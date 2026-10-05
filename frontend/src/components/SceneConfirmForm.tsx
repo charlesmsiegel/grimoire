@@ -8,13 +8,17 @@ import type { DraftCast, SceneDraft } from "./sceneDraft";
 /** Where the scene's opening post comes from (issue #90).
  *  - `greeting` — the greeting body, verbatim, seeded by `start_from_greeting`
  *    (which also seats the greeting's cast). Offered by greeting drafts only.
+ *  - `adapted`  — the greeting rewritten for where the story stands (#91).
+ *    `start_from_greeting` runs with `seed` off: the cast is seated and the
+ *    scene stamped with the greeting, but nothing is posted. `CastPanel`'s
+ *    opener block then offers the rewrite off that stamp, through the same
+ *    generate → preview → adopt loop as a premise. Greeting drafts only.
  *  - `premise`  — nothing is posted here; the premise is handed to `CastPanel`,
  *    whose generate → preview → adopt loop streams against a scene that exists.
  *    Generation genuinely cannot happen before creation, so this stays a
  *    handoff rather than a fourth write in `create()`.
- *  - `none`     — an empty scene the reader writes into themselves.
- *  #91's adapted greeting becomes the fourth member of this union. */
-type FirstPost = "none" | "greeting" | "premise";
+ *  - `none`     — an empty scene the reader writes into themselves. */
+type FirstPost = "none" | "greeting" | "adapted" | "premise";
 
 export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, onCreated,
                                     onWriting, onSalvaged }: {
@@ -61,6 +65,10 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
   // scene" must not land on a generate option with an empty box.
   const [firstPost, setFirstPost] = useState<FirstPost>(
     draft.source === "greeting" ? "greeting" : draft.premise.trim() ? "premise" : "none");
+  // Both greeting sources open the scene through `start_from_greeting`, which
+  // seats the greeting's cast and applies its location; they differ only in
+  // whether the body is posted.
+  const usesGreeting = firstPost === "greeting" || firstPost === "adapted";
   const [locations, setLocations] = useState<EntitySummary[]>([]);
   // Tracks the locations read specifically (not chars/pcs/roster): the
   // controlled <select> can only ever offer what has loaded, so a location
@@ -168,11 +176,19 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
    .filter((o) => !cast.some((c) => c.kind === o.kind && c.id === o.id));
 
   // Ordered by how much each source supplies, so the pre-selected one is at or
-  // near the top. `greeting` is offered only where a greeting exists to seed
-  // from; #91's adapted greeting joins it there.
-  const sources: { value: FirstPost; label: string }[] = [
+  // near the top. Both greeting sources are offered only where a greeting
+  // exists to seed from.
+  const sources: { value: FirstPost; label: string; disabled?: boolean }[] = [
     ...(draft.source === "greeting"
-      ? [{ value: "greeting" as const, label: "The greeting, verbatim" }] : []),
+      ? [{ value: "greeting" as const, label: "The greeting, verbatim" },
+         // "in the scene" for the same reason as the premise label below:
+         // Create posts nothing on this path either.
+         //
+         // Unlike the premise, NOT offered without a connection: Create claims
+         // the greeting and posts nothing, so the scene could neither adapt it
+         // nor take it verbatim any more -- the premise path loses nothing.
+         { value: "adapted" as const, disabled: !ready,
+           label: "The greeting, adapted in the scene to where the story stands" }] : []),
     // "in the scene", not just "generate": pressing Create generates nothing.
     // The premise is carried to CastPanel's opener box, where the reader still
     // has to generate and accept a post. A label promising the post itself
@@ -271,7 +287,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     // Gated on the first-post SOURCE, not on the draft's kind: a greeting draft
     // that is no longer using its greeting gets no backend-seated cast either,
     // so the chips the form collected are the only cast it will ever have.
-    if (firstPost !== "greeting" && cast.length) {
+    if (!usesGreeting && cast.length) {
       try {
         // A `characters`-kind actor can be the player themselves (CastPanel's
         // role selector allows it, and the roster's roles are how this pane
@@ -316,7 +332,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     }
     // 5. seed. A failure here has written nothing outside the scene, so the
     //    scene goes; anything after has, so nothing does.
-    if (draft.source === "greeting" && firstPost === "greeting") {
+    if (draft.source === "greeting" && usesGreeting) {
       try {
         // Seed only when this pane could NOT own the decision. With a working
         // picker (pre-filled from the greeting) whatever sits in it at Create
@@ -326,7 +342,11 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
         // picker to have answered with, so discarding the greeting's own
         // location would lose it to an infrastructure fault the reader had no
         // say in (#218).
-        const r = await api.startFromGreeting(cid, sid, draft.gid, !locationsOk);
+        //
+        // `seed` off for the adapted greeting: everything but the post, which
+        // the opener block in the scene generates from the stamp this writes.
+        const r = await api.startFromGreeting(cid, sid, draft.gid, !locationsOk,
+                                              firstPost === "greeting");
         sid = r.id;
       } catch (err: any) {
         if (live.current) { setError(await deleteAndReport(sid, errorText(err))); setWriting(false); }
@@ -363,11 +383,12 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
     <>
       {/* Rendered, not stored: whether a failed locations read costs the scene
           its setting depends on `firstPost`, which the reader can still change
-          after the read failed. Only a greeting that is actually going to be
-          the first post reaches `startFromGreeting`, which is what seeds. */}
+          after the read failed. Only a greeting that is actually going to
+          supply the first post, verbatim or adapted, reaches
+          `startFromGreeting`, which is what seeds. */}
       {(() => {
         const failed = locationsFailed
-          ? (seedsFromGreeting && firstPost === "greeting"
+          ? (seedsFromGreeting && usesGreeting
               ? "Locations couldn't be loaded — the scene will open at the greeting's own location."
               : "Locations failed to load — the pre-filled location was cleared.")
           : null;
@@ -411,17 +432,29 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       <div className="radio-group" role="radiogroup" aria-labelledby="confirm-first-post">
         {sources.map((s) => (
           <label className="radio-row" key={s.value}>
-            <input type="radio" name="first-post" value={s.value} disabled={locked}
+            <input type="radio" name="first-post" value={s.value} disabled={locked || s.disabled}
                    checked={firstPost === s.value} onChange={() => setFirstPost(s.value)} />
             {s.label}
           </label>
         ))}
       </div>
+      {/* Says why the adapted option is greyed out -- except under the premise
+          option, whose own hint already says there is nothing to generate with. */}
+      {draft.source === "greeting" && !ready && firstPost !== "premise" && (
+        <div className="field-hint">Set up an LLM connection in Config to adapt the greeting.</div>
+      )}
 
-      {firstPost === "greeting" ? (
-        <div className="field-hint">
-          The greeting supplies the opening post and seats its own cast.
-        </div>
+      {usesGreeting ? (
+        firstPost === "greeting" ? (
+          <div className="field-hint">
+            The greeting supplies the opening post and seats its own cast.
+          </div>
+        ) : (
+          <div className="field-hint">
+            The greeting seats its own cast. Adapt it from the scene, where you preview the
+            rewrite before it is posted.
+          </div>
+        )
       ) : (
         <>
           <div className="role">In this scene</div>

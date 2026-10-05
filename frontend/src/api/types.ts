@@ -354,7 +354,9 @@ export type ResponseRecord = { content: string; id: string; actor_ref: string | 
 export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
 export type PassageCharacterInput = { name: string; passage: string; source_text: string };
 export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };
-export type Scene = { meta: { id: string; title: string; response_preset?: string }; messages: Message[] };
+export type Scene = { meta: { id: string; title: string; response_preset?: string;
+  /** the greeting this scene was started from, verbatim or adapted (#91) */
+  greeting?: string }; messages: Message[] };
 // One stored variant of the generation a reroll replaces. `posts` is how many
 // transcript posts it becomes (one reply can split per speaker), `preview` is
 // clipped server-side, and `guidance` is the reroll hint that produced it.

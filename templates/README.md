@@ -286,8 +286,10 @@ itself; that made it a second render path over the same data, disagreeing with
 the inspector's breakdown as soon as anything could be dropped. The order and
 the selectors now live in `context.assemble.SECTIONS`, and
 `_render_sections` renders it: `opener` (prepend
-`opener_instruction/{standard|offscreen}.j2`), `pcless` (offscreen sections +
-opener variant), `story_full` (`sections/story_so_far/{full|compact}.j2`;
+`opener_instruction/{standard|offscreen}.j2`), `opener_adapt` (the
+`adapt_{standard|offscreen}.j2` pair instead, when the opener's prompt is a
+greeting being rewritten for the campaign's current state, #91), `pcless`
+(offscreen sections + opener variant), `story_full` (`sections/story_so_far/{full|compact}.j2`;
 the opener uses `full` with the last 5 scenes, chat uses `compact` with the
 configured `recap_depth`).
 

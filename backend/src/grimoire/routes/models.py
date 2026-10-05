@@ -842,12 +842,21 @@ class StartFromGreeting(BaseModel):
     # no location UI at all (the campaign wizard's opener step) leave the
     # default.
     seed_location: bool = True
+    # False opens the scene from the greeting WITHOUT posting its body (#91):
+    # cast seated, scene stamped and renamed, transcript left empty for the
+    # opener to adapt the greeting into (`Opener.adapt`).
+    seed: bool = True
 
 
 class Opener(BaseModel):
-    prompt: str
+    prompt: str = ""
     completed: list[dict] = []
     snapshot: list[dict] = []
+    # Rewrite the greeting this scene was started from (its `greeting` stamp)
+    # for where the campaign stands now, instead of generating from `prompt`,
+    # which is then ignored (#91). The body is read server-side so the model is
+    # handed the greeting as authored, not a copy the client may have edited.
+    adapt: bool = False
 
 
 class SceneIntent(BaseModel):

@@ -19,7 +19,7 @@ import { SuggestedCast } from "./SuggestedCast";
  *  exception and keeps its own: it renders in the inspector too, which has no
  *  banner of this one's to borrow. */
 export function CastPanel({
-  cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, pcless, sceneLocked,
+  cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, greeting, pcless, sceneLocked,
   onRenaming,
 }: {
   cid: string;
@@ -28,6 +28,8 @@ export function CastPanel({
   onSeeded: () => void;
   onSceneRenamed?: (id: string) => void;
   initialPrompt?: string;
+  /** the greeting the scene was started from -- see `OpenerComposer` */
+  greeting?: string;
   pcless?: boolean;
   /** A turn is streaming into this scene, so anything that can rename its file
    *  has to wait: the id is the filename, and moving it mid-turn strands the
@@ -126,7 +128,7 @@ export function CastPanel({
         <SuggestedCast cid={cid} sid={sid} cast={cast} nameOf={nameOf} onCast={reloadCast} />
 
         <OpenerComposer cid={cid} sid={sid} ready={ready} initialPrompt={initialPrompt}
-                        characters={chars} onSeeded={onSeeded} onError={setError} />
+                        greeting={greeting} characters={chars} onSeeded={onSeeded} onError={setError} />
       </div>
     </details>
   );

@@ -91,7 +91,8 @@ test("a greeting draft applies location and date BEFORE seeding", async () => {
   // seeded against the dated scene, and the confirmed title lands after the rename
   // `false`: this pane owns the location, so the server must not seed the
   // greeting's over what the picker says (#218).
-  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false);
+  // The last `true` is `seed`: the verbatim greeting posts its body.
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false, true);
   expect(api.renameScene).toHaveBeenCalledWith("c", "s9-greet", "Reckoning");
   expect(onCreated).toHaveBeenCalledWith("s9-titled", undefined);
 });
@@ -105,7 +106,7 @@ test("clearing a greeting's pre-filled location leaves the scene with none", asy
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
   expect(api.setSceneLocation).not.toHaveBeenCalled();
-  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false);
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false, true);
 });
 
 test("editing title, date, location, and premise reaches the write sequence", async () => {
@@ -377,7 +378,7 @@ test("a failed locations read lets the server seed the greeting's own location",
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalled());
   expect(api.setSceneLocation).not.toHaveBeenCalled();
-  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", true);
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", true, true);
 });
 
 test("declining the greeting stops the banner promising its location", async () => {
@@ -510,6 +511,48 @@ test("a greeting draft can take a premise instead of the greeting body", async (
   fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
   await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-dated", "The tide comes in."));
   expect(api.startFromGreeting).not.toHaveBeenCalled();
+});
+
+// #91: the greeting still opens the scene -- its cast, its location, its claim
+// on the greeting -- but `seed` is off, so nothing is posted and nothing is
+// handed to the opener box: the scene's own stamp is what the opener adapts.
+test("adapting the greeting opens the scene from it without posting the body", async () => {
+  const onCreated = renderForm(GRT);
+  fireEvent.click(await screen.findByRole("radio", { name: /greeting, adapted/i }));
+  // the greeting seats its own cast, exactly as the verbatim path does
+  expect(screen.queryByLabelText("Add to cast")).toBeNull();
+  expect(screen.queryByLabelText("Premise")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalledWith("s9-titled", undefined));
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", false, false);
+  expect(api.addCastBatch).not.toHaveBeenCalled();
+  // start_from_greeting retitles to the greeting's name; the form's title wins
+  expect(api.renameScene).toHaveBeenCalledWith("c", "s9-greet", "Reckoning");
+});
+
+test("the adapted greeting is offered only to a greeting draft", async () => {
+  renderForm(GEN);
+  await screen.findByRole("radio", { name: /generate one/i });
+  expect(screen.queryByRole("radio", { name: /greeting, adapted/i })).toBeNull();
+});
+
+// Create would claim the greeting and post nothing; with no connection the
+// scene could then neither adapt it nor take it verbatim.
+test("the adapted greeting is not offered without an LLM connection, and says why", async () => {
+  render(<SceneConfirmForm cid="c" draft={GRT} ready={false} onBack={() => {}} onCreated={vi.fn()} />);
+  expect(await screen.findByRole("radio", { name: /greeting, adapted/i })).toBeDisabled();
+  expect(screen.getByRole("radio", { name: /verbatim/i })).toBeChecked();
+  expect(screen.getByText(/set up an llm connection in config to adapt/i)).toBeInTheDocument();
+});
+
+test("a failed locations read still lets an adapted greeting open at its own location", async () => {
+  (api.listEntities as any).mockRejectedValue(new Error("boom"));
+  const onCreated = renderForm(GRT);
+  fireEvent.click(await screen.findByRole("radio", { name: /greeting, adapted/i }));
+  expect(await screen.findByText(/open at the greeting's own location/i)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /create scene/i }));
+  await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  expect(api.startFromGreeting).toHaveBeenCalledWith("c", "s9-dated", "reck", true, false);
 });
 
 test("declining the first post keeps the premise out of the opener box", async () => {

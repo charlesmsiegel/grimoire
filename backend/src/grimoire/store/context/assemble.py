@@ -65,27 +65,45 @@ log = logging.getLogger(__name__)
 
 def compose_opener(cid: str, sid: str, prompt: str,
                    describe: bool = True, model: str = "",
-                   actor_ref: str = "grimoire", prior: list[dict] | None = None) -> tuple[list[dict], dict | None]:
+                   actor_ref: str = "grimoire", prior: list[dict] | None = None,
+                   adapt: bool = False) -> tuple[list[dict], dict | None]:
     """A full-turn-context opener: the instruction plus every assembled system section
     (cast, plot threads, date, current setting, world-info, a full 5-scene recap, …),
     then the prompt as the user turn. The prompt seeds world-info activation, since a new
     scene has no history. No conversation history is included — the opener is for a scene
     with no messages. Ephemeral: the caller does not persist the result.
 
+    `adapt` makes the prompt a greeting's body to rewrite for the campaign's
+    current state rather than a premise to write from (#91): only the opener
+    instruction's variant and the breakdown's label for the prompt change, so
+    the adaptation sees exactly the context a from-scratch opener would.
+
     Returns the messages and the breakdown describing them — see `compose_turn`
     for why those two must come out of one pass."""
     a = _assemble(cid, sid, wi_seed=prompt, full_recap=OPENER_RECAP_DEPTH,
                   actor_ref=actor_ref, opening_narrator=actor_ref == "grimoire",
                   opener=True)
+    a["data"]["opener_adapt"] = adapt
     # Both trailing messages are rendered before packing so their tokens can be
     # reserved: neither is droppable, so neither may go uncounted.
     user_text = macros.expand_macros(prompt, macros.scene_substitutions(cid, sid), cid, sid,
                                      datetime_subs=a["datetime_subs"])
     prior_text = "\n\n".join(f"{part['speaker']}: {part['content']}" for part in (prior or []))
-    instruction = ("Set the scene as narrator. Do not write any NPC or PC actions or dialogue."
-                   if actor_ref == "grimoire" else
-                   "Write only this assigned NPC's contribution after the preceding opening. Do not write for other actors.")
-    extra = (("Opener prompt", user_text), ("Previous opening contributions", prior_text),
+    # The opener is written one speaker per call, and the adapt instruction is
+    # the same system text for all of them -- so what each call keeps of the
+    # greeting has to be said here: the narrator its setting and situation,
+    # each NPC its own part of it.
+    if actor_ref == "grimoire":
+        instruction = ("Set the scene as narrator, from the greeting's setting and situation. "
+                       "Do not write any NPC or PC actions or dialogue." if adapt else
+                       "Set the scene as narrator. Do not write any NPC or PC actions or dialogue.")
+    else:
+        instruction = ("Write only this assigned NPC's own part of the greeting, adapted, after the "
+                       "preceding opening. Do not write for other actors." if adapt else
+                       "Write only this assigned NPC's contribution after the preceding opening. "
+                       "Do not write for other actors.")
+    extra = (("Greeting to adapt" if adapt else "Opener prompt", user_text),
+             ("Previous opening contributions", prior_text),
              ("Assigned opener instruction", instruction))
     before = [{"role": "user", "content": user_text}]
     if prior_text:
@@ -859,7 +877,8 @@ SECTIONS = [
 #: The two sections that pick a variant file from the assembled data. Everything
 #: else in `SECTIONS` names its template outright.
 _VARIANTS = {
-    "scene/opener_instruction": lambda d: "offscreen" if d["pcless"] else "standard",
+    "scene/opener_instruction": lambda d: ("adapt_" if d.get("opener_adapt") else "")
+                                          + ("offscreen" if d["pcless"] else "standard"),
     "scene/sections/story_so_far": lambda d: "full" if d["story_full"] else "compact",
 }
 

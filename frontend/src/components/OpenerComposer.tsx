@@ -10,12 +10,19 @@ const generatedCount = (cast: OpenerSpeaker[]) => cast.filter((actor) => actor.r
 
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */
-export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onSeeded, onError }: {
+export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, characters, onSeeded,
+                                 onError }: {
   cid: string;
   sid: string;
   /** An LLM connection is configured; without one there is nothing to call. */
   ready: boolean;
   initialPrompt?: string;
+  /** The greeting this scene was started from, if any. An empty scene that
+   *  carries one was opened for adaptation (#91) -- or emptied since -- so the
+   *  block offers to rewrite that greeting for where the story stands now. The
+   *  server reads the body off the scene's own stamp; only its presence matters
+   *  here, which is why a reload still offers it. */
+  greeting?: string;
   /** Every character an opener could be saved against. Which one it IS saved
    *  against is this block's own state, not the panel's add-to-scene selection:
    *  those are unrelated choices, and sharing them meant staging a PC disabled
@@ -34,6 +41,10 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   const [parts, setParts] = useState<OpenerContribution[]>([]);
   const [snapshot, setSnapshot] = useState<OpenerSpeaker[]>([]);
   const [complete, setComplete] = useState(false);
+  // Whether the preview on screen adapts the greeting rather than the prompt:
+  // "Retry remaining speakers" has to continue the generation it belongs to,
+  // whatever the box holds by then.
+  const [adapted, setAdapted] = useState(false);
   const [busy, setBusy] = useState(false);
   const [charId, setCharId] = useState("");
   const [versionPick, setVersionPick] = useState("");
@@ -66,19 +77,19 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
   const live = useRef(`${cid}/${sid}`);
   useLayoutEffect(() => { live.current = `${cid}/${sid}`; }, [cid, sid]);
 
-  async function generate(resume = false) {
-    if (!prompt.trim() || busy) return;
+  async function generate(resume = false, adapt = resume && adapted) {
+    if ((!adapt && !prompt.trim()) || busy) return;
     onError(null);
     const existing = resume ? parts : [];
     const currentSnapshot = resume ? snapshot : [];
-    if (!resume) { setOpener(""); setParts([]); setSnapshot([]); }
+    if (!resume) { setOpener(""); setParts([]); setSnapshot([]); setAdapted(adapt); }
     setComplete(false);
     setBusy(true);
     let acc = "";
     let active: OpenerSpeaker | null = null;
     let assembled = [...existing];
     try {
-      await api.opener(cid, sid, prompt, (e) => {
+      await api.opener(cid, sid, adapt ? "" : prompt, (e) => {
         if (e.snapshot) setSnapshot(e.snapshot);
         if (e.speaker_start) { active = e.speaker_start; acc = ""; }
         if (e.delta) {
@@ -100,7 +111,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
           setOpener(serialize(assembled));
           onError(e.error);
         }
-      }, undefined, existing, currentSnapshot);
+      }, undefined, existing, currentSnapshot, adapt);
     } catch (err: unknown) {
       setOpener(serialize(assembled));
       onError(err);
@@ -157,6 +168,19 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, characters, onS
     <div>
       <div className="role">Generate an opener</div>
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+      {greeting && (
+        <>
+          <div className="picker">
+            <button className="primary" onClick={() => void generate(false, true)} disabled={!ready || busy}>
+              Adapt the greeting
+            </button>
+          </div>
+          <div className="field-hint">
+            Rewrites the greeting this scene was started from for where the story stands now.
+            Or generate from a premise instead:
+          </div>
+        </>
+      )}
       <div className="picker">
         <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                value={prompt} onChange={(e) => setPrompt(e.target.value)} />
