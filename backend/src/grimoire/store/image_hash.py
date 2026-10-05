@@ -6,7 +6,11 @@ transparent pixels are not part of what is drawn, so they are not part of the
 identity. What *is* drawn is: the raster, the way a browser orients it, and the
 colour description that says how its samples are to be read (an ICC profile, a
 PNG gAMA/cHRM/sRGB/cICP chunk). The same samples under another profile are a
-different picture and a different id.
+different picture and a different id. That descriptor is tagged with its source
+-- `png\\0` before a PNG's raw colour chunks, `icc\\0` before any other format's
+ICC profile -- so the two can never be confused; an image with no colour data
+has an empty, untagged descriptor, which is what lets the same pixels share an
+id across formats.
 
 The leading `1` is the canonicalization version. A change to any rule here is a
 `px2`; it never quietly reinterprets `px1`, and tests/fixtures/images/
@@ -49,6 +53,7 @@ import functools
 import hashlib
 import io
 import re
+import threading
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -219,10 +224,16 @@ def _png_colour(data: bytes) -> bytes:
 
 
 def _colour(im: Image.Image, data: bytes) -> bytes:
+    """The colour descriptor: `png\\0` + a PNG's raw colour chunks, or `icc\\0` +
+    any other format's ICC profile. The tag keeps the two sources apart -- an
+    ICC profile crafted to equal a PNG's chunk bytes would otherwise merge
+    pictures read under different colour rules. With no colour data it is
+    `b""`, untagged, so the same pixels share an id across formats."""
     if im.format == "PNG":
-        return _png_colour(data)
+        chunks = _png_colour(data)
+        return b"png\0" + chunks if chunks else b""
     profile = im.info.get("icc_profile")
-    return profile if isinstance(profile, bytes) else b""
+    return b"icc\0" + profile if isinstance(profile, bytes) and profile else b""
 
 
 def _normalized(rgba: Image.Image) -> Image.Image:
@@ -254,9 +265,30 @@ def _feed(update: Callable[[bytes], object], im: Image.Image) -> None:
         update(band.tobytes())
 
 
+#: Serializes the warnings-filter swap in `_open`. `catch_warnings` replaces
+#: process-wide state, so two of ours interleaving could restore each other's
+#: filters; this keeps our own entries ordered. It covers only the header parse.
+_WARNINGS_LOCK = threading.Lock()
+
+
+def _open(data: bytes) -> Image.Image:
+    """`Image.open` without Pillow's `DecompressionBombWarning`.
+
+    A raster between Pillow's warning and error thresholds would otherwise
+    print to stderr before `STATIC_BUDGET` makes it opaque -- or, under
+    `-W error`, raise and turn a decodable picture into an "undecodable" one.
+    Over-budget input is this module's own decision, so the warning is noise.
+    Only the open is covered: every later check Pillow makes is on a size
+    already held far below its threshold -- a GIF frame's under `STATIC_BUDGET`,
+    a band's crop under `_BAND_PIXELS`."""
+    with _WARNINGS_LOCK, warnings.catch_warnings():
+        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+        return Image.open(io.BytesIO(data))
+
+
 def _identify(data: bytes, sha: str) -> PixelIdentity:
     try:
-        im = Image.open(io.BytesIO(data))
+        im = _open(data)
     except Image.DecompressionBombError:
         return opaque(sha, "over-budget")
     with im:

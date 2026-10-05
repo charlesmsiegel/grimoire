@@ -28,7 +28,19 @@ from PIL import Image, ImageCms
 HERE = Path(__file__).parent
 W, H = 24, 16
 ORIENT_TAG = 0x0112
-SUFFIXES = {".png", ".jpg", ".gif", ".webp"}
+#: Every fixture this module owns. `write()` reads and pins exactly these, so a
+#: stray file dropped in the directory is neither picked up nor pinned, and
+#: `build()` is held to the same list.
+NAMES = frozenset({
+    "apng_anim.png", "apng_oriented.png", "base.png",
+    "gif_anim.gif", "gif_anim_duration_changed.gif", "gif_anim_frame_changed.gif",
+    "gif_anim_late_loop.gif", "gif_anim_noloop.gif", "gif_single.gif",
+    "jpeg_camera_exif.jpg", "jpeg_cmyk.jpg", "jpeg_plain.jpg", "jpeg_plain_as.png",
+    "jpeg_rot6.jpg", "jpeg_rot6_upright.png",
+    "png16_rgb.png", "png_cicp.png", "png_icc.png", "png_invisible_a.png",
+    "png_invisible_b.png", "png_onepixel.png", "png_text.png", "png_xmp_orient.png",
+    "webp_anim.webp", "webp_exif6.webp", "webp_plain.webp", "webp_rotated.webp",
+})
 
 
 def _noise(seed: int, w: int = W, h: int = H, mode: str = "RGB") -> Image.Image:
@@ -257,10 +269,13 @@ def write() -> None:
     An existing file is never overwritten: the committed bytes are the fixture
     (the sRGB profile lcms builds carries its creation time, so a rebuild is not
     byte-identical anyway). Ids are computed from what is on disk."""
-    for name, data in build().items():
+    built = build()
+    if set(built) != NAMES:
+        raise SystemExit(f"build() and NAMES disagree: {sorted(set(built) ^ NAMES)}")
+    for name, data in built.items():
         if not (HERE / name).exists():
             (HERE / name).write_bytes(data)
-    on_disk = {p.name: p.read_bytes() for p in HERE.iterdir() if p.suffix in SUFFIXES}
+    on_disk = {name: (HERE / name).read_bytes() for name in NAMES}
     (HERE / "pixel_ids.json").write_text(json.dumps(ids(on_disk), indent=2) + "\n")
 
 
