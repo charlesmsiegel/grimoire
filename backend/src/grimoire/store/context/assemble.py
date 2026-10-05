@@ -1081,10 +1081,16 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
     is expanded piece by piece in DOCUMENT order -- a run of the template's own
     text, then the body in the next slot, then the next run -- which is the
     left-to-right order expanding the whole rendered section always drew
-    `{{random}}` in. So the unbounded section is byte-identical to the
-    section-level expansion, the template's own text (the secret heading a
-    reader may have edited) included, and a body that expands to nothing still
-    leaves the gap it always left.
+    `{{random}}` in. So the unbounded section is the section-level expansion,
+    the template's own text (the secret heading a reader may have edited)
+    included, and a body that expands to nothing still leaves the gap it
+    always left. Byte for byte, that holds for `{{random}}` under a seeded
+    `random`, and only that far: the whole-text expansion drew every
+    `{{random}}` before any `{{roll}}` and piece by piece they interleave,
+    which is harmless only because a `{{roll}}` seeds itself from the OS
+    (`dice.roll`) rather than from `random` -- so no seed reproduces a roll,
+    whole or piecewise. A macro a hand-edited template splits across a slot's
+    edge would also expand whole and not piecewise.
 
     Every expansion is remembered: a body by its entry's ref, a run of fixed
     text by its text less its edge whitespace (removing an entry only changes

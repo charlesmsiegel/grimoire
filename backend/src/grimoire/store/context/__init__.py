@@ -1,7 +1,7 @@
 """The context builder: assemble a scene's cast + world-info into the OpenRouter
-messages list, SillyTavern-faithful. World-info selection goes through activate(),
-the single swap point for smarter retrieval; `semantic.py` is the strategy that
-took that swap, scoring what the keywords missed by embedding similarity, and
+messages list, SillyTavern-faithful. World-info selection goes through
+`activation.run`, the one gate every entry passes; `semantic.py` is the second
+stage it is handed, scoring what the keywords missed by embedding similarity, and
 `archive.py` sits beside both, recalling absorbed scenes that have fallen out of
 the recap window by the same keyword rule.
 

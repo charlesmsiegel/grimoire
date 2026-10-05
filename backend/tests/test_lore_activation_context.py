@@ -200,6 +200,28 @@ def test_a_stored_director_note_is_a_post_for_the_window_and_the_timers(scene):
     assert "keeper counts ships" not in _system(cid, sid)
 
 
+def test_a_cut_through_the_triggering_post_ends_its_sticky_carry(scene):
+    """Timers are derived from the transcript (§5.3), so a cut changes them as
+    it changes the posts: with the post that started a carry cut away, the
+    same number of posts after it carries nothing."""
+    cid, sid, croot = scene
+    config.write_config(context_scan_depth="1")
+    entities.create_entity(croot, "lore", "Lighthouse", "The lighthouse keeper counts ships.",
+                           keys="lighthouse", fields={"sticky": "2"})
+    scenes.append_message(cid, sid, "user", "We wait.")                    # post 0
+    scenes.append_message(cid, sid, "assistant", "The lighthouse turns.")  # post 1
+    scenes.append_message(cid, sid, "user", "We keep waiting.")            # post 2
+    hit = _hits(cid, sid)["lore:lighthouse"]
+    assert hit.reason == {"type": "sticky", "from_post": 1, "remaining": 2}
+    assert "keeper counts ships" in _system(cid, sid)
+
+    assert scenes.delete_from(cid, sid, 1) == 2
+    scenes.append_message(cid, sid, "assistant", "The water turns.")       # post 1
+    scenes.append_message(cid, sid, "user", "We keep waiting.")            # post 2
+    assert "lore:lighthouse" not in _hits(cid, sid)
+    assert "keeper counts ships" not in _system(cid, sid)
+
+
 def test_a_director_turn_seeds_activation_as_the_seed(scene):
     cid, sid, croot = scene
     entities.create_entity(croot, "lore", "Ferry", "The ferryman skims the toll.", keys="ferry")

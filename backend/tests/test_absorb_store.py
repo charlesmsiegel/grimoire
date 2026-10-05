@@ -770,6 +770,28 @@ def test_created_record_citation_is_recorded(monkeypatch, tmp_path):
     assert rows["locations/the-crypt#body"]["quote"] == "She lifted the brass lantern."
 
 
+def test_created_record_citation_never_reaches_a_prompt(monkeypatch, tmp_path):
+    """Spec §9.3: provenance is never read by the context builder. A created
+    record that activates brings its body into the prompt and not the quote
+    it was cited with."""
+    from grimoire.store import context, provenance, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    review = {"quote": "QUOTE_SHE_LIFTED_THE_LANTERN", "speaker": "Mara", "certainty": 0.8}
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "new_lore:lantern", "kind": "new_lore",
+         "target": {"kind": "lore", "id": ""}, "field": "body",
+         "after": "BODY_THE_LANTERN_BURNS_BLUE",
+         "payload": {"name": "Lantern", "keys": "lantern", "kind": "lore"},
+         "review": review}], sid)
+    assert applied == ["new_lore:lantern"]
+    assert provenance.read(cid)["lore/lantern#body"]["quote"] == review["quote"]
+    scenes.append_message(cid, sid, "user", "Mara raises the lantern.")
+    prompt = str(context.compose_turn(cid, sid)[0])
+    assert "BODY_THE_LANTERN_BURNS_BLUE" in prompt
+    assert review["quote"] not in prompt
+
+
 def test_created_outcome_names_the_new_record(monkeypatch, tmp_path):
     from grimoire.store import scenes
     from grimoire.store.absorb import apply as absorb_apply

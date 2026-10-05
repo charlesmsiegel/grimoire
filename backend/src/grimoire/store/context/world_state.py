@@ -1,8 +1,10 @@
 """The world's own state, as the prompt sees it: world-info activation plus the
 today / weather / character-state / group-state blocks.
 
-`activate` is the swap point the module docstring names -- everything else here
-gathers the data one section renders from.
+World-info selection is `activation.run`'s: `_world_info` gathers the entries
+and calls it with the scene's posts, seed and present set. `activate` is a thin
+one-window wrapper over the same engine for callers that hold only joined text.
+Everything else here gathers the data one section renders from.
 """
 
 from __future__ import annotations
@@ -65,9 +67,11 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
              recall: Callable[[list[dict], str], list[dict]] | None = None,
              pinned_refs: frozenset = frozenset(),
              excluded_refs: frozenset = frozenset()) -> list[dict]:
-    """Select world-info entries. Owned entries (owners non-empty) are silent unless one
-    owner ref is in `present`; then keyless = always-on, keyed = any key whole-word (ci) in
-    recent_text. Unowned entries behave as before.
+    """Select world-info entries against one window of joined text: `activation.run`
+    with `recent_text` as its only post, scan depth 1 and no recursion. Owned entries
+    (owners non-empty) are silent unless an owner is in `present`, or is made present by
+    an item, group or creature that activates; then keyless = always-on, keyed = the
+    entry's key rule against `recent_text`. Unowned entries need only their keys.
 
     `secrecy: gm-only` (#49) is dropped here, before any other rule and before
     `recall` ever sees the entry: this gate -- `activation.run`, which this
@@ -107,10 +111,11 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
     in `missed` would let the second stage put back exactly what the reader
     asked to remove.
 
-    `recall` is the second-stage retrieval strategy — `semantic.recall` in
-    production, wired in by `_world_info`; anything with its signature in a
-    test. It is handed the entries the keyword rule *rejected*, and only after
-    the owner gate has already admitted them: an entry whose owner is absent
+    `recall` is a second-stage retrieval strategy with `semantic.recall`'s
+    signature -- a test's, since production does not come through here:
+    `_world_info` hands `semantic.recall_scored` to the engine itself. It is
+    handed the entries the keyword rule *rejected*, and only after the owner
+    gate has already admitted them: an entry whose owner is absent
     never reaches it, so no similarity score can leak owned lore. Its hits are
     appended, so this function's result is a superset of what the keyword rule
     alone returns, in the same order. Defaulting it to None keeps the plain

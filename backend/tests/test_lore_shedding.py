@@ -24,6 +24,7 @@ from grimoire.store import (
     characters,
     config,
     context,
+    dice,
     entities,
     pins,
     scenes,
@@ -359,6 +360,29 @@ def test_no_budget_prompt_is_identical_to_the_section_level_render(scene):
     old = [s["text"] for s in assemble._render_sections(
         {k: v for k, v in a.items() if k != "lore"}, cid, sid)]
     assert new == old
+
+
+def test_random_and_roll_together_still_expand_identically(scene, monkeypatch):
+    """Piece by piece, `{{random}}` and `{{roll}}` interleave where the joined
+    section drew every random first. That cannot move a draw: a roll seeds
+    itself from the OS, never from `random`. With that source pinned, the
+    section is byte-identical to the section-level expansion."""
+    cid, sid, croot = scene
+    entities.create_entity(croot, "lore", "Bell", "Rolls {{roll:1d20}}, tolls {{random:a,b,c}}.")
+    entities.create_entity(croot, "lore", "Fog", "Fog {{random:x,y,z}} for {{roll:3d6}}.",
+                           secrecy="secret")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    seeds = iter(range(1000))
+    monkeypatch.setattr(dice.secrets, "randbits", lambda _bits: next(seeds))
+    a = assemble._assemble(cid, sid)
+    random.seed(5)
+    new = next(s for s in assemble._render_sections(a, cid, sid) if s["id"] == "world_info")
+    seeds = iter(range(1000))
+    random.seed(5)
+    old = next(s for s in assemble._render_sections(
+        {k: v for k, v in a.items() if k != "lore"}, cid, sid) if s["id"] == "world_info")
+    assert new["text"] == old["text"]
+    assert "{{" not in new["text"]
 
 
 @pytest.fixture
