@@ -1053,3 +1053,23 @@ class ChronicleLineSave(BaseModel):
     of the transcript changes."""
     one_line: str | None = None
     date: str | None = None
+
+
+class ContinuityAliasCreate(BaseModel):
+    """Merge `ref` into `to` (capstone spec §5.1). The flags answer the two
+    refusals a reader may override: `replace` an existing merge of `ref`, and
+    `accept_status_change` when the two records disagree about being open."""
+    ref: str
+    to: str
+    replace: bool | None = None
+    accept_status_change: bool | None = None
+    note: str | None = None
+
+
+class ContinuityLinkCreate(BaseModel):
+    """Record ``a <relation> b`` (capstone spec §5.3)."""
+    a: str
+    b: str
+    relation: str
+    scene: str | None = None
+    note: str | None = None
