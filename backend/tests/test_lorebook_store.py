@@ -277,8 +277,8 @@ AUDIT_ROWS = [
      {"secondary_keys": "tide, salt", "key_logic": "and_all"}),
     ({"keysecondary": ["tide"], "selectiveLogic": 1},
      {"secondary_keys": "tide", "key_logic": "not_all"}),
-    ({"keysecondary": ["tide"], "selectiveLogic": 0},
-     {"secondary_keys": "tide", "key_logic": "and_any"}),
+    # and_any is the native default, so it is not written
+    ({"keysecondary": ["tide"], "selectiveLogic": 0}, {"secondary_keys": "tide"}),
     # `selective` absent is ST's default: on
     ({"keysecondary": ["tide"]}, {"secondary_keys": "tide"}),
     # selective off: the secondary list is ignored, so nothing is written
@@ -320,8 +320,10 @@ def test_adopt_maps_the_audit_table(stash, expected):
 
 
 def test_adopt_clamps_into_bounds():
-    assert lorebook.adopt({"order": 5000, "sticky": 99, "cooldown": -4, "scanDepth": 500}).fields == {
-        "priority": "1000", "sticky": "50", "cooldown": "0", "scan_depth": "100"}
+    assert lorebook.adopt({"order": 5000, "sticky": 99, "cooldown": 7, "scanDepth": 500}).fields == {
+        "priority": "1000", "sticky": "50", "cooldown": "7", "scan_depth": "100"}
+    # clamped to the bottom is the default, which is not written
+    assert lorebook.adopt({"order": -5, "cooldown": -4}).fields == {"priority": "0"}
 
 
 def test_adopt_reports_unmapped():
@@ -356,6 +358,69 @@ def test_adopt_unmapped_ignores_the_defaults_an_st_export_writes():
     })
     assert res.unmapped == ()
     assert res.fields == {}
+
+
+# A stock entry as SillyTavern's world-info editor writes it (camelCase), and
+# as its V3 card export files one under `extensions` (snake_case): every field
+# at its default. Adopting either must change nothing and report nothing --
+# otherwise every import looks customised.
+ST_STOCK_WORLD_INFO = {
+    "keysecondary": [], "selective": True, "selectiveLogic": 0, "constant": False,
+    "vectorized": False, "order": 100, "position": 0, "ignoreBudget": False,
+    "excludeRecursion": False, "preventRecursion": False, "delayUntilRecursion": False,
+    "probability": 100, "useProbability": True, "depth": 4, "group": "",
+    "groupOverride": False, "groupWeight": 100, "scanDepth": None,
+    "caseSensitive": None, "matchWholeWords": None, "useGroupScoring": None,
+    "automationId": "", "role": 0, "sticky": 0, "cooldown": 0, "delay": 0,
+    "triggers": [], "characterFilter": {"isExclude": False, "names": [], "tags": []},
+}
+ST_STOCK_V3 = {
+    "secondary_keys": [], "selective": True, "insertion_order": 100,
+    "position": "before_char", "constant": False,
+    "extensions": {
+        "position": 0, "exclude_recursion": False, "probability": 100,
+        "useProbability": True, "depth": 4, "selectiveLogic": 0, "group": "",
+        "group_override": False, "group_weight": 100, "prevent_recursion": False,
+        "delay_until_recursion": 0, "scan_depth": None, "match_whole_words": None,
+        "use_group_scoring": False, "case_sensitive": None, "automation_id": "",
+        "role": None, "vectorized": False, "sticky": 0, "cooldown": 0, "delay": 0,
+    },
+}
+
+
+@pytest.mark.parametrize("stash", [ST_STOCK_WORLD_INFO, ST_STOCK_V3])
+def test_adopt_of_a_stock_st_entry_is_empty(stash):
+    for placed in _both_places(stash):
+        assert lorebook.adopt(placed) == lorebook.AdoptResult({}, ())
+
+
+@pytest.mark.parametrize("stash,expected", [
+    ({"priority": 100}, {}),
+    ({"sticky": 0, "cooldown": 0}, {}),
+    ({"excludeRecursion": False, "preventRecursion": False}, {}),
+    ({"ignoreBudget": False}, {}),
+    # one field off its default is written; its default-valued neighbours are not
+    ({"order": 100, "sticky": 0, "cooldown": 2}, {"cooldown": "2"}),
+    ({"order": 99}, {"priority": "99"}),
+])
+def test_adopt_skips_a_value_that_is_the_native_default(stash, expected):
+    assert lorebook.adopt(stash).fields == expected
+
+
+@pytest.mark.parametrize("stash,unmapped", [
+    ({"delay": 0, "depth": 4, "position": 0, "groupWeight": 100, "role": 0}, ()),
+    ({"position": "before_char", "group_weight": 100, "useProbability": True}, ()),
+    ({"delayUntilRecursion": 0, "useGroupScoring": None}, ()),
+    ({"characterFilter": {"isExclude": False, "names": [], "tags": []}}, ()),
+    ({"delay": 1, "depth": 2, "position": 4, "groupWeight": 50, "role": 1},
+     ("delay", "depth", "groupWeight", "position", "role")),
+    ({"position": "after_char"}, ("position",)),
+    ({"characterFilter": {"isExclude": True, "names": [], "tags": []}}, ("characterFilter",)),
+    ({"characterFilter": {"names": ["Mara"]}}, ("characterFilter",)),
+])
+def test_adopt_unmapped_ignores_st_per_field_defaults(stash, unmapped):
+    for placed in _both_places(stash):
+        assert lorebook.adopt(placed).unmapped == unmapped
 
 
 def test_adopt_unmapped_keeps_a_probability_that_is_not_always():
