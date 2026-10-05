@@ -151,6 +151,38 @@ def test_edit_rewrites_and_replaces_record(client):
     assert "rewritten" not in messages(client, cid, sid)[-1]
 
 
+def test_saving_a_rewritten_post_unchanged_keeps_its_original(client):
+    """The rule is idempotent, so the stored text gives it nothing to fire on:
+    the edit writes the same text back, and the original is still the only
+    copy of what the model wrote."""
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    reply = messages(client, cid, sid)[-1]
+
+    assert edit(client, cid, sid, 1, reply["content"]).status_code == 200
+    assert records(client, cid, sid)[reply["response_id"]]["original"] == \
+        "She paused... then spoke."
+    assert messages(client, cid, sid)[-1]["rewritten"] is True
+
+
+def test_editing_another_part_of_the_response_keeps_the_record(client):
+    """A roll continuation shares its first part's `response_id`, so the key
+    alone does not say which part a record describes -- its `stored` text does.
+    An edit of the second part is not an edit of the text that was rewritten."""
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    rid = messages(client, cid, sid)[-1]["response_id"]
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Second half.",
+                                          "response_id": rid, "response_part": "b"}])
+
+    assert edit(client, cid, sid, 2, "Second half, edited.").status_code == 200
+    assert store.scenes.read_scene(cid, sid)["messages"][2]["content"] == "Second half, edited."
+    assert records(client, cid, sid)[rid]["original"] == "She paused... then spoke."
+    assert messages(client, cid, sid)[1]["rewritten"] is True
+
+
 def test_edit_of_a_message_with_no_id_is_not_rewritten(client):
     cid, sid = seed(client)
     put_rules(client, cid, {**ELLIPSIS, "targets": ["model", "user"]})
