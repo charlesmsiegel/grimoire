@@ -322,3 +322,240 @@ def test_sitting_out_npc_anchored_by_a_continue_too(client):
     response = client.post(base + "/chat", json={"content": ""})
     assert "error" not in response.text, response.text
     assert _presence(cid, sid, WINIFRED) is not None
+
+
+# ---- auto-continue rounds ----
+
+SERAPHINE = "characters:seraphine"
+
+
+def _run(cid, sid):
+    return SimpleNamespace(
+        id="test", scene_identity=store.scenes.scene_identity(cid, sid), cancel_requested=False)
+
+
+def _drive(cid, sid, fake, run, round_record, on_frame):
+    """Drive `_frames` directly, handing each decoded frame to `on_frame`."""
+    token = streaming._claim_turn(cid, sid)
+
+    async def collect():
+        async for frame in character_turns._frames(
+            cid, sid, fake, {"kind": "openrouter", "model": "test"}, run, token,
+            round_record, streaming.StreamOutcome(),
+        ):
+            if frame.startswith("data: "):
+                on_frame(json.loads(frame.removeprefix("data: ")))
+
+    asyncio.run(collect())
+
+
+def test_list_auto_rounds_stop_at_cap(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    fake = FakeLLM([reply("Mara one.", None), reply("Winifred one.", None),
+                    reply("Mara two.", None), reply("Winifred two.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 4
+    assert speakers(cid, sid) == ["Mara", "Winifred", "Mara", "Winifred"]
+    assert response.text.count('"round_start": {"index": 2, "of": 2}') == 1
+    assert response.text.count('"round_start"') == 1
+
+
+def test_directed_null_handoff_ends_chain(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="directed", auto_rounds=3)
+    fake = FakeLLM([reply("Mara answers.", None), reply("Nobody else.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 1
+    assert speakers(cid, sid) == ["Mara"]
+
+
+def test_repeat_handoff_leads_next_round(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="directed", auto_rounds=1)
+    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", MARA),
+                    reply("Mara again.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 3
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert messages[-1]["speaker"] == "Mara"
+    assert speakers(cid, sid) == ["Mara", "Winifred", "Mara"]
+    prompt = "\n".join(m["content"] for m in fake.requests[1]["messages"])
+    section = prompt.split("Eligible next speakers:", 1)[1].split("The current actor", 1)[0]
+    assert MARA in section
+    assert WINIFRED not in section
+
+
+def test_repeat_handoff_without_rounds_is_rejected(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="directed", auto_rounds=0)
+    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", MARA)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 2
+    assert speakers(cid, sid) == ["Mara", "Winifred"]
+    assert latest_round(cid, sid)["issue"] == "repeated speaker"
+
+
+def test_stop_zeroes_remaining_rounds_and_retry_starts_none(client):
+    import pytest
+
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=2)
+    round_record = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
+        run_id="test", actor_ref=MARA, mode="list", plan=[WINIFRED], auto_remaining=2,
+        round_index=1, auto_total=2)
+    run = _run(cid, sid)
+    fake = FakeLLM([reply("Mara one.", None), reply("Winifred one.", None),
+                    reply("Mara two.", None)])
+    starts = []
+
+    def on_frame(data):
+        if "response_start" in data:
+            starts.append(data["response_start"]["actor_ref"])
+        if "delta" in data and len(starts) == 2:
+            run.cancel_requested = True
+
+    with pytest.raises(asyncio.CancelledError):
+        _drive(cid, sid, fake, run, round_record, on_frame)
+    assert fake.calls == 2
+    pending = store.responses.unfinished(cid, sid)
+    assert pending["auto_remaining"] == 0
+    assert pending["plan"] == [] and pending["stopped"] is True
+    retry = FakeLLM([reply("Winifred finishes.", None), reply("Must not run.", None)])
+    use(client, retry)
+    response = client.post(base + "/retry")
+    assert "error" not in response.text, response.text
+    assert retry.calls == 1
+    assert "round_start" not in response.text
+    assert speakers(cid, sid) == ["Mara", "Winifred"]
+
+
+def test_stop_mid_round_retry_generates_only_the_interrupted_reply(client):
+    import pytest
+
+    cid, sid, base = seed(client)
+    response = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Seraphine"})
+    assert response.status_code == 200, response.text
+    actor = response.json()["character"]
+    response = client.post(base + "/cast", json={"id": actor})
+    assert response.status_code == 200, response.text
+    group(client, base, order="list", order_list=[MARA, WINIFRED, SERAPHINE], auto_rounds=0)
+    round_record = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
+        run_id="test", actor_ref=MARA, mode="list", plan=[WINIFRED, SERAPHINE])
+    run = _run(cid, sid)
+    fake = FakeLLM([reply("Mara one.", None)])
+
+    def on_frame(data):
+        if "delta" in data:
+            run.cancel_requested = True
+
+    with pytest.raises(asyncio.CancelledError):
+        _drive(cid, sid, fake, run, round_record, on_frame)
+    retry = FakeLLM([reply("Mara finishes.", None), reply("Must not run.", None)])
+    use(client, retry)
+    response = client.post(base + "/retry")
+    assert "error" not in response.text, response.text
+    assert retry.calls == 1
+    assert speakers(cid, sid) == ["Mara"]
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["content"] == "Mara finishes."
+
+
+def test_roll_pause_continues_chain_after_resolution(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    fake = FakeLLM([
+        ['Wait.\n```roll\n{"check":"notice"}\n```'],
+        reply("No roll.", None),
+        reply("Winifred one.", None),
+        reply("Mara two.", None),
+        reply("Winifred two.", None),
+    ])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert fake.calls == 1
+    assert latest_round(cid, sid)["auto_remaining"] == 1
+    proposal = store.proposals.get(cid, sid)
+    response = client.post(
+        base + "/roll-proposal", json={"proposal": proposal["id"], "action": "decline"})
+    assert response.status_code == 200 and "error" not in response.text, response.text
+    assert fake.calls == 5
+    assert speakers(cid, sid) == ["Mara", "Mara", "Winifred", "Mara", "Winifred"]
+    assert response.text.count('"round_start": {"index": 2, "of": 2}') == 1
+
+
+def test_manual_never_auto_continues(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="manual", auto_rounds=3)
+    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Nobody else.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 1
+    assert speakers(cid, sid) == ["Mara"]
+
+
+def test_follow_ups_fire_once_per_chain(client, monkeypatch):
+    _cid, _sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    fired = []
+
+    async def count(after_turn, outcome):
+        fired.append(after_turn)
+
+    monkeypatch.setattr(streaming, "_fire_follow_up", count)
+    fake = FakeLLM([reply("Mara one.", None), reply("Winifred one.", None),
+                    reply("Mara two.", None), reply("Winifred two.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 4
+    assert len(fired) == 1
+
+
+def test_follow_on_round_keeps_the_original_post(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    fake = FakeLLM([reply("Mara one.", None), reply("Winifred one.", None),
+                    reply("Mara two.", None), reply("Winifred two.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    rounds = list(store.responses._scope(cid, sid, store.responses._read(cid))["rounds"].values())
+    assert [r["round_index"] for r in rounds] == [1, 2]
+    assert [r["auto_remaining"] for r in rounds] == [1, 0]
+    assert rounds[0]["post"] is not None and rounds[1]["post"] == rounds[0]["post"]
+    assert rounds[1]["automatic"] and rounds[1]["note"]
+
+
+def test_stop_in_directed_retry_ignores_the_interrupted_handoff(client):
+    import pytest
+
+    cid, sid, base = seed(client)
+    round_record = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
+        run_id="test", actor_ref=MARA)
+    run = _run(cid, sid)
+    fake = FakeLLM([reply("Mara one.", WINIFRED)])
+
+    def on_frame(data):
+        if "delta" in data:
+            run.cancel_requested = True
+
+    with pytest.raises(asyncio.CancelledError):
+        _drive(cid, sid, fake, run, round_record, on_frame)
+    retry = FakeLLM([reply("Mara finishes.", WINIFRED), reply("Must not run.", None)])
+    use(client, retry)
+    response = client.post(base + "/retry")
+    assert "error" not in response.text, response.text
+    assert retry.calls == 1
+    assert speakers(cid, sid) == ["Mara"]

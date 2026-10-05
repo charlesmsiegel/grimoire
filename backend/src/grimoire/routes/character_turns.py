@@ -79,9 +79,15 @@ def _compose(cid, sid, round_record, actor, conn, appended=()):
     # Offering the current/used actors teaches an invalid handoff; omitting the
     # narrator hides a valid slot. Explicit one-response requests have no next,
     # and neither does a List/Natural/Manual round: its plan decides, and any
-    # handoff block it writes is ignored.
-    used = {*round_record["used"], actor}
+    # handoff block it writes is ignored. With automatic rounds remaining, a
+    # Directed handoff to someone who already spoke this round is valid -- it
+    # ends the round and that character leads the next (`_successor`) -- so
+    # only the current actor is withheld.
     offer = round_record["automatic"] and round_record.get("mode", "directed") == "directed"
+    if offer and round_record.get("auto_remaining", 0) > 0:
+        used = {actor}
+    else:
+        used = {*round_record["used"], actor}
     pool = _handoff_pool(cid, sid, round_record) if offer else []
     candidates = [entry for entry in [*pool, {"ref": "grimoire", "name": "Grimoire"}]
                   if offer and entry["ref"] not in used]
@@ -139,6 +145,12 @@ def start(
             if not conn and (planned["actor_ref"]
                              or not (automatic and planned["mode"] == "manual")):
                 conn = _require_connection("chat", cid)
+            chain = {}
+            if kind == "post" and planned["mode"] != "manual":
+                # The rounds a player post may run on for (`_follow_on`);
+                # Manual never auto-continues.
+                rounds = _settings(cid, sid)["auto_rounds"]
+                chain = {"auto_remaining": rounds, "auto_total": rounds, "round_index": 1}
             round_record = store.responses.new_round(
                 cid,
                 sid,
@@ -148,6 +160,7 @@ def start(
                 note=note,
                 turn=turn,
                 **planned,
+                **chain,
             )
     outcome = streaming.StreamOutcome()
     frames = _frames(
@@ -187,18 +200,7 @@ def _plan(cid, sid, kind, trigger, actor_ref):
     mode = settings["order"]
     history = scene["messages"]
     if kind == "post":
-        planned = store.group_play.plan_post(
-            settings, cast, trigger=trigger, history=history, rng=_rng(),
-            force=(actor_ref,) if actor_ref else ())
-        lead, plan = planned["actor_ref"], planned["plan"]
-        if actor_ref:
-            # The forced ref leads; the planner's own lead, if any, is next.
-            plan = ([lead] if lead else []) + plan
-            lead = actor_ref
-        if mode not in ("list", "natural"):
-            lead, plan = actor_ref, []
-        return {"eligible": planned["eligible"], "actor_ref": lead, "mode": mode, "plan": plan,
-                "present": cast}
+        return _plan_round(settings, cast, trigger=trigger, history=history, lead=actor_ref)
     if actor_ref:
         return {"eligible": cast, "actor_ref": actor_ref, "mode": mode, "plan": [],
                 "present": cast}
@@ -210,6 +212,90 @@ def _plan(cid, sid, kind, trigger, actor_ref):
     # Sitting-out characters never reach the selector.
     return {"eligible": store.group_play.available(settings, cast), "actor_ref": lead,
             "mode": mode, "plan": [], "present": cast}
+
+
+def _plan_round(settings, cast, *, trigger, history, lead, author=None):
+    """A round answering `trigger` -- a player post, or the contribution a
+    follow-on round continues from (whose writer is `author`) -- planned by
+    the scene's order, with `lead`, if any, forced to speak first."""
+    mode = settings["order"]
+    planned = store.group_play.plan_post(
+        settings, cast, trigger=trigger, history=history, rng=_rng(),
+        force=(lead,) if lead else (), author=author)
+    actor, plan = planned["actor_ref"], planned["plan"]
+    if lead:
+        # The forced ref leads; the planner's own lead, if any, is next.
+        plan = ([actor] if actor else []) + plan
+        actor = lead
+    if mode not in ("list", "natural"):
+        actor, plan = lead, []
+    return {"eligible": planned["eligible"], "actor_ref": actor, "mode": mode, "plan": plan,
+            "present": cast}
+
+
+def _follow_on(cid, sid, run, token, round_record, lead):
+    """The next automatic round of a player post's chain, or None when the
+    scene's order is Manual now (which never auto-continues).
+
+    Planned by the scene's current order with the most recent contribution as
+    its trigger -- its writer never counted as naming themselves -- and with
+    `lead` (a Directed repeat handoff) speaking first. It keeps the original
+    post, so usage stays attributed to what the player sent, and answers the
+    Continue note, as an empty send would. A Directed round with no lead goes
+    through the selector (`_first_actor`)."""
+    with store.locks.campaign_lock(cid):
+        _fence(cid, sid, run, token)
+        scene = store.scenes.read_scene(cid, sid)
+        settings = store.group_play.settings_of(scene["meta"])
+        if settings["order"] == "manual":
+            return None
+        history = scene["messages"]
+        last = _last_contribution(cid, sid, history) or {"ref": None, "text": ""}
+        planned = _plan_round(settings, roster(cid, sid), trigger=last["text"],
+                              history=history, lead=lead, author=last["ref"])
+        following = store.responses.new_round(
+            cid,
+            sid,
+            automatic=True,
+            post=round_record["post"],
+            run_id=run.id,
+            note=prompts.render("scene/director_note.j2"),
+            turn=round_record.get("turn"),
+            auto_remaining=round_record.get("auto_remaining", 0) - 1,
+            round_index=round_record.get("round_index", 1) + 1,
+            auto_total=round_record.get("auto_total", 0),
+            **planned,
+        )
+        # A detached write -- the round, and the presence it anchors -- that
+        # no contribution may follow (the selector can hand back), so it
+        # stamps the campaign for itself.
+        streaming._turn_settled(cid)
+        return following
+
+
+def _chain_continues(round_record, ending, cancelled):
+    """Whether a round that just ended with nobody next runs on into a
+    follow-on round. `ending` is its last contribution's successor choice
+    plus that contribution's `status`, None when no contribution closed it
+    (nothing generated, the selector handed back, a speaker left)."""
+    return not (
+        cancelled
+        or ending is None
+        or ending["issue"]
+        or ending["status"] != "complete"
+        or not round_record["used"]
+        or round_record.get("mode", "directed") == "manual"
+        or round_record.get("auto_remaining", 0) <= 0
+        or (ending["handed_back"] and not ending["lead"])
+    )
+
+
+def _stop(cid, sid, round_record):
+    """Stop ends the whole chain: no rounds remain, the plan is gone, and the
+    round is `stopped`, so a Retry finishes the interrupted contribution and
+    `_successor` names nobody after it, in any mode."""
+    return store.responses.update_round(
+        cid, sid, round_record["id"], auto_remaining=0, plan=[], stopped=True)
 
 
 def _last_contribution(cid, sid, history):
@@ -232,31 +318,42 @@ def answers_nothing(cid, sid, *, director, content, speaker_ref):
             and _settings(cid, sid)["order"] == "manual")
 
 
-def _successor(cid, sid, round_record, handoff, cancelled):
+def _successor(cid, sid, round_record, handoff, cancelled, actor=None):
     """Who speaks after the contribution that just landed.
 
-    `round_record["used"]` must already include that contribution's actor.
+    `round_record["used"]` must already include that contribution's actor
+    (`actor`, when the caller knows it).
     Directed: the contribution's handoff, validated against the round's
     eligible minus whoever now sits out; `handed_back` is an explicit
-    `next: null`. List, Natural and Manual: the stored plan alone decides
-    (`next_planned`, which skips whoever has left or started sitting out) and
-    the handoff is ignored. Either way nobody follows a non-automatic round or
-    a Stop, and the plan is cleared with it.
+    `next: null`. With automatic rounds remaining, a handoff to someone who
+    already spoke this round is no issue: it ends the round, and that ref is
+    the `lead` of the follow-on round (`_follow_on`) -- never the actor
+    handing off, whom the prompt never offers. List, Natural and Manual: the
+    stored plan alone decides (`next_planned`, which skips whoever has left or
+    started sitting out) and the handoff is ignored. Either way nobody follows
+    a non-automatic round, a Stop, or a round a Stop already marked `stopped`
+    (so a Retry finishes only the interrupted contribution), and the plan is
+    cleared with it.
 
-    `{"next", "issue", "plan", "handed_back"}`."""
+    `{"next", "issue", "plan", "handed_back", "lead"}`."""
     plan = list(round_record.get("plan") or [])
     issue = None
     handed_back = False
+    lead = None
     if round_record.get("mode", "directed") == "directed":
         refs = [entry["ref"] for entry in _handoff_pool(cid, sid, round_record)]
         nxt, issue = store.response_protocol.validate_handoff(
             handoff, [*refs, "grimoire"], round_record["used"])
         handed_back = nxt is None and issue is None
+        if (issue == "repeated speaker" and round_record.get("auto_remaining", 0) > 0
+                and handoff["next"] != actor):
+            lead, issue = handoff["next"], None
     else:
         nxt, plan = store.group_play.next_planned(_settings(cid, sid), roster(cid, sid), plan)
-    if not round_record["automatic"] or cancelled:
-        nxt, plan = None, []
-    return {"next": nxt, "issue": issue, "plan": plan, "handed_back": handed_back}
+    if not round_record["automatic"] or cancelled or round_record.get("stopped"):
+        nxt, plan, lead = None, [], None
+    return {"next": nxt, "issue": issue, "plan": plan, "handed_back": handed_back,
+            "lead": lead}
 
 
 def _selector_messages(cid, sid, round_record):
@@ -574,6 +671,26 @@ async def _first_actor(cid, sid, client, round_record):
     return actor, round_record
 
 
+class _Progress:
+    """What a run's frames have in hand, which `_frames`' failure paths read
+    back: the round, and the contribution in flight (`record`, `watcher`,
+    `meter`, the roll `continuation` it finishes and the `appended` blocks its
+    prompt still owes). `ending` is the successor choice of the contribution
+    that closed the round, None until one does (`_chain_continues`), and
+    `terminal` that the round already wrote the run's last frame (a roll
+    pause, an empty response)."""
+
+    def __init__(self, round_record, appended, continuation):
+        self.round_record = round_record
+        self.appended = appended
+        self.continuation = continuation
+        self.record = None
+        self.watcher = None
+        self.meter = None
+        self.ending = None
+        self.terminal = False
+
+
 async def _frames(
     cid,
     sid,
@@ -589,154 +706,200 @@ async def _frames(
     appended=(),
     continuation=None,
 ):
-    actor = round_record.get("actor_ref")
-    record = None
-    watcher = None
-    meter = None
+    """One run carries a player post's whole chain of rounds: the first, then
+    each follow-on `_follow_on` opens while rounds remain, announced by a
+    `round_start` frame. The turn settles once, after the last of them."""
+    turn = _Progress(round_record, appended, continuation)
     # Tracker keys this turn marked `pending`, started in `finally` once the
     # terminal frames are out -- in transcript order, which is the order the
     # scene's tracker lock runs them in.
     tracked: list[tracker_routes.Mark] = []
     try:
-        actor, round_record = await _first_actor(cid, sid, client, round_record)
-        while actor and not run.cancel_requested:
-            await anyio.lowlevel.checkpoint()
-            current = await run_in_threadpool(roster, cid, sid)
-            if actor not in [r["ref"] for r in current] + ["grimoire"]:
-                await run_in_threadpool(
-                    _round_state,
-                    cid,
-                    sid,
-                    round_record,
-                    status="complete",
-                    issue="speaker left the scene",
-                )
+        actor, turn.round_record = await _first_actor(cid, sid, client, round_record)
+        while True:
+            round_frames = _round_frames(
+                cid, sid, client, conn, run, token, turn, actor, outcome, tracked
+            )
+            async with aclosing(round_frames) as frames:
+                async for frame in frames:
+                    yield frame
+            if turn.terminal:
+                return
+            if not _chain_continues(turn.round_record, turn.ending, run.cancel_requested):
                 break
-            recovered = await run_in_threadpool(
-                _recover_completed, cid, sid, run, token, round_record
+            following = await run_in_threadpool(
+                _follow_on, cid, sid, run, token, turn.round_record, turn.ending["lead"]
             )
-            if recovered is not None:
-                round_record = recovered
-                actor = recovered.get("actor_ref")
-                continue
-            record, messages = await run_in_threadpool(
-                _prepare, cid, sid, run, token, round_record, actor, conn, appended
-            )
-            appended = ()
-            watcher = store.response_protocol.ResponseWatcher(perception=actor != "grimoire")
+            if following is None:
+                break
+            turn.round_record = following
             yield streaming._sse(
                 {
-                    "response_start": {
-                        "id": record["id"],
-                        "speaker": record["speaker"],
-                        "actor_ref": actor,
+                    "round_start": {
+                        "index": following["round_index"],
+                        "of": following["auto_total"] + 1,
                     }
                 }
             )
-            meter = store.usage.meter(
-                "continuation" if continuation else "chat",
-                campaign=cid,
-                scene=sid,
-                post=round_record["post"],
-                round_id=round_record["id"],
-                response_id=record["id"],
-            )
-            async for frame in _stream_contribution(client, messages, conn, meter, watcher, run):
-                yield frame
-            meter.done()
-            meter = None
-            paused = watcher.roll.complete or watcher.roll.truncated
-            status = "incomplete" if paused or run.cancel_requested else "complete"
-            if paused:
-                proposal = await run_in_threadpool(
-                    _pause,
-                    cid,
-                    sid,
-                    run,
-                    token,
-                    record,
-                    watcher,
-                    round_record,
-                    continuation,
-                    outcome,
-                    actor,
-                    tracked,
-                )
-                yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
-                outcome.land()
-                yield streaming._sse({"done": True})
-                return
-            at = await run_in_threadpool(
-                _save, cid, sid, run, token, record, watcher, status, round_record, continuation,
-                tracked,
-            )
-            outcome.persisted(at)
-            if watcher.issue == "empty response":
-                await run_in_threadpool(_round_state, cid, sid, round_record, status="incomplete")
-                outcome.fail("empty_response", "The model returned no response prose.")
-                yield streaming._sse(
-                    {
-                        "error": {
-                            "kind": "empty_response",
-                            "detail": "The model returned no response prose.",
-                        }
-                    }
-                )
-                return
-            used = [*round_record["used"], actor]
-            # Persistence is complete before metadata may authorize a successor.
-            # The end frame goes out first, so a Stop or a sit-out the player
-            # gives on seeing it is what the successor choice reads.
-            yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
-            after = await run_in_threadpool(
-                _successor, cid, sid, {**round_record, "used": used}, watcher.handoff,
-                run.cancel_requested,
-            )
-            next_actor, issue = after["next"], after["issue"]
-            round_record = await run_in_threadpool(
-                _round_state,
-                cid,
-                sid,
-                round_record,
-                used=used,
-                pending_response=None,
-                actor_ref=next_actor,
-                plan=after["plan"],
-                status="pending" if next_actor else "complete",
-                issue=issue,
-                continuation=None,
-                completed_response=record["id"],
-                control_issue=issue,
-            )
-            actor = next_actor
-            record = None
-            watcher = None
-            continuation = None
+            actor, turn.round_record = await _first_actor(cid, sid, client, following)
         outcome.land()
         yield streaming._sse({"done": True})
     except store.responses.ResponseConflict as exc:
-        _abort_meter(meter)
+        _abort_meter(turn.meter)
         # A lost scene/turn fence must never rescue into its replacement.
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except LLMError as exc:
         await _rescue(
-            cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, exc,
-            tracked=tracked,
+            cid, sid, run, token, turn.record, turn.watcher, turn.round_record, turn.continuation,
+            outcome, turn.meter, exc, tracked=tracked,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
     except BaseException:
         with anyio.CancelScope(shield=True):
             await _rescue(
-                cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter,
-                tracked=tracked,
+                cid, sid, run, token, turn.record, turn.watcher, turn.round_record,
+                turn.continuation, outcome, turn.meter, tracked=tracked,
             )
         raise
     finally:
         with anyio.CancelScope(shield=True):
             await streaming._fire_follow_up(after_turn, outcome)
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
+
+
+async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome, tracked):
+    """One round's contributions, from `actor` until nobody is next. Every
+    write lands on `turn`, which is what `_frames` rescues from on failure."""
+    turn.ending = None
+    while actor and not run.cancel_requested:
+        await anyio.lowlevel.checkpoint()
+        current = await run_in_threadpool(roster, cid, sid)
+        if actor not in [r["ref"] for r in current] + ["grimoire"]:
+            await run_in_threadpool(
+                _round_state,
+                cid,
+                sid,
+                turn.round_record,
+                status="complete",
+                issue="speaker left the scene",
+            )
+            turn.ending = None
+            break
+        recovered = await run_in_threadpool(
+            _recover_completed, cid, sid, run, token, turn.round_record
+        )
+        if recovered is not None:
+            turn.round_record, after = recovered
+            turn.ending = {**after, "status": "complete"}
+            actor = turn.round_record.get("actor_ref")
+            continue
+        turn.record, messages = await run_in_threadpool(
+            _prepare, cid, sid, run, token, turn.round_record, actor, conn, turn.appended
+        )
+        record = turn.record
+        turn.appended = ()
+        turn.watcher = watcher = store.response_protocol.ResponseWatcher(
+            perception=actor != "grimoire")
+        yield streaming._sse(
+            {
+                "response_start": {
+                    "id": record["id"],
+                    "speaker": record["speaker"],
+                    "actor_ref": actor,
+                }
+            }
+        )
+        turn.meter = store.usage.meter(
+            "continuation" if turn.continuation else "chat",
+            campaign=cid,
+            scene=sid,
+            post=turn.round_record["post"],
+            round_id=turn.round_record["id"],
+            response_id=record["id"],
+        )
+        async for frame in _stream_contribution(client, messages, conn, turn.meter, watcher, run):
+            yield frame
+        turn.meter.done()
+        turn.meter = None
+        paused = watcher.roll.complete or watcher.roll.truncated
+        status = "incomplete" if paused or run.cancel_requested else "complete"
+        if paused:
+            # The chain waits on the roll: `auto_remaining` stays on the
+            # paused round, and its resume carries on from it.
+            proposal = await run_in_threadpool(
+                _pause,
+                cid,
+                sid,
+                run,
+                token,
+                record,
+                watcher,
+                turn.round_record,
+                turn.continuation,
+                outcome,
+                actor,
+                tracked,
+            )
+            turn.terminal = True
+            yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
+            outcome.land()
+            yield streaming._sse({"done": True})
+            return
+        at = await run_in_threadpool(
+            _save, cid, sid, run, token, record, watcher, status, turn.round_record,
+            turn.continuation, tracked,
+        )
+        outcome.persisted(at)
+        if watcher.issue == "empty response":
+            await run_in_threadpool(
+                _round_state, cid, sid, turn.round_record, status="incomplete")
+            turn.terminal = True
+            outcome.fail("empty_response", "The model returned no response prose.")
+            yield streaming._sse(
+                {
+                    "error": {
+                        "kind": "empty_response",
+                        "detail": "The model returned no response prose.",
+                    }
+                }
+            )
+            return
+        used = [*turn.round_record["used"], actor]
+        # Persistence is complete before metadata may authorize a successor.
+        # The end frame goes out first, so a Stop or a sit-out the player
+        # gives on seeing it is what the successor choice reads.
+        yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
+        after = await run_in_threadpool(
+            _successor, cid, sid, {**turn.round_record, "used": used}, watcher.handoff,
+            run.cancel_requested, actor,
+        )
+        # The contribution's own issue (it spoke for another actor) stops a
+        # chain as surely as a bad handoff does.
+        turn.ending = {**after, "status": status, "issue": after["issue"] or watcher.issue}
+        next_actor, issue = after["next"], after["issue"]
+        turn.round_record = await run_in_threadpool(
+            _round_state,
+            cid,
+            sid,
+            turn.round_record,
+            used=used,
+            pending_response=None,
+            actor_ref=next_actor,
+            plan=after["plan"],
+            status="pending" if next_actor else "complete",
+            issue=issue,
+            continuation=None,
+            completed_response=record["id"],
+            control_issue=issue,
+        )
+        actor = next_actor
+        turn.record = None
+        turn.watcher = None
+        turn.continuation = None
+    if run.cancel_requested:
+        turn.round_record = await run_in_threadpool(_stop, cid, sid, turn.round_record)
 
 
 def _abort_meter(meter):
@@ -757,6 +920,10 @@ async def _rescue(
     def save():
         with store.locks.campaign_lock(cid):
             _fence(cid, sid, run, token)
+            if run.cancel_requested:
+                # A Stop ends the chain however the interrupted contribution
+                # is kept below -- saved for Retry, or paused on its roll.
+                _stop(cid, sid, round_record)
             if watcher and record:
                 current = store.responses.get(cid, sid, record["id"], private=True)
                 if current["status"] != "complete":
@@ -896,6 +1063,9 @@ def _retry_context_matches(messages, round_record):
 
 
 def _recover_completed(cid, sid, run, token, round_record):
+    """`(round, successor choice)` once a pending contribution that already
+    completed is published and the round advanced past it; None when the
+    round has no completed contribution left to recover."""
     pending = round_record.get("pending_response")
     if not pending:
         return None
@@ -917,7 +1087,7 @@ def _recover_completed(cid, sid, run, token, round_record):
         variant = next(v for v in record["variants"] if v["id"] == record["active_variant"])
         used = list(dict.fromkeys([*round_record["used"], record["actor_ref"]]))
         after = _successor(cid, sid, {**round_record, "used": used}, variant.get("handoff"),
-                           run.cancel_requested)
+                           run.cancel_requested, record["actor_ref"])
         return _round_state(
             cid,
             sid,
@@ -929,7 +1099,7 @@ def _recover_completed(cid, sid, run, token, round_record):
             status="pending" if after["next"] else "complete",
             issue=after["issue"],
             continuation=None,
-        )
+        ), {**after, "issue": after["issue"] or variant.get("issue")}
 
 
 def _public_error(exc):
