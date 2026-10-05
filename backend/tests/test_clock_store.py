@@ -14,6 +14,7 @@ from grimoire.store import (
     characters,
     chronicle,
     clock,
+    commitments,
     config,
     plot,
     scenes,
@@ -488,3 +489,81 @@ def test_observe_ignores_a_date_the_calendar_rejects(monkeypatch, tmp_path):
     clock.advance(cid, to="2026-05-01", reason="start")
     assert clock.observe(cid, "2026-13-40", "nonsense")["moved"] is False
     assert clock.now(cid) == "2026-05-01"
+
+
+def test_digest_rows_are_pinned_for_an_ordinary_campaign(monkeypatch, tmp_path):
+    """A characterization of the digest's open ledger for a campaign with no
+    aliases -- whole rows, in order, aging included -- taken on the code that
+    reads `plot.open_threads`/`commitments.open_commitments` directly, so the
+    switch to effective rows can only add to it. The frozen sweep cannot carry
+    this: its fixture has no clock, so `clock.preview` there records only a
+    `ClockError`, and this test is the digest's identity proof instead.
+
+    Three dated scenes, and every retired row (a closed thread, a fulfilled
+    commitment) sits by its `last_scene` BETWEEN its section's open rows, so a
+    digest that stopped filtering them -- or sorted them apart -- would move a
+    row; and the `(last_scene, id)` order differs from plain id order, so a
+    re-sort on either key alone would too. The commitments cover each aging
+    branch the preview's landing day can reach: a dated deadline already behind
+    it (overdue outranking a recent touch), one still ahead, a free-text one
+    that is not a date at all, and an undated row.
+
+    Task 4 of the slice B plan may only add `"aliases": []` to each row literal
+    below; any other edit means the no-alias digest moved."""
+    cid = _campaign(monkeypatch, tmp_path)
+    for sid, date in (("001--the-pier-at-dusk", "2026-03-01"),
+                      ("002--saltmarch-eve", "2026-04-20"),
+                      ("003--the-coronation", "2026-05-15")):
+        chronicle.absorb(cid, {"id": sid, "one_line": "x", "summary": "y", "keywords": [],
+                               "cast": [], "location": "", "date": date})
+    plot.set_movement(cid, "maras-map", "Mara's map", "advanced",
+                      "Mara hid the map.", "003--the-coronation")
+    plot.set_movement(cid, "the-tithe", "The Saltmarch tithe", "closed",
+                      "Paid in full.", "002--saltmarch-eve")
+    plot.set_movement(cid, "the-coronation", "The coronation", "open", "",
+                      "001--the-pier-at-dusk")
+    commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                             "2026-05-20", "Mara swore it on the quay.",
+                             "003--the-coronation")
+    commitments.set_movement(cid, "seraphines-ultimatum", "Seraphine's ultimatum", "threat",
+                             "fulfilled", "", "Seraphine made good on it.",
+                             "002--saltmarch-eve")
+    commitments.set_movement(cid, "seraphines-wager", "Seraphine's wager", "threat", "open",
+                             "2026-06-10", "", "002--saltmarch-eve")
+    commitments.set_movement(cid, "winifreds-promise", "Winifred's promise", "promise",
+                             "open", "before the bells stop", "", "001--the-pier-at-dusk")
+    commitments.set_movement(cid, "winifreds-errand", "Winifred's errand", "foreshadowing", "open",
+                             "", "Winifred took the letter.", "003--the-coronation")
+    clock.advance(cid, to="2026-05-02", reason="start")
+
+    digest = clock.preview(cid, days=30)
+
+    assert digest["to"] == "2026-06-01"   # aged against the landing day, not 05-02
+    assert digest["to"] == "2026-06-01"   # aged against the landing day, not 05-02
+    assert digest["open_threads"] == [
+        {"id": "the-coronation", "title": "The coronation", "status": "open",
+         "last_scene": "001--the-pier-at-dusk", "latest_beat": "",
+         "aging": {"state": "stale", "days_since": 92, "days_over": None, "due_in": None}},
+        {"id": "maras-map", "title": "Mara's map", "status": "advanced",
+         "last_scene": "003--the-coronation", "latest_beat": "Mara hid the map.",
+         "aging": {"state": "ok", "days_since": 17, "days_over": None, "due_in": None}},
+    ]
+    assert digest["commitments"] == [
+        {"id": "winifreds-promise", "title": "Winifred's promise", "kind": "promise",
+         "status": "open", "due": "before the bells stop", "last_scene": "001--the-pier-at-dusk",
+         "latest_beat": "",
+         "aging": {"state": "stale", "days_since": 92, "days_over": None, "due_in": None}},
+        {"id": "seraphines-wager", "title": "Seraphine's wager", "kind": "threat",
+         "status": "open", "due": "2026-06-10", "last_scene": "002--saltmarch-eve",
+         "latest_beat": "",
+         "aging": {"state": "stale", "days_since": 42, "days_over": None, "due_in": 9}},
+        {"id": "maras-oath", "title": "Mara's oath", "kind": "promise", "status": "open",
+         "due": "2026-05-20", "last_scene": "003--the-coronation",
+         "latest_beat": "Mara swore it on the quay.",
+         "aging": {"state": "overdue", "days_since": 17, "days_over": 12, "due_in": None}},
+        {"id": "winifreds-errand", "title": "Winifred's errand", "kind": "foreshadowing",
+         "status": "open", "due": "", "last_scene": "003--the-coronation",
+         "latest_beat": "Winifred took the letter.",
+         "aging": {"state": "ok", "days_since": 17, "days_over": None, "due_in": None}},
+    ]
+    assert digest["aging"] == {"overdue": 1, "stale": 3, "stale_after": 30}
