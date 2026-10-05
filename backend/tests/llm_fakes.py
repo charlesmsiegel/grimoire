@@ -518,6 +518,31 @@ class RecordingProvider:
             raise self.probe_error
 
 
+class FakeEmbeddings:
+    """Stands in for an `embeddings.EmbeddingsClient` singleton (a store
+    module's `_CLIENT`), recording every chunk and the deadline it was given.
+
+    `vector_for` maps one text to its vector, so a test scripts widths and
+    directions per text. `error` is raised by every call after the first
+    `fail_after` -- ``fail_after=1`` answers one chunk and fails the next,
+    which is the shape a partial batch failure is tested against.
+    """
+
+    def __init__(self, vector_for=lambda t: [1.0, 0.0], error=None, fail_after=0):
+        self.vector_for = vector_for
+        self.error = error
+        self.fail_after = fail_after
+        self.calls: list[list[str]] = []
+        self.deadlines: list[float | None] = []
+
+    def embed(self, texts, model, key, base_url, deadline=None):
+        self.calls.append(list(texts))
+        self.deadlines.append(deadline)
+        if self.error is not None and len(self.calls) > self.fail_after:
+            raise self.error
+        return [self.vector_for(t) for t in texts]
+
+
 class StallingOpenRouter(FakeLLM):
     """Streams `deltas`, then holds the connection open — the model still
     talking when the client walks away."""
