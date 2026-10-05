@@ -83,4 +83,26 @@ describe("individual response controls", () => {
     fireEvent.click(screen.getByRole("button", { name: "Use variant 2" }));
     expect(actions.onActivate).toHaveBeenCalledWith("response-a", "v2");
   });
+  it("shows what made each variant under its text, and nothing for one with no record", async () => {
+    vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
+      settings: { words: 120, paragraphs: 3, style_id: "", phase: "play" },
+      resume_settings: { words: 60, paragraphs: 1, style_id: "noir", phase: "play" },
+      variants: [{ id: "v1", content: "First", status: "complete" },
+        { id: "v2", content: "Second", status: "complete", made_by: { model: "vendor/m", guidance: "Colder." } },
+        { id: "v3", content: "Third", status: "complete", made_by: { model: "vendor/r", composed: "resume" } }] } as Awaited<ReturnType<typeof api.getResponse>>);
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
+    await screen.findByRole("button", { name: "Use variant 2" });
+    expect(screen.getAllByText(/^Model: /)).toHaveLength(2);
+    expect(screen.getByText("Model: vendor/m")).toBeInTheDocument();
+    expect(screen.getByText("Guided: Colder.")).toBeInTheDocument();
+    expect(screen.getAllByText("Guided: Colder.")).toHaveLength(1);
+    // Each variant reads the settings it was composed under.
+    expect(screen.getByText("Length: ~120 words, 3 paragraphs")).toBeInTheDocument();
+    expect(screen.getByText("Length: ~60 words, 1 paragraphs")).toBeInTheDocument();
+    expect(screen.getByText("Style: noir")).toBeInTheDocument();
+    // The variant with no `made_by` renders no provenance beside its text.
+    const first = screen.getByText("First").parentElement as HTMLElement;
+    expect(first.querySelectorAll("p.subtle")).toHaveLength(0);
+  });
 });

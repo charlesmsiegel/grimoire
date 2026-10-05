@@ -3,6 +3,7 @@ import { useState } from "react";
 import { api, type ResponseRecord } from "../api/client";
 import RerollRoutePicker, { NO_REROLL_ROUTE, type RerollRoute } from "./RerollRoute";
 import { ErrorNote } from "./ErrorNote";
+import { madeByLines } from "./play/swipeTitle";
 
 export function ResponseControls({ cid, sid, responseId, canReroll, status, contextChanged,
   disabled = false, onDelete, onReroll, onActivate, onReplay, onCreateCharacter }: {
@@ -77,6 +78,10 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
       {record?.variants.map((variant, index) => <div key={variant.id}>
         <Thinking content={variant.reasoning ?? ""} />
         <p>{variant.content}</p>
+        {/* A resume-composed variant was written under `resume_settings`. */}
+        {madeByLines(variant.made_by,
+          variant.made_by?.composed === "resume" ? record.resume_settings : record.settings)
+          .map((line) => <p key={line} className="subtle">{line}</p>)}
         {variant.issue && <p className="subtle">Response issue: {variant.issue}</p>}
         <button disabled={disabled || variant.status !== "complete" || record.active_variant === variant.id}
           onClick={() => { setRecord(null); onActivate(responseId, variant.id); }}>
