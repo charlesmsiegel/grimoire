@@ -128,6 +128,13 @@ android/                          ← new top-level Gradle project
   means nothing on the network can reach the server; a per-boot random bearer token
   appended by the shell and checked by a middleware is a cheap hardening step if we
   ever care about other apps on the same device probing localhost.
+- **LLM calls leave from Python, not from the WebView.** An OpenAI-compatible
+  connection can name a server on the local network over plain `http://`
+  (Ollama, llama.cpp, LM Studio, vLLM). `network_security_config.xml` does not
+  stand in the way: it governs Android's Java networking — here, only the
+  WebView — while `httpx` in the embedded interpreter opens its own sockets.
+  The setup a user needs (LAN address instead of `localhost`, a server bound to
+  the network) is in `android/README.md`, "Using a local LLM server".
 - **Single origin.** WebView loads the SPA *from the Python server*, exactly like
   desktop. We deliberately do not use `WebViewAssetLoader` for the static files —
   splitting origins between assets and API would reintroduce CORS and cookie/URL

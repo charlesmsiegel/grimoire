@@ -107,6 +107,23 @@ test("creating a custom endpoint connection posts the right fields", async () =>
     })));
 });
 
+test("a local-server preset fills the base URL, and an API key stays optional", async () => {
+  render(<ConnectionEditor />);
+  await screen.findByText("+ New connection");
+  fireEvent.click(screen.getByText("+ New connection"));
+  fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "openai_compatible" } });
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Local" } });
+  const presets = screen.getByRole("group", { name: "Local server presets" });
+  fireEvent.click(within(presets).getByRole("button", { name: "Ollama" }));
+  expect(screen.getByLabelText("Base URL")).toHaveValue("http://localhost:11434/v1");
+  fireEvent.click(screen.getByRole("button", { name: /create connection/i }));
+  await waitFor(() => expect(api.createConnection).toHaveBeenCalledWith(
+    expect.objectContaining({
+      kind: "openai_compatible", name: "Local",
+      base_url: "http://localhost:11434/v1", api_key: "",
+    })));
+});
+
 test("Set as active updates the active connection", async () => {
   render(<ConnectionEditor />);
   const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);

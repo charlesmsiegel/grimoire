@@ -9,6 +9,7 @@ const section = (tier: string, tokens: number, dropped = false) => ({
 const ctx = (over: Partial<SceneContext> = {}): SceneContext => ({
   model: "m", total_tokens: 1_000, dropped_tokens: 0, budget_tokens: 4_000,
   sections: [section("lock-in", 400), section("history", 600)],
+  token_count: { tokenizer: "cl100k_base", exact: true },
   ...over,
 });
 
@@ -44,4 +45,17 @@ test("a tier the client's union has not caught up with still lands in the bar", 
   })} />);
   expect(screen.getByText(/RECALLED 250/)).toBeInTheDocument();
   expect(screen.getByText(/STANDING FRAME 100/)).toBeInTheDocument();
+});
+
+test("marks the total as an estimate when the tokenizer was not the model's own", () => {
+  render(<ContextBudgetBar label="LAST TURN" ctx={ctx({
+    model: "llama3.1:8b", token_count: { tokenizer: "cl100k_base", exact: false },
+  })} />);
+  const total = screen.getByText("≈ 1,000 / 4,000 · 25%");
+  expect(total).toHaveAttribute("title", expect.stringMatching(/llama3\.1:8b uses its own/));
+});
+
+test("a snapshot frozen before tokenizers were recorded reads as an estimate", () => {
+  render(<ContextBudgetBar label="LAST TURN" ctx={ctx({ token_count: undefined })} />);
+  expect(screen.getByText("≈ 1,000 / 4,000 · 25%")).toBeInTheDocument();
 });

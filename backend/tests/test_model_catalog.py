@@ -36,6 +36,25 @@ def test_an_entry_keeps_missing_metadata_missing():
         "prompt": None, "completion": None}
 
 
+def test_the_context_window_is_read_from_vllms_field_too():
+    """vLLM names the window it serves as `max_model_len`; without reading it a
+    local model's context bar has nothing to be a fraction of."""
+    assert catalog.entry({"id": "m", "max_model_len": 32768})["context"] == 32768
+    assert catalog.entry({"id": "m", "context_length": 8192,
+                          "max_model_len": 4096})["context"] == 8192
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, "8192", True])
+def test_a_context_field_that_is_not_a_positive_integer_is_unknown(value):
+    assert catalog.entry({"id": "m", "context_length": value})["context"] is None
+
+
+def test_llama_cpps_training_length_is_not_the_window():
+    """`n_ctx_train` is what the weights were trained to, not what `-c` gave
+    the server; drawing the bar against it would hide an overflow."""
+    assert catalog.entry({"id": "m", "meta": {"n_ctx_train": 131072}})["context"] is None
+
+
 def test_a_null_pricing_block_does_not_raise():
     """An endpoint sending `"pricing": null` is not hypothetical, and one bad
     field must not empty a catalog of three hundred."""

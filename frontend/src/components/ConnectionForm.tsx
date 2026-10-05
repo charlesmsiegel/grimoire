@@ -24,8 +24,9 @@ export const BLANK_CONNECTION: ConnectionFormValue = {
  *
  *  Shared by the Connections page's editor and the first-run wizard (#194):
  *  the branching per kind (OpenRouter wants a key and an OpenRouter model,
- *  Claude wants neither, a custom endpoint wants a base URL and its own model
- *  list) is the part worth having exactly once.
+ *  Claude wants neither, an OpenAI-compatible endpoint -- a local Ollama,
+ *  llama.cpp, LM Studio or vLLM server, or a hosted one -- wants a base URL, an
+ *  optional key and its own model list) is the part worth having exactly once.
  *
  *  Kept dumb on purpose — no fetching, no saving. `models` arrives as data and
  *  `modelsHint` as a slot, because the affordance that belongs there differs by
@@ -64,7 +65,7 @@ export function ConnectionForm({
                 onChange={(e) => set({ kind: e.target.value as LLMConnectionKind })}>
           <option value="openrouter">OpenRouter</option>
           <option value="claude">Claude</option>
-          <option value="openai_compatible">Custom (OpenAI-compatible)</option>
+          <option value="openai_compatible">OpenAI-compatible (Ollama, llama.cpp, LM Studio, …)</option>
         </select>
       </Field>
       <Field label="Name">
@@ -108,10 +109,21 @@ export function ConnectionForm({
 
       {value.kind === "openai_compatible" && (
         <>
-          <Field label="Base URL">
+          <Field label="Base URL"
+                 hint="The address that ends in /v1. A local server on another machine (or reached from the Android app) is http://<that computer's LAN address>:<port>/v1, and has to be listening on the network rather than only on localhost.">
             <input type="text" placeholder="https://api.example.com/v1" value={value.base_url}
                    onChange={(e) => set({ base_url: e.target.value })} />
           </Field>
+          <div className="field-hint" role="group" aria-label="Local server presets">
+            Local servers on this machine:{" "}
+            {LOCAL_PRESETS.map((p, i) => (
+              <span key={p.label}>
+                {i > 0 && " · "}
+                <button type="button" className="link" title={p.url}
+                        onClick={() => set({ base_url: p.url })}>{p.label}</button>
+              </span>
+            ))}
+          </div>
           <Field label="API key" hint="Optional — leave blank for servers that don't require auth.">
             <input type="password" placeholder={keySet ? "A key is set — type to replace" : "(optional)"}
                    value={apiKey} onChange={(e) => onApiKey(e.target.value)} />
@@ -145,6 +157,21 @@ export function ConnectionForm({
     </>
   );
 }
+
+/** Each server's out-of-the-box OpenAI-compatible root on this machine.
+ *
+ *  A preset fills the field and nothing more: the port is only the default,
+ *  and the reader can still edit it before saving. Every one of these speaks
+ *  `POST /chat/completions`, and all but the oldest builds serve `GET /models`,
+ *  which is what "Fetch models" and "Test connection" ask. */
+const LOCAL_PRESETS: { label: string; url: string }[] = [
+  { label: "Ollama", url: "http://localhost:11434/v1" },
+  { label: "llama.cpp", url: "http://localhost:8080/v1" },
+  { label: "LM Studio", url: "http://localhost:1234/v1" },
+  { label: "vLLM", url: "http://localhost:8000/v1" },
+  { label: "KoboldCpp", url: "http://localhost:5001/v1" },
+  { label: "text-generation-webui", url: "http://localhost:5000/v1" },
+];
 
 // Aliases resolve to the newest model of each tier at request time (the Agent
 // SDK passes them through to Claude Code); pinned ids freeze a version and

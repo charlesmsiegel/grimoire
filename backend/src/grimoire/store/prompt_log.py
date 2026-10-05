@@ -60,7 +60,7 @@ import json
 import time
 from pathlib import Path
 
-from . import atomic, config, locks
+from . import atomic, config, locks, tokens
 from .campaigns import paths as campaigns_paths
 from .paths import safe_id
 
@@ -278,6 +278,12 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
             # would then refuse the entry it had just listed.
             _root(cid).mkdir(parents=True, exist_ok=True)
             payload = {k: v for k, v in row.items() if k != "scene"}
+            # How these counts were made, frozen with them: the model and the
+            # tokenizer both change, and a past turn is described by its own.
+            # Payload only, like the sections -- the list view never shows it.
+            # An entry written before this existed has none, which the
+            # inspector reads as "estimate", the answer it cannot rule out.
+            payload["token_count"] = tokens.counting(model)
             atomic.write_text(_entry_path(cid, eid),
                               json.dumps({"id": eid, **payload, **breakdown}, indent=2) + "\n")
             evicted = index["entries"][:max(0, len(index["entries"]) - keep)]

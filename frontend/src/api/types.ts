@@ -1196,9 +1196,16 @@ export type CampaignBudget = {
   spent_usd?: number; estimated_usd?: number;
   unpriced_calls?: number; calls?: number; fraction?: number;
 };
+/** How a breakdown's token counts were made (`store.tokens.counting`).
+ *  `tokenizer` is a tiktoken encoding name (`cl100k_base`) or `heuristic`, the
+ *  characters/4 fallback. `exact` only when the tokenizer that counted is the
+ *  model's own; for most backends it is not, and the counts are estimates. */
+export type TokenCounting = { tokenizer: string; exact: boolean };
 export type SceneContext = {
   model: string; total_tokens: number; dropped_tokens: number;
   budget_tokens: number; sections: ContextSection[];
+  /** Absent on a snapshot frozen before it existed — read as an estimate. */
+  token_count?: TokenCounting;
 };
 /** One user pin or exclude (#129) as the panel sees it: the rule, the target it
  *  names resolved to something displayable, and how many posts it has left.

@@ -28,8 +28,27 @@ def entry(raw: dict) -> dict:
     if not isinstance(pricing, dict):
         pricing = {}
     return {"id": raw["id"], "name": raw.get("name") or raw["id"],
-            "context": raw.get("context_length"),
+            "context": _context(raw),
             "prompt": pricing.get("prompt"), "completion": pricing.get("completion")}
+
+
+def _context(raw: dict) -> int | None:
+    """The model's context window, from whichever field this server names it.
+
+    `context_length` is OpenRouter's; `max_model_len` is vLLM's, and it is the
+    window the server was launched with rather than the one the weights were
+    trained to -- which is the one a prompt has to fit. llama.cpp's `meta.n_ctx_train` is deliberately NOT read:
+    it is the training length, and a server started with a smaller `-c` would
+    have the inspector drawing a bar against a window it does not have. Ollama
+    names none here, so its models stay unknown -- `None`, never `0`.
+
+    Only a positive integer counts; anything else is a field that does not say.
+    """
+    for key in ("context_length", "max_model_len"):
+        value = raw.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
 
 
 def rows(body: object) -> list | None:

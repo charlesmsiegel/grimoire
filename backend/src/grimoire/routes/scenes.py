@@ -4588,11 +4588,16 @@ def get_scene_context(cid: str, sid: str):
     dropped still ships here, with its text and `dropped: true`, so the
     inspector can show what was cut without that cut counting toward the total
     it was cut to fit. See `context.context_breakdown` for why the total is not
-    the sum of the rows."""
+    the sum of the rows.
+
+    `token_count` says which tokenizer produced those numbers and whether it is
+    this model's own (`tokens.counting`) -- for most backends it is not, and the
+    inspector marks the counts as estimates."""
     _require_scene(cid, sid)
     conn, _resolution, _routed = _standing_connection("chat", cid)
     model = effective_model(conn) if conn is not None else ""
-    return {"model": model, **store.context.context_breakdown(cid, sid, model=model)}
+    return {"model": model, **store.context.context_breakdown(cid, sid, model=model),
+            "token_count": store.tokens.counting(model)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts")
