@@ -362,7 +362,7 @@ def post_campaign_adopt_st(cid: str):
     with store.locks.campaign_lock(cid):
         for kind in store.entities.ENTITY_KINDS:
             # overlay-ok: the campaign's OWN records on purpose -- an inherited one
-            # is the world's to adopt, and the overlay listing would materialize it
+            # is the world's to adopt, and handing it to update_entity would materialize it
             _adopt_bulk(kind, store.entities.list_entities(croot, kind),
                         lambda k, e, m: _campaign_adopt(cid, k, e, m), applied, skipped)
     return {"applied": applied, "skipped": skipped}
