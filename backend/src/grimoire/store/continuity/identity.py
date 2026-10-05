@@ -48,6 +48,15 @@ the batch already moves, and is otherwise downgraded to ``uncertain``.
 `Examination.rewritten` then retargets the accepted rows by the §10.2 rewrite
 (never ``open``, kind and unresolving status kept as stored) and stamps every
 examined row with its `identity_check`; materialize stages what it is given.
+
+**A retarget frees the id its row held**, and materialize assigns the batch
+again. A later row `assign_ids` dropped as a second move of that proposed
+record -- the same title again, or the id it was given spelled out -- was never
+examined, and on that second run it would be handed the freed id and open the
+very record the resolver said already exists, with no `identity_check` to say
+so. `examine` remembers those siblings per proposal (the rows that stage once
+it stops holding its id), and `rewritten` retargets them onto the same record,
+where materialize drops them as a second move again: the drop they already had.
 """
 
 from __future__ import annotations
@@ -102,7 +111,7 @@ class Examined:
     def __init__(self, section: str, index: int, key: str, kind: similarity.Kind,
                  row: dict, assigned: str,
                  candidates: list[tuple[similarity.Subject, dict]],
-                 distinguished_from: list[str]):
+                 distinguished_from: list[str], siblings: tuple[int, ...] = ()):
         self.section = section
         self.index = index            # position in its section
         self.key = key                # "r1", "r2", ... in examination order
@@ -112,6 +121,7 @@ class Examined:
         self.title = _staged_title(row, assigned)
         self.candidates = candidates
         self.distinguished_from = distinguished_from
+        self.siblings = siblings      # later rows dropped only because this one holds its id
         self.decision = "unchecked"
         self.status = "hint_only"
         self.reason = ""
@@ -228,7 +238,11 @@ class Examination:
         canonical record by the §10.2 rewrite and carries its original under
         `AS_NEW_KEY`; every other examined row is the row as given. Both carry
         `identity_check` (without ``alternatives``, which materialize adds).
-        Rows with no plausible candidate were never examined and are untouched."""
+        An accepted row's siblings -- the rows dropped only because it held its
+        id -- are retargeted onto the same record without a check, so they stay
+        a dropped second move rather than opening the record under the freed
+        id. Rows with no plausible candidate were never examined and are
+        untouched."""
         out = dict(parsed)
         for section in SECTIONS:
             rows = parsed.get(section)
@@ -240,6 +254,10 @@ class Examination:
                 new = _onto_existing(e.kind, e.row, e.target)
                 new["identity_check"] = ic
                 new[AS_NEW_KEY] = dict(e.row)
+                for j in e.siblings:
+                    sibling = parsed[e.section][j]
+                    if out[e.section][j] is sibling and isinstance(sibling, dict):
+                        out[e.section][j] = _onto_existing(e.kind, sibling, e.target)
             else:
                 new = {**e.row, "identity_check": ic}
             out[e.section][e.index] = new
@@ -362,16 +380,17 @@ _Pools = dict[similarity.Kind, list[similarity.Subject]]
 class _Proposal:
     """A proposed-new row on its way to being examined."""
 
-    __slots__ = ("assigned", "index", "kind", "row", "section", "subject")
+    __slots__ = ("assigned", "index", "kind", "row", "section", "siblings", "subject")
 
     def __init__(self, section: str, index: int, kind: similarity.Kind, row: dict,
-                 assigned: str, subject: similarity.Subject):
+                 assigned: str, subject: similarity.Subject, siblings: tuple[int, ...]):
         self.section = section
         self.index = index
         self.kind = kind
         self.row = row
         self.assigned = assigned
         self.subject = subject
+        self.siblings = siblings
 
 
 def _subject(kind: similarity.Kind, n: int, row: dict, assigned: str, sid: str,
@@ -388,6 +407,23 @@ def _actors(cid: str, sid: str, facts: dict) -> set[str]:
     present = {canon.actor_ref(c) for c in (cast if isinstance(cast, list) else ())
                if isinstance(c, str) and c}
     return present | involvement.scene_actors(cid).get(sid, set())
+
+
+def _siblings(threads: dict, owed: dict | None, parsed: dict, live: dict[str, str],
+              before: dict[tuple[str, int], absorb_materializer.Assigned | None],
+              section: str, index: int) -> tuple[int, ...]:
+    """The later rows of `section` that `assign_ids` drops only because row
+    `index` holds its id: the rows it stages once that row stops holding one.
+
+    Asked by assigning the batch again with the row blanked (a blank beat is
+    dropped before it reserves anything), which is what a retarget does to the
+    id it held. Earlier rows cannot change; the record it is retargeted onto
+    is stored, so reserving it frees nothing else."""
+    rows = list(parsed.get(section) or [])
+    rows[index] = {}
+    after = absorb_materializer.assign_ids(threads, owed, {**parsed, section: rows}, live)
+    return tuple(j for j in range(index + 1, len(rows))
+                 if before.get((section, j)) is None and after.get((section, j)) is not None)
 
 
 def _classify(cid: str, sid: str, parsed: dict, facts: dict, ledgers: effective.Ledgers,
@@ -408,9 +444,10 @@ def _classify(cid: str, sid: str, parsed: dict, facts: dict, ledgers: effective.
                 continue
             if actors is None:
                 actors = _actors(cid, sid, facts)
-            proposals.append(_Proposal(section, i, kind, row, slot.id,
-                                       _subject(kind, len(proposals) + 1, row, slot.id, sid,
-                                                actors)))
+            proposals.append(_Proposal(
+                section, i, kind, row, slot.id,
+                _subject(kind, len(proposals) + 1, row, slot.id, sid, actors),
+                _siblings(threads, ledgers.commitments, parsed, live, assigned, section, i)))
     return proposals, targets
 
 
@@ -462,7 +499,7 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
             continue
         rows.append(Examined(p.section, p.index, f"r{len(rows) + 1}", p.kind, p.row,
                              p.assigned, candidates,
-                             _distinguished(p.row, p.kind, stored[p.kind], live)))
+                             _distinguished(p.row, p.kind, stored[p.kind], live), p.siblings))
     matching: Literal["basic", "semantic"] = (
         "semantic" if similarity.matching() == "semantic" else "basic")
     return Examination(rows, len(proposals), matching, sem.mode, sem.error, sem.embedded,
