@@ -12,6 +12,7 @@ from grimoire.store.absorb import routing as absorb_routing
 from grimoire.store.scenes import serialize
 from tests.llm_fakes import FakeLLM
 from tests.test_character_turns import seed
+from tests.test_group_play_turns import MARA, WINIFRED, group, reply, speakers, use
 from tests.test_response_controls_routes import _answer
 
 STAMP = "2026-10-05T12:00:00Z"
@@ -362,3 +363,26 @@ def test_an_all_excluded_scene_is_empty_to_absorb_dossiers_and_the_fold(client):
     body = client.post(base + "/rolling-summary?force=true").json()
     assert body["refreshed"] is False
     assert fake.calls == 0
+
+
+# --- group play: the speaker-order planner ----------------------------------
+
+def test_the_speaker_order_planner_continues_from_the_last_post_in_context(client):
+    # List order Mara, Winifred: an empty send continues after the newest
+    # contribution. Hiding Winifred's reply makes Mara's the newest one the
+    # planner can see, so Winifred is next again -- not Mara.
+    cid, sid = seed(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    group(client, base, order="list", order_list=[MARA, WINIFRED])
+    use(client, FakeLLM([reply("Mara answers.", None)]))
+    client.post(base + "/chat", json={"speaker_ref": MARA})
+    use(client, FakeLLM([reply("Winifred continues.", MARA)]))
+    client.post(base + "/chat", json={"content": ""})
+    assert speakers(cid, sid) == ["Mara", "Winifred"]
+    hidden = next(i for i, m in enumerate(_messages(cid, sid)) if m.get("speaker") == "Winifred")
+    store.scenes.set_excluded(cid, sid, hidden, True)
+    fake = FakeLLM([reply("Winifred again.", MARA)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": ""})
+    assert "error" not in response.text, response.text
+    assert speakers(cid, sid) == ["Mara", "Winifred", "Winifred"]

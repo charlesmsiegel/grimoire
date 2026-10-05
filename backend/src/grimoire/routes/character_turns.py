@@ -206,7 +206,9 @@ def _plan(cid, sid, kind, trigger, actor_ref):
     scene = store.scenes.read_scene(cid, sid)
     settings = store.group_play.settings_of(scene["meta"])
     mode = settings["order"]
-    history = scene["messages"]
+    # Posts in context only: a hidden post names nobody, breaks no silence and
+    # is no contribution to continue from (`_follow_on` reads the same way).
+    history = store.scenes.without_excluded(scene["messages"])
     if kind == "post":
         return _plan_round(settings, cast, trigger=trigger, history=history, lead=actor_ref)
     if actor_ref:
@@ -267,7 +269,7 @@ def _follow_on(cid, sid, run, token, round_record, lead):
         if allowed < index:
             return None
         remaining = min(round_record.get("auto_remaining", 0) - 1, allowed - index)
-        history = scene["messages"]
+        history = store.scenes.without_excluded(scene["messages"])
         last = _last_contribution(cid, sid, history) or {"ref": None, "text": ""}
         planned = _plan_round(settings, roster(cid, sid), trigger=last["text"],
                               history=history, lead=lead, author=last["ref"])
