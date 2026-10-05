@@ -24,11 +24,11 @@ from . import (
     overlay,
     pcs,
     playing,
-    plot,
 )
 from .appearances import cast as appearances_cast
 from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
+from .continuity import effective
 
 
 def _char_name(aroot, aid: str) -> str:
@@ -107,7 +107,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     roster = appearances_cast.roster(cid)
 
     try:
-        open_threads = plot.open_threads(cid)
+        open_threads = effective.threads(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json
         open_threads = []
 

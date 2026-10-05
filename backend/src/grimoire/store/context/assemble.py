@@ -27,7 +27,6 @@ from ... import model_guidance, prompts
 from .. import (
     birthdays,
     characters,
-    commitments,
     config,
     entities,
     length_drift,
@@ -35,7 +34,6 @@ from .. import (
     overlay,
     pcs,
     pins,
-    plot,
     response_presets,
     response_targets,
     styles,
@@ -47,6 +45,7 @@ from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
 from ..campaigns import read as campaigns_read
+from ..continuity import effective
 from ..scenes import read as scenes_read
 from ..tracker import fields as tracker_fields
 from ..tracker import settings as tracker_settings
@@ -582,8 +581,8 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
         # could recall the present -- or the future -- as a past event.
         "archive_entries": archive._archive_entries(
             cid, recent_text, story._recap_ids(cid, full_recap or None), before=sid),
-        "plot_lines": plot.render_open(cid, with_id=False),
-        "commitment_lines": commitments.render_open(cid, with_id=False),
+        "plot_lines": effective.render_threads(cid, with_id=False),
+        "commitment_lines": effective.render_commitments(cid, with_id=False),
         # Keyword activations only. A recalled group deliberately does NOT pull
         # its campaign state: that state renders into the `Group state` section,
         # which is `spotlight`, so feeding it from recall would grow a section

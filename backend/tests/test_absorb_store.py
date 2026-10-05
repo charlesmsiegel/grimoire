@@ -1572,6 +1572,33 @@ def test_commitment_snapshot_tolerates_garbled(monkeypatch, tmp_path):
     assert absorb.commitment_snapshot(cid) == ""
 
 
+def test_absorb_snapshots_show_canonical_ids_only(monkeypatch, tmp_path):
+    """An aliased source is folded into its canonical: the extraction prompt
+    offers the model the canonical id alone, so it cannot advance (or open a
+    duplicate of) a record that was merged away."""
+    from grimoire.store import commitments, plot, scenes
+    from grimoire.store.continuity import doc
+    cid = _campaign(monkeypatch, tmp_path)
+    scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Winifred inks it.", "001--gate")
+    plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara finds it.", "002--causeway")
+    commitments.set_movement(cid, "winifreds-promise", "Winifred's promise", "promise", "open",
+                             "", "Winifred swore it.", "001--gate")
+    commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                             "", "Mara swore it.", "002--causeway")
+    for kind, src, to in (("thread", "maras-map", "winifreds-chart"),
+                          ("commitment", "maras-oath", "winifreds-promise")):
+        doc.put_alias(cid, f"{kind}:{src}",
+                      {"to": f"{kind}:{to}", "created": "", "source": "manual", "note": ""})
+    threads = absorb.plot_snapshot(cid)
+    owed = absorb.commitment_snapshot(cid)
+    assert [line.split(":", 1)[0] for line in threads.splitlines()] == ["winifreds-chart"]
+    assert [line.split(":", 1)[0] for line in owed.splitlines()] == ["winifreds-promise"]
+    assert "maras-map" not in threads and "maras-oath" not in owed
+    assert "Mara finds it." in threads      # the merged latest beat is the source's later one
+    assert "Mara swore it." in owed
+
+
 def test_materialize_commitment_new_and_resolve(monkeypatch, tmp_path):
     from grimoire.store import commitments, scenes
     cid = _campaign(monkeypatch, tmp_path)
