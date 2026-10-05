@@ -2343,3 +2343,14 @@ test("a rewritten post whose record is gone offers nothing to restore", async ()
   expect(await screen.findByText(/no longer has a recorded original/)).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Restore original" })).not.toBeInTheDocument();
 });
+
+test("a hand-mangled record's rules do not crash the opened rewrite", async () => {
+  (api.getSceneRewrites as any).mockResolvedValue({
+    "resp-1": { original: "Mara nods. (OOC: she is lying)", rules: "r-strip", at: 7 } });
+  (api.getRegex as any).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
+  renderRewrites();
+  fireEvent.click(await screen.findByRole("button", { name: /Rewritten/ }));
+  const detail = await screen.findByRole("region", { name: "Rewrite of post 4" });
+  expect(within(detail).getByText("Mara nods. (OOC: she is lying)")).toBeInTheDocument();
+  expect(within(detail).getByRole("button", { name: "Restore original" })).toBeInTheDocument();
+});

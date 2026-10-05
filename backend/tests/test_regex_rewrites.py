@@ -302,6 +302,29 @@ def test_read_all_never_raises(client):
     assert rewrites.read_all(cid, "no-such-scene") == {}
 
 
+def test_a_hand_mangled_record_reads_back_in_shape(client):
+    """`original` is what makes a record worth keeping; every other field a
+    reader dereferences is put back in shape rather than handed on mangled."""
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    path = rewrites.path(cid, store.scenes.scene_identity(cid, sid))
+    path.write_text(json.dumps({
+        "a": {"original": "x"},
+        "b": {"original": "y", "rules": "r-1", "stored": 4, "at": None, "variant": ["v"]},
+        "c": {"original": "z", "rules": ["r-1", 2, None, "r-2"], "stored": "z!",
+              "at": "2026-10-05T12:00:00Z", "variant": "v-1"},
+    }), encoding="utf-8")
+    assert rewrites.read_all(cid, sid) == {
+        "a": {"original": "x", "rules": [], "stored": "", "at": ""},
+        "b": {"original": "y", "rules": [], "stored": "", "at": ""},
+        "c": {"original": "z", "rules": ["r-1", "r-2"], "stored": "z!",
+              "at": "2026-10-05T12:00:00Z", "variant": "v-1"},
+    }
+    got = records(client, cid, sid)
+    assert got["b"] == {"original": "y", "rules": [], "at": ""}
+
+
 def test_restore_without_a_record_is_refused(client):
     cid, sid = seed(client)
     put_rules(client, cid, ELLIPSIS)
