@@ -544,3 +544,66 @@ def test_a_relationship_record_that_is_not_a_dict_is_skipped(client):
          "bonds": {f"{mara}|{reeve}": {"type": "kin", "since_scene": ""}}}), encoding="utf-8")
     rows = client.get(f"/api/campaigns/{cid}/ledger").json()["relationships"]
     assert [r["kind"] for r in rows] == ["bond"]
+
+
+def test_ledger_rows_are_pinned_for_an_ordinary_campaign(client):
+    """A characterization of what `/ledger` serves today for a campaign with no
+    aliases -- whole rows, in order -- so a later switch to effective rows can
+    only add to it. The retired rows are part of it (the route reads
+    `include_closed`/`include_resolved` for the Ledger's "show retired"), and
+    each is placed by its `last_scene` BETWEEN its section's open rows, so an
+    implementation that sorted open and retired rows apart would move it.
+
+    No clock in this campaign, so every row is aged against no present."""
+    cid = _campaign(client)
+    first = store.scenes.create_scene(cid, "The Pier at Dusk")
+    second = store.scenes.create_scene(cid, "Saltmarch Eve")
+    third = store.scenes.create_scene(cid, "The coronation")
+    assert (first, second, third) == (
+        "001--the-pier-at-dusk", "002--saltmarch-eve", "003--the-coronation")
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "advanced",
+                            "Mara hid the map.", first)
+    store.plot.set_movement(cid, "the-tithe", "The Saltmarch tithe", "closed",
+                            "Paid in full.", second)
+    store.plot.set_movement(cid, "the-coronation", "The coronation", "open", "", third)
+    store.commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                                   "before the bells stop", "Mara swore it on the quay.",
+                                   first)
+    store.commitments.set_movement(cid, "seraphines-ultimatum", "Seraphine's ultimatum",
+                                   "threat", "fulfilled", "", "Seraphine made good on it.",
+                                   second)
+    store.commitments.set_movement(cid, "winifreds-promise", "Winifred's promise", "promise",
+                                   "open", "", "", third)
+
+    body = client.get(f"/api/campaigns/{cid}/ledger").json()
+
+    assert body["plot"] == [
+        {"id": "maras-map", "title": "Mara's map", "status": "advanced",
+         "last_scene": "001--the-pier-at-dusk", "latest_beat": "Mara hid the map.",
+         "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
+         "scene": {"id": "001--the-pier-at-dusk", "title": "The Pier at Dusk", "date": ""}},
+        {"id": "the-tithe", "title": "The Saltmarch tithe", "status": "closed",
+         "last_scene": "002--saltmarch-eve", "latest_beat": "Paid in full.",
+         "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
+         "scene": {"id": "002--saltmarch-eve", "title": "Saltmarch Eve", "date": ""}},
+        {"id": "the-coronation", "title": "The coronation", "status": "open",
+         "last_scene": "003--the-coronation", "latest_beat": "",
+         "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
+         "scene": {"id": "003--the-coronation", "title": "The coronation", "date": ""}},
+    ]
+    assert body["commitments"] == [
+        {"id": "maras-oath", "title": "Mara's oath", "kind": "promise", "status": "open",
+         "due": "before the bells stop", "last_scene": "001--the-pier-at-dusk",
+         "latest_beat": "Mara swore it on the quay.",
+         "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
+         "scene": {"id": "001--the-pier-at-dusk", "title": "The Pier at Dusk", "date": ""}},
+        {"id": "seraphines-ultimatum", "title": "Seraphine's ultimatum", "kind": "threat",
+         "status": "fulfilled", "due": "", "last_scene": "002--saltmarch-eve",
+         "latest_beat": "Seraphine made good on it.",
+         "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
+         "scene": {"id": "002--saltmarch-eve", "title": "Saltmarch Eve", "date": ""}},
+        {"id": "winifreds-promise", "title": "Winifred's promise", "kind": "promise",
+         "status": "open", "due": "", "last_scene": "003--the-coronation", "latest_beat": "",
+         "aging": {"state": "ok", "days_since": None, "days_over": None, "due_in": None},
+         "scene": {"id": "003--the-coronation", "title": "The coronation", "date": ""}},
+    ]

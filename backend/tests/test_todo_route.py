@@ -888,3 +888,32 @@ def test_greeting_image_assignment_items_distinguish_worlds_and_removed_images(c
     assert len({i["id"] for i in items["items"]}) == 2
     assert {i["fix"] for i in items["items"]} == {
         f"/worlds/{wid}/greetings/{gid}" for wid, gid in made}
+
+
+def test_owed_is_pinned_for_an_ordinary_campaign(client, campaign):
+    """A characterization of the `owed` chore for a campaign with no aliases:
+    its count, its sentence, and each instance's exact strings. A commitment
+    counts when its `due` is non-empty, parseable or not -- Todo does no
+    calendar work -- and one with no due does not count at all."""
+    cid, _ = campaign
+    first = store.scenes.create_scene(cid, "The Pier at Dusk")
+    second = store.scenes.create_scene(cid, "Saltmarch Eve")
+    store.commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                                   "2026-06-01", "Mara swore it on the quay.", first)
+    store.commitments.set_movement(cid, "winifreds-promise", "Winifred's promise", "promise",
+                                   "open", "before the bells stop", "", second)
+    store.commitments.set_movement(cid, "seraphines-favour", "Seraphine's favour", "promise",
+                                   "open", "", "Seraphine owes one.", second)
+
+    chore = next(c for c in _todo(client, cid)["chores"] if c["id"] == "owed")
+    assert chore["n"] == 2
+    assert chore["what"] == "2 open threads with a deadline"
+
+    body = _items(client, "owed", cid)
+    assert body["total"] == 2
+    assert [{k: i[k] for k in ("id", "label", "detail")} for i in body["items"]] == [
+        {"id": "maras-oath", "label": "Mara's oath",
+         "detail": "due 2026-06-01 · promise · Mara swore it on the quay."},
+        {"id": "winifreds-promise", "label": "Winifred's promise",
+         "detail": "due before the bells stop · promise"},
+    ]
