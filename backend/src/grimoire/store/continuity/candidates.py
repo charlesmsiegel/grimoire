@@ -13,9 +13,10 @@ both halves of the IO the opposite way from `doc`:
 
 - `read` is tolerant all the way down. An unparseable file reads as empty; a
   record of the wrong shape is skipped while its neighbours are kept; a nested
-  field of the wrong type is normalized (``signals`` to ``{}``, a ``proposal``
-  that does not fit to ``None``) so every consumer downstream can index a
-  record without guarding it.
+  field of the wrong type is normalized (``signals`` to ``{}``, a ``signals``
+  value that is not standard JSON -- inf, NaN -- dropped, a ``proposal`` that
+  does not fit to ``None``) so every consumer downstream can index a record
+  without guarding it, and render it as JSON.
 - `write` overwrites a malformed file instead of refusing it. Refusing protects
   decisions; there are none here, and the next sweep rebuilds what was lost.
 
@@ -113,6 +114,26 @@ def _str_dict(value) -> dict:
     return {k: v for k, v in value.items() if isinstance(k, str) and isinstance(v, str)}
 
 
+def _json_safe(value) -> bool:
+    """True when ``value`` renders as standard JSON. `json.loads` reads the
+    literal ``1e999`` as inf and accepts NaN / Infinity, and a JSON response
+    renders with ``allow_nan=False`` -- one such value would 500 every route
+    that carries the record."""
+    try:
+        json.dumps(value, allow_nan=False)
+    except (ValueError, RecursionError):
+        return False
+    return True
+
+
+def _signals(value) -> dict:
+    """The JSON-safe entries of ``signals``; a value that is not is dropped
+    alone, so its neighbours still reach the reader."""
+    if not isinstance(value, dict):
+        return {}
+    return {k: v for k, v in value.items() if _json_safe(v)}
+
+
 def _text(value) -> str:
     return value if isinstance(value, str) else ""
 
@@ -142,12 +163,11 @@ def _record(value) -> dict | None:
         return None
     if not isinstance(value.get("fingerprint"), str):
         return None
-    signals = value.get("signals")
     return {
         "kind": kind,
         "refs": list(value["refs"]),
         "fingerprint": value["fingerprint"],
-        "signals": signals if isinstance(signals, dict) else {},
+        "signals": _signals(value.get("signals")),
         "proposal": _proposal(value.get("proposal")),
         "created": _text(value.get("created")),
     }

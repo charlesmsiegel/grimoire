@@ -173,6 +173,32 @@ def test_bad_nested_fields_are_normalized(cid):
     assert records["f"]["proposal"] is None
 
 
+def test_non_finite_signals_are_dropped_so_the_record_stays_json_safe(cid):
+    # `json.loads` accepts the standard literal 1e999 (as inf) and the
+    # non-standard NaN / Infinity tokens; a JSON response renders with
+    # allow_nan=False, so one such value must not reach a consumer.
+    _store(cid, {"a": _pair(signals={"cosine": "__INF__", "lexical": 0.5,
+                                     "shared_scenes": ["012--the-coronation"],
+                                     "spread": ["__NAN__"],
+                                     "nested": {"x": "__NEG__"}}),
+                 "b": _closure()})
+    path = _file(cid)
+    text = (path.read_text(encoding="utf-8")
+            .replace('"__INF__"', "1e999").replace('"__NAN__"', "NaN")
+            .replace('"__NEG__"', "-Infinity"))
+    path.write_text(text, encoding="utf-8")
+    data = candidates.read(cid)
+    assert data["records"]["a"]["signals"] == {
+        "lexical": 0.5, "shared_scenes": ["012--the-coronation"]}
+    json.dumps(data, allow_nan=False)
+    assert candidates.drop(cid, "b") is not None
+    json.loads(path.read_text(encoding="utf-8"), parse_constant=_refuse)
+
+
+def _refuse(token):
+    raise AssertionError(f"non-standard JSON token {token!r} written")
+
+
 def test_bad_top_level_fields_are_normalized(cid):
     _file(cid).write_text(json.dumps({
         "version": 1, "generated": 5, "generation": None,
