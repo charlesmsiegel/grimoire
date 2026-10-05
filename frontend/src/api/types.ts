@@ -191,10 +191,14 @@ export type Config = {
   /** Characters the off-scene cast's "known to exist" tier may name; "0" = no
    *  ceiling. Over it, the ones the in-scene cast mentions are kept first. */
   offscene_known_limit: string;
-  /** Semantic recall: the openai_compatible connection serving /embeddings, "" = off. */
+  /** The openai_compatible connection serving /embeddings, "" = off. With this
+   *  and `embeddings_model` both set, EVERY embedder runs (`embed_space.resolve`):
+   *  recall, the art catalogue, search by meaning, and the continuity checks
+   *  after a wrap-up — so "" is the one way to stop all embedding. */
   embeddings_connection_id: string;
   embeddings_model: string;
-  /** Entries a similarity pass may add on top of the keyword ones; "0" = off. */
+  /** Entries a similarity pass may add on top of the keyword ones; "0" = recall
+   *  off. It turns off recall only, never the other embedders. */
   semantic_recall_depth: string;
   /** Cosine floor a recalled entry must clear. */
   semantic_recall_threshold: string;
