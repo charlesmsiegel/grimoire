@@ -395,3 +395,32 @@ def test_a_failure_part_way_leaves_no_sibling(client, monkeypatch):
         assert set(rec.get("scenes", [])) <= before
         assert set(rec.get("presence", {})) <= before
     assert store.revision.current(cid) != revision
+
+
+def test_branch_copies_scene_note(client):
+    """Branching spec resolution 16: the sibling keeps its source's author's
+    note, under its own identity, and keeps it when the source is deleted."""
+    cid, sid = _two_turns(client)
+    note = {"text": "Keep the storm audible in every scene.", "depth": 4, "every": 1}
+    src = store.scenes.ensure_identity(cid, sid)
+    store.authors_notes.set_scene(cid, src, note)
+    new = store.branch.branch_scene(cid, sid, 1)
+    notes = store.authors_notes.read(cid)["scenes"]
+    assert notes[store.scenes.scene_identity(cid, new)] == note
+    assert notes[src] == note
+    store.scenes.delete_scene(cid, sid)
+    assert store.authors_notes.read(cid)["scenes"] == {
+        store.scenes.scene_identity(cid, new): note}
+
+
+def test_a_failed_branch_leaves_no_copied_note(client, monkeypatch):
+    cid, sid = _two_turns(client)
+    src = store.scenes.ensure_identity(cid, sid)
+    store.authors_notes.set_scene(cid, src, {"text": "Storm.", "depth": 4, "every": 1})
+
+    def boom(*_a, **_k):
+        raise RuntimeError("rolls")
+    monkeypatch.setattr(store.rolls, "copy_for_branch", boom)
+    with pytest.raises(RuntimeError):
+        store.branch.branch_scene(cid, sid, 1)
+    assert set(store.authors_notes.read(cid)["scenes"]) == {src}

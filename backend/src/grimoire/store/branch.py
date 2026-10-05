@@ -30,7 +30,7 @@ from __future__ import annotations
 import logging
 import uuid
 
-from . import atomic, checks, dice, locks, responses, revision, rolls, scene_ids
+from . import atomic, authors_notes, checks, dice, locks, responses, revision, rolls, scene_ids
 from .appearances import paths as appearances_paths
 from .audit import baselines
 from .frontmatter import dump_frontmatter
@@ -205,10 +205,14 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
             responses.clone_for_branch(cid, sid, new_sid, rid_map, locked)
             baselines.copy_baseline(cid, sid, new_sid)
             tracker_records.clone(cid, src_ident, new_ident, rid_map)
+            # The scene's author's note, under the sibling's own identity
+            # (branching spec resolution 16) -- the steer the player set for
+            # this scene is part of playing it on. A failed build drops it
+            # again through `discard`'s `delete_scene`.
+            authors_notes.copy_scene(cid, src_ident, new_ident)
             if through < len(messages) - 1:
                 scenes_write.delete_from(cid, new_sid, through + 1)
                 tracker_walk.prune(cid, new_sid)
-            # step 5: copy the scene's author's note here (spec gate 16)
             # Last: an appended roll entry is the one write the cleanup below
             # cannot take back.
             source_rolls = [e for e in rolls.read(cid) if e.get("scene") == sid]
