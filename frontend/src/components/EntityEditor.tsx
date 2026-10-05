@@ -438,6 +438,10 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // lands under the new one, where Save and Delete act on the new `scope`.
   // Bumped by each read and by the scope change below.
   const readReq = useRef(0);
+  // Bumped only when the scope (or kind) changes. An adopt request outlives the
+  // click that sent it, and what it does on completion -- reload the rail, open
+  // a record, set the note or the error -- is about the scope it was sent from.
+  const scopeGen = useRef(0);
   const [owners, setOwners] = useState<string[]>([]);          // selected owner refs (lore only)
   const [secrecy, setSecrecy] = useState<Secrecy>("public");    // audience gate (#49)
   const [sdPrompt, setSdPrompt] = useState("");                 // suggested SD prompt, absorb-set only
@@ -466,7 +470,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   const [activationOpen, setActivationOpen] = useState(false);
   // What the record's stashed SillyTavern settings would still add (spec 4.2):
   // null when there is no stash, nothing pending, or the preview did not load.
-  const [adopt, setAdopt] = useState<{ fields: Record<string, string>; unmapped: string[] } | null>(null);
+  const [adopt, setAdopt] = useState<
+    { fields: Record<string, string>; unmapped: string[]; inherited?: boolean } | null>(null);
   // The bulk button's one-line outcome.
   const [adoptAllNote, setAdoptAllNote] = useState<string | null>(null);
   // An adopt request is out (this record's or the whole library's). Both
@@ -481,6 +486,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     [wid, kind, scope.kind, scope.id]);
   useEffect(() => {
     readReq.current += 1;   // discard a record read still out for the old scope
+    scopeGen.current += 1;  // ...and an adopt still out for it
+    setAdoptBusy(false);    // that request no longer holds this scope's buttons
     reload();
     resetForm();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -705,40 +712,57 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     }
   }
 
+  /** `reload`, unless the scope has moved on since `gen` was taken: a listing
+   *  of the old scope must not repopulate the new scope's rail. */
+  async function reloadFor(gen: number) {
+    const rows = await api.listEntities(scope, kind);
+    if (gen === scopeGen.current) setItems(rows);
+  }
+
   async function applyAdopt() {
     if (!editing || adoptBusy) return;
+    const gen = scopeGen.current;
+    const viewing = readReq.current;   // unchanged = no other record opened since
     setError(null);
     setAdoptBusy(true);
     try {
       await api.adoptSt(scope, kind, editing);
-      await reload();
-      await select(editing);   // the new values, and a banner with nothing left
+      await reloadFor(gen);
+      // Nothing below is about the screen any more once the scope has changed
+      // or another record has been opened: `select` would put this one back.
+      if (gen === scopeGen.current && viewing === readReq.current) {
+        await select(editing);   // the new values, and a banner with nothing left
+      }
     } catch (err) {
-      setError(errorText(err));
+      if (gen === scopeGen.current) setError(errorText(err));
     } finally {
-      setAdoptBusy(false);
+      if (gen === scopeGen.current) setAdoptBusy(false);
     }
   }
 
   async function applyAdoptAll() {
     if (adoptBusy) return;
+    const gen = scopeGen.current;
+    const viewing = readReq.current;
     setError(null);
     setAdoptAllNote(null);
     setAdoptBusy(true);
     try {
       const r = await api.adoptStAll(scope);
+      if (gen !== scopeGen.current) return;   // the outcome is about another scope
       setAdoptAllNote(`Applied to ${r.applied.length} ${r.applied.length === 1 ? "entry" : "entries"}; `
         + `${r.skipped.length} skipped`);
-      await reload();
+      await reloadFor(gen);
       // Re-read only a record being VIEWED. Re-selecting one open in the form
       // would reset its fields, body and name to what is on disk and drop the
       // reader into view mode -- discarding an edit nobody saved. (The button is
       // disabled for that case; this is the guard if it ever is not.)
-      if (editing && mode === "view") await select(editing);
+      if (gen === scopeGen.current && viewing === readReq.current
+          && editing && mode === "view") await select(editing);
     } catch (err) {
-      setError(errorText(err));
+      if (gen === scopeGen.current) setError(errorText(err));
     } finally {
-      setAdoptBusy(false);
+      if (gen === scopeGen.current) setAdoptBusy(false);
     }
   }
 
@@ -1250,7 +1274,15 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         ) : mode === "view" && editing ? (
           <div className="detail-view">
             <div className="detail-main">
-              {adopt && (
+              {adopt?.inherited && (
+                // A record the campaign only reads from its world: the world's
+                // copy is the one that takes the import, so there is nothing to
+                // apply from here.
+                <div className="banner adopt-banner" role="status" aria-label="Imported settings">
+                  <p>Imported SillyTavern settings are available on the world's copy of this entry.</p>
+                </div>
+              )}
+              {adopt && !adopt.inherited && (
                 <div className="banner adopt-banner" role="status" aria-label="Imported settings">
                   <p>
                     <strong>This entry carries imported SillyTavern settings that are not
@@ -1414,12 +1446,19 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                         {parseRefs(fields.known_by).map((ref) => {
                           const hit = resolveRef(KNOWN_BY_SPEC, ref);
                           if (hit) {
-                            return (
+                            // A host that cannot open an actor gets a label, not
+                            // a button that does nothing when pressed.
+                            return onOpenOwner ? (
                               <button key={ref} className="chip owner-chip"
-                                      onClick={() => onOpenOwner?.(ref)}>
+                                      onClick={() => onOpenOwner(ref)}>
                                 <Portrait src={hit.avatar ?? null} name={hit.label} />
                                 {hit.label}
                               </button>
+                            ) : (
+                              <span key={ref} className="chip on">
+                                <Portrait src={hit.avatar ?? null} name={hit.label} />
+                                {hit.label}
+                              </span>
                             );
                           }
                           // Gone only if the listing actually arrived; a failed

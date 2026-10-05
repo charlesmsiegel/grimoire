@@ -1732,9 +1732,11 @@ export const api = {
                           secrecy?: string; fields?: Record<string, string>; rev?: string }) =>
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/${kind}/${id}`, patch),
   /** What a record's stashed SillyTavern settings would still add: the native
-   *  fields they map to, and the stash keys that map to nothing. Read-only. */
+   *  fields they map to, and the stash keys that map to nothing. Read-only.
+   *  `inherited` (campaign scope only) is a record the campaign reads from its
+   *  world: its settings are adopted there, and applying here is refused. */
   previewAdoptSt: (scope: EntityScope, kind: EntityKind, id: string) =>
-    request<{ fields: Record<string, string>; unmapped: string[] }>(
+    request<{ fields: Record<string, string>; unmapped: string[]; inherited?: boolean }>(
       "GET", `${entityBase(scope)}/${kind}/${id}/adopt-st`),
   adoptSt: (scope: EntityScope, kind: EntityKind, id: string) =>
     request<{ applied: Record<string, string> }>(
