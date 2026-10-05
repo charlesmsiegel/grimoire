@@ -53,6 +53,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from copy import deepcopy
 from pathlib import Path
 
 import anyio
@@ -464,6 +465,30 @@ class RefusingProvider:
         if model in self.failing:
             raise LLMError(self.kind, f"{model} refused: {self.why}", status=self.status)
         yield f"from {model}"
+
+
+class SequencedProvider:
+    """Answers its N-th call with `script[N]` (the last entry repeating): an
+    exception to raise before any delta, or a sequence of chunks to stream.
+    Records each call's messages and model -- the shape a degrade-to-text and a
+    fallback are tested against when the calls must differ (#377)."""
+
+    def __init__(self, script):
+        self.script = list(script)
+        self.requests: list[dict] = []
+        self.closed = 0
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.requests.append({"messages": deepcopy(list(messages)), "model": model,
+                              "kwargs": kwargs})
+        step = self.script[min(len(self.requests), len(self.script)) - 1]
+        try:
+            if isinstance(step, BaseException):
+                raise step
+            for chunk in step:
+                yield chunk
+        finally:
+            self.closed += 1
 
 
 class RecordingProvider:

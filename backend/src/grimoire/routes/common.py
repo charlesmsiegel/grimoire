@@ -348,7 +348,19 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
                      retries=store.config.llm_retries,
                      fallback=_fallback_connection,
                      observer=health.record if health is not None else None,
-                     capture=store.logs.incoming_capture)
+                     capture=store.logs.incoming_capture,
+                     images=_post_images_for,
+                     load_image=_load_post_image)
+
+
+# Late-bound through the module attribute, so a test patching
+# `store.post_images` intercepts what the facade calls (#377).
+def _post_images_for(conn: dict) -> int:
+    return store.post_images.images_for(conn)
+
+
+def _load_post_image(cid: str, part: dict) -> str | None:
+    return store.post_images.load(cid, part)
 
 
 def build_openai_compatible_client() -> OpenAICompatibleClient:

@@ -122,7 +122,7 @@ def as_text(messages: list[dict]) -> list[dict]:
 def _chosen(messages: list[dict], keep: int) -> set[int]:
     """`id()`s of the newest `keep` references, counted from the end."""
     refs = [p for m in messages for p in image_refs(m.get("content", ""))]
-    return {id(p) for p in refs[len(refs) - keep:]} if keep > 0 else set()
+    return {id(p) for p in refs[max(0, len(refs) - keep):]} if keep > 0 else set()
 
 
 def _load(load: Callable[[dict], str | None], part: dict) -> str | None:
