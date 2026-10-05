@@ -707,6 +707,7 @@ def test_import_into_fresh_store_resolves(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid, shared, _avatar = _placed_realm()
     _describe(shared, "A grey quay at dusk.")
+    shared_sha = image_store.read(shared).blob_sha256
     bundle = _export(wid, tmp_path)
     worlds.delete_world(wid)
     _wipe_image_store(tmp_path)
@@ -718,6 +719,9 @@ def test_import_into_fresh_store_resolves(monkeypatch, tmp_path):
     for d, name in refs:
         assert image_refs.resolve(d, name) is not None, (d, name)
     assert image_store.read(shared).raw["description"] == "A grey quay at dusk."
+    # Our own export is already sanitized, so sanitizing on import is a no-op:
+    # the very same blob comes back.
+    assert image_store.read(shared).blob_sha256 == shared_sha
     # Only global technical fields and the merged description: never sources.
     assert "sources" not in image_store.read(_avatar).raw
 
@@ -924,3 +928,125 @@ def test_format_1_bundle_still_imports(monkeypatch, tmp_path):
     }))
     wid = world_bundle.import_bundle(zpath)
     assert (worlds.world_root(wid) / "assets" / "cover.png").read_bytes() == PNG
+
+
+# ---- review round 1: bounded metadata, sanitized blobs, no journals ----
+
+def test_export_does_not_pack_a_promotion_journal(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, shared, _avatar = _placed_realm()
+    d = worlds.world_root(wid) / "assets"
+    image_refs.write_journal(d, {"image": shared})
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        names = z.namelist()
+    assert f"{world_bundle.WORLD_PREFIX}/assets/image-refs/cover.json" in names
+    assert not any(n.endswith(image_refs.JOURNAL) for n in names)
+
+
+def test_import_refuses_more_objects_than_blobs(monkeypatch, tmp_path):
+    """Many small objects naming one tiny blob was a memory amplifier."""
+    _home(monkeypatch, tmp_path)
+    data = _pixels(20)
+    sha, blob_name = _blob_entry(data)
+    entries: dict[str, str | bytes] = {blob_name: data}
+    for n in range(5):
+        fake = "px1-" + f"{n:x}" * 64
+        entries[f"image-store/objects/{fake[4:6]}/{fake}.json"] = _object_body(
+            fake, sha, len(data), description="Saltmarch at low tide.")
+    with pytest.raises(world_bundle.BundleError, match="more image objects"):
+        world_bundle.import_bundle(_hand_bundle(tmp_path, "padded", entries))
+    assert worlds.list_worlds() == []
+    assert not (image_store.store_root() / "blobs").exists()
+
+
+def test_import_refuses_two_objects_naming_one_blob(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    a, b = _pixels(21), _pixels(22)
+    sha_a, name_a = _blob_entry(a)
+    _sha_b, name_b = _blob_entry(b)
+    one, two = "px1-" + "1" * 64, "px1-" + "2" * 64
+    bundle = _hand_bundle(tmp_path, "twice", {
+        name_a: a, name_b: b,
+        f"image-store/objects/11/{one}.json": _object_body(one, sha_a, len(a)),
+        f"image-store/objects/22/{two}.json": _object_body(two, sha_a, len(a)),
+    })
+    with pytest.raises(world_bundle.BundleError, match="name one blob"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+
+
+def test_import_refuses_object_bytes_past_the_total_cap(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(23)
+    sha, blob_name = _blob_entry(data)
+    claimed = "px1-" + "c" * 64
+    body = _object_body(claimed, sha, len(data), description="Mara at the gate.")
+    monkeypatch.setattr(world_bundle, "MAX_OBJECT_BYTES", len(body) - 1)
+    bundle = _hand_bundle(tmp_path, "fat", {
+        blob_name: data, f"image-store/objects/cc/{claimed}.json": body})
+    with pytest.raises(world_bundle.BundleError, match="too large"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+    assert not (image_store.store_root() / "blobs").exists()
+
+
+def test_an_overlong_description_is_dropped_not_fatal(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(24)
+    sha, blob_name = _blob_entry(data)
+    claimed = "px1-" + "c" * 64
+    long = "x" * (world_bundle.MAX_IMPORTED_DESCRIPTION + 1)
+    tag = {"kind": "character", "relation": "subject", "scope": "world:realm",
+           "id": "seraphine"}
+    bundle = _hand_bundle(tmp_path, "long", {
+        blob_name: data,
+        f"image-store/objects/cc/{claimed}.json": _object_body(
+            claimed, sha, len(data), description=long, associations=[tag],
+            reviews={"subjects": ["world:realm"]}),
+        "world/assets/image-refs/cover.json": json.dumps({"format": 1, "image": claimed}),
+    })
+    logged: list[tuple] = []
+    monkeypatch.setattr(world_bundle.logs, "record",
+                        lambda *a, **k: logged.append((a, k)))
+    new = world_bundle.import_bundle(bundle)
+    local = image_refs.read(worlds.world_root(new) / "assets", "cover").image
+    raw = image_store.read(local).raw
+    assert "description" not in raw
+    # The rest of the object's metadata still lands, under the final id.
+    assert raw["associations"] == [{**tag, "scope": f"world:{new}"}]
+    assert raw["reviews"] == {"subjects": [f"world:{new}"]}
+    assert any(k.get("kind") == "bundle_description_dropped" for _a, k in logged)
+
+
+def test_import_sanitizes_a_planted_blob(monkeypatch, tmp_path):
+    """A hand-built blob carrying a text chunk and trailing bytes must not
+    become the blob a later local upload of the same pixels dedupes onto --
+    that would carry the bundle's bytes out in the user's own exports."""
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+    _home(monkeypatch, tmp_path)
+    im = Image.new("RGB", (8, 6), (30, 60, 90))
+    info = PngInfo()
+    info.add_text("Comment", "PLANTED-TEXT")
+    buf = io.BytesIO()
+    im.save(buf, "PNG", pnginfo=info)
+    planted = buf.getvalue() + b"TRAILING-JUNK"
+    sha, blob_name = _blob_entry(planted)
+    claimed = "px1-" + "c" * 64
+    bundle = _hand_bundle(tmp_path, "planted", {
+        blob_name: planted,
+        f"image-store/objects/cc/{claimed}.json": _object_body(claimed, sha, len(planted)),
+        "world/assets/image-refs/cover.json": json.dumps({"format": 1, "image": claimed}),
+    })
+    new = world_bundle.import_bundle(bundle)
+    resolved = image_refs.resolve(worlds.world_root(new) / "assets", "cover")
+    stored = resolved.blob_path.read_bytes()
+    assert resolved.blob_sha256 != sha
+    assert b"PLANTED-TEXT" not in stored and b"TRAILING-JUNK" not in stored
+    assert not image_store.blob_path(sha, "png").exists()
+
+    clean = io.BytesIO()
+    im.save(clean, "PNG")
+    later = image_store.ingest(clean.getvalue(), "png")
+    assert later.id == resolved.image_id
+    assert later.blob_sha256 == resolved.blob_sha256
