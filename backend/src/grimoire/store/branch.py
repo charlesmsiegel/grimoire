@@ -129,7 +129,7 @@ def _sid(cid: str, sid: str, meta: dict, title: str) -> str:
     return uniquify(base, lambda c: scenes_paths._sid_taken(cid, c) or c in logged)
 
 
-def _snap(messages: list[dict], through: int) -> int:
+def snap(messages: list[dict], through: int) -> int:
     """`through` moved forward to the last part of the response it lands in --
     a response's parts are one reply, and a branch that kept half of one would
     hold a reply nobody wrote."""
@@ -172,7 +172,7 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
                                 f"a sibling branch of this scene was absorbed ({closed['title']})")
         if not 0 <= through < len(messages):
             raise IndexError(through)
-        through = _snap(messages, through)
+        through = snap(messages, through)
         # Read, not minted: the source is never written. Only a scene from
         # before identities existed (which the startup backfill normally
         # reaches first) is given one here.

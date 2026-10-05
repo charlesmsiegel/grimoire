@@ -390,6 +390,9 @@ class ForkCampaign(BaseModel):
     """
     name: str
     from_scene: str | None = None
+    #: Fork AT A POST of `from_scene` (play controls III): the copy keeps that
+    #: scene through this index and cuts the rest. Requires `from_scene`.
+    from_index: int | None = None
     #: An optional idempotency key (#409). A repeat with the same key is answered
     #: with the fork the first call made instead of copying the campaign again —
     #: because a lost response and a failed write are the same thing to a client,

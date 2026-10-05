@@ -67,7 +67,7 @@ import json
 import logging
 import shutil
 
-from . import atomic, cascade, locks, revision
+from . import atomic, branch, cascade, locks, revision, scene_ids
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -77,6 +77,7 @@ from .scenes import identity as scenes_identity
 from .scenes import lifecycle as scenes_lifecycle
 from .scenes import paths as scenes_paths
 from .scenes import read as scenes_read
+from .tracker import walk as tracker_walk
 
 log = logging.getLogger(__name__)
 
@@ -175,7 +176,8 @@ def _nothing_cut() -> dict:
 
 
 def fork_campaign(cid: str, name: str, from_scene: str | None = None,
-                  key: str = "", expect_revision: str = "") -> dict:
+                  key: str = "", expect_revision: str = "",
+                  from_index: int | None = None) -> dict:
     """Copy campaign `cid` into a new campaign called `name`, and return a
     report of what that took.
 
@@ -183,7 +185,9 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     whole and every scene after it is taken off the copy. `None` forks from
     where the campaign stands.
 
-    "After" is a lexicographic comparison of scene ids, which is play order
+    "After" compares scene NUMBERS (`_after`): a later number, or another
+    scene sharing this one's number -- a branch of it. Within the grammar that
+    is play order
     because ids are number-first and every number is padded to one width
     (`store/scene_ids.py`; `scenes.lifecycle.repad` is what keeps the width
     uniform when a campaign outgrows it). That last clause is the whole of the
@@ -233,6 +237,17 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     "failed", "replayed"}`. All but `id` and `replayed` are always present and
     carry nothing at all for a fork from now — see `_nothing_cut`. `replayed`
     says which of the two things happened: a copy, or a key being answered.
+
+    `from_index` forks AT A POST of `from_scene` (play controls III: branching
+    an absorbed scene, whose past lives in campaign files only a copy can hold
+    twice). The copy keeps that scene through the post and cuts the rest with
+    `cascade.delete_from`, which reverses what the cut posts' absorb wrote and
+    un-absorbs the scene in the copy; the source is never written. A post inside
+    a multi-part reply moves to its last part, as a branch does. Validated in
+    `_check_source`, so a bad index copies nothing: `ValueError` without a
+    `from_scene`, `IndexError` outside the transcript. The report then carries
+    `cut_at`, the index kept through -- optional, so a marker from before it
+    still replays.
     """
     ensure_home()
     if len(key) > KEY_LIMIT:
@@ -265,7 +280,7 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
             # After the replay and before the claim: everything a real copy
             # needs to be true, none of which a repeat has to satisfy a second
             # time. Refused here, a stale request leaves nothing behind.
-            _check_source(cid, from_scene, expect_revision)
+            through = _check_source(cid, from_scene, expect_revision, from_index)
             # Claim the id with an empty directory FIRST, and outside the block that
             # cleans up -- this is the one step whose failure must not delete
             # anything. `uniquify` ran before the lock, so the id can have been taken
@@ -305,6 +320,8 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
                 _discard(new_cid)
                 raise
             report = _cut_after(new_cid, from_scene) if from_scene else _nothing_cut()
+            if from_scene and through is not None:
+                report = {**_cut_at(new_cid, from_scene, through, report), "cut_at": through}
             out = {"id": new_cid, "from_scene": from_scene or "", **report}
             if key:
                 _record(cid, new_cid, key, out)
@@ -327,7 +344,8 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
     raise ForkContentionError(cid, name)
 
 
-def _check_source(cid: str, from_scene: str | None, expect_revision: str) -> None:
+def _check_source(cid: str, from_scene: str | None, expect_revision: str,
+                  from_index: int | None = None) -> int | None:
     """Everything a real copy needs of its source, checked under the hold.
 
     Every one of these runs AFTER a keyed replay, and that ordering is the whole
@@ -340,7 +358,10 @@ def _check_source(cid: str, from_scene: str | None, expect_revision: str) -> Non
 
     Raises `campaigns.CampaignNotFound`, `revision.RevisionMismatchError` or
     `scenes.SceneNotFound`, in that order -- a missing source is a plainer
-    answer than a stale token against one.
+    answer than a stale token against one -- then, for a `from_index`,
+    `ValueError` without a `from_scene` and `IndexError` outside its transcript.
+    Returns the post the copy keeps through (`from_index` moved to the last
+    part of a multi-part reply), or `None` for a scene-level fork.
     """
     if not campaigns_paths.campaign_meta_path(cid).exists():
         raise campaigns_paths.CampaignNotFound(cid)
@@ -351,6 +372,14 @@ def _check_source(cid: str, from_scene: str | None, expect_revision: str) -> Non
         # mean a scene the campaign will actually show you.
         if from_scene not in {s["id"] for s in scenes_read.list_scenes(cid)}:
             raise scenes_paths.SceneNotFound(from_scene)
+    if from_index is None:
+        return None
+    if from_scene is None:
+        raise ValueError("from_index needs from_scene")
+    messages = scenes_read.read_scene(cid, from_scene)["messages"]
+    if not 0 <= from_index < len(messages):
+        raise IndexError(from_index)
+    return branch.snap(messages, from_index)
 
 
 def _discard(new_cid: str) -> None:
@@ -603,7 +632,7 @@ def _cut_after(cid: str, from_scene: str) -> dict:
     `cascade` reports a bare step name because it only ever handles one scene,
     which here would leave a reader unable to tell which of a dozen it meant.
     """
-    later = sorted(s["id"] for s in scenes_read.list_scenes(cid) if s["id"] > from_scene)
+    later = sorted(s["id"] for s in scenes_read.list_scenes(cid) if _after(s["id"], from_scene))
     removed, records, refused, failed = [], 0, [], []
     for sid in reversed(later):
         try:
@@ -645,3 +674,42 @@ def _cut_after(cid: str, from_scene: str) -> dict:
     removed.reverse()           # report in play order, not the order they went
     return {"removed_scenes": removed, "records": records,
             "refused": refused, "failed": failed}
+
+
+def _after(sid: str, from_scene: str) -> bool:
+    """Whether a fork at `from_scene` takes `sid` off the copy.
+
+    Compared BY NUMBER: every later number goes, and so does every other scene
+    sharing `from_scene`'s number -- those are its branches (`store/branch.py`
+    gives a sibling its source's number), alternatives to the scene the fork
+    keeps rather than scenes before it, whatever their slugs sort as. An id
+    outside the grammar falls back to the string comparison ids sort by.
+    """
+    if sid == from_scene:
+        return False
+    mine, theirs = scene_ids.parse_sid(from_scene), scene_ids.parse_sid(sid)
+    if mine is None or theirs is None:
+        return sid > from_scene
+    return theirs["number"] >= mine["number"]
+
+
+def _cut_at(cid: str, sid: str, through: int, report: dict) -> dict:
+    """Cut the copy's `sid` after post `through`, folding the cascade's report
+    into the fork's. Like `_cut_after`, nothing here raises: a cut that fails
+    is named in `failed` and the fork stands."""
+    try:
+        if through >= len(scenes_read.read_scene(cid, sid)["messages"]) - 1:
+            return report
+        cut = cascade.delete_from(cid, sid, through + 1)
+    except Exception:       # see `_cut_after`: one scene may not sink the fork
+        log.warning("fork %s: could not cut scene %s at %s", cid, sid, through, exc_info=True)
+        return {**report, "failed": [*report["failed"], sid]}
+    out = {**report, "records": report["records"] + cut.get("records", 0),
+           "refused": [*report["refused"], *cut.get("refused", [])],
+           "failed": [*report["failed"], *(f"{sid}/{step}" for step in cut.get("failed", []))]}
+    try:
+        tracker_walk.prune(cid, sid)
+    except Exception:
+        log.warning("fork %s: could not prune the tracker of %s", cid, sid, exc_info=True)
+        out["failed"].append(f"{sid}/tracker")
+    return out
