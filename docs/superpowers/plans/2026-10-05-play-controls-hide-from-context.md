@@ -518,3 +518,39 @@ test("an absorbed scene offers no hide toggle", async () => { ... });
 - "Importing the JSON export" has no parser to mean; it is read as the import draft/commit JSON (`ImportedMessage`) plus a stored scene file, whose metadata comment carries the flag.
 - `_rolling_due`'s threshold stays on the raw post count; only an all-excluded (or note-only) pending span is treated as empty.
 - Replay gets a third step kind, `"kept"`, rather than reclassifying excluded turns as `"verbatim"`, because verbatim steps append without a turn boundary.
+
+## Plan-gate rulings (binding; override the tasks above where they differ)
+
+Plan → implementation gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`; owner-approved).
+
+1. **Replay (Task 7).** Segment exactly as today, then relabel a generation
+   step as `kept` only when **every** message in it is excluded. The
+   segmentation test fixture gets a third exchange (player post, reply C) so
+   "the next stage() appends the second player post" is reachable; assertions
+   follow the plan's stage semantics (stage appends every leading non-generation
+   step). `state()` reports a pending `kept` step as `next: "verbatim"` (the
+   frontend type is unchanged).
+2. **Tracker running state.** `walk._latest_ok` (what `current()` and the
+   absorb snapshot read) skips records whose owning message is excluded, so a
+   hidden post's snapshot never becomes the tracker section of a prompt;
+   `_tracked` stays unchanged so prune keeps the records. Tests: `current()`
+   skips the hidden post's snapshot; re-run-from-here schedules nothing for the
+   hidden key; `mark(...)` is None.
+3. **Timestamp.** Stamp with `store/scenes/write.py`'s module-level `now_iso`
+   (imported from `..paths`), which is what the tests patch. A same-second
+   hide-then-send makes that reply un-rerollable (ties refuse) — accepted.
+4. **Director notes keep their behaviour.** The selector uses
+   `without_excluded(messages)[-12:]` and keeps its existing synthetic-speaker
+   filter; `_rolling_due`'s `fresh` count and the absorb/dossier empty guards use
+   `without_excluded` too (a notes-only scene is not newly "empty").
+5. **Frontend absorbed-scene test** awaits `findByText(/scene complete/i)` before
+   asserting the toggle is absent.
+6. **EPUB**: the class and tag are enough; no epub stylesheet change.
+7. **`round_open`** counts `pending` rounds too (what `responses.unfinished`
+   returns) — stated.
+8. **Gates**: after `make check`, the orchestrator runs the code review and the
+   final adversarial review against the spec; the implementer does not.
+9. Global Constraints' reason for inline flag checks in `pending_reviews` is
+   wrong (it already imports `scenes.paths`); the inline check stays, reason
+   corrected in the code comment to the real one (no new import needed).
