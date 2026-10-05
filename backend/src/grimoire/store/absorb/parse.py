@@ -23,6 +23,12 @@ CITATION_TEXT = ("quote", "speaker")
 #: top-level contract (`parse_output("{}")`) cannot see them, and a template edit
 #: that dropped the ask would otherwise go unnoticed until a live run.
 CITATION_FIELDS = CITATION_TEXT + ("certainty",)
+#: What a row opening a NEW plot thread or commitment may say about its own
+#: identity: why no listed record already covers it, and which listed ids it was
+#: weighed against and judged different business. Like `CITATION_FIELDS` these
+#: live INSIDE rows, so the derived top-level contract cannot see them and
+#: `evals` must ask for them explicitly.
+IDENTITY_FIELDS = ("why_new", "distinguished_from")
 
 
 def _int05(v) -> int:
@@ -100,6 +106,29 @@ def _cite(e: dict) -> dict:
     certainty = _certainty(e.get("certainty"))
     if certainty is not None:
         out["certainty"] = certainty
+    return out
+
+
+def _identity(e: dict) -> dict:
+    """The identity fields on one plot or commitment row, present ONLY where
+    the model gave a well-typed, non-blank value -- key presence is the signal,
+    as it is for `_cite`.
+
+    `distinguished_from` keeps its string elements, stripped, blanks dropped,
+    deduplicated in first-seen order. Ids are NOT checked against the store
+    here: this function has no snapshot, so filtering unknown ids is the
+    identity step's job.
+    """
+    out: dict = {}
+    why = e.get("why_new")
+    if isinstance(why, str) and why.strip():
+        out["why_new"] = why.strip()
+    seen = e.get("distinguished_from")
+    if isinstance(seen, list):
+        ids = [s.strip() for s in seen if isinstance(s, str) and s.strip()]
+        ids = list(dict.fromkeys(ids))
+        if ids:
+            out["distinguished_from"] = ids
     return out
 
 
@@ -196,7 +225,7 @@ def parse_output(text: str) -> dict:
             status = _str(e, "status").lower()
             plot_moves.append({"id": _str(e, "id"), "title": _str(e, "title"),
                                "status": status if status in plot.STATUSES else "open",
-                               "beat": _str(e, "beat")} | _cite(e))
+                               "beat": _str(e, "beat")} | _cite(e) | _identity(e))
 
     # An absent or unrecognized kind/status normalizes to "", NOT to a default.
     # `commitments.set_movement` reads a blank as "keep what is stored" and
@@ -231,7 +260,7 @@ def parse_output(text: str) -> dict:
             # non-string (null, a number, an object) is treated as omission.
             if isinstance(e.get("due"), str):
                 row["due"] = e["due"].strip()
-            commitment_moves.append(row | _cite(e))
+            commitment_moves.append(row | _cite(e) | _identity(e))
 
     new_characters = _list("new_characters",
                            ("name", "description", "history", "personality",
