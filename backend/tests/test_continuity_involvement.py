@@ -129,3 +129,34 @@ def test_stage_history_keeps_chronicle_when_appearances_is_garbled(cid):
     _chronicle(cid, {S1: ["characters/mara"]})
     (_root(cid) / "appearances.json").write_text("{ no", encoding="utf-8")
     assert involvement.stage_history(cid, {"characters/mara"}) == {"characters/mara": {S1}}
+
+
+# ------------------------------------------------------------- group_touched
+
+
+def test_group_touched_equals_touched_scenes_without_aliases(cid):
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "open", "Stolen.", S1)
+    store.plot.set_movement(cid, "maras-map", "", "advanced", "Traced.", S3)
+    store.plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Lost.", S2)
+    store.plot.set_movement(cid, "realm-feud", "The Realm feud", "closed", "", "")
+    expected = involvement.touched_scenes(store.plot.read(cid))
+    assert expected                       # not vacuous
+    assert involvement.group_touched(cid, "thread") == expected
+
+
+def test_group_touched_folds_members_into_the_canonical(cid):
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "open", "Stolen.", S1)
+    store.plot.set_movement(cid, "maras-map", "", "advanced", "Traced.", S3)
+    store.plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Lost.", S2)
+    store.plot.set_movement(cid, "realm-feud", "The Realm feud", "open", "Begun.", S2)
+    doc.put_alias(cid, "thread:maras-map", {"to": "thread:winifreds-chart"})
+    assert involvement.group_touched(cid, "thread") == {
+        "winifreds-chart": {S1, S2, S3}, "realm-feud": {S2}}
+
+
+def test_group_touched_garbled_ledger_is_empty(cid):
+    store.commitments.set_movement(cid, "mara-promise", "Mara's promise", "promise", "open",
+                                   None, "She swore.", S1)
+    (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
+    assert involvement.group_touched(cid, "thread") == {}
+    assert involvement.group_touched(cid, "commitment") == {"mara-promise": {S1}}

@@ -74,7 +74,7 @@ def _plot_raw(cid, data):
 # ----------------------------------------------------------- the identity law
 
 
-def test_identity_law_threads(cid):
+def _identity_threads(cid):
     # Beats appended out of scene order, and a status-only move newer than
     # every beat -- the two reasons a "tidier" projection would differ.
     _thread(cid, "maras-map", "Mara's map", "advanced",
@@ -85,15 +85,23 @@ def test_identity_law_threads(cid):
     data["shouting"] = dict(data["realm-feud"], status="Closed")
     data["garbage"] = "not a record"
     _plot_raw(cid, data)
+
+
+def _identity_commitments(cid):
+    _commitment(cid, "mara-promise", "Mara's promise",
+                beats=[(S2, "She swore it."), (S1, "She hinted.")], due="by midwinter", last=S3)
+    _commitment(cid, "old-debt", "The old debt", status="fulfilled", beats=[(S1, "Paid.")])
+
+
+def test_identity_law_threads(cid):
+    _identity_threads(cid)
     for include in (False, True):
         assert effective.threads(cid, include_closed=include) == [
             dict(r, aliases=[]) for r in store.plot.open_threads(cid, include_closed=include)]
 
 
 def test_identity_law_commitments(cid):
-    _commitment(cid, "mara-promise", "Mara's promise",
-                beats=[(S2, "She swore it."), (S1, "She hinted.")], due="by midwinter", last=S3)
-    _commitment(cid, "old-debt", "The old debt", status="fulfilled", beats=[(S1, "Paid.")])
+    _identity_commitments(cid)
     for include in (False, True):
         assert effective.commitments(cid, include_resolved=include) == [
             dict(r, aliases=[])
@@ -376,3 +384,93 @@ def test_garbled_events_is_unknown_not_missing(cid):
     assert diag["unreadable"] == ["events"]
     assert diag["broken_links"] == []
     assert [lk["id"] for lk in effective.links(cid)] == ["l1"]
+
+
+# ------------------------------------------------------- the snippet renders
+
+
+def test_render_helpers_obey_identity_law(cid):
+    _identity_threads(cid)
+    _identity_commitments(cid)
+    for w in (True, False):
+        assert effective.render_threads(cid, w) == store.plot.render_open(cid, w)
+        assert effective.render_commitments(cid, w) == store.commitments.render_open(cid, w)
+    # Not vacuous: both sections have lines to compare.
+    assert len(effective.render_threads(cid, True)) == 2
+    assert len(effective.render_commitments(cid, True)) == 1
+
+
+def test_render_helpers_show_canonical_ids_only(cid):
+    _thread(cid, "maras-map", "Mara's map", "open",
+            beats=[(S1, "The map was stolen."), (S3, "Mara traced the thief.")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "advanced", beats=[(S2, "Winifred lost it.")])
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    lines = effective.render_threads(cid, True)
+    assert len(lines) == 1
+    assert lines[0].startswith("winifreds-chart: Winifred's chart (")
+    assert not any("maras-map" in line for line in lines)
+
+
+def test_render_helpers_tolerate_a_garbled_ledger(cid):
+    _identity_commitments(cid)
+    (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
+    assert effective.render_threads(cid, True) == []
+    lines = effective.render_commitments(cid, True)
+    assert lines == store.commitments.render_open(cid, True)
+    assert len(lines) == 1
+
+
+def test_render_helpers_ignore_a_garbled_continuity_file(cid):
+    # Review Focus 5: a garbled continuity.json reads as no aliases, so every
+    # snippet is the physical render and nothing raises.
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S1, "The map was stolen.")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S2, "Winifred lost it.")])
+    (_root(cid) / "continuity.json").write_text("{ no", encoding="utf-8")
+    for w in (True, False):
+        lines = effective.render_threads(cid, w)
+        assert lines == store.plot.render_open(cid, w)
+        assert len(lines) == 2
+
+
+def test_no_alias_projection_never_loads_the_ledgers(cid, monkeypatch):
+    _identity_threads(cid)
+    _identity_commitments(cid)
+    expected = [dict(r, aliases=[]) for r in store.plot.open_threads(cid)]
+
+    def boom(cls, cid):
+        raise AssertionError("Ledgers.load on the no-alias path")
+
+    monkeypatch.setattr(effective.Ledgers, "load", classmethod(boom))
+    assert effective.threads(cid) == expected
+    assert effective.commitments(cid) == [
+        dict(r, aliases=[]) for r in store.commitments.open_commitments(cid)]
+    assert effective.render_commitments(cid, False) == store.commitments.render_open(cid, False)
+
+
+def test_no_alias_rows_parse_the_ledger_once(cid, monkeypatch):
+    _identity_commitments(cid)
+    real = store.commitments.read
+    calls = []
+
+    def counting(cid):
+        calls.append(cid)
+        return real(cid)
+
+    monkeypatch.setattr(store.commitments, "read", counting)
+    assert not (_root(cid) / "continuity.json").exists()
+    effective.commitments(cid)
+    assert len(calls) == 1
+
+
+def test_render_helpers_fall_back_to_the_physical_render(cid, monkeypatch):
+    _identity_threads(cid)
+    _identity_commitments(cid)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("continuity failed")
+
+    monkeypatch.setattr(effective, "_groups", broken)
+    for w in (True, False):
+        assert effective.render_threads(cid, w) == store.plot.render_open(cid, w)
+        assert effective.render_commitments(cid, w) == store.commitments.render_open(cid, w)
+    assert effective.render_threads(cid, True) != []

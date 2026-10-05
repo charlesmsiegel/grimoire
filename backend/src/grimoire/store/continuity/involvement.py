@@ -58,6 +58,23 @@ def touched_scenes(records) -> dict[str, set[str]]:
     return out
 
 
+def group_touched(cid: str, kind: str,
+                  ledgers: effective.Ledgers | None = None) -> dict[str, set[str]]:
+    """`touched_scenes` over the `kind` ledger ("thread" | "commitment"), with
+    each alias member's scenes folded into its live canonical, keyed by bare
+    id -- so a merged-away record is never its own key and its canonical
+    answers for the whole group. With no live alias it is exactly
+    `touched_scenes` of the raw ledger. An unreadable ledger is ``{}``."""
+    ledgers = ledgers or effective.Ledgers.load(cid)
+    raw = {"thread": ledgers.threads, "commitment": ledgers.commitments}.get(kind)
+    live = effective.live_canon(cid, ledgers)
+    out: dict[str, set[str]] = {}
+    for rid, scenes in touched_scenes(raw).items():
+        _, canonical = canon.split_ref(live.get(f"{kind}:{rid}", f"{kind}:{rid}"))
+        out.setdefault(canonical, set()).update(scenes)
+    return out
+
+
 def stage_history(cid: str, refs: set[str]) -> dict[str, set[str]]:
     """For each ref, every scene it has stood in -- read off `scene_actors`, the
     one scene->actor index `of` uses too, so briefing's flag and every newer

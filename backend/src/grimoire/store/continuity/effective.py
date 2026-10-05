@@ -41,6 +41,7 @@ consistent read hold `campaign_lock` themselves.
 
 from __future__ import annotations
 
+from ... import prompts
 from .. import commitments as commitments_store
 from .. import events, fieldtext, plot, scene_ids
 from . import canon, doc
@@ -248,13 +249,23 @@ def links(cid: str, ledgers: Ledgers | None = None) -> list[dict]:
 # ------------------------------------------------------------------- records
 
 
+def _projected(cid: str, kind: str) -> list[dict]:
+    """The physical projected rows (closed/resolved included). Raises exactly
+    what the physical projection raises."""
+    if kind == "thread":
+        return plot.open_threads(cid, include_closed=True)
+    return commitments_store.open_commitments(cid, include_resolved=True)
+
+
+def _raw(cid: str, kind: str) -> dict:
+    """The stored records, beats and all -- what only a merge needs."""
+    return plot.read(cid) if kind == "thread" else commitments_store.read(cid)
+
+
 def _physical(cid: str, kind: str) -> tuple[dict, list[dict]]:
     """The stored records and their projected rows (closed/resolved included).
     Raises exactly what the physical projection raises."""
-    if kind == "thread":
-        return plot.read(cid), plot.open_threads(cid, include_closed=True)
-    return (commitments_store.read(cid),
-            commitments_store.open_commitments(cid, include_resolved=True))
+    return _raw(cid, kind), _projected(cid, kind)
 
 
 def _beats(record) -> list[dict]:
@@ -311,7 +322,13 @@ def _latest_scene(candidates: list[str], fallback: str) -> str:
 
 def _groups(cid: str, kind: str, rows: list[dict]) -> dict[str, list[str]]:
     """Canonical id -> [canonical id, member ids in sorted-ref order], for every
-    group with at least one live member."""
+    group with at least one live member.
+
+    No stored alias means no group, so the common path answers without
+    `live_canon` -- which would load all three ledgers to say the same thing,
+    on every effective read (the shell badge runs on every navigation)."""
+    if not doc.read(cid)["aliases"]:
+        return {}
     ids = {row["id"] for row in rows}
     out: dict[str, list[str]] = {}
     for src, target in sorted(live_canon(cid).items()):
@@ -361,9 +378,12 @@ def records(cid: str, kind: str) -> dict[str, dict]:
 
 
 def _rows(cid: str, kind: str, include: bool) -> list[dict]:
-    raw, rows = _physical(cid, kind)
+    rows = _projected(cid, kind)
     by_id = {row["id"]: row for row in rows}
     groups = _groups(cid, kind, rows)
+    # Only a merge needs the raw beats, so a campaign with no group parses its
+    # ledger once (inside the projection) rather than twice.
+    raw = _raw(cid, kind) if groups else {}
     hidden = {m for members in groups.values() for m in members[1:]}
     out = []
     for row in rows:
@@ -387,3 +407,31 @@ def threads(cid: str, include_closed: bool = False) -> list[dict]:
 
 def commitments(cid: str, include_resolved: bool = False) -> list[dict]:
     return _rows(cid, "commitment", include_resolved)
+
+
+# ------------------------------------------------------------------ renders
+
+
+def render_threads(cid: str, with_id: bool) -> list[str]:
+    """`plot.render_open`'s lines over the effective threads: canonical ids
+    only, merged beats. With no live alias it IS `plot.render_open` (the
+    identity law). Only the row read is guarded, exactly as there: a garbled
+    plot.json still costs the section (the physical render's own tolerance
+    answers ``[]``), and a broken snippet template still raises."""
+    try:
+        rows = threads(cid)
+    except Exception:  # noqa: BLE001 -- a continuity-side failure degrades to the physical lines, never drops the section (spec §3.9)
+        return plot.render_open(cid, with_id)
+    template = f"snippets/plot_thread_line/{'absorb' if with_id else 'context'}.j2"
+    return [prompts.render(template, t=t) for t in rows]
+
+
+def render_commitments(cid: str, with_id: bool) -> list[str]:
+    """`commitments.render_open`'s lines over the effective commitments, with
+    `render_threads`' shape and tolerance."""
+    try:
+        rows = commitments(cid)
+    except Exception:  # noqa: BLE001 -- a continuity-side failure degrades to the physical lines, never drops the section (spec §3.9)
+        return commitments_store.render_open(cid, with_id)
+    template = f"snippets/commitment_line/{'absorb' if with_id else 'context'}.j2"
+    return [prompts.render(template, c=c) for c in rows]
