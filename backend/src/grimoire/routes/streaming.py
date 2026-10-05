@@ -186,14 +186,14 @@ def _served(meter, conn: dict) -> str:
     return (attempted or conn).get("id", "")
 
 
-def _display_stream(cid: str | None, conn: dict):
-    """The display-phase stream for a turn that asked for `conn`.
-
-    Built from the requested connection, not the one that ends up answering: a
-    fallback is only known once the attempt has run. `cid=None` is a caller with
-    no campaign to read rules for, and gets an inactive stream.
+def _display_stream(cid: str | None, conn: dict, meter=None) -> store.regex.stream.DisplayStream:
+    """The display-phase stream for a turn that asked for `conn`, built from the
+    connection `meter`'s call is actually running on (`_served`) -- after a
+    fallback, the one whose rules the saved message will be filed under.
+    `cid=None` is a caller with no campaign to read rules for, and gets an
+    inactive stream.
     """
-    entries = (store.regex.layers.effective(cid=cid, connection=conn.get("id", ""))
+    entries = (store.regex.layers.effective(cid=cid, connection=_served(meter, conn))
                if cid else [])
     return store.regex.stream.DisplayStream(entries)
 
@@ -202,11 +202,42 @@ def _visible_frames(display, text: str, *, last: bool = False) -> list[str]:
     """The frames for `text`, the visible words that would have gone out as one
     `delta`: that `delta`, or when `display` is active the `display` frame the
     throttle allows. `last` closes the stream, which sends whatever the throttle
-    held back."""
-    if not display.active:
+    held back. No `display` at all is an inactive one."""
+    if display is None or not display.active:
         return [_sse({"delta": text})] if text else []
     frames = [display.feed(text) if text else None, display.finish() if last else None]
     return [_sse({"display": f}) for f in frames if f]
+
+
+class _Display:
+    """One contribution's display stream, built on its first visible text.
+
+    Not before: which connection serves the call is known only once an attempt
+    is running, and a fallback takes over before any text arrives (text already
+    on screen cannot fail over). So the first visible words are the moment the
+    serving connection -- and so its rules -- is settled. Until then there is
+    nothing to show and nothing to build.
+    """
+
+    def __init__(self, cid: str | None, conn: dict, meter) -> None:
+        self._cid, self._conn, self._meter = cid, conn, meter
+        self.stream: store.regex.stream.DisplayStream | None = None
+
+    @property
+    def active(self) -> bool:
+        return self.stream is not None and self.stream.active
+
+    async def build(self) -> None:
+        """Settle the stream now, text or not -- for a caller that has to know
+        whether it is `active` before deciding to ask for any."""
+        if self.stream is None:
+            self.stream = await run_in_threadpool(
+                _display_stream, self._cid, self._conn, self._meter)
+
+    async def frames(self, text: str, *, last: bool = False) -> list[str]:
+        if text:
+            await self.build()
+        return _visible_frames(self.stream, text, last=last)
 
 
 def _store_phase(cid: str, segments: list[dict], connection: str) -> list[tuple]:
@@ -745,22 +776,28 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # Display rules ride the same text, so the redaction and the fence
             # hiding above are unchanged: a `display` frame stands where the
             # `delta` would have, and counts from 0 on this path.
-            display = await run_in_threadpool(_display_stream, cid, conn)
+            display = _Display(cid, conn, meter)
             async for delta in client.stream(messages, conn, meter.usage):
                 if not delta:
                     if liveness.due():
                         yield _HEARTBEAT  # the facade is still waiting on the model
                     continue
                 out = redactor.feed(watcher.feed(delta))
-                frames = _visible_frames(display, out)
+                frames = await display.frames(out)
                 if frames:
                     liveness.sent()
                     for frame in frames:
                         yield frame
+                elif display.active and liveness.due():
+                    # Text a display rule is hiding sends no bytes, and it can
+                    # arrive as an unbroken run of non-empty deltas with no
+                    # empty one to carry a heartbeat. Only with rules in force:
+                    # a plain stream sends the bytes it always did.
+                    yield _HEARTBEAT
                 if watcher.complete:
                     break  # stop-after-fence: ignore anything past the close
             tail = redactor.feed(watcher.finish()) + redactor.finish()
-            for frame in _visible_frames(display, tail, last=True):
+            for frame in await display.frames(tail, last=True):
                 yield frame
             # Before `finalize`, and deliberately: the accounting is complete the
             # moment the provider stops, and the persist below can raise
@@ -779,7 +816,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # while the redactor was still withholding all of it. Without this
             # the client would be missing text that a refresh then reveals.
             flushed = redactor.feed(watcher.finish()) + redactor.finish()
-            for frame in _visible_frames(display, flushed, last=True):
+            for frame in await display.frames(flushed, last=True):
                 yield frame
             watcher.connection = _served(meter, conn)
             meter.done("error", exc.kind, detail=exc.detail)

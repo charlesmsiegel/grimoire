@@ -216,7 +216,11 @@ def migrate(cid: str, sid: str) -> list[dict]:
                 "active_variant": vid,
                 "status": "complete",
                 "created": now_iso(),
-                "variants": [{"id": vid, "content": message["content"], "status": "complete"}],
+                # Its connection rides along, so a swipe away and back puts
+                # the post's provenance back with its text.
+                "variants": [{"id": vid, "content": message["content"], "status": "complete",
+                              **({"connection": message["connection"]}
+                                 if message.get("connection") else {})}],
             }
             scope["responses"][rid] = record
             message.update(

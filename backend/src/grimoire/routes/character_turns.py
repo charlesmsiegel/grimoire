@@ -671,24 +671,26 @@ async def _stream_events(client, messages, conn, meter, watcher, run, display):
                 yield reasoning
                 continue
             delta = event["delta"]
-            frames = streaming._visible_frames(display, watcher.feed(delta))
+            frames = await display.frames(watcher.feed(delta))
             if frames:
                 liveness.sent()
                 for frame in frames:
                     yield frame
-            elif not delta and liveness.due():
+            elif (not delta or display.active) and liveness.due():
+                # An empty delta is the facade waiting on the model; with a
+                # display rule in force, a non-empty one whose text is hidden
+                # sends nothing either (`_fence_stream` says why it is only then).
                 yield streaming._HEARTBEAT
             if watcher.roll.complete:
                 break
 
 
 async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=None):
-    # Display rules for the connection the turn asked for: the one that answers
-    # is only known once the attempt has run, and a fallback mid-stream is rare
-    # enough that its own rules apply from the save on, not while it streams.
-    # Frames replace `delta` frames one for one, so `keep` counts from this
-    # contribution's `response_start`.
-    display = await run_in_threadpool(streaming._display_stream, cid, conn)
+    # Display rules for the connection that serves the call, settled on the
+    # first visible text (`streaming._Display`), so a fallback's reply is shaped
+    # by the rules it is saved under. Frames replace `delta` frames one for
+    # one, so `keep` counts from this contribution's `response_start`.
+    display = streaming._Display(cid, conn, meter)
     try:
         async with aclosing(
             _stream_events(client, messages, conn, meter, watcher, run, display)
@@ -699,12 +701,13 @@ async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=
         # What the throttle held back is on screen after a refresh and must be
         # before it: `_rescue` saves the partial whole. A delta stream has
         # nothing held back, so it sends nothing here.
+        await display.build()
         if display.active:
-            for frame in streaming._visible_frames(display, watcher.finish(), last=True):
+            for frame in await display.frames(watcher.finish(), last=True):
                 yield frame
         raise
     visible = watcher.finish()
-    for frame in streaming._visible_frames(display, visible, last=True):
+    for frame in await display.frames(visible, last=True):
         yield frame
     if run.cancel_requested:
         # Stop can arrive while the final visible delta is being delivered.

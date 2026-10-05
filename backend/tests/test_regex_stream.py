@@ -326,3 +326,34 @@ def test_a_failed_turn_without_rules_sends_the_deltas_and_nothing_more(client):
     frames = failing_body(client, cid, sid, speaker_ref="characters:mara")
     assert [f["delta"] for f in frames if "delta" in f] == FAILS
     assert not any("display" in f for f in frames)
+
+
+# Hidden text that arrives as one unbroken run of non-empty deltas: no empty
+# delta ever comes along to carry a heartbeat.
+DENSE = ["<think>abc", "def", "ghi"]
+
+
+def test_a_hidden_stretch_of_text_still_earns_a_heartbeat(client, monkeypatch):
+    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)   # only a first beat is due
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([DENSE])
+    body = {"content": "Hello", "speaker_ref": "characters:mara"}
+    url = f"/api/campaigns/{cid}/scenes/{sid}/chat"
+
+    # Every plain delta is a frame, so no beat is due...
+    assert beats(client.post(url, json=body)) == 0
+    # ...but text a display rule hides sends nothing, so the stream says it is alive.
+    put_rules(client, f"/api/campaigns/{cid}/regex", OPEN_THINK)
+    assert beats(client.post(url, json=body)) == 1
+
+
+def test_a_hidden_stretch_of_text_still_earns_a_heartbeat_legacy(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    monkeypatch.setattr(streaming, "HEARTBEAT_GAP", 3600.0)
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([DENSE])
+    url = f"/api/campaigns/{cid}/scenes/{sid}/chat"
+
+    assert beats(client.post(url, json={"content": "Hello"})) == 0
+    put_rules(client, f"/api/campaigns/{cid}/regex", OPEN_THINK)
+    assert beats(client.post(url, json={"content": "Hello"})) == 1

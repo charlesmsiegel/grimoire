@@ -209,3 +209,88 @@ def test_a_message_without_connection_serializes_unchanged():
     assert block == ('**Mara:** <!-- grimoire-response {"response_id": "r1"} -->\nHi.\n')
     with_connection = serialize._message_block({**message, "connection": "backup"})
     assert '"connection": "backup"' in with_connection
+
+
+ANSWERS = {"name": "Answers", "pattern": "answers", "replacement": "replies",
+           "applies": ["display"]}
+
+
+def shown_text(response) -> str:
+    """What a client shows for a one-part body: deltas appended, display
+    frames applied as `keep`/`tail`."""
+    buffer = ""
+    for line in response.text.splitlines():
+        if not line.startswith("data: "):
+            continue
+        frame = json.loads(line[len("data: "):])
+        if "delta" in frame:
+            buffer += frame["delta"]
+        elif "display" in frame:
+            buffer = buffer[:frame["display"]["keep"]] + frame["display"]["tail"]
+    return buffer
+
+
+def connection_rules(client, conn, *rules):
+    response = client.put(f"/api/llm-connections/{conn}/regex", json={"rules": list(rules)})
+    assert response.status_code == 200, response.text
+
+
+def test_live_display_follows_the_serving_connection(client, monkeypatch):
+    """After a fallback, the reply on screen is shaped by the fallback's own
+    rules -- the ones its saved message is filed under -- not the failed
+    primary's."""
+    cid, sid = seed(client)
+    backup, provider = with_fallback(client, monkeypatch)
+    connection_rules(client, "openrouter", {**ANSWERS, "replacement": "WRONG"})
+    connection_rules(client, backup, ANSWERS)
+    response = send(client, cid, sid)
+
+    assert provider.calls == 2
+    assert shown_text(response) == "Mara replies."
+    assert replies(cid, sid)[-1]["content"] == "Mara answers."
+
+
+def test_live_display_follows_the_serving_connection_legacy(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    backup, _ = with_fallback(client, monkeypatch)
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    connection_rules(client, "openrouter", {**ANSWERS, "replacement": "WRONG"})
+    connection_rules(client, backup, ANSWERS)
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
+    assert response.status_code == 200, response.text
+    assert shown_text(response) == "Mara replies."
+
+
+def test_a_migrated_post_keeps_its_connection_through_a_swipe(client):
+    cid, sid = seed(client)
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Old reply.",
+                                          "connection": "openrouter"}])
+    store.responses.migrate(cid, sid)
+    rid = replies(cid, sid)[0]["response_id"]
+    original = active_variant(cid, sid, rid)
+    assert original["connection"] == "openrouter"
+
+    other = store.responses.save_variant(
+        cid, sid, rid, "Another reply.", "complete", activate=False, connection="backup")
+    store.responses.activate(cid, sid, rid, other["id"])
+    store.responses.activate(cid, sid, rid, original["id"])
+    assert replies(cid, sid)[0]["connection"] == "openrouter"
+
+
+def test_an_alternate_keeps_its_connection_through_a_promote(client):
+    cid, sid = seed(client)
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "First take.",
+                                          "connection": "openrouter"}])
+    store.alternates.archive(cid, sid)
+    store.scenes.remove_trailing_assistant_run(cid, sid)
+    store.scenes.append_reply(cid, sid, [{"speaker": "Mara", "content": "Second take.",
+                                          "connection": "backup"}])
+    store.alternates.promote(cid, sid, 0)
+    last = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert (last["content"], last["connection"]) == ("First take.", "openrouter")
+    store.alternates.promote(cid, sid, 1)
+    last = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert (last["content"], last["connection"]) == ("Second take.", "backup")
