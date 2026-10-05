@@ -160,3 +160,33 @@ def test_group_touched_garbled_ledger_is_empty(cid):
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     assert involvement.group_touched(cid, "thread") == {}
     assert involvement.group_touched(cid, "commitment") == {"mara-promise": {S1}}
+
+
+def test_group_touched_keeps_a_hand_edited_empty_id_without_aliases(cid):
+    # plot.json is hand-editable: an empty record id (and a non-dict record) are
+    # read by touched_scenes and effective.threads alike, so with no alias the
+    # identity with touched_scenes must still hold rather than raise.
+    (_root(cid) / "plot.json").write_text(json.dumps({
+        "": {"title": "Mara's map", "status": "open", "last_scene": S1,
+             "beats": [{"status": "open", "note": "Stolen.", "scene": S1}]},
+        "winifreds-chart": {"title": "Winifred's chart", "status": "open", "last_scene": S2,
+                            "beats": [{"status": "open", "note": "Lost.", "scene": S2}]},
+        "realm-feud": "not a record",
+    }), encoding="utf-8")
+    expected = involvement.touched_scenes(store.plot.read(cid))
+    assert "" in expected                 # not vacuous
+    assert involvement.group_touched(cid, "thread") == expected
+
+
+def test_group_touched_folds_into_a_canonical_beside_an_empty_id(cid):
+    (_root(cid) / "plot.json").write_text(json.dumps({
+        "": {"title": "Mara's map", "status": "open", "last_scene": S3,
+             "beats": [{"status": "open", "note": "Stolen.", "scene": S3}]},
+        "maras-map": {"title": "Mara's map", "status": "open", "last_scene": S1,
+                      "beats": [{"status": "open", "note": "Stolen.", "scene": S1}]},
+        "winifreds-chart": {"title": "Winifred's chart", "status": "open", "last_scene": S2,
+                            "beats": [{"status": "open", "note": "Lost.", "scene": S2}]},
+    }), encoding="utf-8")
+    doc.put_alias(cid, "thread:maras-map", {"to": "thread:winifreds-chart"})
+    assert involvement.group_touched(cid, "thread") == {
+        "": {S3}, "winifreds-chart": {S1, S2}}

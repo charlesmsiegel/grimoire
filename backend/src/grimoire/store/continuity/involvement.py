@@ -70,8 +70,12 @@ def group_touched(cid: str, kind: str,
     live = effective.live_canon(cid, ledgers)
     out: dict[str, set[str]] = {}
     for rid, scenes in touched_scenes(raw).items():
-        _, canonical = canon.split_ref(live.get(f"{kind}:{rid}", f"{kind}:{rid}"))
-        out.setdefault(canonical, set()).update(scenes)
+        # Only an alias hit is split: its target already passed `split_ref` on
+        # the way into `live_canon`. A miss keeps the raw id, so a hand-edited
+        # empty id answers as `touched_scenes` does rather than raising.
+        target = live.get(f"{kind}:{rid}")
+        key = canon.split_ref(target)[1] if target is not None else rid
+        out.setdefault(key, set()).update(scenes)
     return out
 
 
