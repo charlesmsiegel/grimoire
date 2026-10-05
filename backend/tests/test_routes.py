@@ -13567,10 +13567,11 @@ def test_turn_override_still_reaches_the_cascade(client):
     captured = {}
     real = store.context.compose_turn
 
-    def spy(cid_, sid_, turn=None, appended=(), describe=True, model=""):
+    def spy(cid_, sid_, turn=None, appended=(), describe=True, model="", images=0):
         captured["turn"] = turn
         captured["model"] = model
-        return real(cid_, sid_, turn=turn, appended=appended, describe=describe, model=model)
+        return real(cid_, sid_, turn=turn, appended=appended, describe=describe, model=model,
+                    images=images)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: FakeOpenRouter(["ok"])
     store.context.compose_turn = spy
