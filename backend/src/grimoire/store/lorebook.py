@@ -11,9 +11,11 @@ entries are skipped.
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
-from . import cards, entities
+from . import cards, entities, lore_fields
 
 
 class LorebookError(Exception):
@@ -58,7 +60,32 @@ _ST_EXTENSION_FIELDS = (
     "delayUntilRecursion", "delay_until_recursion",
     "scanDepth", "scan_depth", "depth", "role",
     "matchWholeWords", "match_whole_words",
+    # Fields the first stash dropped when they sat at the top level of an entry
+    # (spec 4.1 "lost" rows). Most are not honoured, but keeping them means a
+    # later change can honour them without a re-import.
+    "sticky", "cooldown", "delay", "ignoreBudget", "ignore_budget",
+    "group", "groupOverride", "group_override", "groupWeight", "group_weight",
+    "useGroupScoring", "use_group_scoring", "vectorized",
+    "characterFilter", "character_filter", "triggers",
+    "automationId", "automation_id",
 )
+
+# Stashed fields that no part of grimoire honours: `adopt` reports whichever of
+# these a stash holds, so the editor can say what an import carried that will
+# not take effect. Every spelling, since the stash keeps the one it was given.
+_UNHONOURED = frozenset((
+    "delay", "delayUntilRecursion", "delay_until_recursion",
+    "probability", "useProbability", "position", "depth", "role",
+    "caseSensitive", "case_sensitive", "matchWholeWords", "match_whole_words",
+    "use_regex", "useRegex",
+    "group", "groupOverride", "group_override", "groupWeight", "group_weight",
+    "useGroupScoring", "use_group_scoring",
+    "vectorized", "characterFilter", "character_filter", "triggers",
+    "automationId", "automation_id",
+))
+
+# ST's `selectiveLogic` numbering, onto the catalog's operators.
+_SELECTIVE_LOGIC = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
 
 
 def _normalize(book) -> list[dict]:
@@ -125,6 +152,118 @@ def importable_count(book) -> int:
     return sum(1 for e in _entries_container(book or {}) if _importable(e))
 
 
+@dataclass(frozen=True)
+class AdoptResult:
+    fields: dict[str, str]          # native activation fields, frontmatter-shaped
+    unmapped: tuple[str, ...]       # stashed, recognised, and not honoured
+
+
+def _scopes(stash: Mapping[str, object]):
+    """The places ST files an advanced field: the top level, then the V3
+    entry's own `extensions` object."""
+    yield stash
+    nested = stash.get("extensions")
+    if isinstance(nested, Mapping):
+        yield nested
+
+
+def _pick(stash: Mapping[str, object], *names: str) -> object:
+    """The first value present under any of `names`, top level before nested.
+    A null is "absent" -- ST exports `scanDepth: null` for "use the default"."""
+    for scope in _scopes(stash):
+        for name in names:
+            if scope.get(name) is not None:
+                return scope[name]
+    return None
+
+
+def _int(value: object) -> int | None:
+    # A bool is an int to Python and a flag to ST; neither reading is a number.
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _clamped(key: str, value: object) -> str | None:
+    n = _int(value)
+    if n is None:
+        return None
+    lo, hi = lore_fields.BOUNDS[key]
+    return str(min(max(n, lo), hi))
+
+
+def _secondary_keys(stash: Mapping[str, object]) -> str | None:
+    raw = _pick(stash, "keysecondary", "secondary_keys")
+    if not isinstance(raw, list):
+        return None
+    keys = [k.strip() for k in raw if isinstance(k, str) and k.strip()]
+    return ", ".join(keys) or None
+
+
+def adopt(stash: Mapping[str, object]) -> AdoptResult:
+    """The native activation fields a stash maps to (spec 4.1), as the flat
+    strings frontmatter holds, plus the recognised-but-unhonoured fields it
+    carries. A value of the wrong type is skipped, as if it were absent; an
+    out-of-range number is clamped (an editor save refuses instead -- an
+    import is not the author typing it)."""
+    fields: dict[str, str] = {}
+
+    # `selective` absent is ST's default (on); off means the secondary list is
+    # ignored, which is the same as not having one.
+    selective = _pick(stash, "selective")
+    if selective is not False:
+        secondary = _secondary_keys(stash)
+        if secondary:
+            fields["secondary_keys"] = secondary
+            code = _int(_pick(stash, "selectiveLogic"))
+            if code in _SELECTIVE_LOGIC:
+                fields["key_logic"] = _SELECTIVE_LOGIC[code]
+
+    scan_depth = _clamped("scan_depth", _pick(stash, "scanDepth", "scan_depth"))
+    if scan_depth is not None:
+        fields["scan_depth"] = scan_depth
+    for key in ("sticky", "cooldown"):
+        value = _clamped(key, _pick(stash, key))
+        if value is not None:
+            fields[key] = value
+    priority = _clamped("priority", _pick(stash, "priority", "order", "insertion_order"))
+    if priority is not None:
+        fields["priority"] = priority
+
+    if _pick(stash, "ignoreBudget", "ignore_budget") is True:
+        fields["keep"] = "true"
+
+    # exclude = no entry's body may pull this one in; prevent = this entry's
+    # body pulls nothing in.
+    not_pulled = _pick(stash, "excludeRecursion", "exclude_recursion") is True
+    not_pulling = _pick(stash, "preventRecursion", "prevent_recursion") is True
+    if not_pulled or not_pulling:
+        fields["recursion"] = ("none" if not_pulled and not_pulling
+                               else "pulls_only" if not_pulled else "pulled_only")
+
+    unmapped = sorted({name for scope in _scopes(stash) for name in _UNHONOURED
+                       if scope.get(name) is not None})
+    return AdoptResult(fields, tuple(unmapped))
+
+
+def pending_adopt(meta: Mapping[str, object]) -> AdoptResult:
+    """What adopting a record's stash would still change: `adopt` over its
+    `st_extensions`, less every field the record already has. An author's edit
+    beats a stale import, so a field with any value is left alone. No stash, or
+    one that is not a JSON object, is nothing to adopt."""
+    raw = meta.get("st_extensions")
+    try:
+        stash = json.loads(raw) if isinstance(raw, str) and raw.strip() else None
+    except ValueError:
+        stash = None
+    if not isinstance(stash, dict):
+        return AdoptResult({}, ())
+    res = adopt(stash)
+    held = {k for k in lore_fields.FIELD_KEYS if str(meta.get(k) or "").strip()}
+    return AdoptResult({k: v for k, v in res.fields.items() if k not in held},
+                       res.unmapped)
+
+
 def _existing_signatures(root: Path, kind: str) -> set[tuple[str, str, str]]:
     sigs = set()
     for ref in entities.list_entities(root, kind):
@@ -172,8 +311,11 @@ def commit(root: Path, entries: list[dict]) -> list[dict]:
         # round trip through parse/dump_frontmatter (single-line string scalars)
         # cannot reshape them. Absent entirely when there is nothing to stash --
         # a simple import's frontmatter is byte-identical to what it always was.
+        # The honoured ones are also written natively (`adopt`), so a new import
+        # takes effect without the author pressing Apply.
         ext = e.get("extensions") or {}
-        fields = {"st_extensions": json.dumps(ext, sort_keys=True)} if ext else None
+        fields = ({"st_extensions": json.dumps(ext, sort_keys=True), **adopt(ext).fields}
+                  if ext else None)
         eid = entities.create_entity(root, category, e.get("name", "Imported entry"),
                                      e.get("body", ""), ",".join(e.get("keys", [])),
                                      fields=fields)

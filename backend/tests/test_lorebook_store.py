@@ -239,3 +239,160 @@ def test_normalize_preserves_regex_flag_and_entry_extensions():
                                     "extensions": {"sticky": 2, "cooldown": 3}}
     assert out[1]["extensions"] == {"preventRecursion": True, "delayUntilRecursion": 2}
     assert "extensions" not in out[2]
+
+
+# --- the audit table (spec 4.1): the stash keeps what used to be lost, and
+# `adopt` maps the honoured rows onto native activation fields -----------------
+
+
+def test_stash_keeps_previously_lost_fields():
+    out = lorebook._normalize({"entries": [
+        {"keys": ["tide"], "name": "Tide", "content": "x", "sticky": 2, "cooldown": 3,
+         "delay": 1, "ignoreBudget": True, "group": "g", "vectorized": True}]})
+    assert out[0]["extensions"] == {"sticky": 2, "cooldown": 3, "delay": 1,
+                                    "ignoreBudget": True, "group": "g", "vectorized": True}
+
+
+@pytest.mark.parametrize("field", [
+    "ignore_budget", "groupOverride", "group_override", "groupWeight", "group_weight",
+    "useGroupScoring", "use_group_scoring", "characterFilter", "character_filter",
+    "triggers", "automationId", "automation_id",
+])
+def test_stash_keeps_every_spelling_of_the_lost_rows(field):
+    out = lorebook._normalize({"entries": [
+        {"keys": ["tide"], "name": "Tide", "content": "x", field: "v"}]})
+    assert out[0]["extensions"] == {field: "v"}
+
+
+def _both_places(stash):
+    """The same stash at the top level and nested under `extensions`, where ST
+    writes most advanced fields when it exports a card."""
+    return [stash, {"extensions": dict(stash)}]
+
+
+AUDIT_ROWS = [
+    ({"keysecondary": ["tide"], "selective": True, "selectiveLogic": 2},
+     {"secondary_keys": "tide", "key_logic": "not_any"}),
+    ({"secondary_keys": ["tide", " ", "salt"], "selectiveLogic": 3},
+     {"secondary_keys": "tide, salt", "key_logic": "and_all"}),
+    ({"keysecondary": ["tide"], "selectiveLogic": 1},
+     {"secondary_keys": "tide", "key_logic": "not_all"}),
+    ({"keysecondary": ["tide"], "selectiveLogic": 0},
+     {"secondary_keys": "tide", "key_logic": "and_any"}),
+    # `selective` absent is ST's default: on
+    ({"keysecondary": ["tide"]}, {"secondary_keys": "tide"}),
+    # selective off: the secondary list is ignored, so nothing is written
+    ({"selective": False, "keysecondary": ["tide"]}, {}),
+    ({"selective": False, "keysecondary": ["tide"], "selectiveLogic": 2}, {}),
+    ({"keysecondary": []}, {}),
+    ({"sticky": 2, "cooldown": 3}, {"sticky": "2", "cooldown": "3"}),
+    ({"priority": 5, "order": 900}, {"priority": "5"}),
+    ({"order": 900}, {"priority": "900"}),
+    ({"insertion_order": 7}, {"priority": "7"}),
+    ({"order": 900, "insertion_order": 7}, {"priority": "900"}),
+    ({"ignoreBudget": True}, {"keep": "true"}),
+    ({"ignore_budget": True}, {"keep": "true"}),
+    ({"ignoreBudget": False}, {}),
+    ({"excludeRecursion": True}, {"recursion": "pulls_only"}),
+    ({"exclude_recursion": True}, {"recursion": "pulls_only"}),
+    ({"preventRecursion": True}, {"recursion": "pulled_only"}),
+    ({"prevent_recursion": True}, {"recursion": "pulled_only"}),
+    ({"excludeRecursion": True, "preventRecursion": True}, {"recursion": "none"}),
+    ({"excludeRecursion": False, "preventRecursion": False}, {}),
+    ({"scanDepth": None}, {}),
+    ({"scan_depth": 4}, {"scan_depth": "4"}),
+    ({"scanDepth": 0}, {"scan_depth": "0"}),
+    # a value of the wrong type is skipped, and does not spoil its neighbours
+    ({"sticky": "abc", "cooldown": 3}, {"cooldown": "3"}),
+    ({"selectiveLogic": 9, "keysecondary": ["tide"]}, {"secondary_keys": "tide"}),
+    ({"sticky": True}, {}),
+    ({"keysecondary": "tide"}, {}),
+]
+
+
+@pytest.mark.parametrize("stash,expected", AUDIT_ROWS)
+def test_adopt_maps_the_audit_table(stash, expected):
+    for placed in _both_places(stash):
+        assert lorebook.adopt(placed).fields == expected
+
+
+def test_adopt_clamps_into_bounds():
+    assert lorebook.adopt({"order": 5000, "sticky": 99, "cooldown": -4, "scanDepth": 500}).fields == {
+        "priority": "1000", "sticky": "50", "cooldown": "0", "scan_depth": "100"}
+
+
+def test_adopt_reports_unmapped():
+    res = lorebook.adopt({"probability": 50, "position": 1, "delay": 2})
+    assert res.unmapped == ("delay", "position", "probability")
+    assert res.fields == {}
+
+
+def test_adopt_reports_unmapped_in_either_spelling_and_place():
+    res = lorebook.adopt({
+        "case_sensitive": True, "matchWholeWords": True,
+        "extensions": {"useRegex": True, "group": "g", "automation_id": "a",
+                       "delayUntilRecursion": 1, "characterFilter": {}},
+        "sticky": 2,
+    })
+    assert res.unmapped == ("automation_id", "case_sensitive", "characterFilter",
+                            "delayUntilRecursion", "group", "matchWholeWords", "useRegex")
+    assert res.fields == {"sticky": "2"}
+
+
+def test_adopt_unmapped_is_deduplicated_and_skips_absent_values():
+    res = lorebook.adopt({"delay": 1, "extensions": {"delay": 2, "depth": None}})
+    assert res.unmapped == ("delay",)
+
+
+def test_adopt_of_an_empty_stash_is_empty():
+    res = lorebook.adopt({})
+    assert res.fields == {} and res.unmapped == ()
+
+
+def test_adopt_ignores_a_non_dict_extensions_object():
+    assert lorebook.adopt({"extensions": "junk", "sticky": 1}).fields == {"sticky": "1"}
+
+
+def test_commit_writes_native_fields_and_stash(tmp_path):
+    entries = lorebook._normalize({"entries": [
+        {"keys": ["tide"], "name": "Tide", "content": "x", "keysecondary": ["salt"],
+         "selectiveLogic": 2, "sticky": 2, "probability": 50}]})
+    [created] = lorebook.commit(tmp_path, entries)
+    meta = entities.read_entity(tmp_path, created["kind"], created["id"])["meta"]
+    assert meta["secondary_keys"] == "salt"
+    assert meta["key_logic"] == "not_any"
+    assert meta["sticky"] == "2"
+    assert json.loads(meta["st_extensions"])["keysecondary"] == ["salt"]
+    assert json.loads(meta["st_extensions"])["probability"] == 50
+
+
+def test_reimport_is_still_a_noop(tmp_path):
+    book = {"entries": [{"keys": ["tide"], "name": "Tide", "content": "x",
+                         "keysecondary": ["salt"], "sticky": 2}]}
+    assert len(lorebook.commit(tmp_path, lorebook._normalize(book))) == 1
+    assert lorebook.commit(tmp_path, lorebook._normalize(book)) == []
+    assert len(entities.list_entities(tmp_path, "lore")) == 1
+
+
+def test_pending_adopt_skips_fields_the_record_has():
+    stash = {"sticky": 2, "cooldown": 3, "probability": 40}
+    meta = {"name": "Tide", "sticky": "5", "st_extensions": json.dumps(stash)}
+    res = lorebook.pending_adopt(meta)
+    assert res.fields == {"cooldown": "3"}
+    assert res.unmapped == ("probability",)
+
+
+def test_pending_adopt_treats_a_blank_value_as_not_there():
+    meta = {"sticky": "  ", "st_extensions": json.dumps({"sticky": 2})}
+    assert lorebook.pending_adopt(meta).fields == {"sticky": "2"}
+
+
+def test_pending_adopt_is_empty_without_a_stash():
+    res = lorebook.pending_adopt({"name": "Tide"})
+    assert res.fields == {} and res.unmapped == ()
+
+
+@pytest.mark.parametrize("raw", ["{not json", "[1, 2]", '"text"', "null", "", 7])
+def test_pending_adopt_tolerates_garbled_stash(raw):
+    res = lorebook.pending_adopt({"st_extensions": raw})
+    assert res.fields == {} and res.unmapped == ()
