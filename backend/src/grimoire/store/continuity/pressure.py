@@ -18,8 +18,10 @@ advance digest has its own, older reading of the same records.
 **Each source fails soft on its own.** A calendar provider can be user plugin
 code that raises anything (`calendars.primary_provider` catches only
 `CalendarError`/`KeyError`), so every source -- and the provider and `now`
-resolutions themselves -- runs through `_soft`. A broken calendar degrades the
-list to undated items rather than failing the read; nothing invents a date
+resolutions themselves, and every per-day call into the provider (`_fixed_of`,
+`_labels`) -- runs through `_soft`. A broken calendar degrades the list to
+undated items rather than failing the read, and one day a plugin cannot name
+costs that item's label rather than its source; nothing invents a date
 (spec §3.8, §26). With no readable `now` there is nothing to measure from:
 events are still listed, undated relative to now (`in_days: None`, `ok`), and
 holidays and birthdays, which only exist relative to a window, are absent.
@@ -57,11 +59,6 @@ SORT_ORDER = ("overdue", "today", "due_soon", "upcoming", "passed", "stale", "ok
 HIGH_PRESSURE = frozenset({"overdue", "today", "due_soon"})
 
 _DEADLINE_RELATIONS = frozenset({"before", "by", "on"})
-
-#: What a provider's date arithmetic raises on a day it cannot render. One bad
-#: label costs that label, not the item: the item is still dated.
-_LABEL_ERRORS = (calendars.CalendarError, KeyError, TypeError, ValueError,
-                 OverflowError, OSError)
 
 T = TypeVar("T")
 
@@ -119,22 +116,22 @@ def state_of(kind: str, relation: str, in_days: int | None, *, warn_days: int,
 
 
 def _labels(provider, fixed: int | None) -> tuple[str, str]:
-    """`(native, friendly)` for a fixed day, or blanks when it cannot be rendered."""
+    """`(native, friendly)` for a fixed day, or blanks when it cannot be rendered.
+
+    Soft by construction, like `_fixed_of`: both run provider code on one day,
+    so one day a plugin cannot handle costs that day's labels (or date), never
+    the item, the source or the read.
+    """
     if provider is None or fixed is None:
         return "", ""
-    try:
-        return provider.format(fixed), provider.describe(fixed)["friendly"]
-    except _LABEL_ERRORS:
-        return "", ""
+    return _soft(lambda: (provider.format(fixed), provider.describe(fixed)["friendly"]),
+                 ("", ""))
 
 
 def _fixed_of(provider, native: str) -> int | None:
     if provider is None or not native:
         return None
-    try:
-        return calendars.fixed_of(provider, native)
-    except _LABEL_ERRORS:
-        return None
+    return _soft(calendars.fixed_of, None, provider, native)
 
 
 def _item(kind: str, ref: str, label: str, fixed: int | None, ctx: dict, **extra) -> dict:
@@ -164,8 +161,7 @@ def _event_items(ctx: dict) -> list[dict]:
         if row["fired"] is not None and not today:
             continue
         out.append(_item("event", f"event:{row['id']}", row["name"], fixed, ctx,
-                         native=row["date"], friendly=row["friendly"],
-                         passed=bool(row["passed"])))
+                         native=row["date"], passed=bool(row["passed"])))
     return out
 
 
@@ -221,12 +217,23 @@ def _context(cid: str, now: str | None, horizon: int | None, wanted: frozenset[s
     now_fixed = _fixed_of(provider, now) if now else None
     rows: list[dict] = []
     if wanted & {"event", "linked_deadline"}:
-        rows = _soft(events.list_events, rows, cid, provider, now_fixed)
+        rows = _event_rows(cid, provider, now_fixed)
     return {"cid": cid, "croot": croot, "provider": provider, "now": now or "",
             "now_fixed": now_fixed,
             "horizon": max(calendars.UPCOMING_WINDOW_DAYS if horizon is None else horizon, 0),
             "warn_days": _soft(calendars.warn_days, calendars.WARN_DAYS, croot),
             "events": rows}
+
+
+def _event_rows(cid: str, provider, now_fixed: int | None) -> list[dict]:
+    """`events.list_events`, read once. When the provider raises on some row's
+    day (plugin code, anything at all), the rows are read again without it: no
+    calendar code runs then, so every event is still listed. Each item is then
+    dated and labelled by this module, softly and one day at a time; what the
+    fallback costs is only the `passed` reading, which needs the provider and
+    reads as "cannot tell" (False), as it does with no clock."""
+    rows = _soft(events.list_events, None, cid, provider, now_fixed)
+    return _soft(events.list_events, [], cid) if rows is None else rows
 
 
 def _order(item: dict) -> tuple:

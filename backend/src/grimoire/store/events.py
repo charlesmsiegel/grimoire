@@ -146,6 +146,13 @@ def _fired(value) -> dict | None:
     return {"at": _text(value.get("at")), "moment": _text(value.get("moment"))}
 
 
+#: What a provider's parse raises on a hand-edited date it cannot read: a
+#: CalendarError normally, but a huge year overflows Gregorian's `date` (and
+#: pyluach) before the provider can say so -- the same set `birthdays` guards
+#: each actor with. One such row reads as undated; it never costs the others.
+_UNREADABLE = (calendars.CalendarError, ValueError, OverflowError)
+
+
 def _row(eid: str, rec, provider=None, now_fixed: int | None = None) -> dict:
     """One projected event. `provider`, when given, adds the friendly date.
 
@@ -172,7 +179,7 @@ def _row(eid: str, rec, provider=None, now_fixed: int | None = None) -> dict:
     if provider is not None and date:
         try:
             friendly = calendars.friendly(provider, date)
-        except calendars.CalendarError:
+        except _UNREADABLE:
             friendly = ""
     fired = _fired(rec.get("fired"))
     fixed = _fixed(provider, date) if provider is not None else None
@@ -195,7 +202,7 @@ def _fixed(provider, date: str) -> int | None:
         return None
     try:
         return calendars.fixed_of(provider, date)
-    except calendars.CalendarError:
+    except _UNREADABLE:
         return None
 
 
