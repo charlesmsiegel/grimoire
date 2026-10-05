@@ -30,6 +30,11 @@ _FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reas
 #: `update_connection`): the rev exists to invalidate the cached model catalog
 #: and the health verdict, and neither describes a sampler preset.
 SAMPLER_FIELDS = frozenset({"sampler_preset", "sampler_support"})
+#: Every field whose edit keeps the `rev`: the sampler pair, and `vision`
+#: (#377) -- an override describes neither the catalog nor the provider's
+#: health, and bumping the rev would discard the cached catalog that "auto"
+#: reads, so setting it back to auto would read "unknown" until a refresh.
+REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision"}
 
 
 class ConnectionNotFound(Exception):
@@ -56,7 +61,7 @@ def _write_raw(id: str, keep_rev: str = "", **fields: str) -> None:
     cached_models below), so clearing it here is pure hygiene either way."""
     meta = {k: fields.get(k, "") for k in _FIELDS}
     # `keep_rev` is the one exception, for an edit nothing the rev guards has
-    # seen: the sidecar and the rev both survive it (see `SAMPLER_FIELDS`).
+    # seen: the sidecar and the rev both survive it (see `REV_NEUTRAL_FIELDS`).
     meta["rev"] = keep_rev or secrets.token_hex(8)
     _dir().mkdir(parents=True, exist_ok=True)
     if not keep_rev:
@@ -167,7 +172,7 @@ def update_connection(id: str, **fields) -> None:
         fields.pop("api_key", None)
     merged = {**conn, **fields}
     changed = {k for k in _FIELDS if merged[k] != conn[k]}
-    keep = conn["rev"] if changed and changed <= SAMPLER_FIELDS and conn["rev"] else ""
+    keep = conn["rev"] if changed and changed <= REV_NEUTRAL_FIELDS and conn["rev"] else ""
     _write_raw(id, keep_rev=keep, **{k: merged[k] for k in _FIELDS})
 
 

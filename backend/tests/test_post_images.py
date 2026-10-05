@@ -126,6 +126,15 @@ def test_reach_with_no_connection_reads_none(client):
     assert client.get("/api/config").json()["send_images_reach"] == "none"
 
 
+def test_editing_only_the_vision_override_keeps_the_catalog(home):
+    conn = _conn()
+    _catalog(conn, [{"id": "m", "vision": True}])
+    llm_connections.update_connection(conn["id"], vision="off")
+    assert post_images.capability(llm_connections.read_connection_raw(conn["id"])) == "no"
+    llm_connections.update_connection(conn["id"], vision="")
+    assert post_images.capability(llm_connections.read_connection_raw(conn["id"])) == "yes"
+
+
 def test_connection_vision_is_constrained_and_round_trips(client):
     bad = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Mara", "api_key": "k", "vision": "sometimes"})
