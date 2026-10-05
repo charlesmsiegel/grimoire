@@ -864,6 +864,8 @@ When `existing` is accepted, the parsed row is rewritten before `materialize`:
 
 **Uncertain rows.** An `uncertain` row stays a new staged row, but it gets `review.band = "low"` after materialize, so it arrives unticked in the NEEDS YOU drawer. Under the existing save rule an unticked row is **still written unless rejected**, and its hint says so: “Possible existing record — reject this row, or switch it to the existing record, if it is the same business.”
 
+**Unchecked rows.** A row the check never answered — omitted from a partial reply, or every row when the call failed, was refused by the budget, or had no connection — is `unchecked` / `hint_only`, and it gets the same `low` band. Every examined row has at least one plausible candidate, so an unanswered one is a possible duplicate nobody ruled out; its routing band would pre-approve it outside NEEDS YOU. A partially answered batch reports the phase `degraded`, never `ok` (Slice C plan, revised after the Codex review on #466).
+
 The identity resolver is advisory. Final staged edits still go through the normal review.
 
 ## 10.3 Review hints and switching rows
@@ -2276,7 +2278,7 @@ Use fake vectors, never real external embedding calls.
 - the resolver fails or returns undecodable output → the staged new row survives, with hints and alternatives;
 - one batch call for several ambiguous records;
 - existing citation/review fields survive identity resolution;
-- an uncertain row is band `low`;
+- an uncertain or unchecked row is band `low`;
 - alternatives carry valid `before` tokens that pass `check_conflicts`;
 - the `identity` phase row appears, with status;
 - existing absorb tests stay call-count-stable.
