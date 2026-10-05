@@ -279,3 +279,14 @@ def test_forget_ref_uses_the_given_name(cid):
     review.forget_ref(cid, "thread:winifreds-chart", name="Winifred's chart")
     assert store.journal.read(cid)[-1]["label"] == (
         "Mara's map → merged into Winifred's chart — removed with deleted record")
+
+
+def test_create_link_refuses_an_occupied_null_id(cid):
+    from grimoire.store.continuity import canon
+    lid = canon.link_id("pays_off", "thread:maras-map", "commitment:mara-oath")
+    (_root(cid) / "continuity.json").write_text(json.dumps({"links": {lid: None}}),
+                                                encoding="utf-8")
+    refused = _refused(review.create_link, cid, "thread:maras-map", "commitment:mara-oath",
+                       "pays_off")
+    assert (refused.status, refused.kind) == (409, "link_exists")
+    assert doc.read(cid)["links"] == {lid: None}

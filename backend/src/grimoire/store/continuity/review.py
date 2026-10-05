@@ -218,7 +218,9 @@ def create_link(cid: str, a: str, b: str, relation: str, *, scene: str = "",
                 raise RefusedError(409, "link_exists", "that link already exists",
                               {"id": link["id"]})
         lid = canon.link_id(relation, ca, cb)
-        if doc.get_link(cid, lid) is not None:
+        # Membership, not `get_link(...) is not None`: a hand-edited null stored
+        # under this id is still a record, and writing over it would replace it.
+        if lid in doc.read(cid)["links"]:
             raise RefusedError(409, "link_exists", "that link already exists", {"id": lid})
         record = {"a": ca, "b": cb, "relation": relation, "created": paths.now_iso(),
                   "scene": scene, "note": note}
