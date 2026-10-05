@@ -41,6 +41,13 @@ its citation and identity fields, and its candidates with their signals, and
 nothing else of the campaign. `parse_output` rebuilds the reply field by field;
 a reply with no decodable object is None -- a failed check -- never ``[]``,
 which is a decodable reply with nothing usable in it (§24).
+
+**Deciding** (`Examination.decide`) is where the reply is not trusted: an
+``existing`` is accepted only onto an offered, live candidate no other row in
+the batch already moves, and is otherwise downgraded to ``uncertain``.
+`Examination.rewritten` then retargets the accepted rows by the §10.2 rewrite
+(never ``open``, kind and unresolving status kept as stored) and stamps every
+examined row with its `identity_check`; materialize stages what it is given.
 """
 
 from __future__ import annotations
@@ -50,7 +57,7 @@ import re
 from typing import Literal
 
 from ... import prompts
-from .. import fieldtext
+from .. import commitments, fieldtext
 from ..absorb import materializer as absorb_materializer
 from ..absorb import parse as absorb_parse
 from . import canon, effective, involvement, similarity
@@ -163,6 +170,141 @@ class Examination:
         Within one row every candidate is the row's own type, so a bare id is
         unambiguous."""
         return [_prompt_row(e) for e in self.rows]
+
+    def decide(self, decisions: list[dict]) -> None:
+        """Take the resolver's `parse_output` decisions (spec §10.2).
+
+        Rows are visited in examination order. A row the reply never answered
+        is `unchecked` / `hint_only`; ``new`` and ``uncertain`` stand as given;
+        ``existing`` is accepted only when the id it names -- canonicalized
+        through the alias map -- is one of the row's live candidates and no
+        other row in this batch (an explicit or honoured target, or an earlier
+        accepted row) already moves that record. Otherwise it is downgraded to
+        ``uncertain``: identity resolution never reopens a record, and a second
+        move of one record would lose a beat. Replaces any earlier decision."""
+        by_key: dict[str, dict] = {}
+        for answer in decisions:
+            if isinstance(answer, dict) and isinstance(answer.get("row"), str):
+                by_key.setdefault(answer["row"], answer)   # a repeated key keeps its first
+        taken = set(self.targets)
+        for e in self.rows:
+            d = by_key.get(e.key)
+            if d is None:
+                _settle(e, "unchecked", "hint_only", NO_ANSWER)
+            elif d.get("decision") == "existing":
+                self._existing(e, d, taken)
+            else:
+                word = d.get("decision")
+                _settle(e, word if word in DECISIONS else "uncertain", "accepted",
+                        _text(d.get("reason")))
+
+    def _existing(self, e: Examined, d: dict, taken: set[tuple[str, str]]) -> None:
+        rid = _bare(e.kind, d.get("id"))
+        rid = _canonical(self.live, e.kind, rid) if rid else ""
+        offered = {s.ref.partition(":")[2]: s for s, _ in e.candidates}
+        cand = offered.get(rid)
+        if cand is None:
+            _settle(e, "uncertain", "downgraded", NOT_OFFERED)
+        elif not cand.live:
+            _settle(e, "uncertain", "downgraded", NOT_LIVE)
+        elif (e.kind, rid) in taken:
+            _settle(e, "uncertain", "downgraded", ALREADY_MOVED)
+        else:
+            _settle(e, "existing", "accepted", _text(d.get("reason")), target=rid)
+            taken.add((e.kind, rid))
+
+    def hint_only(self, reason: str) -> None:
+        """No usable answer (no connection, a failed or refused call, an
+        undecodable reply): every examined row becomes `unchecked` /
+        `hint_only` with `reason`, discarding any earlier `decide`."""
+        for e in self.rows:
+            _settle(e, "unchecked", "hint_only", reason)
+
+    def rewritten(self, parsed: dict) -> dict:
+        """`parsed` with every examined row replaced by its decided form.
+
+        A shallow copy with fresh lists for the two sections; `parsed` itself
+        is not mutated. An accepted ``existing`` row is retargeted onto its
+        canonical record by the §10.2 rewrite and carries its original under
+        `AS_NEW_KEY`; every other examined row is the row as given. Both carry
+        `identity_check` (without ``alternatives``, which materialize adds).
+        Rows with no plausible candidate were never examined and are untouched."""
+        out = dict(parsed)
+        for section in SECTIONS:
+            rows = parsed.get(section)
+            if isinstance(rows, list):
+                out[section] = list(rows)
+        for e in self.rows:
+            ic = _identity_check(e)
+            if e.decision == "existing" and e.status == "accepted" and e.target:
+                new = _onto_existing(e.kind, e.row, e.target)
+                new["identity_check"] = ic
+                new[AS_NEW_KEY] = dict(e.row)
+            else:
+                new = {**e.row, "identity_check": ic}
+            out[e.section][e.index] = new
+        return out
+
+    def counts(self) -> dict[str, int]:
+        """Flat counts for the phase block and the log row (spec §29): no
+        titles, texts or reasons. ``deterministic + semantic == candidates``."""
+        vias = [sig.get("via") for e in self.rows for _, sig in e.candidates]
+        out = {"proposed": self.proposed, "examined": len(self.rows),
+               "candidates": len(vias),
+               "deterministic": sum(v in ("lexical", "structural") for v in vias),
+               "semantic": sum(v == "semantic" for v in vias),
+               "embedded": self.embedded}
+        for word in CHECK_DECISIONS:
+            out[word] = sum(e.decision == word for e in self.rows)
+        for status in ("downgraded", "hint_only"):
+            out[status] = sum(e.status == status for e in self.rows)
+        return {k: int(v) for k, v in out.items()}
+
+    def all_unchecked(self) -> bool:
+        """Rows were examined and the check answered none of them."""
+        return bool(self.rows) and all(e.decision == "unchecked" for e in self.rows)
+
+
+#: Reasons the acceptance guard gives (display text, never a prompt).
+NO_ANSWER = "the check gave no answer for this row"
+NOT_OFFERED = "named a record that was not offered"
+NOT_LIVE = "that record is already closed or resolved"
+ALREADY_MOVED = "another row in this scene already moves that record"
+
+
+def _settle(e: Examined, decision: str, status: str, reason: str, *,
+            target: str | None = None) -> None:
+    e.decision, e.status, e.reason, e.target = decision, status, reason, target
+
+
+def _onto_existing(kind: str, row: dict, rid: str) -> dict:
+    """The §10.2 rewrite of `row` onto the existing record `rid`.
+
+    The id becomes the canonical one and the title blank (keep stored). A plot
+    status is the model's ``closed`` or ``advanced``, else ``advanced`` -- never
+    ``open``, which `parse_output` defaults to and which would regress an
+    advanced thread. A commitment keeps its stored kind and keeps a status only
+    when it resolves the record. ``due`` stays exactly as present or absent.
+    Citation keys are untouched."""
+    new = {**row, "id": rid, "title": ""}
+    status = row.get("status")
+    if kind == "thread":
+        new["status"] = status if status in ("closed", "advanced") else "advanced"
+    else:
+        new["kind"] = ""
+        new["status"] = status if status in commitments.RESOLVED else ""
+    return new
+
+
+def _identity_check(e: Examined) -> dict:
+    """The row's `identity_check`, as the review stores and shows it (§10.3)."""
+    return {"decision": e.decision, "status": e.status, "reason": e.reason,
+            "proposed": {"title": e.title, "why_new": _text(e.row.get("why_new")),
+                         "distinguished_from": list(e.distinguished_from)},
+            "candidates": [{"ref": s.ref, "title": s.title, "status": s.status,
+                            "latest_beat": similarity.beat_lines(s.record)[0],
+                            "signals": dict(sig)}
+                           for s, sig in e.candidates]}
 
 
 def _text(value) -> str:
