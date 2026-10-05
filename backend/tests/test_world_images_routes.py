@@ -169,3 +169,18 @@ def test_an_unknown_world_cannot_be_written_into(client, tmp_path):
     r = client.put("/api/worlds/nope/cover",
                    files={"file": ("c.png", _png(), "image/png")})
     assert r.status_code == 404
+
+
+def test_library_and_cover_puts_carry_the_image_id(client, wid):
+    """The library and cover answers name the picture's identity beside `v`,
+    and the listing row says the same thing."""
+    from grimoire.store import image_hash
+    put = _put(client, wid, "coastline").json()
+    assert image_hash.is_image_id(put["image_id"])
+    listed = client.get(f"/api/worlds/{wid}/images").json()
+    assert [i["image_id"] for i in listed] == [put["image_id"]]
+    cover = client.put(f"/api/worlds/{wid}/cover",
+                       files={"file": ("c.jpg", _png(), "image/jpeg")}).json()
+    assert cover["image_id"] == put["image_id"]   # same bytes, same picture
+    row = next(g for g in client.get(f"/api/worlds/{wid}/gallery").json() if g["kind"] == "world")
+    assert row["image_id"] == put["image_id"]

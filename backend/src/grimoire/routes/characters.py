@@ -845,7 +845,7 @@ def list_world_gallery(wid: str):
             row = {"kind": base, "id": item["id"], "vid": item["vid"],
                    "name": item["name"], "ext": item["ext"], "record_name": found[0],
                    "described": item["described"], "description": item["description"],
-                   **_gallery_urls(wid, base, item)}
+                   **_gallery_image_id(item), **_gallery_urls(wid, base, item)}
             if base == "greetings":
                 # Who is in the picture, which for greeting art is the sidecar
                 # that governs it. Carried here so the gallery can say which
@@ -881,6 +881,7 @@ def list_world_gallery(wid: str):
                     "ext": image["ext"], "record_name": "World library",
                     "described": image["name"] in descs,
                     "description": descs.get(image["name"], ""),
+                    **_gallery_image_id(image),
                     "url": f"{url}?v={v}", "thumb": f"{url}{thumb_query(v)}"})
     return out
 
@@ -958,6 +959,7 @@ def list_campaign_gallery(cid: str):
                        # image reviewed and left blank is described.
                        "described": item["name"] in desc,
                        "description": desc.get(item["name"], ""),
+                       **_gallery_image_id(item),
                        "url": f"{base_url}?v={v}",
                        "thumb": f"{base_url}{thumb_query(v)}"}
                 if base == "greetings":
@@ -990,6 +992,7 @@ def _campaign_library_rows(cid: str) -> list[dict]:
                                     else "Campaign library",
                      "described": image["name"] in descs,
                      "description": descs.get(image["name"], ""),
+                     **_gallery_image_id(image),
                      "url": f"{url}?v={v}", "thumb": f"{url}{thumb_query(v)}"})
     return rows
 
@@ -1074,6 +1077,13 @@ def _actor_image_url(prefix: str, base: str, rid: str, vid: str, name: str) -> s
                 f"/versions/{quote(vid, safe='')}"
                 f"/images/{quote(name, safe='')}")
     return f"{prefix}/{base}/{quote(rid, safe='')}/images/{quote(name, safe='')}"
+
+
+def _gallery_image_id(item: dict) -> dict:
+    """``{"image_id": ...}`` for a listing row backed by the image store, else
+    nothing -- a legacy file has no identity, and the key is absent rather than
+    null so the client reads "no identity" as one thing."""
+    return {"image_id": item["image_id"]} if item.get("image_id") else {}
 
 
 def _gallery_urls(wid: str, base: str, item: dict) -> dict:
@@ -1164,7 +1174,8 @@ async def put_world_image(wid: str, cid: str, vid: str, name: str, file: UploadF
         stored = store.assets.put_image(root, cid, vid, name, data, ext)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"name": name, "ext": stored}
+    return {"name": name, "ext": stored,
+            "image_id": store.assets.image_id(root, cid, vid, name)}
 
 
 @router.delete("/worlds/{wid}/characters/{cid}/versions/{vid}/images/{name}")

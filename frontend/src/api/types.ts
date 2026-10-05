@@ -747,6 +747,9 @@ export type CharacterSummary = {
 export type BaseVersion = {
   id: string; name: string; images: string[];
   image_v: Record<string, string>;
+  /** Image identity per image name, only for images the image store holds;
+   *  a legacy file has no entry. */
+  image_ids?: Record<string, string>;
   image_descriptions: Record<string, string>;
 };
 /** The world's copy of a picture that a campaign file of the same name hides
@@ -759,6 +762,9 @@ export type CharacterDetail = {
   versions: { id: string; name: string; card: Card; images?: string[];
               /** Per-image cache token, keyed by the names in `images`. */
               image_v?: Record<string, string>;
+              /** Image identity keyed by the names in `images`, present only
+               *  for images the image store holds (a legacy file has none). */
+              image_ids?: Record<string, string>;
               /** Campaign reads only: the names in `images` the campaign holds
                *  no file for -- the world's, read through the overlay. */
               inherited?: string[];
@@ -1116,9 +1122,13 @@ export type GalleryImage = {
   url: string; thumb: string; ext: string;
   described: boolean; description: string;
   subjects?: string[] | null;
+  /** The picture's identity in the image store; absent for a legacy file. */
+  image_id?: string;
 };
 export type CampaignImage = {
   name: string; ext: string; v: string;
+  /** The picture's identity in the image store; absent for a legacy file. */
+  image_id?: string;
   /** True when the picture belongs to the campaign's WORLD and this campaign
    *  is only reading through to it. The two are different sentences everywhere
    *  they are shown: the picker offers "remove from this campaign" (which hides
@@ -2598,6 +2608,8 @@ export type CampaignLibrary = { images: CampaignImage[]; hidden: string[] };
  *  campaigns inherit FROM. */
 export type WorldImage = {
   name: string; ext: string; v: string;
+  /** The picture's identity in the image store; absent for a legacy file. */
+  image_id?: string;
   description?: string; described?: boolean;
 };
 

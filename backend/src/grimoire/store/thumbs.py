@@ -81,7 +81,7 @@ from pathlib import Path
 
 from PIL import Image, features
 
-from . import atomic, image_hash
+from . import atomic, image_hash, image_store
 from .paths import home
 
 _log = logging.getLogger(__name__)
@@ -176,8 +176,13 @@ def generation() -> str:
 _CACHE = (".cache", "thumbs")
 
 
-def _key(src: Path, st: os.stat_result, width: int, root: Path) -> str:
+def _key(src: Path, st: os.stat_result | None, width: int, root: Path) -> str:
     """The entry name for `src` at `width`: its identity, stat and the encoder.
+
+    A content-addressed blob (`image_store.blob_sha_of`) is named by its byte
+    sha alone, with no path and no stat: the bytes ARE the identity, so every
+    placement of one picture -- and every device a library is synced to --
+    shares one entry, and a lookup costs no stat. `st` is then unused.
 
     The source is named relative to the library root, in posix form, so the
     same picture has the same key from any folder the library is opened from,
@@ -195,6 +200,10 @@ def _key(src: Path, st: os.stat_result, width: int, root: Path) -> str:
     hand in was built from this same home(), and one spelled differently only
     gets the absolute key -- non-portable, never wrong.
     """
+    if (sha := image_store.blob_sha_of(src)) is not None:
+        return hashlib.sha256(f"cas|{sha}|{width}|{_encoder()}".encode()).hexdigest()[:32]
+    if st is None:
+        st = src.stat()
     name, prefix = str(src), f"{root}{os.sep}"
     if name.startswith(prefix):
         name = name[len(prefix):].replace(os.sep, "/")
@@ -472,10 +481,12 @@ def thumbnail(src: Path, width: int) -> Path | None:
     upscaled), upright and in its own colours, generating it on first request.
     None if the source is missing, not a decodable image, or animated -- each
     a case where the caller serves the original."""
-    try:
-        st = src.stat()
-    except OSError:
-        return None
+    st: os.stat_result | None = None
+    if image_store.blob_sha_of(src) is None:
+        try:
+            st = src.stat()
+        except OSError:
+            return None
     root = home()
     # One join, not four: a warm hit is little more than this and a stat, and
     # each pathlib join re-parses the whole path.

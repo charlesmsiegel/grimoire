@@ -504,7 +504,8 @@ async def _entity_image_put(root, kind: str, eid: str, name: str, file: UploadFi
         stored = store.assets.put_image(root, eid, "default", name, data, ext, base=kind)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"name": name, "ext": stored}
+    return {"name": name, "ext": stored,
+            "image_id": store.assets.image_id(root, eid, "default", name, base=kind)}
 
 
 def _entity_image_promote(root, kind: str, eid: str, name: str):

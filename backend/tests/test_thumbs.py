@@ -162,7 +162,11 @@ def test_a_rewrite_that_moves_the_mtime_is_a_new_entry(tmp_path, monkeypatch):
     # The coarser clock must still tell two writes apart: same bytes, same
     # size, a millisecond later -> a new entry, not the old one served again.
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    src = _greeting_art(tmp_path)
+    # A legacy file: a blob is named by its bytes, so its stat is no part of
+    # its key (`test_thumbnail_shared_across_placements`).
+    src = tmp_path / "assets" / "legacy.png"
+    src.parent.mkdir(parents=True)
+    src.write_bytes(_png_bytes())
     os.utime(src, ns=(1_700_000_000_000_000_000, 1_700_000_000_000_000_000))
     before = thumbs.thumbnail(src, 320)
     os.utime(src, ns=(1_700_000_000_001_000_000, 1_700_000_000_001_000_000))
@@ -882,3 +886,52 @@ def test_the_route_serves_a_fallback_thumbnail_as_what_it_is(client, monkeypatch
     assert r.headers["content-type"] == "image/jpeg"
     with Image.open(io.BytesIO(r.content)) as im:
         assert im.format == "JPEG" and max(im.size) == 128
+
+
+# ---- content-addressed sources: one entry per picture, not per placement ----
+def _upload_avatar(client, wid, cid, data):
+    r = client.put(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
+                   files={"file": ("a.png", io.BytesIO(data), "image/png")})
+    assert r.status_code == 200, r.text
+
+
+def _two_characters_with_one_picture(client, data):
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    ids = [client.post(f"/api/worlds/{wid}/characters", json={"name": n}).json()["character"]
+           for n in ("Seraphine", "Mara")]
+    for cid in ids:
+        _upload_avatar(client, wid, cid, data)
+    return wid, ids
+
+
+def test_thumbnail_shared_across_placements(client, tmp_path):
+    """The same bytes placed as two characters' avatars are one blob, so the
+    thumbnail cache holds one entry for both: the key names the byte sha, not
+    the path."""
+    wid, ids = _two_characters_with_one_picture(client, _png_bytes())
+    tags = set()
+    for cid in ids:
+        r = client.get(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar?w=256")
+        assert r.status_code == 200
+        tags.add(r.headers["etag"])
+    assert len(tags) == 1
+    entries = [p for p in (tmp_path / ".cache" / "thumbs" / thumbs.generation()).iterdir()
+               if not p.name.startswith(".")]
+    assert len(entries) == 1
+
+
+def test_a_blob_key_names_no_path_and_costs_no_stat(client, tmp_path):
+    wid, ids = _two_characters_with_one_picture(client, _png_bytes())
+    paths = [assets.image_path(tmp_path / "worlds" / wid, cid, "default", "avatar") for cid in ids]
+    from grimoire.store import image_store
+    assert all(image_store.blob_sha_of(p) for p in paths)
+    assert thumbs._key(paths[0], None, 256, tmp_path) == thumbs._key(paths[1], None, 256, tmp_path)
+    assert thumbs._key(paths[0], None, 256, tmp_path) != thumbs._key(paths[0], None, 320, tmp_path)
+    # nothing is statted before the cache lookup: a warm hit never touches the file
+    thumbs.thumbnail(paths[0], 256)
+
+    class NoStat(type(paths[1])):
+        def stat(self, *a, **k):
+            raise AssertionError("a blob source is not statted")
+
+    assert thumbs.thumbnail(NoStat(paths[1]), 256) is not None

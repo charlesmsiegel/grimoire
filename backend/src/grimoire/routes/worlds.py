@@ -649,7 +649,9 @@ async def put_world_pc_image(wid: str, pid: str, vid: str, name: str,
                                         base=store.pcs.ASSET_BASE)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"name": name, "ext": stored}
+    return {"name": name, "ext": stored,
+            "image_id": store.assets.image_id(root, pid, vid, name,
+                                              base=store.pcs.ASSET_BASE)}
 
 
 @router.delete("/worlds/{wid}/pcs/{pid}/versions/{vid}/images/{name}")

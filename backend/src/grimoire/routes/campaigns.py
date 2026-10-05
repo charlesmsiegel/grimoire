@@ -686,7 +686,8 @@ async def put_campaign_cover(cid: str, file: UploadFile = File(...)):
         # this is unreachable from here -- kept because what is storable is the
         # store's decision to make, not this route's to assume.
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"ext": stored, "v": store.covers.cover_version(cid)}
+    return {"ext": stored, "v": store.covers.cover_version(cid),
+            "image_id": store.covers.cover_image_id(cid)}
 
 
 @router.delete("/campaigns/{cid}/cover")
@@ -915,8 +916,10 @@ async def put_campaign_library_image(cid: str, name: str, file: UploadFile = Fil
     # `v` so the client can build the immutable `?v=` URL without a second round
     # trip. It resolves and stats, and answers "" rather than raising if the
     # file went between the two -- a write that landed must not report a 500.
+    placed = store.assets.resolve(store.campaign_images.images_dir(cid), name)
     return {"name": name, "ext": stored,
-            "v": store.campaign_images.image_version(cid, name)}
+            "v": store.campaign_images.image_version(cid, name),
+            "image_id": placed.image_id if placed is not None else None}
 
 
 @router.post("/campaigns/{cid}/images/{name}/restore")
@@ -1981,7 +1984,8 @@ async def put_campaign_image(cid: str, char: str, vid: str, name: str, file: Upl
         stored = store.assets.put_image(root, char, vid, name, data, ext)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"name": name, "ext": stored}
+    return {"name": name, "ext": stored,
+            "image_id": store.assets.image_id(root, char, vid, name)}
 
 
 @router.delete("/campaigns/{cid}/characters/{char}/versions/{vid}/images/{name}")
@@ -2542,7 +2546,9 @@ async def put_campaign_pc_image(cid: str, pid: str, vid: str, name: str,
                                         base=store.pcs.ASSET_BASE)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    return {"name": name, "ext": stored}
+    return {"name": name, "ext": stored,
+            "image_id": store.assets.image_id(root, pid, vid, name,
+                                              base=store.pcs.ASSET_BASE)}
 
 
 @router.delete("/campaigns/{cid}/pcs/{pid}/versions/{vid}/images/{name}")
