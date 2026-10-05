@@ -44,7 +44,7 @@ from ..campaigns import paths as campaigns_paths
 from ..scenes import moment as scenes_moment
 from ..scenes import read as scenes_read
 from ..sheets import paths as sheets_paths
-from . import conflicts, materializer, weather
+from . import conflicts, materializer, parse, weather
 
 #: Kept as a name here because `absorb` re-exports it, but the list itself now
 #: lives with the log it describes (`changes.BROWSABLE_KINDS`) -- `store.undo`
@@ -95,6 +95,10 @@ def _outside_drift(cid: str, e: dict, reading, landed: set[tuple]) -> dict | Non
     if now is None or now == reading or (key is not None and (key, now) in landed):
         return None
     return conflicts.conflict_row(cid, e)
+
+
+#: The edit kinds whose write creates a record, and so whose outcome says which.
+_CREATING_KINDS = frozenset({"new_character", "new_location", "new_lore"})
 
 
 def _apply_one(cid: str, croot, e: dict, sid: str | None,
@@ -593,8 +597,10 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
             target = {"kind": "locations", "id": new_eid}
         elif kind == "new_lore":
             p = e["payload"]
-            new_eid = overlay.create_entity(cid, "lore", p["name"], after, p.get("keys", ""))
-            target = {"kind": "lore", "id": new_eid}
+            # A client-edited payload is clamped like the model's word is.
+            lore_kind = parse.new_lore_kind(p.get("kind"))
+            new_eid = overlay.create_entity(cid, lore_kind, p["name"], after, p.get("keys", ""))
+            target = {"kind": lore_kind, "id": new_eid}
         else:
             return {"state": "failed", "id": eid, "kind": "error",
                     "reason": f"this campaign does not know how to apply a "
@@ -673,9 +679,13 @@ def _apply_one(cid: str, croot, e: dict, sid: str | None,
         # the staged one: everything `apply_edits` derives after the write --
         # the citation, the resume reading -- has to name the record that now
         # holds the beat, not the one it moved off. Only the two reallocations
-        # set it; a `new_*` kind's created id is not reported here, so its
-        # citation keeps the key it has always had.
+        # set it; a `new_*` kind's created id is reported as `created` below.
         out["target"] = moved_to
+    if kind in _CREATING_KINDS:
+        # The staged `target.id` of a creation is "" -- the id exists only now.
+        # Named here so the provenance step can key the citation on the record
+        # that was made rather than on nothing.
+        out["created"] = {"kind": target["kind"], "id": target["id"]}
     return out
 
 
@@ -821,7 +831,12 @@ def apply_edits(cid: str, edits: list[dict], sid: str | None = None,
             # and a plot beat are exactly the continuity lines this exists to
             # make checkable, and neither is browsable.
             if sid:
-                pkey = provenance.key(written)
+                # A created record's staged target id is "", so key on the id the
+                # write handed back; every other kind cites what it wrote.
+                created = prior.get("created")
+                cite_edit = ({**written, "target": created} if isinstance(created, dict)
+                             else written)
+                pkey = provenance.key(cite_edit)
                 prow = provenance.row(written, sid) if pkey else None
                 if pkey and prow:
                     cited[pkey] = prow
