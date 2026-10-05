@@ -13,7 +13,7 @@ import json
 import re
 from pathlib import Path
 
-from . import assets, atomic, covers, image_library, locks
+from . import assets, atomic, covers, fetch, image_library, image_refs, image_store, locks
 from .worlds import paths as worlds_paths
 
 MEMBER_PREFIX = "collection-image-"
@@ -89,10 +89,28 @@ def referenced(wid: str, name: str) -> bool:
     return found
 
 
+def _placed_image(wid: str, name: str) -> str | None:
+    """The image id the member's placement names, None when it has none (a
+    legacy file, or nothing at all). The placement alone, resolved or not: a
+    member whose object has not arrived yet is still that image."""
+    ref = image_refs.read(image_directory(wid), name)
+    return ref.image if ref is not None else None
+
+
 def guard_write(wid: str, name: str, data: bytes | None = None) -> None:
-    """Called under the collection lock by world-image write and delete paths."""
+    """Called under the collection lock by world-image write and delete paths.
+
+    A placement-backed member is its image, not its bytes: stored bytes are
+    sanitised, so an upload is harmless exactly when it is the same image.
+    """
     if not referenced(wid, name):
         return
+    if data is not None:
+        placed = _placed_image(wid, name)
+        if placed is not None:
+            if image_store.ingest(data, fetch.sniff_ext(data) or "png").id == placed:
+                return
+            raise ImageInCollectionError("image is a member of an image collection")
     path = assets.path_in(image_directory(wid), name, supported_only=True)
     if data is not None and path is not None and path.read_bytes() == data:
         return
@@ -108,12 +126,18 @@ def put_member(wid: str, data: bytes) -> str:
     name = MEMBER_PREFIX + hashlib.sha256(data).hexdigest()
     with locks.image_collection_lock(wid):
         d = image_directory(wid)
-        existing = assets.path_in(d, name, supported_only=True)
-        if existing is not None:
-            if existing.read_bytes() != data:
+        obj = image_store.ingest(data, ext)
+        placed = _placed_image(wid, name)
+        if placed is not None:
+            if placed != obj.id:
+                raise CollectionInvalidError("stored collection member has changed")
+            return name
+        legacy = assets.path_in(d, name, supported_only=True)
+        if legacy is not None:
+            if legacy.read_bytes() != data:
                 raise CollectionInvalidError("stored collection member has changed")
         else:
-            assets.put_in(d, name, data, ext, supported_only=True)
+            assets.link_in(d, name, obj.id)
     return name
 
 
@@ -122,7 +146,10 @@ def publish(wid: str, collection_id: str, members: list[str]) -> dict:
     with locks.image_collection_lock(wid):
         target = manifest_path(wid, collection_id)
         for name in members:
-            path = assets.path_in(image_directory(wid), name, supported_only=True)
+            d = image_directory(wid)
+            if assets.resolve(d, name) is not None:
+                continue  # a placement is its own identity; its blob is sanitised
+            path = assets.path_in(d, name, supported_only=True)
             if path is None or hashlib.sha256(path.read_bytes()).hexdigest() != name[len(MEMBER_PREFIX):]:
                 raise CollectionInvalidError("collection member is missing or has changed")
         if target.exists():

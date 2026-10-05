@@ -87,3 +87,24 @@ def test_world_forks_and_bundles_keep_all_members_and_repoint_links(client, coll
         assert len(data['members']) == 2
         assert all(url.startswith(f'/api/worlds/{new_id}/images/') for url in data['members'])
         assert [client.get(url).content for url in data['members']] == [png(), png('blue')]
+
+
+def png_dpi(dpi, color='red'):
+    b = io.BytesIO()
+    Image.new('RGB', (4, 4), color).save(b, 'PNG', dpi=(dpi, dpi))
+    return b.getvalue()
+
+
+def test_pixel_duplicate_reupload_does_not_trip_guard(client):
+    wid = worlds.create_world('Realm')
+    name = collections.put_member(wid, png_dpi(72))
+    collections.publish(wid, uuid.uuid4().hex, [name])
+    url = f'/api/worlds/{wid}/images/{name}'
+
+    def put(data):
+        return client.put(url, files={'file': ('x.png', data, 'image/png')})
+
+    assert png_dpi(72) != png_dpi(144)
+    assert put(png_dpi(144)).status_code == 200  # same pixels, other pHYs
+    r = put(png_dpi(72, 'blue'))
+    assert r.status_code == 409 and r.json()['detail'] == 'image_in_collection'
