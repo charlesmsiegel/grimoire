@@ -98,7 +98,7 @@ def _opener_frames(cid: str, sid: str, prompt: str, cast: list[dict],
                     cid, sid, prompt, actor_ref=actor["actor_ref"], prior=parts,
                     describe=store.prompt_log.capturing(), model=effective_model(conn))
                 _record_prompt(cid, sid, "opener", breakdown,
-                               model=effective_model(conn), messages=messages)
+                               model=effective_model(conn), kind=conn["kind"], messages=messages)
                 yield f"data: {json.dumps({'speaker_start': actor})}\n\n"
                 meter = store.usage.meter("opener", campaign=cid, scene=sid)
                 prose = ""

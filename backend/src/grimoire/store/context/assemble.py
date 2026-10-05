@@ -1139,12 +1139,25 @@ def _token_memo():
     every distinct string.
     """
     seen: dict[str, int] = {}
+    used: set[str] = set()
 
     def count(text: str) -> int:
         n = seen.get(text)
         if n is None:
             n = seen[text] = tokens.count_tokens(text)
+            if text and (which := tokens.last_counter()):
+                used.add(which)
         return n
+
+    def counted_with() -> str:
+        """Which counter produced this compose's numbers: one name, `MIXED`
+        when an encode fell back on some strings, "" when nothing was counted
+        (or a test replaced `count_tokens`, which records no counter)."""
+        if len(used) > 1:
+            return tokens.MIXED
+        return next(iter(used), "")
+
+    count.counted_with = counted_with
     return count
 
 
@@ -1337,10 +1350,17 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
     # section that can be shown struck through -- so their cost has to be added
     # here, or a pack that fit by trimming history alone reports nothing
     # dropped and the inspector stays silent about the cut it just made.
-    return {"sections": rows, "total_tokens": total,
-            "dropped_tokens": (sum(r["tokens"] for r in rows if r["dropped"])
-                               + p["history_trimmed_tokens"]),
-            "budget_tokens": p["budget"]}
+    out = {"sections": rows, "total_tokens": total,
+           "dropped_tokens": (sum(r["tokens"] for r in rows if r["dropped"])
+                              + p["history_trimmed_tokens"]),
+           "budget_tokens": p["budget"]}
+    # Which counter made these numbers, taken from the pass that made them
+    # (`_token_memo`) -- `tokens.counting` turns it into the inspector's label.
+    # Absent when `count` is a bare function that cannot say.
+    which = getattr(count, "counted_with", None)
+    if which is not None and which():
+        out["counted_with"] = which()
+    return out
 
 
 def context_breakdown(cid: str, sid: str, model: str = "") -> dict:

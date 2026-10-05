@@ -818,7 +818,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
                               identity=run.scene_identity, outcome=outcome,
                               after_turn=_follow_up_hook(request.app, cid, sid, client))
         _record_prompt(cid, sid, "director", breakdown,
-                       model=effective_model(conn), messages=messages)
+                       model=effective_model(conn), kind=conn["kind"], messages=messages)
         # DETACHED, like the ordinary send below. This branch used to return the
         # response directly, which left its reservation running forever -- the
         # scene answered `run_in_flight` from then on -- while the generation
@@ -862,7 +862,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     # showing a request the model never saw (`test_a_turn_that_never_claims_
     # records_nothing`).
     _record_prompt(cid, sid, "chat", breakdown,
-                   model=effective_model(conn), messages=messages)
+                   model=effective_model(conn), kind=conn["kind"], messages=messages)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -915,7 +915,7 @@ def _retry_run(cid: str, sid: str, body, request: Request,
                           task="retry", identity=run.scene_identity, outcome=outcome,
                           after_turn=_follow_up_hook(request.app, cid, sid, client))
     _record_prompt(cid, sid, "retry", breakdown,
-                   model=effective_model(conn), messages=messages)
+                   model=effective_model(conn), kind=conn["kind"], messages=messages)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -1237,7 +1237,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # The frozen panel names this attempt; the live panel resolves the next
     # ordinary turn independently, so a one-shot override cannot leak into it.
     _record_prompt(cid, sid, "regenerate", breakdown,
-                   model=effective_model(conn), messages=messages)
+                   model=effective_model(conn), kind=conn["kind"], messages=messages)
     # `on_unstarted` is `restore` again, for the one path the stream's own hooks
     # cannot cover: a Stop that arrived while this route was still in the
     # synchronous setup above. The runner honours it with a checkpoint BEFORE
@@ -4596,8 +4596,10 @@ def get_scene_context(cid: str, sid: str):
     _require_scene(cid, sid)
     conn, _resolution, _routed = _standing_connection("chat", cid)
     model = effective_model(conn) if conn is not None else ""
-    return {"model": model, **store.context.context_breakdown(cid, sid, model=model),
-            "token_count": store.tokens.counting(model)}
+    breakdown = store.context.context_breakdown(cid, sid, model=model)
+    return {"model": model, **breakdown,
+            "token_count": store.tokens.counting(model, conn["kind"] if conn else "",
+                                                 breakdown.get("counted_with", ""))}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts")
@@ -4682,9 +4684,10 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # "live" is the one the Context panel is showing.
         conn, _resolution, _routed = _standing_connection("chat", cid)
         model = effective_model(conn) if conn is not None else ""
-        head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model,
-                **store.context.context_breakdown(cid, sid, model=model),
-                "token_count": store.tokens.counting(model)}
+        live = store.context.context_breakdown(cid, sid, model=model)
+        head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,
+                "token_count": store.tokens.counting(model, conn["kind"] if conn else "",
+                                                     live.get("counted_with", ""))}
     else:
         other = store.prompt_log.read_entry(cid, against, scene=sid)
         if other is None:
@@ -5034,7 +5037,7 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
     stream = _chat_stream(cid, sid, messages, conn, client, task="replay",
                           identity=run.scene_identity, outcome=outcome)
     _record_prompt(cid, sid, "replay", breakdown,
-                   model=effective_model(conn), messages=messages)
+                   model=effective_model(conn), kind=conn["kind"], messages=messages)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))

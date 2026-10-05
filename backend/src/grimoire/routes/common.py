@@ -402,7 +402,8 @@ def _turn_override(body) -> dict | None:
 
 
 def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
-                   *, model: str | None = None, messages: list[dict] | None = None) -> None:
+                   *, model: str | None = None, kind: str = "",
+                   messages: list[dict] | None = None) -> None:
     """Freeze what this turn's model is about to see (#157).
 
     Called with the breakdown from the SAME `context.compose_*` call that
@@ -413,6 +414,12 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
     Scene callers pass the resolved requested model, including per-call
     overrides. None retains the legacy scene-stamp default for other callers;
     an empty string means the endpoint's unnamed default and stays empty.
+
+    `kind` is the connection kind the model is reached through, which is what
+    lets the snapshot say whether its counts are the model's own
+    (`tokens.counting`). A fallback attempt is recorded without one -- the
+    variant callback is handed a model id only -- so its counts read as
+    estimates, which is the safe direction.
 
     `messages` binds an optional best-effort capture for a distinct fallback
     attempt. The prepared prompt owns frozen variants; this callback only files
@@ -466,7 +473,8 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
             try:
                 store.prompt_log.record(
                     cid, sid, task, breakdown,
-                    model=meta.get("model", "") if model is None else model)
+                    model=meta.get("model", "") if model is None else model,
+                    kind=kind)
             finally:
                 # A capture IS a campaign write (`prompts/index.json`), and
                 # the one route that reaches this while persisting nothing else

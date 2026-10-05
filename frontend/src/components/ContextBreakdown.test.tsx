@@ -38,3 +38,9 @@ test("a snapshot that names no tokenizer is an estimate, not exact", () => {
   expect(screen.getByText("≈ 100 / 200 tok")).toBeInTheDocument();
   expect(screen.getByText(/may not be gpt-4's own/)).toBeInTheDocument();
 });
+
+test("a compose that fell back on some strings says it is partly a length count", () => {
+  render(<ContextBreakdown models={models}
+                           ctx={ctx({ token_count: { tokenizer: "mixed", native: false } })} />);
+  expect(screen.getByText(/partly counted with cl100k_base/)).toBeInTheDocument();
+});

@@ -114,12 +114,33 @@ def _encoder():
     return _loader.get()
 
 
+#: Which counter this thread's latest `count_tokens` call used -- `ENCODING` or
+#: `HEURISTIC`. Thread-local because composes run concurrently in the
+#: threadpool. Read by `context.assemble._token_memo`, which is what lets a
+#: breakdown say how ITS numbers were made rather than how the loader stands
+#: later (the loader can come back from a failed load between the two).
+_last = threading.local()
+
+#: What a compose reports when its strings were counted by both -- an encode
+#: that raised on one string falls back for that string alone.
+MIXED = "mixed"
+
+
+def last_counter() -> str:
+    """The counter the latest `count_tokens` on this thread used, or "" when
+    this thread has not counted anything (or a test replaced `count_tokens`)."""
+    return getattr(_last, "counter", "")
+
+
 def count_tokens(text: str) -> int:
     if not text:
         return 0
     try:
-        return len(_encoder().encode(text))
+        n = len(_encoder().encode(text))
+        _last.counter = ENCODING
+        return n
     except Exception:  # noqa: BLE001 - token counting must never fail a turn; heuristic instead
+        _last.counter = HEURISTIC
         # Round UP, and never to zero. The heuristic is applied per string, and
         # the packer counts each history message separately -- with floor
         # division every message under four characters cost nothing at all, so
@@ -155,12 +176,28 @@ def _native_encoding(model: str) -> str:
         return ""
 
 
-def counting(model: str) -> dict:
+#: The only connection kind whose model ids name the model that actually
+#: answers. An `openai_compatible` endpoint may serve anything under any id --
+#: including OpenRouter-style ones like `openai/gpt-4` (a LiteLLM gateway, a
+#: local server) -- and a Claude connection is never on tiktoken's table.
+NATIVE_KINDS = ("openrouter",)
+
+
+def counting(model: str, kind: str = "", counted_with: str = "") -> dict:
     """How the token counts reported beside `model` were made, and whether
     the tokenizer was that model's own.
 
-    `tokenizer` is `ENCODING` or `HEURISTIC`; `native` is true only when the
-    encoder is loaded AND the model is one tiktoken maps to that same encoding.
+    `counted_with` is the counter the compose actually used (`ENCODING`,
+    `HEURISTIC` or `MIXED`, from `context.assemble._token_memo`), and it is
+    what `tokenizer` reports when given. Only when it is absent -- a breakdown
+    built outside that pass -- is the loader's CURRENT state read instead
+    (`_loaded`, which never starts a load), and that can be wrong in one
+    direction: a load that succeeded after the counting was done.
+
+    `native` needs all three: counted with `ENCODING`, on a connection whose
+    kind is in `NATIVE_KINDS`, for a model tiktoken maps to `ENCODING`. `kind`
+    defaults to unknown, which is never native -- a fallback attempt's kind is
+    not threaded through to its snapshot, so its counts read as estimates.
     Everything else -- a Claude model, a llama on a local server, an OpenAI
     model on the newer `o200k_base`, an Android build with no tiktoken, a
     desktop that could not fetch the encoding -- is an estimate, and the
@@ -169,20 +206,14 @@ def counting(model: str) -> dict:
     counts text, not the chat format's per-message framing, so even a native
     count sits a little under the provider's `prompt_tokens`.
 
-    Reads the loader's state and never loads (`_loaded`), so it cannot start a
-    download or wait on one -- `prompt_log.record` calls it on a path that must
-    not wait. It describes the counter as it stands now, which is the one the
-    compose that just ran used, with one blind spot: `count_tokens` falls back
-    to the heuristic per string when `encode` raises, so a section whose text
-    trips the encoder is counted by length under a `cl100k_base` label.
-
     It is a description of the counting, not a correction of it. Counting each
     model with its own tokenizer would change what the packer keeps per
     connection, and for most backends there is no tokenizer to load at all.
     """
-    if _loaded() is None:
-        return {"tokenizer": HEURISTIC, "native": False}
-    return {"tokenizer": ENCODING, "native": _native_encoding(model) == ENCODING}
+    tokenizer = counted_with or (HEURISTIC if _loaded() is None else ENCODING)
+    native = (tokenizer == ENCODING and kind in NATIVE_KINDS
+              and _native_encoding(model) == ENCODING)
+    return {"tokenizer": tokenizer, "native": native}
 
 
 def record_tokens(path: Path, body: str) -> int:
