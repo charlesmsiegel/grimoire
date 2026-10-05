@@ -666,6 +666,57 @@ def test_build_prompt_with_no_optional_fields_renders():
     assert not text.endswith("\n")
 
 
+def _candidate_text_bytes(cand):
+    fields = [cand["title"], cand["kind"], cand["due"], cand["latest_beat"], *cand["earlier"]]
+    return sum(len(f.encode("utf-8")) for f in fields)
+
+
+def test_a_long_stored_beat_is_clipped_in_the_resolver_prompt(cid, s0, sid):
+    # Ledger routes take a beat of any length, and a closed record is in the
+    # pool though not in the extraction snapshot: its title can select it while
+    # its beats would blow the resolver's context. The candidate's stored text
+    # is shown within the identity-text bound, as its embedding input was.
+    pid, title, _ = LEDGER_THREAD
+    first = "Winifred found the first page. " + "ш" * 20000
+    latest = "Winifred burned the ledger. " + "灰" * 20000
+    store.plot.set_movement(cid, pid, title, "open", first, s0)
+    store.plot.set_movement(cid, pid, "", "closed", latest, s0)
+    exam = _examine(cid, sid, plot=[REOPENED_LEDGER])
+    [row] = exam.prompt_rows()
+    [cand] = row["candidates"]
+    bound = similarity.CONTINUITY_IDENTITY_BYTES
+    assert _candidate_text_bytes(cand) <= bound
+    assert cand["title"] == "Find the ledger"
+    assert cand["latest_beat"].startswith("Winifred burned the ledger. 灰")
+    assert latest.startswith(cand["latest_beat"])
+    _, user = identity.build_prompt([row])
+    # The same prompt with one-byte beats: the labels and separators, the fixed overhead.
+    _, short = identity.build_prompt([{**row, "candidates": [
+        {**cand, "latest_beat": "-", "earlier": ["-"] * len(cand["earlier"])}]}])
+    assert len(user["content"].encode("utf-8")) <= len(short["content"].encode("utf-8")) + bound
+    assert "Winifred burned the ledger. 灰灰灰" in user["content"]
+
+
+def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, sid):
+    bound = similarity.CONTINUITY_IDENTITY_BYTES
+    record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "debt " + "k" * bound,
+              "due": "midsummer " + "d" * bound, "status": "open",
+              "beats": [{"text": "Mara swore it. " + "e" * bound, "scene": s0},
+                        {"text": "Mara owes the tithe. " + "b" * bound, "scene": s0}]}
+    stored = similarity.subject("commitment", "commitment:the-saltmarch-tithe", record)
+    examined = identity.Examined("commitment_movements", 0, "r1", "commitment",
+                                 {"title": "Saltmarch tithe", "beat": "Mara owes."},
+                                 "saltmarch-tithe", [(stored, {"via": "lexical"})], [])
+    [cand] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
+                                  {}).prompt_rows()[0]["candidates"]
+    assert _candidate_text_bytes(cand) <= bound
+    assert cand["title"].startswith("The Saltmarch tithe t")
+    assert all(not text or (text in record["kind"] or text in record["due"]
+                            or any(text in b["text"] for b in record["beats"]))
+               for text in (cand["kind"], cand["due"], cand["latest_beat"], *cand["earlier"]))
+    assert "" not in cand["earlier"]
+
+
 # ------------------------------------------------------------ deciding rows
 
 #: A second reword of `LEDGER_THREAD`, so two rows can name one record.
