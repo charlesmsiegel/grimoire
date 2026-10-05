@@ -25,11 +25,30 @@ record, a tangent.
     `time_history`, which the context builder reads as scene state;
   - a director note already never reaches a story prompt.
   The route refuses those with 400 `not_excludable`.
-- **Exclusion belongs to the post slot, not the variant.** Swiping, rerolling
-  or activating another variant of an excluded response keeps it excluded; the
-  player excluded "that reply", not "that take". `responses._message` rebuilds
-  the message dict on `save_variant`, `activate` and `publish_saved`, so those
-  writers carry the flag across.
+- **Exclusion belongs to the post slot, not the variant — and to the whole
+  response.** Swiping, rerolling or activating another variant of an excluded
+  response keeps it excluded; the player excluded "that reply", not "that
+  take". A response split into parts around a roll is one reply: toggling any
+  part sets every part with that `response_id`, a newly appended part inherits
+  the flag from its siblings, and `activate` (which collapses parts) keeps it if
+  any part had it. `responses._message` rebuilds the message dict on
+  `save_variant`, `activate` and `publish_saved`, so those writers carry the
+  flag across.
+- **A frozen prompt that predates an exclusion is not replayed.** Rerolls,
+  Retry and roll continuations replay a response's frozen prompt snapshot
+  rather than recomposing, so a snapshot taken before a post was excluded still
+  contains it. The flag's stored value is the time it was set; a reroll (and
+  step 4's Keep writing) of a response whose record was created before any
+  currently-excluded post that precedes it is refused with 409
+  `context_excluded` — "A post this reply was written from is now hidden.
+  Replay from here to regenerate without it." A response composed after the
+  exclusion rerolls normally.
+- **Not on an absorbed scene, not while a round is open.** An absorbed scene
+  has no future prompts to protect, and what absorb already took from the post
+  stays in the chronicle and facts (retcon or re-absorb is how to correct
+  those); the toggle is refused 409 `scene_absorbed` and not shown. Toggling
+  while a round is paused or incomplete would change the transcript hash and
+  strand its Retry or roll resolution, so it is refused 409 `round_open`.
 - **Safe by default.** `chronicle.transcript_text` filters excluded posts
   unless told otherwise; the two exports that call it pass
   `include_excluded=True`. A future LLM caller that forgets the parameter
@@ -52,12 +71,16 @@ record, a tangent.
 `serialize.RESPONSE_METADATA` gains `"excluded"`. The per-message
 `<!-- grimoire-response {json} -->` comment already round-trips for every block
 regardless of role or speaker and never enters `content`. The value stored is
-the boolean `true`; an included post simply has no key (no `false` written).
+the ISO time it was excluded (truthy, and what the frozen-prompt rule above
+compares against); an included post simply has no key (no `false` written).
 
-Helper: `serialize.is_excluded(message) -> bool`, and
-`serialize.in_context(messages) -> list[dict]` returning the messages that are
-neither excluded nor director notes, in order — the one filter every LLM input
-uses so the rule lives in one place.
+Helpers in `serialize`: `is_excluded(message) -> bool`;
+`without_excluded(messages)` — drops excluded posts only, for inputs that today
+include director notes (voice examples, `recent_text`, `birthday_text`), so
+their behaviour for notes does not change; and `in_context(messages)` — drops
+excluded posts **and** director notes, for inputs that already drop notes
+(history projection, transcript text, the selector). The rules live in these
+two functions.
 
 ### 2. Toggling
 
@@ -81,12 +104,14 @@ uses so the rule lives in one place.
 | Input | Change |
 |---|---|
 | Turn history — `context/story._project_history` | skip `is_excluded` (beside the existing director-note skip) |
-| `_assemble` content inputs: voice examples (`history[-4:]`), `recent_text` (world info, mechanics, art catalogue, recall), `birthday_text`, `speaker.nominate`, `length_drift.measure_contributions` | computed from `in_context(history)`; the index-based steps (`pins.active`, `actor.observed_history`) still run on the full list first |
+| `_assemble` content inputs: voice examples (`history[-4:]`), `recent_text` (world info, mechanics, art catalogue, recall), `birthday_text`, `speaker.nominate`, `length_drift.measure_contributions` | computed from `without_excluded(history)`; the index-based steps (`pins.active`, `actor.observed_history`) still run on the full list first |
 | Speaker selector — `character_turns._selector_messages` | last 12 *in-context* posts |
 | `chronicle.transcript_text` (audit, absorb, rolling summary, scene-break, dossiers) | filters by default; `include_excluded=True` for the markdown and plain-text exports |
 | Absorb evidence — `store.absorb.materialize(..., messages)` and `absorb/routing.speaker_index` | given the same filtered list the model was shown, so a quote from an excluded post does not check out as evidence |
-| Tracker — `tracker/walk._tracked`, `routes/tracker._context_posts` | an excluded post is not tracked and is not context for a neighbour |
-| Passage character draft — `passage_characters._observable_neighbors` | skips excluded neighbours |
+| Tracker — `routes/tracker._context_posts` and the post-landing mark | an excluded post is not context for a neighbour, and no tracker update is marked (paid) for an excluded post. `tracker/walk._tracked` is **unchanged**: it also drives `prune` and later-record flagging, and an excluded post's records must survive so re-including it finds them. The tracker's running state is a ledger of what happened; excluding a post later does not unwind effects already folded into later records (Re-run from here rebuilds them) |
+| Passage character draft — `passage_characters` | refused 409 `excluded_source` when the source passage is excluded; excluded neighbours are skipped |
+| Empty-transcript guards — absorb, dossiers, `_rolling_due` | count `in_context` posts, so an all-excluded scene is "empty" (no invented dossier, no paid fold restating the summary) |
+| Replay (`store/replay.py`) | a generation step whose posts are excluded is replayed verbatim (kept excluded) instead of regenerated — regenerating text that never reaches a prompt buys nothing |
 
 The prompt inspector's history row is built from the packed projected history,
 so it follows automatically.
@@ -101,13 +126,24 @@ adds `excluded` when present, so an unflagged transcript hashes exactly as it
 did before (no spurious invalidation on upgrade). After a toggle the client asks
 for the follow-ups as it does after an edit (`askAfterPost`).
 
-### 5. Exports keep everything
+### 5. Exports keep everything, marked
 
-`export.collect` and the plain-text export pass `include_excluded=True`.
-The JSON export writes messages verbatim, metadata included, so the flag
-travels. The markdown export marks an excluded post with a trailing
-` *(not in context)*` after its speaker label, so a reader of the export can
-tell what the model never saw.
+`export._chapter` rebuilds messages as role/speaker/content today; it carries
+`excluded` through, and each format marks an excluded post:
+
+- markdown and plain text: the post's content is prefixed with the line
+  `*(not in context)*`;
+- HTML and EPUB: the post gets an `excluded` class and a small "not in context"
+  tag;
+- JSON: messages verbatim, metadata included.
+
+The absorb and dossier prompts render through `snippets/transcript.j2`, which
+is untouched: those prompts never see excluded posts at all.
+
+**Round trip.** `scene_import` recognises a leading `*(not in context)*` line on
+an imported post (markdown, text) and sets the flag (stripping the line), and
+`ImportedMessage` / `_expanded` carry `excluded` from a JSON bundle — so an
+export re-imported does not bring hidden posts back into context.
 
 ### 6. Play view
 
@@ -128,8 +164,19 @@ Backend:
 - the flag round-trips through serialize/parse on player, model and response
   posts, and `excluded: false` writes no key;
 - the route excludes and re-includes; refuses a roll line, a transition line
-  and a director note (400 `not_excludable`), an out-of-range index (400), and
+  and a director note (400 `not_excludable`), an out-of-range index (400), an
+  absorbed scene (409 `scene_absorbed`), an open round (409 `round_open`), and
   is refused `scene_busy` while a turn holds the scene (freeze-table row);
+- toggling one part of a multi-part response sets every part; a new part
+  inherits; activate keeps it;
+- rerolling a response composed before a preceding post was excluded is refused
+  `context_excluded`; one composed after rerolls;
+- absorb, dossiers and the rolling-summary trigger treat an all-excluded
+  scene as empty; replay keeps an excluded model step verbatim; the passage
+  draft refuses an excluded source; no tracker mark is made for an excluded
+  post and its records survive a prune;
+- every export marks an excluded post, and importing the markdown or JSON
+  export restores the flag;
 - a later ledger response is flagged `context_changed`;
 - the composed turn prompt omits an excluded post's text, the inspector
   breakdown omits it, and the speaker selector's conversation omits it;
@@ -147,3 +194,12 @@ Frontend:
 - the toggle appears on player and model posts, not on roll, transition or
   note lines; clicking calls `setExcluded` and reloads; `aria-pressed` follows;
 - an excluded post carries the `excluded` class and the "not in context" tag.
+
+## Gate record
+
+Spec → planning gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`, Codex CLI unavailable; owner-approved). Resolved:
+frozen-snapshot rerolls (refuse `context_excluded`), exports and the import
+round trip, tracker prune/marking, multi-part responses, empty-transcript
+guards, open rounds, absorbed scenes, director-note behaviour preserved
+(`without_excluded`), excluded passage sources, and replay of excluded steps.
