@@ -106,6 +106,7 @@ from .turns import (  # noqa: F401
 )
 from .write import (  # noqa: F401
     RESPONSE_FIELDS,
+    NotExcludable,
     RollMessageImmutable,
     add_dismissed,
     append_message,
@@ -121,6 +122,7 @@ from .write import (  # noqa: F401
     restore_trailing_assistant_run,
     set_group,
     set_pcless,
+    set_excluded,
     set_response,
     set_rolling_summary,
     set_scene_break,

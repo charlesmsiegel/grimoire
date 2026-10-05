@@ -126,13 +126,16 @@ def _id():
     return uuid.uuid4().hex
 
 
-def _message(record, content, status, variant=None):
+def _message(record, content, status, variant=None, excluded=None):
     variant = variant or next((v for v in record["variants"] if v["id"] == record["active_variant"]), {})
     # Only an opaque pointer enters transcript metadata. The reasoning itself
     # stays in the response ledger and cannot become scene context or mechanics.
     thinking = {"response_thinking": variant["id"]} if variant.get("reasoning") else {}
     # Only when known, so a variant saved before provenance serializes as it did.
     served = {"connection": variant["connection"]} if variant.get("connection") else {}
+    # Hidden-from-context belongs to the post slot, not the take: this dict is
+    # rebuilt whole, so a writer that does not pass the flag through drops it.
+    hidden = {"excluded": excluded} if excluded else {}
     return {**thinking, **served,
         "role": "assistant",
         "speaker": record["speaker"],
@@ -141,7 +144,15 @@ def _message(record, content, status, variant=None):
         "response_status": status,
         "response_can_reroll": bool(record.get("snapshot_ref") or record.get("snapshot")),
         "context_changed": False,
+        **hidden,
     }
+
+
+def _excluded_of(messages: list[dict], rid: str) -> str | None:
+    """The exclusion stamp a response carries -- the greatest among its parts --
+    or None when no part of it is hidden."""
+    stamps = [str(m["excluded"]) for m in messages if m.get("response_id") == rid and m.get("excluded")]
+    return max(stamps) if stamps else None
 
 
 def _unassigned(message: dict) -> bool:
@@ -431,6 +442,7 @@ def save_variant(
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         messages = read.read_scene(cid, sid)["messages"]
+        excluded = _excluded_of(messages, rid)
         prefix = (
             [
                 m["content"]
@@ -473,7 +485,7 @@ def save_variant(
                 ),
                 None,
             )
-            message = {**_message(record, content, status), "response_part": part}
+            message = {**_message(record, content, status, excluded=excluded), "response_part": part}
             if index is None:
                 write.append_reply(cid, sid, [message])
             else:
@@ -628,12 +640,13 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
                 "variant_incomplete", "Only a completed variant can be selected."
             )
         messages = read.read_scene(cid, sid)["messages"]
+        excluded = _excluded_of(messages, rid)  # read before the parts collapse
         retained = [i for i, m in enumerate(messages) if i == index or m.get("response_id") != rid]
         appearance_paths.remap_presence(
             cid, sid, {old: new for new, old in enumerate(retained)}, len(retained)
         )
         messages = [messages[i] for i in retained]
-        messages[index] = _message(record, variant["content"], "complete", variant)
+        messages[index] = _message(record, variant["content"], "complete", variant, excluded=excluded)
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
@@ -670,7 +683,8 @@ def publish_saved(cid: str, sid: str, rid: str) -> None:
                       if m.get("response_id") == rid and m.get("response_part", "") == part), None)
         text = variant.get("part_content", variant["content"])
         if text.strip():
-            message = {**_message(record, text, variant["status"]), "response_part": part}
+            message = {**_message(record, text, variant["status"], excluded=_excluded_of(messages, rid)),
+                       "response_part": part}
             if index is None:
                 write.append_reply(cid, sid, [message])
             elif messages[index] != message:
