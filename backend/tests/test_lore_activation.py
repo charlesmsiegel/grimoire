@@ -793,37 +793,100 @@ def test_empty_turn_activates_only_standing_entries():
     assert got.present == {}
 
 
-def test_one_search_per_key_per_post(monkeypatch):
+def _count_window_searches(monkeypatch):
+    """Every key search the engine makes, as `(key, text)`."""
     log = []
     real = activation._compile
 
     class Counting:
-        def __init__(self, pattern):
-            self._pattern = pattern
+        def __init__(self, key):
+            self._key = key
+            self._pattern = real(key)
 
         def search(self, text):
-            log.append(text)
+            log.append((self._key, text))
             return self._pattern.search(text)
 
-    monkeypatch.setattr(activation, "_compile", lambda key: Counting(real(key)))
-    n_entries, n_posts = 200, 300
+    monkeypatch.setattr(activation, "_compile", Counting)
+    return log
+
+
+def _long_scene(n_entries, n_posts, timed_every=0):
     entries = []
     for i in range(n_entries):
-        timed = {"sticky": 2, "cooldown": 3} if i % 2 == 0 else {}
+        timed = ({"sticky": 2, "cooldown": 3}
+                 if timed_every and i % timed_every == 0 else {})
         entries.append(_e("lore", f"e{i}", keys=[f"k{i}a", f"k{i}b", f"k{i}c"],
                           body=f"body {i} names k{(i + 1) % n_entries}b", **timed))
     texts = [f"post {j} k{(j * 7) % n_entries}a" if j % 3 else f"post {j} calm"
              for j in range(n_posts)]
-    rec = 2
-    got = _run(entries, texts, seed="seed text", rec=rec, depth=4)
+    return entries, texts
 
+
+def _split(log, entries):
     bodies = {e["body"] for e in entries}
-    window = [t for t in log if t not in bodies]
-    body = [t for t in log if t in bodies]
+    return ([s for s in log if s[1] not in bodies], [s for s in log if s[1] in bodies])
+
+
+def test_untimed_entries_search_only_their_window(monkeypatch):
+    # An untimed entry reads its window and nothing else: a long scene costs
+    # what a short one does, at most one search per key per window slot.
+    log = _count_window_searches(monkeypatch)
+    entries, texts = _long_scene(200, 300)
+    depth, rec = 4, 2
+    got = _run(entries, texts, seed="seed text", rec=rec, depth=depth)
+
+    window, body = _split(log, entries)
     distinct_keys = len({k for e in entries for k in e["keys"]})
-    slots = n_posts + 1  # posts and the seed
-    assert 0 < len(window) <= distinct_keys * slots
+    assert 0 < len(window) <= distinct_keys * (depth + 1)  # the posts, and the seed
+    assert len(set(window)) == len(window)  # each (key, slot) once
     activated = len(got.keyword)
     candidate_keys = sum(len(e["keys"]) for e in entries)
     assert any(h.reason["type"] == "recursion" for h in got.keyword)
     assert 0 < len(body) <= rec * activated * candidate_keys
+
+
+def test_timed_entries_alone_search_every_slot(monkeypatch):
+    # A sticky/cooldown entry replays from the scene's start, so its keys are
+    # searched in every slot -- once each, however many boundaries read them.
+    # Every other key still costs only its window.
+    log = _count_window_searches(monkeypatch)
+    entries, texts = _long_scene(200, 300, timed_every=2)
+    depth = 4
+    _run(entries, texts, seed="seed text", rec=2, depth=depth)
+
+    window, _ = _split(log, entries)
+    timed_keys = {k for e in entries if activation.controls(e).timed() for k in e["keys"]}
+    untimed_keys = {k for e in entries for k in e["keys"]} - timed_keys
+    slots = len(texts) + 1  # posts and the seed
+    on_timed = [s for s in window if s[0] in timed_keys]
+    on_untimed = [s for s in window if s[0] in untimed_keys]
+    assert len(set(window)) == len(window)
+    assert 0 < len(on_timed) <= len(timed_keys) * slots
+    assert 0 < len(on_untimed) <= len(untimed_keys) * (depth + 1)
+
+
+def test_a_long_untimed_scene_costs_its_window(monkeypatch):
+    # Perf smoke, counted rather than timed: 400 entries over a 1000-post
+    # scene with no timed field is bounded by the window, not the scene.
+    log = _count_window_searches(monkeypatch)
+    entries, texts = _long_scene(400, 1000)
+    depth = 4
+    _run(entries, texts, seed="seed text", depth=depth)
+
+    window, _ = _split(log, entries)
+    assert 0 < len(window) <= 400 * 3 * (depth + 1)
+
+
+def test_full_and_windowed_reads_agree():
+    # A timed entry reads a key's whole-scene bitmap; an untimed one walks its
+    # window. Both must name the same newest (key, slot) at every boundary.
+    texts = ["Mara", "calm", "the lantern and Mara", "calm", "lantern", "calm"]
+    for seed in ("", "the lantern", "Mara"):
+        for depth in (None, 0, 1, 2, 6):
+            for keys in (["Mara"], ["lantern", "Mara"], ["Mara", "lantern"], ["none"]):
+                walked = KeyIndex(_posts(texts), seed)
+                full = KeyIndex(_posts(texts), seed)
+                for b in range(1, full.n + 1):
+                    assert (full.newest(keys, b, depth, full=True)
+                            == walked.newest(keys, b, depth)), (seed, depth, keys, b)
