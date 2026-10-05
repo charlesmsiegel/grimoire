@@ -13,9 +13,11 @@ from __future__ import annotations
 import json
 import random
 import re
+import shutil
 
 import pytest
 
+from grimoire import prompts
 from grimoire.store import (
     appearances,
     campaigns,
@@ -348,6 +350,7 @@ def test_no_budget_prompt_is_identical_to_the_section_level_render(scene):
     entities.create_entity(croot, "lore", "Bell", "{{user}} hears the bell {{random:a,b,c}}.")
     entities.create_entity(croot, "lore", "Fog", "Fog over {{user}}.", secrecy="secret")
     entities.create_entity(croot, "lore", "Empty", "")
+    entities.create_entity(croot, "lore", "Hollow", "{{nothing}}")   # expands to ""
     scenes.append_message(cid, sid, "user", "Calm.")
     a = assemble._assemble(cid, sid)
     random.seed(3)
@@ -356,6 +359,63 @@ def test_no_budget_prompt_is_identical_to_the_section_level_render(scene):
     old = [s["text"] for s in assemble._render_sections(
         {k: v for k, v in a.items() if k != "lore"}, cid, sid)]
     assert new == old
+
+
+@pytest.fixture
+def edited_templates(tmp_path, monkeypatch):
+    """A copy of the shipped templates whose shared secret heading -- World
+    info's own fixed text, not any entry's -- carries macros."""
+    root = tmp_path / "templates"
+    shutil.copytree(prompts.DEFAULT_TEMPLATES_DIR, root)
+    secrecy = root / "scene" / "_secrecy.j2"
+    text = secrecy.read_text(encoding="utf-8")
+    assert "Secret knowledge —" in text
+    secrecy.write_text(text.replace(
+        "Secret knowledge —",
+        "{% raw %}Secret knowledge ({{random:red,amber,green}}) that {{user}} lacks{% endraw %}"
+        " —"),
+        encoding="utf-8")
+    monkeypatch.setenv("GRIMOIRE_TEMPLATES", str(root))
+    prompts._env.cache_clear()
+    yield root
+    prompts._env.cache_clear()
+
+
+def test_template_text_in_world_info_is_still_expanded(scene, edited_templates,
+                                                       monkeypatch):
+    """The fixed text around the bodies goes through macros like every other
+    section's, and in document order: the public body's draw, then the
+    heading's, then the secret body's -- as the section-level expansion drew
+    them."""
+    cid, sid, croot = scene
+    appearances.appear(cid, sid, "characters", "winifred", "main", "player", narrate=False)
+    entities.create_entity(croot, "lore", "Bell", "The bell tolls {{random:once,twice}}.")
+    entities.create_entity(croot, "lore", "Fog", "Fog is {{random:thin,thick}}.",
+                           secrecy="secret")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    drawn = _choices(monkeypatch)
+    a = assemble._assemble(cid, sid)
+
+    random.seed(5)
+    new = next(s for s in assemble._render_sections(a, cid, sid) if s["id"] == "world_info")
+    new_draws = list(drawn)
+    drawn.clear()
+    random.seed(5)
+    old = next(s for s in assemble._render_sections(
+        {k: v for k, v in a.items() if k != "lore"}, cid, sid) if s["id"] == "world_info")
+    assert new["text"] == old["text"]
+    assert new_draws == drawn
+    assert "that Winifred lacks" in new["text"] and "{{" not in new["text"]
+    # Three draws in document order: body, heading, body.
+    heading = re.search(r"Secret knowledge \((\w+)\)", new["text"]).group(1)
+    assert heading in ("red", "amber", "green") and new_draws[1] == heading
+
+    # Shedding the public entry re-renders the heading from memory: no draw.
+    drawn.clear()
+    kept = new["shed"]["render"](frozenset({"lore:fog"}))
+    assert drawn == []
+    assert kept.startswith(f"Secret knowledge ({heading}) that Winifred lacks")
+    assert kept.endswith(new["text"].rsplit("\n\n", 1)[1])
 
 
 # ---- rows --------------------------------------------------------------------
