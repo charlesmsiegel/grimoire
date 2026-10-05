@@ -197,6 +197,11 @@ def mark(cid: str, sid: str, key: str) -> Mark | None:
     try:
         if not store.tracker.settings.enabled(cid):
             return None
+        # A post hidden from context is paid no update: nothing reads its
+        # state (`walk._latest_ok` steps over it), so marking it would buy a
+        # call whose answer is never used.
+        if store.tracker.walk.key_excluded(cid, sid, key):
+            return None
         ident = store.scenes.ensure_identity(cid, sid)
         gen = store.tracker.records.mark_pending(cid, ident, key)
     except Exception as exc:  # noqa: BLE001 -- see the docstring
@@ -511,12 +516,14 @@ def _locate(cid: str, sid: str, key: str) -> dict | None:
 
 def _context_posts(cid: str, sid: str, first: int) -> list[dict]:
     """The two non-synthetic messages before the post, oldest first. Rolls,
-    transitions and director notes are not things a character did."""
+    transitions and director notes are not things a character did, and a post
+    hidden from context is in no prompt."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
     player = store.appearances.player_label(cid, sid)
     picked: list[int] = []
     for i in range(min(first, len(messages)) - 1, -1, -1):
-        if messages[i].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+        if (messages[i].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS
+                or store.scenes.is_excluded(messages[i])):
             continue
         picked.append(i)
         if len(picked) == 2:

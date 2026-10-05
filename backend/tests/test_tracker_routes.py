@@ -1106,3 +1106,57 @@ def test_a_hand_mangled_snapshot_is_served_in_the_shape_it_promises(client):
     assert r.status_code == 200, r.text
     assert r.json()["snapshot"] == {"characters:winifred": {"present": True, "fields": {
         "visible_mood": {"value": ["calm"], "aware": []}}}}
+
+
+# --- a post hidden from context -----------------------------------------------
+
+def _hide(client, cid, sid, index):
+    r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/messages/{index}/excluded",
+                   json={"excluded": True})
+    assert r.status_code == 200, r.text
+
+
+def test_an_excluded_post_is_not_marked_and_its_record_survives_a_prune(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    _hide(client, cid, sid, _msg_index(cid, sid, keys[0]))
+    assert tracker_routes.mark(cid, sid, keys[0]) is None
+    assert tracker_routes.mark(cid, sid, keys[1]) is not None     # the control
+    store.tracker.walk.prune(cid, sid)
+    assert keys[0] in _index(cid, sid)
+
+
+def test_current_state_skips_an_excluded_posts_snapshot(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    assert store.tracker.walk.current(cid, sid)[0] == keys[-1]
+    _hide(client, cid, sid, _msg_index(cid, sid, keys[-1]))
+    assert store.tracker.walk.current(cid, sid)[0] == keys[-2]
+    assert keys[-1] in _index(cid, sid)
+
+
+def test_rerun_from_here_schedules_nothing_for_a_hidden_post(client):
+    llm = _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    _hide(client, cid, sid, _msg_index(cid, sid, keys[2]))     # the second player post
+    asked = len(_tracker_posts(llm))
+    r = client.post(f"{_base(cid, sid)}/records/{keys[1]}/rerun-from")
+    assert r.status_code == 200, r.text
+    _settle(client, cid, sid)
+    posts = _tracker_posts(llm)[asked:]
+    assert len(posts) == 2                       # keys[1] and keys[3]; keys[2] is skipped
+    assert all("Words number 1." not in p for p in posts)
+
+
+def test_an_excluded_post_is_not_context_for_its_neighbour(client):
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    reply = _msg_index(cid, sid, keys[1])
+    text = store.scenes.read_scene(cid, sid)["messages"][reply]["content"]
+    assert any(p["content"] == text for p in tracker_routes._context_posts(cid, sid, reply + 1))
+    store.scenes.set_excluded(cid, sid, reply, True)
+    assert all(p["content"] != text for p in tracker_routes._context_posts(cid, sid, reply + 1))

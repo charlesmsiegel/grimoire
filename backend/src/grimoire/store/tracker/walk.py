@@ -91,18 +91,46 @@ def index_of(cid: str, sid: str, key: str) -> int | None:
     return next((i for i, k in ordered_keys(cid, sid) if k == key), None)
 
 
+def _hidden_keys(messages: list[dict], owner: dict[int, str]) -> set[str]:
+    """Keys whose post is hidden from context (every part of a response shares
+    the flag, so any part answers for the whole)."""
+    return {key for i, key in owner.items() if serialize.is_excluded(messages[i])}
+
+
+def key_excluded(cid: str, sid: str, key: str) -> bool:
+    """Whether the post `key` tracks is hidden from context.
+
+    A `p-` key names a player post by its `post_id`; an `r-` key names a
+    response (whichever variant) by the 32 hex characters after `r-`."""
+    messages = read.read_scene(cid, sid)["messages"]
+    if key.startswith("p-"):
+        hits = [m for m in messages if m.get("post_id") and paths.post_key(m["post_id"]) == key]
+    elif key.startswith("r-"):
+        hits = [m for m in messages if m.get("response_id") == key[2:34]]
+    else:
+        return False
+    return any(serialize.is_excluded(m) for m in hits)
+
+
 def _latest_ok(cid: str, sid: str, below: int | None) -> tuple[str | None, dict]:
     """The newest `ok` record at a message index below `below` (anywhere when
     `None`). Pending and failed keys are stepped over, so a turn whose update
-    has not landed reads the state its predecessor left."""
+    has not landed reads the state its predecessor left.
+
+    So is a post hidden from context: its record is kept (`_tracked` is
+    unchanged, so prune and re-including it find it), but its snapshot must not
+    become the state a prompt is given."""
     ident = identity.scene_identity(cid, sid)
     if not ident:
         return None, {}
     index = records.read_index(cid, ident)
-    for i, key in reversed(ordered_keys(cid, sid)):
+    messages = read.read_scene(cid, sid)["messages"]
+    keys, owner = _scan(messages, responses.variants_by_response(cid, sid))
+    hidden = _hidden_keys(messages, owner)
+    for i, key in reversed(keys):
         if below is not None and i >= below:
             continue
-        if index.get(key, {}).get("status") != "ok":
+        if key in hidden or index.get(key, {}).get("status") != "ok":
             continue
         body = records.read_snapshot(cid, ident, key)
         if body is not None:
