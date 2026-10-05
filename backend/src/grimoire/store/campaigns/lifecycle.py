@@ -388,7 +388,17 @@ def _tombstone_deleted_copied_assets(cid: str, root: Path, wroot: Path, copied: 
             # docstring calls the unrecoverable direction, and it is not the
             # ambiguous case -- an image the campaign still holds was not
             # deleted, whatever it is stored as.
+            #
+            # An image-less placement under the name holds no image, so
+            # `names_in` leaves it out -- and it is still not a deletion: it is
+            # the crop this campaign set over the world's picture, which it
+            # could only set while that picture was showing here (a deleted one
+            # is tombstoned, and a tombstoned avatar cannot be cropped).
+            # Tombstoning it would hide the very picture it crops. Read only
+            # for the names already missing, so the sweep's cost is unchanged.
             for name in sorted(assets.names_in(wdir)[0] - assets.names_in(cdir)[0]):
+                if image_refs.read(cdir, name) is not None:
+                    continue
                 overlay.add_deleted(cid, f"assets/{kind}/{aid}/{vid}/{name}")
 
 

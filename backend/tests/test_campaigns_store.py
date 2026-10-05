@@ -432,6 +432,55 @@ def test_slimming_tombstone_by_names_with_refs(monkeypatch, tmp_path):
     assert "gallery_1" not in {i["name"] for i in overlay.list_images(cid, aid, vid)}
 
 
+def _crop_over_inherited_avatar(monkeypatch, tmp_path):
+    """A full-copy campaign whose avatar slot is an image-less placement -- the
+    crop it set over the world's avatar, which it was showing -- beside a
+    legacy `focus.json` identical to the world's. (aid, vid, wroot, croot, cid)"""
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Seraphine")
+    assets.put_image(wroot, aid, vid, "avatar", b"world-avatar", "png")
+    (assets.version_dir(wroot, aid, vid) / "focus.json").write_text(
+        '{"focus": 70}', encoding="utf-8")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    _fat_actor(wroot, croot, aid)
+    cdir = assets.version_dir(croot, aid, vid)
+    image_refs.write(cdir, "avatar", None, focus=30)
+    assert image_refs.read(cdir, "avatar") == image_refs.Ref("avatar", None, 30)
+    assert (cdir / "focus.json").read_text(encoding="utf-8") == '{"focus": 70}'
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+    return aid, vid, wroot, croot, cid
+
+
+def test_slimming_keeps_a_focus_sidecar_beside_an_image_less_avatar_placement(
+        monkeypatch, tmp_path):
+    """The focus guard's image-less branch: such a placement holds no image
+    (`path_in` is None) and still owns the crop, so the sidecar beside it is
+    not redundant and stays."""
+    aid, vid, _wroot, croot, cid = _crop_over_inherited_avatar(monkeypatch, tmp_path)
+    campaigns.ensure_campaign_slim(cid)
+    cdir = assets.version_dir(croot, aid, vid)
+    assert (cdir / "focus.json").exists()
+    assert image_refs.read(cdir, "avatar") == image_refs.Ref("avatar", None, 30)
+    assert overlay.read_focus(cid, aid, vid) == 30
+
+
+def test_slim_does_not_tombstone_an_avatar_held_by_an_image_less_placement(
+        monkeypatch, tmp_path):
+    """An image-less placement is a crop over the world's avatar, which the
+    campaign could only set while it was showing that avatar -- so it is not a
+    deletion, and tombstoning it would hide the very picture it crops. That is
+    the unrecoverable direction the scan's own docstring warns about."""
+    aid, vid, wroot, _croot, cid = _crop_over_inherited_avatar(monkeypatch, tmp_path)
+    campaigns.ensure_campaign_slim(cid)
+    assert f"assets/characters/{aid}/{vid}/avatar" not in overlay.deleted(cid)
+    assert overlay.image_root(cid, aid, vid, "avatar") == wroot
+    assert "avatar" in {i["name"] for i in overlay.list_images(cid, aid, vid)}
+
+
 def test_slim_tombstones_user_deleted_copied_asset(monkeypatch, tmp_path):
     """A pre-overlay full copy had the world avatar copied in; the user deleted
     that copy. Slim must tombstone it so the overlay doesn't resurface the world

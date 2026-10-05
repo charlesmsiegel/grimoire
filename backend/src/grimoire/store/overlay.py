@@ -625,19 +625,20 @@ def _image_slot_file(rel: Path) -> bool:
 
 
 def _tombstoned_asset(kind: str, rid: str, rel: Path, gone: set[str]) -> bool:
-    """Does a per-asset tombstone hide `rel`? `assets/<vid>/<name>.<ext>` is the
-    legacy layout `assets._dir` wrote and `assets/<vid>/image-refs/<name>.json`
-    a placement; `_asset_ref` keys the tombstone on (base, id, vid, name) for
-    both -- the extension is not part of it, because deleting an image and
-    uploading a different format of it is the same slot."""
+    """Does a per-asset tombstone hide `rel`, a file directly in
+    `assets/<vid>/` that is not an image slot (`_image_slot_file` answered
+    first)? Such a file -- one of an extension never accepted, say -- is
+    still named by its stem, and `_asset_ref` keys the tombstone on (base, id,
+    vid, name) without the extension, because deleting an image and uploading
+    a different format of it is the same slot.
+
+    Placements are not asked about here: everything under `image-refs/` is an
+    image slot, which `assets.copy_slots` copies with the tombstone check of
+    its own (`_copy_slots_down`)."""
     parts = rel.parts
-    if parts[:1] != ("assets",):
+    if parts[:1] != ("assets",) or len(parts) != 3:
         return False
-    if len(parts) == 3:
-        return _asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
-    if len(parts) == 4 and parts[2] == image_refs.REFS_DIR:
-        return _asset_ref(kind, rid, parts[1], Path(parts[3]).stem) in gone
-    return False
+    return _asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
 
 
 def _put_base(cid: str, ref: str, base: str) -> None:
