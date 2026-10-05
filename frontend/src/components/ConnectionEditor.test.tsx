@@ -14,6 +14,10 @@ vi.mock("../api/client", async () => ({
     getGlobalRouting: vi.fn(), listSamplerPresets: vi.fn(),
   },
 }));
+vi.mock("./RegexRulesEditor", () => ({
+  RegexRulesEditor: ({ scope }: { scope: unknown }) =>
+    <div data-testid="regex-rules" data-scope={JSON.stringify(scope)} />,
+}));
 vi.mock("../api/models", () => ({ priceLabel: () => "", contextLabel: () => "" }));
 import { api, ApiError } from "../api/client";
 
@@ -72,6 +76,17 @@ test("clicking a connection shows a read-only view", async () => {
   const detail = screen.getByRole("heading", { name: "z.ai GLM" }).closest(".detail-view") as HTMLElement;
   expect(within(detail).getByText(/openai_compatible/)).toBeInTheDocument();
   expect(screen.queryByLabelText("Base URL")).toBeNull();
+});
+
+test("a saved connection carries its own output-processing rules; a new one a hint", async () => {
+  render(<ConnectionEditor />);
+  const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+  expect(screen.queryByTestId("regex-rules")).toBeNull();
+  expect(screen.getByText(/Save the connection to give it output-processing rules/)).toBeInTheDocument();
+  fireEvent.click(await within(rail).findByText("z.ai GLM"));
+  expect(await screen.findByTestId("regex-rules"))
+    .toHaveAttribute("data-scope", '{"kind":"connection","id":"zai-glm"}');
+  expect(screen.queryByText(/Save the connection to give it/)).toBeNull();
 });
 
 test("Edit reveals the form with kind locked", async () => {

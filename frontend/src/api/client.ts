@@ -69,6 +69,8 @@ import {
   type ShellPayload, type TodoPayload,
   type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
+  type RegexBundle, type RegexImportRow, type RegexLayer, type RegexRule, type RegexScope,
+  type RegexStep, type RegexTestBody,
   type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta, type WorldProfile,
 } from "./types";
 
@@ -1090,6 +1092,16 @@ function trackerFieldsPath(scope: TrackerScope): string {
     case "world": return `/api/worlds/${scope.wid}/tracker-fields`;
     case "campaign": return `/api/campaigns/${scope.cid}/tracker-fields`;
     case "scene": return `/api/campaigns/${scope.cid}/scenes/${scope.sid}/tracker-fields`;
+  }
+}
+
+/** The four regex levels share one body and differ only in path. */
+function regexPath(scope: RegexScope): string {
+  switch (scope.kind) {
+    case "global": return "/api/regex";
+    case "world": return `/api/worlds/${scope.wid}/regex`;
+    case "campaign": return `/api/campaigns/${scope.cid}/regex`;
+    case "connection": return `/api/llm-connections/${encodeSegment(scope.id)}/regex`;
   }
 }
 
@@ -3238,6 +3250,16 @@ export const api = {
     request<TrackerLayerBundle>("GET", trackerFieldsPath(scope)),
   setTrackerFields: (scope: TrackerScope, layer: TrackerLayer) =>
     request<TrackerLayerBundle>("PUT", trackerFieldsPath(scope), layer),
+  getRegex: (scope: RegexScope, opts?: { fresh?: boolean }) =>
+    request<RegexBundle>("GET", regexPath(scope), undefined, opts),
+  putRegex: (scope: RegexScope, layer: RegexLayer) =>
+    request<RegexBundle>("PUT", regexPath(scope), layer),
+  testRegex: (body: RegexTestBody) =>
+    request<{ steps: RegexStep[]; result: string }>("POST", "/api/regex/test", body),
+  previewRegexImport: (data: unknown) =>
+    request<{ rows: RegexImportRow[] }>("POST", "/api/regex/import/preview", { data }),
+  importRegex: (scope: RegexScope, rows: Omit<RegexRule, "id">[]) =>
+    request<RegexBundle & { added: string[] }>("POST", "/api/regex/import", { scope, rows }),
   getCampaignTracker: (cid: string) =>
     request<CampaignTrackerSetting>("GET", `/api/campaigns/${cid}/tracker`),
   setCampaignTracker: (cid: string, setting: TrackerSetting) =>

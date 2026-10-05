@@ -13,6 +13,7 @@ import MechanicsConfig from "../components/MechanicsConfig";
 import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
 import { CampaignTrackerSwitch } from "../components/tracker/CampaignTrackerSwitch";
+import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
 import { sectionHref } from "../worldPaths";
 import { intentProps } from "../api/prefetch";
@@ -163,7 +164,7 @@ export default function CampaignHub() {
    *  a mechanics module, set its calendar or give it a cover. They belong to
    *  the campaign, not to whichever scene you happen to have open, so they are
    *  here. */
-  const [panel, setPanel] = useState<"mechanics" | "calendar" | "cover" | "tracker" | null>(null);
+  const [panel, setPanel] = useState<"mechanics" | "calendar" | "cover" | "tracker" | "output" | null>(null);
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -321,7 +322,8 @@ export default function CampaignHub() {
       </ColumnSection>
       <ColumnSection label="Settings">
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
-           ["cover", "Cover"], ["tracker", "Tracker"]] as const).map(([id, label]) => (
+           ["cover", "Cover"], ["tracker", "Tracker"],
+           ["output", "Output processing"]] as const).map(([id, label]) => (
           <button key={id} type="button"
                   className={"column-row" + (panel === id ? " active" : "")}
                   aria-pressed={panel === id}
@@ -388,6 +390,7 @@ export default function CampaignHub() {
             {panel === "calendar" && <CalendarConfig scope={{ kind: "campaign", id: cid }} />}
             {panel === "cover" && <CampaignCover cid={cid} />}
             {/* Keyed by cid so a campaign switch cannot show the last one's fields. */}
+            {panel === "output" && <RegexRulesEditor key={cid} scope={{ kind: "campaign", cid }} />}
             {panel === "tracker" && (
               <>
                 <CampaignTrackerSwitch key={cid} cid={cid} />

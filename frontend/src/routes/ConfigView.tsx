@@ -9,6 +9,7 @@ import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import PricingEditor from "../components/PricingEditor";
+import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ModelRoutingPicker } from "../components/ModelRoutingPicker";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
@@ -95,9 +96,9 @@ type SectionId =
   | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
   | "setup"
   | "context" | "layout" | "tracker" | "semantic" | "system-prompt" | "response"
-  | "samplers" | "transcript" | "playing" | "appearance";
+  | "samplers" | "transcript" | "output" | "playing" | "appearance";
 
-/** The column, as data: three groups, eighteen sections, and which draft fields
+/** The column, as data: three groups, nineteen sections, and which draft fields
  *  each one owns — the last part is what lets a section carry an unsaved dot,
  *  so the footer's count is always findable rather than being a number about
  *  somewhere else. */
@@ -141,6 +142,9 @@ const SECTIONS: SectionDef[] = [
   { id: "samplers", group: "What the model sees", label: "Sampler presets", fields: [] },
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
+  // No draft fields: rules save as you edit them, through their own routes,
+  // like Routing and Token rates.
+  { id: "output", group: "What you see", label: "Output processing", fields: [] },
   { id: "playing", group: "What you see", label: "While playing",
     fields: ["rolling_summary_every", "scene_break_every", "replay_fork_threshold",
              "advance_fork_threshold"] },
@@ -1272,6 +1276,17 @@ export default function ConfigView() {
                         value={draft.advance_fork_threshold}
                         onChange={(v) => edit("advance_fork_threshold", v)} />
             </div>
+          </>
+        )}
+
+        {draft && section === "output" && (
+          <>
+            <p className="config-copy">
+              Regex rules that rewrite what you read, what the model is sent, or both. These
+              global rules run after a connection's own and before a world's or a campaign's.
+              Each saves as you set it.
+            </p>
+            <RegexRulesEditor scope={{ kind: "global" }} />
           </>
         )}
 
