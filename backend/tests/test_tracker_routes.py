@@ -1160,3 +1160,55 @@ def test_an_excluded_post_is_not_context_for_its_neighbour(client):
     assert any(p["content"] == text for p in tracker_routes._context_posts(cid, sid, reply + 1))
     store.scenes.set_excluded(cid, sid, reply, True)
     assert all(p["content"] != text for p in tracker_routes._context_posts(cid, sid, reply + 1))
+
+
+def test_a_hidden_posts_dead_pending_record_does_not_flag_the_next_update(client):
+    """A post marked `pending` and then hidden never gets its update, and the
+    walk steps over it (`_latest_ok`); `_base_unsettled` must too, or every
+    later update lands `upstream_changed` on account of a record nothing reads."""
+    llm = _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    store.tracker.records.mark_pending(cid, _ident(cid, sid), keys[2])
+    _hide(client, cid, sid, _msg_index(cid, sid, keys[2]))
+    asked = len(_tracker_posts(llm))
+    assert client.post(f"{_base(cid, sid)}/records/{keys[3]}/retry").status_code == 200
+    _settle(client, cid, sid)
+    assert len(_tracker_posts(llm)) == asked + 1
+    entry = _index(cid, sid)[keys[3]]
+    assert entry["status"] == "ok"
+    assert entry["flags"] == {"upstream_changed": False, "text_changed": False}
+
+
+def test_rerun_from_a_hidden_post_trusts_the_base_at_the_first_post_that_runs(client):
+    """Re-running from a hidden key: its update is never scheduled, so the
+    chosen starting point (`trust_base`) belongs to the first post that is."""
+    _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    _edit(client, cid, sid, keys[0],
+          {"characters:mara": {"clothing": {"value": "red coat"}}})      # flags keys[1:]
+    assert _index(cid, sid)[keys[1]]["flags"]["upstream_changed"]
+    _hide(client, cid, sid, _msg_index(cid, sid, keys[2]))
+    # keys[3]'s base is keys[1], which carries that flag: only `trust_base`,
+    # which the person's choice of starting point grants, lets it land clean.
+    r = client.post(f"{_base(cid, sid)}/records/{keys[2]}/rerun-from")
+    assert r.status_code == 200, r.text
+    _settle(client, cid, sid)
+    entry = _index(cid, sid)[keys[3]]
+    assert entry["status"] == "ok"
+    assert entry["flags"] == {"upstream_changed": False, "text_changed": False}
+
+
+def test_an_update_marked_before_its_post_was_hidden_is_settled_without_a_call(client):
+    llm = _use(client, _llm())
+    cid, sid = _scene(client)
+    keys = _played(client, cid, sid)
+    marked = tracker_routes.mark(cid, sid, keys[3])
+    assert marked is not None
+    _hide(client, cid, sid, _msg_index(cid, sid, keys[3]))
+    asked = len(_tracker_posts(llm))
+    assert tracker_routes._prepare(cid, _ident(cid, sid), sid, keys[3], marked[1]) is None
+    assert len(_tracker_posts(llm)) == asked
+    entry = _index(cid, sid)[keys[3]]
+    assert entry["status"] == "failed"

@@ -901,6 +901,11 @@ test("the hide toggle is on player and model posts only", async () => {
     { role: "assistant", speaker: DIRECTOR_SPEAKER, content: "faster" }] });
   renderCampaign();
   await screen.findByText("a reply");
+  // The note is not drawn until asked for, so the count below would be vacuous
+  // for it: show it first, then assert it still has no toggle.
+  fireEvent.click(screen.getByRole("button", { name: "Show director notes · 1" }));
+  const note = (await screen.findByText("faster")).closest(".msg") as HTMLElement;
+  expect(within(note).queryByTitle("Hide from context")).toBeNull();
   expect(screen.getAllByTitle("Hide from context")).toHaveLength(2);
   expect(screen.getByLabelText("Hide message 1 from context")).toBeTruthy();
   expect(screen.getByLabelText("Hide message 2 from context")).toBeTruthy();

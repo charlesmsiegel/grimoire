@@ -217,6 +217,21 @@ def test_force_still_refuses_a_scene_with_nothing_new(client):
     assert llm.calls == 1
 
 
+def test_force_does_not_pay_to_judge_a_span_of_hidden_posts(client):
+    """A post hidden from context is not in the question's prompt, so a forced
+    check over a span that is all hidden would ask about an empty transcript."""
+    _key(client)
+    llm = _use(client, _judge(YES))
+    cid, sid = _scene(client, posts=4)
+    for i in range(4):
+        store.scenes.set_excluded(cid, sid, i, True)
+    assert _post(client, cid, sid, force="true")["asked"] is False
+    assert llm.calls == 0
+    store.scenes.set_excluded(cid, sid, 3, False)           # the control
+    assert _post(client, cid, sid, force="true")["asked"] is True
+    assert llm.calls == 1
+
+
 def test_a_missing_connection_is_refused_before_the_gate_is_consulted(client):
     """A 409 that only appeared once a scene happened to be due would be
     indistinguishable, on the client, from the quiet no-op that is this route's

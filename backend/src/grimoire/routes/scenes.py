@@ -3952,7 +3952,11 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
     # `force` overrides the threshold, never the emptiness: a forced question
     # about a scene with nothing new since the last one would pay a provider to
     # answer the question it just answered.
-    if not (view["due"] or (force and view["posts"] > 0)):
+    # Nor does it override a span that is all hidden from context: those posts
+    # are in no prompt, so the question would be asked about nothing.
+    start = max(0, min(view["stored"]["at"], len(scene["messages"]))) if view["intact"] else 0
+    fresh = store.scenes.without_excluded(scene["messages"][start:])
+    if not (view["due"] or (force and view["posts"] > 0 and fresh)):
         return {**_break_body(view, every), "asked": False}
     return await _break_ask(cid, sid, scene, view, every, conn, client, provider)
 

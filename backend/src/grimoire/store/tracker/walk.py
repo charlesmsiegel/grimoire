@@ -97,6 +97,13 @@ def _hidden_keys(messages: list[dict], owner: dict[int, str]) -> set[str]:
     return {key for i, key in owner.items() if serialize.is_excluded(messages[i])}
 
 
+def hidden_keys(cid: str, sid: str) -> set[str]:
+    """Every tracked key whose post is hidden from context, in one read."""
+    messages = read.read_scene(cid, sid)["messages"]
+    _, owner = _scan(messages, responses.variants_by_response(cid, sid))
+    return _hidden_keys(messages, owner)
+
+
 def key_excluded(cid: str, sid: str, key: str) -> bool:
     """Whether the post `key` tracks is hidden from context.
 
