@@ -444,3 +444,65 @@ def project(raw: dict, scope: str) -> dict:
         if isinstance(subjects, list):
             reviews["subjects"] = [s for s in subjects if s == scope]
     return out
+
+
+def _scoped_associations(got: object, scope: str) -> list[dict]:
+    if not isinstance(got, list):
+        return []
+    return [a for a in got if isinstance(a, dict) and a.get("scope") == scope
+            and all(isinstance(v, str) for v in a.values())]
+
+
+def _scoped_subjects(reviews: object, scope: str) -> list[str]:
+    subjects = reviews.get("subjects") if isinstance(reviews, dict) else None
+    if not isinstance(subjects, list):
+        return []
+    return [s for s in subjects if s == scope]
+
+
+def merge_projection(image_id: str, projected: dict, scope: str) -> None:
+    """Fold a bundle projection (`project`) into the local object `image_id`.
+
+    Only ever *adds*: a projected ``description`` fills the object only when it
+    has none -- local text and a local ``""`` (reviewed, nothing to say) both
+    win -- and the projection's associations and subject reviews in `scope`
+    are unioned in. Everything else in `projected` (its blob, its id, any
+    sources a hand-built bundle carried) is ignored: the local object's global
+    fields were computed here from the blob and are not the bundle's to say.
+
+    `scope` must already be the *final* scope (``world:<published id>``); the
+    caller renames the bundle's own before calling. An absent object is left
+    alone, as `update` leaves it.
+    """
+    if not isinstance(projected, dict):
+        return
+    desc = projected.get("description")
+    assoc = _scoped_associations(projected.get("associations"), scope)
+    subjects = _scoped_subjects(projected.get("reviews"), scope)
+
+    def change(raw: dict) -> dict | None:
+        dirty = False
+        if isinstance(desc, str) and not isinstance(raw.get("description"), str):
+            raw["description"] = desc
+            dirty = True
+        if assoc:
+            have = raw.get("associations")
+            have = have if isinstance(have, list) else []
+            for a in assoc:
+                if a not in have:
+                    have = [*have, a]
+                    dirty = True
+            raw["associations"] = have
+        if subjects:
+            reviews = raw.get("reviews")
+            reviews = reviews if isinstance(reviews, dict) else {}
+            listed = reviews.get("subjects")
+            listed = listed if isinstance(listed, list) else []
+            for s in subjects:
+                if s not in listed:
+                    listed = [*listed, s]
+                    dirty = True
+            raw["reviews"] = {**reviews, "subjects": listed}
+        return raw if dirty else None
+
+    update(image_id, change)

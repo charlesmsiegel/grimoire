@@ -186,6 +186,33 @@ def scan(d: Path) -> dict[str, Ref]:
     return out
 
 
+def walk_ids(root: Path) -> set[str]:
+    """Every valid image id placed anywhere under `root`: the ``image`` of each
+    ``**/image-refs/*.json``, the promotion journal excluded.
+
+    Symlinks are not followed -- neither a linked directory nor a linked ref
+    file -- because the caller (world bundle export) packs what this names into
+    a file the user hands to somebody else, and a link must not reach past the
+    tree it was asked about. Unreadable directories are skipped.
+    """
+    out: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        if Path(dirpath).name != REFS_DIR:
+            continue
+        dirnames[:] = []                    # nothing nests inside image-refs/
+        for fname in filenames:
+            if fname == JOURNAL or not fname.endswith(_SUFFIX):
+                continue
+            stem = fname[: -len(_SUFFIX)]
+            path = Path(dirpath) / fname
+            if not _valid_name(stem) or path.is_symlink():
+                continue
+            ref = _read_file(path, stem)
+            if ref is not None and ref.image is not None:
+                out.add(ref.image)
+    return out
+
+
 def image_names(d: Path) -> set[str]:
     """Names whose placement holds an image (focus-only overrides excluded)."""
     return {n for n, r in scan(d).items() if r.image is not None}

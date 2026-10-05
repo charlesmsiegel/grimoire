@@ -8,6 +8,7 @@ image in the imported world 404s.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import zipfile
@@ -18,9 +19,15 @@ import pytest
 from grimoire.store import (
     assets,
     characters,
+    covers,
+    fetch,
     greetings,
     image_descriptions,
+    image_hash,
+    image_refs,
+    image_store,
     world_bundle,
+    world_images,
     worlds,
 )
 
@@ -582,3 +589,338 @@ def test_image_descriptions_survive_a_round_trip(monkeypatch, tmp_path):
     nroot = worlds.world_root(imported)
     assert image_descriptions.read_all(nroot, cid, vid) == {
         "gallery_1": "A grey quay at dusk.", "gallery_2": ""}
+
+
+# ---- format 2: image dependencies (spec section 10) ----
+#
+# The seed above plants LEGACY files, so these build placements through the
+# real write paths -- a character avatar, a library image, the world cover --
+# whose bytes live in the global image store and not in the world tree. That
+# is exactly what a format-1 bundle lost (Codex review, P1).
+
+def _pixels(seed: int = 0) -> bytes:
+    from PIL import Image
+    im = Image.new("RGB", (8, 6))
+    im.putdata([((x * 11 + seed) % 256, (y * 23 + seed) % 256, (x * y + seed) % 256)
+                for y in range(6) for x in range(8)])
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _ref_dirs(root: Path) -> list[tuple[Path, str]]:
+    """Every placement under `root`, as `(owning dir, name)`."""
+    return [(p.parent.parent, p.stem)
+            for p in sorted(root.rglob(f"{image_refs.REFS_DIR}/*.json"))
+            if p.name != image_refs.JOURNAL]
+
+
+def _placed_realm(name: str = "Realm") -> tuple[str, str, str]:
+    """A world whose avatar, library image and cover are all placements.
+    Returns `(wid, shared image id, avatar image id)`: the cover and the library
+    image are one picture placed twice."""
+    wid = worlds.create_world(name)
+    root = worlds.world_root(wid)
+    cid, vid = characters.create_character(root, "Seraphine", "default")
+    assets.put_image(root, cid, vid, "avatar", _pixels(1), "png",
+                     source_url="https://example.invalid/seraphine.png")
+    world_images.put_image(wid, "coastline", _pixels(2), "png")
+    covers.put_world_cover(wid, _pixels(2), "png")
+    shared = image_refs.read(root / "assets", "cover").image
+    avatar = image_refs.read(root / "characters" / cid / "assets" / vid, "avatar").image
+    assert shared and avatar and shared != avatar
+    assert image_refs.read(root / "assets" / "images", "coastline").image == shared
+    return wid, shared, avatar
+
+
+def _store_members(bundle: Path) -> tuple[list[str], list[str]]:
+    with zipfile.ZipFile(bundle) as z:
+        names = z.namelist()
+    return ([n for n in names if n.startswith("image-store/blobs/")],
+            [n for n in names if n.startswith("image-store/objects/")])
+
+
+def _wipe_image_store(tmp_path: Path) -> None:
+    import shutil
+    shutil.rmtree(image_store.store_root(), ignore_errors=True)
+    shutil.rmtree(tmp_path / ".cache", ignore_errors=True)
+
+
+def _describe(image_id: str, text: str) -> None:
+    image_store.update(image_id, lambda raw: {**raw, "description": text})
+
+
+def test_export_writes_format_2(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    assert world_bundle.FORMAT == 2
+    with zipfile.ZipFile(_export(_placed_realm()[0], tmp_path)) as z:
+        assert json.loads(z.read(world_bundle.MANIFEST_NAME))["format"] == 2
+
+
+def test_bundle_carries_image_dependencies_once(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, shared, avatar = _placed_realm()
+    blobs, objects = _store_members(_export(wid, tmp_path))
+    # Two placements of one picture plus a third picture: two of each, not three.
+    assert len(blobs) == 2 and len(objects) == 2
+    obj = image_store.read(shared)
+    assert f"image-store/blobs/{obj.blob_sha256[:2]}/{obj.blob_sha256}.{obj.ext}" in blobs
+    assert f"image-store/objects/{shared[4:6]}/{shared}.json" in objects
+    assert f"image-store/objects/{avatar[4:6]}/{avatar}.json" in objects
+    with zipfile.ZipFile(_export(wid, tmp_path, "again")) as z:
+        info = z.getinfo(f"image-store/blobs/{obj.blob_sha256[:2]}/{obj.blob_sha256}.{obj.ext}")
+        assert info.compress_type == zipfile.ZIP_STORED
+        assert z.read(info) == image_store.blob_path(obj.blob_sha256, obj.ext).read_bytes()
+
+
+def test_bundle_object_projection_has_no_sources(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, _shared, avatar = _placed_realm()
+    mine = {"kind": "character", "relation": "subject", "scope": f"world:{wid}",
+            "id": "seraphine"}
+    other = {"kind": "character", "relation": "subject", "scope": "world:elsewhere",
+             "id": "mara"}
+    image_store.update(avatar, lambda raw: {
+        **raw, "associations": [mine, other],
+        "reviews": {"subjects": [f"world:{wid}", "world:elsewhere"]},
+        "description_conflicts": [{"scope": "world:elsewhere", "text": "x"}]})
+    assert image_store.read(avatar).raw["sources"]          # the store has one
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        projected = json.loads(z.read(f"image-store/objects/{avatar[4:6]}/{avatar}.json"))
+    assert "sources" not in projected and "description_conflicts" not in projected
+    assert projected["associations"] == [mine]
+    assert projected["reviews"] == {"subjects": [f"world:{wid}"]}
+    assert projected["blob"] == image_store.read(avatar).raw["blob"]
+
+
+def test_export_skips_an_unresolvable_placement(monkeypatch, tmp_path):
+    """A ref naming an object the store does not hold still exports -- the
+    world is not refused for it, the ref simply carries no dependency."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    image_refs.write(worlds.world_root(wid) / "assets", "cover", "px1-" + "e" * 64)
+    blobs, objects = _store_members(_export(wid, tmp_path))
+    assert blobs == [] and objects == []
+
+
+def test_import_into_fresh_store_resolves(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, shared, _avatar = _placed_realm()
+    _describe(shared, "A grey quay at dusk.")
+    bundle = _export(wid, tmp_path)
+    worlds.delete_world(wid)
+    _wipe_image_store(tmp_path)
+
+    new = world_bundle.import_bundle(bundle)
+    root = worlds.world_root(new)
+    refs = _ref_dirs(root)
+    assert len(refs) == 3
+    for d, name in refs:
+        assert image_refs.resolve(d, name) is not None, (d, name)
+    assert image_store.read(shared).raw["description"] == "A grey quay at dusk."
+    # Only global technical fields and the merged description: never sources.
+    assert "sources" not in image_store.read(_avatar).raw
+
+
+def test_import_renames_the_bundle_scope_to_the_final_world_id(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, _shared, avatar = _placed_realm()
+    tag = {"kind": "character", "relation": "subject", "scope": f"world:{wid}",
+           "id": "seraphine"}
+    image_store.update(avatar, lambda raw: {
+        **raw, "associations": [tag], "reviews": {"subjects": [f"world:{wid}"]}})
+    bundle = _export(wid, tmp_path)
+    _wipe_image_store(tmp_path)
+
+    new = world_bundle.import_bundle(bundle)
+    assert new != wid                                   # the source still holds its id
+    raw = image_store.read(avatar).raw
+    assert raw["associations"] == [{**tag, "scope": f"world:{new}"}]
+    assert raw["reviews"] == {"subjects": [f"world:{new}"]}
+
+
+def test_import_reuses_existing_blob(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, _shared, _avatar = _placed_realm()
+    bundle = _export(wid, tmp_path)
+    before = sorted((image_store.store_root() / "blobs").rglob("*.*"))
+    objects = sorted((image_store.store_root() / "objects").rglob("*.json"))
+    new = world_bundle.import_bundle(bundle)
+    assert new != wid
+    assert sorted((image_store.store_root() / "blobs").rglob("*.*")) == before
+    assert sorted((image_store.store_root() / "objects").rglob("*.json")) == objects
+    for d, name in _ref_dirs(worlds.world_root(new)):
+        assert image_refs.resolve(d, name) is not None
+
+
+def _hand_bundle(tmp_path: Path, label: str, entries: dict[str, str | bytes],
+                 fmt: int = 2) -> Path:
+    zpath = tmp_path / f"{label}.zip"
+    zpath.write_bytes(_zip_bytes({
+        world_bundle.MANIFEST_NAME: _manifest(world_id="realm", name="Realm", fmt=fmt),
+        "world/world.md": "---\nname: Realm\n---\n", **entries}))
+    return zpath
+
+
+def _blob_entry(data: bytes) -> tuple[str, str]:
+    sha = hashlib.sha256(data).hexdigest()
+    return sha, f"image-store/blobs/{sha[:2]}/{sha}.png"
+
+
+def _object_body(image_id: str, sha: str, size: int, **extra) -> str:
+    return json.dumps({"format": 1, "id": image_id, "identity": "pixels",
+                       "blob": {"sha256": sha, "ext": "png", "mime": "image/png",
+                                "size": size, "animated": False}, **extra})
+
+
+def test_import_recomputes_id_and_rewrites_refs(monkeypatch, tmp_path):
+    """A bundle can never claim an id for pixels it does not contain: the id
+    is recomputed from the blob, and staged refs follow the local one."""
+    _home(monkeypatch, tmp_path)
+    data = _pixels(9)
+    sha, blob_name = _blob_entry(data)
+    claimed = "px1-" + "c" * 64
+    bundle = _hand_bundle(tmp_path, "claimed", {
+        blob_name: data,
+        f"image-store/objects/cc/{claimed}.json": _object_body(
+            claimed, sha, len(data), description="Mara at the gate."),
+        "world/assets/image-refs/cover.json": json.dumps(
+            {"format": 1, "image": claimed, "focus": 40}),
+        "world/assets/images/image-refs/gate.json": json.dumps(
+            {"format": 1, "image": claimed}),
+    })
+    new = world_bundle.import_bundle(bundle)
+    root = worlds.world_root(new)
+    local = image_hash.pixel_identity(data, sha).id
+    assert local != claimed
+    cover = image_refs.read(root / "assets", "cover")
+    assert (cover.image, cover.focus) == (local, 40)
+    assert image_refs.read(root / "assets" / "images", "gate").image == local
+    assert image_store.read(claimed) is None
+    assert not image_store.object_path(claimed).exists()
+    assert image_store.read(local).raw["description"] == "Mara at the gate."
+    assert image_refs.resolve(root / "assets", "cover") is not None
+
+
+def test_import_never_overwrites_local_description(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, shared, _avatar = _placed_realm()
+    _describe(shared, "Theirs")
+    bundle = _export(wid, tmp_path)
+    for local in ("Mine", ""):
+        _describe(shared, local)
+        world_bundle.import_bundle(bundle)
+        assert image_store.read(shared).raw["description"] == local
+
+
+def test_a_failed_metadata_merge_does_not_fail_the_import(monkeypatch, tmp_path):
+    """Past the publish the world exists; reporting failure would invite a
+    retry that imports a second copy. Logged instead."""
+    _home(monkeypatch, tmp_path)
+    wid, _shared, _avatar = _placed_realm()
+    bundle = _export(wid, tmp_path)
+
+    def boom(*a, **k):
+        raise OSError("disk went away")
+
+    logged: list[tuple] = []
+    monkeypatch.setattr(image_store, "merge_projection", boom)
+    monkeypatch.setattr(world_bundle.logs, "record",
+                        lambda *a, **k: logged.append((a, k)))
+    new = world_bundle.import_bundle(bundle)
+    assert worlds.read_world(new)["meta"]["name"] == "Realm"
+    assert logged and logged[0][0][0] == "warning"
+
+
+def test_import_rejects_mismatched_blob(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(10)
+    _sha, blob_name = _blob_entry(data)
+    bundle = _hand_bundle(tmp_path, "mismatch", {blob_name: data + b"tamper"})
+    with pytest.raises(world_bundle.BundleError, match="does not match"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+    assert not (image_store.store_root() / "blobs").exists()
+
+
+def test_import_rejects_unknown_image_store_member(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(11)
+    sha, blob_name = _blob_entry(data)
+    other = "ab" if not sha.startswith("ab") else "cd"
+    good_id = "px1-" + "d" * 64
+    cases: dict[str, dict[str, str | bytes]] = {
+        "stray-file": {"image-store/readme.txt": "x"},
+        "stray-dir": {"image-store/thumbs/aa/x.png": data},
+        "bad-ext": {f"image-store/blobs/{sha[:2]}/{sha}.bmp": data},
+        "upper-hex": {f"image-store/blobs/{sha[:2].upper()}/{sha.upper()}.png": data},
+        "wrong-shard": {f"image-store/blobs/{other}/{sha}.png": data},
+        "short-sha": {f"image-store/blobs/{sha[:2]}/{sha[:40]}.png": data},
+        "blob-twice": {blob_name: data, f"image-store/blobs/{sha[:2]}/{sha}.jpg": data},
+        "object-wrong-shard": {
+            blob_name: data,
+            f"image-store/objects/aa/{good_id}.json": _object_body(good_id, sha, len(data))},
+        "object-not-px1": {
+            blob_name: data,
+            f"image-store/objects/dd/{'d' * 64}.json": _object_body(good_id, sha, len(data))},
+        "object-not-a-dict": {blob_name: data,
+                              f"image-store/objects/dd/{good_id}.json": "[]"},
+        "object-not-json": {blob_name: data,
+                            f"image-store/objects/dd/{good_id}.json": "{nope"},
+        "object-bad-sha": {blob_name: data,
+                           f"image-store/objects/dd/{good_id}.json": _object_body(
+                               good_id, "XYZ", len(data))},
+        "object-names-absent-blob": {
+            f"image-store/objects/dd/{good_id}.json": _object_body(good_id, sha, len(data))},
+    }
+    for label, entries in cases.items():
+        with pytest.raises(world_bundle.BundleError):
+            world_bundle.import_bundle(_hand_bundle(tmp_path, label, entries))
+    # A format-1 bundle defines no image store at all.
+    with pytest.raises(world_bundle.BundleError):
+        world_bundle.import_bundle(_hand_bundle(tmp_path, "fmt1", {blob_name: data}, fmt=1))
+    assert worlds.list_worlds() == []
+
+
+def test_import_refuses_an_oversized_blob(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(12)
+    _sha, blob_name = _blob_entry(data)
+    monkeypatch.setattr(fetch, "MAX_BYTES", len(data) - 1)
+    with pytest.raises(world_bundle.BundleError):
+        world_bundle.import_bundle(_hand_bundle(tmp_path, "huge", {blob_name: data}))
+    assert worlds.list_worlds() == []
+
+
+def test_import_wraps_an_unreadable_blob(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    data = _pixels(13)
+    _sha, blob_name = _blob_entry(data)
+    bundle = _hand_bundle(tmp_path, "crc", {blob_name: data})
+    real_open = zipfile.ZipFile.open
+
+    def boom(self, name, *a, **k):
+        target = name.filename if isinstance(name, zipfile.ZipInfo) else str(name)
+        if target.startswith("image-store/blobs/"):
+            raise zipfile.BadZipFile("Bad CRC-32")
+        return real_open(self, name, *a, **k)
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", boom)
+    with pytest.raises(world_bundle.BundleError):
+        world_bundle.import_bundle(bundle)
+    monkeypatch.setattr(zipfile.ZipFile, "open", real_open)
+    assert worlds.list_worlds() == []
+    staging = worlds.staging.staging_root()
+    assert not staging.is_dir() or not any(staging.iterdir())
+
+
+def test_format_1_bundle_still_imports(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    zpath = tmp_path / "old.zip"
+    zpath.write_bytes(_zip_bytes({
+        world_bundle.MANIFEST_NAME: _manifest(world_id="saltmarch", fmt=1),
+        "world/world.md": "---\nname: Saltmarch\n---\n",
+        "world/assets/cover.png": PNG,
+    }))
+    wid = world_bundle.import_bundle(zpath)
+    assert (worlds.world_root(wid) / "assets" / "cover.png").read_bytes() == PNG
