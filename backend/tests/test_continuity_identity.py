@@ -73,9 +73,10 @@ def _examine(cid, sid, plot=(), owed=(), deadline=None):
 
 
 def _proposed(kind, row, sid):
-    """The subject `examine` builds for a proposed row, for asserting signals."""
+    """The subject `examine` builds for a proposed row, for asserting signals --
+    titled, like the record materialize would open, by its title or else its id."""
     return similarity.subject(kind, "proposed:test",
-                              {"title": row.get("title", ""),
+                              {"title": row.get("title", "") or row.get("id", ""),
                                "beats": [{"text": row["beat"], "scene": sid}],
                                "kind": row.get("kind", ""), "due": row.get("due", "")},
                               scenes={sid})
@@ -220,6 +221,47 @@ def test_row_with_unknown_id_is_proposed_and_titled_by_title_or_id(cid, s0, sid)
     assert examined.title == "maras-debt"
     assert examined.kind == "commitment"
     assert examined.section == "commitment_movements"
+
+
+def _untitled(kind, row, sid):
+    """`_proposed` without the id fallback: the subject the id-less title line
+    would give, to show the id is what decides the test."""
+    return _proposed(kind, {**row, "id": ""}, sid)
+
+
+def test_unknown_id_without_a_title_is_matched_under_its_id(cid, s0, sid):
+    # §10.2: "its title, or else its id, becomes the title text". Only the id
+    # carries the overlap here; the beat alone is below the lexical floors.
+    _seed_ledger(cid, s0)
+    row = {"id": "the-harbour-ledger", "title": "", "beat": "Winifred kept searching.",
+           "status": "open"}
+    stored = _pooled(cid, "thread:find-the-ledger")
+    assert similarity.admitted_by(similarity.lexical(_untitled("thread", row, sid), stored)) is None
+    sig = similarity.lexical(_proposed("thread", row, sid), stored)
+    assert sig["tokens"] >= similarity.TOKEN_FLOOR and sig["chars"] >= similarity.CHAR_FLOOR
+    exam = _examine(cid, sid, plot=[row])
+    assert exam.proposed == 1
+    [examined] = exam.rows
+    assert examined.assigned == "the-harbour-ledger"
+    assert examined.title == "the-harbour-ledger"
+    assert _refs(examined) == ["thread:find-the-ledger"]
+
+
+def test_an_id_spelling_a_stored_title_is_examined(cid, s0, sid):
+    # The record materialize would open is titled "the-lost-map", which is the
+    # stored title slugged -- an exact signal, though the beats share nothing.
+    store.plot.set_movement(cid, "old-map", "The lost map", "open",
+                            "Mara lost the map.", s0)
+    row = {"id": "the-lost-map", "title": "", "beat": "Seraphine sailed for Saltmarch.",
+           "status": "open"}
+    stored = _pooled(cid, "thread:old-map")
+    assert not similarity.lexical(_untitled("thread", row, sid), stored)["slug_equal"]
+    sig = similarity.lexical(_proposed("thread", row, sid), stored)
+    assert sig["slug_equal"]
+    exam = _examine(cid, sid, plot=[row])
+    [examined] = exam.rows
+    assert examined.title == "the-lost-map"
+    assert _refs(examined) == ["thread:old-map"]
 
 
 # ------------------------------------------------------------------ aliases
