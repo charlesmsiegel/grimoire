@@ -459,6 +459,32 @@ def test_embedding_failure_keeps_lexical_candidates(cid, s0, sid, monkeypatch):
     assert signals["via"] == "lexical"
 
 
+def test_no_same_type_record_means_no_provider_call(cid, s0, sid, fake):
+    # An empty plot ledger: nothing a proposed thread could be compared with,
+    # so embedding its text would send campaign prose for nothing.
+    _configure()
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER], deadline=_soon())
+    assert exam.proposed == 1
+    assert exam.rows == []
+    assert exam.embedding == "configured" and exam.embedded == 0
+    assert fake.calls == []
+
+
+def test_only_a_proposal_with_a_same_type_pool_is_embedded(cid, s0, sid, fake):
+    # A stored commitment, no stored thread: only the commitment row is embedded.
+    _configure()
+    _seed_deadline(cid, s0)
+    exam = _examine(cid, sid, plot=[RECOVER_THE_LEDGER], owed=[SERAPHINES_THREAT],
+                    deadline=_soon())
+    assert exam.proposed == 2
+    owed = _proposed("commitment", SERAPHINES_THREAT, sid)
+    record = _pooled(cid, "commitment:the-midnight-deadline")
+    assert [call[0] for call in fake.calls] == [owed.text]
+    assert _proposed("thread", RECOVER_THE_LEDGER, sid).text not in {
+        t for call in fake.calls for t in call}
+    assert {t for call in fake.calls for t in call} <= {owed.text, record.text}
+
+
 def test_proposed_subject_carries_the_scene_cast(cid, s0, sid):
     # A lexically weak pair is admitted through the structural clause only when
     # the record and the proposal share an actor; `facts["cast"]` is where the
