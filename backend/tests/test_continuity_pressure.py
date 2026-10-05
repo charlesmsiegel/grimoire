@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from types import SimpleNamespace
 
 import pytest
 
@@ -26,6 +27,7 @@ from grimoire.store import (
     plot,
     worlds,
 )
+from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.continuity import pressure
 
 #: A plugin calendar on a bare integer axis: 360-day years of twelve 30-day
@@ -187,8 +189,8 @@ def _primary(cid, provider_id, secondary=None):
     calendars.write_calendar(root, cfg)
 
 
-def _tithe(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path, now=None)
+def _tithe(monkeypatch, tmp_path, warn=None):
+    cid = _campaign(monkeypatch, tmp_path, now=None, warn=warn)
     _plugin(tmp_path, "tithe_test", _TITHE_PROVIDER_SRC)
     _primary(cid, "tithe-test-calendar")
     clock.advance(cid, to="735")
@@ -583,3 +585,285 @@ def test_sources_restrict_the_work_done(monkeypatch, tmp_path):
     assert calls == []
     pressure.build(cid)
     assert sorted(calls) == ["birthday", "holiday"]
+
+
+# ---- deadlines (Task 6) -----------------------------------------------------
+
+#: Spec §28.5's provider axis: `(calendar, now, due = now+4, event D = now+10)`,
+#: every date in that calendar's own natives. On Hebrew the event is 11 days out
+#: so that D-1 (`5786-Shevat-30`) crosses a month boundary.
+_AXIS = [
+    ("gregorian", "2026-05-10", "2026-05-14", "2026-05-20"),
+    ("hebrew", "5786-Shevat-20", "5786-Shevat-24", "5786-Adar-01"),
+    ("tithe-test-calendar", "735", "739", "745"),
+]
+
+OATH = "commitment:mara-s-oath"
+CORONATION = "event:the-coronation"
+
+
+@pytest.fixture(params=_AXIS, ids=[row[0] for row in _AXIS])
+def cal(request, monkeypatch, tmp_path):
+    calendar, now, due, date = request.param
+    if calendar == "tithe-test-calendar":
+        cid = _tithe(monkeypatch, tmp_path, warn=7)
+    else:
+        cid = _campaign(monkeypatch, tmp_path, calendar=calendar, warn=7, now=now)
+    return SimpleNamespace(calendar=calendar, cid=cid, now=now, due=due, date=date)
+
+
+def _commitment(cid, due="", mid="mara-s-oath", title="Mara's oath", status="open"):
+    commitments.set_movement(cid, mid, title, "promise", status, due,
+                             "Mara swore it at the gate.", "001--gate")
+    return f"commitment:{mid}"
+
+
+def _link(cid, lid, a, b, relation):
+    continuity_doc.put_link(cid, lid, {"a": a, "b": b, "relation": relation,
+                                       "created": "", "scene": "", "note": ""})
+
+
+def _alias(cid, src, to):
+    continuity_doc.put_alias(cid, src, {"to": to, "created": "", "source": "manual",
+                                        "note": ""})
+
+
+def _deadlines(cid, subject=None, **kw):
+    return [i for i in _items(cid, **kw) if i["kind"] in {"deadline", "linked_deadline"}
+            and (subject is None or i["subject"] == subject)]
+
+
+def test_a_parseable_due_is_a_deadline(cal):
+    cid = cal.cid
+    _commitment(cid, due=cal.due)
+    provider = _provider(cid)
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["ref"], item["subject"]) == ("deadline", OATH, OATH)
+    assert item["fixed"] == F(cid, cal.due)
+    assert item["in_days"] == F(cid, cal.due) - F(cid, cal.now) == 4
+    assert (item["state"], item["due_text"], item["relation"]) == ("due_soon", cal.due, "on")
+    assert item["native"] == provider.format(F(cid, cal.due))
+    assert item["friendly"] == provider.describe(F(cid, cal.due))["friendly"]
+    assert item["label"] == "Mara's oath"
+    assert item["precision"] == "exact"
+
+
+def test_free_text_due_is_not_arithmetic(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    _commitment(cid, due="before the bells stop")
+    vow = _commitment(cid, due="2026-05-14", mid="seraphine-s-vow", title="Seraphine's vow")
+    assert _deadlines(cid, OATH) == []
+    [item] = _deadlines(cid, vow)
+    assert (item["kind"], item["in_days"]) == ("deadline", 4)
+
+
+def test_overdue_due(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    _commitment(cid, due="2026-05-01")
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["state"], item["in_days"]) == ("deadline", "overdue", -9)
+    assert item["due_text"] == "2026-05-01"
+
+
+def test_before_link_derives_d_minus_one(cal):
+    cid = cal.cid
+    _commitment(cid)
+    assert events.create(cid, "The coronation", cal.date) == "the-coronation"
+    _link(cid, "l1", OATH, CORONATION, "before")
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["ref"], item["subject"]) == ("linked_deadline", CORONATION, OATH)
+    assert item["fixed"] == F(cid, cal.date) - 1
+    if cal.calendar == "hebrew":
+        assert item["fixed"] == F(cid, "5786-Shevat-30")
+    assert item["in_days"] == F(cid, cal.date) - 1 - F(cid, cal.now)
+    assert (item["relation"], item["due_text"], item["state"]) == ("before", "", "upcoming")
+    assert item["label"] == "Mara's oath"
+    assert item["native"] == _provider(cid).format(F(cid, cal.date) - 1)
+
+
+def test_by_and_on_links_derive_d(cal):
+    cid = cal.cid
+    vow = _commitment(cid, mid="seraphine-s-vow", title="Seraphine's vow")
+    _commitment(cid)
+    events.create(cid, "The coronation", cal.date)
+    _link(cid, "l1", OATH, CORONATION, "by")
+    _link(cid, "l2", vow, CORONATION, "on")
+    day, now = F(cid, cal.date), F(cid, cal.now)
+    for subject, relation in ((OATH, "by"), (vow, "on")):
+        [item] = _deadlines(cid, subject)
+        assert (item["kind"], item["ref"], item["relation"]) == (
+            "linked_deadline", CORONATION, relation)
+        assert (item["fixed"], item["in_days"], item["state"]) == (day, day - now, "upcoming")
+
+
+def test_after_sets_no_deadline(cal):
+    cid = cal.cid
+    _commitment(cid)
+    events.create(cid, "The coronation", cal.date)
+    _link(cid, "l1", OATH, CORONATION, "after")
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["ref"], item["relation"]) == ("linked_deadline", CORONATION, "after")
+    assert item["in_days"] == F(cid, cal.date) - F(cid, cal.now)
+    assert item["state"] == "upcoming"
+    assert item["fixed"] == F(cid, cal.date)
+
+
+def test_after_is_only_ever_upcoming(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    cases = {"the-coronation": ("The coronation", "2026-05-05"),     # behind now
+             "mara-s-audience": ("Mara's audience", "2026-05-10"),   # today, unfired
+             "saltmarch-eve": ("Saltmarch Eve", "2026-06-24")}       # 45 days out
+    for n, (eid, (name, date)) in enumerate(cases.items()):
+        assert events.create(cid, name, date) == eid
+        subject = _commitment(cid, mid=f"oath-{n}", title=f"Mara's oath {n}")
+        _link(cid, f"l{n}", subject, f"event:{eid}", "after")
+    assert _deadlines(cid) == []
+
+
+def test_earliest_of_due_and_link_wins(cal):
+    cid = cal.cid
+    provider = _provider(cid)
+    due = provider.format(F(cid, cal.now) + 15)
+    _commitment(cid, due=due)
+    events.create(cid, "The coronation", cal.date)
+    _link(cid, "l1", OATH, CORONATION, "before")
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["ref"]) == ("linked_deadline", CORONATION)
+    assert item["fixed"] == F(cid, cal.date) - 1
+    assert item["due_text"] == due
+
+
+def test_a_link_to_a_reached_event_is_overdue(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    events.create(cid, "The coronation", "2026-05-12")
+    _commitment(cid)
+    _link(cid, "l1", OATH, CORONATION, "by")
+    clock.advance(cid, to="2026-05-12")
+    assert events.get(cid, "the-coronation")["fired"] is not None
+    [item] = _deadlines(cid, OATH)
+    assert (item["state"], item["in_days"]) == ("today", 0)
+    clock.advance(cid, to="2026-05-13")
+    [item] = _deadlines(cid, OATH)
+    assert (item["state"], item["in_days"]) == ("overdue", -1)
+
+    events.create(cid, "Mara's audience", "2026-05-11")
+    vow = _commitment(cid, mid="seraphine-s-vow", title="Seraphine's vow")
+    _link(cid, "l2", vow, "event:mara-s-audience", "by")
+    [audience] = [i for i in _items(cid, "event") if i["ref"] == "event:mara-s-audience"]
+    assert audience["state"] == "passed"
+    [item] = _deadlines(cid, vow)
+    assert (item["kind"], item["state"], item["in_days"]) == ("linked_deadline", "overdue", -2)
+
+
+def test_backwards_clock_keeps_a_fired_event_reached(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    events.create(cid, "The coronation", "2026-05-20")
+    _commitment(cid)
+    _link(cid, "l1", OATH, CORONATION, "before")
+    clock.advance(cid, to="2026-05-21")
+    clock.advance(cid, to="2026-05-15", reason="correction")
+    assert clock.now(cid) == "2026-05-15"
+    assert events.get(cid, "the-coronation")["fired"] is not None
+
+    assert [i for i in _items(cid, "event") if i["ref"] == CORONATION] == []
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["state"]) == ("linked_deadline", "overdue")
+    assert item["in_days"] == F(cid, "2026-05-19") - F(cid, "2026-05-15") > 0
+
+    _commitment(cid, due="2026-05-17")
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["state"], item["due_text"]) == (
+        "linked_deadline", "overdue", "2026-05-17")
+
+
+def test_a_redated_fired_event_outranks_an_earlier_due(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7, now="2026-05-01")
+    events.create(cid, "The coronation", "2026-05-05")
+    clock.advance(cid, to="2026-05-10")
+    assert events.update(cid, "the-coronation", date="2026-05-30")
+    assert events.get(cid, "the-coronation")["fired"] is not None
+    _commitment(cid, due="2026-05-12")
+    _link(cid, "l1", OATH, CORONATION, "before")
+    [item] = _deadlines(cid, OATH)
+    assert (item["state"], item["kind"]) == ("overdue", "linked_deadline")
+    assert item["fixed"] == F(cid, "2026-05-29")
+    assert item["due_text"] == "2026-05-12"
+
+
+def test_a_fired_link_survives_a_raising_plugin(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    events.create(cid, "The coronation", "2026-05-12")
+    clock.advance(cid, to="2026-05-13")
+    assert events.get(cid, "the-coronation")["fired"] is not None
+    _commitment(cid, due="2026-05-20")
+    _link(cid, "l1", OATH, CORONATION, "by")
+
+    _plugin(tmp_path, "broken_test", _BROKEN_PROVIDER_SRC)
+    _primary(cid, "broken-test-calendar")
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["ref"], item["state"]) == ("linked_deadline", CORONATION, "overdue")
+    assert (item["fixed"], item["in_days"], item["native"], item["friendly"]) == (
+        None, None, "", "")
+    assert item["due_text"] == "2026-05-20"
+
+
+def test_resolved_and_merged_away_commitments_make_no_deadline(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    vow = _commitment(cid, due="2026-05-14", mid="seraphine-s-vow",
+                      title="Seraphine's vow", status="fulfilled")
+    _commitment(cid, due="2026-05-14")
+    debt = _commitment(cid, due="2026-05-16", mid="winifred-s-debt", title="Winifred's debt")
+    assert _deadlines(cid, vow) == []
+    [before] = _deadlines(cid, debt)
+    assert before["fixed"] == F(cid, "2026-05-16")
+
+    _alias(cid, debt, OATH)
+    assert _deadlines(cid, debt) == []
+    [item] = _deadlines(cid, OATH)
+    assert (item["kind"], item["fixed"]) == ("deadline", F(cid, "2026-05-14"))
+
+
+def test_a_merged_source_due_is_not_inherited(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    _commitment(cid, due="")
+    src = _commitment(cid, due="2026-05-14", mid="winifred-s-debt", title="Winifred's debt")
+    [item] = _deadlines(cid, src)
+    assert (item["kind"], item["subject"]) == ("deadline", src)
+
+    _alias(cid, src, OATH)
+    assert _deadlines(cid, src) == []
+    assert _deadlines(cid, OATH) == []
+
+
+def test_dangling_or_undated_link_contributes_nothing(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    _commitment(cid)
+    events.create(cid, "Mara's audience", "2026-05-14")
+    _link(cid, "l1", OATH, "event:mara-s-audience", "by")
+    assert events.delete(cid, "mara-s-audience")
+    path = _root(cid) / "events.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["midsummer-rite"] = {"name": "The Saltmarch rite", "date": "midsummer",
+                              "note": "", "fired": None}
+    path.write_text(json.dumps(data), encoding="utf-8")
+    _link(cid, "l2", OATH, "event:midsummer-rite", "by")
+    assert _deadlines(cid, OATH) == []
+
+    events.create(cid, "The coronation", "2026-05-20")
+    _link(cid, "l3", OATH, CORONATION, "by")
+    [item] = _deadlines(cid, OATH)
+    assert (item["ref"], item["fixed"]) == (CORONATION, F(cid, "2026-05-20"))
+
+
+def test_thread_links_never_make_deadlines(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                      "The map turned up in Saltmarch.", "001--gate")
+    events.create(cid, "The coronation", "2026-05-20")
+    _link(cid, "l1", "thread:mara-s-map", CORONATION, "before")
+    assert _deadlines(cid) == []
+
+    _commitment(cid)
+    _link(cid, "l2", OATH, CORONATION, "before")
+    [item] = _deadlines(cid)
+    assert (item["subject"], item["ref"]) == (OATH, CORONATION)

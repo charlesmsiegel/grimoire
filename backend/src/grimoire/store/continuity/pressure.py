@@ -33,6 +33,18 @@ the campaign's own finite list. Holidays and birthdays are bounded by
 day wider -- `upcoming_holidays` is half-open at its start, `(native,
 native + window]` -- so today's observances are included too, and each item's
 `in_days` is recomputed from now rather than taken from the shifted row.
+Deadlines are not bounded at all: every parseable due is listed.
+
+**Deadlines** (spec §13.5, Decision 8) are read off live *canonical*
+commitments (`effective`), so a merged-away source's due is never inherited and
+never a second item. Each commitment's candidates -- its parseable due (read
+through `aging`, the one place a `due` is parsed) and each `before`/`by`/`on`
+link to an event (D-1, D, D) -- are each given a state, and `_choose` keeps the
+most urgent, then the earliest. A link to a *reached* event (fired stamp, or
+`passed`) is `overdue` whatever the arithmetic says, except a `by`/`on` link on
+the event's own day; a fired stamp needs no calendar, so it survives a broken
+plugin as an undated `overdue` item. An `after` link sets no deadline and is
+listed only while it is `upcoming`.
 """
 
 from __future__ import annotations
@@ -40,8 +52,9 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
-from .. import birthdays, calendars, clock, events, notices
+from .. import aging, birthdays, calendars, clock, events, notices
 from ..campaigns import paths as campaigns_paths
+from . import effective
 
 #: The item kinds, which are also the source names `build` accepts. The order
 #: is the tie-break between items on one fixed day.
@@ -59,6 +72,17 @@ SORT_ORDER = ("overdue", "today", "due_soon", "upcoming", "passed", "stale", "ok
 HIGH_PRESSURE = frozenset({"overdue", "today", "due_soon"})
 
 _DEADLINE_RELATIONS = frozenset({"before", "by", "on"})
+
+#: How many days before the event's day each deadline-setting link falls due
+#: (spec §13.5): `before` is D-1, `by` and `on` are D.
+_LINK_OFFSET = {"before": 1, "by": 0, "on": 0}
+
+#: The link relations a commitment can carry to an event; `related_to` is none.
+_LINK_RELATIONS = _DEADLINE_RELATIONS | {"after"}
+
+#: The sources that yield per-commitment *candidates* rather than items;
+#: `_choose` turns them into at most one deadline item per commitment.
+_CANDIDATE_KINDS = frozenset({"deadline", "linked_deadline"})
 
 T = TypeVar("T")
 
@@ -147,8 +171,10 @@ def _item(kind: str, ref: str, label: str, fixed: int | None, ctx: dict, **extra
         "actor": None, "age": None}
     out.update(extra)
     out["state"] = state_of(kind, out["relation"], out["in_days"],
-                            warn_days=ctx["warn_days"], passed=extra.get("passed", False))
+                            warn_days=ctx["warn_days"], passed=extra.get("passed", False),
+                            reached=extra.get("reached", False))
     out.pop("passed", None)
+    out.pop("reached", None)
     return out
 
 
@@ -193,10 +219,126 @@ def _birthday_items(ctx: dict) -> list[dict]:
     return out
 
 
+def _owed_item(ctx: dict, row: dict, kind: str, ref: str, fixed: int | None,
+               **extra) -> dict:
+    """A deadline-kind item for one live canonical commitment `row`."""
+    return _item(kind, ref, row["title"], fixed, ctx, subject=f"commitment:{row['id']}",
+                 due_text=row["due"], **extra)
+
+
+def _due_fixed(actx: dict, due: str) -> int | None:
+    """The fixed day a parseable `due` names, through `aging`'s one reading of
+    it; None for free text or no due. Only the due is handed over: the scene a
+    record last moved in is staleness, which a deadline does not need."""
+    base = actx["now_fixed"]
+    if base is None or not due:
+        return None
+    block = aging.age(actx, {"due": due})
+    if block["due_in"] is not None:
+        return base + block["due_in"]
+    if block["days_over"] is not None:
+        return base - block["days_over"]
+    return None
+
+
+def _deadline_candidates(ctx: dict) -> list[dict]:
+    """One `deadline` candidate per live canonical commitment with a parseable
+    due. `aging.prepare` resolves the provider outside any `try` (plugin code),
+    which is why this whole source sits inside `build`'s `_soft`; one due a
+    calendar cannot read costs only its own candidate."""
+    actx = aging.prepare(ctx["cid"], ctx["now"])
+    if ctx["now_fixed"] is None:
+        return []
+    out = []
+    for row in effective.commitments(ctx["cid"]):
+        fixed = _soft(_due_fixed, None, actx, row["due"])
+        if fixed is not None:
+            out.append(_owed_item(ctx, row, "deadline", f"commitment:{row['id']}", fixed))
+    return out
+
+
+def _after_item(ctx: dict, link: dict, row: dict, day: int | None,
+                reached: bool) -> dict | None:
+    """An `after` link sets no deadline; it is listed only while its event is
+    unreached and `0 < in_days <= UPCOMING_WINDOW_DAYS` (Decision 8), so it can
+    only ever be `upcoming`."""
+    now_fixed = ctx["now_fixed"]
+    if reached or day is None or now_fixed is None:
+        return None
+    if not 0 < day - now_fixed <= calendars.UPCOMING_WINDOW_DAYS:
+        return None
+    return _owed_item(ctx, row, "linked_deadline", link["b"], day, relation="after",
+                      _lid=link["id"])
+
+
+def _link_candidate(ctx: dict, link: dict, row: dict, event: dict) -> dict | None:
+    """One link's candidate, or None. Reached is a stamp (`fired`) or a reading
+    (`passed`); a fired event stays a candidate with no date and no `now` at
+    all, because nothing has to be computed to know it was reached."""
+    relation = link["relation"]
+    day = _fixed_of(ctx["provider"], event["date"])
+    fired = event["fired"] is not None
+    reached = fired or bool(event["passed"])
+    if relation == "after":
+        return _after_item(ctx, link, row, day, reached)
+    if not fired and (day is None or ctx["now_fixed"] is None):
+        return None
+    fixed = day - _LINK_OFFSET[relation] if day is not None else None
+    return _owed_item(ctx, row, "linked_deadline", link["b"], fixed, relation=relation,
+                      reached=reached, _lid=link["id"])
+
+
+def _linked_candidates(ctx: dict) -> list[dict]:
+    """A candidate per `commitment --before|by|on|after--> event` link, on
+    canonical endpoints. A thread's links, a resolved commitment's, a dangling
+    or an undated event's and `related_to` contribute nothing."""
+    owed = {f"commitment:{c['id']}": c for c in effective.commitments(ctx["cid"])}
+    dated = {f"event:{r['id']}": r for r in ctx["events"]}
+    out = []
+    for link in effective.links(ctx["cid"]):
+        row, event = owed.get(link["a"]), dated.get(link["b"])
+        if row is None or event is None or link["relation"] not in _LINK_RELATIONS:
+            continue
+        candidate = _soft(_link_candidate, None, ctx, link, row, event)
+        if candidate is not None:
+            out.append(candidate)
+    return out
+
+
+def _urgency(item: dict) -> tuple:
+    """Most urgent, then earliest (nulls last), then `deadline` before
+    `linked_deadline`, then the lowest link id (Decision 8)."""
+    fixed = item["fixed"]
+    return (PRESSURE_STATES.index(item["state"]), fixed is None, fixed or 0,
+            item["kind"] != "deadline", item.get("_lid", ""))
+
+
+def _choose(candidates: list[dict]) -> list[dict]:
+    """One deadline item per commitment, plus every `after` item.
+
+    Ranking by state before date is what keeps "reached -> overdue" true when
+    an earlier due exists, a fired event was re-dated, or the clock went back;
+    among unreached candidates the state is monotone in `in_days`, so it is
+    exactly "earliest wins"."""
+    best: dict[str, dict] = {}
+    after: list[dict] = []
+    for item in candidates:
+        if item["relation"] == "after":
+            after.append(item)
+        elif item["subject"] not in best or _urgency(item) < _urgency(best[item["subject"]]):
+            best[item["subject"]] = item
+    chosen = [*best.values(), *after]
+    for item in chosen:
+        item.pop("_lid", None)
+    return chosen
+
+
 _SOURCE_FNS: dict[str, Callable[[dict], list[dict]]] = {
     "event": _event_items,
     "holiday": _holiday_items,
     "birthday": _birthday_items,
+    "deadline": _deadline_candidates,
+    "linked_deadline": _linked_candidates,
 }
 
 
@@ -249,15 +391,20 @@ def build(cid: str, now: str | None = None, horizon: int | None = None,
     `now` None reads the campaign clock; `horizon` None is
     `calendars.UPCOMING_WINDOW_DAYS` and bounds only holidays and birthdays.
     `sources` restricts which sources run at all (an unknown name is a
-    `ValueError`). Items are on the fixed-day axis, undated last, ties in
-    `KINDS` order. Never raises for an existing campaign.
+    `ValueError`); the deadline choice runs over whatever candidates the
+    requested deadline sources produced, so a commitment yields at most one
+    `deadline`/`linked_deadline` item (plus its `after` items). Items are on
+    the fixed-day axis, undated last, ties in `KINDS` order. Never raises for
+    an existing campaign.
     """
     wanted = _requested(sources)
     ctx = _context(cid, now, horizon, wanted)
     items: list[dict] = []
+    candidates: list[dict] = []
     for kind, fn in _SOURCE_FNS.items():
         if kind in wanted:
-            items.extend(_soft(fn, [], ctx))
+            (candidates if kind in _CANDIDATE_KINDS else items).extend(_soft(fn, [], ctx))
+    items.extend(_choose(candidates))
     items.sort(key=_order)
     return {"now": ctx["now"], "friendly": _labels(ctx["provider"], ctx["now_fixed"])[1],
             "fixed": ctx["now_fixed"], "items": items}
