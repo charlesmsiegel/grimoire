@@ -187,6 +187,16 @@ DEFAULT_REPLAY_FORK_THRESHOLD = "10"
 # the number is configuration because the judgement is the user's: a saga told
 # in seasons and a thriller told in hours do not agree about thirty days.
 DEFAULT_ADVANCE_FORK_THRESHOLD = "30"
+# Whether post images are sent to a model that can read them (#377,
+# `store.post_images`). Off on every install, new and upgraded: an image is
+# paid for on every turn it stays in the window, and switching that on behind
+# someone's back is the imposition `backup_enabled` also refuses to make.
+DEFAULT_SEND_IMAGES = "off"
+# How many of the newest images in the sent history go out. Three because one
+# picture is rarely the whole scene (a map and the room it shows) and each
+# extra one is paid on every turn until it ages out; configuration because the
+# right trade depends on the reader's model price. Tune against real play.
+DEFAULT_SEND_IMAGES_LIMIT = "3"
 # The global scope of the response-preset cascade. These MUST be listed here:
 # read_config() narrows its return to _CONFIG_KEYS, so a key omitted from this
 # tuple is silently dropped and the global scope resolves as if unset — no
@@ -215,6 +225,7 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "art_catalog_depth", "art_catalog_threshold",
                 "prompt_layout_enabled", "speaker_turn_taking",
                 "tracker", "perception_rider",
+                "send_images", "send_images_limit",
                 "backup_enabled", "backup_interval_hours", "backup_keep",
                 "backup_dir", "replay_fork_threshold",
                 "advance_fork_threshold", "log_level") + _LENGTH_KEYS + routing.CONFIG_KEYS \
@@ -258,6 +269,8 @@ def read_config() -> dict[str, str]:
                 "speaker_turn_taking": DEFAULT_SPEAKER_TURN_TAKING,
                 "tracker": DEFAULT_TRACKER,
                 "perception_rider": DEFAULT_PERCEPTION_RIDER,
+                "send_images": DEFAULT_SEND_IMAGES,
+                "send_images_limit": DEFAULT_SEND_IMAGES_LIMIT,
                 "backup_enabled": DEFAULT_BACKUP_ENABLED,
                 "backup_interval_hours": DEFAULT_BACKUP_INTERVAL_HOURS,
                 "backup_keep": DEFAULT_BACKUP_KEEP,

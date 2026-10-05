@@ -29,7 +29,8 @@ def entry(raw: dict) -> dict:
         pricing = {}
     out = {"id": raw["id"], "name": raw.get("name") or raw["id"],
            "context": _context(raw),
-           "prompt": pricing.get("prompt"), "completion": pricing.get("completion")}
+           "prompt": pricing.get("prompt"), "completion": pricing.get("completion"),
+           "vision": _vision(raw)}
     # Which request parameters the model takes, when the provider says
     # (OpenRouter's `supported_parameters`). Kept only as a list of strings and
     # only when present: an absent list means "unknown", which the sampler split
@@ -39,6 +40,21 @@ def entry(raw: dict) -> dict:
     if isinstance(params, list):
         out["params"] = [p for p in params if isinstance(p, str)]
     return out
+
+
+def _vision(raw: dict) -> bool | None:
+    """Whether the provider says this model reads images (#377).
+
+    OpenRouter publishes `architecture.input_modalities`; an OpenAI-compatible
+    endpoint occasionally does through the same field. None when there is no
+    such list -- "the provider did not say", which is a different fact from
+    "text only", for the same reason an unpriced model is None rather than 0.
+    """
+    arch = raw.get("architecture")
+    modalities = arch.get("input_modalities") if isinstance(arch, dict) else None
+    if not isinstance(modalities, list):
+        return None
+    return "image" in modalities
 
 
 def _context(raw: dict) -> int | None:

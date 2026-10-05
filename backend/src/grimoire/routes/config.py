@@ -22,6 +22,7 @@ from .common import (
     _response_body,
     _routing_body,
     _routing_fields,
+    _standing_connection,
     _with_sampling,
     _write_response,
     get_health,
@@ -54,6 +55,17 @@ HEALTH_CHECK_CEILING = 45.0
 
 
 # ---- config ----
+def _send_images_reach() -> str:
+    """Whether post images would reach the model (#377), for the connection
+    the GLOBAL chat route resolves to -- what a turn in a campaign with no route
+    of its own runs on. Answers "unknown" rather than failing the config read:
+    this is a hint beside a checkbox, not something worth a 500."""
+    try:
+        return store.post_images.reach(_standing_connection("chat", "")[0])
+    except Exception:  # noqa: BLE001 - a display hint; see the docstring
+        return "unknown"
+
+
 def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict:
     """Everything the Configuration page reads, enumerated by hand.
 
@@ -113,6 +125,10 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "tracker": cfg.get("tracker", store.config.DEFAULT_TRACKER),
             "perception_rider": cfg.get("perception_rider",
                                         store.config.DEFAULT_PERCEPTION_RIDER),
+            "send_images": cfg.get("send_images", store.config.DEFAULT_SEND_IMAGES),
+            "send_images_limit": cfg.get("send_images_limit",
+                                         store.config.DEFAULT_SEND_IMAGES_LIMIT),
+            "send_images_reach": _send_images_reach(),
             "backup_enabled": cfg.get("backup_enabled", store.config.DEFAULT_BACKUP_ENABLED),
             "backup_interval_hours": cfg.get("backup_interval_hours",
                                              store.config.DEFAULT_BACKUP_INTERVAL_HOURS),
@@ -219,7 +235,7 @@ def get_config(registry: health.ProviderHealth = Depends(get_health)):
 
 
 #: Config keys whose only meaningful values are "on" and "off".
-_ON_OFF_KEYS = ("tracker", "perception_rider")
+_ON_OFF_KEYS = ("tracker", "perception_rider", "send_images")
 
 
 @router.put("/config")

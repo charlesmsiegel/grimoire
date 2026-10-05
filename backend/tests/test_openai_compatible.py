@@ -87,7 +87,7 @@ async def test_list_models_parses_id_name_context_pricing():
     client = make_client(handler)
     models = await client.list_models("https://custom.example.com/v1", "sk-x")
     assert models == [{"id": "glm-4.6", "name": "GLM-4.6", "context": 128000,
-                        "prompt": "0.000002", "completion": "0.000006"}]
+                        "prompt": "0.000002", "completion": "0.000006", "vision": None}]
 
 
 async def test_list_models_missing_pricing_and_context_come_back_none():
@@ -97,7 +97,8 @@ async def test_list_models_missing_pricing_and_context_come_back_none():
     client = make_client(handler)
     models = await client.list_models("https://custom.example.com/v1", "")
     assert models == [{"id": "local-model", "name": "local-model",
-                        "context": None, "prompt": None, "completion": None}]
+                        "context": None, "prompt": None, "completion": None,
+                        "vision": None}]
 
 
 # ---- _strict_messages ----

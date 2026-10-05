@@ -52,6 +52,8 @@ class ConfigUpdate(BaseModel):
     speaker_turn_taking: str | None = None
     tracker: str | None = None
     perception_rider: str | None = None
+    send_images: str | None = None
+    send_images_limit: str | None = None
     backup_enabled: str | None = None
     backup_interval_hours: str | None = None
     backup_keep: str | None = None
@@ -91,6 +93,7 @@ class ConnectionCreate(BaseModel):
     #: Whether an OpenAI-compatible endpoint takes top-k, min-p and repetition
     #: penalty. "" reads as standard.
     sampler_support: Literal["", "standard", "extended"] = ""
+    vision: Literal["", "on", "off"] = ""
 
 
 class ConnectionUpdate(BaseModel):
@@ -102,6 +105,7 @@ class ConnectionUpdate(BaseModel):
     reasoning_effort: Literal["", "low", "high", "max"] | None = None
     sampler_preset: str | None = None
     sampler_support: Literal["", "standard", "extended"] | None = None
+    vision: Literal["", "on", "off"] | None = None
 
 
 class CatalogProbe(BaseModel):
