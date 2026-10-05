@@ -100,10 +100,13 @@ async function optionsForKind(scope: EntityScope, kind: RefKind): Promise<Record
 
 /** All records in a container that can own lore.
  *
- *  Narrower than what `refOptions` can offer, and deliberately: owners gate by
- *  *scene presence*, and nothing makes an item, a group or a creature present
- *  (the entity-kinds design settled this). A ref field has no such constraint,
- *  which is why the two lists are not the same list. */
+ *  Owners gate by *scene presence*, and every one of these kinds can be
+ *  present: an actor or a location by being in the scene, an item through its
+ *  holder, a group through its leader or headquarters, a creature through its
+ *  habitat -- or any of the last three by activating (lore activation spec
+ *  §7). Public lore an object owns reaches every NPC in the room; lore a
+ *  character owns stays that character's (§8.2). */
 export function loreOwnerOptions(scope: EntityScope): Promise<RecordRef[]> {
-  return refOptions(scope, ["characters", "pcs", "locations"]).then((r) => r.options);
+  return refOptions(scope, ["characters", "pcs", "locations", "items", "groups", "creatures"])
+    .then((r) => r.options);
 }

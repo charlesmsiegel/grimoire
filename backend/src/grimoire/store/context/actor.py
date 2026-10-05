@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 
 from ... import prompts
-from .. import entities, relationships
+from .. import entities, lore_fields, relationships
 from ..appearances import paths
 from . import pack
 
@@ -36,13 +36,45 @@ def observed_history(cid: str, sid: str, actor_ref: str, history: list[dict]) ->
         r["start"] <= i and (r.get("end") is None or i < r["end"]) for r in valid)]
 
 
+# Owners that are not actors: a place, a thing, a body of people, a beast.
+# Public lore one of these owns is knowledge of the room, not of a person.
+_OBJECT_OWNER_KINDS = ("locations", "items", "groups", "creatures")
+
+
+def _known_by(entry: dict) -> tuple[str, ...]:
+    """The entry's `known_by` refs: off its parsed controls when it carries
+    them, else parsed here, so a synthetic entry (the current setting) is read
+    by the same lenient rule as a record."""
+    found = entry.get("controls")
+    if isinstance(found, lore_fields.Controls):
+        return found.known_by
+    return lore_fields.parse({"known_by": entry.get("known_by")}).known_by
+
+
+def knows(entry: dict, actor_ref: str | None) -> bool:
+    """Whether an actor's own call may see an entry (spec §8).
+
+    gm-only reaches no actor. A `known_by` list decides alone when set: the
+    named actors know it whatever its secrecy, and nobody else does -- a ref
+    to an actor that no longer exists simply never matches. Otherwise an owner
+    knows it, and public lore is shared when it has no owners or only object
+    owners. The narrator is not filtered by this; callers skip it."""
+    secrecy = entities.normalize_secrecy(entry.get("secrecy"))
+    if secrecy == entities.GM_ONLY:
+        return False
+    known_by = _known_by(entry)
+    if known_by:
+        return actor_ref in known_by
+    owners = entry.get("owners") or []
+    if actor_ref in owners:
+        return True
+    return secrecy == entities.PUBLIC and all(
+        str(o).partition(":")[0] in _OBJECT_OWNER_KINDS for o in owners)
+
+
 def known_entries(entries: list[dict], actor_ref: str | None) -> list[dict]:
-    """Ownership attributes private lore; unowned public lore is shared."""
-    return [e for e in entries
-            if entities.normalize_secrecy(e.get("secrecy")) != entities.GM_ONLY
-            and (actor_ref in (e.get("owners") or [])
-                 or (not e.get("owners") and
-                     entities.normalize_secrecy(e.get("secrecy")) == entities.PUBLIC))]
+    """The entries `actor_ref`'s own call may see, in order."""
+    return [e for e in entries if knows(e, actor_ref)]
 
 
 def own_relationships(cid: str, actor_ref: str | None, roster: list[dict]) -> list[str]:

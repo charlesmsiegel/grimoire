@@ -180,6 +180,11 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     tracker_lines = _tracker_lines(cid, sid, tracker, tracker_viewer, excluded_refs)
 
     roster = actor.public_roster(cast)
+    # Who is in the room, kept whole when an NPC call narrows `cast` below: the
+    # owner gate reads the scene, not the speaker (spec §8.1), so lore gated on
+    # another character present activates on this call too -- and what this
+    # call may then SEE of it is `actor.knows`'s question, asked afterwards.
+    scene_cast = cast
     public_player_names = [a["name"] for a in cast if a["role"] == "player"]
     response_actor = None
     if actor_ref is not None:
@@ -348,17 +353,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             # because we decided they needed the description more.
             level = entities.normalize_secrecy(loc["meta"].get("secrecy"))
             owners = [v.strip() for v in loc["meta"].get("owners", "").split(",") if v.strip()]
-            visible_setting = (not actor_scoped or actor.known_entries(
-                [{"secrecy": level, "owners": owners}], actor_ref))
+            visible_setting = not actor_scoped or actor.knows(
+                {"secrecy": level, "owners": owners,
+                 "known_by": loc["meta"].get("known_by", "")}, actor_ref)
             if level != entities.GM_ONLY and visible_setting:
                 current_setting = loc["body"].strip()
                 current_setting_secret = level == entities.SECRET
         except entities.EntityNotFound:
             pass  # referenced location was deleted — omit the setting block
     # The base present set and why each ref is in it (spec §7.3); the engine
-    # grows it structurally and by activation.
+    # grows it structurally and by activation. The whole scene's, on an NPC
+    # call as on the narrator's (see `scene_cast`).
     present: dict[str, dict] = {f"{a['kind']}:{a['id']}": {"type": "cast", "via": None}
-                                for a in cast}
+                                for a in scene_cast}
     if current_loc and not loc_excluded:
         present[f"locations:{current_loc}"] = {"type": "current_location", "via": None}
 

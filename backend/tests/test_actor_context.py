@@ -11,6 +11,7 @@ from grimoire.store import (
     config,
     context,
     entities,
+    lore_fields,
     overlay,
     pins,
     playstate,
@@ -19,6 +20,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.appearances import paths
+from grimoire.store.context import actor as actor_context
 
 
 @pytest.fixture
@@ -331,3 +333,126 @@ def test_perception_rider_switch(cast_scene):
     assert "rely on the Scene state section" not in off
     # The rest of the assigned-speaker contract is untouched by the switch.
     assert "# What this actor can perceive" in off and "```handoff" in off
+
+
+# ---- what a per-character call may see (spec §8) ------------------------------
+
+def _actor_text(cid, sid, actor_ref=None):
+    return str(context.compose_turn(cid, sid, actor_ref=actor_ref)[0])
+
+
+def test_known_by_reaches_named_actor_and_narrator_only(cast_scene):
+    # A secret about Mara that only Winifred knows: it activates because Mara is
+    # in the room -- on Winifred's call too, where the narrowed cast used to
+    # leave Mara out of `present` -- and then only the narrator and Winifred see it.
+    cid, sid = cast_scene
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Debt", "MARA_OWES_THE_TIDE",
+                           owners="characters:mara", secrecy="secret",
+                           fields={"known_by": "characters:winifred"})
+    scenes.append_message(cid, sid, "user", "Calm.")
+    assert "MARA_OWES_THE_TIDE" in _actor_text(cid, sid)
+    assert "MARA_OWES_THE_TIDE" in _actor_text(cid, sid, "grimoire")
+    assert "MARA_OWES_THE_TIDE" in _actor_text(cid, sid, "characters:winifred")
+    assert "MARA_OWES_THE_TIDE" not in _actor_text(cid, sid, "characters:mara")
+
+
+def test_location_owned_public_lore_reaches_npc_there(cast_scene):
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "Saltmarch Quay", "Grey water.")
+    scenes.set_location(cid, sid, loc)
+    entities.create_entity(croot, "lore", "Quay Bell", "THE_QUAY_BELL_RINGS_AT_DUSK",
+                           owners=f"locations:{loc}")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    for actor_ref in (None, "characters:mara", "characters:winifred"):
+        assert "THE_QUAY_BELL_RINGS_AT_DUSK" in _actor_text(cid, sid, actor_ref), actor_ref
+
+
+def test_character_owned_lore_still_private_to_owner(cast_scene):
+    # Public and owned by Mara, who is present on Winifred's call now -- so it
+    # activates there, and the knowledge rule is what keeps it out.
+    cid, sid = cast_scene
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Habit", "MARA_HUMS_WHEN_LYING",
+                           owners="characters:mara")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    assert "MARA_HUMS_WHEN_LYING" in _actor_text(cid, sid)
+    assert "MARA_HUMS_WHEN_LYING" in _actor_text(cid, sid, "characters:mara")
+    assert "MARA_HUMS_WHEN_LYING" not in _actor_text(cid, sid, "characters:winifred")
+
+
+def test_known_by_deleted_actor_reaches_nobody_and_does_not_raise(cast_scene):
+    # A dangling ref -- nobody of that id is in the world, which is what a
+    # deleted actor leaves behind. It matches no call; the narrator, who is not
+    # filtered by knowledge, still has what activated.
+    cid, sid = cast_scene
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Ledger", "THE_LEDGER_IS_FORGED",
+                           owners="characters:mara", secrecy="secret",
+                           fields={"known_by": "characters:seraphine"})
+    scenes.append_message(cid, sid, "user", "Calm.")
+    assert "THE_LEDGER_IS_FORGED" in _actor_text(cid, sid)
+    for actor_ref in ("characters:mara", "characters:winifred"):
+        assert "THE_LEDGER_IS_FORGED" not in _actor_text(cid, sid, actor_ref), actor_ref
+
+
+def test_item_held_by_present_npc_unlocks_owned_lore(cast_scene):
+    # Winifred holds the lantern. On Mara's call Winifred is still in the
+    # present set, so the lantern is present, its public lore activates, and an
+    # object owner shares it with everyone in the room (§8.2).
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "items", "Lantern", "A brass lantern.", keys="unsaid",
+                           fields={"holder": "characters:winifred"})
+    entities.create_entity(croot, "lore", "Oil", "THE_LANTERN_BURNS_WHALE_OIL",
+                           owners="items:lantern")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    for actor_ref in (None, "characters:mara", "characters:winifred"):
+        assert "THE_LANTERN_BURNS_WHALE_OIL" in _actor_text(cid, sid, actor_ref), actor_ref
+
+
+def test_secret_current_setting_known_by_reaches_that_npc(cast_scene):
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    loc = entities.create_entity(croot, "locations", "Saltmarch Vault", "VAULT_BEHIND_THE_CHAPEL",
+                                 secrecy="secret", fields={"known_by": "characters:winifred"})
+    scenes.set_location(cid, sid, loc)
+    scenes.append_message(cid, sid, "user", "Calm.")
+
+    def setting(actor_ref):
+        sections = context.compose_turn(cid, sid, actor_ref=actor_ref)[1]["sections"]
+        return [s for s in sections if s["id"] == "current_setting" and s["text"].strip()]
+
+    assert setting("characters:winifred")
+    assert "VAULT_BEHIND_THE_CHAPEL" in _actor_text(cid, sid, "characters:winifred")
+    assert not setting("characters:mara")
+    assert "VAULT_BEHIND_THE_CHAPEL" not in _actor_text(cid, sid, "characters:mara")
+
+
+@pytest.mark.parametrize("entry, expected", [
+    ({"secrecy": "public"}, True),
+    ({"secrecy": "secret"}, False),
+    ({"secrecy": "gm-only", "owners": ["characters:mara"]}, False),
+    ({"secrecy": "gm-only", "known_by": "characters:mara"}, False),
+    ({"secrecy": "secret", "owners": ["characters:mara"]}, True),
+    ({"secrecy": "public", "owners": ["characters:winifred"]}, False),
+    ({"secrecy": "public", "owners": ["locations:quay", "items:lantern"]}, True),
+    ({"secrecy": "public", "owners": ["groups:union", "creatures:gull"]}, True),
+    ({"secrecy": "secret", "owners": ["locations:quay"]}, False),
+    # Mixed: one owner is an actor, so the entry stays that actor's.
+    ({"secrecy": "public", "owners": ["locations:quay", "characters:winifred"]}, False),
+    ({"secrecy": "public", "owners": ["lore:other"]}, False),
+    # `known_by` replaces the owner rule outright, whatever the secrecy.
+    ({"secrecy": "secret", "owners": ["characters:winifred"], "known_by": "characters:mara"}, True),
+    ({"secrecy": "public", "owners": ["characters:mara"], "known_by": "characters:winifred"}, False),
+    ({"secrecy": "public", "known_by": "pcs:mara, characters:winifred"}, False),
+    # A known_by of nothing parseable is unset.
+    ({"secrecy": "public", "known_by": "locations:quay"}, True),
+])
+def test_knows_rule(entry, expected):
+    assert actor_context.knows(entry, "characters:mara") is expected
+
+
+def test_knows_reads_parsed_controls_first():
+    entry = {"secrecy": "secret", "owners": ["characters:winifred"], "known_by": "",
+             "controls": lore_fields.parse({"known_by": "characters:mara"})}
+    assert actor_context.knows(entry, "characters:mara") is True
+    assert actor_context.known_entries([entry], "characters:winifred") == []

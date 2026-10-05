@@ -1589,7 +1589,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
               <Field label="Owners" hint="lore activates only when an owner is in the scene; none = world-level">
                 <div className="chips owner-picker">
                   {ownerPicker}
-                  {ownerOpts.length === 0 && <span className="field-hint">No characters, PCs, or locations yet.</span>}
+                  {ownerOpts.length === 0 && <span className="field-hint">Nothing to own it yet.</span>}
                 </div>
               </Field>
             )}

@@ -248,6 +248,33 @@ test("creates a lore entry with a selected owner", async () => {
   );
 });
 
+test("owners picker offers items, groups and creatures", async () => {
+  // An object owner is real now: an item is present when its holder is, a
+  // group with its leader or at its headquarters, a creature in its habitat
+  // (spec §7.1), and public lore it owns reaches everyone there (§8.2).
+  const byKind: Record<string, { id: string; name: string }[]> = {
+    locations: [{ id: "quay", name: "Quay" }],
+    items: [{ id: "lantern", name: "Lantern" }],
+    groups: [{ id: "dock-union", name: "Dock Union" }],
+    creatures: [{ id: "gull", name: "Gull" }],
+  };
+  (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
+    Promise.resolve(byKind[kind] ?? []));
+  render(<Wrap wid="w" kind="lore" />);
+  await screen.findByRole("link", { name: /\+ new lore entry/i });
+  for (const label of ["Tanaka", "Quay", "Lantern", "Dock Union", "Gull"]) {
+    expect(await screen.findByLabelText(label)).toBeInTheDocument();
+  }
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Oil" } });
+  fireEvent.click(screen.getByLabelText("Lantern"));
+  fireEvent.click(screen.getByLabelText("Gull"));
+  fireEvent.click(screen.getByRole("button", { name: /create lore entry/i }));
+  await waitFor(() =>
+    expect(api.createEntity).toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore",
+      expect.objectContaining({ name: "Oil", owners: "items:lantern, creatures:gull" })),
+  );
+});
+
 test("groups the rail by owner with an Unowned group", async () => {
   (api.listEntities as any).mockImplementation((_s: any, kind: string) =>
     Promise.resolve(kind === "locations" ? [] : [

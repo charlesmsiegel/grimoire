@@ -21,14 +21,22 @@ beforeEach(() => {
   (api.listEntities as any).mockResolvedValue([{ id: "old-dojo", name: "Old Dojo" }]);
 });
 
-test("collects characters, pcs, locations as owner refs", async () => {
+test("collects characters, pcs, locations, items, groups and creatures as owner refs", async () => {
+  (api.listEntities as any).mockImplementation((_s: unknown, kind: string) =>
+    Promise.resolve(kind === "locations" ? [{ id: "old-dojo", name: "Old Dojo" }]
+      : kind === "items" ? [{ id: "lantern", name: "Lantern" }]
+      : kind === "groups" ? [{ id: "dock-union", name: "Dock Union" }]
+      : kind === "creatures" ? [{ id: "gull", name: "Gull" }] : []));
   const opts = await loreOwnerOptions({ kind: "world", id: "w" });
   expect(opts).toEqual([
     { ref: "characters:tanaka", label: "Tanaka", kind: "characters" },
     { ref: "pcs:hero", label: "Hero", kind: "pcs" },
     { ref: "locations:old-dojo", label: "Old Dojo", kind: "locations" },
+    { ref: "items:lantern", label: "Lantern", kind: "items" },
+    { ref: "groups:dock-union", label: "Dock Union", kind: "groups" },
+    { ref: "creatures:gull", label: "Gull", kind: "creatures" },
   ]);
-  expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, "locations");
+  expect(api.listEntities).not.toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore");
 });
 
 test("actors with avatars get an avatar url; others get none", async () => {
