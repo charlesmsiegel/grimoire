@@ -800,9 +800,13 @@ class LLMClient:
         """`messages` lowered for `conn`, then streamed (#377).
 
         Lowering resolves the image budget (a catalog sidecar read) and loads
-        pictures (a decode, cached), so it runs off the event loop. The provider
-        stream is closed in `finally`, so a caller's close or a timeout still
-        reaches httpx exactly as `_guard` and `_resilient` intend."""
+        pictures (a decode, cached), so it runs off the event loop. It runs
+        inside the attempt, so its time counts against the first-delta idle
+        bound: a pathological stall here is recorded as that connection's
+        timeout -- accepted, since a warm picture is a cache hit and a cold one
+        is one bounded decode. The provider stream is closed in `finally`, so a
+        caller's close or a timeout still reaches httpx exactly as `_guard` and
+        `_resilient` intend."""
         lowered, sent = await asyncio.to_thread(self._lower, messages, conn, campaign, degrade)
         if usage is not None:
             usage["images"] = sent
@@ -835,7 +839,13 @@ class LLMClient:
             return 0
 
     def _load(self, campaign: str, part: dict) -> str | None:
-        return self._load_image(campaign, part) if self._load_image is not None else None
+        if self._load_image is None:
+            return None
+        try:
+            return self._load_image(campaign, part)
+        except Exception as exc:  # noqa: BLE001 - one picture is never worth a turn
+            log.warning("could not load a post image to send: %s", exc)
+            return None
 
     def _provider(self, messages: list[dict], conn: dict, usage: dict | None):
         kind = conn.get("kind", "openrouter")

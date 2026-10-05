@@ -156,3 +156,16 @@ def test_the_prompt_names_its_campaign_and_holds_no_bytes(cid, scene_a):
     assert forked.campaign == "fork-of-it"
     assert forked.with_appended({"role": "system", "content": "x"}).campaign == "fork-of-it"
     assert _refs(forked) == _refs(msgs)
+
+
+def test_macros_expand_around_a_kept_image(cid):
+    # An unknown macro is stripped by expansion; `{{user}}` would stay literal
+    # in a scene with no player.
+    sid = _scene(cid, [("user", f"{{{{nonsense}}}}Mara unrolls ![a map]({_url(cid, 'coastline')})",
+                        None)])
+    plain, _ = context.compose_turn(cid, sid, images=0)
+    rich, _ = context.compose_turn(cid, sid, images=3)
+    assert [r["alt"] for r in _refs(rich)] == ["a map"]
+    assert cp.as_text(list(rich)) == list(plain)
+    assert not any("{{nonsense}}" in cp.text_of(m["content"]) for m in rich)
+    assert any("Mara unrolls a map" in cp.text_of(m["content"]) for m in rich)

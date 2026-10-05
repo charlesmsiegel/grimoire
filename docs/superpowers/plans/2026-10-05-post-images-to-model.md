@@ -18,7 +18,7 @@
 - Every store write through `store.atomic`; filesystem access through the resolvers (`test_paths_guard.py`); markers need a reason.
 - pydantic: plain `BaseModel` fields, `Literal` allowed, no `Field`/validators.
 - Persisted prompts never hold `data:` URIs; logs/errors scrub them.
-- `send_images_limit` default `"3"`; `SEND_EDGE = 1024`; `IMAGE_TOKENS = 1600`; `MAX_SEND_BYTES = 3_750_000`; `CACHE_BYTES = 16 * 1024 * 1024`; `REJECTED_STATUSES = frozenset({400, 413, 415, 422})`.
+- `send_images_limit` default `"3"`; `SEND_EDGE = 1024`; `IMAGE_TOKENS = 1600`; `MAX_SEND_BYTES = 3_750_000`; `CACHE_BYTES = 16 * 1024 * 1024`; `REJECTED_STATUSES = frozenset({400, 404, 413, 415, 422})`.
 - Carried label text, verbatim: `[Image from the previous reply: {alt}]`.
 - Lint gates are ratcheted: after fixing or adding findings run `make baseline` only if counts drop; never add findings.
 - Backend tests: `PYTHONPATH=backend/src backend/.venv/bin/python -m pytest backend/tests/<file> -q`. Frontend: `cd frontend && npx vitest run <file>`.

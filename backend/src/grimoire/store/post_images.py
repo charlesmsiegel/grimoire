@@ -217,9 +217,13 @@ def _encoded(path: Path) -> tuple[str, bytes] | None:
         return hit
     data = _read_capped(path)
     if data is None:
+        log.warning("post image %s is past the %d-byte read cap; sending its description",
+                    path.name, image_drafts.MAX_BYTES)
         return None
     media, body = _encode(data)
     if len(body) > MAX_SEND_BYTES:
+        log.warning("post image %s encodes past %d bytes; sending its description",
+                    path.name, MAX_SEND_BYTES)
         return None
     _remember(key, (media, body))
     return media, body
