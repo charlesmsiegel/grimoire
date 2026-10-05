@@ -147,6 +147,31 @@ def test_any_other_promote_failure_is_reported_with_its_own_reason(client, monke
         {"kind": "lore", "id": "lantern", "reason": "it points at campaign-local content"}]
 
 
+def test_a_filesystem_failure_does_not_leak_the_store_path(client, monkeypatch, tmp_path):
+    _wid, cid, sid = _scene(client)
+
+    def disk_full(c, kind, eid):
+        raise OSError(28, "No space left on device", str(tmp_path / "worlds" / "x.md"))
+
+    def nameless(c, kind, eid):
+        raise RuntimeError()
+
+    monkeypatch.setattr(sync, "promote", disk_full)
+    r = _put(client, cid, sid, _save(cid, sid, [_new_lore()]))
+    assert r.status_code == 200
+    assert r.json()["publish_failed"] == [
+        {"kind": "lore", "id": "lantern", "reason": "could not write the world record"}]
+    assert str(tmp_path) not in r.text
+
+    monkeypatch.setattr(sync, "promote", nameless)
+    sid2 = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
+    lore = _new_lore()
+    lore["payload"]["name"] = "Lamp"
+    r = _put(client, cid, sid2, _save(cid, sid2, [lore]))
+    assert r.json()["publish_failed"] == [
+        {"kind": "lore", "id": "lamp", "reason": "RuntimeError"}]
+
+
 def test_lost_response_retry_replays_published(client, monkeypatch):
     _wid, cid, sid = _scene(client)
     calls = _counting(monkeypatch)

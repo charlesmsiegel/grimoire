@@ -691,16 +691,16 @@ def test_materialize_dedupes_new_lore_per_kind(monkeypatch, tmp_path):
     parsed = {"new_lore": [
         {"name": "Lantern", "body": "an item twin", "keys": "", "kind": "items"},
         {"name": "Lantern", "body": "a lore twin", "keys": "", "kind": "lore"},
-        {"name": "Tide Wardens", "body": "a group", "keys": "", "kind": "groups"},
+        {"name": "Saltmarch Wardens", "body": "a group", "keys": "", "kind": "groups"},
     ]}
     edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
     assert len(edits) == 2                       # the items twin is the only one skipped
     lore = edits["new_lore:lantern"]
     assert lore["target"] == {"kind": "lore", "id": ""} and lore["after"] == "a lore twin"
-    group = edits["new_lore:groups/tide-wardens"]
+    group = edits["new_lore:groups/saltmarch-wardens"]
     assert group["target"] == {"kind": "groups", "id": ""}
     assert group["payload"]["kind"] == "groups"
-    assert group["label"] == "New group — Tide Wardens"
+    assert group["label"] == "New group — Saltmarch Wardens"
 
 
 def test_materialize_keeps_same_named_rows_of_two_kinds_apart(monkeypatch, tmp_path):

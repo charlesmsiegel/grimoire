@@ -62,12 +62,19 @@ def _reason(exc: Exception, e: dict, eid: str) -> str:
     can act on, and `PromoteConflictError`'s own message names a ref
     (``the library already has lore/lantern``) rather than the record they
     approved.
+
+    An `OSError` gets a fixed sentence instead of its own text, which carries
+    the absolute path into the store -- this reason is shown on screen and
+    persisted in the commit journal. Anything else falls back to the class
+    name rather than an empty reason.
     """
     if isinstance(exc, sync.PromoteConflictError):
         name = e.get("payload", {}).get("name")
         label = name if isinstance(name, str) and name else eid
         return f"the world already has a record named {label}"
-    return str(exc)
+    if isinstance(exc, OSError):
+        return "could not write the world record"
+    return str(exc) or type(exc).__name__
 
 
 def _settled(slot) -> TypeGuard[dict]:
