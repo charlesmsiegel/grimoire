@@ -26,4 +26,6 @@ guard forbids. Importers name the submodule they want:
   ``effective`` and ``involvement``; read-only.
 - ``similarity`` -- identity texts and the lexical, structural and embedding
   signals that rank possible duplicates; scores rank, they never write.
+- ``identity`` -- which absorb rows would open a new thread or commitment, and
+  the stored same-type records each might already be; read-only.
 """
