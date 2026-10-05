@@ -13,7 +13,8 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``characters``  /worlds/{wid}/characters
   ``greetings``   /worlds/{wid}/greetings and /campaigns/{cid}/greetings
   ``campaigns``   /campaigns
-  ``continuity``  /campaigns/{cid}/continuity, reviewed aliases and links
+  ``continuity``  /campaigns/{cid}/continuity, reviewed aliases and links,
+                  /campaigns/{cid}/continuity/drivers
   ``scenes``      /campaigns/{cid}/scenes
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets

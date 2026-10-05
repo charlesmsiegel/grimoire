@@ -22,4 +22,6 @@ guard forbids. Importers name the submodule they want:
 - ``review`` -- validated, journalled alias and link writes.
 - ``pressure`` -- temporal pressure: one dated item list over events, holidays,
   birthdays and deadlines; read-only, and never imported by ``clock``.
+- ``drivers`` -- scene drivers and date anchors composed from ``pressure``,
+  ``effective`` and ``involvement``; read-only.
 """

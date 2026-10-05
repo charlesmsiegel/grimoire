@@ -12,10 +12,14 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
+import grimoire.embeddings
 import grimoire.store as store
+from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import doc
+from grimoire.store.continuity import doc, drivers
+from tests.llm_fakes import from_entries
+from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
 
 @pytest.fixture
@@ -173,6 +177,7 @@ def test_get_continuity_reports_malformed_sections(client, cid):
 
 @pytest.mark.parametrize("method,path,body", [
     ("get", "/continuity", None),
+    ("get", "/continuity/drivers", None),
     ("post", "/continuity/aliases", {"ref": "thread:a", "to": "thread:b"}),
     ("delete", "/continuity/aliases?ref=thread:a", None),
     ("post", "/continuity/links", {"a": "thread:a", "b": "thread:b", "relation": "continues"}),
@@ -202,3 +207,65 @@ def test_get_continuity_reads_each_ledger_once(client, cid, monkeypatch):
     monkeypatch.setattr(store.plot, "read", lambda c: calls.append(c) or real(c))
     assert len(_get(client, cid)["links"]) == 3
     assert len(calls) == 1
+
+
+# ---- drivers ----------------------------------------------------------------
+
+S1 = "001--saltmarch"
+
+
+def _drivers(client, cid, **params):
+    r = client.get(f"/api/campaigns/{cid}/continuity/drivers", params=params)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_get_drivers_matches_the_store(client, cid):
+    store.clock.advance(cid, to="2026-05-10")
+    store.pcs.create_pc(_root(cid), "Seraphine", [])
+    store.appearances.appear(cid, S1, "pcs", "seraphine", "default", "player")
+    store.plot.set_movement(cid, "mara-s-map", "", "advanced", "Mara traced the coast.", S1)
+    body = _drivers(client, cid)
+    assert body == drivers.snapshot(cid)
+    assert {"thread:mara-s-map", "thread:winifred-s-chart",
+            "commitment:mara-s-oath"} <= {d["ref"] for d in body["drivers"]}
+    offscreen = _drivers(client, cid, offscreen="true")
+    assert offscreen == drivers.snapshot(cid, offscreen=True)
+    assert offscreen != body
+
+
+def test_drivers_route_survives_a_raising_plugin(client, cid, tmp_path):
+    store.clock.advance(cid, to="2026-05-10")
+    store.chronicle.absorb(cid, {"id": S1, "one_line": "", "date": "2026-03-31"})
+    store.plot.set_movement(cid, "mara-s-map", "", "advanced", "Mara traced the coast.", S1)
+    store.commitments.set_movement(cid, "mara-s-oath", "", "promise", "open", "2026-05-12",
+                                   "Mara swore it at the gate.", S1)
+    before = {d["ref"]: d for d in _drivers(client, cid)["drivers"]}
+    assert before["commitment:mara-s-oath"]["pressure"]["state"] == "due_soon"
+    assert before["thread:mara-s-map"]["pressure"]["state"] == "stale"
+
+    _plugin(tmp_path, "broken_test", _BROKEN_PROVIDER_SRC)
+    _primary(cid, "broken-test-calendar")
+    body = _drivers(client, cid)
+    assert body["fixed"] is None
+    found = {d["ref"]: d for d in body["drivers"]}
+    for ref in ("thread:mara-s-map", "commitment:mara-s-oath"):
+        assert found[ref]["pressure"] == {"state": "ok", "in_days": None, "friendly": ""}
+    assert body["anchors"] == []
+
+
+class _NoEmbeddings:
+    def __init__(self, *args, **kwargs):
+        raise AssertionError("the drivers read must not build an embeddings client")
+
+
+def test_drivers_route_makes_no_model_call(client, cid, monkeypatch):
+    monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
+        "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
+    monkeypatch.setattr(grimoire.embeddings, "EmbeddingsClient", _NoEmbeddings)
+    client.app.dependency_overrides[routes.get_llm] = lambda: from_entries([])
+    try:
+        body = _drivers(client, cid)
+    finally:
+        client.app.dependency_overrides.pop(routes.get_llm, None)
+    assert body["matching"] == "semantic"
