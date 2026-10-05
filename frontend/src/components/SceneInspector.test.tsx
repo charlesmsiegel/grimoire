@@ -424,6 +424,49 @@ test("context section expands to show the text", async () => {
   await screen.findByText("lore text");
 });
 
+test("world info lists each entry with its reason", async () => {
+  (api.getSceneContext as any).mockResolvedValue({
+    model: "m", total_tokens: 100, dropped_tokens: 0, budget_tokens: 0,
+    sections: [{
+      id: "world_info", label: "World info", text: "lore text", tokens: 100,
+      tier: "spotlight", dropped: false, trimmed: 0,
+      names: { "lore:realm-charter": "Realm charter" },
+      entries: [
+        { ref: "lore:saltmarch", name: "Saltmarch", kind: "lore", secrecy: "public", priority: 100,
+          keep: false, level: 0, shed: false,
+          reason: { type: "key", key: "Saltmarch", secondary: null, post: 41, seed: false } },
+        { ref: "lore:tide-tables", name: "Tide tables", kind: "lore", secrecy: "public", priority: 100,
+          keep: false, level: 1, shed: true,
+          reason: { type: "recursion", via: "lore:realm-charter", key: "tide" } },
+      ],
+      held_back: [{ ref: "lore:winifred-rumour", name: "Winifred's rumour",
+                    reason: { type: "cooldown", remaining: 3 } }],
+    }],
+  });
+  renderInspector();
+  fireEvent.click(await screen.findByText(/World info/));
+  const kept = (await screen.findByText("Saltmarch")).closest("li")!;
+  expect(kept.textContent).toContain("key 'Saltmarch' in post #41");
+  expect(kept.className).not.toContain("shed");
+  const shed = screen.getByText("Tide tables").closest("li")!;
+  expect(shed.className).toContain("shed");
+  expect(shed.textContent).toContain("pulled in by Realm charter");
+  expect(shed.textContent).toContain("shed: budget");
+  expect(screen.getByText("Held back")).toBeInTheDocument();
+  expect(screen.getByText("Winifred's rumour").closest("li")!.textContent)
+    .toContain("on cooldown — 3 posts");
+});
+
+test("a capture without entries still renders", async () => {
+  // A prompt recorded before rows carried entries: the section expands to its
+  // text and draws no list and no "Held back" heading.
+  renderInspector();
+  fireEvent.click(await screen.findByText(/World info/));
+  await screen.findByText("lore text");
+  expect(document.querySelector(".ctx-entries")).toBeNull();
+  expect(screen.queryByText("Held back")).not.toBeInTheDocument();
+});
+
 test("shows the story-so-far recap", async () => {
   renderInspector();
   await screen.findByText("Story so far");

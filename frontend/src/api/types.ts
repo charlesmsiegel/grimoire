@@ -1196,6 +1196,37 @@ export type Climate = { id: string; name: string; persistence: number; seasons: 
  *  packer; they still carry their text so the inspector can show what was cut.
  *  `trimmed` is how many history messages the packer dropped from the front —
  *  0 on every section except Conversation history. */
+/** How an owned entry's owner is present (spec §7): `via` is the ref the
+ *  presence came through (a holder, a leader, a location), null when there is
+ *  none to name. */
+export type OwnerPresence = {
+  type: "cast" | "current_location" | "held_by" | "led_by" | "headquarters" | "habitat" | "activated";
+  via?: string | null;
+};
+/** An entry's owner and how it is present, carried by any reason that passed
+ *  the owner gate. */
+type OwnerPart = { owner?: string; owner_presence?: OwnerPresence };
+/** Why an entry is in the prompt (Task 7's reason dicts, spec §10). JSON-safe
+ *  and for the inspector only; no reason ever reaches a prompt. */
+export type LoreReason = OwnerPart & (
+  | { type: "key"; key: string; secondary?: string | null; post?: number | null; seed?: boolean }
+  | { type: "keyless" }
+  | { type: "pinned" }
+  | { type: "sticky"; from_post?: number | null; remaining: number }
+  | { type: "recursion"; via: string; key?: string }
+  | { type: "recall"; score: number }
+);
+/** One entry of a World info or Recalled lore row. Absent on a capture
+ *  recorded before reasons existed. */
+export type LoreEntryRow = {
+  ref: string; name: string; kind?: string | null; secrecy?: string;
+  priority?: number; keep?: boolean; level?: number;
+  reason: LoreReason; shed: boolean;
+};
+/** An entry World info held back this turn (a cooldown). */
+export type HeldEntryRow = {
+  ref: string; name: string; reason: { type: "cooldown"; remaining: number };
+};
 export type ContextSection = {
   /** Stable section identity (#29). OPTIONAL because a prompt snapshot frozen
    *  before ids existed does not carry one — those predate editable labels
@@ -1208,6 +1239,14 @@ export type ContextSection = {
    *  whatever its tier (#129). Optional: snapshots frozen before pins existed
    *  have no such field, and they are rendered by this same component. */
   pinned?: boolean;
+  /** World info and Recalled lore rows only: each entry, why it is in, and
+   *  whether the packer shed it (spec §10). Optional: a capture recorded
+   *  before this existed has none, and is rendered by this same component. */
+  entries?: LoreEntryRow[];
+  /** Display names for every ref an entry's reason mentions. */
+  names?: Record<string, string>;
+  /** World info only: entries held back (cooldown). */
+  held_back?: HeldEntryRow[];
 };
 /** One row of the prompt layout editor. `label` is what the INSPECTOR calls the
  *  section — never what the model reads, which each template emits itself.
