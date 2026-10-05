@@ -188,6 +188,30 @@ test("switching version drops the other version's history rows and its preview",
   expect(await screen.findByText("No earlier revisions.")).toBeInTheDocument();
 });
 
+test("a slow answer for an earlier history click cannot replace the later one", async () => {
+  (api.listPCRevisions as any).mockResolvedValue([
+    { id: "r2", saved: "2026-10-05T12:00:00Z", name: "Mara" },
+    { id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" },
+  ]);
+  let releaseFirst: (v: unknown) => void = () => {};
+  (api.readPCRevision as any).mockImplementation((_s: unknown, _p: string, _v: string, rid: string) =>
+    rid === "r2" ? new Promise((r) => { releaseFirst = r; })
+      : Promise.resolve({ ...DETAIL.versions[0].persona, description: "The later click." }));
+  renderPC();
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  await waitFor(() => expect(document.querySelectorAll(".history-row")).toHaveLength(2));
+  const rows = document.querySelectorAll<HTMLButtonElement>(".history-row");
+  fireEvent.click(rows[0]);          // r2: slow
+  fireEvent.click(rows[1]);          // r1: answers at once
+  expect(await screen.findByText("The later click.")).toBeInTheDocument();
+  releaseFirst({ ...DETAIL.versions[0].persona, description: "The earlier click." });
+  await waitFor(() => expect(api.readPCRevision).toHaveBeenCalledTimes(2));
+  expect(screen.queryByText("The earlier click.")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Restore this text" }));
+  await waitFor(() => expect(api.restorePCRevision).toHaveBeenCalledWith(
+    { kind: "world", id: "realm" }, "mara", "default", "r1"));
+});
+
 test("a PC with no history says so", async () => {
   renderPC();
   expect(await screen.findByText("No earlier revisions.")).toBeInTheDocument();

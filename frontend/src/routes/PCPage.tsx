@@ -165,18 +165,25 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     return () => { active = false; };
   }, [vid, detail]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // One token per row click: only the LATEST click may install its preview,
+  // or a slow first answer would land over the second and Restore would put
+  // back a revision the reader is no longer looking at.
+  const revisionRequest = useRef(0);
   // A preview belongs to the version it was opened on. Every way the selected
   // version changes -- the picker, a new version, an import, a revert to
   // inherited that re-reads -- goes through `vid` or a fresh `detail`, so the
   // preview is dropped there rather than in each of them.
-  useEffect(() => { setRevision(null); }, [vid, detail]);
+  useEffect(() => { revisionRequest.current++; setRevision(null); }, [vid, detail]);
 
   async function openRevision(rev: PCRevision) {
     setError(null);
+    const request = ++revisionRequest.current;
+    const fresh = () => live.current && request === revisionRequest.current
+      && selectedVid.current === vid;
     try {
       const persona = await api.readPCRevision(scope, pid, vid, rev.id);
-      if (live.current && selectedVid.current === vid) { setRevision({ ...rev, persona }); setTab("persona"); }
-    } catch (err: unknown) { setError(errorText(err)); }
+      if (fresh()) { setRevision({ ...rev, persona }); setTab("persona"); }
+    } catch (err: unknown) { if (fresh()) setError(errorText(err)); }
   }
   async function restoreRevision() {
     if (!revision) return;
