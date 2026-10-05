@@ -420,7 +420,7 @@ test("a stale poll answer landing after a newer read does not overwrite it or st
     (api.getTrackerRecord as any).mockResolvedValue({
       key: "p-1", status: "ok", flags: TF, snapshot: {}, fields: [], names: {} });
     (api.rerunTrackerFrom as any).mockResolvedValue({});
-    fireEvent.click(await screen.findByText("Tracker · no change"));
+    fireEvent.click((await screen.findAllByText("Tracker", { selector: "summary" }))[1]);
     const newer = { "p-0": PENDING["p-0"],
       "p-1": { status: "ok", changed: [["characters:mara", "visible_mood", "fear"]], flags: TF } };
     (api.getTracker as any).mockResolvedValueOnce({
@@ -515,7 +515,10 @@ test("Retry on an untracked post re-reads the tracker", async () => {
   withTracker({ entries: { "p-0": { status: "failed", changed: [], flags: TF, error: "interrupted" },
                            "p-1": { status: "ok", changed: [], flags: TF } } });
   (api.retryTracker as any).mockResolvedValue({});
+  (api.getTrackerRecord as any).mockResolvedValue({
+    key: "p-0", status: "failed", flags: TF, snapshot: null, fields: [], names: {} });
   renderCampaign();
+  fireEvent.click((await screen.findAllByText("Tracker", { selector: "summary" }))[0]);
   fireEvent.click(await screen.findByRole("button", { name: "Retry" }));
   const before = (api.getTracker as any).mock.calls.length;
   await waitFor(() => expect(api.retryTracker).toHaveBeenCalledWith("run", "s1", "p-0"));

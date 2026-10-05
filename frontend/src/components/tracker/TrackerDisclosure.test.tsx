@@ -64,7 +64,11 @@ test("fetches only on open and renders read-only values with awareness", async (
   const { container } = render(<TrackerDisclosure cid="run" sid="s1" trackerKey="p-1" entry={OK} rerunCount={1}
     names={NAMES} labels={LABELS} enabled onChanged={vi.fn()} />);
   expect(api.getTrackerRecord).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByText("Tracker · Mara: Visible mood → fear"));
+  const summary = screen.getByText("Tracker", { selector: "summary" });
+  expect(summary).toHaveTextContent(/^Tracker$/);
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  expect(screen.getByText("Tracker · Mara: Visible mood → fear")).not.toBeVisible();
+  fireEvent.click(summary);
   expect(await screen.findAllByText("Clothing")).toHaveLength(2);
   expect(api.getTrackerRecord).toHaveBeenCalledWith("run", "s1", "p-1");
   expect(screen.getByText("private")).toBeInTheDocument();
@@ -81,7 +85,7 @@ test("fetches only on open and renders read-only values with awareness", async (
 
 test("Edit reveals the form and Save sends only changed values", async () => {
   const onChanged = mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Mara Clothing"), { target: { value: "wet cloak" } });
   fireEvent.change(screen.getByLabelText("Mara Clothing awareness"), { target: { value: "present" } });
@@ -97,7 +101,7 @@ test("Edit reveals the form and Save sends only changed values", async () => {
 
 test("a list value is edited item by item: added, and blank items dropped", async () => {
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("Mara Companions item 1")).toHaveValue("Winifred");
   fireEvent.click(screen.getByRole("button", { name: "Add Mara Companions item" }));
@@ -122,7 +126,7 @@ test("an item with a comma in it stays one item", async () => {
   };
   vi.mocked(api.getTrackerRecord).mockResolvedValue(injured);
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("Mara Companions item 1")).toHaveValue("cut, left arm");
   fireEvent.change(screen.getByLabelText("Mara Companions item 2"), { target: { value: "dry" } });
@@ -135,7 +139,7 @@ test("an item with a comma in it stays one item", async () => {
 
 test("removing a list item sends the list without it", async () => {
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(screen.getByRole("button", { name: "Remove Mara Companions item 1" }));
   expect(screen.queryByLabelText("Mara Companions item 1")).toBeNull();
@@ -148,7 +152,7 @@ test("removing a list item sends the list without it", async () => {
 
 test("Save with nothing changed sends nothing", async () => {
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
   expect(await screen.findByRole("button", { name: "Edit" })).toBeInTheDocument();
@@ -158,7 +162,7 @@ test("Save with nothing changed sends nothing", async () => {
 test("an edit the server refuses is shown, not swallowed", async () => {
   vi.mocked(api.editTrackerRecord).mockRejectedValue(new Error("scene is busy"));
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Mara Clothing"), { target: { value: "x" } });
   fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -168,6 +172,8 @@ test("an edit the server refuses is shown, not swallowed", async () => {
 test("Retry on a failed entry calls retryTracker and asks the view to refresh", async () => {
   const onChanged = mount({ status: "failed", changed: [], flags: F, error: "interrupted" });
   expect(screen.getByText("Tracker · untracked")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Retry" })).not.toBeVisible();
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   await waitFor(() => expect(api.retryTracker).toHaveBeenCalledWith("run", "s1", "p-1"));
   await waitFor(() => expect(onChanged).toHaveBeenCalled());
@@ -176,21 +182,27 @@ test("Retry on a failed entry calls retryTracker and asks the view to refresh", 
 test("a key with no entry reads untracked and offers Retry", () => {
   mount(undefined);
   expect(screen.getByText("Tracker · untracked")).toBeInTheDocument();
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
 });
 
 test("a retry the server refuses is shown inline", async () => {
   vi.mocked(api.retryTracker).mockRejectedValue(new Error("tracker_off"));
   mount(undefined);
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
+  await screen.findByRole("button", { name: "Edit" });
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(await screen.findByRole("alert")).toHaveTextContent(/tracker_off/);
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
+  expect(screen.getByRole("alert")).not.toBeVisible();
+  expect(screen.getByRole("button", { name: "Retry" })).not.toBeVisible();
 });
 
 test("Re-run tracker from here asks, naming the posts it will pay for, then runs", async () => {
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
   try {
     const onChanged = mount(OK);
-    fireEvent.click(screen.getByText(/Tracker · /));
+    fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
     fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
     expect(confirm).toHaveBeenCalledWith(
       "Re-run the tracker for 3 posts from here? That is 3 model calls.");
@@ -203,7 +215,7 @@ test("a declined re-run confirm sends nothing", async () => {
   const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
   try {
     const onChanged = mount(OK);
-    fireEvent.click(screen.getByText(/Tracker · /));
+    fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
     fireEvent.click(await screen.findByRole("button", { name: "Re-run tracker from here" }));
     expect(confirm).toHaveBeenCalled();
     expect(api.rerunTrackerFrom).not.toHaveBeenCalled();
@@ -229,7 +241,7 @@ test("with the tracker off, a key with no entry renders nothing", () => {
 
 test("with the tracker off, an existing entry is read-only", async () => {
   mount(OK, { enabled: false });
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   expect(await screen.findAllByText("Clothing")).toHaveLength(2);
   expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
@@ -255,7 +267,7 @@ test("an entry that moves while the form is open neither crashes it nor reverts 
   const props = { cid: "run", sid: "s1", trackerKey: "p-1", names: NAMES, labels: LABELS,
                   enabled: true, rerunCount: 1, onChanged: vi.fn() };
   const { rerender } = render(<TrackerDisclosure {...props} entry={OK} />);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   // The server moves on: Mara's clothing changed and a new field appeared.
   const moved: TrackerRecord = { ...RECORD,
@@ -284,7 +296,7 @@ test("an unset field starts from its own default awareness", async () => {
     snapshot: { "characters:mara": { present: true, fields: {} } } };
   vi.mocked(api.getTrackerRecord).mockResolvedValue(rec);
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("Mara Secret awareness")).toHaveValue("private");
   expect(screen.getByLabelText("Mara Clothing awareness")).toHaveValue("present");
@@ -306,7 +318,7 @@ test("a switched-off field is shown in the form but cannot be edited", async () 
     snapshot: { "characters:mara": { present: true, fields: { clothing: { value: "cloak", aware: "present" } } } } };
   vi.mocked(api.getTrackerRecord).mockResolvedValue(rec);
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(screen.getByText(/cloak/)).toBeInTheDocument();
   expect(screen.queryByLabelText("Mara Clothing")).toBeNull();
@@ -314,7 +326,7 @@ test("a switched-off field is shown in the form but cannot be edited", async () 
 
 test("a list that reads the same after trimming is not an edit", async () => {
   mount(OK);
-  fireEvent.click(screen.getByText(/Tracker · /));
+  fireEvent.click(screen.getByText("Tracker", { selector: "summary" }));
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   fireEvent.change(screen.getByLabelText("Mara Companions item 1"), { target: { value: "  Winifred " } });
   fireEvent.click(screen.getByRole("button", { name: "Add Mara Companions item" }));

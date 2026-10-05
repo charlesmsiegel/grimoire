@@ -7,7 +7,7 @@ import { TrackerValues, valueText } from "./TrackerValues";
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
-/** The one line the disclosure prints closed.
+/** The status and changes shown inside the disclosure.
  *
  *  A key with NO entry reads "untracked", not "updating": the turn marks the
  *  post pending inside the lock hold that covers its frames, so a missing entry
@@ -36,7 +36,7 @@ export function rerunPrompt(count: number): string {
   return `Re-run the tracker for ${posts} from here? That is ${calls}.`;
 }
 
-/** One post's tracked state: a summary line, and on first open the record
+/** One post's tracked state: a compact label, and on first open the record
  *  behind it, read-only until Edit is pressed. Fetches only on expansion, like
  *  `SavedThinking`: a long transcript need not transfer every post's snapshot.
  *
@@ -118,7 +118,8 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
                  setOpen(now);
                  if (!now) setEditRecord(null);
                }}>
-        <summary>{summaryText(entry, names, labels)}</summary>
+        <summary>Tracker</summary>
+        <p className="field-hint">{summaryText(entry, names, labels)}</p>
         {loading && record === null && <p role="status">Loading tracker…</p>}
         {entry?.status === "failed" && entry.error && (
           <p className="field-hint">{entry.error === "interrupted"
@@ -151,12 +152,12 @@ export function TrackerDisclosure({ cid, sid, trackerKey, entry, names, labels, 
             )}
           </>
         ))}
+        {canRetry && (
+          <button className="subtle" disabled={busy}
+                  onClick={() => void run(() => api.retryTracker(cid, sid, trackerKey))}>Retry</button>
+        )}
+        {error !== null && <p role="alert" className="field-hint"><ErrorNote err={error} /></p>}
       </details>
-      {canRetry && (
-        <button className="subtle" disabled={busy}
-                onClick={() => void run(() => api.retryTracker(cid, sid, trackerKey))}>Retry</button>
-      )}
-      {error !== null && <p role="alert" className="field-hint"><ErrorNote err={error} /></p>}
     </div>
   );
 }
