@@ -53,6 +53,13 @@ def _sidecar_path(id: str) -> Path:
     return _dir() / f"{id}.models.json"
 
 
+def regex_path(conn_id: str) -> Path:
+    """The connection's output-processing rules (`store/regex/layers.py`). Its
+    own file for the same reason as the sidecar: the record's frontmatter is
+    flat strings, and a rule list does not fit it."""
+    return _dir() / f"{conn_id}.regex.json"
+
+
 def _write_raw(id: str, keep_rev: str = "", **fields: str) -> None:
     """Unconditional write: stamps a fresh rev and clears any sidecar for
     this id, on every call (create AND update) — simpler than conditioning
@@ -218,6 +225,7 @@ def delete_connection(id: str) -> None:
         config.write_config(**dangling)
     p.unlink()
     _sidecar_path(id).unlink(missing_ok=True)
+    regex_path(id).unlink(missing_ok=True)
 
 
 def get_active() -> dict | None:

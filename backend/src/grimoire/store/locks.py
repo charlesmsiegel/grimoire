@@ -160,6 +160,11 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # of that list and the write have to be one hold, or a concurrent campaign
     # layer edit lands between them.
     "store.tracker.fields",
+    # `write_campaign` reads the world's, global and connection rule ids the
+    # campaign's file must not collide with (or switch off something that is
+    # not there), validates against them and writes `regex.json` -- one hold, or
+    # a concurrent campaign write lands between the check and the file.
+    "store.regex.layers",
     # The tracker's per-scene records: a snapshot file per post plus an
     # `index.json` that is read-modify-written whole on every status or flag
     # change -- two unserialized updates landing at once would lose one entry.
