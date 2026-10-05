@@ -1007,9 +1007,9 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
   min-height: 44px; padding: 0 12px; cursor: pointer; font-size: 15px; flex: none;
 }
 .inputbar .roll-btn:disabled { opacity: 0.4; cursor: default; }
-/* The speaker picker and its Respond-as, dressed as the dice button is. The
-   three share one row under the box on a phone, and two of them were UA
-   defaults: a white select and a grey button in a bar of hairline chrome. */
+/* The reply-as chips, dressed as the dice button is. They share one row under
+   the box on a phone with the dice button and Send, and were UA defaults: grey
+   buttons in a bar of hairline chrome. */
 .inputbar .form-actions select, .inputbar .form-actions button {
   border: 1px solid var(--line-strong); border-radius: 3px; background: transparent;
   color: var(--ink); min-height: 44px; padding: 0 10px; font-family: var(--fm);
@@ -1044,6 +1044,28 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
 /* A sitting-out NPC is out of the automatic order, not out of reach: dimmed,
    still tappable. */
 .reply-chip.sitting-out { opacity: .55; }
+/* The group panel sits inline under the composer's meta strip -- not a modal,
+   so the transcript and the box stay reachable while it is open. */
+.group-panel {
+  display: flex; flex-direction: column; gap: 8px; padding: 10px 26px 4px;
+}
+.group-panel-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.group-panel-head select {
+  background: var(--surface); color: var(--ink); border: 1px solid var(--line-strong);
+  border-radius: 3px; padding: 5px 8px; font-family: var(--fm); font-size: 10px;
+  letter-spacing: 0.1em; min-height: 34px;
+}
+.group-panel-error { color: var(--banner-ink); font-family: var(--fm); font-size: 11px; }
+.group-panel-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.group-panel-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; min-height: 34px; }
+.group-panel-name { min-width: 8em; font-size: 13px; }
+.group-panel-slider, .group-panel-sit { display: flex; align-items: center; gap: 6px; }
+.group-panel-moves { display: flex; gap: 4px; }
+.group-panel-moves button {
+  background: transparent; border: 1px solid var(--line-strong); border-radius: 3px;
+  color: var(--ink); cursor: pointer; min-width: 30px; min-height: 30px;
+}
+.group-panel-moves button:disabled { opacity: 0.4; cursor: default; }
 .composer-run-actions .send.cancel-turn { min-height: 44px; }
 .inputbar .send.cancel-turn { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
 
