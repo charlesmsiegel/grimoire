@@ -462,3 +462,143 @@ def test_correcting_a_retired_fact_past_its_retirement_is_refused(client, cid):
     r = client.put(f"/api/campaigns/{cid}/ledger/facts/{fid}", json={"scene": "005"})
     assert r.status_code == 400
     assert store.facts.get(cid, fid)["scene"] == "003"
+
+
+# ------------------------------------------------- merges (continuity capstone)
+#
+# A thread or commitment merged into another (an alias in continuity.json) is
+# hidden behind its canonical, so a hand edit addressed to it lands on the
+# canonical -- but only when the alias is LIVE: a merge into a record that is
+# gone, or a hand-edited cross-type one, must never redirect a write into a
+# record that does not exist. Deletes cascade, because these ids are slugs a
+# later create can hand back.
+
+from grimoire.store.continuity import doc as continuity_doc  # noqa: E402
+
+
+def _thread_ids(client, cid, *titles):
+    return [client.post(f"/api/campaigns/{cid}/ledger/threads",
+                        json={"title": t}).json()["id"] for t in titles]
+
+
+def _merge(client, cid, ref, to):
+    r = client.post(f"/api/campaigns/{cid}/continuity/aliases", json={"ref": ref, "to": to})
+    assert r.status_code == 200, r.text
+
+
+def _beat_texts(cid, pid):
+    return [b["text"] for b in (store.plot.get(cid, pid) or {}).get("beats", [])]
+
+
+def test_put_thread_on_alias_source_writes_canonical(client, cid):
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}", json={"beat": "Mara found it."})
+    assert r.status_code == 200, r.text
+    assert r.json()["id"] == canonical
+    assert _beat_texts(cid, canonical) == ["Mara found it."]
+    assert _beat_texts(cid, src) == []
+    assert "via merged The missing map" in _newest(client, cid)["label"]
+
+
+def test_put_thread_physical_flag_writes_source(client, cid):
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}", params={"physical": True},
+                   json={"beat": "Mara found it."})
+    assert r.status_code == 200 and r.json()["id"] == src
+    assert _beat_texts(cid, src) == ["Mara found it."]
+
+
+def test_put_thread_on_dangling_alias_source_writes_source(client, cid):
+    (src,) = _thread_ids(client, cid, "The missing map")
+    continuity_doc.put_alias(cid, f"thread:{src}", {"to": "thread:gone"})
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}", json={"beat": "Still here."})
+    assert r.status_code == 200 and r.json()["id"] == src
+    assert store.plot.get(cid, "gone") is None
+
+
+def test_put_thread_on_wrong_type_alias_source_writes_source(client, cid):
+    (src,) = _thread_ids(client, cid, "The missing map")
+    mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                      json={"title": "Mara's oath"}).json()["id"]
+    continuity_doc.put_alias(cid, f"thread:{src}", {"to": f"commitment:{mid}"})
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}", json={"beat": "Still here."})
+    assert r.status_code == 200 and r.json()["id"] == src
+    assert store.plot.get(cid, mid) is None
+
+
+def test_put_commitment_on_alias_source_writes_canonical(client, cid):
+    src, canonical = [client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                                  json={"title": t}).json()["id"]
+                      for t in ("Mara's promise", "Mara's oath")]
+    _merge(client, cid, f"commitment:{src}", f"commitment:{canonical}")
+    r = client.put(f"/api/campaigns/{cid}/ledger/commitments/{src}", json={"due": "midwinter"})
+    assert r.status_code == 200 and r.json()["id"] == canonical
+    assert store.commitments.get(cid, canonical)["due"] == "midwinter"
+    assert store.commitments.get(cid, src)["due"] == ""
+
+
+def test_delete_alias_target_refused_then_forced(client, cid):
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    r = client.delete(f"/api/campaigns/{cid}/ledger/threads/{canonical}")
+    assert r.status_code == 409
+    assert r.json()["kind"] == "has_merged_records"
+    assert r.json()["refs"] == [f"thread:{src}"]
+    assert store.plot.get(cid, canonical) is not None
+    r = client.delete(f"/api/campaigns/{cid}/ledger/threads/{canonical}",
+                      params={"force": True})
+    assert r.status_code == 200, r.text
+    assert store.plot.get(cid, canonical) is None
+    assert continuity_doc.get_alias(cid, f"thread:{src}") is None
+    kinds = [row["kind"] for row in client.get(f"/api/campaigns/{cid}/journal").json()[:2]]
+    assert sorted(kinds) == ["continuity_alias", "plot"]
+
+
+def test_delete_source_removes_its_alias_and_links(client, cid):
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                      json={"title": "Mara's oath"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/continuity/links",
+                    json={"a": f"thread:{src}", "b": f"commitment:{mid}", "relation": "pays_off"})
+    lid = r.json()["link"]["id"]
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    assert client.delete(f"/api/campaigns/{cid}/ledger/threads/{src}").status_code == 200
+    assert continuity_doc.get_alias(cid, f"thread:{src}") is None
+    assert continuity_doc.get_link(cid, lid) is None
+
+
+def test_delete_refused_when_continuity_malformed(client, cid):
+    (pid,) = _thread_ids(client, cid, "The missing map")
+    path = store.campaigns.campaign_root(cid) / "continuity.json"
+    path.write_text("{ no", encoding="utf-8")
+    r = client.delete(f"/api/campaigns/{cid}/ledger/threads/{pid}")
+    assert r.status_code == 409 and r.json()["kind"] == "malformed"
+    assert store.plot.get(cid, pid) is not None
+    assert path.read_text(encoding="utf-8") == "{ no"
+
+
+def test_delete_commitment_target_refused(client, cid):
+    src, canonical = [client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                                  json={"title": t}).json()["id"]
+                      for t in ("Mara's promise", "Mara's oath")]
+    _merge(client, cid, f"commitment:{src}", f"commitment:{canonical}")
+    r = client.delete(f"/api/campaigns/{cid}/ledger/commitments/{canonical}")
+    assert r.status_code == 409 and r.json()["kind"] == "has_merged_records"
+
+
+def test_delete_event_removes_links_and_recreation_does_not_reattach(client, cid):
+    mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                      json={"title": "Mara's oath"}).json()["id"]
+    eid = client.post(f"/api/campaigns/{cid}/events",
+                      json={"name": "The Tribunal", "date": "2026-05-09"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/continuity/links",
+                    json={"a": f"commitment:{mid}", "b": f"event:{eid}", "relation": "before"})
+    assert r.status_code == 200, r.text
+    assert client.delete(f"/api/campaigns/{cid}/events/{eid}").status_code == 200
+    again = client.post(f"/api/campaigns/{cid}/events",
+                        json={"name": "The Tribunal", "date": "2026-06-01"}).json()["id"]
+    assert again == eid
+    body = client.get(f"/api/campaigns/{cid}/continuity").json()
+    assert body["links"] == [] and body["raw_links"] == []
