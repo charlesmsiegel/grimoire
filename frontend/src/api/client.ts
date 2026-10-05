@@ -2730,6 +2730,11 @@ export const api = {
   getSceneRewrites: (cid: string, sid: string) =>
     request<Record<string, SceneRewrite>>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/rewrites`, undefined, { fresh: true }),
+  // Hide a post from context, or return it. Refused on a roll, transition or
+  // note line (400 `not_excludable`), an absorbed scene and an open round (409).
+  setExcluded: (cid: string, sid: string, index: number, excluded: boolean) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}/excluded`,
+                             { excluded }),
   // Cascade post-delete (#75): this post and everything after it, plus the
   // reversal of what the scene wrote. The reply is a report, not an ack — a
   // record the compare-and-swap refused to put back is the one thing the

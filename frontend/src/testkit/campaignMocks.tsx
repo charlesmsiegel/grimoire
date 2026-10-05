@@ -65,7 +65,7 @@ export async function campaignApiMock() {
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),
       getSceneChecks: vi.fn(), rollCheck: vi.fn(),
       getConfig: vi.fn(),
-      editMessage: vi.fn(), deleteMessagesFrom: vi.fn(),
+      editMessage: vi.fn(), setExcluded: vi.fn(), deleteMessagesFrom: vi.fn(),
       // Retcon and its replay (#78/#79/#80). `getReplay` answers null for every
       // suite here, which is what makes the embedded ReplayPanel render nothing
       // -- the tests that want it say so.

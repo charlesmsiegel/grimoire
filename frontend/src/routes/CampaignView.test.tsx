@@ -32,6 +32,7 @@ import { api, ApiError } from "../api/client";
 import type { GroupSettings } from "../api/client";
 import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
+import { DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER } from "../components/play/TranscriptPost";
 import {
   DEFAULT_GROUP, here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
   renderCampaign, withPalette,
@@ -887,6 +888,63 @@ test("the confirm counts the posts and names what an absorbed scene loses", asyn
   // The two records this deliberately does not touch, said before the fact.
   expect(asked).toMatch(/roll log/i);
   expect(asked).toMatch(/timeline/i);
+});
+
+// ---- hide a post from context ----
+
+test("the hide toggle is on player and model posts only", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+    { role: "assistant", speaker: ROLL_SPEAKER, content: "🎲 1d20 = 12" },
+    { role: "assistant", speaker: TRANSITION_SPEAKER, content: "*Time passes.*" },
+    { role: "assistant", speaker: DIRECTOR_SPEAKER, content: "faster" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  expect(screen.getAllByTitle("Hide from context")).toHaveLength(2);
+  expect(screen.getByLabelText("Hide message 1 from context")).toBeTruthy();
+  expect(screen.getByLabelText("Hide message 2 from context")).toBeTruthy();
+});
+
+test("hiding a post calls setExcluded and reloads the scene", async () => {
+  twoPostScene();
+  renderCampaign();
+  await screen.findByText("a reply");
+  const loads = (api.getScene as any).mock.calls.length;
+  const toggle = screen.getAllByTitle("Hide from context")[0];
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.setExcluded).toHaveBeenCalledWith("run", "s1", 0, true));
+  await waitFor(() => expect((api.getScene as any).mock.calls.length).toBeGreaterThan(loads));
+});
+
+test("an excluded post is marked and its toggle is pressed", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi", excluded: "2026-10-05T12:00:00Z" },
+    { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  const toggle = screen.getByTitle("Return to context");
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(toggle.getAttribute("aria-label")).toBe("Return message 1 to context");
+  expect(toggle.closest(".msg")?.classList.contains("excluded")).toBe(true);
+  expect(screen.getByText("a reply").closest(".msg")?.classList.contains("excluded")).toBe(false);
+  expect(screen.getAllByText("not in context")).toHaveLength(1);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.setExcluded).toHaveBeenCalledWith("run", "s1", 0, false));
+});
+
+test("an absorbed scene offers no hide toggle", async () => {
+  (api.listScenes as any).mockResolvedValue(DONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  await screen.findByText(/scene complete/i);
+  expect(screen.queryAllByTitle("Hide from context")).toHaveLength(0);
+  // The cut is still offered there; it is only the toggle that is withheld.
+  expect(screen.getByLabelText("Delete message 1 and everything after it")).toBeTruthy();
 });
 
 test("a record the reversal could not put back is reported", async () => {

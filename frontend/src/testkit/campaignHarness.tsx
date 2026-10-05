@@ -169,6 +169,7 @@ export function installCampaignMocks() {
       model: "campaign/model", effective_model: "campaign/model", post_process: "none", key_set: true, rev: "r1",
       models: [], fetched_at: "" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
+  (api.setExcluded as any).mockResolvedValue({ ok: true });
   (api.getReplay as any).mockResolvedValue(null);
   (api.replayPreview as any).mockResolvedValue(
     { posts: 1, turns: 1, threshold: 10, fork: false, blocked: "" });

@@ -438,7 +438,11 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
    *  rewrote, and `rewrite_key` names the record that says so (a later part of
    *  a response has a key of its own); `connection` is the connection that
    *  produced it. */
-  shown?: string; rewritten?: boolean; rewrite_key?: string; connection?: string };
+  shown?: string; rewritten?: boolean; rewrite_key?: string; connection?: string;
+  /** Hidden from context: the ISO time it was hidden. Absent on a post that is
+   *  in context -- the server never writes `false`. The post stays in the
+   *  transcript and every export; it reaches no prompt. */
+  excluded?: string };
 // The response settings a record's prompt rendered (`settings`) and, for a roll
 // continuation, the ones its resume prompt rendered (`resume_settings`).
 export type ResponseSettingsRecord = { style_id: string; phase: string; words: number; paragraphs: number };

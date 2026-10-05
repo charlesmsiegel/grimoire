@@ -3544,6 +3544,27 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (landed) setPendingResponse(null);
   }
 
+  /** Hide a post from context, or return it. Guarded as `saveEdit` is, and for
+   *  its reasons: a swap in flight is rewriting these posts, and the indices on
+   *  screen must be the active scene's own. The same latch the cut takes, since
+   *  the toggle rewrites the transcript too. Exclusion moves the digests the
+   *  rolling summary and scene-break check are measured against, so the
+   *  follow-ups are asked for as after an edit. */
+  async function toggleExcluded(index: number, excluded: boolean) {
+    if (!activeId || rolling || !transcriptIsActive) return;
+    const release = takeRollLatch(activeId);
+    try {
+      await api.setExcluded(cid, activeId, index, excluded);
+    } catch (err: unknown) {
+      fail(err, false);
+      return;
+    } finally {
+      release();
+    }
+    const seen = await selectScene(activeId);
+    askAfterPost(activeId, seen);   // #85, #84
+  }
+
   async function deleteMessagesFrom(index: number) {
     if (!activeId || rolling || !transcriptIsActive) return;
     // The window is always the transcript's TAIL, so this is the real total
@@ -4276,6 +4297,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     stepAlternate: (delta) => void pickAlternate(stepAlternate(delta)),
     stepVariant,
     edit: (index, text) => setEditing({ index, text }),
+    toggleExcluded: (index, excluded) => void toggleExcluded(index, excluded),
     cancelEdit: () => setEditing(null),
     saveEdit: () => void saveEdit(),
     saveRetcon: () => void saveRetcon(),
@@ -4364,12 +4386,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const transcriptCtx = useMemo<TranscriptContext>(() => ({
     cid, sid: activeId ?? "",
     loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
-    busy, rolling, active: transcriptIsActive,
+    busy, rolling, active: transcriptIsActive, absorbed: activeDone,
     responseDisabled,
     lastIndex: firstIndex + messages.length - 1,
     rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
     trackerRerun,
-  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, responseDisabled,
+  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, activeDone,
+       responseDisabled,
        firstIndex, messages.length, rerollAt, canReroll,
        postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 

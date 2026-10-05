@@ -1964,6 +1964,13 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 /* The cascade cut (#75) takes this post and every one after it, so its hover
    reads as the destructive action it is rather than as another accent icon. */
 .msg-edit.msg-cut:hover { color: var(--alert); }
+/* Hidden from context: still in the transcript, reaching no prompt. Marked per
+   post rather than per run, since a hidden post can sit inside a run of
+   included ones. */
+.msg.excluded { border-left: 1px dashed var(--page-muted); }
+.msg.excluded .msg-body { opacity: 0.55; }
+.not-in-context { font-size: 0.75em; font-style: italic; color: var(--page-muted); margin-right: 0.5em; }
+.msg-exclude[aria-pressed="true"] { color: var(--accent); }
 /* reroll alternates: ‹ n/m › in the gutter, on the message Reroll acts on */
 .swipe-nav { display: flex; align-items: center; gap: 3px; }
 .swipe-count { color: var(--page-muted); font-family: var(--fm); font-size: 10px; }
