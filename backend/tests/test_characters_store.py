@@ -2058,3 +2058,40 @@ def test_chub_redownload_keeps_the_caption_of_a_legacy_slot(tmp_path, monkeypatc
 
     assert image_descriptions.read_all(tmp_path, cid, vid).get("gallery_0") == "Mara at the quay"
     assert assets.image_id(tmp_path, cid, vid, "gallery_0") is not None
+
+
+def _cmyk_jpeg() -> bytes:
+    from PIL import Image
+    return _jpeg_bytes(Image.merge("CMYK", (*_noise_rgb(33).split(), _noise_rgb(34).getchannel(0))))
+
+
+def _palette(fmt: str) -> bytes:
+    import io
+    im = _noise_rgb(35).quantize(colors=16)
+    assert im.mode == "P"
+    buf = io.BytesIO()
+    im.save(buf, fmt)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("make, ext", [
+    (_cmyk_jpeg, "jpg"),
+    (lambda: _palette("GIF"), "gif"),
+    (lambda: _palette("PNG"), "png"),
+])
+def test_png_round_trip_of_a_cmyk_or_palette_avatar_keeps_the_original(
+        tmp_path, monkeypatch, make, ext):
+    """A CMYK JPEG's plane is its RGB conversion and a palette image's is its
+    expansion, so neither shares a pixel identity with the plane -- which is
+    why the plane is compared as decoded pixels (`_shown`), not by id. The
+    carried original comes back, not the plane."""
+    import io
+
+    from PIL import Image
+    avatar = make()
+    with Image.open(io.BytesIO(avatar)) as im:
+        assert im.mode in ("CMYK", "P")
+    original, _blob, source_hash, p, new_hash = _round_trip_png(
+        tmp_path, monkeypatch, avatar, ext)
+    assert p.read_bytes() == original and p.suffix == f".{ext}"
+    assert new_hash == source_hash

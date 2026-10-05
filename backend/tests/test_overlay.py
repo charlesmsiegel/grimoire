@@ -2122,11 +2122,37 @@ def test_demote_copy_keeps_campaign_legacy_art(monkeypatch, tmp_path):
     assert assets.image_path(croot, aid, "default", "gallery_1").read_bytes() == PNG + b"mine"
 
 
+def _real_png(seed: int, text: bytes | None = None) -> bytes:
+    """A decodable PNG; `text` adds a tEXt chunk, which changes the bytes and
+    not the picture (the store sanitizes it away)."""
+    import io
+
+    from PIL import Image
+    from PIL.PngImagePlugin import PngInfo
+    im = Image.new("RGB", (6, 4), (seed * 37 % 256, seed * 11 % 256, 90))
+    info = None
+    if text is not None:
+        info = PngInfo()
+        info.add_text("Comment", text.decode())
+    buf = io.BytesIO()
+    im.save(buf, "PNG", pnginfo=info)
+    return buf.getvalue()
+
+
 def test_demote_copy_never_copies_journal(monkeypatch, tmp_path):
     wroot, cid, aid, wd, cd = _seraphine(monkeypatch, tmp_path)
-    assets.put_image(wroot, aid, "default", "avatar", PNG + b"a", "png")
-    assets.put_image(wroot, aid, "default", "gallery_1", PNG + b"g", "png")
-    image_refs.write_journal(wd, {"name": "gallery_1"})
+    assets.put_image(wroot, aid, "default", "avatar", _real_png(1), "png")
+    assets.put_image(wroot, aid, "default", "gallery_1", _real_png(2), "png")
+    a, g = (image_refs.read(wd, n).image for n in ("avatar", "gallery_1"))
+    # A well-formed journal (one recovery would finish), so it is held back
+    # by the busy locks below rather than discarded as malformed.
+    image_refs.write_journal(wd, {
+        "name": "gallery_1",
+        "pre": {"avatar": a, "gallery_1": g},
+        "post": {"avatar": g, "gallery_1": a},
+        "desc": {"avatar": None, "gallery_1": None},
+    })
+    assert assets._journal_ok(image_refs.read_journal(wd)) == "gallery_1"
     # A promotion in flight on the world side: its locks are busy, so the
     # read-side recovery leaves the journal where it is while the copy runs.
     held, release = threading.Event(), threading.Event()
@@ -2148,6 +2174,7 @@ def test_demote_copy_never_copies_journal(monkeypatch, tmp_path):
     assert image_refs.read_journal(wd) is not None          # still the world's
     assert not (cd / image_refs.REFS_DIR / image_refs.JOURNAL).exists()
     assert assets.names_in(cd)[0] == {"avatar", "gallery_1"}
+    assert image_refs.read(cd, "avatar").image == a          # copied as it stood: pre
 
 
 def test_demote_copy_fills_override_ref_keeping_focus(monkeypatch, tmp_path):
@@ -2182,3 +2209,50 @@ def test_overlay_promote_links(monkeypatch, tmp_path):
     assert image_refs.read(cd, "avatar").image == world_id
     assert image_refs.read(wd, "gallery_1").image == world_id    # the world is untouched
     assert {i["name"] for i in overlay.list_images(cid, aid, "default")} == {"avatar"}
+
+
+def test_overlay_promote_ingests_a_legacy_world_file_then_links(monkeypatch, tmp_path):
+    """A world image held as a legacy file (no placement) is ingested once and
+    the campaign slot LINKS to it; the world's folder is left as it was."""
+    _wroot, cid, aid, wd, cd = _seraphine(monkeypatch, tmp_path)
+    wd.mkdir(parents=True, exist_ok=True)
+    legacy = wd / "gallery_1.png"
+    legacy.write_bytes(_real_png(3))
+    assert image_refs.read(wd, "gallery_1") is None
+
+    overlay.promote_image(cid, aid, "default", "gallery_1")
+
+    placed = image_refs.read(cd, "avatar")
+    assert placed is not None and placed.image is not None
+    obj = image_store.read(placed.image)
+    assert obj is not None
+    assert image_refs.resolve(cd, "avatar").blob_path == image_store.blob_path(obj.blob_sha256, obj.ext)
+    assert legacy.read_bytes() == _real_png(3)                    # the world is untouched
+    assert image_refs.read(wd, "gallery_1") is None
+    assert {i["name"] for i in overlay.list_images(cid, aid, "default")} == {"avatar"}
+
+
+def test_shadowing_a_legacy_file_against_a_placement_of_the_same_picture(monkeypatch, tmp_path):
+    """Legacy files have no identity until migration (spec section 11), so a
+    legacy file and a placement are compared by BYTES: the same picture with
+    other bytes (here a tEXt chunk the store sanitized out of the placement's
+    blob) still lists the world's copy as shadowed, in both directions. Pinned
+    so a change to that rule is a decision, not a drift."""
+    wroot, cid, aid, wd, cd = _seraphine(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    # The world holds a placement; the campaign a legacy file of the same pixels.
+    assets.put_image(wroot, aid, "default", "gallery_1", _real_png(4, b"Seraphine"), "png")
+    cd.mkdir(parents=True, exist_ok=True)
+    (cd / "gallery_1.png").write_bytes(_real_png(4, b"Mara"))
+    assert assets.image_id(croot, aid, "default", "gallery_1") is None
+    assert [i["name"] for i in overlay.shadowed_images(cid, aid, "default")] == ["gallery_1"]
+    # The campaign's legacy bytes equal to the world's blob: one picture.
+    (cd / "gallery_1.png").write_bytes(
+        assets.image_path(wroot, aid, "default", "gallery_1").read_bytes())
+    assert overlay.shadowed_images(cid, aid, "default") == []
+    # Mirrored: a legacy world file against a campaign placement of its pixels.
+    assets.delete_in(cd, "gallery_1")
+    assets.delete_in(wd, "gallery_1")
+    (wd / "gallery_2.png").write_bytes(_real_png(5, b"Winifred"))
+    assets.put_image(croot, aid, "default", "gallery_2", _real_png(5), "png")
+    assert [i["name"] for i in overlay.shadowed_images(cid, aid, "default")] == ["gallery_2"]

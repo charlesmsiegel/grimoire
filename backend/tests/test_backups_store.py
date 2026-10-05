@@ -772,3 +772,19 @@ def test_full_backup_contains_image_store(monkeypatch, tmp_path):
     assert any(n.startswith("assets/image-store/blobs/") for n in names)
     assert any(n.startswith("assets/image-store/objects/") for n in names)
     assert f"{version.relative_to(root).as_posix()}/image-refs/avatar.json" in names
+
+
+def test_image_backup_anchors_the_image_store_at_the_store_root(monkeypatch, tmp_path):
+    """Only `<home>/assets/image-store/` is the global store. A world holding a
+    directory of that name under its own `assets/` is user content, and its
+    non-image files are not selected as though they were object sidecars."""
+    root = home(monkeypatch, tmp_path)
+    _avatar_store(root)
+    nested = root / "worlds" / "realm" / "assets" / "image-store" / "objects" / "ab"
+    nested.mkdir(parents=True)
+    (nested / "notes.json").write_text("{}", encoding="utf-8")
+
+    names = names_in(backups.create_image_backup(when=AT))
+
+    assert not any(n.startswith("worlds/realm/assets/image-store/") for n in names)
+    assert any(n.startswith("assets/image-store/objects/") for n in names)
