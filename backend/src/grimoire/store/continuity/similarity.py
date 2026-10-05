@@ -39,7 +39,10 @@ answers.
 
 Slice D's reconcile sweep reuses `pool`, `lexical` and `nearest` unchanged
 (and the embedding mechanics, `semantic`, that sit beside them), so a pair the
-sweep raises was scored by exactly the rules absorb staged under.
+sweep raises was scored by exactly the rules absorb staged under. `semantic`
+takes two keywords for it and nothing else changes: `warm_limit`, the sweep's
+own bound in place of `IDENTITY_WARM_LIMIT`, and `loaded`, the cache the sweep
+already read once for every text it scores.
 """
 
 from __future__ import annotations
@@ -552,12 +555,16 @@ def _retry_texts(required: list[str], warm: list[str], forgotten: set[str],
 
 
 def semantic(required: list[str], warm: list[str], *, deadline: float | None,
-             space: dict | None = None, cached: Iterable[str] = ()) -> Semantic:
+             space: dict | None = None, cached: Iterable[str] = (),
+             warm_limit: int = IDENTITY_WARM_LIMIT,
+             loaded: dict[str, list[float]] | None = None) -> Semantic:
     """Vectors for `required` (always embedded when missing), `warm` (embedded
-    when missing, best first, up to `IDENTITY_WARM_LIMIT`) and `cached` (read
-    only). `deadline` None embeds nothing. Every vector is held to one
-    reference width; an off-width one is forgotten, and a forgotten loaded
-    required or warm text is re-embedded once, deadline permitting."""
+    when missing, best first, up to `warm_limit`) and `cached` (read only).
+    `deadline` None embeds nothing. Every vector is held to one reference
+    width; an off-width one is forgotten, and a forgotten loaded required or
+    warm text is re-embedded once, deadline permitting, within what is left of
+    `warm_limit`. A given `loaded` is the cache already read for these texts
+    by the caller (the reconcile sweep's one probe), so it is not read again."""
     space = space or available()
     if space is None:
         return Semantic({}, "off")
@@ -565,8 +572,9 @@ def semantic(required: list[str], warm: list[str], *, deadline: float | None,
     required = list(dict.fromkeys(required))
     need = set(required)
     warm = [t for t in dict.fromkeys(warm) if t not in need]
-    loaded = vectors.load(name, [*required, *warm, *cached])
-    warm_misses = [t for t in warm if t not in loaded][:IDENTITY_WARM_LIMIT]
+    if loaded is None:
+        loaded = vectors.load(name, [*required, *warm, *cached])
+    warm_misses = [t for t in warm if t not in loaded][:warm_limit]
     fresh: dict[str, list[float]] = {}
     error = ""
     if deadline is not None:
@@ -575,7 +583,7 @@ def semantic(required: list[str], warm: list[str], *, deadline: float | None,
     width = reference_width(list(fresh.values()), loaded)
     kept, forgotten = _keep_width(name, {**loaded, **fresh}, width)
     again = _retry_texts(required, warm, forgotten - set(fresh),
-                         IDENTITY_WARM_LIMIT - len(warm_misses))
+                         warm_limit - len(warm_misses))
     embedded = len(fresh)
     if again and deadline is not None and time.monotonic() < deadline:
         healed, retry_error = embed_missing(space, again, deadline=deadline)
