@@ -160,6 +160,17 @@ class ResponseSettings(BaseModel):
     response_continuation_paragraphs: str | None = None
 
 
+class GroupSettings(BaseModel):
+    """A scene's group-play settings. Every key is optional on the wire; the
+    store's `group_play.validate` is what judges the values."""
+
+    order: str = "directed"
+    order_list: list[str] = []
+    talkativeness: dict[str, int] = {}
+    sitting_out: list[str] = []
+    auto_rounds: int = 0
+
+
 class TrackerLayer(BaseModel):
     """One layer of tracker field definitions (world, campaign or scene)."""
 
