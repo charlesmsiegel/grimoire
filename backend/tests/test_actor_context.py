@@ -21,6 +21,7 @@ from grimoire.store import (
 )
 from grimoire.store.appearances import paths
 from grimoire.store.context import actor as actor_context
+from grimoire.store.context import semantic
 
 
 @pytest.fixture
@@ -381,10 +382,13 @@ def test_character_owned_lore_still_private_to_owner(cast_scene):
 
 
 def test_known_by_deleted_actor_reaches_nobody_and_does_not_raise(cast_scene):
-    # A dangling ref -- nobody of that id is in the world, which is what a
-    # deleted actor leaves behind. It matches no call; the narrator, who is not
-    # filtered by knowledge, still has what activated.
+    # Seraphine is created and deleted, so `known_by` names an actor that WAS
+    # real and is gone. It matches no call; the narrator, who is not filtered
+    # by knowledge, still has what activated.
     cid, sid = cast_scene
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    characters.create_character(wroot, "Seraphine", "main", characters.blank_card("Seraphine"))
+    characters.delete_character(wroot, "seraphine")
     entities.create_entity(campaigns.campaign_root(cid), "lore", "Ledger", "THE_LEDGER_IS_FORGED",
                            owners="characters:mara", secrecy="secret",
                            fields={"known_by": "characters:seraphine"})
@@ -425,6 +429,77 @@ def test_secret_current_setting_known_by_reaches_that_npc(cast_scene):
     assert "VAULT_BEHIND_THE_CHAPEL" in _actor_text(cid, sid, "characters:winifred")
     assert not setting("characters:mara")
     assert "VAULT_BEHIND_THE_CHAPEL" not in _actor_text(cid, sid, "characters:mara")
+
+
+# ---- an NPC's activation sees only what it knows ------------------------------
+
+def test_unknown_lore_does_not_pull_by_recursion_on_another_npcs_call(cast_scene):
+    # Mara's secret names the tidebell. At depth 1 it would pull the tidebell
+    # entry -- on Mara's call, and the narrator's, but never on Winifred's,
+    # who does not know the secret that mentions it.
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    config.write_config(lore_recursion_depth="1")
+    entities.create_entity(croot, "lore", "Mara's Errand", "Mara rings the tidebell at night.",
+                           owners="characters:mara", secrecy="secret")
+    entities.create_entity(croot, "lore", "Tidebell", "TIDEBELL_CRACKED_IN_THE_FLOOD",
+                           keys="tidebell")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    assert "TIDEBELL_CRACKED_IN_THE_FLOOD" in _actor_text(cid, sid)
+    assert "TIDEBELL_CRACKED_IN_THE_FLOOD" in _actor_text(cid, sid, "characters:mara")
+    assert "TIDEBELL_CRACKED_IN_THE_FLOOD" not in _actor_text(cid, sid, "characters:winifred")
+
+
+def test_unknown_item_confers_no_presence_on_another_npcs_call(cast_scene):
+    # A secret charm only Mara knows of. Activating, it is present (§7.2) and
+    # unlocks the public lore it owns -- for the calls that know the charm.
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "items", "Charm", "A bone charm.",
+                           owners="characters:mara", secrecy="secret")
+    entities.create_entity(croot, "lore", "Charm Ward", "THE_CHARM_WARDS_OFF_GULLS",
+                           owners="items:charm")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    assert "THE_CHARM_WARDS_OFF_GULLS" in _actor_text(cid, sid)
+    assert "THE_CHARM_WARDS_OFF_GULLS" in _actor_text(cid, sid, "characters:mara")
+    assert "THE_CHARM_WARDS_OFF_GULLS" not in _actor_text(cid, sid, "characters:winifred")
+
+
+def test_unknown_lore_never_takes_a_recall_slot_on_another_npcs_call(cast_scene, monkeypatch):
+    # Recall with depth 1, and Mara's private lore scores best. On Winifred's
+    # call it is not a candidate at all, so the slot goes to what she knows.
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "lore", "Mara Ledger", "MARA_KEEPS_A_SECOND_LEDGER",
+                           keys="unsaid-ledger", owners="characters:mara")
+    entities.create_entity(croot, "lore", "Harbour Toll", "THE_HARBOUR_TOLL_DOUBLED",
+                           keys="unsaid-toll")
+    scores = {"mara-ledger": 0.9, "harbour-toll": 0.5}
+
+    def top_one(candidates, _text):
+        ranked = sorted(candidates, key=lambda e: -scores.get(e["id"], 0.0))
+        return [(e, scores.get(e["id"], 0.0)) for e in ranked[:1]]
+
+    monkeypatch.setattr(semantic, "recall_scored", top_one)
+    scenes.append_message(cid, sid, "user", "Calm.")
+    mara = _actor_text(cid, sid, "characters:mara")
+    assert "MARA_KEEPS_A_SECOND_LEDGER" in mara
+    winifred = _actor_text(cid, sid, "characters:winifred")
+    assert "MARA_KEEPS_A_SECOND_LEDGER" not in winifred
+    assert "THE_HARBOUR_TOLL_DOUBLED" in winifred
+
+
+def test_actor_call_activation_result_holds_only_known_entries(cast_scene):
+    cid, sid = cast_scene
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Habit", "MARA_HUMS_WHEN_LYING",
+                           owners="characters:mara")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    refs = {h.ref for h in context.assemble._assemble(
+        cid, sid, actor_ref="characters:winifred")["wi_result"].keyword}
+    assert "lore:habit" not in refs
+    refs = {h.ref for h in context.assemble._assemble(
+        cid, sid, actor_ref="characters:mara")["wi_result"].keyword}
+    assert "lore:habit" in refs
 
 
 @pytest.mark.parametrize("entry, expected", [

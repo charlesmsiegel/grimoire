@@ -390,7 +390,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         cid, posts, wi_seed, exclude=exclude, present=present, pinned_refs=pinned_refs,
         excluded_refs=excluded_refs, scan_depth=depth,
         recursion_depth=config.lore_recursion_depth(cfg),
-        current_location=current_loc if not loc_excluded else None, recall_text=recent_text)
+        current_location=current_loc if not loc_excluded else None, recall_text=recent_text,
+        actor_ref=actor_ref if actor_scoped else None)
+    # A no-op since `_world_info` filters its candidates for the actor; kept so
+    # what reaches an NPC's prompt does not rest on that one call site alone.
     if actor_scoped:
         activated_wi = actor.known_entries(activated_wi, actor_ref)
         recalled_wi = actor.known_entries(recalled_wi, actor_ref)

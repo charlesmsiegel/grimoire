@@ -27,6 +27,9 @@ from ..appearances import versions as appearances_versions
 from ..scenes import read as scenes_read
 from . import activation, semantic
 
+# Aliased because `_actor_aliases` and `_character_states` below bind `actor`.
+from . import actor as actor_scope
+
 # Aliased to match `assemble.py` and `macros.py`, and because `_character_states`
 # below takes a parameter named `cast`.
 from . import cast as cast_data
@@ -165,7 +168,8 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                 exclude: frozenset = frozenset(), present: Mapping[str, dict] | None = None,
                 pinned_refs: frozenset = frozenset(), excluded_refs: frozenset = frozenset(),
                 scan_depth: int, recursion_depth: int = 0, current_location: str | None = None,
-                recall_text: str = "") -> tuple[list[dict], list[dict], activation.Result]:
+                recall_text: str = "", actor_ref: str | None = None,
+                ) -> tuple[list[dict], list[dict], activation.Result]:
     """Activated lore/location/item/group/creature entries as
     {"body", "kind", "id", ...} dicts — _assemble renders the bodies and uses
     the refs (e.g. activated groups pull their campaign state into context).
@@ -189,7 +193,13 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
     renders it; `excluded_refs` is the reader's own rule (#129), which applies to
     every kind. `pinned_refs` is its opposite, and both are enforced in
     `activation.run` — the skips below are only there to save reading a file
-    whose body is about to be thrown away."""
+    whose body is about to be thrown away.
+
+    `actor_ref` names an NPC's own call (spec §8.1): the candidates are then
+    only what that actor `actor.knows`, so an entry it cannot know neither
+    activates, pulls by recursion, confers presence nor takes a recall slot --
+    while `present` stays the whole scene's, so the owner gate still reads the
+    room. None, or the narrator, filters nothing."""
     entries = []
     for kind in ("lore", "locations", "items", "groups", "creatures"):
         for meta in overlay.list_entities(cid, kind):
@@ -217,6 +227,8 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                             "controls": lore_fields.parse(e["meta"]),
                             "refs": {f: entity_schema.parse_refs(e["meta"].get(f))
                                      for f in _STRUCTURAL_FIELDS}})
+    if actor_ref not in (None, "grimoire"):
+        entries = actor_scope.known_entries(entries, actor_ref)
     # The only production caller that supplies a second stage, so the strategy
     # is chosen in one visible place and `activation.run` stays a pure function
     # of its arguments. The attribute is resolved off the module on every call,
