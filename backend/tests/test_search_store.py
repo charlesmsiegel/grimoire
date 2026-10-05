@@ -8,6 +8,7 @@ weights stays possible without rewriting the suite.
 
 from __future__ import annotations
 
+import gc
 import json
 import os
 
@@ -487,9 +488,18 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     def _best(n, rounds=3):
         return min(_parse(n) for _ in range(rounds))
 
-    _best(20000)                       # warm the interpreter, not the measure
-    small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
-    large = _best(40000)
+    # The cyclic collector off for the measure. It triggers on allocation
+    # counts and each pass walks every live object, so the 40k run pays for
+    # more and costlier collections than the 20k run -- a superlinear term the
+    # parser does not have, which alone pushed the ratio past 3 on CI.
+    gc.collect()
+    gc.disable()
+    try:
+        _best(20000)                       # warm the interpreter, not the measure
+        small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
+        large = _best(40000)
+    finally:
+        gc.enable()
     assert large / small < 3, (
         f"parsing scaled {large / small:.1f}x for 2x the words -- linear is ~2, "
         f"quadratic is ~4")
