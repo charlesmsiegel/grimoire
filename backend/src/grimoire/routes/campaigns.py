@@ -27,6 +27,7 @@ from fastapi.responses import JSONResponse, Response
 from .. import store
 from ..llm import LLMClient
 from ..store.continuity import doc as continuity_doc
+from ..store.continuity import effective as continuity_effective
 from ..store.continuity import review as continuity_review
 from . import characters as character_routes
 from . import runs
@@ -1542,6 +1543,19 @@ def get_provenance(cid: str):
             for k, v in data.items()}
 
 
+def _effective_or_physical(effective, physical) -> list:
+    """The effective rows, or -- when the continuity side raises -- the
+    physical rows with `aliases: []`, so one shape reaches the page either
+    way. The physical read is not guarded here: a garbled plot.json or
+    commitments.json raises out of both, and the caller's `_tolerant` empties
+    that section exactly as it always has."""
+    try:
+        return effective()
+    except Exception:  # noqa: BLE001 — a continuity-side failure costs the merge, never the section (spec §3.9)
+        return [{**row, "aliases": []} if isinstance(row, dict) else row
+                for row in physical()]
+
+
 @router.get("/campaigns/{cid}/ledger")
 def get_ledger(cid: str):
     """The continuity ledger (#117): what the campaign still owes, in one read.
@@ -1577,6 +1591,22 @@ def get_ledger(cid: str):
     Computed at read time and never stored — see `store.aging`, which argues
     that — so a corrected clock or an edited scene date changes the answer on
     the next read rather than leaving a stamp nothing recomputes.
+
+    The plot and commitment rows are the EFFECTIVE ones (capstone spec §12.5):
+    each carries its canonical id, the group's merged `last_scene` and
+    `latest_beat`, and `aliases: [{ref, title, status}]` naming what was merged
+    into it -- empty for a record nobody merged, which is every record of a
+    campaign with no aliases, so for those the rows are what they always were
+    plus that one key. Aging runs on these rows, so a merged record is as stale
+    as its group rather than as its oldest member. A merged-away source is not
+    a top-level row: it is the same obligation under another name, and listing
+    it twice would show the campaign owing it twice, and hand the reader a
+    second row whose edit would land on a record the projection no longer
+    shows. It stays reachable through its canonical's `aliases`. Edit, quick
+    close and delete already address the canonical (`routes/ledger.py`'s
+    `_live_target` and `_refuse_unsafe_delete`), so the row ids served here
+    are the ones those writes expect. A continuity-side failure degrades to
+    the physical rows (spec §3.9): it costs the merge, never the section.
     """
     _campaign_root_or_404(cid)
 
@@ -1613,8 +1643,12 @@ def get_ledger(cid: str):
             chron = {}
         # The ledger can show finished rows on demand; prompt context still
         # uses the default open-only projections from these store readers.
-        open_threads = _tolerant(lambda: store.plot.open_threads(cid, include_closed=True))
-        owed = _tolerant(lambda: store.commitments.open_commitments(cid, include_resolved=True))
+        open_threads = _tolerant(lambda: _effective_or_physical(
+            lambda: continuity_effective.threads(cid, include_closed=True),
+            lambda: store.plot.open_threads(cid, include_closed=True)))
+        owed = _tolerant(lambda: _effective_or_physical(
+            lambda: continuity_effective.commitments(cid, include_resolved=True),
+            lambda: store.commitments.open_commitments(cid, include_resolved=True)))
         standing = _tolerant(lambda: store.facts.active(cid))
         ended = _tolerant(lambda: store.facts.retired(cid))
         # The whole projection sits inside `_tolerant`, not just the read: it

@@ -1697,12 +1697,18 @@ export type JournalEntry = {
 // plot thread only advances. Contradictions are the fourth section this view is
 // named for and arrive with #111.
 export type LedgerScene = { id: string; title: string; date: string };
+/** A record merged into a ledger row's canonical (capstone §12.5): it is not a
+ *  row of its own, so its canonical names it. */
+export type LedgerAlias = { ref: string; title: string; status: string };
 export type PlotThread = {
   id: string; title: string; status: string;
   last_scene: string; latest_beat: string; scene: LedgerScene;
   /** Present on ledger and digest rows (#103); the digest's own type restates
    *  it as required, since every row there is aged. */
   aging?: Aging;
+  /** What was merged into this row. Present on ledger and digest rows (empty
+   *  when nothing was); optional because other rows of this shape omit it. */
+  aliases?: LedgerAlias[];
 };
 export type Commitment = PlotThread & { kind: string; due: string };
 /** A standing fact on the ledger (#114). `scene` is the scene that RECORDED it,
