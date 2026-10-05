@@ -720,6 +720,61 @@ def test_after_is_only_ever_upcoming(monkeypatch, tmp_path):
     assert _deadlines(cid) == []
 
 
+def test_an_after_link_to_a_reached_event_is_not_listed(monkeypatch, tmp_path):
+    """Reached means a stamp, not a reading: a fired event whose day is ahead
+    of now again (a clock corrected backwards, or a fired event re-dated
+    forward, which keeps the stamp) lists no `after` item, though its
+    `in_days` is inside the window."""
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    events.create(cid, "The coronation", "2026-05-20")
+    events.create(cid, "Mara's audience", "2026-05-12")
+    _commitment(cid)
+    _link(cid, "l1", OATH, CORONATION, "after")
+    clock.advance(cid, to="2026-05-21")
+    clock.advance(cid, to="2026-05-15", reason="correction")
+    assert events.get(cid, "the-coronation")["fired"] is not None
+    assert 0 < F(cid, "2026-05-20") - F(cid, clock.now(cid)) <= calendars.UPCOMING_WINDOW_DAYS
+    assert _deadlines(cid, OATH) == []
+
+    assert events.get(cid, "mara-s-audience")["fired"] is not None
+    assert events.update(cid, "mara-s-audience", date="2026-05-26")
+    assert events.get(cid, "mara-s-audience")["fired"] is not None
+    vow = _commitment(cid, mid="seraphine-s-vow", title="Seraphine's vow")
+    _link(cid, "l2", vow, "event:mara-s-audience", "after")
+    assert _deadlines(cid) == []
+
+
+def test_after_window_is_inclusive_at_its_edge(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    now = F(cid, "2026-05-10")
+    window = calendars.UPCOMING_WINDOW_DAYS
+    provider = _provider(cid)
+    edge, past = provider.format(now + window), provider.format(now + window + 1)
+    assert events.create(cid, "The coronation", edge) == "the-coronation"
+    assert events.create(cid, "Saltmarch Eve", past) == "saltmarch-eve"
+    _commitment(cid)
+    vow = _commitment(cid, mid="seraphine-s-vow", title="Seraphine's vow")
+    _link(cid, "l1", OATH, CORONATION, "after")
+    _link(cid, "l2", vow, "event:saltmarch-eve", "after")
+    [item] = _deadlines(cid)
+    assert (item["subject"], item["relation"]) == (OATH, "after")
+    assert (item["state"], item["in_days"]) == ("upcoming", window)
+
+
+@pytest.mark.parametrize("sources", [{"linked_deadline"}, {"deadline", "linked_deadline"}],
+                         ids=["linked-only", "deadline-and-linked"])
+def test_link_deadlines_need_no_event_source(monkeypatch, tmp_path, sources):
+    """Later slices call `build` with the deadline sources and without
+    `event`; the link source still has to read the event rows."""
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    events.create(cid, "The coronation", "2026-05-20")
+    _commitment(cid)
+    _link(cid, "l1", OATH, CORONATION, "before")
+    items = _items(cid, sources=sources)
+    assert [i["kind"] for i in items] == ["linked_deadline"]
+    assert (items[0]["subject"], items[0]["fixed"]) == (OATH, F(cid, "2026-05-19"))
+
+
 def test_earliest_of_due_and_link_wins(cal):
     cid = cal.cid
     provider = _provider(cid)
