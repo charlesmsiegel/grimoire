@@ -279,6 +279,31 @@ def _link_key(aliases: dict, record) -> tuple[str, str, str] | None:
     return relation, ca, cb
 
 
+def _alias_problem(ref: str, value) -> str | None:
+    """Why `value` is no alias for `ref` on its own terms -- no other record
+    consulted -- or None. Shared by the validated restore and by the snapshot
+    restore's choice of whether to validate at all."""
+    to = _target(value)
+    if to is None:
+        return "an alias needs a target"
+    if _prefix(ref) != _prefix(to) or _prefix(ref) not in _ALIASABLE:
+        return "an alias joins two threads or two commitments"
+    if ref == to:
+        return "a record cannot be merged into itself"
+    return None
+
+
+def _link_problem(value) -> str | None:
+    """`_alias_problem` for a link: its fields and its relation's vocabulary."""
+    if not (isinstance(value, dict)
+            and all(isinstance(value.get(k), str) for k in ("a", "b", "relation"))):
+        return "a link needs two refs and a relation"
+    rule = _RELATIONS.get(value["relation"])
+    if rule is None or _prefix(value["a"]) not in rule[0] or _prefix(value["b"]) not in rule[1]:
+        return "that relation cannot join those two records"
+    return None
+
+
 def restore_alias(cid: str, ref: str, value) -> None:
     """Put one alias back (``None`` removes it), refusing a record that is not a
     same-type thread/commitment alias or that would close a cycle."""
@@ -291,14 +316,10 @@ def restore_alias(cid: str, ref: str, value) -> None:
                 del data["aliases"][ref]
                 _write(cid, data)
             return
-        to = _target(value)
-        if to is None:
-            raise ContinuityError("an alias needs a target")
-        if _prefix(ref) != _prefix(to) or _prefix(ref) not in _ALIASABLE:
-            raise ContinuityError("an alias joins two threads or two commitments")
-        if ref == to:
-            raise ContinuityError("a record cannot be merged into itself")
-        if reaches(data["aliases"], to, ref):
+        problem = _alias_problem(ref, value)
+        if problem is not None:
+            raise ContinuityError(problem)
+        if reaches(data["aliases"], value["to"], ref):
             raise ContinuityError(
                 "putting this merge back would make a loop with a merge made since")
         data["aliases"][ref] = value
@@ -307,7 +328,10 @@ def restore_alias(cid: str, ref: str, value) -> None:
 
 def restore_link(cid: str, lid: str, value) -> None:
     """Put one link back (``None`` removes it), refusing a record outside the
-    relation vocabulary or one equivalent to another link stored since."""
+    relation vocabulary or one equivalent to another link stored since -- and,
+    like `review.create_link`, refusing while the merges cannot be read: an
+    empty alias graph would pass a link that collapses or duplicates under the
+    real one."""
     with locks.campaign_lock(cid):
         data = _mutable(cid, "links")
         if value is None:
@@ -315,14 +339,16 @@ def restore_link(cid: str, lid: str, value) -> None:
                 del data["links"][lid]
                 _write(cid, data)
             return
-        stored = data.get("aliases")
-        aliases: dict = stored if isinstance(stored, dict) else {}
+        problem = _link_problem(value)
+        if problem is not None:
+            raise ContinuityError(problem)
+        aliases = data.get("aliases", {})
+        if not isinstance(aliases, dict):
+            raise ContinuityError(
+                "the merges in continuity.json cannot be read, so whether this link "
+                "would now join a record to itself or repeat another cannot be checked")
         key = _link_key(aliases, value)
-        if key is None:
-            raise ContinuityError("a link needs two refs and a relation")
-        rule = _RELATIONS.get(key[0])
-        if rule is None or _prefix(value["a"]) not in rule[0] or _prefix(value["b"]) not in rule[1]:
-            raise ContinuityError("that relation cannot join those two records")
+        assert key is not None  # _link_problem checked the fields
         if key[1] == key[2]:
             raise ContinuityError(
                 "both ends of this link have since been merged into one record, so "
@@ -358,13 +384,12 @@ def link_snapshot(cid: str, lid: str) -> dict:
     return _snapshot("links", cid, lid)
 
 
-def _alias_shaped(value) -> bool:
-    return _target(value) is not None
+def _alias_valid(ref: str, value) -> bool:
+    return _alias_problem(ref, value) is None
 
 
-def _link_shaped(value) -> bool:
-    return isinstance(value, dict) and all(
-        isinstance(value.get(k), str) for k in ("a", "b", "relation"))
+def _link_valid(_lid: str, value) -> bool:
+    return _link_problem(value) is None
 
 
 def _restore_snapshot(cid: str, section: str, key: str, snap, validated,
@@ -373,23 +398,25 @@ def _restore_snapshot(cid: str, section: str, key: str, snap, validated,
         raise ContinuityError("this change's record of what was there cannot be read")
     if not snap.get("present"):
         validated(cid, key, None)
-    elif well_formed(snap.get("value")):
+    elif well_formed(key, snap.get("value")):
         validated(cid, key, snap["value"])
     else:
         # A malformed record -- null, a string, an object without the fields a
-        # record needs -- put back exactly as it was: validating it would refuse
-        # to restore what the file held, which is the whole job. A well-shaped
-        # record is validated, because that is where a cycle or a duplicate made
-        # since would be caught.
+        # record needs, or one whose fields name a merge or a relation no
+        # validated write would make -- put back exactly as it was: the remove
+        # route took it, so refusing it here would refuse to restore what the
+        # file held, which is the whole job. A record valid on its own terms is
+        # validated, because that is where a cycle or a duplicate made since
+        # would be caught.
         with locks.campaign_lock(cid):
             _put(cid, section, key, snap.get("value"))
 
 
 def restore_alias_snapshot(cid: str, ref: str, snap) -> None:
     with locks.campaign_lock(cid):
-        _restore_snapshot(cid, "aliases", ref, snap, restore_alias, _alias_shaped)
+        _restore_snapshot(cid, "aliases", ref, snap, restore_alias, _alias_valid)
 
 
 def restore_link_snapshot(cid: str, lid: str, snap) -> None:
     with locks.campaign_lock(cid):
-        _restore_snapshot(cid, "links", lid, snap, restore_link, _link_shaped)
+        _restore_snapshot(cid, "links", lid, snap, restore_link, _link_valid)

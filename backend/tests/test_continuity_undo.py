@@ -193,3 +193,34 @@ def test_undo_link_restore_refuses_self_collapsing(cid):
         store.undo.undo(cid, jid)
     assert str(refused.value) != store.undo.CONFLICT
     assert doc.get_link(cid, "l1") is None
+
+
+@pytest.mark.parametrize(("section", "key", "value"), [
+    ("aliases", "thread:a", {"to": "commitment:b"}),
+    ("aliases", "event:a", {"to": "event:b"}),
+    ("aliases", "thread:a", {"to": "thread:a"}),
+    ("links", "l1", _link("thread:a", "thread:b", "rhymes_with")),
+    ("links", "l1", _link("event:a", "thread:b", "pays_off")),
+], ids=["cross-type", "not-aliasable", "self", "unknown-relation", "wrong-endpoints"])
+def test_removing_a_semantically_malformed_record_undo_restores_it_verbatim(
+        cid, section, key, value):
+    """A hand-edited record with every field present but a meaning the
+    validated restore refuses was still accepted by the remove route and
+    journalled -- so Undo has to put it back as it was, not answer 409."""
+    _raw(cid, {section: {key: value}})
+    (review.remove_alias if section == "aliases" else review.remove_link)(cid, key)
+    store.undo.undo(cid, store.journal.read(cid)[-1]["id"])
+    assert doc.read(cid)[section] == {key: value}
+
+
+def test_undo_link_restore_refuses_while_aliases_are_unreadable(cid):
+    """A link checked against an empty alias graph could be self-collapsing or
+    a duplicate of one made since; creating a link refuses while the merges
+    cannot be read, and putting one back refuses the same way."""
+    doc.put_link(cid, "l1", _link("thread:a", "thread:b", "continues"))
+    jid = _journalled_link(cid, "l1", lambda: doc.drop_link(cid, "l1"))
+    _raw(cid, {"aliases": "garbled", "links": {}})
+    with pytest.raises(store.undo.UndoConflict) as refused:
+        store.undo.undo(cid, jid)
+    assert str(refused.value) != store.undo.CONFLICT
+    assert doc.read(cid)["links"] == {}
