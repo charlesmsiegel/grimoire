@@ -27,8 +27,15 @@ Todo's import graph; `review` would drag `undo`. So `pending` imports
 3. ``satisfied`` -- a pair with an effective link between its refs, either
    direction, or a lifecycle target that is no longer live.
 4. ``suppressed`` -- the current fingerprint is a dismissal's key.
-5. ``stale`` -- the stored fingerprint is not the current one.
-6. ``settled`` -- a model-only nomination the model declined (Decision 9).
+5. ``settled`` -- a model-only nomination the model declined (Decision 9),
+   while its stored fingerprint is the current one. Once its records move it
+   reads ``gone`` instead: it is not the question the model answered, and it
+   was never the reader's, so it must not come back as ``stale`` -- surfacing
+   model-only nominations is the flood Decision 9 prevents. ``gone`` hides it,
+   404s apply and dismiss, and lets the next persist drop it, so a later
+   nomination re-asks the model. (This check precedes ``stale``, against
+   Decision 2's written order.)
+6. ``stale`` -- the stored fingerprint is not the current one.
 7. ``live``.
 
 The GET shows `VISIBLE`; Todo counts ``live``; apply and dismiss accept
@@ -248,10 +255,12 @@ def verdict(current: Current, record: dict) -> str:
         return "satisfied"
     if fp in current.suppressions:
         return "suppressed"
+    if settled(record):
+        # Before the stale check: a declined model-only nomination was never
+        # the reader's, so records moving under it must not surface it.
+        return "settled" if fp == record["fingerprint"] else "gone"
     if fp != record["fingerprint"]:
         return "stale"
-    if settled(record):
-        return "settled"
     return "live"
 
 
