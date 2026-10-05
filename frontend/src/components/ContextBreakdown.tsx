@@ -1,6 +1,8 @@
 import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
 import { SamplingSummary } from "./SamplingSummary";
+import { type ContextSection } from "../api/types";
+import { describeHeld, describeReason } from "./loreReasons";
 
 /** The context panel's body: the fill bar, the totals, and one collapsible row
  *  per prompt section.
@@ -57,6 +59,7 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
             <div style={{ width: `${Math.min(100, pctNumber(s.tokens))}%` }} />
           </div>
           <pre className="ctx-text">{s.text}</pre>
+          <LoreEntries section={s} />
         </details>
       ))}
     </>
@@ -89,6 +92,44 @@ export function estimateNote(ctx: SceneContext): string {
   const whose = tokenizer === "cl100k_base" ? " (OpenAI's GPT-4 tokenizer)" : "";
   return `Estimated: counted with ${tokenizer}${whose}; `
     + `${model} uses its own, so the provider's count will differ.`;
+}
+
+/** The entries of a World info or Recalled lore row, one line each: the name
+ *  and why it is in (spec §10). Nothing to render for any other row, nor for a
+ *  capture recorded before rows carried entries. The name is a plain chip and
+ *  a post number plain text: the play view can open neither a lore entry nor a
+ *  transcript index, and a link that went nowhere would only look like one. */
+function LoreEntries({ section }: { section: ContextSection }) {
+  const entries = section.entries ?? [];
+  const held = section.held_back ?? [];
+  const names = section.names ?? {};
+  if (!entries.length && !held.length) return null;
+  return (
+    <>
+      {entries.length > 0 && (
+        <ul className="ctx-entries">
+          {entries.map((e) => (
+            <li key={e.ref} className={e.shed ? "shed" : undefined}>
+              <span className="chip on">{e.name}</span> {describeReason(e.reason, names)}
+              {e.shed && <span className="ctx-shed"> shed: budget</span>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {held.length > 0 && (
+        <>
+          <div className="ctx-caption">Held back</div>
+          <ul className="ctx-entries">
+            {held.map((h) => (
+              <li key={h.ref}>
+                <span className="chip on">{h.name}</span> {describeHeld(h.reason)}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
 }
 
 /** What actually bounds this prompt, in tokens; 0 when nothing is known.
