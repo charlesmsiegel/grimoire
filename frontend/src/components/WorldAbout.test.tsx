@@ -59,3 +59,23 @@ test("a failed save keeps the form and says why", async () => {
   expect(await screen.findByText(/world kept changing/)).toBeInTheDocument();
   expect(screen.getByLabelText("Genre")).toBeInTheDocument();
 });
+
+test("a save still in flight when the world changes does not land on the next world", async () => {
+  let releasePut: (v: unknown) => void = () => {};
+  (api.updateWorld as any).mockImplementation(() => new Promise((r) => { releasePut = r; }));
+  const { rerender } = render(<WorldAbout wid="realm" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByLabelText("Genre"), { target: { value: "Realm's genre" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  (api.getWorld as any).mockImplementation(async (wid: string) => wid === "saltmarch"
+    ? { meta: { id: "saltmarch", name: "Saltmarch", genre: "Harbour noir", tone: "", themes: [] },
+        body: "", counts: {} }
+    : { meta: { id: "realm", name: "Realm", genre: "Realm's genre", tone: "", themes: [] },
+        body: "", counts: {} });
+  rerender(<WorldAbout wid="saltmarch" />);
+  expect(await screen.findByText(/Genre: Harbour noir/)).toBeInTheDocument();
+  releasePut({ id: "realm", name: "Realm" });
+  await waitFor(() => expect(api.getWorld).toHaveBeenCalledWith("realm"));
+  expect(screen.getByText(/Genre: Harbour noir/)).toBeInTheDocument();
+  expect(screen.queryByText(/Realm's genre/)).not.toBeInTheDocument();
+});

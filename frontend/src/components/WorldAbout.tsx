@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, type WorldProfile } from "../api/client";
@@ -17,10 +17,15 @@ export function WorldAbout({ wid }: { wid: string }) {
   const [draft, setDraft] = useState<ProfileDraft | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Which world the screen is showing NOW. This component outlives a world
+  // switch (the overview is not keyed by world), so a save still in flight
+  // when the reader moves on must not land its world's profile on the next.
+  const shown = useRef(wid);
 
   useEffect(() => {
     let live = true;
-    setProfile(null); setDraft(null); setError(null);
+    shown.current = wid;
+    setProfile(null); setDraft(null); setError(null); setSaving(false);
     api.getWorld(wid).then((w) => {
       if (live) setProfile({ genre: w.meta.genre ?? "", tone: w.meta.tone ?? "",
                              themes: w.meta.themes ?? [], description: w.body.trim() });
@@ -31,17 +36,20 @@ export function WorldAbout({ wid }: { wid: string }) {
   async function save() {
     if (!draft) return;
     const next = profileOf(draft);
+    const target = wid;
+    const current = () => shown.current === target;
     setSaving(true); setError(null);
     try {
-      await api.updateWorld(wid, next);
+      await api.updateWorld(target, next);
       // Re-read rather than echo: the store folds and de-duplicates what it
       // keeps, and the view should show what was kept.
-      const w = await api.getWorld(wid);
+      const w = await api.getWorld(target);
+      if (!current()) return;
       setProfile({ genre: w.meta.genre ?? "", tone: w.meta.tone ?? "",
                    themes: w.meta.themes ?? [], description: w.body.trim() });
       setDraft(null);
-    } catch (err: unknown) { setError(errorText(err)); }
-    finally { setSaving(false); }
+    } catch (err: unknown) { if (current()) setError(errorText(err)); }
+    finally { if (current()) setSaving(false); }
   }
 
   const p = profile ?? EMPTY;
