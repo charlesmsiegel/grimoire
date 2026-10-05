@@ -753,6 +753,42 @@ def _promote_flat(cid: str, kind: str, eid: str, wroot: Path) -> None:
         overlay.record_dir(cid, kind, eid) / "assets", wroot / kind / eid / "assets"))
 
 
+def promoted_intact(cid: str, kind: str, eid: str) -> bool:
+    """Did a flat-record `promote` of this ref land in full?
+
+    What a caller that journalled a promote as *attempted* and never saw it
+    return asks before trying again (the chronicle commit's publish step, spec
+    §9.4) -- asking `promote` instead would refuse the commit's own record as a
+    collision. True only when the campaign holds a sync base for the ref, the
+    world file exists, and that file's bytes hash to the base.
+
+    The WORLD file is what is compared, never the campaign copy. `promote`
+    records the base first and writes the world file second, both from the same
+    bytes, so the pair agreeing is the one state only a completed promote of
+    this record leaves behind. The campaign copy proves nothing either way: it
+    is free to move after a publish, and it matched the base before the world
+    file was ever written. A base beside a world file that hashes to something
+    else is the residue of a promote that never landed plus a record somebody
+    else put under the same id -- and that one `promote`'s own precondition
+    refuses, which is the answer it should get. It is also what a promote that
+    DID land looks like once the world record has been edited since; the two
+    cannot be told apart from here, so both read as not published, which errs
+    toward reporting a publish that happened rather than claiming one that did
+    not.
+    """
+    if kind not in entities.SYNCED_KINDS or not safe_id(eid):
+        return False
+    base = campaigns_paths.read_manifest(cid).get(_ref_str(kind, eid))
+    if not isinstance(base, str) or not base:
+        return False             # "" is the pre-slim reservation, not a base
+    try:
+        text = _world_file(campaigns_read.world_root_of(cid), kind, eid).read_text(
+            encoding="utf-8")
+    except (OSError, ValueError):  # absent, unreadable, or not text this store wrote
+        return False
+    return entities.content_hash(text) == base
+
+
 def _require_world_character(cid: str, wroot: Path, text: str, gid: str) -> None:
     """A greeting names the character it belongs to, so the library needs that
     character too -- otherwise promoting publishes a greeting pointing at

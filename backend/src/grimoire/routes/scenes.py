@@ -4432,10 +4432,21 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
             started.append({"id": "timeline", "kind": "error",
                             "reason": store.absorb.UNCONFIRMED})
         store.scenes.mark_absorbed(cid, sid, body.one_line, body.summary)
+        def checkpoint() -> None:
+            store.commits.checkpoint(cid, body.commit_token, progress)
+
         applied, failures = store.absorb.apply_edits(
-            cid, body.edits, sid, progress=progress,
-            checkpoint=lambda: store.commits.checkpoint(cid, body.commit_token, progress))
-        result = {**record, "applied": applied, "failures": started + failures}
+            cid, body.edits, sid, progress=progress, checkpoint=checkpoint)
+        # Rows the reviewer sent to the world library, promoted as a journalled
+        # step of THIS commit rather than after it (spec §9.4): a retry after a
+        # lost response must find its own world record in the journal, not
+        # collide with it. Ahead of `record`, so a spent token replays both
+        # lists with the rest of the result. Never fatal -- a failed publish
+        # leaves the record in the campaign and says so.
+        published, publish_failed = store.absorb.publish.publish_created(
+            cid, body.edits, progress, checkpoint)
+        result = {**record, "applied": applied, "failures": started + failures,
+                  "published": published, "publish_failed": publish_failed}
         store.commits.record(cid, body.commit_token, result, fp, sid)
         # The scene is absorbed, so its pending review describes work that has
         # now landed. Inside the hold, after the ledger entry, so a save that

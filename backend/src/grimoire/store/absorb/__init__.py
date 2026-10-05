@@ -8,7 +8,8 @@ from __future__ import annotations
 
 # Submodules first, then names. The submodule line is listed in dependency
 # order (`prompt`/`parse`/`snapshots`/`routing`/`weather`/`conflicts` ->
-# `materializer` -> `apply`): each file imports only files named before it.
+# `materializer` -> `apply` -> `publish`): each file imports only files named
+# before it.
 # Python would resolve any other order too -- a submodule already in
 # `sys.modules` is bound whatever this line says -- so the order is a deliberate
 # reading aid, not a requirement: it states the package's internal layering in
@@ -33,6 +34,7 @@ from . import (  # noqa: F401
                materializer,
                parse,
                prompt,
+               publish,
                routing,
                snapshots,
                weather,
