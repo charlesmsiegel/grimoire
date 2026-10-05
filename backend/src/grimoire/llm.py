@@ -182,8 +182,11 @@ DEGRADE = "_degrade"
 #: The HTTP statuses that mean "not this request" -- a provider refusing an
 #: image for its format, size or content. `bad_response` alone cannot say this:
 #: a 500 maps to it too, and re-sending as text on a server error would drop
-#: the pictures from a turn a plain retry would have served.
-REJECTED_STATUSES = frozenset({400, 413, 415, 422})
+#: the pictures from a turn a plain retry would have served. 404 because
+#: OpenRouter answers "No endpoints found that support image input" with one
+#: when no endpoint it may route to takes images; a 404 for a genuinely missing
+#: model costs one extra text attempt that fails the same way.
+REJECTED_STATUSES = frozenset({400, 404, 413, 415, 422})
 
 
 def _with_degrades(routes: list[tuple[dict, int]]) -> list[tuple[dict, int]]:

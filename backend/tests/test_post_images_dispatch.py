@@ -143,8 +143,11 @@ async def test_a_drafts_own_image_parts_still_exclude_claude():
     assert [c["id"] for c, _n in routes] == ["a"]
 
 
-async def test_a_refused_image_is_retried_as_text_on_the_same_connection():
-    provider = SequencedProvider([LLMError("bad_response", "no images", status=422), ("ok",)])
+@pytest.mark.parametrize("status", [400, 404, 413, 415, 422])
+async def test_a_refused_image_is_retried_as_text_on_the_same_connection(status):
+    """404 included: OpenRouter answers "No endpoints found that support image
+    input" when no endpoint it may route to takes images."""
+    provider = SequencedProvider([LLMError("bad_response", "no images", status=status), ("ok",)])
     usage: dict = {}
     assert await _run(_client(provider), _prepared(), _conn(), usage) == "ok"
     first, second = provider.requests
