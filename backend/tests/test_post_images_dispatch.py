@@ -5,7 +5,6 @@ import json
 
 import httpx
 import pytest
-from llm_fakes import ScriptedProvider, SequencedProvider
 
 from grimoire import content_parts as cp
 from grimoire import llm
@@ -13,6 +12,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.model_guidance import PreparedMessages
 from grimoire.openai_compatible import OpenAICompatibleClient
+from tests.llm_fakes import ScriptedProvider, SequencedProvider
 
 MAP = cp.ref("/api/campaigns/c/images/coastline", "a map", False)
 HALL = cp.ref("/api/campaigns/c/images/hall", "the hall", True)
