@@ -227,3 +227,50 @@ def test_naming_still_wins_before_the_first_block():
 def test_the_first_block_switches_the_reason_to_rotation():
     out = speaker.nominate(NPCS, [_npc("Seraphine Vale")])
     assert out["reason"] == "rotation" and out["spoken"] is False
+
+
+# ------------------------------------------------- mention order and silence
+
+def test_mentioned_lists_every_named_npc_in_mention_order():
+    names = ["Seraphine Vale", "Mara", "Winifred"]
+    assert speaker.mentioned("Winifred, ask Mara. Winifred again.", names) == [
+        "Winifred", "Mara"]
+    assert speaker.mentioned("the maraud was loud", names) == []
+    assert speaker.mentioned("Seraphine?", names) == ["Seraphine Vale"]
+
+
+def test_mentioned_orders_by_the_earliest_label_of_each_name():
+    """A name answers to its full name and its first name; the earlier of the
+    two that the text uses is where that name is first mentioned."""
+    names = ["Seraphine Vale", "Mara"]
+    assert speaker.mentioned("Mara, then Seraphine Vale.", names) == [
+        "Mara", "Seraphine Vale"]
+    assert speaker.mentioned("Seraphine Vale, then Mara; Seraphine too.", names) == [
+        "Seraphine Vale", "Mara"]
+
+
+def test_mentioned_ignores_an_ambiguous_label():
+    names = ["Mara Quist", "Mara Ash", "Winifred"]
+    assert speaker.mentioned("Mara?", names) == []
+    assert speaker.mentioned("Mara Ash and Winifred", names) == ["Mara Ash", "Winifred"]
+
+
+def test_mentioned_ignores_case_and_blank_text():
+    assert speaker.mentioned("MARA!", ["Mara", "Winifred"]) == ["Mara"]
+    assert speaker.mentioned("", ["Mara", "Winifred"]) == []
+
+
+def test_quietest_ranks_never_spoken_first_then_longest_silence():
+    history = [_npc("Mara", "a"), _npc("Winifred", "b")]
+    assert speaker.quietest(["Mara", "Winifred", "Seraphine Vale"], history) == [
+        "Seraphine Vale", "Mara", "Winifred"]
+
+
+def test_quietest_works_for_one_name_and_none():
+    assert speaker.quietest(["Mara"], []) == ["Mara"]
+    assert speaker.quietest([], []) == []
+
+
+def test_quietest_dedupes_and_strips_names_like_nominate():
+    assert speaker.quietest(["Mara", " Mara ", "", None, "Winifred"], []) == [
+        "Mara", "Winifred"]
