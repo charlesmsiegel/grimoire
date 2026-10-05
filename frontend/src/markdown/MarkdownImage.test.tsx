@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { GreetingMarkdown } from "../components/GreetingMarkdown";
 import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
 import { MarkdownImage } from "./MarkdownImage";
