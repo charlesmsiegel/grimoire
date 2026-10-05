@@ -85,6 +85,7 @@ from . import (
     image_drafts,
     image_hash,
     image_library,
+    image_refs,
     image_sanitize,
     image_store,
     image_subjects,
