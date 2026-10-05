@@ -158,6 +158,9 @@ held throughout, Stop reaching every round, and one settlement boundary.
   instead ends the round cleanly and starts the follow-on round with that
   character leading (`validate_handoff` reports a repeat distinctly from an
   ineligible ref). With no rounds remaining, today's rejection stands.
+  In directed mode with `auto_remaining > 0`, candidates are eligible +
+  grimoire minus the current actor only (used actors included). This is what
+  makes a repeat handoff reachable.
 - Stop sets `auto_remaining` to 0, clears the round's remaining plan and marks
   the round stopped, so a later Retry finishes only the interrupted contribution
   and generates nothing after it, in any mode.

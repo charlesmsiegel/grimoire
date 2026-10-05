@@ -17,13 +17,19 @@ _PREFIX_RUN = frozenset("` \thandofHANDOF\n")
 
 
 def validate_handoff(payload, eligible, used):
+    """`(next, issue)` for a handoff payload. A ref that is eligible but has
+    already spoken is reported as `"repeated speaker"`, apart from an
+    ineligible one: with automatic rounds remaining, the caller turns that
+    repeat into the next round's lead instead of rejecting it."""
     if not isinstance(payload, dict) or set(payload) != {"next"}:
         return None, "missing or invalid handoff"
     ref = payload["next"]
     if ref is None:
         return None, None
-    if not isinstance(ref, str) or ref not in eligible or ref in used:
+    if not isinstance(ref, str) or ref not in eligible:
         return None, "ineligible or repeated speaker"
+    if ref in used:
+        return None, "repeated speaker"
     return ref, None
 
 
