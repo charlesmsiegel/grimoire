@@ -191,6 +191,34 @@ def test_an_adapted_greeting_rolls_its_macros_once_for_every_speaker(client, cam
     assert len(seen) == 2 and seen[0] == seen[1]
 
 
+def test_adapting_a_greeting_that_expands_to_nothing_is_refused(client, campaign):
+    """`{{date}}` in a scene with no date expands to "": adapting it would send
+    the adapt instruction with no greeting to adapt."""
+    _world, cid = campaign
+    gid = client.post(f"/api/campaigns/{cid}/greetings",
+                      json={"name": "At the Gate", "character": "mara", "version": "main",
+                            "body": "{{date}}"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    sid = client.post(f"/api/campaigns/{cid}/scenes/{sid}/start-from-greeting",
+                      json={"greeting": gid, "seed": False}).json()["id"]
+    fake = FakeLLM(turns=[["unused"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/opener", json={"adapt": True})
+    assert response.status_code == 409
+    assert fake.calls == 0
+
+
+def test_an_ordinary_opener_still_needs_a_prompt(client, campaign):
+    _world, cid = campaign
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    fake = FakeLLM(turns=[["unused"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    url = f"/api/campaigns/{cid}/scenes/{sid}/opener"
+    assert client.post(url, json={}).status_code == 422
+    assert client.post(url, json={"prompt": "   "}).status_code == 422
+    assert fake.calls == 0
+
+
 def test_adapting_needs_a_scene_started_from_a_greeting(client, campaign):
     _world, cid = campaign
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]

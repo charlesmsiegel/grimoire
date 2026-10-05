@@ -124,6 +124,19 @@ def test_start_from_greeting_without_seeding_keeps_the_empty_scene_guard(monkeyp
     assert g not in playing.read_played(cid)
 
 
+def test_an_adapted_start_refuses_a_greeting_with_no_body_before_writing(monkeypatch, tmp_path):
+    wid = _world(monkeypatch, tmp_path)
+    wroot = worlds.world_root(wid)
+    characters.create_character(wroot, "Seraphine", "default", characters.blank_card("Seraphine"))
+    g = greetings.create_greeting(wroot, "Open", "seraphine", "default", body="  ")
+    cid, sid = _campaign_after_seed(wid)
+    with pytest.raises(playing.PlayError):
+        playing.start_from_greeting(cid, sid, g, seed=False)
+    assert g not in playing.read_played(cid)
+    assert not ap.is_appeared(cid, "characters", "seraphine")
+    assert "greeting" not in scenes.read_scene(cid, sid)["meta"]
+
+
 def test_start_from_greeting_expands_roll_macro(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)

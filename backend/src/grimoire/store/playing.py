@@ -329,10 +329,16 @@ def start_from_greeting(cid: str, sid: str, gid: str, *, seed_location: bool = T
     on offer to a second scene while this one opens from it. Deleting the scene
     orphans the mark exactly as a failed verbatim start does, and
     `mark_greeting` clears an orphan."""
-    g = overlay.read_greeting(cid, gid)["meta"]   # raises GreetingNotFound
+    greeting = overlay.read_greeting(cid, gid)   # raises GreetingNotFound
+    g = greeting["meta"]
     scene = scenes_read.read_scene(cid, sid)               # raises SceneNotFound
     if scene["messages"]:
         raise PlayError("scene already has messages")
+    # Refused before any write: an adapted start claims the greeting and posts
+    # nothing, so one with no body would consume it for an opening that the
+    # adapt route will then refuse to write.
+    if not seed and not greeting["body"].strip():
+        raise PlayError(f"greeting {gid} has no body to adapt")
     scene_pcless = scene["meta"].get("pcless") == "true"
     if scene_pcless and not g["pcless"]:
         raise PlayError("an offscreen scene must start from an offscreen greeting")

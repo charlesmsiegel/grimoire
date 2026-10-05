@@ -579,6 +579,11 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
+    # `prompt` defaults to "" only so an adapt request need not send one; an
+    # ordinary opener still needs a premise, as it did when the field was
+    # required, rather than spending a call on context alone.
+    if not body.adapt and not body.prompt.strip():
+        raise HTTPException(status_code=422, detail="an opener needs a prompt")
     prompt = _greeting_to_adapt(cid, sid) if body.adapt else body.prompt
     conn = _require_connection("opener", cid)
     cast = _opener_cast(cid, sid)
@@ -627,9 +632,13 @@ def _greeting_to_adapt(cid: str, sid: str) -> str:
     except store.greetings.GreetingNotFound:
         raise HTTPException(status_code=409,
                             detail="the greeting this scene was started from no longer exists") from None
-    if not body.strip():
+    # Judged on the EXPANSION: a body that is only macros (a `{{date}}` in an
+    # undated scene) can expand to nothing, and adapting nothing is a premise-
+    # less opener wearing the adapt instruction.
+    text = store.context.expand_macros(body, store.context.scene_substitutions(cid, sid), cid, sid)
+    if not text.strip():
         raise HTTPException(status_code=409, detail="the greeting this scene was started from is empty")
-    return store.context.expand_macros(body, store.context.scene_substitutions(cid, sid), cid, sid)
+    return text
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/first-post")
