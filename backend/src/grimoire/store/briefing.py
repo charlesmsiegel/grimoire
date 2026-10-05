@@ -37,9 +37,9 @@ has just run, which makes that window this view's normal case, not a remote one.
 
 from __future__ import annotations
 
-from . import chronicle, commitments, locks, plot, relationships
+from . import chronicle, locks, relationships
 from .appearances import cast as appearances_cast
-from .continuity import involvement
+from .continuity import effective, involvement
 from .scenes import read as scenes_read
 
 
@@ -72,6 +72,12 @@ def _focus(present: list[dict], pcless: bool) -> list[dict]:
     meaning now holds still for as long as the scene does.
     """
     return present if pcless else [a for a in present if a.get("role") == "player"]
+
+
+def _physical_keys(rows: list[dict]) -> list[dict]:
+    """Effective rows without their ``aliases`` key: the briefing renders no
+    merge note, so its row shape stays exactly the physical projection's."""
+    return [{k: v for k, v in row.items() if k != "aliases"} for row in rows]
 
 
 def _flagged(rows: list[dict], touched: dict[str, set[str]],
@@ -158,19 +164,25 @@ def build(cid: str, sid: str) -> dict:
         names = {f"{a['kind']}/{a['id']}": _text(a.get("name")) or _text(a.get("id"))
                  for a in focus}
         stage = _tolerant(lambda: involvement.stage_history(cid, set(names)), {})
-        # Two reads of one file, both inside the hold: `open_threads` projects
-        # the rows and `involvement.touched_scenes` needs the beats it drops.
+        # Two reads per section, both inside the hold: `effective.threads` /
+        # `effective.commitments` give the canonical rows -- a record merged
+        # away by an alias is not a row of its own, and its canonical answers
+        # for the group -- and `involvement.group_touched` gives the scenes
+        # each canonical was touched in, every alias member's beats folded
+        # into it, keyed by canonical id the same way. So a merged record is
+        # listed once and flagged by any scene that moved any of its members.
         #
         # Guarded SEPARATELY, though, because they do not fail together. A file
         # that will not parse takes both, and the section is empty either way.
-        # But `involvement.touched_scenes` can fail on data the projection reads fine --
-        # some shape neither of them anticipated -- and pairing them would let
-        # that cost every row in the section rather than every flag. Losing the
-        # narrowing is this view degrading; losing the obligations is it lying.
-        threads = _tolerant(lambda: plot.open_threads(cid), [])
-        thread_scenes = _tolerant(lambda: involvement.touched_scenes(plot.read(cid)), {})
-        owed = _tolerant(lambda: commitments.open_commitments(cid), [])
-        owed_scenes = _tolerant(lambda: involvement.touched_scenes(commitments.read(cid)), {})
+        # But `involvement.group_touched` can fail on data the projection reads
+        # fine -- some shape neither of them anticipated -- and pairing them
+        # would let that cost every row in the section rather than every flag.
+        # Losing the narrowing is this view degrading; losing the obligations
+        # is it lying.
+        threads = _tolerant(lambda: _physical_keys(effective.threads(cid)), [])
+        thread_scenes = _tolerant(lambda: involvement.group_touched(cid, "thread"), {})
+        owed = _tolerant(lambda: _physical_keys(effective.commitments(cid)), [])
+        owed_scenes = _tolerant(lambda: involvement.group_touched(cid, "commitment"), {})
         # The whole present cast, not just `focus`: a feeling between two NPCs
         # in the room is exactly the kind of thing a briefing is for, and
         # `context.story._relationship_lines` renders the same block from the
