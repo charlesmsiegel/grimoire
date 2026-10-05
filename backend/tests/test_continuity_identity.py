@@ -293,6 +293,28 @@ def test_candidates_never_include_a_hidden_alias_source(cid, s0, sid):
     assert "thread:b" in _refs(examined)
 
 
+def test_examine_treats_source_title_with_closed_canonical_as_proposed(cid, s0, sid):
+    """A slug collision on an open alias source whose canonical is closed is not
+    honoured (that would reopen the canonical unexamined): the row is proposed
+    new, and the closed canonical is a candidate the resolver may see."""
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara lost the map.", s0)
+    store.plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "closed",
+                            "Winifred copied the map.", s0)
+    review.create_alias(cid, "thread:mara-s-map", "thread:winifreds-chart",
+                        accept_status_change=True)
+    row = {"title": "Mara's map", "beat": "Mara hunted for the lost map.", "status": "open"}
+    sig = similarity.lexical(_proposed("thread", row, sid), _pooled(cid, "thread:winifreds-chart"))
+    assert sig["tokens"] >= similarity.TOKEN_FLOOR
+    exam = _examine(cid, sid, plot=[row])
+    assert exam.proposed == 1
+    [examined] = exam.rows
+    assert examined.assigned == "mara-s-map-2"
+    by_ref = {s.ref: s for s, _ in examined.candidates}
+    assert "thread:winifreds-chart" in by_ref
+    assert by_ref["thread:winifreds-chart"].live is False
+    assert "thread:mara-s-map" not in by_ref
+
+
 def test_distinguished_from_drops_unknown_and_canonicalizes(cid, s0, sid):
     _seed_alias(cid, s0)
     row = {"title": "Mara's map", "beat": "Mara hunted for her map.", "status": "open",

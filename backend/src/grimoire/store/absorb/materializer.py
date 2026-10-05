@@ -26,6 +26,7 @@ from .. import (
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
 from ..campaigns import paths as campaigns_paths
+from ..continuity import effective as continuity_effective
 from ..paths import slugify
 from . import conflicts, parse, routing, weather
 
@@ -124,7 +125,8 @@ def _text(value) -> str:
 
 
 def _new_record_id(stored: dict, staged: dict[str, str], slug: str, title: str, *,
-                   settled: Callable[[dict], bool]) -> str:
+                   settled: Callable[[dict], bool],
+                   aliases: dict[str, str] | None = None) -> str:
     """`slug`, or the first `slug-N` that is free or holds the SAME record.
 
     The one allocator for both record types that absorb can open by title (spec
@@ -169,12 +171,23 @@ def _new_record_id(stored: dict, staged: dict[str, str], slug: str, title: str, 
     A movement that DOES carry an id keeps pointing where it says, resolved or
     not: that is a reference, and silently redirecting it would be the opposite
     mistake.
+
+    `aliases` ({source id: canonical id}, this record type's live alias map)
+    adds one case (spec §7.2): a candidate that is a merged record's SOURCE is
+    honoured -- and `_assign_section` then stages onto the canonical -- only
+    when the canonical passes the same predicate (unsettled, and titled like the
+    row or like the source). A source whose canonical is settled is taken, not
+    honoured: following it would reopen the canonical on a title match nobody
+    examined, the route §10.5 closes, so the row is allocated `slug-N` and the
+    identity step sees the settled canonical as a candidate instead.
     """
     want = title.strip().casefold()
 
     def _free(candidate: str) -> bool:
         if candidate in staged:
             return staged[candidate] == want
+        if aliases and candidate in aliases:
+            return _merge_honoured(stored, candidate, aliases[candidate], want, settled)
         cur = stored.get(candidate)
         if not isinstance(cur, dict):
             return True
@@ -187,6 +200,19 @@ def _new_record_id(stored: dict, staged: dict[str, str], slug: str, title: str, 
         n += 1
         candidate = f"{slug}-{n}"
     return candidate
+
+
+def _merge_honoured(stored: dict, source: str, canonical: str, want: str,
+                    settled: Callable[[dict], bool]) -> bool:
+    """Whether a slug landing on alias `source` may follow it to `canonical`."""
+    cur = stored.get(canonical)
+    if not isinstance(cur, dict) or settled(cur):
+        return False
+    titles = {_text(cur.get("title")).casefold()}
+    src = stored.get(source)
+    if isinstance(src, dict):
+        titles.add(_text(src.get("title")).casefold())
+    return want in titles
 
 
 def _commitment_settled(record: dict) -> bool:
@@ -205,31 +231,61 @@ def _thread_settled(record: dict) -> bool:
     return _text(record.get("status")).lower() == "closed"
 
 
-def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
+def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str,
+                       aliases: dict[str, str] | None = None) -> str:
     """`_new_record_id` for commitments: a resolved record is settled. Kept by
     name because `apply` reallocates a row staged as new through it."""
-    return _new_record_id(owed, staged, slug, title, settled=_commitment_settled)
+    return _new_record_id(owed, staged, slug, title, settled=_commitment_settled,
+                          aliases=aliases)
 
 
-def _new_thread_id(threads: dict, staged: dict, slug: str, title: str) -> str:
+def _new_thread_id(threads: dict, staged: dict, slug: str, title: str,
+                   aliases: dict[str, str] | None = None) -> str:
     """`_new_record_id` for plot threads: a closed thread is settled. `apply`
     reallocates a plot row staged as new through it, as it does commitments."""
-    return _new_record_id(threads, staged, slug, title, settled=_thread_settled)
+    return _new_record_id(threads, staged, slug, title, settled=_thread_settled,
+                          aliases=aliases)
 
 
 class Assigned(NamedTuple):
     """The id one plot/commitment row stages onto. `existing` says whether that
-    id names a stored record; `merged_from` is reserved for the alias redirect."""
+    id names a stored record; `merged_from` is the alias source the row named
+    (by id, or by an honoured slug) when `id` is that source's canonical."""
     id: str
     existing: bool
     merged_from: str | None
 
 
+def _aliases(live: dict[str, str] | None, kind: str) -> dict[str, str]:
+    """`live` (ref -> ref) narrowed to one record type, as bare ids."""
+    prefix = f"{kind}:"
+    return {src.removeprefix(prefix): dst.removeprefix(prefix)
+            for src, dst in (live or {}).items()
+            if isinstance(src, str) and isinstance(dst, str)
+            and src.startswith(prefix) and dst.startswith(prefix)}
+
+
+def _redirect(rid: str, stored: dict, aliases: dict[str, str]) -> tuple[str, str | None]:
+    """(`rid`'s live canonical, `rid`) when it is a merged record's source and
+    the canonical is stored; else (`rid`, None)."""
+    canonical = aliases.get(rid)
+    if canonical is not None and isinstance(stored.get(canonical), dict):
+        return canonical, rid
+    return rid, None
+
+
 def _assign_section(rows: list, stored: dict, section: str,
-                    allocate: Callable[[dict, dict, str, str], str],
-                    out: dict[tuple[str, int], Assigned | None]) -> dict[str, str]:
+                    allocate: Callable[[dict, dict, str, str, dict[str, str]], str],
+                    out: dict[tuple[str, int], Assigned | None],
+                    aliases: dict[str, str]) -> dict[str, str]:
     """Assign one section's rows in order, writing into `out`; returns the
-    staged-title map (id -> folded title) the batch built."""
+    staged-title map (id -> folded title) the batch built.
+
+    A row naming a merged record's source stages onto its live canonical
+    (spec §7.2) -- an explicit id whatever the canonical's status (it is a
+    reference; the label says when it reopens one), a slug only where
+    `_new_record_id` honoured it. Redirected before the one-edit-per-record
+    check, so a source and its canonical in one batch are one edit."""
     seen: set[str] = set()
     staged: dict[str, str] = {}   # id -> folded title, for rows in THIS batch
     for i, e in enumerate(rows):
@@ -240,7 +296,10 @@ def _assign_section(rows: list, stored: dict, section: str,
         given = (e.get("id", "") or "").strip()
         title = (e.get("title", "") or "").strip()
         if given:
-            rid = given
+            # Redirected BEFORE the reservation below, so what is reserved is
+            # the canonical under its stored title -- the record the row will
+            # actually move.
+            rid, source = _redirect(given, stored, aliases)
             # An explicit id is RESERVED too, not just remembered as seen. The
             # allocator consults the store and this map; an explicit id naming
             # a record that does not exist yet is in neither, so a later new
@@ -267,14 +326,15 @@ def _assign_section(rows: list, stored: dict, section: str,
         elif any(c.isalnum() for c in title):
             # New record — needs a title with real content, and an id that does
             # not land on somebody else's record.
-            rid = allocate(stored, staged, slugify(title), title)
+            rid = allocate(stored, staged, slugify(title), title, aliases)
             staged[rid] = title.strip().casefold()
+            rid, source = _redirect(rid, stored, aliases)
         else:
             continue  # no id and no usable title -> drop
         if rid in seen:
             continue  # one edit per record per scene (avoids duplicate ids / double-apply)
         seen.add(rid)
-        out[(section, i)] = Assigned(rid, isinstance(stored.get(rid), dict), None)
+        out[(section, i)] = Assigned(rid, isinstance(stored.get(rid), dict), source)
     return staged
 
 
@@ -288,19 +348,52 @@ def assign_ids(threads: dict, owed: dict | None, parsed: dict,
     took (one edit per record per scene). Shared so that anything asking which
     record a row will stage onto -- the identity step, materialize itself --
     gets the same answer, explicit-id reservations and `slug-N` allocation
-    included. `live` (the alias map) is accepted for the redirect and not yet
-    consulted.
+    included. `live` is `continuity.effective.live_canon` -- the alias redirect
+    (spec §7.2), which both callers must pass the same map for.
     """
-    del live   # the alias redirect is not implemented yet
     out: dict[tuple[str, int], Assigned | None] = {}
     _assign_section(parsed.get("plot_movements", []), threads, "plot_movements",
-                    _new_thread_id, out)
+                    _new_thread_id, out, _aliases(live, "thread"))
     rows = parsed.get("commitment_movements", [])
     if owed is None:
         out.update({("commitment_movements", i): None for i in range(len(rows))})
     else:
-        _assign_section(rows, owed, "commitment_movements", _new_commitment_id, out)
+        _assign_section(rows, owed, "commitment_movements", _new_commitment_id, out,
+                        _aliases(live, "commitment"))
     return out
+
+
+def _live_canon(cid: str) -> dict[str, str]:
+    """The alias map staging redirects through, or {} when it cannot be read.
+
+    Not redirecting hides nothing: a continuity.json the reader cannot parse
+    reads as no aliases for every effective reader too, so the source is a
+    record of its own everywhere and writing to it is visible."""
+    try:
+        return continuity_effective.live_canon(cid)
+    except (OSError, ValueError, TypeError, KeyError):
+        return {}
+
+
+def _merged_head(stored: dict | None, slot: Assigned, title: str) -> str:
+    """The title a staged row's label starts with: the alias source's own,
+    for a row that named it, so the reviewer sees what the model wrote."""
+    if slot.merged_from is None:
+        return title
+    src = (stored or {}).get(slot.merged_from)
+    return (_text(src.get("title")) if isinstance(src, dict) else "") or slot.merged_from
+
+
+def _merged_tail(cur: dict | None, slot: Assigned, title: str,
+                 settled: Callable[[dict], bool]) -> str:
+    """`→ merged into <title>` for a row redirected off an alias source, with
+    the canonical's stored status when approving the row would reopen it."""
+    if slot.merged_from is None or not isinstance(cur, dict):
+        return ""
+    tail = f" → merged into {title}"
+    if settled(cur):
+        tail += f" ({_text(cur.get('status'))})"
+    return tail
 
 
 def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
@@ -581,7 +674,12 @@ def materialize(cid: str, sid: str, parsed: dict,
     # Which record each plot/commitment row stages onto, decided once for both
     # sections by the same `assign_ids` the identity step asks -- so the two can
     # never disagree about which slug collisions are honoured.
-    assigned = assign_ids(threads, owed, parsed)
+    #
+    # A row naming a merged record's source is staged onto its live canonical
+    # (spec §7.2): the id, payload and `before` are the canonical's, the PHYSICAL
+    # record `apply` writes and `conflicts` re-reads at save time; the label
+    # keeps the source's title and says where the beat is going.
+    assigned = assign_ids(threads, owed, parsed, _live_canon(cid))
     for i, e in enumerate(parsed.get("plot_movements", [])):
         slot = assigned[("plot_movements", i)]
         if slot is None:
@@ -603,9 +701,11 @@ def materialize(cid: str, sid: str, parsed: dict,
             disp_title = cur.get("title") or title or pid  # keep the stored title
         else:
             before, disp_title = "", title or pid
+        label = (f"{_merged_head(threads, slot, disp_title)} — {status}"
+                 f"{_merged_tail(cur, slot, disp_title, _thread_settled)}")
         out.append(_staged({"id": f"plot:{pid}", "kind": "plot",
                             "target": {"kind": "plot", "id": pid},
-                            "label": f"{disp_title} — {status}",
+                            "label": label,
                             "field": "beat", "before": before, "after": beat, "authored": False,
                             "payload": {"id": pid, "title": disp_title, "status": status,
                                         "scene": sid}}, e))
@@ -653,9 +753,10 @@ def materialize(cid: str, sid: str, parsed: dict,
             disp_kind = kind or "promise"      # set_movement's own defaults, for
             disp_status = status or "open"     # a commitment being created here
             disp_due = due or ""
-        label = f"{disp_title} — {disp_kind}, {disp_status}"
+        label = f"{_merged_head(owed, slot, disp_title)} — {disp_kind}, {disp_status}"
         if disp_due:
             label += f", due {disp_due}"
+        label += _merged_tail(cur, slot, disp_title, _commitment_settled)
         out.append(_staged({"id": f"commitment:{mid}", "kind": "commitment",
                             "target": {"kind": "commitments", "id": mid},
                             "label": label,

@@ -3251,3 +3251,132 @@ def test_assign_ids_matches_materialize(monkeypatch, tmp_path):
     # and no commitments are assigned when the store is unreadable
     unreadable = materializer.assign_ids(plot.read(cid), None, parsed)
     assert all(unreadable[("commitment_movements", i)] is None for i in range(4))
+
+
+# --------------------------------------------------- §7.2: staging follows merges
+
+
+def _alias_campaign(monkeypatch, tmp_path, canonical_status="open"):
+    """A campaign whose thread "Mara's map" (stored where absorb would have
+    opened it, `mara-s-map`) is merged into "Winifred's chart"."""
+    from grimoire.store import plot
+    from grimoire.store.continuity import review
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara lost the map.", "s1")
+    plot.set_movement(cid, "winifreds-chart", "Winifred's chart", canonical_status,
+                      "Winifred copied the map.", "s1")
+    review.create_alias(cid, "thread:mara-s-map", "thread:winifreds-chart",
+                        accept_status_change=canonical_status == "closed")
+    return cid, sid
+
+
+def test_materialize_redirects_an_alias_source_id(monkeypatch, tmp_path):
+    """The model may still name a merged record by its own id (a remembered
+    one, or a physical snapshot): the beat lands on the record it now is."""
+    from grimoire.store import plot
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid, sid = _alias_campaign(monkeypatch, tmp_path)
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Mara found a clue."}]})
+    assert row["id"] == "plot:winifreds-chart"
+    assert row["target"] == {"kind": "plot", "id": "winifreds-chart"}
+    assert row["label"] == "Mara's map — advanced → merged into Winifred's chart"
+    assert row["label"].endswith("→ merged into Winifred's chart")
+    assert row["before"] == absorb_conflicts.plot_line(plot.get(cid, "winifreds-chart"))
+    assert row["payload"]["id"] == "winifreds-chart"
+    assert row["payload"]["title"] == "Winifred's chart"
+    assert absorb.check_conflicts(cid, [row]) == []
+
+
+def test_materialize_redirects_an_alias_source_slug(monkeypatch, tmp_path):
+    """An id-less row titled exactly like the open source would have been
+    honoured onto the source; it is honoured onto the canonical instead."""
+    cid, sid = _alias_campaign(monkeypatch, tmp_path)
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "Mara's map", "status": "advanced", "beat": "Mara found a clue."}]})
+    assert row["target"]["id"] == "winifreds-chart"
+    assert row["label"].endswith("→ merged into Winifred's chart")
+    assert row["payload"]["title"] == "Winifred's chart"
+
+
+def test_source_and_canonical_in_one_batch_stage_once(monkeypatch, tmp_path):
+    cid, sid = _alias_campaign(monkeypatch, tmp_path)
+    for rows in (
+        [{"id": "mara-s-map", "title": "", "status": "advanced", "beat": "First."},
+         {"id": "winifreds-chart", "title": "", "status": "advanced", "beat": "Second."}],
+        [{"id": "winifreds-chart", "title": "", "status": "advanced", "beat": "First."},
+         {"id": "", "title": "Mara's map", "status": "advanced", "beat": "Second."}],
+    ):
+        staged = absorb.materialize(cid, sid, {"plot_movements": rows})
+        assert [(e["target"]["id"], e["after"]) for e in staged] == [("winifreds-chart", "First.")]
+
+
+def test_commitment_alias_source_redirects_and_reserves_canonical_title(monkeypatch, tmp_path):
+    from grimoire.store import commitments
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    from grimoire.store.continuity import review
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", None,
+                             "Mara swore.", "s1")
+    commitments.set_movement(cid, "the-debt", "The debt", "threat", "open", "by midwinter",
+                             "Mara owes the guild.", "s1")
+    review.create_alias(cid, "commitment:mara-s-oath", "commitment:the-debt")
+    staged = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "mara-s-oath", "title": "", "kind": "", "status": "", "beat": "Mara paid a coin."},
+        # The canonical by its own title: the explicit row reserved it, so this
+        # is a second move of the same record, not a new `the-debt-2`.
+        {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "Again."}]})
+    [row] = staged
+    assert row["id"] == "commitment:the-debt"
+    assert row["target"] == {"kind": "commitments", "id": "the-debt"}
+    assert row["label"] == "Mara's oath — threat, open, due by midwinter → merged into The debt"
+    assert row["before"] == absorb_conflicts.commitment_line(commitments.get(cid, "the-debt"))
+    assert row["payload"]["id"] == "the-debt" and row["payload"]["title"] == "The debt"
+    assert absorb.check_conflicts(cid, [row]) == []
+
+
+def test_dangling_alias_does_not_redirect(monkeypatch, tmp_path):
+    from grimoire.store import plot
+    cid, sid = _alias_campaign(monkeypatch, tmp_path)
+    plot.restore(cid, "winifreds-chart", None)
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Mara found a clue."}]})
+    assert row["target"]["id"] == "mara-s-map"
+    assert row["label"] == "Mara's map — advanced"
+
+
+def test_malformed_continuity_file_stages_physically(monkeypatch, tmp_path):
+    cid, sid = _alias_campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "continuity.json").write_text("{ no", encoding="utf-8")
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Mara found a clue."}]})
+    assert row["target"]["id"] == "mara-s-map"
+    assert "merged into" not in row["label"]
+
+
+def test_slug_collision_on_a_source_with_closed_canonical_is_not_redirected(monkeypatch, tmp_path):
+    """Redirecting a slug accident onto a CLOSED canonical would reopen it with
+    no identity check (§10.2, §10.5): the row is new, at the next free slug."""
+    from grimoire.store import plot
+    cid, sid = _alias_campaign(monkeypatch, tmp_path, canonical_status="closed")
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "Mara's map", "status": "open", "beat": "Mara found a clue."}]})
+    assert row["id"] == "plot:mara-s-map-2"
+    assert row["before"] == ""
+    assert "merged into" not in row["label"]
+    applied, failures = absorb.apply_edits(cid, [row], sid)
+    assert failures == [] and applied
+    assert plot.get(cid, "winifreds-chart")["status"] == "closed"
+    assert plot.get(cid, "mara-s-map-2")["title"] == "Mara's map"
+
+
+def test_explicit_source_id_with_closed_canonical_is_labelled_closed(monkeypatch, tmp_path):
+    """An explicit id is a reference and is followed whatever the canonical's
+    status -- but the reviewer is told approving it reopens a closed record."""
+    cid, sid = _alias_campaign(monkeypatch, tmp_path, canonical_status="closed")
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Mara found a clue."}]})
+    assert row["target"]["id"] == "winifreds-chart"
+    assert row["label"].endswith("→ merged into Winifred's chart (closed)")
