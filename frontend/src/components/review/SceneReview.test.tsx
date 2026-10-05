@@ -697,10 +697,34 @@ test("a publish failure is reported after save", async () => {
   fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
   expect(await screen.findByText(/the world already has a record named x/)).toBeInTheDocument();
   expect(screen.getByText(/1 record could not be published to the world library/)).toBeInTheDocument();
+  // Spec 9.4: the notice says how to recover, and it outlives the review the
+  // save just closed.
+  await waitFor(() => expect(screen.queryByRole("button", { name: SAVE_BUTTON })).toBeNull());
+  expect(screen.getByText(
+    "It is kept in this campaign. Resolve the conflict, then publish it with Publish to library in the record's editor.",
+  )).toBeInTheDocument();
   expect(screen.queryByText(/did not apply/)).toBeNull();
   // a new absorb clears the stale notice
   fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
   await waitFor(() => expect(screen.queryByText(/could not be published/)).toBeNull());
+});
+
+test("several publish failures each get the recovery guidance", async () => {
+  stageNewLore();
+  (api.saveChronicle as any).mockResolvedValue({ id: "s1", one_line: "o", summary: "s", keywords: [],
+    cast: [], location: "", date: "", absorbed: "t", applied: ["new_lore:saltmarch-bell"], failures: [],
+    published: [],
+    publish_failed: [{ kind: "lore", id: "x", reason: "the world already has a record named x" },
+                     { kind: "lore", id: "y", reason: "the world already has a record named y" }] });
+  renderCampaign();
+  await screen.findByText("hi");
+  fireEvent.click(screen.getByRole("button", { name: /End scene/ }));
+  fireEvent.click(await screen.findByLabelText("World library"));
+  fireEvent.click(screen.getByRole("button", { name: SAVE_BUTTON }));
+  expect(await screen.findByText(/2 records could not be published/)).toBeInTheDocument();
+  expect(screen.getByText(
+    "Each is kept in this campaign. Resolve each conflict, then publish it with Publish to library in that record's editor.",
+  )).toBeInTheDocument();
 });
 
 test("a save result from before publishing existed (no published keys) still saves", async () => {

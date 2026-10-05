@@ -736,6 +736,28 @@ def test_apply_new_lore_creates_the_proposed_kind(monkeypatch, tmp_path):
         entities.read_entity(croot, "lore", "lantern")
 
 
+@pytest.mark.parametrize("name", ["Mara's Lamp", "mara's lamp", "Mara-s Lamp"])
+def test_apply_new_lore_refuses_a_duplicate_in_the_kind_it_was_edited_to(
+        monkeypatch, tmp_path, name):
+    """Staging dedupes in the kind the model proposed; the reviewer can change
+    it. Re-asked in the kind the row lands as -- by name, or by the slug a new
+    record would take -- and reported rather than suffixed into a duplicate."""
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    entities.create_entity(croot, "items", "Mara's Lamp", "the campaign's own")
+    before = sorted(e["id"] for e in entities.list_entities(croot, "items"))
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "new_lore:maras-lamp", "kind": "new_lore",
+         "target": {"kind": "lore", "id": ""}, "field": "body", "after": "Burns blue.",
+         "payload": {"name": name, "keys": "", "kind": "items"}}], sid)
+    assert applied == []
+    assert [(f["id"], f["kind"]) for f in failures] == [("new_lore:maras-lamp", "conflict")]
+    assert "already has an item" in failures[0]["reason"]   # by name or by id
+    assert sorted(e["id"] for e in entities.list_entities(croot, "items")) == before
+
+
 def test_apply_clamps_a_client_edited_kind(monkeypatch, tmp_path):
     from grimoire.store import entities, scenes
     cid = _campaign(monkeypatch, tmp_path)

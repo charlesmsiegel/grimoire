@@ -4835,6 +4835,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               {review.publishFailures.map((f) => (
                 <p className="field-hint" key={`${f.kind}/${f.id}`}>{f.label}: {f.reason}</p>
               ))}
+              {/* Spec 9.4: the reviewer is told how to finish the job, not only
+                  that it stopped. Rendered outside the review (`!absorb`), so
+                  it is still here once the save has closed it. */}
+              <p className="field-hint">
+                {review.publishFailures.length === 1
+                  ? "It is kept in this campaign. Resolve the conflict, then publish it with Publish to library in the record's editor."
+                  : "Each is kept in this campaign. Resolve each conflict, then publish it with Publish to library in that record's editor."}
+              </p>
               <button className="subtle" onClick={review.dismissPublishFailures}>Dismiss</button>
             </div>
           )}

@@ -62,6 +62,7 @@ from grimoire.store import (
     styles,
     worlds,
 )
+from grimoire.store.absorb import parse as absorb_parse
 from grimoire.store.continuity import identity
 from grimoire.store.tracker import records as tracker_records
 from grimoire.store.tracker import walk as tracker_walk
@@ -363,7 +364,11 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
          + absorb_store.IDENTITY_FIELDS}
         | {"asks_steering_contract": "Treat them as pointers, not as story",
            "asks_identity_contract": "Open a new one only when no listed record already "
-                                     "stands for the same narrative question or obligation"})
+                                     "stands for the same narrative question or obligation",
+           # Inside each new_lore row, so the derived contract cannot see it:
+           # without the ask every suggestion defaults to plain lore.
+           "asks_new_lore_kind": '"kind" is one of '
+                                 + ", ".join(f'"{k}"' for k in absorb_parse.NEW_LORE_KINDS)})
 
     out, parsed = graders.grade_absorb(output)
     if not all(c.ok for c in out):

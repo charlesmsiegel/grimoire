@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from grimoire.store import (
+    alternates,
     appearances,
     campaigns,
     characters,
@@ -220,6 +221,72 @@ def test_a_cut_through_the_triggering_post_ends_its_sticky_carry(scene):
     scenes.append_message(cid, sid, "user", "We keep waiting.")            # post 2
     assert "lore:lighthouse" not in _hits(cid, sid)
     assert "keeper counts ships" not in _system(cid, sid)
+
+
+def test_a_reroll_changes_the_timers_as_it_changes_the_reply(scene):
+    """A reroll replaces the reply the timers were derived from (§5.3): the
+    reply that started a carry, rerolled into one that names nothing, carries
+    nothing -- and promoting the old one back brings the carry with it."""
+    cid, sid, croot = scene
+    config.write_config(context_scan_depth="1")
+    entities.create_entity(croot, "lore", "Lighthouse", "The lighthouse keeper counts ships.",
+                           keys="lighthouse", fields={"sticky": "2"})
+    entities.create_entity(croot, "lore", "Saltmarch Bell", "The bell rings for the drowned.",
+                           keys="bell", fields={"cooldown": "3"})
+    scenes.append_message(cid, sid, "user", "We wait by the bell.")              # post 0
+    scenes.append_reply(cid, sid, [{"speaker": None,
+                                    "content": "The lighthouse turns."}])        # post 1
+    hit = _hits(cid, sid)["lore:lighthouse"]
+    assert hit.reason["type"] == "key" and hit.reason["post"] == 1
+
+    def reroll(text: str) -> None:
+        # What the regenerate route does to the transcript (test_alternates_store).
+        alternates.archive(cid, sid, "", "")
+        scenes.remove_trailing_assistant_run(cid, sid)
+        scenes.append_reply(cid, sid, [{"speaker": None, "content": text}])
+        alternates.reconcile(cid, sid)
+
+    reroll("The water is dark.")
+    scenes.append_message(cid, sid, "user", "We keep waiting.")                  # post 2
+    assert "lore:lighthouse" not in _hits(cid, sid)
+    assert "keeper counts ships" not in _system(cid, sid)
+    # The bell's cooldown, started at post 0, is held either way: the reroll
+    # changed the reply, not the post before it.
+    scenes.append_message(cid, sid, "user", "The bell again.")                   # post 3
+    wi = assemble._assemble(cid, sid)["wi_result"]
+    assert [h.ref for h in wi.held_back] == ["lore:saltmarch-bell"]
+
+    scenes.delete_from(cid, sid, 2)
+    alternates.promote(cid, sid, 0)            # the lighthouse reply is live again
+    scenes.append_message(cid, sid, "user", "We keep waiting.")                  # post 2
+    assert _hits(cid, sid)["lore:lighthouse"].reason == {
+        "type": "sticky", "from_post": 1, "remaining": 2}
+
+
+def test_a_new_scene_starts_every_timer_afresh(scene):
+    """Timers replay the scene's own transcript (§5.3), so a scene boundary
+    resets both: a carry does not follow the cast into the next scene, and a
+    cooldown does not hold an entry there."""
+    cid, sid, croot = scene
+    config.write_config(context_scan_depth="1")
+    entities.create_entity(croot, "lore", "Lighthouse", "The lighthouse keeper counts ships.",
+                           keys="lighthouse", fields={"sticky": "5"})
+    entities.create_entity(croot, "lore", "Saltmarch Bell", "The bell rings for the drowned.",
+                           keys="bell", fields={"cooldown": "5"})
+    scenes.append_message(cid, sid, "user", "The lighthouse turns.")
+    scenes.append_message(cid, sid, "assistant", "The bell rings.")
+    scenes.append_message(cid, sid, "user", "The bell rings again.")
+    first = assemble._assemble(cid, sid)["wi_result"]
+    assert [h.ref for h in first.held_back] == ["lore:saltmarch-bell"]
+    assert {h.ref: h.reason["type"] for h in first.keyword}["lore:lighthouse"] == "sticky"
+
+    nxt = scenes.create_scene(cid, "Next")
+    scenes.append_message(cid, nxt, "user", "Morning. The bell rings.")
+    second = assemble._assemble(cid, nxt)["wi_result"]
+    assert second.held_back == []
+    reasons = {h.ref: h.reason for h in second.keyword}
+    assert "lore:lighthouse" not in reasons
+    assert reasons["lore:saltmarch-bell"]["type"] == "key"
 
 
 def test_a_director_turn_seeds_activation_as_the_seed(scene):

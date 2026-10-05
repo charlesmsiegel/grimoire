@@ -1757,33 +1757,70 @@ test("...and Cancel is still the control that discards it", async () => {
 const salt = (meta: Record<string, unknown> = {}) => ({
   meta: { id: "salt", name: "Salt", keys: "pact", ...meta }, body: "Binds", rev: "r1" });
 
+/** The sidebar's `.side-section` headed `heading`, or null when none is. */
+const sideSection = (side: HTMLElement, heading: string) =>
+  Array.from(side.querySelectorAll<HTMLElement>(".side-section"))
+    .find((sec) => sec.querySelector("h4")?.textContent === heading) ?? null;
+
 test("activation settings show as chips in the read-only view", async () => {
   (api.readEntity as any).mockResolvedValue(salt({ priority: "250", sticky: "2" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
-  await screen.findByText("Priority: 250");
+  await screen.findByRole("heading", { name: "Priority" });
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
-  expect(within(side).getByText("Sticky: 2 posts")).toBeInTheDocument();
-  expect(within(side).getByText("Activation")).toBeInTheDocument();
+  expect(within(sideSection(side, "Priority")!).getByText("250")).toHaveClass("chip", "on");
+  expect(within(sideSection(side, "Sticky")!).getByText("2 posts")).toHaveClass("chip", "on");
+  // No aggregate heading: each field is a section of its own.
+  expect(within(side).queryByText("Activation")).toBeNull();
   expect(container.querySelector("textarea")).toBeNull();
   // Only what is set: nothing here says cooldown, and keep is off.
   expect(within(side).queryByText(/Cooldown/)).toBeNull();
   expect(within(side).queryByText("Keep under budget")).toBeNull();
 });
 
-test("a record with no activation settings has no Activation section", async () => {
+test("each set activation field and known_by is a side-section of its own", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.readEntity as any).mockResolvedValue(
+    salt({ sticky: "3", priority: "40", known_by: "characters:mara" }));
+  const onOpenOwner = vi.fn();
+  const { container } = render(
+    <Wrap wid="w" kind="lore" selected="salt" onOpenOwner={onOpenOwner} />);
+  await screen.findByRole("button", { name: "Mara" });
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  const sticky = sideSection(side, "Sticky");
+  const priority = sideSection(side, "Priority");
+  const knownBy = sideSection(side, "Known by");
+  for (const sec of [sticky, priority, knownBy]) {
+    expect(sec).not.toBeNull();
+    expect(sec!.querySelectorAll("h4")).toHaveLength(1);
+  }
+  expect(new Set([sticky, priority, knownBy]).size).toBe(3);
+  expect(within(sticky!).getByText("3 posts")).toHaveClass("chip", "on");
+  expect(within(priority!).getByText("40")).toHaveClass("chip", "on");
+  // Known by keeps its navigating chips, and only there.
+  fireEvent.click(within(knownBy!).getByRole("button", { name: "Mara" }));
+  expect(onOpenOwner).toHaveBeenCalledWith("characters:mara");
+  expect(within(sticky!).queryByRole("button")).toBeNull();
+});
+
+test("a record with no activation settings has no activation sections", async () => {
   (api.readEntity as any).mockResolvedValue(salt());
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("Binds");
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
-  expect(within(side).queryByText("Activation")).toBeNull();
+  const headings = Array.from(side.querySelectorAll("h4")).map((h) => h.textContent);
+  for (const label of ["Activation", "Secondary keys", "Key logic", "Scan depth", "Sticky",
+                       "Cooldown", "Priority", "Keep under budget", "Recursion", "Known by"]) {
+    expect(headings).not.toContain(label);
+  }
 });
 
 test("keep shows as Keep under budget only when it is on", async () => {
   (api.readEntity as any).mockResolvedValue(salt({ keep: "true", scan_depth: "4" }));
   const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
-  await screen.findByText("Keep under budget");
+  await screen.findByRole("heading", { name: "Keep under budget" });
   const side = container.querySelector(".detail-sidebar") as HTMLElement;
-  expect(within(side).getByText("Scan depth: 4 posts")).toBeInTheDocument();
+  expect(within(sideSection(side, "Keep under budget")!).getByText("yes")).toHaveClass("chip", "on");
+  expect(within(sideSection(side, "Scan depth")!).getByText("4 posts")).toBeInTheDocument();
 });
 
 test("Edit reveals the Activation disclosure and saves changed fields only", async () => {
@@ -1827,7 +1864,7 @@ test("every kind carries the Activation disclosure", async () => {
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "saltmarch-key", name: "Saltmarch Key", sticky: "1" }, body: "b", rev: "r1" });
   const { container } = render(<Wrap wid="w" kind="items" selected="saltmarch-key" />);
-  await screen.findByText("Sticky: 1 post");
+  await screen.findByText("1 post");
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   expect(container.querySelector("details.activation-settings")).not.toBeNull();
 });
@@ -1917,11 +1954,13 @@ test("Apply imported settings to all sits beside + New on the lore rail only", a
 
 test("chips say post for one and posts for the rest", async () => {
   (api.readEntity as any).mockResolvedValue(salt({ cooldown: "0", sticky: "1", scan_depth: "3" }));
-  render(<Wrap wid="w" kind="lore" selected="salt" />);
-  await screen.findByText("Sticky: 1 post");
-  expect(screen.getByText("Scan depth: 3 posts")).toBeInTheDocument();
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("1 post");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  expect(within(sideSection(side, "Sticky")!).getByText("1 post")).toBeInTheDocument();
+  expect(within(sideSection(side, "Scan depth")!).getByText("3 posts")).toBeInTheDocument();
   // "0" is a value that is set: it reads as the number it is.
-  expect(screen.getByText("Cooldown: 0 posts")).toBeInTheDocument();
+  expect(within(sideSection(side, "Cooldown")!).getByText("0 posts")).toBeInTheDocument();
 });
 
 test("the activation counts step by one", async () => {

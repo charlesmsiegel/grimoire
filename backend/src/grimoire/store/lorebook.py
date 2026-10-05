@@ -179,10 +179,14 @@ def _scopes(stash: Mapping[str, object]):
 
 
 def _pick(stash: Mapping[str, object], *names: str) -> object:
-    """The first value present under any of `names`, top level before nested.
-    A null is "absent" -- ST exports `scanDepth: null` for "use the default"."""
-    for scope in _scopes(stash):
-        for name in names:
+    """The first value present under any of `names`, in that order, each looked
+    for at the top level before nested. Names before scopes: `names` is a
+    precedence (spec §4.1 -- `priority`, then `order`, then `insertion_order`),
+    and a lower-ranked spelling at the top level must not beat a higher-ranked
+    one filed under `extensions`. A null is "absent" -- ST exports
+    `scanDepth: null` for "use the default"."""
+    for name in names:
+        for scope in _scopes(stash):
             if scope.get(name) is not None:
                 return scope[name]
     return None

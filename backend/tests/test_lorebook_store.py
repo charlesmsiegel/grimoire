@@ -319,6 +319,18 @@ def test_adopt_maps_the_audit_table(stash, expected):
         assert lorebook.adopt(placed).fields == expected
 
 
+def test_adopt_priority_precedence_holds_across_both_places():
+    """`priority`, then `order`, then `insertion_order` (spec §4.1), wherever
+    each is filed: a higher-ranked spelling under `extensions` beats a lower
+    one on top, and the other way round."""
+    assert lorebook.adopt({"order": 900, "extensions": {"priority": 5}}).fields == {
+        "priority": "5"}
+    assert lorebook.adopt({"insertion_order": 7, "extensions": {"order": 900}}).fields == {
+        "priority": "900"}
+    assert lorebook.adopt({"priority": 5, "extensions": {"order": 900}}).fields == {
+        "priority": "5"}
+
+
 def test_adopt_clamps_into_bounds():
     assert lorebook.adopt({"order": 5000, "sticky": 99, "cooldown": 7, "scanDepth": 500}).fields == {
         "priority": "1000", "sticky": "50", "cooldown": "7", "scan_depth": "100"}
