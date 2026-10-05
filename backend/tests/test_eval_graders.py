@@ -414,6 +414,97 @@ def test_absorb_records_a_parser_crash_as_a_check_rather_than_raising(monkeypatc
     assert parsed == {}
 
 
+# ----------------------------------------------------------------- identity
+
+#: The continuity-identity case's three rows, as the grader is handed them:
+#: what each row should be decided as, and which check carries that verdict.
+IDENTITY_EXPECTED = {
+    "r1": {"decision": "existing", "id": "find-the-ledger", "check": "same_obligation"},
+    "r2": {"decision": "new", "id": "", "check": "distinct"},
+    "r3": {"decision": "new", "id": "", "check": "continuation"},
+}
+IDENTITY_OFFERED = {"r1": {"find-the-ledger"}, "r2": {"the-saltmarch-smuggling"},
+                    "r3": {"seraphines-debts"}}
+
+
+def _identity_json(*decisions: dict) -> str:
+    return json.dumps({"decisions": list(decisions)})
+
+
+_R1 = {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "Same ledger."}
+_R2 = {"row": "r2", "decision": "new", "id": "", "reason": "A different question."}
+_R3 = {"row": "r3", "decision": "new", "id": "", "reason": "It grew out of the debts."}
+
+
+def _identity(text: str) -> set[str]:
+    return failed(graders.grade_identity(text, IDENTITY_EXPECTED, IDENTITY_OFFERED))
+
+
+def test_identity_compliant_passes():
+    checks = graders.grade_identity(_identity_json(_R1, _R2, _R3),
+                                    IDENTITY_EXPECTED, IDENTITY_OFFERED)
+    assert failed(checks) == set()
+    assert {c.name for c in checks} == {
+        "identity.json", "identity.shape", "identity.enum", "identity.known_ids",
+        "identity.covers_rows", "identity.same_obligation", "identity.distinct",
+        "identity.continuation"}
+
+
+def test_identity_prose_fails_json_only():
+    """No object at all short-circuits: nothing else is reported."""
+    checks = graders.grade_identity("They look like the same ledger to me.",
+                                    IDENTITY_EXPECTED, IDENTITY_OFFERED)
+    assert [(c.name, c.ok) for c in checks] == [("identity.json", False)]
+
+
+def test_identity_unknown_enum_fails_enum():
+    """Scored on the raw word: `parse_output` launders "maybe" into "uncertain",
+    which would make this check unfailable. An extra, unexpected row carries
+    it, so no per-row verdict trips beside it."""
+    extra = {"row": "r4", "decision": "maybe", "id": "", "reason": "Hard to say."}
+    assert _identity(_identity_json(_R1, _R2, _R3, extra)) == {"identity.enum"}
+    assert _identity(_identity_json(_R1, _R2, _R3, {**extra, "decision": None})) == {
+        "identity.enum"}
+
+
+def test_identity_unoffered_id_fails_known_ids():
+    extra = {"row": "r4", "decision": "existing", "id": "maras-map", "reason": "Same map."}
+    assert _identity(_identity_json(_R1, _R2, _R3, extra)) == {"identity.known_ids"}
+    # On a scored row it is also the wrong verdict for that row.
+    assert _identity(_identity_json({**_R1, "id": "maras-map"}, _R2, _R3)) == {
+        "identity.known_ids", "identity.same_obligation"}
+
+
+def test_identity_missing_row_fails_covers_rows():
+    """A row with no decision is reported once, by covers_rows: its own verdict
+    check is not reported beside it, so the two failures stay separable."""
+    checks = graders.grade_identity(_identity_json(_R1, _R2),
+                                    IDENTITY_EXPECTED, IDENTITY_OFFERED)
+    assert failed(checks) == {"identity.covers_rows"}
+    assert "identity.continuation" not in {c.name for c in checks}
+
+
+def test_identity_bad_shape_fails_shape():
+    assert "identity.shape" in _identity('{"decisions": {"r1": "existing"}}')
+    assert _identity(_identity_json(_R1, _R2, _R3, {"row": 4, "decision": "new"})) == {
+        "identity.shape"}
+
+
+def test_identity_merged_rows_fail_their_own_verdicts():
+    """The `merged` recording's shape: both ids are offered, so only the two
+    verdict checks trip."""
+    merged = _identity_json(_R1, {**_R2, "decision": "existing",
+                                  "id": "the-saltmarch-smuggling"},
+                            {**_R3, "decision": "existing", "id": "seraphines-debts"})
+    assert _identity(merged) == {"identity.distinct", "identity.continuation"}
+
+
+def test_identity_reads_row_keys_as_the_app_does():
+    """The app strips a "Row" label off a key (`identity.parse_output`), so
+    the grader must not fail a reply the app would have read."""
+    assert _identity(_identity_json({**_R1, "row": "Row r1"}, _R2, _R3)) == set()
+
+
 # ----------------------------------------------------------- prompt contract
 
 def test_prompt_contract_passes_when_every_needle_is_present():

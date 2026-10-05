@@ -62,6 +62,7 @@ from grimoire.store import (
     styles,
     worlds,
 )
+from grimoire.store.continuity import identity
 from grimoire.store.tracker import records as tracker_records
 from grimoire.store.tracker import walk as tracker_walk
 
@@ -722,6 +723,159 @@ def grade_natural_prose(ctx: dict, output: str) -> list[Check]:
                              guide["body"]))
 
 
+# ------------------------------------------------ case 7: continuity identity
+
+# Every seeded text and every proposed row is spelled out here, once: whether a
+# stored record is a candidate depends on the exact words and on which scene
+# its beats were seeded in, so `build` pins what each text is supposed to do
+# (the clause that admits it, the offered sets) and a floor change fails there,
+# loudly, rather than as an eval that quietly asks about nothing.
+
+#: The open thread §28.10's case 1 rewords (the same text as `tests/review_runs`'
+#: LEDGER_THREAD; evals does not import tests).
+IDENTITY_LEDGER = ("find-the-ledger", "Find the ledger",
+                   "Winifred learned the harbour ledger exists.")
+#: The open thread §28.10's case 2 asks a distinct question about.
+IDENTITY_SMUGGLING = ("the-saltmarch-smuggling", "Who runs the Saltmarch smuggling",
+                      "Seraphine would not say who pays for the night cargo.")
+#: The broad thread §28.10's case 3 continues.
+IDENTITY_DEBTS = ("seraphines-debts", "Seraphine's debts",
+                  "Seraphine owes money all along the Saltmarch waterfront.")
+#: A commitment seeded in a scene that shares no one with the absorbed one, and
+#: no content word with §28.10 case 4's commitment row: nothing of its own type is
+#: close to that row, only threads are.
+IDENTITY_DEADLINE = ("the-midnight-deadline", "Seraphine's midnight deadline",
+                     "Seraphine gave Winifred until midnight and no further.")
+
+#: The extraction's rows, in order: r1 to r3 are plot rows, the last a
+#: commitment row.
+IDENTITY_ROWS = {
+    "plot_movements": [
+        # §28.10 case 1: the same obligation, reworded -- admitted by the lexical floors.
+        {"title": "Recover the harbour ledger",
+         "beat": "Winifred went looking for the harbour ledger.", "status": "open"},
+        # §28.10 case 2: the same topic, a distinct question -- admitted structurally.
+        {"title": "Who bribes the Saltmarch harbourmaster",
+         "beat": "Mara saw the harbourmaster pocket a purse after the night cargo landed.",
+         "status": "open"},
+        # §28.10 case 3: a concrete continuation of the broad thread -- structurally.
+        {"title": "Seraphine's debt to Mara comes due",
+         "beat": "Mara told Seraphine the debt is due at the next tide.", "status": "open"},
+    ],
+    # §28.10 case 4: lexically close only to a thread, which it is never offered.
+    "commitment_movements": [
+        {"title": "Pay Mara for finding the ledger", "kind": "promise", "status": "open",
+         "beat": "Mara asked to be paid once the ledger turns up."},
+    ],
+}
+
+#: Plot row index -> the verdict it should get and the check that reports it.
+IDENTITY_VERDICTS = (
+    {"decision": "existing", "id": IDENTITY_LEDGER[0], "check": "same_obligation"},
+    {"decision": "new", "id": "", "check": "distinct"},
+    {"decision": "new", "id": "", "check": "continuation"},
+)
+
+#: What `examine` offers each row, and through which clause, against the
+#: fixture above. Pinned so the recordings are authored against known offers.
+IDENTITY_OFFERS = {
+    "r1": {IDENTITY_LEDGER[0]: "lexical"},
+    "r2": {IDENTITY_SMUGGLING[0]: "structural"},
+    "r3": {IDENTITY_DEBTS[0]: "structural"},
+}
+
+
+def _identity_parsed() -> dict:
+    """The rows as `absorb.parse_output` hands them on, so the case examines
+    exactly the shape the app would."""
+    return absorb_store.parse_output(json.dumps(
+        {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
+         **IDENTITY_ROWS}))
+
+
+def _identity_examine(ctx: dict) -> identity.Examination:
+    cid, sid = ctx["cid"], ctx["sid"]
+    return identity.examine(cid, sid, ctx["parsed"], chronicle.scene_facts(cid, sid),
+                            embed_deadline=None)
+
+
+def _offers(exam: identity.Examination) -> dict[str, dict[str, str]]:
+    return {e.key: {s.ref.partition(":")[2]: sig["via"] for s, sig in e.candidates}
+            for e in exam.rows}
+
+
+def build_continuity_identity() -> dict:
+    """Three open threads seeded in the absorbed scene with Seraphine, Winifred
+    and Mara present -- so every thread shares the proposed rows' cast and
+    scene, and the structural clause is in play -- and a commitment seeded in
+    an earlier scene nobody stood in."""
+    wid, wroot, sera = _world_with_sera()
+    mara, _ = characters.create_character(wroot, "Mara", "default",
+                                          characters.blank_card("Mara"))
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    croot = campaigns.campaign_root(cid)
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+
+    s0 = scenes.create_scene(cid, "Saltmarch docks")
+    sid = scenes.create_scene(cid, "The Pier at Dusk")
+    appearances.appear(cid, sid, "characters", sera, "default", "npc")
+    appearances.appear(cid, sid, "characters", mara, "default", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    for tid, title, beat in (IDENTITY_LEDGER, IDENTITY_SMUGGLING, IDENTITY_DEBTS):
+        plot.set_movement(cid, tid, title, "open", beat, sid)
+    did, title, beat = IDENTITY_DEADLINE
+    commitments.set_movement(cid, did, title, "threat", "open", "midnight", beat, s0)
+
+    ctx = {"cid": cid, "sid": sid, "parsed": _identity_parsed()}
+    exam = _identity_examine(ctx)
+    # Every row is proposed-new (so "not examined" below is not a drop), the
+    # three plot rows are examined in order, and each is offered exactly the
+    # record its case is about, through the clause the case claims.
+    assert exam.proposed == 4, exam.proposed
+    assert [(e.section, e.index) for e in exam.rows] == [
+        ("plot_movements", 0), ("plot_movements", 1), ("plot_movements", 2)], exam.rows
+    assert _offers(exam) == IDENTITY_OFFERS, _offers(exam)
+    assert not any(e.section == "commitment_movements" for e in exam.rows)
+    return ctx
+
+
+def _identity_prompt(ctx: dict) -> list[dict]:
+    """The resolver prompt, through the production builder, for what `examine`
+    finds now -- stored on `ctx` with the offers and verdicts the grader reads."""
+    exam = _identity_examine(ctx)
+    ctx["exam"] = exam
+    ctx["offered"] = {key: set(ids) for key, ids in _offers(exam).items()}
+    ctx["expected"] = {e.key: IDENTITY_VERDICTS[e.index] for e in exam.rows
+                       if e.section == "plot_movements"}
+    return identity.build_prompt(exam.prompt_rows())
+
+
+def grade_continuity_identity(ctx: dict, output: str) -> list[Check]:
+    # The quoted enum words alone also appear in the reply-shape line, so they
+    # would survive deleting every rule; each decision instruction gets the
+    # unique phrase that states it.
+    prompt = graders.grade_prompt(
+        ctx["messages"],
+        {f"asks_{d}": f'"{d}"' for d in identity.DECISIONS}
+        | {"asks_existing_rule": "only when a listed candidate is the same narrative "
+                                 "question or obligation",
+           "asks_closed_is_not_existing": 'A closed or resolved candidate is never "existing"',
+           "asks_continuation_is_new": "a continuation, or a related subplot",
+           "asks_uncertain_rule": "when the transcript cannot tell",
+           "asks_signals_are_hints": "are hints, not proof"})
+    # §28.10 case 4's identity half: a row is only ever compared with its own type, so
+    # a commitment is never offered a thread however close the words are. Graded
+    # over the examination rather than the prompt text, because it must hold
+    # even if a floor change makes the commitment row examined.
+    exam = ctx["exam"]
+    mixed = sorted(f"{row.key}: {s.ref}" for row in exam.rows
+                   for s, _ in row.candidates if s.kind != row.kind)
+    same_type = Check("prompt.same_type_only", not mixed,
+                      f"rows offered a candidate of another type: {mixed}")
+    return [*prompt, same_type,
+            *graders.grade_identity(output, ctx["expected"], ctx["offered"])]
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -830,6 +984,22 @@ CASES: tuple[Case, ...] = (
              # A collapsed generation. Proves the vacuous-pass gate gates:
              # without slop.measurable this recording would score all green.
              Recording("terse", ("slop.measurable",)))),
+    Case(id="continuity-identity",
+         hypothesis="the identity resolver maps a reworded duplicate to the existing "
+                    "record and keeps a same-topic question and a concrete continuation new",
+         build=build_continuity_identity,
+         prompt=_identity_prompt,
+         grade=grade_continuity_identity,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("identity.json",), "json"),
+             # Both ids were offered, so known_ids still passes: what trips is
+             # exactly the two rows that should have stayed new.
+             Recording("merged", ("identity.distinct", "identity.continuation"), "json"),
+             # An id offered nowhere: rejected as unknown, and the wrong
+             # verdict for the row it was given on.
+             Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
+                       "json"))),
 )
 
 BY_ID = {c.id: c for c in CASES}
