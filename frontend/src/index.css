@@ -1187,6 +1187,19 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .regex-line .row { flex: 1; width: auto; min-width: 0; margin-bottom: 0; text-align: left; }
 .regex-code { font-family: var(--fm); }
 .connection-output { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--rule-soft); }
+.regex-test-panel { margin-top: 14px; }
+.regex-test-panel summary { cursor: pointer; font-family: var(--fm); font-size: 10px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.regex-test textarea { width: 100%; margin-top: 4px; }
+.regex-test-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; }
+.regex-test-controls label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; color: var(--muted); }
+.regex-test-controls input[type="number"] { width: 64px; }
+.regex-trace { list-style: none; margin: 8px 0; padding: 0; }
+.regex-trace li { margin-bottom: 8px; }
+.regex-trace li.off { opacity: 0.5; }
+.regex-trace mark { background: var(--accent); color: var(--on-accent); }
+.regex-import-rows { list-style: none; margin: 10px 0; padding: 0; max-height: 50vh; overflow-y: auto; }
+.regex-import-rows li { margin-bottom: 10px; }
+.regex-import-rows li.off { opacity: 0.6; }
 pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10px; }
 .regex-checks { margin-bottom: 12px; }
 .regex-check { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 4px 0; }

@@ -4,7 +4,10 @@ import { api } from "../api/client";
 import type { RegexBundle, RegexEntry, RegexLayer, RegexRule } from "../api/client";
 
 vi.mock("../api/client", () => ({
-  api: { getRegex: vi.fn(), putRegex: vi.fn(), listConnections: vi.fn() },
+  api: {
+    getRegex: vi.fn(), putRegex: vi.fn(), listConnections: vi.fn(),
+    testRegex: vi.fn(), previewRegexImport: vi.fn(), importRegex: vi.fn(),
+  },
 }));
 
 const rule = (id: string, over: Partial<RegexRule> = {}): RegexRule => ({
@@ -54,7 +57,7 @@ async function open(name: string, scope: typeof WORLD | typeof GLOBAL = GLOBAL) 
 test("clicking a rule shows the read-only view with sidebar and no textarea", async () => {
   serve({ rules: [STRIP, QUOTES], off: [] });
   await open("Strip asides");
-  expect(document.querySelector("input[type=text], textarea")).toBeNull();
+  expect(document.querySelector(".editor-body input[type=text], .editor-body textarea")).toBeNull();
   expect(screen.getByText("\\(OOC:[^)]*\\)")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
   for (const heading of ["Flags", "Targets", "Applies", "Depth", "Stored text"]) {
@@ -326,4 +329,48 @@ test("a write in flight at a scope change neither disables nor paints the new sc
   await new Promise((r) => setTimeout(r, 20));
   expect(screen.queryByRole("button", { name: /^Curly quotes/ })).toBeNull();
   expect(screen.getByLabelText("Enable Fix dashes")).toBeEnabled();
+});
+
+test("the test pane sends the open form's rule as the draft", async () => {
+  serve({ rules: [STRIP], off: [] });
+  vi.mocked(api.testRegex).mockResolvedValue({ steps: [], result: "" });
+  await open("Strip asides");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(await screen.findByLabelText("Pattern"), { target: { value: "Seraphine" } });
+  fireEvent.change(screen.getByLabelText("Text to test"), { target: { value: "Seraphine" } });
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+  await screen.findByText("No rules to run at this level.");
+  expect(vi.mocked(api.testRegex).mock.calls[0][0]).toMatchObject({
+    scope: GLOBAL, draft: { id: "r-strip", pattern: "Seraphine" },
+  });
+});
+
+test("the test pane offers the connections, except at a connection's own level", async () => {
+  serve({ rules: [], off: [] });
+  const { unmount } = render(<RegexRulesEditor scope={WORLD} />);
+  expect(await screen.findByRole("option", { name: "Local Llama" })).toBeInTheDocument();
+  unmount();
+  render(<RegexRulesEditor scope={{ kind: "connection", id: "conn-a" }} />);
+  await screen.findByText("Pick a rule to read it, or add one.");
+  expect(screen.queryByLabelText("Connection")).toBeNull();
+});
+
+test("Import… opens the dialog, and a landed import reloads the rules", async () => {
+  serve({ rules: [], off: [] });
+  render(<RegexRulesEditor scope={GLOBAL} />);
+  await screen.findByText("Pick a rule to read it, or add one.");
+  fireEvent.click(screen.getByRole("button", { name: "Import…" }));
+  const file = new File([JSON.stringify([{ scriptName: "Fix" }])], "r.json");
+  vi.mocked(api.previewRegexImport).mockResolvedValue({ rows: [{
+    index: 0, name: "Fix", verdict: "exact", notes: [], original: {},
+    rule: { ...rule("x", { name: "Fix" }), id: undefined } as never,
+  }] });
+  vi.mocked(api.importRegex).mockResolvedValue({} as never);
+  fireEvent.change(await screen.findByLabelText("SillyTavern regex file"), { target: { files: [file] } });
+  const before = vi.mocked(api.getRegex).mock.calls.length;
+  serve({ rules: [rule("r-new", { name: "Fix" })], off: [] });
+  fireEvent.click(await screen.findByRole("button", { name: "Import selected" }));
+  expect(await screen.findByRole("button", { name: /^Fix/ })).toBeInTheDocument();
+  expect(vi.mocked(api.getRegex).mock.calls.length).toBeGreaterThan(before);
+  expect(screen.queryByRole("dialog")).toBeNull();
 });

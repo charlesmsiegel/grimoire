@@ -4,6 +4,8 @@ import {
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { Field } from "./Field";
+import { RegexImportDialog } from "./RegexImportDialog";
+import { RegexTestPane } from "./RegexTestPane";
 
 /** The four presets are settings of two axes, who a rule is for and where it
  *  runs (spec section 2). The checkboxes they set stay editable. */
@@ -107,9 +109,12 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
-  // Connection id to its name, for tagging the connection rules a world or a
-  // campaign inherits. A failed read leaves the ids standing in for the names.
-  const [names, setNames] = useState<Record<string, string>>({});
+  // The connections, for naming the connection rules a world or a campaign
+  // inherits and for the test pane's choice of whose rules run first. A failed
+  // read leaves the ids standing in for the names and the choice empty.
+  const [connections, setConnections] = useState<{ id: string; name: string }[]>([]);
+  const names = useMemo(() => Object.fromEntries(connections.map((c) => [c.id, c.name])), [connections]);
+  const [importing, setImporting] = useState(false);
   // Which scope the screen belongs to, readable from a settled promise: a read
   // or a save landing after the reader moved on must not show the old one.
   const live = useRef(scopeKey);
@@ -127,24 +132,26 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
 
   useEffect(() => {
     setBundle(null); setLoadFailed(false); setSelId(null); setMode("view");
-    setError(null); setFailure(null);
+    setError(null); setFailure(null); setImporting(false);
     // A write still in flight belongs to the scope being left, and its `finally`
     // will not clear this once the scope has moved.
     setSaving(false);
     void reload();
   }, [reload]);
 
+  // A connection's own level inherits nothing and tests only its own rules.
+  const wantsConnections = scope.kind !== "connection";
   useEffect(() => {
-    if (!canOff) return;
+    if (!wantsConnections) return;
     let alive = true;
     void (async () => {
       try {
         const list = await api.listConnections();
-        if (alive) setNames(Object.fromEntries(list.map((c) => [c.id, c.name])));
+        if (alive) setConnections(list.map((c) => ({ id: c.id, name: c.name })));
       } catch { /* the ids stand in */ }
     })();
     return () => { alive = false; };
-  }, [canOff, scopeKey]);
+  }, [wantsConnections, scopeKey]);
 
   const layer: RegexLayer = bundle?.layer ?? { rules: [], off: [] };
   const inherited = bundle?.inherited ?? [];
@@ -201,6 +208,11 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
   }
 
   const problem = problemOf(draft);
+  // The open form's rule, for the test pane. A form that cannot be sent (a depth
+  // typed as prose) has no rule to test, so the pane falls back to what is saved.
+  const testDraft = useMemo(
+    () => (mode === "edit" && problem === null ? { ...ruleOf(draft), id: draft.id ?? "r-draft" } : undefined),
+    [mode, draft, problem]);
 
   async function save() {
     if (problem !== null) return;
@@ -479,11 +491,11 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
           </div>
         ))}
         <button className="primary new" onClick={startNew}>+ New rule</button>
-        {/* Wired by the SillyTavern import's own UI; the client calls it needs
-            are already in `api`. */}
-        <button className="subtle new" disabled title="Importing from SillyTavern is not built yet">
-          Import…
-        </button>
+        <button className="subtle new" onClick={() => setImporting(true)}>Import…</button>
+        <details className="regex-test-panel">
+          <summary>Test rules</summary>
+          <RegexTestPane key={scopeKey} scope={apiScope} draft={testDraft} connections={connections} />
+        </details>
       </div>
       <div className="editor-body">
         {error && <div className="banner" role="alert">{error}</div>}
@@ -502,6 +514,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
           <div className="editor-empty">Pick a rule to read it, or add one.</div>
         )}
       </div>
+      {importing && (
+        <RegexImportDialog scope={apiScope} onClose={() => setImporting(false)}
+                           onDone={() => { setImporting(false); void reload(); }} />
+      )}
     </div>
   );
 }
