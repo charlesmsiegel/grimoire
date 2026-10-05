@@ -26,6 +26,28 @@ import time
 POLL_TIMEOUT = 30.0
 POLL_INTERVAL = 0.01
 
+# Identity-check fixture texts (continuity capstone slice C), one spelling for
+# the store, route and routing suites. Whether a stored record is a candidate
+# depends on these exact words, so each test that uses them first asserts the
+# signal that is supposed to decide it.
+
+#: A stored thread, as (id, title, beat). Seed it in a scene of its own, never
+#: the one being absorbed, unless the test is about shared scenes.
+LEDGER_THREAD = ("find-the-ledger", "Find the ledger",
+                 "Winifred learned the harbour ledger exists.")
+
+#: A proposed plot row rewording `LEDGER_THREAD`: clears `TOKEN_FLOOR` and
+#: `CHAR_FLOOR` lexically, whatever the scene.
+RECOVER_THE_LEDGER = {"title": "Recover the harbour ledger",
+                      "beat": "Winifred went looking for the harbour ledger.",
+                      "status": "open"}
+
+#: A proposed plot row about something else: below both weak floors against
+#: `LEDGER_THREAD`.
+SALTMARCH_TITHE = {"title": "The Saltmarch tithe",
+                   "beat": "The guild demanded Mara pay the Saltmarch tithe.",
+                   "status": "open"}
+
 
 class Answer:
     """A response's shape, over a payload that came from a run.
