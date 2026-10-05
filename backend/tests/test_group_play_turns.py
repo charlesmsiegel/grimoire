@@ -656,3 +656,44 @@ def test_handoff_text_is_unchanged_without_rounds(client):
     second = "\n".join(m["content"] for m in fake.requests[1]["messages"])
     assert "The current actor and everyone who has already responded are excluded." in second
     assert "begins another round" not in second
+
+
+def test_list_chain_survives_replies_without_handoff(client):
+    # List ignores the handoff, so a reply that writes none is no reason to
+    # end the chain: both rounds run.
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    fake = FakeLLM([["Mara one."], ["Winifred one."], ["Mara two."], ["Winifred two."]])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 4
+    assert speakers(cid, sid) == ["Mara", "Winifred", "Mara", "Winifred"]
+    # The issue is still recorded on the variant, as before.
+    rid = store.scenes.read_scene(cid, sid)["messages"][-1]["response_id"]
+    record = store.responses.get(cid, sid, rid, private=True)
+    variant = next(v for v in record["variants"] if v["id"] == record["active_variant"])
+    assert variant["issue"] == "missing or invalid handoff"
+
+
+def test_natural_chain_survives_replies_without_handoff(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="natural", talkativeness={MARA: 100, WINIFRED: 100},
+          auto_rounds=1)
+    fake = FakeLLM([["One."], ["Two."], ["Three."], ["Four."]])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 4
+
+
+def test_list_chain_stops_on_authority_violation(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    fake = FakeLLM([["Mara one."], ["Winifred one.\n\n**Mara:** I speak for her."],
+                    ["Mara two."], ["Winifred two."]])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello"})
+    assert "error" not in response.text, response.text
+    assert fake.calls == 2
+    assert speakers(cid, sid) == ["Mara", "Winifred"]
