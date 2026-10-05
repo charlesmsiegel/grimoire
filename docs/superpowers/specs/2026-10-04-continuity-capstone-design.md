@@ -349,7 +349,7 @@ API semantics:
 - **Storage:** `to` is stored as given; existing chains are not flattened. `source` ∈ {`review`, `manual`}.
 - **Response:** lists any other sources that now resolve transitively to the new target, so the reviewer sees the full effect.
 - **Liveness mismatch:** if the source's liveness differs from the canonical's — an open/advanced thread into a closed one, an unresolved commitment into a resolved one, or the reverse — the merge is refused with 409 `{kind:'liveness_mismatch'}`, unless the request carries `accept_status_change: true`. The review UI shows, before apply, the source's status, kind and due that the canonical will override.
-- **Due:** if the source commitment has a non-empty `due` and the canonical's is empty, the review offers to copy it. Copying is an explicit `commitments.set_movement` (a separate journalled write). A due is never inherited silently.
+- **Due:** if the source commitment has a non-empty `due` and the canonical's is empty, the review offers to copy it. Copying is an explicit, separate journalled write: the client's `PUT /ledger/commitments/{canonical id}` carrying the due, so that every hand edit to the ledger stays in `routes/ledger.py`. The alias refusal's `extra` carries both dues so the review can offer it. A due is never inherited silently.
 
 ## 5.2 Canonicalization
 
@@ -441,7 +441,8 @@ Scene ids are filenames: they change on title rename, the first datetime stamp a
 
 Thread, commitment and event ids are slugs, and they become free again on delete. A recreated record of the same name would otherwise silently inherit the dead record's aliases and links. This is the same reason the event DELETE route already retires notice keys under one hold.
 
-- `routes/ledger.py`'s `delete_thread` and `delete_commitment`, and the event DELETE route, call `continuity.doc.forget_ref(cid, ref)` inside their existing `campaign_lock` hold. It removes aliases whose source or target is `ref`, and links naming `ref`. Each removal is journalled as a `manual` row.
+- `routes/ledger.py`'s `delete_thread` and `delete_commitment`, and the event DELETE route, call `continuity.review.forget_ref(cid, ref)` inside their existing `campaign_lock` hold. It removes aliases whose source or target is `ref`, and links naming `ref`. Each removal is journalled as a `manual` row. It lives in `review` rather than `doc` because journalling needs `undo`, and `doc` cannot import it.
+- A thread/commitment DELETE is refused with 409 `{kind:'malformed'}` before any write while continuity.json (or its aliases or links section) is malformed. A strict check cannot tell whether the record is an alias target, and a cascade that fails after the delete has landed would report a completed write as an error.
 - Deleting a record that is an alias **target** is refused first with 409 `{kind:'has_merged_records', refs}`, unless `?force=1` is passed. The Ledger shows the 409 as “This record has merged records: unmerge them first, or delete anyway”.
 - Deletions that do not pass through those handlers (undo of a create, cascade reversal) leave dangling refs. These surface as broken in `GET /continuity` diagnostics. Slug reuse in those paths is a documented residual.
 
@@ -583,6 +584,18 @@ Required public projections:
     graph.build(cid) -> dict
 
 ## 7.1 Effective merged records
+
+**Live canonical.** `canonical_ref` (§5.2) answers what the stored alias graph says. Every *current-state* question uses one stricter resolver, `effective.live_canon(cid)`. That covers effective records, links, involvement, the alias target's group status, link creation and the Ledger write redirect.
+
+The resolver walks hop by hop from a source, following a hop only when all of these hold:
+
+- the alias record is a dict with a string `to`;
+- both refs parse;
+- both share a prefix in {thread, commitment};
+- the target record exists, or its file is unreadable, in which case existence is unknown and treated as passable;
+- the target has not already been visited.
+
+It stops at the last valid hop. A source caught in a cycle resolves to itself. So A→B with B→gone merges A into B, while a dangling or wrong-type alias never redirects a write to a record that does not exist. Each walk that stops early is reported in diagnostics under the failing hop's reason.
 
 **Identity law.** A canonical record with no live aliases projects **byte-identically** to `plot.open_threads` / `commitments.open_commitments` for that id: the same fields, values, beat order, `latest_beat`, `last_scene` and sort position, plus `aliases: []`.
 
