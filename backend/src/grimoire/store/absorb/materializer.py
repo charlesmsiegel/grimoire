@@ -8,6 +8,9 @@ materialize` would bind the function rather than the module.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from typing import NamedTuple
+
 from .. import (
     characters,
     commitments,
@@ -120,8 +123,17 @@ def _text(value) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
-    """`slug`, or the first `slug-N` that is free or holds the SAME commitment.
+def _new_record_id(stored: dict, staged: dict[str, str], slug: str, title: str, *,
+                   settled: Callable[[dict], bool]) -> str:
+    """`slug`, or the first `slug-N` that is free or holds the SAME record.
+
+    The one allocator for both record types that absorb can open by title (spec
+    §10.5) -- plot threads and commitments differ only in what `settled` means:
+    a closed thread, a resolved commitment. It was commitments' alone until a
+    plot row whose title merely slugged like a stored thread's was merged into
+    it; what follows is written in commitments' terms and holds for threads
+    word for word, with "closed" for "resolved" and `plot_snapshot` (which
+    offers only open and advanced threads) for `commitment_snapshot`.
 
     Only for a movement the model opened WITHOUT an id, where the id is derived
     from the title and a collision may be an accident rather than a reference.
@@ -163,17 +175,10 @@ def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
     def _free(candidate: str) -> bool:
         if candidate in staged:
             return staged[candidate] == want
-        cur = owed.get(candidate)
+        cur = stored.get(candidate)
         if not isinstance(cur, dict):
             return True
-        # `.lower()` for the reason `commitments.open_commitments` folds too, and
-        # it has to be repeated because this is a SECOND reader of the same
-        # field: a hand-edited `"Fulfilled"` is hidden from the snapshot by that
-        # fix, and if this allocator still read it as unresolved the model's new
-        # commitment of the same title would land on the record it was never
-        # shown -- reopening it, which is exactly what the resolved check exists
-        # to prevent.
-        if _text(cur.get("status")).lower() in commitments.RESOLVED:
+        if settled(cur):
             return False
         return _text(cur.get("title")).casefold() == want
 
@@ -182,6 +187,117 @@ def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
         n += 1
         candidate = f"{slug}-{n}"
     return candidate
+
+
+def _commitment_settled(record: dict) -> bool:
+    # `.lower()` for the reason `commitments.open_commitments` folds too, and it
+    # has to be repeated because this is a SECOND reader of the same field: a
+    # hand-edited `"Fulfilled"` is hidden from the snapshot by that fix, and if
+    # this allocator still read it as unresolved the model's new commitment of
+    # the same title would land on the record it was never shown -- reopening
+    # it, which is exactly what the resolved check exists to prevent. `_text`
+    # because the file is hand-editable: a list-valued status reads as "" (not
+    # settled) rather than raising out of a paid-for absorb.
+    return _text(record.get("status")).lower() in commitments.RESOLVED
+
+
+def _thread_settled(record: dict) -> bool:
+    return _text(record.get("status")).lower() == "closed"
+
+
+def _new_commitment_id(owed: dict, staged: dict, slug: str, title: str) -> str:
+    """`_new_record_id` for commitments: a resolved record is settled. Kept by
+    name because `apply` reallocates a row staged as new through it."""
+    return _new_record_id(owed, staged, slug, title, settled=_commitment_settled)
+
+
+def _new_thread_id(threads: dict, staged: dict, slug: str, title: str) -> str:
+    """`_new_record_id` for plot threads: a closed thread is settled. `apply`
+    reallocates a plot row staged as new through it, as it does commitments."""
+    return _new_record_id(threads, staged, slug, title, settled=_thread_settled)
+
+
+class Assigned(NamedTuple):
+    """The id one plot/commitment row stages onto. `existing` says whether that
+    id names a stored record; `merged_from` is reserved for the alias redirect."""
+    id: str
+    existing: bool
+    merged_from: str | None
+
+
+def _assign_section(rows: list, stored: dict, section: str,
+                    allocate: Callable[[dict, dict, str, str], str],
+                    out: dict[tuple[str, int], Assigned | None]) -> dict[str, str]:
+    """Assign one section's rows in order, writing into `out`; returns the
+    staged-title map (id -> folded title) the batch built."""
+    seen: set[str] = set()
+    staged: dict[str, str] = {}   # id -> folded title, for rows in THIS batch
+    for i, e in enumerate(rows):
+        out[(section, i)] = None
+        beat = (e.get("beat", "") or "").strip()
+        if not beat:
+            continue
+        given = (e.get("id", "") or "").strip()
+        title = (e.get("title", "") or "").strip()
+        if given:
+            rid = given
+            # An explicit id is RESERVED too, not just remembered as seen. The
+            # allocator consults the store and this map; an explicit id naming
+            # a record that does not exist yet is in neither, so a later new
+            # row whose title slugs to it was handed the same id -- and then
+            # dropped outright by the one-edit-per-record check below, never
+            # reaching the reviewer. Reserved under this row's title, so the
+            # same title still merges (that is what the dedup is for) and a
+            # different one gets a suffix.
+            #
+            # Under the STORED title when the row omits one, which it may:
+            # `{"id": "the-debt", "beat": ...}` is a valid movement, and
+            # reserving it under "" made the reservation disagree with the
+            # record it names -- so the same record named by TITLE later in the
+            # batch missed the merge and staged `the-debt-2`, which the
+            # reviewer would then approve into a duplicate. The reservation must
+            # say what the id means, not what this row happened to repeat.
+            cur = stored.get(rid)
+            staged.setdefault(
+                rid, (title or (_text(cur.get("title")) if isinstance(cur, dict)
+                                else "")).strip().casefold())
+        elif any(c.isalnum() for c in title):
+            # New record — needs a title with real content, and an id that does
+            # not land on somebody else's record.
+            rid = allocate(stored, staged, slugify(title), title)
+            staged[rid] = title.strip().casefold()
+        else:
+            continue  # no id and no usable title -> drop
+        if rid in seen:
+            continue  # one edit per record per scene (avoids duplicate ids / double-apply)
+        seen.add(rid)
+        out[(section, i)] = Assigned(rid, isinstance(stored.get(rid), dict), None)
+    return staged
+
+
+def assign_ids(threads: dict, owed: dict | None, parsed: dict,
+               live: dict[str, str] | None = None) -> dict[tuple[str, int], Assigned | None]:
+    """The ONE id assignment for `plot_movements` and `commitment_movements`.
+
+    Keyed `(section, row index)`. `None` is a row `materialize` drops: a blank
+    beat; no id and no usable title; every commitment when the store was
+    unreadable (`owed is None`); a later row whose id an earlier row already
+    took (one edit per record per scene). Shared so that anything asking which
+    record a row will stage onto -- the identity step, materialize itself --
+    gets the same answer, explicit-id reservations and `slug-N` allocation
+    included. `live` (the alias map) is accepted for the redirect and not yet
+    consulted.
+    """
+    del live   # the alias redirect is not implemented yet
+    out: dict[tuple[str, int], Assigned | None] = {}
+    _assign_section(parsed.get("plot_movements", []), threads, "plot_movements",
+                    _new_thread_id, out)
+    rows = parsed.get("commitment_movements", [])
+    if owed is None:
+        out.update({("commitment_movements", i): None for i in range(len(rows))})
+    else:
+        _assign_section(rows, owed, "commitment_movements", _new_commitment_id, out)
+    return out
 
 
 def _recorded_here(ledger: dict, sid: str, text: str) -> bool:
@@ -439,45 +555,6 @@ def materialize(cid: str, sid: str, parsed: dict,
         threads = plot.read(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json: skip plot movements, don't 500
         threads = {}
-    seen_pids: set[str] = set()
-    for e in parsed.get("plot_movements", []):
-        beat = (e.get("beat", "") or "").strip()
-        if not beat:
-            continue
-        mid = (e.get("id", "") or "").strip()
-        title = (e.get("title", "") or "").strip()
-        status = e.get("status", "open")
-        if mid:
-            pid = mid
-        elif any(c.isalnum() for c in title):
-            pid = slugify(title)  # new thread — needs a title with real content
-        else:
-            continue  # no id and no usable title -> drop
-        if pid in seen_pids:
-            continue  # one edit per thread per scene (avoids duplicate ids / double-apply)
-        seen_pids.add(pid)
-        cur = threads.get(pid)
-        if isinstance(cur, dict):  # existing thread (by id, or a new title that collides)
-            # Rendered by `conflicts`, not here: the staleness check recomputes
-            # this same line at save time, and two copies of the format would
-            # let a harmless reformat read as a contradiction (#111).
-            before = conflicts.plot_line(cur)
-            disp_title = cur.get("title") or title or pid  # keep the stored title
-        else:
-            before, disp_title = "", title or pid
-        out.append(_staged({"id": f"plot:{pid}", "kind": "plot",
-                            "target": {"kind": "plot", "id": pid},
-                            "label": f"{disp_title} — {status}",
-                            "field": "beat", "before": before, "after": beat, "authored": False,
-                            "payload": {"id": pid, "title": disp_title, "status": status,
-                                        "scene": sid}}, e))
-
-    # Same shape as plot_movements above, and deliberately a second block rather
-    # than a parameterized shared one: the two record types agree on "id or a
-    # slugged title, one edit per record per scene" and on nothing else -- the
-    # label, the payload and the vocabulary the status is drawn from all differ,
-    # so the factored version would be a function whose body is mostly branches
-    # on which of the two called it.
     try:
         owed = commitments.read(cid)
     except Exception:  # noqa: BLE001 — garbled commitments.json: skip these, don't 500
@@ -497,13 +574,51 @@ def materialize(cid: str, sid: str, parsed: dict,
     # reported. Staging nothing costs this section (the same price a garbled
     # file already pays in `render_open` and the ledger) and cannot lose an
     # approval, because there is no approval to lose.
-    seen_mids: set[str] = set()
-    staged_titles: dict[str, str] = {}   # id -> folded title, for new rows in THIS batch
-    for e in (parsed.get("commitment_movements", []) if owed is not None else []):
+    #
+    # Which record each plot/commitment row stages onto, decided once for both
+    # sections by the same `assign_ids` the identity step asks -- so the two can
+    # never disagree about which slug collisions are honoured.
+    assigned = assign_ids(threads, owed, parsed)
+    for i, e in enumerate(parsed.get("plot_movements", [])):
+        slot = assigned[("plot_movements", i)]
+        if slot is None:
+            continue  # blank beat, no usable id or title, or a second edit to one thread
         beat = (e.get("beat", "") or "").strip()
-        if not beat:
-            continue
-        given = (e.get("id", "") or "").strip()
+        title = (e.get("title", "") or "").strip()
+        status = e.get("status", "open")
+        pid = slot.id
+        cur = threads.get(pid)
+        # An existing thread: named by id, or by a new title whose slug collides
+        # with an OPEN thread of the SAME title -- the only collision
+        # `_new_thread_id` honours (§10.5); any other collision was given a
+        # fresh `slug-N` and lands in the else branch as a new thread.
+        if isinstance(cur, dict):
+            # Rendered by `conflicts`, not here: the staleness check recomputes
+            # this same line at save time, and two copies of the format would
+            # let a harmless reformat read as a contradiction (#111).
+            before = conflicts.plot_line(cur)
+            disp_title = cur.get("title") or title or pid  # keep the stored title
+        else:
+            before, disp_title = "", title or pid
+        out.append(_staged({"id": f"plot:{pid}", "kind": "plot",
+                            "target": {"kind": "plot", "id": pid},
+                            "label": f"{disp_title} — {status}",
+                            "field": "beat", "before": before, "after": beat, "authored": False,
+                            "payload": {"id": pid, "title": disp_title, "status": status,
+                                        "scene": sid}}, e))
+
+    # Same shape as plot_movements above, and deliberately a second block rather
+    # than a parameterized shared one: the two record types agree on "id or a
+    # slugged title, one edit per record per scene" -- which `assign_ids` now
+    # decides for both -- and on nothing else -- the
+    # label, the payload and the vocabulary the status is drawn from all differ,
+    # so the factored version would be a function whose body is mostly branches
+    # on which of the two called it.
+    for i, e in enumerate(parsed.get("commitment_movements", []) if owed is not None else []):
+        slot = assigned[("commitment_movements", i)]
+        if slot is None:
+            continue  # blank beat, no usable id or title, or a second edit to one commitment
+        beat = (e.get("beat", "") or "").strip()
         title = (e.get("title", "") or "").strip()
         # Blank means "the model said nothing" -- see parse.py. Carried into the
         # payload AS blank so `set_movement` keeps the stored value; the label
@@ -513,38 +628,7 @@ def materialize(cid: str, sid: str, parsed: dict,
         # None, not "": the key's PRESENCE is the signal (see parse.py). "" is
         # an instruction to clear the deadline; absent means leave it alone.
         due = _text(e["due"]) if "due" in e else None
-        if given:
-            mid = given
-            # An explicit id is RESERVED too, not just remembered as seen. The
-            # allocator consults `owed` and this map; an explicit id naming a
-            # commitment that does not exist yet is in neither, so a later new
-            # row whose title slugs to it was handed the same id -- and then
-            # dropped outright by the one-edit-per-commitment check below,
-            # never reaching the reviewer. Reserved under this row's title, so
-            # the same title still merges (that is what the dedup is for) and a
-            # different one gets a suffix.
-            #
-            # Under the STORED title when the row omits one, which it may:
-            # `{"id": "the-debt", "beat": ...}` is a valid movement, and
-            # reserving it under "" made the reservation disagree with the
-            # record it names -- so the same commitment named by TITLE later in
-            # the batch missed the merge and staged `the-debt-2`, which the
-            # reviewer would then approve into a duplicate. The reservation must
-            # say what the id means, not what this row happened to repeat.
-            stored = owed.get(mid)
-            staged_titles.setdefault(
-                mid, (title or (_text(stored.get("title")) if isinstance(stored, dict)
-                                else "")).strip().casefold())
-        elif any(c.isalnum() for c in title):
-            # New commitment — needs a title with real content, and an id that
-            # does not land on somebody else's record.
-            mid = _new_commitment_id(owed, staged_titles, slugify(title), title)
-            staged_titles[mid] = title.strip().casefold()
-        else:
-            continue  # no id and no usable title -> drop
-        if mid in seen_mids:
-            continue  # one edit per commitment per scene (avoids duplicate ids / double-apply)
-        seen_mids.add(mid)
+        mid = slot.id
         cur = owed.get(mid)
         if isinstance(cur, dict):  # existing commitment (by id, or a colliding new title)
             # The STORED head, deadline included: `due` is applied on save and

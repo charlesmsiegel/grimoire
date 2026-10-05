@@ -1014,19 +1014,24 @@ def test_materialize_plot_new_and_advance(monkeypatch, tmp_path):
     assert "plot:untitled" not in edits       # no-id no-usable-title dropped (not "untitled")
 
 
-def test_materialize_plot_new_title_colliding_existing_id_merges(monkeypatch, tmp_path):
+def test_materialize_plot_new_title_differing_from_colliding_thread_gets_a_suffix(monkeypatch, tmp_path):
+    """§10.5: an id-less row whose title only SLUGS like a stored thread's is a
+    slug accident, not a reference -- the commitment predicate, applied to plot.
+    Merging it would file the new beat into a thread it never named."""
     from grimoire.store import plot, scenes
     cid = _campaign(monkeypatch, tmp_path)
     sid = scenes.create_scene(cid, "S")
-    plot.set_movement(cid, "the-map", "The map", "open", "Elara got it.", "s10")
-    # New thread (no id) whose title slugifies to the existing "the-map": must resolve to
-    # the existing thread and honestly show its `before` (not masquerade as new).
+    plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s10")
     parsed = {"plot_movements": [
         {"id": "", "title": "The Map!", "status": "advanced", "beat": "It is a forgery."}]}
     edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
-    row = edits["plot:the-map"]
-    assert row["before"].startswith("open — Elara got it.")   # resolved to existing
-    assert row["payload"]["title"] == "The map"               # keeps the stored title
+    assert list(edits) == ["plot:the-map-2"]
+    row = edits["plot:the-map-2"]
+    assert row["before"] == ""                                # its own record
+    assert row["target"] == {"kind": "plot", "id": "the-map-2"}
+    assert row["payload"]["title"] == "The Map!"
+    stored = plot.get(cid, "the-map")
+    assert stored["title"] == "The map" and len(stored["beats"]) == 1   # untouched
 
 
 def test_materialize_plot_dedupes_same_pid(monkeypatch, tmp_path):
@@ -3011,3 +3016,154 @@ def test_absorb_system_prompt_asks_for_the_identity_fields():
     assert '"distinguished_from"' in system
     assert "Current plot threads:" in system
     assert "Open commitments:" in system
+
+
+# --- plot slug collisions use the commitment predicate (§10.5) ---------------
+# A collision between an id-less row's slug and a stored thread is honoured only
+# when that thread is not closed AND carries the same casefolded title -- the
+# predicate `_new_commitment_id` has always applied to commitments.
+
+def test_materialize_plot_same_title_open_thread_is_honoured(monkeypatch, tmp_path):
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s10")
+    edits = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "The map", "status": "advanced", "beat": "It is a forgery."}]})
+    assert [e["id"] for e in edits] == ["plot:the-map"]
+    assert edits[0]["before"].startswith("open — ")
+
+
+def test_materialize_plot_same_title_closed_thread_is_not_reopened(monkeypatch, tmp_path):
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "closed", "Mara burned it.", "s10")
+    edits = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "The map", "status": "open", "beat": "Another map surfaced."}]})
+    assert [e["id"] for e in edits] == ["plot:the-map-2"]
+    assert edits[0]["before"] == ""
+    assert plot.get(cid, "the-map")["status"] == "closed"
+
+
+def test_materialize_plot_untitled_titles_never_merge(monkeypatch, tmp_path):
+    """Review Focus 1: every title with no ASCII letters slugs to `untitled`, so
+    two different CJK-titled threads collide on the slug alone."""
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "untitled", "海図", "open", "Mara drew the chart.", "s10")
+    edits = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "灯台", "status": "open", "beat": "Winifred saw the light."},
+        {"id": "", "title": "灯台", "status": "advanced", "beat": "It went dark."}]})
+    assert [e["id"] for e in edits] == ["plot:untitled-2"]    # second deduped onto it
+    assert edits[0]["before"] == "" and edits[0]["payload"]["title"] == "灯台"
+    assert plot.get(cid, "untitled")["title"] == "海図"
+
+
+def test_materialize_plot_explicit_id_is_reserved_against_a_later_slug(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    edits = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "the-map", "title": "The map", "status": "open", "beat": "Mara found it."},
+        {"id": "", "title": "The Map?", "status": "open", "beat": "A second map."}]})
+    assert [e["id"] for e in edits] == ["plot:the-map", "plot:the-map-2"]
+    assert edits[1]["payload"]["title"] == "The Map?"
+
+
+def test_apply_plot_new_row_whose_id_was_taken_is_reallocated(monkeypatch, tmp_path):
+    """Mirrors the commitment branch: a row staged as NEW whose id another write
+    took since must not append its beat onto somebody else's thread."""
+    from grimoire.store import plot
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    [staged] = absorb.materialize(cid, sid, {"plot_movements": [
+        {"id": "", "title": "The map", "status": "open", "beat": "Mara found it."}]})
+    assert staged["before"] == "" and staged["target"]["id"] == "the-map"
+    # another write lands first, under a different title
+    plot.set_movement(cid, "the-map", "A different map", "open", "Winifred drew it.", sid)
+    shown = absorb_conflicts.plot_line(plot.get(cid, "the-map"))
+    applied, failures = absorb.apply_edits(
+        cid, [{**staged, "resolve": "replace", "resolve_from": shown}], sid)
+    assert failures == [] and applied
+    taken = plot.get(cid, "the-map")
+    assert taken["title"] == "A different map"
+    assert [b["text"] for b in taken["beats"]] == ["Winifred drew it."]
+    mine = plot.get(cid, "the-map-2")
+    assert mine["title"] == "The map"
+    assert [b["text"] for b in mine["beats"]] == ["Mara found it."]
+
+
+def test_materialize_slug_collision_with_non_string_status_does_not_raise(monkeypatch, tmp_path):
+    """Both stores are hand-editable; a non-string `status` reads as "" (unsettled)
+    rather than raising out of a paid-for absorb."""
+    from grimoire.store import commitments, plot
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", "",
+                             "Sworn.", "s1")
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Found.", "s1")
+    croot = campaigns.campaign_root(cid)
+    owed = json.loads((croot / "commitments.json").read_text(encoding="utf-8"))
+    owed["mara-s-oath"]["status"] = ["fulfilled"]
+    (croot / "commitments.json").write_text(json.dumps(owed), encoding="utf-8")
+    threads = json.loads((croot / "plot.json").read_text(encoding="utf-8"))
+    threads["mara-s-map"]["status"] = 7
+    (croot / "plot.json").write_text(json.dumps(threads), encoding="utf-8")
+    edits = absorb.materialize(cid, sid, {
+        "plot_movements": [
+            {"id": "", "title": "Mara's map", "status": "advanced", "beat": "Copied."}],
+        "commitment_movements": [
+            {"id": "", "title": "Mara's oath", "kind": "", "status": "", "beat": "Kept."}]})
+    assert [e["id"] for e in edits] == ["plot:mara-s-map", "commitment:mara-s-oath"]
+
+
+def test_assign_ids_matches_materialize(monkeypatch, tmp_path):
+    from grimoire.store import commitments, plot
+    from grimoire.store.absorb import materializer
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    plot.set_movement(cid, "the-map", "The map", "open", "Mara found it.", "s1")
+    plot.set_movement(cid, "the-coronation", "The coronation", "closed", "Done.", "s1")
+    commitments.set_movement(cid, "the-debt", "The debt", "promise", "open", "",
+                             "Sworn.", "s1")
+    parsed = {
+        "plot_movements": [
+            {"id": "the-map", "title": "", "status": "advanced", "beat": "Moved."},
+            {"id": "", "title": "The Map!", "status": "open", "beat": "A second map."},
+            {"id": "", "title": "The coronation", "status": "open", "beat": "Again."},
+            {"id": "x", "title": "X", "status": "open", "beat": ""},              # blank beat
+            {"id": "", "title": "...", "status": "open", "beat": "no title"},     # no title
+            {"id": "", "title": "The map", "status": "open", "beat": "duplicate"},  # dup
+        ],
+        "commitment_movements": [
+            {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "Owed."},
+            {"id": "salt-owed", "title": "Salt owed", "kind": "", "status": "", "beat": "New."},
+            {"id": "", "title": "Salt Owed!", "kind": "", "status": "", "beat": "Other."},
+            {"id": "", "title": "The debt", "kind": "", "status": "", "beat": "dup"},
+        ]}
+    assigned = materializer.assign_ids(plot.read(cid), commitments.read(cid), parsed)
+    assert set(assigned) == {("plot_movements", i) for i in range(6)} | \
+        {("commitment_movements", i) for i in range(4)}
+    staged = absorb.materialize(cid, sid, parsed)
+    by_beat = {e["after"]: e for e in staged}
+    for (section, i), a in assigned.items():
+        beat = parsed[section][i]["beat"]
+        if a is None:
+            assert beat not in by_beat, (section, i)
+            continue
+        assert by_beat[beat]["target"]["id"] == a.id, (section, i)
+        assert a.merged_from is None
+    assert [assigned[("plot_movements", i)] for i in (3, 4, 5)] == [None, None, None]
+    assert assigned[("commitment_movements", 3)] is None
+    assert assigned[("plot_movements", 0)] == ("the-map", True, None)
+    assert assigned[("plot_movements", 1)].id == "the-map-2"
+    assert assigned[("plot_movements", 2)] == ("the-coronation-2", False, None)
+    assert assigned[("commitment_movements", 0)] == ("the-debt", True, None)
+    assert assigned[("commitment_movements", 1)] == ("salt-owed", False, None)
+    assert assigned[("commitment_movements", 2)].id == "salt-owed-2"
+    assert len(staged) == 6
+    # and no commitments are assigned when the store is unreadable
+    unreadable = materializer.assign_ids(plot.read(cid), None, parsed)
+    assert all(unreadable[("commitment_movements", i)] is None for i in range(4))
