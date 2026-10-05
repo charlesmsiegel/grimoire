@@ -264,7 +264,8 @@ merge of pictures that display differently, or without unbounded memory:
   frame 0 only;
 - a raster above the pixel-identity budget:
   - more than 16 MP static;
-  - more than 64 MP of total frame area, or more than 1000 frames, animated;
+  - more than 64 MP of total frame area, more than 1000 frames, or any single frame above the static budget, animated;
+- an animated PNG that carries an orientation the browser rule would apply. Whether browsers rotate an animated PNG is unverified, and opaque identity can never merge two pictures;
 - bytes that sniff as a supported format but fail to decode.
 
 On the budget: a 16 MP image is 64 MB per RGBA copy, and the transpose plus the
