@@ -69,10 +69,12 @@ class ResolvedImage:
 def _valid_name(name: object) -> bool:
     """Same rule as `assets._addressable_name` (copied: no `assets` import here).
 
-    The shared id guard, no ".", and none of the glob metacharacters.
+    The shared id guard, no ".", and none of the glob metacharacters. It also
+    rejects NUL, which `safe_id` admits but no path operation accepts (a
+    deliberate difference from `assets`, which has the same latent gap).
     """
     return (isinstance(name, str) and safe_id(name) and "." not in name
-            and not any(c in name for c in "*?[]"))
+            and not any(c in name for c in "*?[]\0"))
 
 
 def _dir(d: Path) -> Path:
@@ -92,12 +94,12 @@ def _focus_ok(v: object) -> bool:
 def _parse(name: str, text: str) -> Ref | None:
     try:
         obj = json.loads(text)
-    except ValueError:
+    except (ValueError, RecursionError):  # RecursionError: absurdly nested JSON
         return None
     if not isinstance(obj, dict):
         return None
     fmt = obj.get("format")
-    if isinstance(fmt, bool) or fmt != FORMAT:
+    if type(fmt) is not int or fmt != FORMAT:
         return None
     image = obj.get("image")
     if "image" in obj and not (isinstance(image, str) and image_hash.is_image_id(image)):
@@ -123,8 +125,9 @@ def read(d: Path, name: str) -> Ref | None:
     return _read_file(ref_path(d, name), name)
 
 
-def _dump(obj: dict) -> str:
-    return json.dumps(obj, sort_keys=True) + "\n"
+def _dump(obj: dict) -> bytes:
+    """Bytes, not text: a text-mode write would turn "\\n" into "\\r\\n" on Windows."""
+    return (json.dumps(obj, sort_keys=True) + "\n").encode("utf-8")
 
 
 def delete(d: Path, name: str) -> bool:
@@ -154,7 +157,7 @@ def write(d: Path, name: str, image: str | None, *, focus: int | None = None) ->
     if focus is not None:
         obj["focus"] = focus
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(path, _dump(obj))
+    atomic.write_bytes(path, _dump(obj))
 
 
 def scan(d: Path) -> dict[str, Ref]:
@@ -220,7 +223,7 @@ def is_transient(path: Path) -> bool:
 def read_journal(d: Path) -> dict | None:
     try:
         obj = json.loads((_dir(d) / JOURNAL).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return obj if isinstance(obj, dict) else None
 
@@ -228,7 +231,7 @@ def read_journal(d: Path) -> dict | None:
 def write_journal(d: Path, journal: dict) -> None:
     path = _dir(d) / JOURNAL
     path.parent.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(path, _dump(journal))
+    atomic.write_bytes(path, _dump(journal))
 
 
 def clear_journal(d: Path) -> None:

@@ -246,3 +246,56 @@ def test_is_transient(tmp_path):
     assert not image_refs.is_transient(d / "image-refs" / "avatar.json")
     assert not image_refs.is_transient(d / "other" / ".promote.json")
     assert not image_refs.is_transient(d / ".promote.json")
+
+
+def test_deeply_nested_json_is_absent_not_fatal(tmp_path):
+    d = tmp_path / "rec"
+    o = _obj()
+    image_refs.write(d, "good", o.id)
+    _raw(d, "avatar", "[" * 200000)
+    (d / "image-refs" / ".promote.json").write_text("[" * 200000)
+    assert image_refs.read(d, "avatar") is None
+    assert set(image_refs.scan(d)) == {"good"}
+    assert image_refs.read_journal(d) is None
+
+
+def test_float_format_is_rejected(tmp_path):
+    d = tmp_path / "rec"
+    o = _obj()
+    _raw(d, "avatar", json.dumps({"format": 1.0, "image": o.id}))
+    assert image_refs.read(d, "avatar") is None
+
+
+def test_files_are_written_as_bytes_with_lf(tmp_path):
+    d = tmp_path / "rec"
+    o = _obj()
+    image_refs.write(d, "avatar", o.id)
+    image_refs.write_journal(d, {"a": 1})
+    for p in (image_refs.ref_path(d, "avatar"), d / "image-refs" / ".promote.json"):
+        data = p.read_bytes()
+        assert data.endswith(b"}\n") and b"\r" not in data
+
+
+def test_nul_name_is_unsafe(tmp_path):
+    d = tmp_path / "rec"
+    o = _obj()
+    assert image_refs.delete(d, "a\0b") is False
+    assert image_refs.read(d, "a\0b") is None
+    assert image_refs.resolve(d, "a\0b") is None
+    with pytest.raises(ValueError):
+        image_refs.write(d, "a\0b", o.id)
+
+
+@pytest.mark.parametrize("name", [
+    "avatar", "Avatar_1", "gallery-3", "a.b", "*", "a?", "a[b]", "", "..", ".",
+    "é-name", "promote-tmp", "Promote-Tmp", "a/b", "../x", "a\0b",
+])
+def test_valid_name_parity_with_assets(name):
+    from grimoire.store import assets
+    mine = image_refs._valid_name(name)
+    if "\0" in name:
+        # assets' `safe_id` admits NUL (a latent gap there, out of scope here);
+        # placement names must never reach a path call with one.
+        assert mine is False
+        return
+    assert mine == assets._addressable_name(name)
