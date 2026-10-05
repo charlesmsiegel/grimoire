@@ -358,6 +358,141 @@ def test_reconcile_log_row_carries_counts_only(client):
             assert text not in str(value)
 
 
+
+# ------------------------------------------- a malformed continuity.json
+
+
+def _garble(cid: str) -> None:
+    (campaigns_paths.campaign_root(cid) / "continuity.json").write_text("{ no",
+                                                                      encoding="utf-8")
+
+
+def _cache_bytes(cid: str) -> bytes | None:
+    return _bytes(campaigns_paths.campaign_root(cid) / "continuity_candidates.json")
+
+
+def _reconcile_row(cid: str) -> dict:
+    """The newest pass's info row (`scan` is oldest first)."""
+    rows = [r for r in store.logs.scan(level="info", campaign=cid)
+            if r.get("message") == "continuity reconcile"]
+    return rows[-1]
+
+
+def _assert_malformed(run: dict) -> None:
+    assert run["state"] == "failed", run
+    error = run["error"]
+    assert (error["kind"], error["status"], error["sweep"]) == ("malformed", 409, "full")
+    assert "continuity.json" in error["detail"]
+    assert run["result"]["continuity"] == "malformed"
+
+
+def test_proposals_refused_by_a_malformed_continuity_file_fail_the_run(client):
+    """Decision 2 keeps the cache as it is while continuity.json is malformed,
+    so persist 2 writes nothing -- and a run that paid for the call and saved
+    none of it says so rather than landing with `llm: "ok"`."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    held = _install(client, _held(_reply(_duplicate())))
+    resp = _refresh(client, cid)
+    assert resp.status_code == 202, resp.text
+    held.await_held()
+    _garble(cid)
+    before = _cache_bytes(cid)
+    assert before is not None, "persist 1 landed before the call"
+    held.release()
+
+    run = _settled(client, cid, resp)
+
+    _assert_malformed(run)
+    assert _cache_bytes(cid) == before
+    assert _reconcile_row(cid)["continuity"] == "malformed"
+
+
+def test_a_malformed_continuity_file_ends_the_pass_before_the_model(client):
+    """A Refresh over a malformed continuity.json pays for no call, leaves the
+    cache byte-identical, and fails visibly rather than landing `skipped`."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    assert _settled(client, cid, _refresh(client, cid))["state"] == "landed"
+    before = _cache_bytes(cid)
+    assert before is not None and PAIR in _records(cid)
+    _key(client)
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+    _garble(cid)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    _assert_malformed(run)
+    assert _reconcile_requests(fake) == []
+    assert _cache_bytes(cid) == before
+    assert _reconcile_row(cid)["continuity"] == "malformed"
+
+
+def test_a_continuity_file_garbled_before_persist_1_ends_the_pass(client, monkeypatch):
+    """Garbled between discovery and persist 1: the first persist refuses, and
+    the pass ends there -- no model call, no write, a failed run."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+    discover = continuity_routes.reconcile.discover
+
+    def discover_then_garble(*args, **kwargs):
+        sweep = discover(*args, **kwargs)
+        _garble(cid)
+        return sweep
+
+    monkeypatch.setattr(continuity_routes.reconcile, "discover", discover_then_garble)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    _assert_malformed(run)
+    assert _reconcile_requests(fake) == []
+    assert _cache_bytes(cid) is None
+
+
+def test_a_sweep_that_discovered_under_a_malformed_file_persists_nothing(client, monkeypatch):
+    """Discovery read continuity.json malformed, so it found nothing; repaired
+    before persist 1, nothing it did is worth writing, and the run fails
+    rather than landing a sweep that never looked."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+    path = campaigns_paths.campaign_root(cid) / "continuity.json"
+    original = _bytes(path)
+    discover = continuity_routes.reconcile.discover
+
+    def discover_garbled(*args, **kwargs):
+        _garble(cid)
+        try:
+            return discover(*args, **kwargs)
+        finally:
+            if original is None:
+                path.unlink()
+            else:
+                path.write_bytes(original)
+
+    monkeypatch.setattr(continuity_routes.reconcile, "discover", discover_garbled)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    _assert_malformed(run)
+    assert _reconcile_requests(fake) == []
+    assert _cache_bytes(cid) is None
+
+
+def test_a_well_formed_pass_says_continuity_ok(client):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["continuity"] == "ok"
+    assert _reconcile_row(cid)["continuity"] == "ok"
+
 # ------------------------------------------------- the automatic trigger
 
 
