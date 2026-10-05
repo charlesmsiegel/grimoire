@@ -375,3 +375,17 @@ test("the swipe target leaves vertical panning to the browser", () => {
   const bodies = bodiesOf(css, ".msg.swipe-target");
   expect(bodies.map((b) => declares(b, "touch-action"))).toContain("pan-y pinch-zoom");
 });
+
+// `pan-y` on the post also stops an ANCESTOR from panning sideways for a drag
+// that starts on it, so wide content inside the swipe target has to be its own
+// horizontal scroller -- the touch-action intersection stops at a scroller,
+// which then pans natively (and useSwipe declines a gesture started in one).
+test("wide content in the swipe target scrolls sideways on its own", () => {
+  const { css } = stylesheet();
+  const pre = bodiesOf(css, ".msg.swipe-target .msg-body pre");
+  expect(pre.map((b) => declares(b, "overflow-x"))).toContain("auto");
+  const table = bodiesOf(css, ".msg.swipe-target .msg-body table");
+  expect(table.map((b) => declares(b, "display"))).toContain("block");
+  expect(table.map((b) => declares(b, "max-width"))).toContain("100%");
+  expect(table.map((b) => declares(b, "overflow-x"))).toContain("auto");
+});

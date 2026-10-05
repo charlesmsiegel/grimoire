@@ -1972,6 +1972,14 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    a horizontal drag would otherwise be claimed as a pan and cancel the
    pointer before the gesture is decided. */
 .msg.swipe-target { touch-action: pan-y pinch-zoom; }
+/* That pan-y also stops an ANCESTOR from panning sideways for a drag that
+   starts on the post, so wide content overflowing it could not be reached by
+   touch. The touch-action intersection stops at a scroll container, which
+   then pans natively, so a code block or a GFM table here scrolls itself --
+   and useSwipe declines a gesture that starts inside a horizontally
+   scrollable element, so the native scroll wins there. */
+.msg.swipe-target .msg-body pre { overflow-x: auto; }
+.msg.swipe-target .msg-body table { display: block; max-width: 100%; overflow-x: auto; }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }
 
 /* ---- scene inspector + record drawer ---- */

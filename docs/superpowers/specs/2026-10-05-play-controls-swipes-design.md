@@ -332,7 +332,12 @@ discard the gesture. It fires only when:
 A left swipe (finger moving right-to-left) is **›**; a right swipe is **‹** —
 SillyTavern's mapping. `touch-action: pan-y pinch-zoom` on the swipe target keeps vertical
 scrolling native, and pinch-zoom stays available because the gesture already
-discards a second pointer. The constants are structural (a thumb's travel, a scroll's
+discards a second pointer. Because `pan-y` also stops an *outer* scroller from
+panning sideways for a drag that starts on the post, a code block or table
+inside the swipe target is made its own horizontal scroll container
+(`overflow-x: auto`; a table also `display: block; max-width: 100%`) — the
+touch-action intersection stops at a scroller, so it pans natively, and the
+hook already declines a gesture that starts inside one. The constants are structural (a thumb's travel, a scroll's
 angle) and should be tuned on a device. The Android shell needs nothing: it is
 the same frontend in a WebView.
 
