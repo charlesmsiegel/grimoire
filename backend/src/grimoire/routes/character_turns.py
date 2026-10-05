@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import random
 from collections.abc import Callable
 from contextlib import aclosing
@@ -12,7 +13,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import content_parts, llm_reasoning, prompts, store
-from ..llm import LLMClient, effective_model, fallback_sampling
+from ..llm import ATTEMPTED, LLMClient, effective_model, fallback_sampling
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from . import runs, streaming
@@ -30,6 +31,7 @@ from .common import (
 from .models import GroupSettings, RegenerateBody
 
 router = APIRouter()
+_log = logging.getLogger("grimoire.character_turns")
 
 #: Where a round's planning draws its randomness (talkativeness rolls, the
 #: Natural shuffle). A seam for tests, which patch it to prove a retry or a
@@ -128,6 +130,7 @@ def start(
     continuation=None,
     kind="note",
     trigger="",
+    typed_note="",
 ):
     """Open (or resume) a round and hand its frames to a detached run.
 
@@ -164,6 +167,7 @@ def start(
                 turn=turn,
                 **planned,
                 **chain,
+                typed_note=typed_note,
             )
     outcome = streaming.StreamOutcome()
     frames = _frames(
@@ -466,7 +470,7 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
 
 
 def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None,
-          tracked=None, connection=""):
+          tracked=None, connection="", made_by=None):
     """Persist this contribution's variant. A key the tracker marked `pending`
     for it is appended to `tracked`, for the caller to start once the turn's
     terminal frames are out (see `_start_tracking`). `connection` is the id of
@@ -493,6 +497,7 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
             part=continuation or "",
             reasoning=watcher.reasoning + watcher.preparation_note,
             connection=connection,
+            made_by=made_by,
         )
         before = streaming._active_variant(cid, sid, record["id"]) if continuation else ""
         if continuation and status == "complete":
@@ -731,7 +736,7 @@ async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=
 
 
 def _pause(cid, sid, run, token, record, watcher, round_record, continuation, outcome, actor,
-           tracked=None, connection=""):
+           tracked=None, connection="", made_by=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         if continuation:
@@ -753,7 +758,7 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
         # is tracked; the resumed part marks the finished variant again, over
         # the whole response.
         at = _save(cid, sid, run, token, record, watcher, "incomplete", round_record, continuation,
-                   tracked=tracked, connection=connection)
+                   tracked=tracked, connection=connection, made_by=made_by)
         _round_state(
             cid,
             sid,
@@ -805,6 +810,11 @@ class _Progress:
         self.served = served
         self.ending = None
         self.terminal = False
+        # Which snapshot the contribution in flight runs on, and what made it
+        # once its call is done: built before the meter is dropped, so a Stop
+        # landing while `_save`/`_pause` runs still has it for `_rescue`.
+        self.composed = "primary"
+        self.made_by = None
 
 
 async def _frames(
@@ -874,6 +884,7 @@ async def _frames(
         await _rescue(
             cid, sid, run, token, turn.record, turn.watcher, turn.round_record, turn.continuation,
             outcome, turn.meter, exc, tracked=tracked, served=turn.served,
+            made_by=turn.made_by, composed=turn.composed,
         )
         outcome.fail(exc.kind, exc.detail)
         yield streaming._sse({"error": {"kind": exc.kind, "detail": exc.detail}})
@@ -882,6 +893,7 @@ async def _frames(
             await _rescue(
                 cid, sid, run, token, turn.record, turn.watcher, turn.round_record,
                 turn.continuation, outcome, turn.meter, tracked=tracked, served=turn.served,
+                made_by=turn.made_by, composed=turn.composed,
             )
         raise
     finally:
@@ -917,7 +929,8 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             turn.ending = {**after, "status": "complete"}
             actor = turn.round_record.get("actor_ref")
             continue
-        turn.record, messages, _composed = await run_in_threadpool(
+        turn.made_by = None
+        turn.record, messages, turn.composed = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, conn, turn.appended
         )
         record = turn.record
@@ -949,6 +962,8 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
         # than `conn`.
         turn.served = served = streaming._served(turn.meter, conn)
         turn.meter.done()
+        turn.made_by = _made_by(turn.meter, turn.meter.task, turn.composed,
+                                turn.round_record.get("typed_note", ""))
         turn.meter = None
         paused = watcher.roll.complete or watcher.roll.truncated
         status = "incomplete" if paused or run.cancel_requested else "complete"
@@ -969,6 +984,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
                 actor,
                 tracked,
                 served,
+                made_by=turn.made_by,
             )
             turn.terminal = True
             yield streaming._sse({"proposal": {**proposal["payload"], "id": proposal["id"]}})
@@ -977,7 +993,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             return
         at = await run_in_threadpool(
             _save, cid, sid, run, token, record, watcher, status, turn.round_record,
-            turn.continuation, tracked, served,
+            turn.continuation, tracked, served, made_by=turn.made_by,
         )
         outcome.persisted(at)
         if watcher.issue == "empty response":
@@ -1032,6 +1048,38 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
         turn.round_record = await run_in_threadpool(_stop, cid, sid, turn.round_record)
 
 
+def _made_by(meter, task: str, composed: str, note: str, guidance: str = "") -> dict | None:
+    """What wrote a variant, for its `made_by`: the route the meter's holder
+    says served the call, read after `meter.done()`.
+
+    The holder rather than `meter.row`, because the row is None when the ledger
+    append failed while the holder still has the values; and the holder rather
+    than the connection the route resolved, because `llm._stamp` resets it per
+    attempt, so it names a fallback that answered. A key the holder lacks is
+    left out, never guessed (`effective_model` would be a guess). Pure -- it
+    runs on the event loop -- and fail-soft: provenance never fails a turn."""
+    if meter is None:
+        return None
+    try:
+        usage = meter.usage
+        served = {
+            "connection_id": (usage.get(ATTEMPTED) or {}).get("id"),
+            "connection": usage.get("connection"),
+            "model": usage.get("model"),
+            "provider": usage.get("provider"),
+        }
+        return {
+            "task": task,
+            **{key: value for key, value in served.items() if value},
+            "composed": composed,
+            "guidance": (guidance or "")[: store.alternates.MAX_GUIDANCE_CHARS],
+            "note": note or "",
+        }
+    except Exception:  # noqa: BLE001 - provenance must never fail a turn
+        _log.exception("could not record what made a %s response", task)
+        return None
+
+
 def _abort_meter(meter):
     if meter:
         meter.done("aborted")
@@ -1039,7 +1087,7 @@ def _abort_meter(meter):
 
 async def _rescue(
     cid, sid, run, token, record, watcher, round_record, continuation, outcome, meter, error=None,
-    *, tracked=None, served="",
+    *, tracked=None, served="", made_by=None, composed="primary",
 ):
     # Before `meter.done`, for `_frames`' reason: what a rescued partial is
     # filed under is the attempt that was running when the turn broke. With no
@@ -1050,6 +1098,7 @@ async def _rescue(
             meter.done("error", error.kind, detail=error.detail)
         else:
             meter.done("aborted")
+        made_by = _made_by(meter, meter.task, composed, round_record.get("typed_note", ""))
 
     def save():
         with store.locks.campaign_lock(cid):
@@ -1076,6 +1125,7 @@ async def _rescue(
                             record["actor_ref"],
                             tracked,
                             served,
+                            made_by=made_by,
                         )
                         return
                     at = _save(
@@ -1090,6 +1140,7 @@ async def _rescue(
                         continuation,
                         tracked,
                         served,
+                        made_by=made_by,
                     )
                     outcome.persisted(at)
             # Only this run's own round, and only while it is unfinished: a
@@ -1352,6 +1403,9 @@ def regenerate_response(
                     },
                 )
             token = streaming._claim_turn(cid, sid)
+            # Lock-free and non-minting, inside this hold: the round's typed
+            # note, which a reroll of a director turn replays with its snapshot.
+            note = store.responses.round_typed_note(cid, sid, record["round_id"])
             messages = PreparedMessages.from_snapshot(record["snapshot"], effective_model(conn),
                                                       campaign=cid)
             if body and body.guidance:
@@ -1365,13 +1419,15 @@ def regenerate_response(
                 )
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
-            request.app, cid, sid, rid, client, conn, run, token, record, messages, outcome
+            request.app, cid, sid, rid, client, conn, run, token, record, messages, outcome,
+            note=note, guidance=(body.guidance if body else None) or "",
         )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
-async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, messages, outcome):
+async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, messages, outcome,
+                         *, note="", guidance=""):
     watcher = store.response_protocol.ResponseWatcher(perception=record["actor_ref"] != "grimoire")
     meter = store.usage.meter(
         "regenerate",
@@ -1401,9 +1457,11 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
             yield frame
         served = streaming._served(meter, conn)
         meter.done()
+        made_by = _made_by(meter, "regenerate", "primary", note, guidance)
 
         accepted = await run_in_threadpool(
-            _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked, served
+            _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked, served,
+            made_by=made_by,
         )
         if accepted:
             outcome.land()
@@ -1431,7 +1489,8 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
             await _start_tracking(app, cid, sid, client, tracked, run.scene_identity)
 
 
-def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, connection=""):
+def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, connection="",
+                   made_by=None):
     with store.locks.campaign_lock(cid):
         _fence(cid, sid, run, token)
         if run.cancel_requested or watcher.roll.complete or watcher.roll.truncated:
@@ -1453,6 +1512,7 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
             activate=False,
             reasoning=watcher.reasoning + watcher.preparation_note,
             connection=connection,
+            made_by=made_by,
         )
         store.responses.activate(cid, sid, rid, variant["id"])
         if rewrite:

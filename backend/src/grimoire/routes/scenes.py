@@ -940,7 +940,9 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             turn=_turn_override(turn),automatic=not ephemeral,
             actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client),
             kind="post" if not ephemeral else ("note" if content else "continue"),
-            trigger=content)
+            trigger=content,
+            # The player's own words only: the template above is app wording.
+            typed_note=content if ephemeral else "")
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default

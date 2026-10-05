@@ -274,8 +274,14 @@ def get(cid: str, sid: str, rid: str, *, private=False) -> dict:
 def new_round(
     cid: str, sid: str, *, eligible, automatic, post, run_id, actor_ref=None, note="", turn=None,
     mode="directed", plan=(), auto_remaining=0, round_index=1, auto_total=0, present=None,
+    typed_note: str = "",
 ) -> dict:
     """Open a round, superseding any unfinished one.
+
+    `note` is what the prompt is steered by, which for an empty send, a replay
+    turn or an automatic follow-on round is the `director_note.j2` template;
+    `typed_note` is only what the player typed, so a variant's `made_by.note`
+    never puts app wording in their mouth.
 
     `mode` and `plan` are the group-play order this round follows (the refs
     still to speak after `actor_ref`); `auto_remaining`, `round_index` and
@@ -308,6 +314,7 @@ def new_round(
             "run_id": run_id,
             "actor_ref": actor_ref,
             "note": note,
+            "typed_note": typed_note,
             "turn": turn,
             "status": "pending",
             "pending_response": None,
@@ -322,6 +329,23 @@ def new_round(
         scope["rounds"][round_id] = record
         _write(cid, data)
         return copy.deepcopy(record)
+
+
+def round_typed_note(cid: str, sid: str, round_id: str | None) -> str:
+    """The note the player typed for a round, or "" -- for a round that has
+    none, is missing, or for `None` (a migrated response has no round).
+
+    Read-only and lock-free, for `actor_refs`' reasons: it resolves the
+    identity without minting (`_scope` would write the scene file) and the
+    ledger is one file written whole. A caller deciding against it holds the
+    campaign lock itself."""
+    if not round_id:
+        return ""
+    token = identity.scene_identity(cid, sid)
+    if not token:
+        return ""
+    rounds = _read(cid)["scenes"].get(token, {}).get("rounds", {})
+    return rounds.get(round_id, {}).get("typed_note", "")
 
 
 def update_round(cid: str, sid: str, round_id: str, **fields) -> dict:
@@ -398,7 +422,11 @@ def save_variant(
     part="",
     reasoning="",
     connection="",
+    made_by: dict | None = None,
 ) -> dict:
+    """Append a variant. `made_by` (the call that wrote it) is stored only when
+    given: a variant from before it existed, or one whose provenance could not
+    be built, has no key at all rather than an empty one."""
     with locks.campaign_lock(cid):
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
@@ -429,6 +457,8 @@ def save_variant(
         }
         if connection:
             variant["connection"] = connection
+        if made_by is not None:
+            variant["made_by"] = copy.deepcopy(made_by)
         record["variants"].append(variant)
         if activate:
             record.update(active_variant=variant["id"], status=status)

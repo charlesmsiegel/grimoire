@@ -439,9 +439,24 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
    *  a response has a key of its own); `connection` is the connection that
    *  produced it. */
   shown?: string; rewritten?: boolean; rewrite_key?: string; connection?: string };
+// The response settings a record's prompt rendered (`settings`) and, for a roll
+// continuation, the ones its resume prompt rendered (`resume_settings`).
+export type ResponseSettingsRecord = { style_id: string; phase: string; words: number; paragraphs: number };
+// `made_by` is the call that wrote a variant. Every key is optional because
+// unknown is absent, never zero: a variant from before it existed has no
+// `made_by`, and a key the provider never reported is missing rather than
+// guessed. `note` is only what the player typed, never the app's template.
+export type ResponseVariant = {
+  id: string; content: string; reasoning?: string; status: string; issue?: string | null;
+  made_by?: {
+    task?: string; connection_id?: string; connection?: string; model?: string; provider?: string;
+    composed?: "primary" | "resume"; guidance?: string; note?: string;
+  };
+};
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
-  variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };
+  variants: ResponseVariant[];
+  settings?: ResponseSettingsRecord; resume_settings?: ResponseSettingsRecord };
 export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
 export type PassageCharacterInput = { name: string; passage: string; source_text: string };
 export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };
