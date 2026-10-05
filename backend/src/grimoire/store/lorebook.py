@@ -6,6 +6,12 @@ keyed by index, fields `key`/`comment`/`disable`) and the V3 `character_book`
 entities with a markdown body + comma-joined `keys` — the triggers the context
 builder already consumes. `constant` -> keyless (always-on); disabled/blank
 entries are skipped.
+
+The advanced ST activation fields ride along in an `st_extensions` stash, and
+that stash is also what `adopt` maps native activation fields from (the
+`lore_fields` catalog; the mapping table is spec 4.1). A new import has those
+native fields written beside the stash; `pending_adopt` serves the old imports,
+whose stash has not been applied yet.
 """
 
 from __future__ import annotations
@@ -48,9 +54,11 @@ def _importable(e) -> bool:
 # The advanced ST activation fields, in both spellings the two schemas use
 # (V3 character_book / standalone world-info). Preserved verbatim under an
 # `extensions` stash at parse time and an `st_extensions` frontmatter key at
-# commit (#20): the context builder does not honor them yet, but dropping them
-# at import is lossy and irreversible, and keeping them lets higher-fidelity
-# activation be built later without re-importing.
+# commit (#20). `adopt` maps the rows spec 4.1 marks honoured (secondary keys
+# and logic, scan depth, sticky, cooldown, priority, keep, recursion) onto
+# native fields; the rest are stashed un-honoured, because dropping them at
+# import is lossy and irreversible and keeping them lets a future change use
+# them without a re-import.
 _ST_EXTENSION_FIELDS = (
     "secondary_keys", "keysecondary", "selective", "selectiveLogic",
     "position", "insertion_order", "order", "priority",
@@ -73,6 +81,7 @@ _ST_EXTENSION_FIELDS = (
 # Stashed fields that no part of grimoire honours: `adopt` reports whichever of
 # these a stash holds, so the editor can say what an import carried that will
 # not take effect. Every spelling, since the stash keeps the one it was given.
+# Each must also be in `_ST_EXTENSION_FIELDS` (a test holds the two together).
 _UNHONOURED = frozenset((
     "delay", "delayUntilRecursion", "delay_until_recursion",
     "probability", "useProbability", "position", "depth", "role",
@@ -200,6 +209,18 @@ def _secondary_keys(stash: Mapping[str, object]) -> str | None:
     return ", ".join(keys) or None
 
 
+def _set_by_author(name: str, value: object) -> bool:
+    """Whether a stashed value says anything. ST exports write every field with
+    its default (`group: ""`, `vectorized: false`, `triggers: []`,
+    `characterFilter: {}`), and listing those would flag every entry; a
+    probability of 100 is "always fires", which is what grimoire does."""
+    if value is None or value is False:
+        return False
+    if isinstance(value, (str, list, dict)) and not value:
+        return False
+    return not (name == "probability" and value == 100)
+
+
 def adopt(stash: Mapping[str, object]) -> AdoptResult:
     """The native activation fields a stash maps to (spec 4.1), as the flat
     strings frontmatter holds, plus the recognised-but-unhonoured fields it
@@ -242,7 +263,7 @@ def adopt(stash: Mapping[str, object]) -> AdoptResult:
                                else "pulls_only" if not_pulled else "pulled_only")
 
     unmapped = sorted({name for scope in _scopes(stash) for name in _UNHONOURED
-                       if scope.get(name) is not None})
+                       if _set_by_author(name, scope.get(name))})
     return AdoptResult(fields, tuple(unmapped))
 
 

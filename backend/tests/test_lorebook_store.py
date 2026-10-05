@@ -331,7 +331,7 @@ def test_adopt_reports_unmapped_in_either_spelling_and_place():
     res = lorebook.adopt({
         "case_sensitive": True, "matchWholeWords": True,
         "extensions": {"useRegex": True, "group": "g", "automation_id": "a",
-                       "delayUntilRecursion": 1, "characterFilter": {}},
+                       "delayUntilRecursion": 1, "characterFilter": {"names": ["Mara"]}},
         "sticky": 2,
     })
     assert res.unmapped == ("automation_id", "case_sensitive", "characterFilter",
@@ -342,6 +342,26 @@ def test_adopt_reports_unmapped_in_either_spelling_and_place():
 def test_adopt_unmapped_is_deduplicated_and_skips_absent_values():
     res = lorebook.adopt({"delay": 1, "extensions": {"delay": 2, "depth": None}})
     assert res.unmapped == ("delay",)
+
+
+def test_adopt_unmapped_ignores_the_defaults_an_st_export_writes():
+    res = lorebook.adopt({
+        "group": "", "groupOverride": False, "vectorized": False,
+        "triggers": [], "characterFilter": {}, "automationId": "", "probability": 100,
+        "useProbability": False, "caseSensitive": None, "matchWholeWords": False,
+        "extensions": {"use_regex": False, "automation_id": "", "depth": None},
+    })
+    assert res.unmapped == ()
+    assert res.fields == {}
+
+
+def test_adopt_unmapped_keeps_a_probability_that_is_not_always():
+    assert lorebook.adopt({"probability": 99}).unmapped == ("probability",)
+    assert lorebook.adopt({"probability": 0}).unmapped == ("probability",)
+
+
+def test_every_unhonoured_name_is_stashed():
+    assert set(lorebook._ST_EXTENSION_FIELDS).issuperset(lorebook._UNHONOURED)
 
 
 def test_adopt_of_an_empty_stash_is_empty():
