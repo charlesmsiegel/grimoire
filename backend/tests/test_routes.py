@@ -1646,6 +1646,61 @@ def test_campaign_promote_of_its_own_unarrived_pick_is_404_and_keeps_it(client):
     assert r.status_code == 404 and r.json()["detail"] == "image not found"
 
 
+def _pending_id(color) -> str:
+    """An image id whose object has not synced in."""
+    pending = store.image_store.ingest(_png_bytes(color=color), "png")
+    store.image_store.object_path(pending.id).unlink()
+    return pending.id
+
+
+def test_campaign_promote_refuses_an_inherited_slot_the_world_has_not_received(client):
+    """A slot the campaign inherits is the WORLD's placement; when that has
+    not arrived, the campaign promote refuses as the world-scope one does --
+    before anything is copied up or tombstoned -- rather than swapping as
+    though the slot were empty."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    wbase = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    cbase = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    wdir = store.assets.version_dir(store.worlds.world_root(wid), chid, "default")
+    cdir = store.assets.version_dir(store.campaigns.campaign_root(cid), chid, "default")
+    client.put(f"{wbase}/gallery_1",
+               files={"file": ("g.png", io.BytesIO(_png_bytes(color=(2, 2, 2))), "image/png")})
+    store.assets.link_in(wdir, "avatar", _pending_id((7, 7, 7)))     # the world's avatar
+
+    assert client.post(f"{wbase}/gallery_1/promote").status_code == 404   # world scope
+    r = client.post(f"{cbase}/gallery_1/promote")
+    assert r.status_code == 404 and "not yet available" in r.json()["detail"]
+    assert "avatar" in r.json()["detail"]
+    assert store.image_refs.scan(cdir) == {}
+    assert store.overlay.deleted(cid) == set()
+
+    # The promoted slot itself inherited and not arrived: refused on its name.
+    store.assets.link_in(wdir, "gallery_2", _pending_id((8, 8, 8)))
+    r = client.post(f"{cbase}/gallery_2/promote")
+    assert r.status_code == 404 and "gallery_2" in r.json()["detail"]
+    assert store.image_refs.scan(cdir) == {}
+
+
+def test_campaign_promote_of_a_slot_it_deleted_is_not_found(client):
+    """A world slot this campaign tombstoned does not exist here, so with the
+    campaign's avatar unarrived the answer is still "image not found", not
+    the avatar's syncing state."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    wbase = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    cbase = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+    for slot, color in (("avatar", (1, 1, 1)), ("gallery_1", (2, 2, 2))):
+        client.put(f"{wbase}/{slot}",
+                   files={"file": ("x.png", io.BytesIO(_png_bytes(color=color)), "image/png")})
+    assert client.delete(f"{cbase}/gallery_1").status_code == 200
+    cdir = store.assets.version_dir(store.campaigns.campaign_root(cid), chid, "default")
+    store.assets.link_in(cdir, "avatar", _pending_id((7, 7, 7)))
+
+    r = client.post(f"{cbase}/gallery_1/promote")
+    assert r.status_code == 404 and r.json()["detail"] == "image not found"
+
+
 def test_avatar_focus_endpoint_round_trip(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]

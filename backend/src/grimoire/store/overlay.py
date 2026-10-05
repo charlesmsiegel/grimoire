@@ -1872,16 +1872,8 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
         resolved = read_descriptions(cid, aid, vid, base)
         union = {i["name"] for i in list_images(cid, aid, vid, base)}
         cdir = assets.version_dir(croot, aid, vid, base)
-        # The campaign's OWN image-bearing placement that has not arrived yet
-        # (mid-sync) is its pick, not a gap: refused before anything is copied
-        # up, in `_check_promotable`'s order -- the promoted slot first, the
-        # avatar only once the slot exists at all (so a missing one is still
-        # "not found") -- since a copy-up landed before a refusal would leave
-        # the campaign holding a slot it no longer inherits.
-        assets.check_arrived(cdir, name)
-        if (assets.image_path(croot, aid, vid, name, base) is not None
-                or assets.image_path(wroot, aid, vid, name, base) is not None):
-            assets.check_arrived(cdir, assets.AVATAR)
+        _check_promote_arrived(cid, aid, vid, name, base, inherits, cdir,
+                               assets.version_dir(wroot, aid, vid, base))
         for n in (name, assets.AVATAR):
             if not (inherits and assets.image_path(croot, aid, vid, n, base) is None
                     and _asset_ref(base, aid, vid, n) not in deleted(cid)):
@@ -1927,6 +1919,40 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
         if (inherits and assets.image_path(croot, aid, vid, name, base) is None
                 and assets.image_path(wroot, aid, vid, name, base) is not None):
             add_deleted(cid, _asset_ref(base, aid, vid, name))
+
+
+def _check_promote_arrived(cid: str, aid: str, vid: str, name: str, base: str,
+                           inherits: bool, cdir: Path, wdir: Path) -> None:
+    """Refuse a campaign promotion whose slots have not arrived, before
+    `promote_image` copies anything up -- a copy-up landed before a refusal
+    would leave the campaign holding a slot it no longer inherits.
+
+    A slot's picture is the campaign's own placement, or -- for a slot it
+    inherits (no image of its own, not tombstoned) -- the WORLD's, so it is
+    that placement whose arrival is asked: the campaign's own unarrived pick
+    is not a gap to copy over, and an inherited one the world has not received
+    refuses here as the world-scope promotion does. `_check_promotable`'s
+    order: the promoted slot first, the avatar only once that slot exists at
+    all, so a slot that is missing -- or tombstoned here -- is still "not
+    found" whatever the avatar's state."""
+    gone = deleted(cid)
+
+    def inherited(n: str) -> bool:
+        if not inherits or _asset_ref(base, aid, vid, n) in gone:
+            return False
+        held = image_refs.read(cdir, n)
+        return (held is None or held.image is None) and assets.path_in(cdir, n) is None
+
+    def check(n: str) -> bool:
+        """Raise if `n` has not arrived; whether `n` holds a picture here."""
+        assets.check_arrived(cdir, n)
+        if inherited(n):
+            assets.check_arrived(wdir, n)
+            return assets.path_in(wdir, n) is not None
+        return assets.path_in(cdir, n) is not None
+
+    if check(name):
+        check(assets.AVATAR)
 
 
 def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict]:
