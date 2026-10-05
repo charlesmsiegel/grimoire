@@ -215,7 +215,14 @@ def _revision_ids(root: Path, pid: str, vid: str) -> list[str]:
     d = _history_dir(root, pid, vid)
     if not d.is_dir():
         return []
-    return sorted(p.stem for p in d.glob("*.md") if _REVISION_ID.fullmatch(p.stem))
+    return sorted((p.stem for p in d.glob("*.md") if _REVISION_ID.fullmatch(p.stem)),
+                  key=_revision_order)
+
+
+def _revision_order(rid: str) -> tuple[str, int]:
+    """Timestamp, then `uniquify`'s numeric suffix -- so `-10` follows `-9`."""
+    stamp, _, n = rid.partition("-")
+    return stamp, int(n or 1)
 
 
 def keep_before_overwrite(root: Path, pid: str, vid: str, new_text: str) -> None:
@@ -232,7 +239,11 @@ def keep_before_overwrite(root: Path, pid: str, vid: str, new_text: str) -> None
         before = p.read_text(encoding="utf-8")
     except FileNotFoundError:
         return
-    if before != new_text:
+    # Compared as the store would WRITE it, not byte for byte: a file from
+    # before a field existed (no `goals:` line, say) re-dumps differently with
+    # nothing changed, and a byte compare would spend a history slot on a Save
+    # that edited nothing.
+    if _dump_persona(_load_persona(before)) != new_text:
         _record_revision(root, pid, vid, before)
 
 

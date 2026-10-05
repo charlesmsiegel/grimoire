@@ -93,7 +93,7 @@ def create_world(name: str, *, genre: str = "", tone: str = "", themes=(),
     ensure_home()
     base = slugify(name)
     now = now_iso()
-    meta = {"name": name, "created": now, "updated": now}
+    meta = {"name": _one_line(name), "created": now, "updated": now}
     _apply_profile(meta, genre=genre, tone=tone, themes=themes)
     with staging.staging_tree() as tree:
         atomic.write_text(paths.meta_path_of(tree),
@@ -251,7 +251,7 @@ def update_world(wid: str, *, name: str | None = None, genre: str | None = None,
         before = mp.read_text(encoding="utf-8")
         meta, body = parse_frontmatter(before)
         if name is not None:
-            meta["name"] = name
+            meta["name"] = _one_line(name)
         _apply_profile(meta, genre=genre, tone=tone, themes=themes)
         if description is not None:
             body = _body(description)

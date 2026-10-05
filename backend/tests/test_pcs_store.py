@@ -260,3 +260,27 @@ def test_deleting_a_version_deletes_its_history(tmp_path):
     again = pcs.create_version(tmp_path, pid, "Older", pcs.blank_persona("Elara"))
     assert again == v2 and pcs.list_revisions(tmp_path, pid, again) == []
     assert pcs.list_revisions(tmp_path, pid, vid) == []
+
+
+def test_an_unedited_save_of_a_file_from_before_the_profile_fields_records_nothing(tmp_path):
+    # The old file has no `goals:`/`player_notes:` lines, so re-dumping it
+    # differs byte-wise with nothing edited -- that is not a revision.
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    (tmp_path / "pcs" / pid / f"{vid}.md").write_text(
+        "---\nname: Elara\npronouns: she/her\nsummary: ''\nbirthdate: ''\n---\n\nhero\n",
+        encoding="utf-8")
+    pcs.update_version(tmp_path, pid, vid, pcs.read_persona(tmp_path, pid, vid))
+    assert pcs.list_revisions(tmp_path, pid, vid) == []
+
+
+def test_revisions_order_a_double_digit_suffix_after_a_single_one(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    d = tmp_path / "pcs" / pid / "history" / vid
+    d.mkdir(parents=True)
+    for rid in ("20261005T120000000000Z", "20261005T120000000000Z-2",
+                "20261005T120000000000Z-10", "20261005T110000000000Z"):
+        (d / f"{rid}.md").write_text("---\nname: Elara\n---\n", encoding="utf-8")
+    (d / "20261005T120000000000Z (conflicted copy).md").write_text("x", encoding="utf-8")
+    assert [r["id"] for r in pcs.list_revisions(tmp_path, pid, vid)] == [
+        "20261005T120000000000Z-10", "20261005T120000000000Z-2",
+        "20261005T120000000000Z", "20261005T110000000000Z"]

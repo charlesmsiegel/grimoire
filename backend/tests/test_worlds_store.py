@@ -150,3 +150,13 @@ def test_a_fork_carries_the_profile(monkeypatch, tmp_path):
     wid = worlds.create_world("Realm", genre="Gothic", themes=["salt"], description="Coast.")
     fid = worlds.fork_world(wid, "Realm Copy")
     assert worlds.profile_of(worlds.world_root(fid)) == worlds.profile_of(worlds.world_root(wid))
+
+
+def test_a_name_with_a_line_break_cannot_split_the_frontmatter(monkeypatch, tmp_path):
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Salt\nmarch")
+    worlds.update_world(wid, genre="Gothic")
+    meta = worlds.read_world(wid)["meta"]
+    assert meta["name"] == "Salt march" and meta["genre"] == "Gothic"
+    worlds.update_world(wid, name="Realm\nAgain")
+    assert worlds.read_world(wid)["meta"]["name"] == "Realm Again"

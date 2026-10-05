@@ -22,6 +22,10 @@ test("the profile reads as a rendered view, with no form until Edit", async () =
 
 test("Edit opens the form; Save writes the profile and returns to the view", async () => {
   render(<WorldAbout wid="realm" />);
+  // what the view shows after a save is the server's re-read, not the draft
+  (api.getWorld as any).mockResolvedValue({
+    meta: { id: "realm", name: "Realm", genre: "Coastal gothic", tone: "Bright", themes: ["salt", "debt"] },
+    body: "A **drowned** coast.\n", counts: {} });
   fireEvent.click(await screen.findByRole("button", { name: "Edit" }));
   expect(screen.getByLabelText("Themes")).toHaveValue("salt, debt");
   fireEvent.change(screen.getByLabelText("Tone"), { target: { value: "Bright" } });
