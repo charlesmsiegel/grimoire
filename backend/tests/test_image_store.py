@@ -573,3 +573,39 @@ def test_identify_hashes_through_the_module_attribute(monkeypatch):
 def test_identify_rejects_an_unsupported_ext_for_unsniffable_bytes():
     with pytest.raises(ValueError):
         image_store.identify(b"plain text", "bmp")
+
+
+def _encoded(im: Image.Image, fmt: str, **kw) -> bytes:
+    buf = io.BytesIO()
+    im.save(buf, fmt, **kw)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("fmt,kw", [
+    ("TIFF", {"description": "Winifred's private note"}),
+    ("BMP", {}),
+])
+def test_decodable_but_unsniffable_bytes_are_opaque(fmt, kw):
+    """Spec section 5: bytes that are none of the four served formats are named
+    by their bytes, however well Pillow decodes them. Named by their pixels, a
+    later clean PNG of the same picture would dedupe onto them -- and be served
+    as `image/png`, note and all."""
+    im = _img(7)
+    other = _encoded(im, fmt, **kw)
+    with Image.open(io.BytesIO(other)) as got:
+        assert got.convert("RGB").tobytes() == im.tobytes()     # same pixels
+    clean = _png(im)
+    pixels_id = image_hash.pixel_identity(clean, _sha(clean)).id
+
+    want = image_store.identify(other, "png")
+    first = image_store.ingest(other, "png")
+    assert first.id == want and first.identity == "bytes"
+    assert _sidecar(first.id)["reason"] == "unsniffable"
+    assert first.id != pixels_id
+
+    assert image_store.identify(clean, "png") == pixels_id
+    later = image_store.ingest(clean, "png")
+    assert later.id == pixels_id != first.id
+    blob = image_store.blob_path(later.blob_sha256, later.ext).read_bytes()
+    assert blob.startswith(b"\x89PNG\r\n\x1a\n")
+    assert b"private note" not in blob

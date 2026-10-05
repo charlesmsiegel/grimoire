@@ -297,6 +297,27 @@ class _Members:
     objects: dict[str, zipfile.ZipInfo]
 
 
+#: Names a placement reader opens by exact spelling. On a case-insensitive
+#: filesystem any other spelling opens the same file, so it is refused.
+_EXACT_NAMES = (image_refs.REFS_DIR, image_refs.JOURNAL)
+
+
+def _check_placement_spelling(parts: list[str], filename: str) -> None:
+    """Refuse a member under a case variant of ``image-refs/`` or named a case
+    variant of the promotion journal.
+
+    `_contain_refs` walks the staged tree by the exact names, but on macOS or
+    Windows ``IMAGE-REFS/cover.json`` *is* ``image-refs/cover.json`` to every
+    reader: a placement (or journal) spelled that way would skip the walk and
+    place whatever local image it names. No grimoire writes one, so a bundle
+    holding one was built by hand, and is refused before anything is written."""
+    for part in parts[1:]:
+        folded = part.casefold()
+        for exact in _EXACT_NAMES:
+            if folded == exact and part != exact:
+                raise BundleError(f"bundle entry uses another spelling of {exact!r}: {filename}")
+
+
 def _world_members(infos: list[zipfile.ZipInfo], fmt: int) -> _Members:
     """The members under ``world/`` and ``image-store/``, with the archive's
     shape checked.
@@ -313,6 +334,7 @@ def _world_members(infos: list[zipfile.ZipInfo], fmt: int) -> _Members:
             continue
         parts = ziputil.member_parts(i.filename, min_parts=2, err=BundleError)
         if parts[0] == WORLD_PREFIX:
+            _check_placement_spelling(parts, i.filename)
             out.world.append(i)
             continue
         if parts[0] != STORE_PREFIX or fmt < 2:
@@ -482,17 +504,21 @@ def _contain_refs(staging: Path, id_map: dict[str, str], contained: set[str]) ->
     names into its slots, past this check. Symlinks are not followed
     (extraction makes none)."""
     dropped = journals = 0
+    # Names are compared case-folded, as a case-insensitive filesystem reads
+    # them -- behind `_check_placement_spelling`, which refuses the variants.
     for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
-        if Path(dirpath).name != image_refs.REFS_DIR:
+        if Path(dirpath).name.casefold() != image_refs.REFS_DIR:
             continue
         dirnames[:] = []
         owner = Path(dirpath).parent
-        if image_refs.JOURNAL in filenames:
-            image_refs.clear_journal(owner)
-            journals += 1
+        for f in filenames:
+            if f.casefold() == image_refs.JOURNAL:
+                (Path(dirpath) / f).unlink()
+                journals += 1
         dropped += sum(_contain_ref(owner, f[: -len(".json")], id_map, contained)
                        for f in filenames
-                       if f != image_refs.JOURNAL and f.endswith(".json"))
+                       if f.casefold() != image_refs.JOURNAL
+                       and f.casefold().endswith(".json"))
     if dropped or journals:
         logs.record("warning", __name__,
                     "bundle placements named images the bundle does not carry; dropped",
