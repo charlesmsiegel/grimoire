@@ -5120,22 +5120,8 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
                 except store.responses.ResponseConflict as exc:
                     raise HTTPException(409,detail={"kind":exc.kind,"detail":exc.detail}) from exc
             target = messages[index] if 0 <= index < len(messages) else {}
-            # The store phase runs on what the player typed, with the edited
-            # message's role and the connection that produced it -- but only
-            # where a record can be kept. A message with neither id (one written
-            # before ids existed) has nothing to key one by, and rewriting it
-            # would change text that Restore could never give back; a synthetic
-            # line has no role. A restore runs no phase at all: it would
-            # rewrite the original straight back.
-            key = store.regex.rewrites.key_for(target)
-            if body.restore:
-                _require_restorable(cid, sid, target, body.content)
-            role = store.regex.apply.role_of(target)
-            original = content
-            fired: list[str] = []
-            if key and role and not body.restore:
-                content, fired = store.regex.view.store_phase(
-                    original, cid=cid, role=role, connection=target.get("connection") or "")
+            key, original, content, fired = _edit_store_phase(
+                cid, sid, target, content, restore=body.restore)
             store.scenes.edit_message(cid, sid, index, content)
             try:
                 store.alternates.reconcile(cid, sid)
@@ -5153,6 +5139,34 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
     except store.scenes.RollMessageImmutable:
         raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited")
     return {"ok": True}
+
+
+def _edit_store_phase(cid: str, sid: str, target: dict, content: str, *,
+                      restore: bool) -> tuple[str, str, str, list[str]]:
+    """What an edit of `target` stores: `(key, original, content, fired)`,
+    where `key` is the message's record key (`rewrites.key_for`, "" for none)
+    and `content` the text to write. Shared by the plain edit and the retcon,
+    which are the same write with different consequences, and called inside
+    the hold that writes it; `_settle_rewrite` follows the write when `key`.
+
+    The store phase runs on what the player typed, with the edited message's
+    role and the connection that produced it -- but only where a record can be
+    kept. A message with neither id (one written before ids existed) has
+    nothing to key one by, and rewriting it would change text that Restore
+    could never give back; a synthetic line has no role. A restore runs no
+    phase at all: it would rewrite the original straight back, and it is
+    refused unless it undoes exactly the rewrite on record
+    (`_require_restorable`)."""
+    key = store.regex.rewrites.key_for(target)
+    if restore:
+        _require_restorable(cid, sid, target, content)
+    role = store.regex.apply.role_of(target)
+    fired: list[str] = []
+    stored = content
+    if key and role and not restore:
+        stored, fired = store.regex.view.store_phase(
+            content, cid=cid, role=role, connection=target.get("connection") or "")
+    return key, content, stored, fired
 
 
 def _require_restorable(cid: str, sid: str, target: dict, content: str) -> None:
@@ -5295,13 +5309,24 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
     _require_scene(cid, sid)
     # Macros resolved once at persist time, the same as a fresh send and the
     # same as the plain edit (#137): a retconned `{{roll:1d20}}` must not
-    # re-roll on every later context build.
-    content = store.context.expand_macros(
+    # re-roll on every later context build. Not for a restore, as there.
+    content = body.content if body.restore else store.context.expand_macros(
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
         # One hold over check and rewrite, as for the cascade delete above.
         with runs.scene_held_free(request.app, cid, sid):
+            # The stored-rewrite handling the plain edit gets, in this same
+            # hold: the store phase on the new text, then the post's record
+            # settled -- replaced when a rule fired, retired when the retcon
+            # overwrote the text it stored. Without it a retcon over a
+            # rewritten post left an original nothing could restore.
+            messages = store.scenes.read_scene(cid, sid)["messages"]
+            target = messages[index] if 0 <= index < len(messages) else {}
+            key, original, content, fired = _edit_store_phase(
+                cid, sid, target, content, restore=body.restore)
             report = store.retcon.retcon(cid, sid, index, content)
+            if key:
+                _settle_rewrite(cid, sid, target, key, original, fired, content)
             # A retcon is a text edit for the tracker: the rewritten post's
             # record is stale and every later one was built on it.
             tracker_routes.after_text_edit(cid, sid, index)

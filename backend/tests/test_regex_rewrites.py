@@ -626,3 +626,50 @@ def test_a_record_written_under_the_bare_response_id_still_resolves_for_a_later_
     r = edit(client, cid, sid, 2, "No roll... fine.", restore=True)
     assert r.status_code == 200, r.text
     assert records(client, cid, sid) == {}
+
+
+def retcon(client, cid, sid, index, content, **body):
+    return client.post(f"/api/campaigns/{cid}/scenes/{sid}/messages/{index}/retcon",
+                       json={"content": content, **body})
+
+
+def test_a_retcon_over_a_rewritten_post_retires_its_record(client):
+    """A retcon is an edit that also un-absorbs: the post's stored-rewrite
+    record is settled exactly as a plain edit settles it, so text the record
+    never stored does not keep an original nobody can restore."""
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    assert len(records(client, cid, sid)) == 1
+
+    r = retcon(client, cid, sid, 1, "She spoke at once.")
+    assert r.status_code == 200, r.text
+    assert records(client, cid, sid) == {}
+    assert "rewritten" not in messages(client, cid, sid)[-1]
+
+
+def test_a_retcon_runs_the_store_phase_and_replaces_the_record(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    rid = messages(client, cid, sid)[-1]["response_id"]
+
+    r = retcon(client, cid, sid, 1, "She waited... and left.")
+    assert r.status_code == 200, r.text
+    reply = messages(client, cid, sid)[-1]
+    assert reply["content"] == "She waited… and left."
+    assert reply["rewritten"] is True
+    assert set(records(client, cid, sid)) == {rid}
+    assert records(client, cid, sid)[rid]["original"] == "She waited... and left."
+
+
+def test_a_retcon_of_a_player_post_is_rewritten_like_an_edit(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, {**ELLIPSIS, "targets": ["user"]})
+    send(client, cid, sid, "Fine.", content="Hello", speaker_ref="characters:mara")
+    post = messages(client, cid, sid)[0]
+
+    r = retcon(client, cid, sid, 0, "Wait... what?")
+    assert r.status_code == 200, r.text
+    assert messages(client, cid, sid)[0]["content"] == "Wait… what?"
+    assert records(client, cid, sid)[post["post_id"]]["original"] == "Wait... what?"
