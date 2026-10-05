@@ -354,7 +354,13 @@ def unfinished(cid: str, sid: str) -> dict | None:
 
 
 def prepare(
-    cid: str, sid: str, round_id: str, actor_ref: str, speaker: str, snapshot: dict
+    cid: str,
+    sid: str,
+    round_id: str,
+    actor_ref: str,
+    speaker: str,
+    snapshot: dict,
+    settings: dict | None = None,
 ) -> dict:
     with locks.campaign_lock(cid):
         data = _read(cid)
@@ -370,6 +376,8 @@ def prepare(
             "variants": [],
             "created": now_iso(),
         }
+        if settings is not None:
+            record["settings"] = copy.deepcopy(settings)
         record["snapshot_ref"] = response_snapshots.write(cid, record["id"], "primary", snapshot)
         scope["responses"][record["id"]] = record
         scope["rounds"][round_id].update(pending_response=record["id"], actor_ref=actor_ref)
@@ -523,12 +531,16 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         write.replace_messages(cid, sid, messages)
 
 
-def save_resume_prompt(cid: str, sid: str, rid: str, snapshot: dict) -> None:
+def save_resume_prompt(
+    cid: str, sid: str, rid: str, snapshot: dict, settings: dict | None = None
+) -> None:
     with locks.campaign_lock(cid):
         data = _read(cid)
         reference = response_snapshots.write(cid, rid, "resume", snapshot)
         record = _scope(cid, sid, data)["responses"][rid]
         record["resume_snapshot_ref"] = reference
+        if settings is not None:
+            record["resume_settings"] = copy.deepcopy(settings)
         record.setdefault("resume_snapshot_refs", []).append(reference)
         _write(cid, data)
 

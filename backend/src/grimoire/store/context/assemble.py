@@ -396,6 +396,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                                       campaign_meta=campaign_meta, config=cfg)
     targets = response_targets.resolve(turn=turn or {}, scene_meta=scene["meta"],
                                        campaign_meta=campaign_meta, config=cfg)
+    phase = "opening" if opening_narrator else "continuation"
     try:
         resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
     except (styles.StyleNotFound, OSError, UnicodeDecodeError):
@@ -446,7 +447,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "world_overview": worlds_read.profile_of(campaigns_read.world_root_of(cid)),
         "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
-        "budget": targets["opening" if opening_narrator else "continuation"],
+        "budget": targets[phase],
         "npc_cards": npc_cards,
         "cast_blocks": cast_blocks,
         "named_npc_count": named_npc_count,
@@ -540,6 +541,8 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
             "post_history": post_history, "npc_names": npc_names, "wi_result": wi_result,
             "lore": lore,
+            "response_settings": {"style_id": budget["style_id"], "phase": phase,
+                                  **targets[phase]},
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
                                                 current_loc if not loc_excluded else None, voiced_ids)}
 
@@ -1502,6 +1505,7 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
     prepared = model_guidance.PreparedMessages(model, select, profiles={
         "": frozen[""], **{name: frozen[text] for name, text in profiles.items()}},
         campaign=cid)
+    prepared.settings = deepcopy(a.get("response_settings"))
     return prepared, prepared.breakdown
 
 

@@ -76,6 +76,8 @@ class PreparedMessages(list):
         #: resolves them against -- the campaign running the attempt, which for
         #: a snapshot restored in a fork is the fork.
         self.campaign = campaign
+        # The response settings the prompt rendered; set by `assemble._prepare`.
+        self.settings: dict | None = None
         super().__init__(deepcopy(messages))
 
     def for_model(self, model: str) -> list[dict]:

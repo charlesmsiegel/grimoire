@@ -441,7 +441,7 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
                     messages,
                     conn,
                 )
-                return record, messages
+                return record, messages, "resume" if record.get("resume_snapshot") else "primary"
         messages, _breakdown = _compose(cid, sid, round_record, actor, conn, appended)
         # The round's eligible first, then the whole present cast: an explicit
         # pick a talkativeness roll filtered out is still who they are.
@@ -452,14 +452,17 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
         )
         if pending and appended:
             record = store.responses.get(cid, sid, pending, private=True)
-            store.responses.save_resume_prompt(cid, sid, pending, messages.snapshot())
+            store.responses.save_resume_prompt(
+                cid, sid, pending, messages.snapshot(), getattr(messages, "settings", None)
+            )
             # The original pre-response snapshot remains the reroll boundary.
         else:
             record = store.responses.prepare(
-                cid, sid, round_record["id"], actor, speaker, messages.snapshot()
+                cid, sid, round_record["id"], actor, speaker, messages.snapshot(),
+                getattr(messages, "settings", None),
             )
         _capture(cid, sid, "continuation" if appended else "chat", messages, conn)
-        return record, messages
+        return record, messages, "resume" if pending and appended else "primary"
 
 
 def _save(cid, sid, run, token, record, watcher, status, round_record, continuation=None,
@@ -914,7 +917,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             turn.ending = {**after, "status": "complete"}
             actor = turn.round_record.get("actor_ref")
             continue
-        turn.record, messages = await run_in_threadpool(
+        turn.record, messages, _composed = await run_in_threadpool(
             _prepare, cid, sid, run, token, turn.round_record, actor, conn, turn.appended
         )
         record = turn.record
