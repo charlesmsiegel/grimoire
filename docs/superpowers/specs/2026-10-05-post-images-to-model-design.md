@@ -227,9 +227,9 @@ trusting it.
 
 ## Composition
 
-`_assemble(..., images: int = 0)`; `story._project_history(messages, *,
-images: int = 0, cid: str = "")`, where `cid` is required whenever `images > 0`.
-With `images == 0` the projection is today's code path, untouched. Otherwise:
+`_assemble(..., images: int = 0)`. With `images == 0` it calls
+`story._project_history` exactly as today, untouched. Otherwise it calls a
+sibling, `story._project_history_refs(messages, *, images, cid)`, and:
 
 1. **Choose.** Walk the scene's messages newest to oldest, skipping director
    notes as today, and choose up to `images` markdown images whose URL is one of
