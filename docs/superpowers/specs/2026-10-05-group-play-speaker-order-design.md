@@ -35,7 +35,9 @@ Per scene, stored as one frontmatter field `group_play` on the scene file
 holding compact JSON (frontmatter values are strings; one field keeps the
 scene file's head readable and lets a rename carry the settings with the
 file). Written by a new `store.scenes.set_group(cid, sid, settings)` under
-`@_serialized`, read by `store.scenes.group_settings(cid, sid)`.
+`@_serialized`, taking the already-serialized string; routes read it through
+`store.group_play.settings_of(scene_meta)` (the scenes package may not import
+the planner, which would close an import cycle through `store.context`).
 
 | Key | Values | Default |
 |---|---|---|
@@ -153,8 +155,9 @@ held throughout, Stop reaching every round, and one settlement boundary.
   instead ends the round cleanly and starts the follow-on round with that
   character leading (`validate_handoff` reports a repeat distinctly from an
   ineligible ref). With no rounds remaining, today's rejection stands.
-- Stop sets `auto_remaining` to 0 on the round, so a later Retry finishes only
-  the interrupted contribution and starts no further rounds.
+- Stop sets `auto_remaining` to 0, clears the round's remaining plan and marks
+  the round stopped, so a later Retry finishes only the interrupted contribution
+  and generates nothing after it, in any mode.
 - A new SSE frame `round_start {"index": n, "of": total}` precedes each
   follow-on round's first `response_start`. Clients that ignore unknown frames
   are unaffected.
