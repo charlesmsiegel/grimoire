@@ -515,3 +515,27 @@ def test_an_ordinary_read_failure_is_not_read_as_an_unusable_name(home, monkeypa
     monkeypatch.setattr("pathlib.Path.stat", _denied)
 
     assert store.pending_reviews.name_usable(cid, sid) is True
+
+
+def test_follow_stamps_repoints_alternatives(scene):
+    """A staged row's alternatives are whole rows too: swapping to one after a
+    rename must not save a stale stamp the store no longer matches."""
+    cid, sid = scene
+    new = "0002--moved"
+    row = {"id": "plot:mara-s-chart", "kind": "plot", "before": "",
+           "payload": {"scene": sid},
+           "identity_check": {"decision": "uncertain", "alternatives": [
+               _commitment_row(sid),
+               {"id": "plot:mara-s-map", "kind": "plot", "before": "open — x",
+                "payload": {"scene": sid}}]}}
+    store.pending_reviews.publish(cid, sid, "g1", _review(edits=[row]), {})
+
+    store.pending_reviews.repoint_scenes(cid, {sid: new})
+
+    moved = store.pending_reviews.read(cid, new)["review"]["edits"][0]
+    assert moved["payload"]["scene"] == new
+    commitment, thread = moved["identity_check"]["alternatives"]
+    assert commitment["payload"]["scene"] == new
+    assert commitment["before"].endswith(f"last moved in {new}]")
+    assert commitment["resolve_from"].endswith(f"last moved in {new}]")
+    assert thread["payload"]["scene"] == new

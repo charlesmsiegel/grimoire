@@ -307,6 +307,29 @@ def clear_destinations(cid: str, sids) -> None:
 _SCENE_STAMPED = frozenset({"plot", "commitment", "fact"})
 
 
+def _follow_row(row, old: str, new: str) -> None:
+    """One staged row's scene stamps moved from `old` onto `new`, in place."""
+    if not isinstance(row, dict) or row.get("kind") not in _SCENE_STAMPED:
+        return
+    payload = row.get("payload")
+    if isinstance(payload, dict) and payload.get("scene") == old:
+        payload["scene"] = new
+    # Anchored to the END of the line, exactly as `sceneRenamed` anchors it: a
+    # beat that happens to quote the old scene id in its own text is left alone.
+    # The beat count sits in front of it and is deliberately not matched -- it
+    # is "1 beat" singular and "N beats" otherwise, and matching the plural
+    # alone silently skipped every commitment with exactly one beat.
+    #
+    # No kind check beyond the one above: only `conflicts.commitment_line`
+    # ends in this suffix, so a plot or fact row's `before` is untouched by
+    # construction rather than by a second list to keep in step.
+    frm, to = f", last moved in {old}]", f", last moved in {new}]"
+    for field in ("before", "resolve_from"):
+        value = row.get(field)
+        if isinstance(value, str) and value.endswith(frm):
+            row[field] = value[:-len(frm)] + to
+
+
 def _follow_stamps(raw: bytes, old: str, new: str) -> bytes:
     """The record with the scene ids its staged rows carry moved onto `new`.
 
@@ -332,28 +355,14 @@ def _follow_stamps(raw: bytes, old: str, new: str) -> bytes:
     edits = review.get("edits") if isinstance(review, dict) else None
     if not isinstance(edits, list):
         return raw
-    # Anchored to the END of the line, exactly as `sceneRenamed` anchors it: a
-    # beat that happens to quote the old scene id in its own text is left alone.
-    # The beat count sits in front of it and is deliberately not matched -- it
-    # is "1 beat" singular and "N beats" otherwise, and matching the plural
-    # alone silently skipped every commitment with exactly one beat.
-    frm, to = f", last moved in {old}]", f", last moved in {new}]"
-
-    def repoint(v):
-        return v[:-len(frm)] + to if isinstance(v, str) and v.endswith(frm) else v
-
     for edit in edits:
-        if not isinstance(edit, dict) or edit.get("kind") not in _SCENE_STAMPED:
-            continue
-        payload = edit.get("payload")
-        if isinstance(payload, dict) and payload.get("scene") == old:
-            payload["scene"] = new
-        # No kind check beyond the one above: only `conflicts.commitment_line`
-        # ends in this suffix, so a plot or fact row's `before` is untouched by
-        # construction rather than by a second list to keep in step.
-        for field in ("before", "resolve_from"):
-            if field in edit:
-                edit[field] = repoint(edit[field])
+        _follow_row(edit, old, new)
+        # An identity check's alternatives are whole staged rows the reviewer
+        # can swap in, so they carry the same stamps and follow them too.
+        check = edit.get("identity_check") if isinstance(edit, dict) else None
+        alternatives = check.get("alternatives") if isinstance(check, dict) else None
+        for alt in alternatives if isinstance(alternatives, list) else ():
+            _follow_row(alt, old, new)
     return (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
 
 

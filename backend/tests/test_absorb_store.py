@@ -3412,3 +3412,337 @@ def test_commitment_explicit_source_reserves_its_own_slug_with_resolved_canonica
         {"id": "", "title": "Mara's oath", "kind": "promise", "status": "open",
          "beat": "Second."}]})
     assert [(e["id"], e["after"]) for e in staged] == [("commitment:the-debt", "First.")]
+
+
+# ------------------------- §10.3: staging identity checks (band, alternatives)
+
+_AS_NEW = "_identity_as_new"   # identity.AS_NEW_KEY, spelled as materialize spells it
+
+
+def _ic(decision, status="accepted", *candidates, reason=""):
+    """A row's `identity_check` as `identity.rewritten` stamps it (no
+    alternatives -- materialize adds those). `candidates` are (ref, title,
+    status) as the examination saw them, which staging must not trust."""
+    return {"decision": decision, "status": status, "reason": reason,
+            "proposed": {"title": "Mara's chart", "why_new": "", "distinguished_from": []},
+            "candidates": [{"ref": ref, "title": title, "status": st,
+                            "latest_beat": "", "signals": {}}
+                           for ref, title, st in candidates]}
+
+
+_MAP = ("thread:mara-s-map", "Mara's map", "open")
+_CHART = ("thread:winifred-s-chart", "Winifred's chart", "open")
+_SERA = ("thread:seraphine-s-map", "Seraphine's map", "open")
+
+
+def _identity_campaign(monkeypatch, tmp_path):
+    """Three open threads seeded in an earlier scene, and the scene absorbed."""
+    from grimoire.store import plot
+    cid = _campaign(monkeypatch, tmp_path)
+    s0 = scenes.create_scene(cid, "Saltmarch docks")
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara lost the map.", s0)
+    plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open",
+                      "Winifred copied the chart.", s0)
+    plot.set_movement(cid, "seraphine-s-map", "Seraphine's map", "open",
+                      "Seraphine sold her map.", s0)
+    sid = scenes.create_scene(cid, "The tearoom")
+    return cid, sid
+
+
+def _chart_row(**extra):
+    return {"id": "", "title": "Mara's chart", "status": "open",
+            "beat": "Mara unrolled a second chart.", **extra}
+
+
+def _cited(cid, sid):
+    """A narrated line the row cites, so its routing band is `high`."""
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "Mara unrolled a second chart."}])
+    return {"speaker": "Grimoire", "certainty": 0.95, "quote": "Mara unrolled a second chart."}
+
+
+def _accepted(target, *candidates, original=None, status="advanced"):
+    """An accepted `existing` row as `identity.rewritten` returns it: retargeted
+    by the §10.2 rewrite, carrying its original under the private key."""
+    original = original or _chart_row()
+    return {**original, "id": target, "title": "", "status": status,
+            "identity_check": _ic("existing", "accepted", *candidates),
+            _AS_NEW: dict(original)}
+
+
+def test_uncertain_row_is_band_low_and_keeps_its_citation_score(monkeypatch, tmp_path):
+    """`uncertain` is a possible duplicate: it goes to NEEDS YOU whatever the
+    citation says, and the citation itself is reported as it was."""
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    cite = _cited(cid, sid)
+    [plain] = absorb.materialize(cid, sid, {"plot_movements": [_chart_row(**cite)]})
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(**cite, identity_check=_ic("uncertain", "accepted", _MAP))]})
+    assert plain["review"]["band"] == "high"
+    assert row["review"]["band"] == "low"
+    assert row["review"]["score"] == plain["review"]["score"]
+    assert row["review"]["quote"] == plain["review"]["quote"] == cite["quote"]
+    assert row["identity_check"]["decision"] == "uncertain"
+
+
+def test_unchecked_row_is_band_low(monkeypatch, tmp_path):
+    """A row the check never answered still has a plausible candidate nobody
+    ruled out; only an answered `new` (or an accepted `existing`) keeps its
+    routing band."""
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    cite = _cited(cid, sid)
+    [unchecked] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(**cite, identity_check=_ic("unchecked", "hint_only", _MAP))]})
+    [new] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(**cite, identity_check=_ic("new", "accepted", _MAP))]})
+    assert unchecked["review"]["band"] == "low"
+    assert new["review"]["band"] == "high"
+    assert new["identity_check"]["decision"] == "new"
+
+
+def test_row_without_identity_check_has_no_identity_key(monkeypatch, tmp_path):
+    """Literal, so a regression in the extracted per-row staging helpers shows."""
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    review = {"certainty": None, "quote": "", "speaker": "", "authority": "uncited",
+              "score": 0.42, "band": "medium"}
+    [p, c] = absorb.materialize(cid, sid, {
+        "plot_movements": [_chart_row()],
+        "commitment_movements": [{"id": "", "title": "Pay Winifred", "kind": "debt",
+                                  "status": "", "due": "by midwinter",
+                                  "beat": "Mara swore to pay."}]})
+    assert p == {"id": "plot:mara-s-chart", "kind": "plot",
+                 "target": {"kind": "plot", "id": "mara-s-chart"},
+                 "label": "Mara's chart — open", "field": "beat", "before": "",
+                 "after": "Mara unrolled a second chart.", "authored": False,
+                 "payload": {"id": "mara-s-chart", "title": "Mara's chart",
+                             "status": "open", "scene": sid},
+                 "review": review}
+    assert c == {"id": "commitment:pay-winifred", "kind": "commitment",
+                 "target": {"kind": "commitments", "id": "pay-winifred"},
+                 "label": "Pay Winifred — debt, open, due by midwinter", "field": "beat",
+                 "before": "", "after": "Mara swore to pay.", "authored": False,
+                 "payload": {"id": "pay-winifred", "title": "Pay Winifred", "kind": "debt",
+                             "status": "", "due": "by midwinter", "scene": sid},
+                 "review": review}
+    assert "identity_check" not in p and "identity_check" not in c
+
+
+def test_alternatives_are_complete_rows_with_valid_before_tokens(monkeypatch, tmp_path):
+    """Each alternative is a whole staged row for its candidate, carrying the
+    same `before` token a primary row on that thread would: swapping to it and
+    saving must not read as a conflict."""
+    from grimoire.store import plot
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _MAP, _CHART))]})
+    [row] = staged
+    alts = row["identity_check"]["alternatives"]
+    assert [a["target"] for a in alts] == [{"kind": "plot", "id": "mara-s-map"},
+                                           {"kind": "plot", "id": "winifred-s-chart"}]
+    for alt in alts:
+        tid = alt["target"]["id"]
+        assert alt["kind"] == "plot" and alt["id"] == f"plot:{tid}"
+        assert alt["label"].startswith(plot.get(cid, tid)["title"])
+        assert alt["after"] == "Mara unrolled a second chart."
+        assert alt["payload"]["scene"] == sid
+        assert alt["payload"]["status"] == "advanced"   # §10.2: never `open`
+        assert alt["before"] == absorb_conflicts.plot_line(plot.get(cid, tid))
+        assert absorb.check_conflicts(cid, [alt]) == []
+    assert _AS_NEW not in json.dumps(staged)
+
+
+def test_accepted_row_offers_the_as_new_variant(monkeypatch, tmp_path):
+    """A wrong but accepted `existing` is one click from undone: its as-new
+    alternative is the model's own row, on a fresh record."""
+    from grimoire.store import plot
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP, _CHART)]})
+    [row] = staged
+    assert row["target"] == {"kind": "plot", "id": "mara-s-map"}
+    assert row["before"] == absorb_conflicts.plot_line(plot.get(cid, "mara-s-map"))
+    alts = row["identity_check"]["alternatives"]
+    # The accepted target itself is not an alternative to itself.
+    assert [a["target"]["id"] for a in alts] == ["winifred-s-chart", "mara-s-chart"]
+    as_new = alts[-1]
+    assert as_new["before"] == ""
+    assert plot.get(cid, as_new["target"]["id"]) is None
+    assert as_new["payload"]["title"] == "Mara's chart"
+    assert as_new["payload"]["status"] == "open"
+    assert as_new["label"] == "Mara's chart — open"
+    assert _AS_NEW not in json.dumps(staged)
+
+
+def test_alternatives_skip_closed_and_batch_taken_candidates(monkeypatch, tmp_path):
+    from grimoire.store import plot
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted",
+                                      ("thread:mara-s-map", "Mara's map", "closed"),
+                                      _CHART, _SERA)),
+        {"id": "winifred-s-chart", "title": "", "status": "advanced",
+         "beat": "Winifred burned the copy."}]})
+    row = next(e for e in staged if "identity_check" in e)
+    assert [a["target"]["id"] for a in row["identity_check"]["alternatives"]] == \
+        ["seraphine-s-map"]
+
+
+def test_alternatives_are_revalidated_against_the_current_store(monkeypatch, tmp_path):
+    """The examination's snapshot is stale by the time materialize runs: a
+    candidate closed since is skipped, and one merged away since is offered as
+    the record it now is -- never as the hidden source."""
+    from grimoire.store import plot
+    from grimoire.store.continuity import review
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
+    review.create_alias(cid, "thread:winifred-s-chart", "thread:seraphine-s-map")
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _MAP, _CHART))]})
+    assert [a["target"]["id"] for a in row["identity_check"]["alternatives"]] == \
+        ["seraphine-s-map"]
+
+
+def test_two_candidates_sharing_a_canonical_yield_one_alternative(monkeypatch, tmp_path):
+    from grimoire.store.continuity import review
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    review.create_alias(cid, "thread:winifred-s-chart", "thread:seraphine-s-map")
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _CHART, _SERA))]})
+    assert [a["target"]["id"] for a in row["identity_check"]["alternatives"]] == \
+        ["seraphine-s-map"]
+
+
+def test_two_as_new_variants_never_share_an_id(monkeypatch, tmp_path):
+    """Two accepted rows whose own titles slug alike (and fold alike) must not
+    be offered one fresh record: swapping both in would merge them."""
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP),
+        _accepted("winifred-s-chart", _CHART,
+                  original=_chart_row(title="Mara's Chart", beat="Winifred saw it."))]})
+    ids = [a["target"]["id"] for e in staged for a in e["identity_check"]["alternatives"]]
+    assert ids == ["mara-s-chart", "mara-s-chart-2"]
+
+
+def test_as_new_variant_never_keeps_a_non_slug_id(monkeypatch, tmp_path):
+    """A model-written id the Ledger's routes cannot address is not kept; a
+    free, slug-shaped one is."""
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP, original=_chart_row(id="plot/the-map")),
+        _accepted("winifred-s-chart", _CHART,
+                  original=_chart_row(id="the-sea-chart", title="The sea chart",
+                                      beat="Winifred saw it."))]})
+    ids = [e["identity_check"]["alternatives"][-1]["target"]["id"] for e in staged]
+    assert ids == ["mara-s-chart", "the-sea-chart"]
+
+
+def test_accepted_target_closed_before_staging_is_downgraded(monkeypatch, tmp_path):
+    """Identity resolution never reopens a record -- including one closed in
+    the window between the resolver's answer and staging."""
+    from grimoire.store import plot
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    closed = {**plot.get(cid, "mara-s-map"), "status": "closed"}
+    plot.restore(cid, "mara-s-map", closed)
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP, _CHART)]})
+    assert row["target"] == {"kind": "plot", "id": "mara-s-chart"}
+    assert row["before"] == ""
+    assert row["payload"]["title"] == "Mara's chart"
+    ic = row["identity_check"]
+    assert (ic["decision"], ic["status"]) == ("uncertain", "downgraded")
+    assert ic["reason"] == "that record was closed while the review was being prepared"
+    assert row["review"]["band"] == "low"
+    # Downgraded rows offer no as-new variant (they ARE new); the live
+    # candidate is still one click away.
+    assert [a["target"]["id"] for a in ic["alternatives"]] == ["winifred-s-chart"]
+    applied, failures = absorb.apply_edits(cid, [row], sid)
+    assert failures == [] and applied
+    assert plot.get(cid, "mara-s-map") == closed
+
+
+def test_a_sibling_of_a_downgraded_row_does_not_reopen_the_closed_target(monkeypatch, tmp_path):
+    """`identity.rewritten` retargets the rows that were dropped only because
+    the accepted row held their id (its siblings) onto the same record, where
+    they are dropped as a second move. Downgrading the accepted row must take
+    them back off it: left there, the sibling stages onto the closed record."""
+    from grimoire.store import plot
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    plot.restore(cid, "mara-s-map", {**plot.get(cid, "mara-s-map"), "status": "closed"})
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP),
+        {"id": "mara-s-map", "title": "", "status": "advanced", "beat": "Again."}]})
+    assert [(e["target"]["id"], e["after"]) for e in staged] == \
+        [("mara-s-chart", "Mara unrolled a second chart.")]
+
+
+def test_commitment_alternative_before_is_commitment_line(monkeypatch, tmp_path):
+    from grimoire.store import commitments
+    from grimoire.store.absorb import conflicts as absorb_conflicts
+    cid = _campaign(monkeypatch, tmp_path)
+    s0 = scenes.create_scene(cid, "Saltmarch docks")
+    commitments.set_movement(cid, "the-debt", "The debt", "threat", "open", "by midwinter",
+                             "Mara owes the guild.", s0)
+    sid = scenes.create_scene(cid, "The tearoom")
+    [row] = absorb.materialize(cid, sid, {"commitment_movements": [
+        {"id": "", "title": "Mara's guild debt", "kind": "promise", "status": "open",
+         "beat": "Mara paid a coin.",
+         "identity_check": _ic("uncertain", "accepted",
+                               ("commitment:the-debt", "The debt", "open"))}]})
+    assert row["review"]["band"] == "low"
+    [alt] = row["identity_check"]["alternatives"]
+    assert alt["kind"] == "commitment"
+    assert alt["target"] == {"kind": "commitments", "id": "the-debt"}
+    assert alt["before"] == absorb_conflicts.commitment_line(commitments.get(cid, "the-debt"))
+    assert alt["payload"]["kind"] == "" and alt["payload"]["status"] == ""   # §10.2
+    assert alt["label"] == "The debt — threat, open, due by midwinter"
+    assert absorb.check_conflicts(cid, [alt]) == []
+
+
+def test_alternatives_never_carry_identity_check(monkeypatch, tmp_path):
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    staged = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP, _CHART, _SERA)]})
+    [row] = staged
+    alts = row["identity_check"]["alternatives"]
+    assert len(alts) == 3
+    for alt in alts:
+        assert "identity_check" not in alt
+        assert alt["review"] == row["review"] and alt["review"] is not row["review"]
+
+
+def test_a_failing_alternatives_pass_stages_the_rows_without_alternatives(monkeypatch, tmp_path):
+    """An identity-only pass may not turn a paid-for extraction into a failed
+    absorb: the rows stage without it, and the caller is told."""
+    from grimoire.store.absorb import materializer
+
+    def boom(*a, **k):
+        raise RuntimeError("alternatives exploded")
+
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(materializer, "_attach_alternatives", boom)
+    seen: list[BaseException] = []
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _chart_row(identity_check=_ic("uncertain", "accepted", _MAP))]},
+        on_identity_error=seen.append)
+    assert row["identity_check"]["alternatives"] == []
+    assert row["review"]["band"] == "low"
+    assert [str(e) for e in seen] == ["alternatives exploded"]
+
+
+def test_a_failing_recheck_pass_stages_the_rows_as_given(monkeypatch, tmp_path):
+    from grimoire.store.absorb import materializer
+
+    def boom(*a, **k):
+        raise RuntimeError("recheck exploded")
+
+    cid, sid = _identity_campaign(monkeypatch, tmp_path)
+    monkeypatch.setattr(materializer, "_recheck_accepted", boom)
+    seen: list[BaseException] = []
+    [row] = absorb.materialize(cid, sid, {"plot_movements": [
+        _accepted("mara-s-map", _MAP)]}, on_identity_error=seen.append)
+    assert row["target"]["id"] == "mara-s-map"
+    assert row["identity_check"]["decision"] == "existing"
+    assert [str(e) for e in seen] == ["recheck exploded"]
