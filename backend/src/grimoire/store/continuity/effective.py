@@ -311,6 +311,21 @@ def _merge_beats(members: list[list[dict]]) -> list[dict]:
     return out
 
 
+def later_scene(stored: str, other: str) -> str:
+    """Whichever of two scene ids comes later in play order. An id outside the
+    grammar loses to one inside it; when neither parses, `stored` is kept
+    unless it is empty -- a closure applied with an earlier evidence scene must
+    never move a record's ``last_scene`` backwards (§12.4)."""
+    a, b = _order(stored), _order(other)
+    if a is not None and b is not None:
+        return other if b > a else stored
+    if a is not None:
+        return stored
+    if b is not None:
+        return other
+    return stored or other
+
+
 def _latest_scene(candidates: list[str], fallback: str) -> str:
     best, best_n = None, None
     for scene in candidates:

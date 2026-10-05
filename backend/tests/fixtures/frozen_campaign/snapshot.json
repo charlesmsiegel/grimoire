@@ -716,6 +716,7 @@
       "trimmed": 0
     }
   ],
+  "continuity.candidates.records[the-drowned-ledger]": [],
   "continuity.drivers.snapshot[the-drowned-ledger]": {
     "anchors": [],
     "drivers": [
@@ -797,6 +798,7 @@
       "title": "The debt in salt"
     }
   ],
+  "continuity.pending.findings[the-drowned-ledger]": [],
   "continuity.pressure.build[the-drowned-ledger]": {
     "fixed": null,
     "friendly": "",
