@@ -3368,9 +3368,7 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
     has_summary = bool(stored["summary"])
     intact = (has_summary
               and stored["at"] <= total
-              and store.rolling_summary.covered_digest(
-                  messages[:stored["at"]], store.appearances.player_label(cid, sid))
-              == stored["digest"]
+              and _rolling_digest(cid, sid, messages[:stored["at"]]) == stored["digest"]
               and store.rolling_summary.facts_digest(facts) == stored["facts"])
     return {"summary": stored["summary"],
             # Reported as 0 for the same reason, so the panel cannot say
@@ -3379,6 +3377,19 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
             "stale": has_summary and not intact,
             "prior": stored["summary"] if intact else "",
             "base": stored["at"] if intact else 0}
+
+
+def _rolling_digest(cid: str, sid: str, covered: list[dict]) -> str:
+    """`covered_digest` over the PROMPT view of the prefix a fold covers, which
+    is what the fold was written from: a prompt rule added, edited or switched
+    off afterwards changes what the summary describes as surely as an edit
+    does. Depth counts from the end of the prefix, as it did when the fold was
+    asked for -- counted against a transcript that has grown since, an append
+    would move every depth-bounded rule and void a summary that is still good.
+    With no prompt rule the view is the raw text, so the digest is the one
+    stored before rules existed."""
+    shown = store.regex.view.view(covered, cid=cid, phase="prompt")
+    return store.rolling_summary.covered_digest(shown, store.appearances.player_label(cid, sid))
 
 
 def _rolling_due(view: dict, every: int, force: bool) -> bool:
@@ -3430,9 +3441,7 @@ def _rolling_commit(cid: str, sid: str, summary: str, covered: int, digest: str,
         # first was in place, because they fail on opposite facts.
         #
         # The prefix must be intact -- the fold describes those messages.
-        intact = store.rolling_summary.covered_digest(
-            scene["messages"][:covered],
-            store.appearances.player_label(cid, sid)) == digest
+        intact = _rolling_digest(cid, sid, scene["messages"][:covered]) == digest
         # ...the facts must be the facts it was given, for the same reason the
         # prefix must be the prefix. Review caught that adding facts to the
         # stored validity key did not, on its own, make them a PRECONDITION: a
@@ -3641,8 +3650,7 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
     # landing while the model is answering must not be counted as covered by a
     # summary that never saw it.
     covered, base = len(messages), view["base"]
-    digest = store.rolling_summary.covered_digest(
-        messages, store.appearances.player_label(cid, sid))
+    digest = _rolling_digest(cid, sid, messages)
     # Depth counts over the whole snapshot, not the slice being folded.
     shown = store.regex.view.view(messages[base:], cid=cid, phase="prompt",
                                   offset=base, total=len(messages))

@@ -278,6 +278,34 @@ def test_rolling_summary_and_dossier_prompts_use_view(client, review_scene):
     assert "secret plan" not in sent(fake)
 
 
+def test_a_prompt_rule_change_makes_the_rolling_summary_stale(client, review_scene):
+    """The summary was folded from the prompt view, so its validity is checked
+    against that view: a prompt rule added, edited or switched off afterwards
+    means the prose describes text the model is no longer shown."""
+    cid, sid = review_scene
+    reply(cid, sid, "<think>a secret plan</think>Hello, traveller.", speaker="Aese")
+    url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("They met; she had a plan.")
+    assert client.post(url + "?force=true").json()["refreshed"] is True
+    assert client.get(url).json()["stale"] is False
+
+    # A display-only rule does not touch what the summary was folded from.
+    put_rules(client, f"/api/campaigns/{cid}/regex", {**THINK, "applies": ["display"]})
+    assert client.get(url).json()["stale"] is False
+
+    put_rules(client, f"/api/campaigns/{cid}/regex", THINK)
+    assert client.get(url).json()["stale"] is True
+
+    # Folded again under the rule, and switching the rule off undoes it again.
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("They met over tea.")
+    assert client.post(url + "?force=true").json()["refreshed"] is True
+    assert client.get(url).json()["stale"] is False
+    put_rules(client, f"/api/campaigns/{cid}/regex", {**THINK, "enabled": False})
+    assert client.get(url).json()["stale"] is True
+
+
 def test_scene_break_prompt_uses_view(client, review_scene):
     cid, sid = review_scene
     reply(cid, sid, "<think>a secret plan</think>Hello, traveller.", speaker="Aese")
