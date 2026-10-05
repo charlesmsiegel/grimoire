@@ -465,6 +465,23 @@ def test_unknown_item_confers_no_presence_on_another_npcs_call(cast_scene):
     assert "THE_CHARM_WARDS_OFF_GULLS" not in _actor_text(cid, sid, "characters:winifred")
 
 
+def test_unknown_item_held_in_the_scene_is_present_on_another_npcs_call(cast_scene):
+    # Structural presence is the scene's (§8.1): Mara holds a ledger only she
+    # knows of, so it is in the room on every call, and the public lore it
+    # owns is shared with everyone there (§8.2) -- Winifred included, though
+    # the ledger's own entry never reaches her.
+    cid, sid = cast_scene
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "items", "Ledger", "LEDGER_ITSELF", keys="unsaid",
+                           owners="characters:mara", fields={"holder": "characters:mara"})
+    entities.create_entity(croot, "lore", "Ledger Ink", "THE_LEDGER_INK_RUNS_IN_RAIN",
+                           owners="items:ledger")
+    scenes.append_message(cid, sid, "user", "Calm.")
+    for actor_ref in (None, "characters:mara", "characters:winifred"):
+        assert "THE_LEDGER_INK_RUNS_IN_RAIN" in _actor_text(cid, sid, actor_ref), actor_ref
+    assert "LEDGER_ITSELF" not in _actor_text(cid, sid, "characters:winifred")
+
+
 def test_unknown_lore_never_takes_a_recall_slot_on_another_npcs_call(cast_scene, monkeypatch):
     # Recall with depth 1, and Mara's private lore scores best. On Winifred's
     # call it is not a candidate at all, so the slot goes to what she knows.
