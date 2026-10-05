@@ -93,6 +93,8 @@ _UNHONOURED = frozenset((
     "automationId", "automation_id",
 ))
 
+_NO_CONTROLS = lore_fields.Controls()
+
 # ST's `selectiveLogic` numbering, onto the catalog's operators.
 _SELECTIVE_LOGIC = {0: "and_any", 1: "not_all", 2: "not_any", 3: "and_all"}
 
@@ -213,16 +215,36 @@ def _secondary_keys(stash: Mapping[str, object]) -> str | None:
     return ", ".join(keys) or None
 
 
+# What a stock SillyTavern entry writes for a field that has a non-falsy
+# default, in every spelling and both of the types ST has used for it
+# (`position` is a number in world info and `"before_char"` on a V3 card).
+# A value here says nothing an author chose.
+_ST_DEFAULTS: dict[str, tuple[object, ...]] = {
+    "delay": (0,),
+    "depth": (4,),
+    "position": (0, "before_char"),
+    "groupWeight": (100,), "group_weight": (100,),
+    "probability": (100,),  # "always fires", which is what grimoire does
+    "useProbability": (True,),
+    "role": (0,),
+    "delayUntilRecursion": (0,), "delay_until_recursion": (0,),
+}
+
+
 def _set_by_author(name: str, value: object) -> bool:
     """Whether a stashed value says anything. ST exports write every field with
-    its default (`group: ""`, `vectorized: false`, `triggers: []`,
-    `characterFilter: {}`), and listing those would flag every entry; a
-    probability of 100 is "always fires", which is what grimoire does."""
+    its default (`group: ""`, `vectorized: false`, `depth: 4`, `groupWeight:
+    100`, a `characterFilter` naming nobody), and listing those would flag
+    every entry. A mapping says something only when one of its values does."""
     if value is None or value is False:
         return False
     if isinstance(value, (str, list, dict)) and not value:
         return False
-    return not (name == "probability" and value == 100)
+    if isinstance(value, Mapping):
+        return any(_set_by_author("", v) for v in value.values())
+    # `1 == True` to Python; a flag never matches a number's default, or back.
+    return not any(value == d and isinstance(value, bool) == isinstance(d, bool)
+                   for d in _ST_DEFAULTS.get(name, ()))
 
 
 def adopt(stash: Mapping[str, object]) -> AdoptResult:
@@ -266,6 +288,10 @@ def adopt(stash: Mapping[str, object]) -> AdoptResult:
         fields["recursion"] = ("none" if not_pulled and not_pulling
                                else "pulls_only" if not_pulled else "pulled_only")
 
+    # A value that reads as the native default says nothing an author chose
+    # (ST writes `order: 100`, `sticky: 0` on every entry), and writing it
+    # would make every import look customised.
+    fields = {k: v for k, v in fields.items() if lore_fields.parse({k: v}) != _NO_CONTROLS}
     unmapped = sorted({name for scope in _scopes(stash) for name in _UNHONOURED
                        if _set_by_author(name, scope.get(name))})
     return AdoptResult(fields, tuple(unmapped))
