@@ -562,8 +562,8 @@ So `backend/src/grimoire/store/continuity/` is split:
 | `canon` | `canonical_ref` / `canonical_refs`, fingerprint and candidate-id functions | `doc` |
 | `effective` | `threads`, `commitments`, `links`, the render helpers for prompt snippets | `canon`, `plot`, `commitments`, `prompts` |
 | `involvement` | §8 | `effective`, `chronicle`, `appearances` |
-| `pressure` | §13 | `effective`, `calendars`, `events`, `aging`, `birthdays`, `notices` (never imported by `clock`) |
-| `drivers` | §14 | `pressure`, `involvement`, `effective` |
+| `pressure` | §13 | `effective`, `calendars`, `events`, `aging`, `birthdays`, `notices`, `clock` (§13.1's `clock.now`), `campaigns.paths` (the calendar root) — never imported by `clock` (Slice B plan, Decision 1) |
+| `drivers` | §14 | `pressure`, `involvement`, `effective`, `embed_space` (the one definition of `matching`), `aging` (a driver's `stale`), `appearances.cast` (offscreen player tokens; it may not import `suggest`) (Slice B plan, Decisions 1, 10, 12) |
 | `similarity` | §9 | `effective`, `embed_space`, `vectors`, `embeddings` |
 | `identity` | §10 prompt build/parse and the deterministic pre-pass | `similarity`, `prompts`, `absorb.parse` |
 | `reconcile` | §11 discovery, prompt build/parse and persist | `similarity`, `pressure`, `candidates`, `doc` (for read and suppressions only; see the writer guard) |
@@ -1235,7 +1235,7 @@ Public API:
 
     pressure.build(cid, now=None, horizon=None, sources=ALL) -> dict
 
-`sources` is a subset of {`event`, `holiday`, `birthday`, `deadline`, `linked_deadline`}. Todo passes only the deadline kinds (§18.3).
+`sources` is a subset of {`event`, `holiday`, `birthday`, `deadline`, `linked_deadline`}. A caller that wants deadlines only passes the deadline kinds; Todo may do so for its overdue/due-soon split (§18.3), which Slice B does not take. An unknown source name is a `ValueError`. `horizon` (default `UPCOMING_WINDOW_DAYS`) bounds only the holiday and birthday sources, and `now=None` reads the campaign clock (Slice B plan, Decision 9).
 
 Output:
 
@@ -1255,12 +1255,33 @@ Output:
           "relation": "on",
           "state": "upcoming",
           "subject": null,
-          "due_text": ""
+          "due_text": "",
+          "precision": "exact",
+          "actor": null,
+          "age": null
         }
       ]
     }
 
 `subject` is the commitment ref for deadline kinds, and null otherwise.
+
+`ref` names the dated thing the item measures from (Slice B plan, Decision 4):
+
+| Kind | `ref` | `subject` |
+|---|---|---|
+| `event` | `event:<eid>` | null |
+| `holiday` | `notices.holiday_key(fixed, name)` | null |
+| `birthday` | the occurrence ref (§13.6) | null |
+| `deadline` | `commitment:<id>` | the commitment ref |
+| `linked_deadline` | `event:<eid>` — the linked **event**, not the commitment | the commitment ref |
+
+`label` is the event name, the holiday name, the actor name, or the commitment title for both deadline kinds. `due_text` is the commitment's stored `due` on deadline kinds, and `""` otherwise. The three typed extras that drivers and anchors need (Decision 4):
+
+- `precision` is the occurrence's (`exact` | `yearless` | `month`) for a birthday, `"exact"` for anything else with a `fixed`, and null when `fixed` is null;
+- `actor` is a birthday's `<kind>:<id>`, and null otherwise;
+- `age` is an exact birthday's age, and null otherwise.
+
+An event's `native` is its stored date, time kept (`"…T20:00"`); all arithmetic is day-level. Items are ordered on the fixed-day axis, undated last, ties broken by kind order, then `ref`, then `subject` (Decision 5).
 
 ## 13.1 Sources
 
@@ -1274,7 +1295,7 @@ Include:
 - overdue commitments;
 - passed-but-unresolved event-linked obligations (§13.5).
 
-Pressure **composes** the existing readers: `calendars.upcoming_holidays`, `events.upcoming` / `on_day` / `list_events`, `aging.prepare` / `age`, `birthdays.occurrences`, and `clock.now`. It re-implements no scan. Each source fails soft independently, as `notices.pending` does. A calendar failure degrades to undated items, and no dates are fabricated (§26).
+Pressure **composes** the existing readers: `calendars.upcoming_holidays`, `events.list_events` (the rows `events.upcoming` / `on_day` read; pressure lists every unfired event plus fired ones on today, Slice B plan, Decision 6), `aging.prepare` / `age`, `birthdays.occurrences`, and `clock.now`. It re-implements no scan. Each source fails soft independently, as `notices.pending` does. A calendar failure degrades to undated items, and no dates are fabricated (§26).
 
 The pressure module must not be imported by `clock`.
 
@@ -1307,8 +1328,8 @@ This avoids rewriting “before the bells stop” into a fabricated native date.
 | Field | Definition |
 |---|---|
 | `kind` | `event` \| `holiday` \| `birthday` \| `deadline` (parseable due) \| `linked_deadline` (via a temporal link) |
-| `fixed` | the target's fixed day on the primary provider; `null` for a month-only birthday or an unparseable due |
-| `in_days` | `fixed(target) − fixed(now)`: negative in the past, `null` when `fixed` is null |
+| `fixed` | the target's fixed day on the primary provider; `null` for a month-only birthday, an event whose date the primary provider cannot read (every event, when no provider resolves), and a link to an event whose `fired` stamp is set but whose date cannot be read (§13.5). An unparseable or free-text due produces **no** item at all — the `kind` row and §13.1 restrict `deadline` to a parseable due, and §13.2 keeps free text non-arithmetic — so a calendar failure drops dated deadline items rather than listing them undated (Slice B plan, Decision 8) |
+| `in_days` | `fixed(target) − fixed(now)`: negative in the past, `null` when `fixed` is null or no `now` can be read (no clock, or a `now` the provider cannot read) |
 | `relation` | `on` for events, holidays, exact/yearless birthdays and deadlines; `in_month` for month-only birthdays; `before` \| `by` \| `on` \| `after` for linked deadlines |
 
 `state` is decided by the first match:
@@ -1334,21 +1355,33 @@ An event is **reached** when its `fired` stamp is set, or its `passed` reading i
 
 A **passed-but-unresolved event-linked obligation** is an unresolved canonical commitment with a before/by/on link to a reached event. Its state is `overdue`. It nominates a `possible_commitment_resolution` (§11.1), but nothing ever resolves it automatically.
 
-When a commitment has both a parseable `due` and link deadlines, the earliest wins. The item carries `due_text`, the stored prose.
+When a commitment has both a parseable `due` and link deadlines, it still yields **one** deadline item, which carries `due_text`, the stored prose. The sentences above can disagree, so three readings are fixed (Slice B plan, Global Constraints and Decision 8):
 
-Dangling or unparseable links contribute nothing.
+- **Most urgent, then earliest.** Each candidate (the parseable `due`, and each before/by/on link to a dated event) is given its own state, and the item is the most urgent candidate by `PRESSURE_STATES` index, then the earliest `fixed` (nulls last), then `deadline` before `linked_deadline`, then the lowest link id. Among unreached candidates the state is monotone in `in_days`, so this is exactly "earliest wins"; it differs only when a link is reached, which is what keeps "reached → `overdue`" true when an earlier `due` exists, a fired event was re-dated (`events.update` keeps the stamp), or the clock went backwards. The item's `fixed`, `in_days`, `relation` and `ref` come from the chosen candidate.
+- **The event's own day.** Reached forces `overdue` on a deadline kind, **except** a `by`/`on` link on its event's own day (`in_days == 0`), which is `today` whether or not the event fired — otherwise advancing onto the event's day (which fires it) would make its `by` commitment overdue before the scene that fulfils it.
+- **`after` is only ever `upcoming`.** An `after` link yields its own `linked_deadline` item only while its event is dated, unreached and `0 < in_days ≤ UPCOMING_WINDOW_DAYS`. From D onwards, or further out than the window, it yields nothing, so it is never `today` (high pressure) or `ok`.
+
+**No readable `now`, or no provider** (no clock set, or a calendar that fails): a `deadline` candidate needs a readable `now` and yields nothing without one, so a campaign with no clock has no `deadline` items. A link candidate whose event has a `fired` stamp is still a candidate — reachedness is a stamp, not arithmetic — with `fixed` (null when the date cannot be read) and `in_days: null`, and its state is `overdue`. Any other link candidate needs both a readable `now` and a readable event date (Decision 8).
+
+Dangling or unparseable links contribute nothing, and nor do a thread's links (they become its driver's `time_anchors`, §14) or `related_to`.
 
 ## 13.6 Birthday occurrences
 
 Add:
 
-    birthdays.occurrences(cid, now_fixed, window) -> [{
+    birthdays.occurrences(cid, now_fixed, window=calendars.UPCOMING_WINDOW_DAYS, *,
+                          provider=None, roster=None,
+                          visible_characters=True) -> [{
       ref, name, actor, precision: "exact" | "yearless" | "month",
-      fixed | None, month_key | None, in_days | None, age | None
+      fixed | None, year, month_key | None, month_name,
+      in_days | None, age | None, native, friendly
     }]
 
+- The three positional parameters come first. The keyword-only ones exist because `upcoming`'s callers choose the roster and `visible_characters` (suggestions pass the appearance roster with `visible_characters=True`), and `provider` lets pressure resolve a plugin once. `provider=None` resolves the primary provider (`[]` when none resolves); `roster=None` means the appearance roster (Slice B plan, Decision 2).
+- The scan covers `[now_fixed, now_fixed + window]`, **today included** (birthdays always have; events and holidays use `(now, now + w]`).
+- `year` is the provider year of the hit, for every precision; `month_name` is `describe(day)["month_name"]` (what `upcoming`'s `"in <month_name>"` renders); `native` and `friendly` feed `AnchorOption` (§14). A month-only row has `fixed`, `in_days` and `age` null, `native` `""` and `friendly` `"<month_name> <year>"`. Rows come in gather order, and within an actor in day order (Decision 3).
 - `gather` gains `ref`.
-- `upcoming` becomes a projection of `occurrences`, so the existing prompt line is byte-identical.
+- `upcoming` is a projection of the **same lazy per-actor scan** (`_actor_hits`) that `occurrences` materializes, not of the materialized `occurrences` list: it takes only the first hit per actor, so it stops on the same day it always has and a plugin raising on a later day cannot cost a line that renders today. The existing prompt line is byte-identical (Decision 2).
 - Age is computed only for exact birthdays with a known year.
 
 ---
@@ -1389,7 +1422,7 @@ Rules:
 - **Aliases:** canonicalize before generating drivers.
 - **Liveness:** resolved commitments and closed threads are not active drivers.
 - **Temporal drivers:** upcoming temporal occurrences (event, holiday, birthday) may be drivers even when no thread links to them. A commitment's pressure comes from §13. A commitment is never itself a time anchor in v1.
-- **Links:** reviewed links let a driver expose related obligations without collapsing them.
+- **Links:** reviewed links let a driver expose related obligations without collapsing them. A link is listed on both of its drivers: `direction` is `"out"` on its `a` endpoint, `"in"` on its `b` endpoint, and `"both"` for an undirected relation (`related_to`); `other` is the far endpoint. Links come from `effective.links`, so endpoints are canonical and broken or duplicate links are already excluded (Slice B plan, Decision 13).
 - **Offscreen:** with `offscreen=true`, driver `actors` drop PC tokens, exactly as the suggestion snapshot does.
 
 `drivers.snapshot(cid, offscreen=False)` returns:
@@ -1744,6 +1777,8 @@ Only the existing `owed` chore is in scope:
 - it counts **canonical** commitments;
 - it is relabelled “N open commitments with a deadline”;
 - it may call `pressure.build(cid, sources={"deadline", "linked_deadline"})` to split overdue and due-soon counts.
+
+Slice B takes **neither** of the optional parts (Slice B plan, Decision 16). `owed` counts exactly today's rule made canonical — a live canonical commitment whose `due` is non-empty, parseable or not — and calls neither `pressure` nor `aging`: deadline pressure resolves the calendar provider, which is plugin code, and the overdue/due-soon split would put that on the global To do page. Link deadlines are **not** counted yet: counting them would change `owed` for a campaign that has links but no aliases, and would load all three ledgers through `effective.links` for every campaign. Both arrive together with the split, in a later slice. Todo's set is therefore a *stated* deadline, dated or not; pressure's is dated deadlines only.
 
 Todo never requests birthdays or holidays. `live('')` runs every campaign builder for every campaign, birthday gathering reads every visible character's metadata, and holidays run user plugin code, so either would break Todo's cost rule.
 
