@@ -28,12 +28,15 @@ def _state_at(texts, b, entry, depth, seed=""):
 
 # --- §5.4: the bitmap is exact ------------------------------------------------
 
-EQUIV_KEYS = ["Saltmarch's", "C++", "Café", "harbour"]
-EQUIV_POSTS = ["at Saltmarch's gate", "c++ notes", "CAFÉ", "harbourmaster"]
+# "gate c" would match only across the join of the last two posts -- which the
+# newline that joins them prevents, so per-post matching must refuse it too.
+EQUIV_KEYS = ["Saltmarch's", "C++", "Café", "harbour", "gate c"]
+EQUIV_POSTS = ["at Saltmarch's gate", "c++ notes", "CAFÉ", "harbourmaster",
+               "at the gate", "c notes"]
 
 
 @pytest.mark.parametrize("seed", ["", "the harbour"])
-@pytest.mark.parametrize("depth", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("depth", range(len(EQUIV_POSTS) + 1))
 def test_bitmap_matches_joined_text(depth, seed):
     idx = KeyIndex(_posts(EQUIV_POSTS), seed)
     window_posts = EQUIV_POSTS[-depth:] if depth else []
@@ -153,6 +156,7 @@ def test_scan_depth_zero_sees_only_seed():
 def test_empty_scene_with_seed():
     idx = KeyIndex([], "the road to Saltmarch")
     assert idx.n == 1
+    assert idx.boundaries() == [1]
     assert idx.age(0) == 0
     assert idx.post_index(0) is None
     entry = _entry(["Saltmarch"], sticky=2, cooldown=1)
@@ -255,6 +259,9 @@ def test_director_note_counts_as_a_post():
 
 
 def test_seed_boundary_is_the_last_one_replayed():
+    assert KeyIndex(_posts(["a", "b", "c"]), "").boundaries() == [1, 2, 3]
+    assert KeyIndex(_posts(["a", "b", "c"]), "seed").boundaries() == [1, 2, 4]
+    assert KeyIndex([], "").boundaries() == []
     entry = _entry(["lantern"], sticky=1)
     idx = KeyIndex(_posts(["the lantern", "calm"]), "")
     assert timed_state(entry, idx, 1)["fresh"] is False
@@ -267,3 +274,38 @@ def test_keyless_entry_is_never_timed():
     idx = KeyIndex(_posts(["calm"]), "")
     assert timed_state(_entry([], sticky=3), idx, 1) == {
         "state": "ready", "fresh": False, "from_slot": None, "remaining": 0}
+
+
+@pytest.mark.parametrize("controls, expected", [
+    ({"cooldown": 1}, {"state": "active", "fresh": True, "from_slot": 1, "remaining": 1}),
+    ({"sticky": 1}, {"state": "active", "fresh": True, "from_slot": 1, "remaining": 2}),
+])
+def test_a_non_matching_seed_replaces_the_last_boundary(controls, expected):
+    # A seed is the current turn's text, not a turn of its own: the seeded
+    # boundary stands where boundary P would, so the newest post is counted
+    # once and nothing ages an extra step.
+    posts = _posts(["calm", "the lantern"])
+    entry = _entry(["lantern"], **controls)
+    unseeded = timed_state(entry, KeyIndex(posts, ""), 1)
+    seeded = timed_state(entry, KeyIndex(posts, "go on"), 1)
+    assert unseeded == expected
+    assert seeded == unseeded
+
+
+def test_a_matching_seed_activates_at_the_current_boundary():
+    posts = _posts(["the lantern", "calm"])
+    entry = _entry(["lantern"], sticky=1, cooldown=1)
+    # The seeded boundary replaces boundary 2, where the post-0 activation is
+    # still carried by sticky -- not boundary 3, where it would be cooling.
+    assert timed_state(entry, KeyIndex(posts, "go on"), 1) == {
+        "state": "active", "fresh": False, "from_slot": 0, "remaining": 1}
+    later = _posts(["the lantern", "calm", "calm", "calm"])
+    assert timed_state(entry, KeyIndex(later, "light the lantern"), 1) == {
+        "state": "active", "fresh": True, "from_slot": 4, "remaining": 2}
+
+
+def test_negative_cooldown_cannot_cool_forever():
+    # Hand-built: `parse` never yields one, but the machine must still end.
+    texts = ["the lantern", "calm", "calm", "the lantern"]
+    entry = _entry(["lantern"], cooldown=-1)
+    assert _state_at(texts, 4, entry, 1)["state"] == "active"
