@@ -734,7 +734,9 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
         await select(editing);   // the new values, and a banner with nothing left
       }
     } catch (err) {
-      if (gen === scopeGen.current) setError(errorText(err));
+      // The same guard as success: an error about this record is noise on
+      // another one the reader has opened since.
+      if (gen === scopeGen.current && viewing === readReq.current) setError(errorText(err));
     } finally {
       if (gen === scopeGen.current) setAdoptBusy(false);
     }

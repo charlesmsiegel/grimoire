@@ -1072,6 +1072,39 @@ def _lore_detail(hits: list[activation.Hit], catalog: dict[str, str]) -> dict:
 _BODY_SLOT = re.compile("\x00(\\d+)\x00")
 
 
+#: A run of World info's fixed text, by occurrence: (text, slot before, slot after).
+_RunKey = tuple[str, str | None, str | None]
+
+
+def _recall_run(runs: dict[_RunKey, str], suffixes: set[str], key: _RunKey, expand) -> str:
+    """The expansion a re-rendered run of World info's fixed text keeps, by
+    occurrence: `key` is (text, slot before, slot after). A run whose neighbour
+    was shed takes the draw of the occurrence that shares its text and the slot
+    it still has -- before for a suffix, after for anything else (see
+    `_world_info_section`); text never seen is expanded. Remembered either way,
+    so the next re-render is not a new draw."""
+    if key not in runs:
+        core, before, after = key
+        sides = ((1, before), (2, after)) if core in suffixes else ((2, after), (1, before))
+        found = next((got for side, ref in sides if ref is not None
+                      for k, got in runs.items() if k[0] == core and k[side] == ref), None)
+        runs[key] = expand(core) if found is None else found
+    return runs[key]
+
+
+def _held_back_only(section: Section, pinned, extra: dict) -> dict | None:
+    """A text-less World info row for an empty section that still held entries
+    back -- the turn where cooldown suppresses the only relevant entry is the
+    turn the reader most needs to see why. It puts nothing in the prompt
+    (`_compose_system` joins only what has some) and, like any section that
+    rendered empty, breaks no heading run."""
+    if not (extra.get("lore") or {}).get("held_back"):
+        return None
+    return {"id": section.id, "label": section.label, "text": "", "tier": section.tier,
+            "pinned": section.id in pinned, "heading": section.heading, "heading_text": "",
+            **extra}
+
+
 def _world_info_section(section: Section, data: dict, lore: dict, head: str,
                         expand) -> tuple[str, dict]:
     """World info's text, plus what the packer needs to shed it an entry at a
@@ -1093,11 +1126,24 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
     edge would also expand whole and not piecewise.
 
     Every expansion is remembered: a body by its entry's ref, a run of fixed
-    text by its text less its edge whitespace (removing an entry only changes
-    the joins around a run). `render(kept)` re-renders the slots for the kept
-    entries and reuses those, so shedding one entry cannot re-draw another's
-    macros or the template's; only a run never seen before -- possible only in
-    a hand-edited template -- is expanded, once.
+    text by OCCURRENCE -- its text less its edge whitespace (removing an entry
+    only changes the joins around a run) together with the slots either side of
+    it. The same fixed text twice is two draws, so the text alone cannot name
+    one: a template that wraps every body in `{{random}}` would hand every
+    re-rendered occurrence the first one's. `render(kept)` re-renders the slots
+    for the kept entries and reuses those, so shedding one entry cannot re-draw
+    another's macros or the template's, nor give one occurrence another's.
+
+    A shed entry takes its slot out, and the runs either side of it close up
+    into one, so a surviving run can find a neighbour gone. Which of the two
+    draws it keeps depends on whom the text belonged to: text a template puts
+    AHEAD of each body belongs to the body after it, text put BEHIND each body
+    to the body before. The full render says which -- the leading edge of a
+    prefixed list is that text, the trailing edge of a suffixed one -- so a
+    run whose text closes the full render keeps the occurrence that shares its
+    slot before, and any other the one that shares its slot after. Only text
+    the full render never produced -- possible only in a hand-edited template
+    -- is expanded, once.
 
     `head` is the section's already-expanded shared heading. World info declares
     none in the catalog, so it is "" today; `render` closes over it so a heading
@@ -1108,7 +1154,7 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
     slotted = [i for i, h in enumerate(hits) if h.entry.get("body")]
     template = _section_template(section, data)
     bodies: dict[str, str] = {}
-    runs: dict[str, str] = {}
+    runs: dict[_RunKey, str] = {}
 
     def skeleton(kept: frozenset) -> list[str]:
         shown = [i for i in slotted if hits[i].ref in kept]
@@ -1123,33 +1169,43 @@ def _world_info_section(section: Section, data: dict, lore: dict, head: str,
         body = body.strip()
         return head + "\n\n" + body if (head and body) else body
 
-    def run(piece: str, fresh: bool) -> str:
+    def neighbours(pieces: list[str], n: int) -> tuple[str | None, str | None]:
+        """The refs of the slots either side of run `n` (None at an edge)."""
+        before = hits[int(pieces[n - 1])].ref if n else None
+        after = hits[int(pieces[n + 1])].ref if n + 1 < len(pieces) else None
+        return before, after
+
+    def run(piece: str, got: str) -> str:
         # Keyed on the run WITHOUT its edge whitespace: removing an entry only
         # adds or drops the joins around a run (and the outer strip), and
         # whitespace holds no macro, so the run itself is the same text.
         core = piece.strip()
-        if fresh or core not in runs:
-            got = expand(core)
-            runs.setdefault(core, got)
-        else:
-            got = runs[core]
         lead = piece[:len(piece) - len(piece.lstrip())]
         return lead + got + piece[len(lead) + len(core):]
 
     # The first render draws, in document order, every occurrence afresh -- the
     # same fixed text twice is two expansions, as it was in the joined section.
     out = []
-    for n, piece in enumerate(skeleton(frozenset(h.ref for h in hits))):
+    pieces = skeleton(frozenset(h.ref for h in hits))
+    for n, piece in enumerate(pieces):
         if n % 2:
             hit = hits[int(piece)]
             out.append(bodies.setdefault(hit.ref, expand(hit.entry["body"])))
         else:
-            out.append(run(piece, fresh=True))
+            core = piece.strip()
+            runs[(core, *neighbours(pieces, n))] = got = expand(core)
+            out.append(run(piece, got))
     text = finish("".join(out))
+    # Text that ends the full render but does not start it: each body's suffix.
+    suffixes = {pieces[-1].strip()} - {pieces[0].strip()}
 
     def render(kept: frozenset) -> str:
-        return finish("".join(bodies[hits[int(piece)].ref] if n % 2 else run(piece, fresh=False)
-                              for n, piece in enumerate(skeleton(kept))))
+        pieces = skeleton(kept)
+        return finish("".join(
+            bodies[hits[int(piece)].ref] if n % 2
+            else run(piece, _recall_run(runs, suffixes, (piece.strip(), *neighbours(pieces, n)),
+                                        expand))
+            for n, piece in enumerate(pieces)))
 
     units = []
     for pos, h in enumerate(hits):
@@ -1272,6 +1328,8 @@ def _render_sections(a: dict, cid: str, sid: str, opener: bool = False,
             head = expand(prompts.render(section.heading, **data)).strip()
         text, extra = _expanded_section(section, data, body, head, lore, expand)
         if not text:
+            # `last_heading` stays put: an empty section breaks no run.
+            out.extend(r for r in (_held_back_only(section, pinned, extra),) if r)
             continue
         out.append({"id": section.id, "label": section.label,
                     "text": text, "tier": section.tier,
@@ -1307,8 +1365,8 @@ def _dedupe_runs(sections: list[dict]) -> None:
     """
     last = ""
     for s in sections:
-        if s.get("dropped"):
-            continue
+        if s.get("dropped") or not s["text"]:
+            continue   # sent nothing, so it closes no run (a held-back-only row)
         head = s.get("heading") or ""
         dupe = s.get("heading_text")
         if head and head == last and dupe and s["text"].startswith(dupe):
@@ -1366,6 +1424,9 @@ def _profile_sections(base: list[dict], guidance: str) -> list[dict]:
         if section["id"] == "model_guidance":
             section["text"] = guidance
         if not section["text"]:
+            # A held-back-only World info row: nothing to frame, opens no run.
+            if (section.get("lore") or {}).get("held_back"):
+                sections.append(section)
             continue
         heading = section["heading"]
         frozen_heading = headings.get(heading, "")
@@ -1496,7 +1557,9 @@ def _token_memo():
 
 def _compose_system(texts: list[str]) -> str:
     """The system message as it will be sent, from section texts."""
-    return prompts.render("scene/system.j2", sections=texts).strip()
+    # Only sections with text: a held-back-only World info row is in the list
+    # for the inspector and has nothing to say to the model.
+    return prompts.render("scene/system.j2", sections=[t for t in texts if t]).strip()
 
 
 def _system_text(packed_sections: list[dict]) -> str:
