@@ -530,9 +530,16 @@ export default function CampaignHub() {
                 <Link className="hub-row-title" to={`/campaigns/${cid}/scenes/${s.id}`}>
                   {s.title}
                 </Link>
-                <span className={"chip" + (s.done ? "" : " on")}>
-                  {s.done ? "absorbed" : "open"}
-                </span>
+                {/* A closed branch is not open work -- the headline above
+                    already leaves it out -- so it says what the scene list
+                    and the play view say. */}
+                {!s.done && s.closed_by ? (
+                  <span className="chip" title="A sibling branch was absorbed">closed</span>
+                ) : (
+                  <span className={"chip" + (s.done ? "" : " on")}>
+                    {s.done ? "absorbed" : "open"}
+                  </span>
+                )}
                 <button className="hub-row-del" aria-label={`Delete ${s.title}`}
                         title="Delete this scene"
                         onClick={() => { void removeScene(s); }}>✕</button>

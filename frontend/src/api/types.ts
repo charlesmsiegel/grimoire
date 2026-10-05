@@ -2093,6 +2093,9 @@ export type TimelineScene = {
   /** The scene's own opening moment, falling back to the chronicle's date. */
   date: string;
   location: string; done: boolean; pcless: boolean; beats: TimelineBeat[];
+  /** Present only on a closed branch: the absorbed sibling that closed it
+   *  (the scene listing's `closed_by`). */
+  closed_by?: { sid: string; title: string };
 };
 /** Only the threads with a beat on some card: a chip that filters to nothing
  *  is worse than no chip. */

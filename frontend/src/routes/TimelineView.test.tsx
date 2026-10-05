@@ -109,6 +109,26 @@ test("a scene that was never absorbed still gets a card, and says so", async () 
   expect(within(open).getByText("IN PLAY")).toBeInTheDocument();
 });
 
+test("a closed branch is not in play, and the not-absorbed filter leaves it out",
+  async () => {
+    // A sibling whose branch group was absorbed is a road not taken: read-only,
+    // and not open work -- the same "closed" the play view and scene list say.
+    (api.campaignTimeline as any).mockResolvedValue({
+      ...PLAYED,
+      scenes: [...PLAYED.scenes,
+               scene({ id: "001--first-light-branch", title: "First Light (branch)",
+                       closed_by: { sid: "001--first-light", title: "First Light" } })],
+    });
+    renderTimeline();
+    const closed = await waitFor(() => cardFor(/First Light \(branch\)/));
+    expect(within(closed).getByText("CLOSED")).toHaveAttribute(
+      "title", "A sibling branch was absorbed");
+    expect(within(closed).queryByText("IN PLAY")).not.toBeInTheDocument();
+
+    fireEvent.click(column().getByRole("button", { name: /^not absorbed$/i }));
+    await waitFor(() => expect(titles()).toEqual(["Verdigris & Ash"]));
+  });
+
 test("an offscreen scene is marked as one", async () => {
   // A director-driven scene seats no PC, and on a play history that is a fact
   // about the scene rather than a gap in it.

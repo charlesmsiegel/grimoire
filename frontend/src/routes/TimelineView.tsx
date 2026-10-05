@@ -108,7 +108,8 @@ export default function TimelineView() {
    *  thing about SHOW RETIRED and its section counts. */
   const base = useMemo(() => scenes.filter((s, i) =>
     !(absorb === "absorbed" && !s.done)
-    && !(absorb === "open" && s.done)
+    // A closed branch is not open work either: a sibling's absorb settled it.
+    && !(absorb === "open" && (s.done || s.closed_by))
     && inSpan(ranks[i], fromRank, toRank)),
   [scenes, absorb, fromRank, toRank, ranks]);
 
@@ -277,7 +278,11 @@ export default function TimelineView() {
                   <div className="timeline-meta">
                     {s.location && <span className="chip on">{s.location}</span>}
                     {s.pcless && <span className="chip on">OFFSCREEN</span>}
-                    <span className="chip on">{s.done ? "ABSORBED" : "IN PLAY"}</span>
+                    {/* A closed branch is a road not taken, not in play:
+                        the play view's and scene list's "closed". */}
+                    {!s.done && s.closed_by
+                      ? <span className="chip" title="A sibling branch was absorbed">CLOSED</span>
+                      : <span className="chip on">{s.done ? "ABSORBED" : "IN PLAY"}</span>}
                   </div>
                   {s.beats.length > 0 && (
                     <ul className="timeline-beats">

@@ -188,5 +188,9 @@ def build(cid: str) -> dict:
             "done": bool(meta.get("done")),
             "pcless": bool(meta.get("pcless")),
             "beats": by_scene.get(sid, []),
+            # A closed branch (play controls III) is not in play: its absorbed
+            # sibling, as the scene listing derives it. Present only on one,
+            # the listing's own shape.
+            **({"closed_by": dict(meta["closed_by"])} if meta.get("closed_by") else {}),
         })
     return {"scenes": out, "threads": roster}
