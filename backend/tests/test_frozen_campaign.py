@@ -137,7 +137,7 @@ def test_the_sweep_covers_the_whole_store_not_a_corner_of_it(frozen_home):
     assert modules >= {"worlds", "campaigns", "characters", "entities", "greetings",
                        "overlay", "scenes", "appearances", "chronicle", "plot",
                        "commitments", "relationships", "dossiers", "sheets",
-                       "checks", "context", "tags", "modules"}
+                       "checks", "context", "tags", "modules", "continuity"}
     assert len(swept) >= 50
 
 
