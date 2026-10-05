@@ -793,15 +793,27 @@ def test_a_closed_branch_is_not_a_chapter(monkeypatch, tmp_path):
 
 
 def test_the_json_dump_keeps_a_closed_branch(monkeypatch, tmp_path):
-    """The JSON dump is the nearest-to-disk export, so it holds every scene on
-    disk, a closed branch included -- only the book formats tell one past."""
+    """The JSON dump is the nearest-to-disk export, so `scenes` holds every
+    scene on disk, a closed branch included -- marked `closed_by`, so a reader
+    can tell what the book left out. `contents` is the book's table of
+    contents, so it numbers exactly the scenes `collect` makes chapters of."""
     _, cid = _campaign(monkeypatch, tmp_path)
     a = scenes.create_scene(cid, "Mara")
     b = scenes.create_scene(cid, "Winifred")
-    for sid in (a, b):
+    c = scenes.create_scene(cid, "Seraphine")
+    for sid in (a, b, c):
         scenes.append_message(cid, sid, "user", "Mara waits.")
     g = scenes.ensure_identity(cid, a)
     scenes.write.set_branch_keys(cid, b, g, of=g)
     scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
     payload = json.loads(export.build_json(cid)[0].decode())
-    assert [row["id"] for row in payload["contents"]] == sorted([a, b])
+
+    assert [s["meta"]["id"] for s in payload["scenes"]] == sorted([a, b, c])
+    closed = {s["meta"]["id"]: s["meta"].get("closed_by") for s in payload["scenes"]}
+    assert closed[b] == {"sid": a, "title": "Mara"}
+    assert closed[a] is None and closed[c] is None
+
+    chapters = export.collect(cid)["chapters"]
+    assert [(row["number"], row["title"]) for row in payload["contents"]] == \
+        [(ch["number"], ch["title"]) for ch in chapters]
+    assert [row["id"] for row in payload["contents"]] == [a, c]

@@ -781,17 +781,29 @@ def build_json(cid: str) -> tuple[bytes, str]:
 
     `contents` is this format's table of contents: the scene order the book
     formats number their chapters by, stated rather than left implicit in the
-    order of a JSON array a consumer may well re-sort."""
+    order of a JSON array a consumer may well re-sort. A closed branch is in
+    `scenes` and has no `contents` entry, exactly as it has no chapter."""
     campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
-    # Every scene on disk, a closed branch included: the book formats tell one
-    # past, this dump is the data.
-    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
-    scene_docs = [scenes_read.read_scene(cid, sid) for sid in sids]
+    # `scenes` is every scene on disk, a closed branch included: the book
+    # formats tell one past, this dump is the data. A closed branch says so in
+    # its meta (as the scene GET does), so a reader can tell what the book
+    # left out -- and `contents` numbers exactly what the book makes chapters
+    # of, the same filter `collect` applies, or its numbers would drift from
+    # the chapters' from the first closed branch on.
+    rows = sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])
+    scene_docs = []
+    for row in rows:
+        doc = scenes_read.read_scene(cid, row["id"])
+        if row.get("closed_by"):
+            doc["meta"]["closed_by"] = dict(row["closed_by"])
+        scene_docs.append(doc)
+    in_book = [doc for row, doc in zip(rows, scene_docs, strict=True) if not row.get("closed_by")]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),
                     "world": campaign["meta"].get("world", "")},
-        "contents": [{"number": n, "id": sid, "title": doc["meta"].get("title", sid)}
-                    for n, (sid, doc) in enumerate(zip(sids, scene_docs, strict=True), start=1)],
+        "contents": [{"number": n, "id": doc["meta"]["id"],
+                      "title": doc["meta"].get("title", doc["meta"]["id"])}
+                    for n, doc in enumerate(in_book, start=1)],
         "scenes": scene_docs,
         "chronicle": chronicle.read_chronicle(cid),
         "roster": appearances_cast.roster(cid),
