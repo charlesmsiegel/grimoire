@@ -1218,17 +1218,45 @@ before `px1` shipped, so the version stays `px1`:
 
 - **The colour descriptor is tagged with its source** (`png\0` / `icc\0`,
   §1.3). Only the fixtures carrying colour data moved their pinned ids.
-- **Pillow's decompression-bomb warning is silenced** inside pixel identity;
-  the static budget decides what is too large.
+- **Pillow's `DecompressionBombWarning` is ignored process-wide**, by one
+  targeted filter `image_hash` installs at import (a per-call
+  `catch_warnings` swaps process-wide state and is not thread-safe). This is
+  sound only because our own budgets bound every decode we make: the header
+  is held to `STATIC_BUDGET` and the animation budgets, and **each frame is
+  held to `STATIC_BUDGET` again on seek** -- a GIF frame larger than its
+  header grows Pillow's canvas there, and such a frame is `over-budget`, as is
+  one Pillow refuses outright with `DecompressionBombError`. Pillow's error
+  threshold itself is untouched. The filter reaches every Pillow caller in the
+  process, not only identity (`image_store._opens`, thumbnails): those keep
+  Pillow's error threshold, and covers and post images their own tighter
+  bounds.
 - **A JPEG's first Exif APP1 with any bytes after its signature is the one
   read** for orientation, matching Chromium's reader (Skia's
   `read_metadata`); an empty one is dropped uncounted, and every later one is
   dropped unread (§1.1).
 - **Recorded sources drop userinfo and lower-case the host** (§3).
 - **An image-bearing placement that has not arrived refuses promotion the same
-  way whether or not a legacy file sits beside it** -- `ImageNotYetAvailableError`,
-  an `OSError` -- and every promote route answers it with the 404 an absent
-  image gets, carrying the reason.
+  way whether or not a legacy file sits beside it** --
+  `ImageNotYetAvailableError`, an `OSError`, raised before anything is
+  written. The promote routes answer it with the 404 an absent image gets,
+  carrying the reason as the detail. The order is the promoted slot's own
+  state first (not arrived, then absent -- "image not found" -- then an
+  unsupported extension, 400) and the avatar's arrival last, so a missing
+  slot is never reported as a syncing avatar. **A campaign promotion never
+  copies the world's picture over the campaign's own unarrived placement**:
+  that placement is the campaign's pick, so `overlay.promote_image` refuses
+  before copying anything up (an image-less crop placement is still filled
+  under its crop).
+- **`image_refs.delete` swallows only a missing file.** Any other failure --
+  a `PermissionError`, a read-only mount -- now propagates, and with it from
+  every writer that deletes a placement through `image_refs.write(..., None)`:
+  `assets._clear_focus_in` (dropping an image-less avatar placement's crop),
+  `assets.copy_slots` (a copied legacy slot clearing the destination's
+  placement) and `world_bundle._contain_ref` (a staged placement losing an
+  image it may not claim). `assets.delete_in` alone still swallows it, as documented, so
+  the image delete routes still answer `ok` when the unlink fails -- the
+  caller that needs the removal confirmed (`covers.delete_cover`) re-resolves
+  afterwards.
 - **`image_id` is absent, never null,** wherever a picture has no placement:
   listings, upload answers, shadowed world copies and greeting rows alike.
 - **Image-only backups take `image-refs/*.json` only under an `assets/`

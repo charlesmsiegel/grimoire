@@ -1612,6 +1612,40 @@ def test_campaign_image_promote_routes_swap_campaign_side_only(client):
     assert client.get(f"{ebase}/gallery_1").content == day
 
 
+def test_campaign_promote_of_its_own_unarrived_pick_is_404_and_keeps_it(client):
+    """The campaign's own image-bearing placement that has not arrived yet is
+    the campaign's pick, not a gap to copy the world's picture into: promotion
+    refuses with the not-yet-available 404 and the pick stays placed."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mira"}).json()["character"]
+    wbase = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    for slot, color in (("avatar", (1, 1, 1)), ("gallery_1", (2, 2, 2))):
+        client.put(f"{wbase}/{slot}",
+                   files={"file": ("x.png", io.BytesIO(_png_bytes(color=color)), "image/png")})
+    cdir = store.assets.version_dir(store.campaigns.campaign_root(cid), chid, "default")
+    pending = store.image_store.ingest(_png_bytes(color=(7, 7, 7)), "png")
+    store.image_store.object_path(pending.id).unlink()      # not synced in yet
+    store.assets.link_in(cdir, "gallery_1", pending.id)
+
+    r = client.post(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/gallery_1/promote")
+    assert r.status_code == 404
+    assert "not yet available" in r.json()["detail"]
+    assert store.image_refs.read(cdir, "gallery_1").image == pending.id
+    assert store.image_refs.read(cdir, "avatar") is None    # nothing copied up first
+
+    # The same for the campaign's own unarrived AVATAR, promoting an inherited
+    # gallery picture: refused before that picture is copied up.
+    store.assets.delete_in(cdir, "gallery_1")
+    store.assets.link_in(cdir, "avatar", pending.id)
+    r = client.post(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/gallery_1/promote")
+    assert r.status_code == 404 and "not yet available" in r.json()["detail"]
+    assert store.image_refs.read(cdir, "avatar").image == pending.id
+    assert store.image_refs.read(cdir, "gallery_1") is None
+    # ... and a slot that exists nowhere is still plainly not found.
+    r = client.post(f"/api/campaigns/{cid}/characters/{chid}/versions/default/images/gallery_9/promote")
+    assert r.status_code == 404 and r.json()["detail"] == "image not found"
+
+
 def test_avatar_focus_endpoint_round_trip(client):
     wid = _world(client)
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]

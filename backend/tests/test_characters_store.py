@@ -2124,3 +2124,74 @@ def test_chub_gallery_replace_lists_slots_inside_its_lock_hold(tmp_path, monkeyp
 
     assert injected == ["gallery_5"]
     assert set(_gallery_ids(tmp_path, cid, vid)) == {"gallery_0"}
+
+
+def test_chub_gallery_replace_cannot_wedge_against_a_promotion(tmp_path, monkeypatch):
+    """The listing taken under the gallery locks must not heal a stranded
+    promotion: healing takes {avatar, slot, promote-tmp} blocking, and a
+    promotion holding `avatar` while it waits for `gallery_0` -- which the
+    replace holds -- would wedge both for good (ABBA). A stray promote-tmp
+    whose rename keeps failing makes every healing listing try."""
+    import threading
+    import time
+    from pathlib import Path
+
+    from grimoire.store import assets, image_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid, vid = ch.create_character(tmp_path, "Seraphine")
+    assets.put_image(tmp_path, cid, vid, "avatar", _gallery_png(1), "png")
+    assets.put_image(tmp_path, cid, vid, "gallery_0", _gallery_png(2), "png")
+    d = assets.version_dir(tmp_path, cid, vid)
+    (d / "promote-tmp.png").write_bytes(_gallery_png(3))      # pre-#253 residue
+    real_rename = Path.rename
+
+    def rename(self, target):
+        if self.name.startswith("promote-tmp"):
+            raise OSError("held by a sync client")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+    fresh = [(0, image_store.ingest(_gallery_png(9), "png").id)]
+    real_held = assets._image_locks_held
+    inside = threading.Event()
+    replacer = []
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def held(dd, *names):
+        with real_held(dd, *names):
+            # The replace's own hold (gallery slots only), not a heal's nested
+            # inside a listing, which also names `avatar`.
+            if (threading.current_thread() in replacer and assets.AVATAR not in names
+                    and not inside.is_set()):
+                inside.set()
+                time.sleep(0.5)      # let the promotion take `avatar` and wait on gallery_0
+            yield
+
+    monkeypatch.setattr(assets, "_image_locks_held", held)
+    errors = []
+
+    def replace():
+        try:
+            ch._replace_gallery(tmp_path, cid, vid, fresh)
+        except Exception as exc:  # noqa: BLE001 -- reported below
+            errors.append(exc)
+
+    def promote():
+        inside.wait(5)
+        try:
+            assets.promote_image(tmp_path, cid, vid, "gallery_0")
+        except Exception as exc:  # noqa: BLE001 -- a refusal is fine, a wedge is not
+            errors.append(exc)
+
+    a = threading.Thread(target=replace, daemon=True)
+    b = threading.Thread(target=promote, daemon=True)
+    replacer.append(a)
+    a.start()
+    b.start()
+    a.join(5)
+    b.join(5)
+    assert inside.is_set()
+    assert not a.is_alive() and not b.is_alive(), "replace and promote wedged"
+    assert not [e for e in errors if not isinstance(e, OSError)], errors

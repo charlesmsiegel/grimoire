@@ -53,7 +53,6 @@ import functools
 import hashlib
 import io
 import re
-import threading
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -64,6 +63,25 @@ from PIL import Image, features
 from . import image_sanitize
 
 ID_RE = re.compile(r"px1-[0-9a-f]{64}\Z")
+
+# Pillow warns (on stderr) for a raster between its warning and error
+# thresholds -- at open, on a GIF seek that grows the canvas, on a crop. Every
+# decode identity makes is bounded by a budget of its own first
+# (`STATIC_BUDGET` on the header and again on every frame, `ANIM_AREA_BUDGET`,
+# `MAX_FRAMES`), so here the warning says nothing we act on. One targeted
+# filter, installed once at import: a per-call `catch_warnings` swaps
+# process-wide state and is not thread-safe. Being process-wide, it quiets the
+# same warning for the app's other Pillow callers too; Pillow's ERROR
+# threshold (`DecompressionBombError`) is untouched and still refuses for all
+# of them, and those that need a tighter bound hold one of their own
+# (`covers.MAX_PIXELS`, `post_images.MAX_DECODE_PIXELS`).
+
+
+def _ignore_bomb_warnings() -> None:
+    warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
+
+
+_ignore_bomb_warnings()
 
 #: A static raster above this many pixels is opaque. 16 MP is 64 MB per RGBA
 #: copy, and the transpose plus the conversion can briefly hold two. Set
@@ -265,30 +283,9 @@ def _feed(update: Callable[[bytes], object], im: Image.Image) -> None:
         update(band.tobytes())
 
 
-#: Serializes the warnings-filter swap in `_open`. `catch_warnings` replaces
-#: process-wide state, so two of ours interleaving could restore each other's
-#: filters; this keeps our own entries ordered. It covers only the header parse.
-_WARNINGS_LOCK = threading.Lock()
-
-
-def _open(data: bytes) -> Image.Image:
-    """`Image.open` without Pillow's `DecompressionBombWarning`.
-
-    A raster between Pillow's warning and error thresholds would otherwise
-    print to stderr before `STATIC_BUDGET` makes it opaque -- or, under
-    `-W error`, raise and turn a decodable picture into an "undecodable" one.
-    Over-budget input is this module's own decision, so the warning is noise.
-    Only the open is covered: every later check Pillow makes is on a size
-    already held far below its threshold -- a GIF frame's under `STATIC_BUDGET`,
-    a band's crop under `_BAND_PIXELS`."""
-    with _WARNINGS_LOCK, warnings.catch_warnings():
-        warnings.simplefilter("ignore", Image.DecompressionBombWarning)
-        return Image.open(io.BytesIO(data))
-
-
 def _identify(data: bytes, sha: str) -> PixelIdentity:
     try:
-        im = _open(data)
+        im = Image.open(io.BytesIO(data))
     except Image.DecompressionBombError:
         return opaque(sha, "over-budget")
     with im:
@@ -307,8 +304,9 @@ def _identify(data: bytes, sha: str) -> PixelIdentity:
         if mode == "CMYK" or mode in ("I", "F") or mode.startswith("I;16"):
             return opaque(sha, f"mode-{mode}", size)
         # The header's size, before anything is loaded. For an animation this is
-        # the canvas, which is every frame's size in Pillow, so it holds each
-        # frame to the still budget too.
+        # the canvas, which is every frame's size in Pillow -- except a GIF
+        # frame larger than the header, which grows the canvas on seek and is
+        # held to the same budget there (`_animated`).
         if size[0] * size[1] > STATIC_BUDGET:
             return opaque(sha, "over-budget", size)
 
@@ -317,17 +315,31 @@ def _identify(data: bytes, sha: str) -> PixelIdentity:
         # as the still it would otherwise look like.
         if fmt == "WEBP" and _riff_has_anim(data) and not _webp_animates():
             return opaque(sha, "webp-animation-unsupported", size)
-        n = getattr(im, "n_frames", 1) if fmt in ANIMATES else 1
-        animated = fmt in ANIMATES and getattr(im, "is_animated", False) and n > 1
-        if not animated:
+        n = _frame_count(im)      # None: refused as too large while counting
+        animated = n is not None and getattr(im, "is_animated", False) and n > 1
+        if n is not None and not animated:
             return _static(im, data)
-        if n > MAX_FRAMES or size[0] * size[1] * n > ANIM_AREA_BUDGET:
+        if n is None or n > MAX_FRAMES or size[0] * size[1] * n > ANIM_AREA_BUDGET:
             return opaque(sha, "over-budget", size)
         # Whether a browser rotates an animated PNG by its EXIF is unverified,
         # and an opaque id can never merge two pictures that display apart.
         if orientation(im) is not None:
             return opaque(sha, "animated-oriented", size)
-        return _animated(im, data, size, n)
+        return _animated(im, data, size, n, sha)
+
+
+def _frame_count(im: Image.Image) -> int | None:
+    """How many frames `im` has (1 for a format no browser animates), or None
+    when counting them is refused as too large. Counting seeks through every
+    frame, and a GIF frame larger than the header grows the canvas on seek --
+    past Pillow's error threshold, a refusal: too large is over budget, not
+    undecodable."""
+    if im.format not in ANIMATES:
+        return 1
+    try:
+        return getattr(im, "n_frames", 1)
+    except Image.DecompressionBombError:
+        return None
 
 
 def _static(im: Image.Image, data: bytes) -> PixelIdentity:
@@ -360,7 +372,8 @@ def _total_plays(fmt: str | None, loop: int | None) -> int:
     return 0 if loop is None else int(loop)
 
 
-def _animated(im: Image.Image, data: bytes, size: tuple[int, int], n: int) -> PixelIdentity:
+def _animated(im: Image.Image, data: bytes, size: tuple[int, int], n: int,
+              sha: str) -> PixelIdentity:
     color = _colour(im, data)
     plays = _total_plays(im.format, im.info.get("loop"))
     w, h = size
@@ -374,8 +387,16 @@ def _animated(im: Image.Image, data: bytes, size: tuple[int, int], n: int) -> Pi
         + color
     )
     for i in range(n):
-        im.seek(i)
+        try:
+            im.seek(i)
+        except Image.DecompressionBombError:
+            return opaque(sha, "over-budget", size)
         if im.size != size:
+            # A GIF frame larger than the header grows Pillow's canvas on seek,
+            # before anything is decoded: held to the still budget here, since
+            # the header's size was all the earlier check could see.
+            if im.size[0] * im.size[1] > STATIC_BUDGET:
+                return opaque(sha, "over-budget", size)
             raise ValueError("frame size differs from the canvas")
         # Loaded first: a WebP frame's duration lands in `info` only once its
         # pixels are decoded, and before that it is the previous frame's.
