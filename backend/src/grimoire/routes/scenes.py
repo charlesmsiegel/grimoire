@@ -5562,6 +5562,8 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
         # live turn that is history moving out from under a reply already being
         # written.
         with runs.scene_held_open(request.app, cid, sid):
+            if body.branch:
+                return _replay_in_branch(cid, sid, body.index)
             report = store.replay.begin(cid, sid, body.index)
             # The cut half of a replay: the held tail's records go with it, as
             # for any cut (a restore brings the posts back untracked, Retry).
@@ -5572,8 +5574,33 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
+    except store.branch.BranchRefused as exc:
+        raise HTTPException(status_code=409,
+                            detail={"kind": exc.kind, "detail": exc.detail}) from exc
     except (store.SceneNotFound, store.CampaignNotFound):
         raise HTTPException(status_code=404, detail="scene not found")
+
+
+def _replay_in_branch(cid: str, sid: str, index: int) -> dict:
+    """Branch the whole transcript and begin the replay inside the sibling, so
+    the original is never touched (#151). Called inside the door's hold.
+
+    Every refusal `begin` makes is evaluated FIRST, so a replay that would be
+    refused leaves no sibling; if `begin` still refuses after the branch, the
+    sibling is discarded (`branch.discard`, which also bumps the revision for
+    the roll entries the branch appended). Answers the session with the
+    sibling's id under `branched`, for the client to navigate to.
+    """
+    store.replay.check_begin(cid, sid, index)
+    last = len(store.scenes.read_scene(cid, sid)["messages"]) - 1
+    new = store.branch.branch_scene(cid, sid, last)
+    try:
+        report = store.replay.begin(cid, new, index)
+    except BaseException:
+        store.branch.discard(cid, new)
+        raise
+    tracker_routes.after_cut(cid, new)
+    return {**report, "branched": new}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay/turn")

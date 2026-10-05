@@ -37,6 +37,38 @@ def _contents(cid, sid):
     return [m["content"] for m in scenes.read_scene(cid, sid)["messages"]]
 
 
+# --- checking before starting (play controls III) ----------------------------
+
+
+def test_check_begin_refuses_what_begin_refuses_and_writes_nothing(cid, sid):
+    other = scenes.create_scene(cid, "Elsewhere")
+    scenes.append_message(cid, other, "user", "player one")
+    scenes.append_reply(cid, other, [{"speaker": None, "content": "reply one"}])
+    replay.begin(cid, other, 1)
+    running = replay.read(cid)
+    path = scenes.paths._scene_path(cid, sid)
+    before = path.read_bytes()
+    with pytest.raises(replay.ReplayError):
+        replay.check_begin(cid, sid, 1)
+    assert replay.read(cid) == running
+    assert path.read_bytes() == before
+
+
+def test_check_begin_refuses_an_index_and_a_span_with_nothing_to_replay(cid, sid):
+    with pytest.raises(IndexError):
+        replay.check_begin(cid, sid, 9)
+    scenes.append_message(cid, sid, "user", "player three")
+    with pytest.raises(replay.ReplayError):
+        replay.check_begin(cid, sid, 4)          # a player post, and no reply after it
+    assert replay.read(cid) == {}
+
+
+def test_check_begin_passes_what_begin_accepts(cid, sid):
+    replay.check_begin(cid, sid, 1)
+    assert replay.read(cid) == {}
+    assert len(_contents(cid, sid)) == 4
+
+
 # --- starting one ----------------------------------------------------------
 
 

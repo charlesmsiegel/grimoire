@@ -235,3 +235,69 @@ def test_the_scene_payload_names_who_closed_it(closed, client):
         assert meta["closed_by"] == {"sid": absorbed, "title": "Mara"}
     meta = client.get(f"/api/campaigns/{cid}/scenes/{absorbed}").json()["meta"]
     assert "closed_by" not in meta
+
+
+# --- replay inside a branch (#151) ------------------------------------------
+
+
+def _four_posts(client):
+    cid, sid = seed(client)
+    for role, text in (("user", "Mara waits."), ("assistant", "The tide turns."),
+                       ("user", "She runs."), ("assistant", "The bell rings.")):
+        store.scenes.append_message(cid, sid, role, text,
+                                    **({"speaker": "Mara"} if role == "assistant" else {}))
+    return cid, sid
+
+
+def test_replay_in_a_branch_leaves_the_original_byte_identical(client):
+    cid, sid = _four_posts(client)
+    path = store.scenes._scene_path(cid, sid)
+    before = path.read_bytes()
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 2, "branch": True})
+    assert r.status_code == 200, r.text
+    new = r.json()["branched"]
+    assert new != sid and path.read_bytes() == before
+    assert store.replay.state(cid)["scene"] == new
+    assert len(store.scenes.read_scene(cid, new)["messages"]) == 2
+
+
+def test_replay_without_branch_behaves_as_today(client):
+    cid, sid = _four_posts(client)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 2})
+    assert r.status_code == 200, r.text
+    assert "branched" not in r.json()
+    assert store.replay.state(cid)["scene"] == sid
+    assert len(store.scenes.read_scene(cid, sid)["messages"]) == 2
+
+
+def test_a_refused_branch_replay_creates_no_sibling(client):
+    cid, sid = _four_posts(client)
+    store.scenes.append_message(cid, sid, "user", "She waits.")
+    before = {s["id"] for s in store.scenes.list_scenes(cid)}
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 4, "branch": True})
+    assert r.status_code == 409 and r.json().get("kind") == "replay_refused", r.text
+    assert {s["id"] for s in store.scenes.list_scenes(cid)} == before
+
+
+def test_a_branch_replay_of_an_absorbed_scene_is_refused(client):
+    cid, sid = _four_posts(client)
+    store.scenes.mark_absorbed(cid, sid, "x", "y")
+    before = {s["id"] for s in store.scenes.list_scenes(cid)}
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 2, "branch": True})
+    assert r.status_code == 409 and r.json().get("kind") == "absorbed_use_fork", r.text
+    assert {s["id"] for s in store.scenes.list_scenes(cid)} == before
+
+
+def test_begin_failing_after_the_branch_deletes_it(client, monkeypatch):
+    cid, sid = _four_posts(client)
+    before = {s["id"] for s in store.scenes.list_scenes(cid)}
+    revision = store.revision.current(cid)
+
+    def refuse(*a, **k):
+        raise store.replay.ReplayError("raced")
+
+    monkeypatch.setattr(store.replay, "begin", refuse)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/replay", json={"index": 2, "branch": True})
+    assert r.status_code == 409 and r.json().get("kind") == "replay_refused", r.text
+    assert {s["id"] for s in store.scenes.list_scenes(cid)} == before
+    assert store.revision.current(cid) != revision

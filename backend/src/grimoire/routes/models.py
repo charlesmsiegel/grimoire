@@ -850,6 +850,11 @@ class ExcludeMessage(BaseModel):
 class ReplayStart(BaseModel):
     #: The first post to replay -- the one AFTER the retconned post.
     index: int
+    #: Replay inside a branch of the scene (play controls III, #151): the whole
+    #: transcript is branched and the replay runs in the sibling, so the
+    #: original is never touched. Off by default, so existing callers keep the
+    #: in-place replay; the client turns it on for an unabsorbed scene.
+    branch: bool = False
 
 
 class ReplayCancel(BaseModel):

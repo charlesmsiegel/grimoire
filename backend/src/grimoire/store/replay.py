@@ -264,6 +264,50 @@ def state(cid: str) -> dict | None:
             "gone": not scenes_paths._scene_path(cid, rec.get("scene", "")).exists()}
 
 
+def check_begin(cid: str, sid: str, index: int) -> None:
+    """Every refusal `begin` makes, and nothing it writes.
+
+    For a caller that has to know a replay WILL start before doing something
+    else first -- replay-in-a-branch (play controls III) evaluates these before
+    building the sibling, so a refused replay leaves no sibling behind. Same
+    order as `begin`: a replay already running (`ReplayError`),
+    `scenes.SceneNotFound`, `IndexError`, a blocked transition span and no
+    generation step (`ReplayError`).
+    """
+    with locks.campaign_lock(cid):
+        _checked(cid, sid, index)
+
+
+def _checked(cid: str, sid: str, index: int) -> list[dict]:
+    """`check_begin`'s refusals, returning the steps a replay at `index` would
+    walk. Called under the campaign lock."""
+    running = read(cid)
+    if running.get("steps"):
+        # Named, not merely reported. One replay runs per campaign, so a
+        # refusal here means the reviewer has a walk open somewhere else and
+        # has to go and finish or stop it -- and "somewhere else" is not a
+        # place they can be sent without its name. Falls back to the id when
+        # the scene will not read; the refusal is not worth failing over.
+        other = running.get("scene", "")
+        try:
+            label = scenes_read.read_scene_meta(cid, other).get("title") or other
+        except Exception:  # noqa: BLE001 -- a label, on a path that is already refusing
+            label = other
+        raise ReplayError(f"a replay is already running in “{label}” — finish or stop "
+                          "that one first")
+    scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
+    messages = scene["messages"]
+    if index < 0 or index >= len(messages):
+        raise IndexError(index)
+    if _moves(messages, index):
+        raise ReplayError(BLOCKED_TRANSITION)
+    sizes = scenes_turns._parse_turn_sizes(scene["meta"].get("turn_sizes", ""))
+    steps = _segment(messages, index, sizes)
+    if not any(s["kind"] == "generation" for s in steps):
+        raise ReplayError("there is no model turn after that post to replay")
+    return steps
+
+
 def begin(cid: str, sid: str, index: int) -> dict:
     """Cut the scene at `index`, holding everything from there on for replay.
 
@@ -285,30 +329,7 @@ def begin(cid: str, sid: str, index: int) -> dict:
     honestly rebuild.
     """
     with locks.campaign_lock(cid):
-        running = read(cid)
-        if running.get("steps"):
-            # Named, not merely reported. One replay runs per campaign, so a
-            # refusal here means the reviewer has a walk open somewhere else and
-            # has to go and finish or stop it -- and "somewhere else" is not a
-            # place they can be sent without its name. Falls back to the id when
-            # the scene will not read; the refusal is not worth failing over.
-            other = running.get("scene", "")
-            try:
-                label = scenes_read.read_scene_meta(cid, other).get("title") or other
-            except Exception:  # noqa: BLE001 -- a label, on a path that is already refusing
-                label = other
-            raise ReplayError(f"a replay is already running in “{label}” — finish or stop "
-                              "that one first")
-        scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
-        messages = scene["messages"]
-        if index < 0 or index >= len(messages):
-            raise IndexError(index)
-        if _moves(messages, index):
-            raise ReplayError(BLOCKED_TRANSITION)
-        sizes = scenes_turns._parse_turn_sizes(scene["meta"].get("turn_sizes", ""))
-        steps = _segment(messages, index, sizes)
-        if not any(s["kind"] == "generation" for s in steps):
-            raise ReplayError("there is no model turn after that post to replay")
+        steps = _checked(cid, sid, index)
         rec = {"scene": sid, "cut": index, "created": now_iso(),
                "steps": steps, "done": 0, "mark": index, "staged": 0}
         _write(cid, rec)

@@ -214,14 +214,17 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
                      if m.get("speaker") == scenes_serialize.ROLL_SPEAKER]
             rolls.copy_for_branch(cid, sid, new_sid, match_rolls(source_rolls, lines))
         except BaseException:
-            _discard(cid, new_sid)
+            discard(cid, new_sid)
             raise
         return new_sid
 
 
-def _discard(cid: str, sid: str) -> None:
-    """Remove a half-built sibling. Each step is fail-soft and logged: the
-    exception that brought us here is the one the caller needs to see."""
+def discard(cid: str, sid: str) -> None:
+    """Remove a sibling that failed -- half-built here, or one a replay could
+    not then begin in (`routes.scenes.post_replay`). Each step is fail-soft
+    and logged: the exception that brought the caller here is the one it needs
+    to see. Bumps the revision, since what was written before the failure (an
+    appended roll entry cannot be taken back) is a write no 2xx will stamp."""
     try:
         scenes_lifecycle.delete_scene(cid, sid)
     except Exception:
