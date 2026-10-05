@@ -61,7 +61,8 @@ class PreparedMessages(list):
     """
 
     def __init__(self, primary_model: str, factory: VariantFactory, *,
-                 profiles: dict[str, tuple[list[dict], dict | None]] | None = None):
+                 profiles: dict[str, tuple[list[dict], dict | None]] | None = None,
+                 campaign: str = ""):
         self._frozen_profiles = deepcopy(profiles)
         self._factory = factory
         self._primary_model = primary_model
@@ -70,6 +71,11 @@ class PreparedMessages(list):
         self._notified: set[str] = set()
         self.breakdown = deepcopy(breakdown)
         self.on_variant: VariantCallback | None = None
+        #: The campaign whose prompt this is. Image references (#377,
+        #: `content_parts`) name no campaign, so this is what the facade
+        #: resolves them against -- the campaign running the attempt, which for
+        #: a snapshot restored in a fork is the fork.
+        self.campaign = campaign
         super().__init__(deepcopy(messages))
 
     def for_model(self, model: str) -> list[dict]:
@@ -102,14 +108,14 @@ class PreparedMessages(list):
                          "profiles": {k: v for k, v in self._frozen_profiles.items() if k}})
 
     @classmethod
-    def from_snapshot(cls, snapshot: dict, model: str) -> PreparedMessages:
+    def from_snapshot(cls, snapshot: dict, model: str, campaign: str = "") -> PreparedMessages:
         """Restore a writer without reconstructing the past from current files."""
         if snapshot.get("version") != 1 or "unprofiled" not in snapshot:
             raise ValueError("Unsupported frozen prompt snapshot")
         frozen = deepcopy({"": snapshot["unprofiled"], **snapshot.get("profiles", {})})
         def select(selected_model):
             return frozen.get(_ALIASES.get(selected_model, selected_model), frozen[""])
-        return cls(model, select, profiles=frozen)
+        return cls(model, select, profiles=frozen, campaign=campaign)
 
     def with_appended(self, message: dict) -> PreparedMessages:
         """Append explicit reroll steering to every frozen historical variant.
@@ -123,4 +129,4 @@ class PreparedMessages(list):
             return [*deepcopy(variant[0]), deepcopy(message)], None
         snapshot["unprofiled"] = append(snapshot["unprofiled"])
         snapshot["profiles"] = {k: append(v) for k, v in snapshot["profiles"].items()}
-        return self.from_snapshot(snapshot, self._primary_model)
+        return self.from_snapshot(snapshot, self._primary_model, campaign=self.campaign)

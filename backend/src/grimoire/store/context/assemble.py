@@ -20,6 +20,7 @@ what it is handed.
 from __future__ import annotations
 
 import logging
+import re
 from copy import deepcopy
 from typing import NamedTuple
 
@@ -122,7 +123,8 @@ def build_opener_messages(cid: str, sid: str, prompt: str, model: str = "") -> l
 def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
               turn: dict | None = None, actor_ref: str | None = None,
               eligible_speakers: list[dict] | None = None,
-              opening_narrator: bool = False, opener: bool = False) -> dict:
+              opening_narrator: bool = False, opener: bool = False,
+              images: int = 0) -> dict:
     """One pass gathering the template data + projected history + post-history.
     build_* render templates/scene/system.j2 from data; context_sections renders
     the per-section templates for the token breakdown. `wi_seed` folds extra text
@@ -467,12 +469,67 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
                                   length_correction=length_correction)
     post_history = _expanded(post_history)
 
-    sub_history = [{"role": m["role"], "content": _expanded(m["content"])}
-                   for m in story._project_history(history)]
+    if images > 0:
+        # The newest `images` pictures stay as references (#377): projected as
+        # sentinels, expanded like any other text, then split into parts.
+        projected, image_table, nonce = story._project_history_refs(history, images=images,
+                                                                    cid=cid)
+        sub_history = _split_refs([{"role": m["role"], "content": _expanded(m["content"])}
+                                   for m in projected], image_table, nonce)
+    else:
+        sub_history = [{"role": m["role"], "content": _expanded(m["content"])}
+                       for m in story._project_history(history)]
     return {"data": data, "subs": subs, "datetime_subs": dt_subs, "history": sub_history,
             "post_history": post_history, "npc_names": npc_names,
             "pinned_sections": _pinned_sections(pinned_refs, cast, activated_wi,
                                                 current_loc if not loc_excluded else None, voiced_ids)}
+
+
+def _parts_of(text: str, refs: dict[int, dict], sentinel) -> list:
+    """`text` split on this composition's sentinels into text and reference
+    parts. Removing the sentinels leaves exactly the `images=0` string, so the
+    text parts concatenate to it (`content_parts`' rule)."""
+    parts: list = []
+    pos = 0
+    for m in sentinel.finditer(text):
+        if m.start() > pos:
+            parts.append({"type": "text", "text": text[pos:m.start()]})
+        ref = refs.get(int(m.group(1)))
+        if ref is not None:
+            parts.append(content_parts.ref(ref["url"], ref["alt"], ref["role"] != "user"))
+        pos = m.end()
+    if pos < len(text) or not parts:
+        parts.append({"type": "text", "text": text[pos:]})
+    return parts
+
+
+def _split_refs(history: list[dict], refs: dict[int, dict], nonce: str) -> list[dict]:
+    """Projected history with sentinels -> messages with image references, in
+    USER messages only (#377).
+
+    The providers that read images take them in user content alone, so a
+    picture from an assistant post is CARRIED: moved to the start of the next
+    user message, or -- when none follows in the window -- onto a carrier, a
+    user message appended after the history that holds nothing else
+    (`content_parts.CARRIER`). A message left with no reference is its plain
+    string again, which is what keeps everything around it unchanged.
+    """
+    sentinel = re.compile("⟦img:" + re.escape(nonce) + r":(\d+)⟧")
+    out: list[dict] = []
+    carry: list = []
+    for m in history:
+        parts = _parts_of(m["content"], refs, sentinel)
+        found = content_parts.image_refs(parts)
+        if m["role"] == "user":
+            parts = carry + parts
+            carry = []
+        else:
+            carry += found
+            parts = [p for p in parts if p not in found]
+        out.append({**m, "content": content_parts.collapse(parts)})
+    if carry:
+        out.append({"role": "user", "content": carry, content_parts.CARRIER: True})
+    return out
 
 
 #: What `_tracker_read` answers when there is no state to show.
@@ -1131,8 +1188,7 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         packed["budget"] = budget
         system = compose([s["text"] for s in packed["sections"] if not s["dropped"]])
         messages = [{"role": "system", "content": system}] if system or opener else []
-        messages += packed["history"]
-        messages += before_post
+        messages += _merged_carrier(packed["history"], before_post)
         if post_history:
             messages.append({"role": "system", "content": post_history})
         messages += after_post
@@ -1149,8 +1205,25 @@ def _prepare(a: dict, cid: str, sid: str, *, model: str, describe: bool,
         return frozen[model_guidance.guidance_for(selected_model, profiles)]
 
     prepared = model_guidance.PreparedMessages(model, select, profiles={
-        "": frozen[""], **{name: frozen[text] for name, text in profiles.items()}})
+        "": frozen[""], **{name: frozen[text] for name, text in profiles.items()}},
+        campaign=cid)
     return prepared, prepared.breakdown
+
+
+def _merged_carrier(history: list[dict], before_post: tuple[dict, ...]) -> list[dict]:
+    """`history + before_post`, with a trailing carrier folded into a user
+    message the prompt appends right after it (a director note, #377), so the
+    carrier never sits beside another user message. New list, new dicts: the
+    packed history and `before_post` are shared by every guidance variant."""
+    tail = history[-1] if history else None
+    first = before_post[0] if before_post else None
+    if not (tail and tail.get(content_parts.CARRIER) and first and first["role"] == "user"):
+        return [*history, *before_post]
+    content = first["content"]
+    note = {**first, "content": [*tail["content"],
+                                 *([{"type": "text", "text": content}]
+                                   if isinstance(content, str) else content)]}
+    return [*history[:-1], note, *before_post[1:]]
 
 
 def _token_memo():
@@ -1209,8 +1282,13 @@ Appended = tuple[str, str, str]
 def compose_turn(cid: str, sid: str, turn: dict | None = None,
                  appended: tuple[Appended, ...] = (),
                  describe: bool = True, model: str = "", actor_ref: str | None = None,
-                 eligible_speakers: list[dict] | None = None) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                 eligible_speakers: list[dict] | None = None,
+                 images: int = 0) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One turn's messages, and the breakdown describing them.
+
+    `images` is how many of the newest post images to keep as references for a
+    route that reads them (#377, `store.post_images.images_for`); 0 composes
+    today's text-only prompt, byte for byte.
 
     `describe=False` returns `None` for the breakdown and skips building it.
     That is not a micro-optimisation: on the DEFAULT unbounded budget `pack`
@@ -1241,7 +1319,8 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
     sent, and the record must report it), and three call sites used to spell
     the first two out separately with nothing holding them together.
     """
-    a = _assemble(cid, sid, turn=turn, actor_ref=actor_ref, eligible_speakers=eligible_speakers)
+    a = _assemble(cid, sid, turn=turn, actor_ref=actor_ref, eligible_speakers=eligible_speakers,
+                  images=images)
     return _prepare(a, cid, sid, model=model, describe=describe,
                     after_post=tuple({"role": role, "content": content}
                                      for _label, role, content in appended),
@@ -1250,7 +1329,8 @@ def compose_turn(cid: str, sid: str, turn: dict | None = None,
 
 
 def build_messages(cid: str, sid: str, turn: dict | None = None,
-                   appended: tuple[Appended, ...] = (), model: str = "") -> list[dict]:
+                   appended: tuple[Appended, ...] = (), model: str = "",
+                   images: int = 0) -> list[dict]:
     """`compose_turn` without the breakdown — see there.
 
     The old `reserve=` parameter is gone. It charged the budget for a message
@@ -1258,13 +1338,15 @@ def build_messages(cid: str, sid: str, turn: dict | None = None,
     and gave `compose_turn` no way to report the appended block; `appended`
     does all three jobs at once.
     """
-    return compose_turn(cid, sid, turn=turn, appended=appended, describe=False, model=model)[0]
+    return compose_turn(cid, sid, turn=turn, appended=appended, describe=False, model=model,
+                        images=images)[0]
 
 
 def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = None,
                           describe: bool = True, model: str = "", actor_ref: str | None = None,
                           eligible_speakers: list[dict] | None = None,
-                          appended: tuple[Appended, ...] = ()) -> tuple[model_guidance.PreparedMessages, dict | None]:
+                          appended: tuple[Appended, ...] = (),
+                          images: int = 0) -> tuple[model_guidance.PreparedMessages, dict | None]:
     """One director turn: full system + history, then the note as the final user
     message. The note rides only this call — never persisted. `turn` is the same
     one-shot response-preset override as `compose_turn`, and the messages and
@@ -1286,7 +1368,7 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
     # scene in a director note could not recall it (nothing else in the scan
     # window has said the word yet).
     a = _assemble(cid, sid, wi_seed=note, turn=turn, actor_ref=actor_ref,
-                  eligible_speakers=eligible_speakers)
+                  eligible_speakers=eligible_speakers, images=images)
     # expanded up front so the note's tokens are reserved before packing: it is
     # a mandatory message, so the budget has to know about it
     note_text = macros.expand_macros(note, a["subs"], cid, sid, datetime_subs=a["datetime_subs"])
@@ -1300,9 +1382,10 @@ def compose_director_turn(cid: str, sid: str, note: str, turn: dict | None = Non
 
 
 def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = None,
-                            model: str = "") -> list[dict]:
+                            model: str = "", images: int = 0) -> list[dict]:
     """`compose_director_turn` without the breakdown — see there."""
-    return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model)[0]
+    return compose_director_turn(cid, sid, note, turn=turn, describe=False, model=model,
+                                 images=images)[0]
 
 
 def _history_rows(p: dict, count) -> list[dict]:
@@ -1425,18 +1508,18 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
     return out
 
 
-def context_breakdown(cid: str, sid: str, model: str = "") -> dict:
+def context_breakdown(cid: str, sid: str, model: str = "", images: int = 0) -> dict:
     """The LIVE inspector view: compose the turn as it would be sent right now
     and describe it. Runs the same render and pack `compose_turn` runs.
 
     The live view has no appended blocks — those belong to a specific turn
     (regenerate guidance, a roll result), and this composes a hypothetical one.
     """
-    _messages, detail = compose_turn(cid, sid, model=model)
+    _messages, detail = compose_turn(cid, sid, model=model, images=images)
     assert detail is not None  # describe=True always builds the inspector
     return detail
 
 
-def context_sections(cid: str, sid: str, model: str = "") -> list[dict]:
+def context_sections(cid: str, sid: str, model: str = "", images: int = 0) -> list[dict]:
     """Just the rows of `context_breakdown` — see there."""
-    return context_breakdown(cid, sid, model=model)["sections"]
+    return context_breakdown(cid, sid, model=model, images=images)["sections"]

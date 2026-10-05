@@ -13,6 +13,7 @@ import io
 import json
 import re
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -260,6 +261,19 @@ def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/")
         packed = images.add(p) if p is not None else None
         return f"![{m['alt']}]({prefix}{packed})" if packed is not None else m["alt"]
     return _MD_IMG.sub(sub, text)
+
+
+def image_links(text: str) -> list[tuple[str, str]]:
+    """Every markdown image in `text`, as `(alt, url)`, in order -- the same
+    matches `drop_images` reduces, so a caller counting images and a caller
+    stripping them cannot disagree about which ones there are."""
+    return [(m["alt"], m["url"]) for m in _MD_IMG.finditer(text)]
+
+
+def sub_images(text: str, repl: Callable[[int, str, str], str]) -> str:
+    """`text` with the i-th markdown image replaced by `repl(i, alt, url)`."""
+    counter = iter(range(len(text) + 1))
+    return _MD_IMG.sub(lambda m: repl(next(counter), m["alt"], m["url"]), text)
 
 
 def drop_images(text: str) -> str:

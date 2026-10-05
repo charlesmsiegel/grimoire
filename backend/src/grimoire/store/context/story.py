@@ -8,12 +8,14 @@ a garbled file and return nothing: neither block is worth failing a turn over.
 
 from __future__ import annotations
 
+import secrets
+
 from ... import prompts
-from .. import chronicle, config, export, relationships
+from .. import chronicle, config, export, post_images, relationships
 from ..scenes import serialize as scenes_serialize
 
 
-def _project_history(messages: list[dict]) -> list[dict]:
+def _project_history(messages: list[dict], reduce=None) -> list[dict]:
     """Script lines (templates/scene/history_line.j2) -> conversation roles; merge
     consecutive same-role messages so providers that expect strict alternation are
     happy.
@@ -38,9 +40,12 @@ def _project_history(messages: list[dict]) -> list[dict]:
     question ("this reader gets text only, give it the alt text") that a
     plain-text export already answers, and two copies of that rule would agree
     right up until one of them was fixed.
+
+    `reduce(index, message) -> str` replaces that reduction for one caller,
+    `_project_history_refs`, which keeps chosen pictures as sentinels (#377).
     """
     out: list[dict] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         # A director note is an instruction to the narrator, not a line in the
         # scene, and it is stored only so the turn it produced can be
         # attributed to it. Dropping it here is what keeps a prompt
@@ -51,13 +56,62 @@ def _project_history(messages: list[dict]) -> list[dict]:
         # dialogue -- and the model would learn to write them back.
         if scenes_serialize.is_director_note(message):
             continue
-        m = {**message, "content": export.drop_images(message["content"])}
+        content = (export.drop_images(message["content"]) if reduce is None
+                   else reduce(index, message))
+        m = {**message, "content": content}
         line = prompts.render("scene/history_line.j2", m=m)
         if out and out[-1]["role"] == m["role"]:
             out[-1]["content"] += "\n\n" + line
         else:
             out.append({"role": m["role"], "content": line})
     return out
+
+
+def _chosen_images(messages: list[dict], images: int, cid: str) -> set[tuple[int, int]]:
+    """`(message index, image index)` of the newest `images` sendable pictures:
+    newest message first and, within one, the later image first. Director notes
+    are skipped, as the projection skips them. "Sendable" is
+    `post_images.eligible` -- an app image this campaign resolves to a file it
+    can decode -- so a remote or broken picture never takes a slot."""
+    chosen: set[tuple[int, int]] = set()
+    for i in range(len(messages) - 1, -1, -1):
+        if scenes_serialize.is_director_note(messages[i]):
+            continue
+        links = export.image_links(messages[i]["content"])
+        for j in range(len(links) - 1, -1, -1):
+            if len(chosen) >= images:
+                return chosen
+            if post_images.eligible(cid, links[j][1]):
+                chosen.add((i, j))
+    return chosen
+
+
+def _project_history_refs(messages: list[dict], *, images: int,
+                          cid: str) -> tuple[list[dict], dict[int, dict], str]:
+    """`_project_history`, keeping the newest `images` pictures as SENTINELS.
+
+    Each chosen image becomes its alt text followed by `⟦img:<nonce>:<n>⟧`;
+    every other image is reduced to its alt text exactly as `_project_history`
+    reduces it, and everything else -- director notes, rendering, merging -- is
+    that function's. Returns the projected messages (strings), the table of
+    what each sentinel stands for (`{n: {"url", "alt", "role"}}`) and the
+    nonce. The nonce is fresh per composition, so a post cannot forge a
+    sentinel; `assemble` splits on it after macro expansion (#377).
+    """
+    chosen = _chosen_images(messages, images, cid)
+    nonce = secrets.token_hex(8)
+    table: dict[int, dict] = {}
+
+    def reduce(i: int, message: dict) -> str:
+        def mark(j: int, alt: str, url: str) -> str:
+            if (i, j) not in chosen:
+                return alt
+            n = len(table)
+            table[n] = {"url": url, "alt": alt, "role": message["role"]}
+            return f"{alt}⟦img:{nonce}:{n}⟧"
+        return export.sub_images(message["content"], mark)
+
+    return _project_history(messages, reduce), table, nonce
 
 
 def _relationship_lines(cid: str, cast) -> list[str]:
