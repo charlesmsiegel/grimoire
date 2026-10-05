@@ -43,7 +43,7 @@ the planner, which would close an import cycle through `store.context`).
 |---|---|---|
 | `order` | `directed` \| `manual` \| `list` \| `natural` | `directed` |
 | `order_list` | actor refs (`kind:id`), may include `grimoire` | `[]` |
-| `talkativeness` | `{ref: 0..100}` | 50 for any ref absent |
+| `talkativeness` | `{ref: 0..100}` | for any ref absent: 50 in Natural, 100 (never filtered) in Directed |
 | `sitting_out` | actor refs | `[]` |
 | `auto_rounds` | integer `0..5` | `0` |
 
@@ -81,9 +81,12 @@ themselves does not count.
 
 - **Directed** — today's selector and handoffs, over a filtered eligible list:
   available characters, then each one *not* named in the post kept with
-  probability `talkativeness/100`. If the roll removes every available
-  character, the one with highest talkativeness is kept (ties: `nominate`'s
-  longest-silent order). The filtered list is the round's `eligible`, so it is
+  probability `talkativeness/100`. Directed treats an unset talkativeness as
+  100, so only a character the player gave a value is ever filtered — saving
+  any other setting never starts dropping the unnamed cast. If the roll
+  removes every available character, the one with highest talkativeness (by
+  those same effective values) is kept (ties: `nominate`'s longest-silent
+  order). The filtered list is the round's `eligible`, so it is
   what the selector sees and what handoff candidates are drawn from.
 - **Manual** — the post is appended and the round has an empty plan: no
   contribution is generated and the run ends with `done`. The player chooses who

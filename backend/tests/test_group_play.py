@@ -242,3 +242,33 @@ def test_list_continue_anchor_survives_last_speaker_sitting_out():
     lst = {**lst, "sitting_out": ["characters:mara"]}
     assert group_play.plan_continue(lst, R, last={"ref": "characters:seraphine", "text": ""},
                                     history=[], rng=random.Random(0)) == "characters:winifred"
+
+
+def test_directed_unset_talkativeness_never_filters():
+    s = group_play.parse("")
+    for seed in range(20):
+        p = group_play.plan_post(s, R, trigger="", history=[], rng=random.Random(seed))
+        assert p["eligible"] == R
+
+
+def test_directed_draw_count_is_the_same_set_or_unset():
+    # One draw per available entry whatever is set, so a seeded rng is spent
+    # identically and later draws read the same.
+    unset, set_ = random.Random(3), random.Random(3)
+    group_play.plan_post(group_play.parse(""), R, trigger="", history=[], rng=unset)
+    group_play.plan_post({**group_play.parse(""), "talkativeness": {"characters:mara": 40}}, R,
+                         trigger="", history=[], rng=set_)
+    assert unset.random() == set_.random()
+
+
+def test_directed_fallback_counts_unset_as_hundred():
+    s = {**group_play.parse(""), "talkativeness": {"characters:mara": 0, "characters:seraphine": 0}}
+    p = group_play.plan_post(s, R, trigger="", history=[], rng=random.Random(0))
+    assert [e["ref"] for e in p["eligible"]] == ["characters:winifred"]
+
+
+def test_natural_unset_talkativeness_is_still_fifty():
+    s = {**group_play.parse(""), "order": "natural"}
+    joined = {len(group_play.plan_post(s, R, trigger="", history=[], rng=random.Random(n))["plan"])
+              for n in range(30)}
+    assert len(joined) > 1  # a coin flip per character, not everyone every time

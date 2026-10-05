@@ -159,6 +159,14 @@ def _talk(settings: dict, ref: str) -> int:
     return settings["talkativeness"].get(ref, DEFAULT_TALKATIVENESS)
 
 
+def _directed_talk(settings: dict, ref: str) -> int:
+    """Directed's talkativeness: an UNSET ref is 100, always kept. Only a ref
+    the player gave a value filters, so saving any other setting (one sit-out
+    toggle) never starts dropping every unnamed character from the selector.
+    Natural keeps the shared default (`_talk`)."""
+    return settings["talkativeness"].get(ref, 100)
+
+
 def _list_sequence(settings: dict, avail: list[dict]) -> list[str]:
     here = {e["ref"] for e in avail}
     head = [r for r in settings["order_list"] if r in here or r == GRIMOIRE]
@@ -185,9 +193,11 @@ def _directed(settings: dict, roster: list[dict], avail: list[dict], trigger: st
               history: list[dict], rng: random.Random, force: tuple[str, ...],
               author: str | None) -> list[dict]:
     named = set(_named(trigger, avail)) - {author}
-    # Every available entry rolls, named or not, so the draw count depends on
-    # the cast alone and a seeded rng reads the same however the post words it.
-    rolls = {e["ref"]: rng.random() * 100 < _talk(settings, e["ref"]) for e in avail}
+    # Every available entry rolls, named or not and set or not (an unset 100
+    # always passes: `random()` is below 1), so the draw count depends on the
+    # cast alone and a seeded rng reads the same however the post words it or
+    # whichever values the player has set.
+    rolls = {e["ref"]: rng.random() * 100 < _directed_talk(settings, e["ref"]) for e in avail}
     # An explicit pick wins over sitting out: a forced ref stays eligible.
     eligible = [e for e in roster
                 if e["ref"] in force
@@ -195,7 +205,8 @@ def _directed(settings: dict, roster: list[dict], avail: list[dict], trigger: st
     if eligible or not avail:
         return eligible
     silence = _by_silence(avail, history)
-    keep = max(avail, key=lambda e: (_talk(settings, e["ref"]), -silence.index(e["ref"])))
+    keep = max(avail, key=lambda e: (_directed_talk(settings, e["ref"]),
+                                     -silence.index(e["ref"])))
     return [keep]
 
 

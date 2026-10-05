@@ -168,12 +168,13 @@ def start(
 
 
 def _plan(cid, sid, kind, trigger, actor_ref):
-    """The round's `eligible`, lead `actor_ref`, `mode` and remaining `plan`.
+    """The round's `eligible`, lead `actor_ref`, `mode` and remaining `plan`,
+    plus `present`: the whole present cast, whose observation the round
+    anchors however narrow `eligible` is.
 
-    A scene that never stored group-play settings is planned exactly as before
-    they existed: the whole cast eligible, the lead as asked, the selector and
-    handoffs deciding the rest. (Directed's talkativeness filter would
-    otherwise drop each unnamed character half the time at the default 50.)
+    A scene that never stored group-play settings reads as the defaults --
+    Directed, nobody sitting out, no talkativeness set (which Directed never
+    filters) -- so it plans exactly as before settings existed.
 
     An explicit lead (Respond as, a reply-as chip, a replay) is never planned
     away, sitting out or not. With a post it still opens a round by mode, and
@@ -181,8 +182,6 @@ def _plan(cid, sid, kind, trigger, actor_ref):
     what follows it."""
     cast = roster(cid, sid)
     scene = store.scenes.read_scene(cid, sid)
-    if not scene["meta"].get("group_play"):
-        return {"eligible": cast, "actor_ref": actor_ref, "mode": "directed", "plan": []}
     settings = store.group_play.settings_of(scene["meta"])
     mode = settings["order"]
     history = scene["messages"]
@@ -197,9 +196,11 @@ def _plan(cid, sid, kind, trigger, actor_ref):
             lead = actor_ref
         if mode not in ("list", "natural"):
             lead, plan = actor_ref, []
-        return {"eligible": planned["eligible"], "actor_ref": lead, "mode": mode, "plan": plan}
+        return {"eligible": planned["eligible"], "actor_ref": lead, "mode": mode, "plan": plan,
+                "present": cast}
     if actor_ref:
-        return {"eligible": cast, "actor_ref": actor_ref, "mode": mode, "plan": []}
+        return {"eligible": cast, "actor_ref": actor_ref, "mode": mode, "plan": [],
+                "present": cast}
     lead = None
     if kind == "continue":
         lead = store.group_play.plan_continue(
@@ -207,7 +208,7 @@ def _plan(cid, sid, kind, trigger, actor_ref):
             rng=_rng())
     # Sitting-out characters never reach the selector.
     return {"eligible": store.group_play.available(settings, cast), "actor_ref": lead,
-            "mode": mode, "plan": []}
+            "mode": mode, "plan": [], "present": cast}
 
 
 def _last_contribution(cid, sid, history):
