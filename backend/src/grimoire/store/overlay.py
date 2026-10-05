@@ -1148,6 +1148,10 @@ def materialize_actor(cid: str, kind: str, aid: str) -> None:
     for p in dst.glob(f"*.{ext}"):
         if p.name != meta_name:
             p.unlink()
+    if kind == "pcs":
+        # ...and the same for history: a campaign copy's edit trail is residue
+        # once the copy is gone, and must not reappear on the fresh one (#67).
+        pcs.forget_history(croot, aid)
     with _recorded_base(cid, _flat_ref(kind, aid), base, dst / meta_name):
         # the meta is the single commit point, so it goes last -- `snapshot`
         # puts it first, and for a PC it is an *.md sibling of the versions
@@ -1209,6 +1213,12 @@ def dematerialize_actor(cid: str, kind: str, aid: str) -> None:
     for p in [d / meta, *rest]:
         if p.exists():
             p.unlink()
+    if kind == "pcs":
+        # The copy's history goes with the copy (#67). Left behind, it would
+        # list against the world text now showing through, and restoring an
+        # entry would re-materialize and write the old campaign text straight
+        # over the world change this revert just accepted.
+        pcs.forget_history(croot_of(cid), aid)
     if not any(d.iterdir()):
         d.rmdir()
 
@@ -2012,6 +2022,30 @@ def read_pc(cid: str, pid: str, *, v: View | None = None) -> dict:
         ver["avatar_focus"] = read_focus(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
         ver["image_descriptions"] = read_descriptions(cid, pid, ver["id"], pcs.ASSET_BASE, v=v)
     return detail
+
+
+def pc_revisions(cid: str, pid: str, vid: str) -> list[dict]:
+    """A campaign PC version's revision history (#67): the CAMPAIGN copy's.
+
+    History belongs to the copy that was edited, so a PC this campaign still
+    inherits has none here -- not the world's, which is the world page's to
+    show. The version is checked through `pc_root` first, so an id the campaign
+    cannot see at all is a 404 rather than an empty list."""
+    pcs.require_version(pc_root(cid, pid), pid, vid)
+    croot = croot_of(cid)
+    if not pcs.pc_exists(croot, pid):
+        return []
+    return pcs.list_revisions(croot, pid, vid)
+
+
+def pc_revision(cid: str, pid: str, vid: str, rid: str) -> dict:
+    """One entry of `pc_revisions`. Raises `pcs.PCRevisionNotFoundError` for an
+    inherited PC, which has no campaign history to hold it."""
+    pcs.require_version(pc_root(cid, pid), pid, vid)
+    croot = croot_of(cid)
+    if not pcs.pc_exists(croot, pid):
+        raise pcs.PCRevisionNotFoundError(rid)
+    return pcs.read_revision(croot, pid, vid, rid)
 
 
 def tagline(cid: str, char_id: str, *, v: View | None = None) -> str:

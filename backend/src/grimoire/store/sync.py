@@ -189,7 +189,12 @@ def _advance_actor(cid: str, kind: str, actor_id: str, *, copy: bool) -> bool:
         src = wroot / kind / actor_id / f"{vid}.{ext}"
         dst = croot / kind / actor_id / f"{vid}.{ext}"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        atomic.write_text(dst, src.read_text(encoding="utf-8"))
+        text = src.read_text(encoding="utf-8")
+        if kind == "pcs":
+            # Accepting the world's text over a diverged copy discards the
+            # campaign's newest edit -- keep it, so history can return it (#67).
+            pcs.keep_before_overwrite(croot, actor_id, vid, text)
+        atomic.write_text(dst, text)
     appearances_versions.set_base(cid, kind, actor_id, world_h)
     return True
 

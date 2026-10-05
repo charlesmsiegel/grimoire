@@ -3,7 +3,8 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import Markdown from "react-markdown";
 import { markdownImageComponents } from "../markdown/MarkdownImage";
 import remarkGfm from "remark-gfm";
-import { api, type EntityScope, type ModuleDetail, type PCDetail, type Persona, type VersionRef } from "../api/client";
+import { api, type EntityScope, type ModuleDetail, type PCDetail, type PCRevision, type Persona,
+         type VersionRef } from "../api/client";
 import { errorText } from "../api/errors";
 import { thumbSet } from "../api/thumbs";
 import { AvatarFocusPicker } from "../components/AvatarFocusPicker";
@@ -17,8 +18,11 @@ import { initialsOf } from "../components/Portrait";
 import { sectionHref } from "../worldPaths";
 import { PCArtTab } from "../components/pc/PCArtTab";
 import { MobileArtEntry } from "../components/MobileArtEntry";
+import { whenLabel } from "../components/turnLabels";
 
-const BLANK: Persona = { name: "", pronouns: "", summary: "", description: "", birthdate: "" };
+const BLANK: Persona = {
+  name: "", pronouns: "", summary: "", description: "", birthdate: "", goals: "", player_notes: "",
+};
 type Tab = "persona" | "lore" | "art" | "sheet";
 type PCImage = { name: string; v: string };
 
@@ -62,6 +66,12 @@ function PCRecord({ campaign }: { campaign: boolean }) {
   const [locked, setLocked] = useState<string | null>(null);
   const [worldVersions, setWorldVersions] = useState<VersionRef[]>([]);
   const [importVid, setImportVid] = useState("");
+  // Revision history (#67): the selected version's earlier texts, and the one
+  // being looked at instead of the current text. `null` revisions is "not
+  // loaded / could not load", which the column says rather than "none".
+  const [revisions, setRevisions] = useState<PCRevision[] | null>(null);
+  const [revisionError, setRevisionError] = useState<string | null>(null);
+  const [revision, setRevision] = useState<(PCRevision & { persona: Persona }) | null>(null);
   const imageRequest = useRef(0);
   const recordRequest = useRef(0);
   const selectedVid = useRef("");
@@ -139,7 +149,36 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     return () => { active = false; };
   }, [wid, campaign, cid, pid]);
 
+  // Keyed on `detail` as well as `vid`: every save, restore and version
+  // create ends in a fresh `read`, so a new detail is exactly "history may have
+  // moved". A stale answer for a version since switched away from is dropped.
+  useEffect(() => {
+    if (!vid || !detail) return;
+    let active = true;
+    setRevisionError(null);
+    api.listPCRevisions(scope, pid, vid)
+      .then((list) => { if (active) setRevisions(list); })
+      .catch((err: unknown) => { if (active) { setRevisions(null); setRevisionError(errorText(err)); } });
+    return () => { active = false; };
+  }, [vid, detail]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function openRevision(rev: PCRevision) {
+    setError(null);
+    try {
+      const persona = await api.readPCRevision(scope, pid, vid, rev.id);
+      if (live.current && selectedVid.current === vid) { setRevision({ ...rev, persona }); setTab("persona"); }
+    } catch (err: unknown) { setError(errorText(err)); }
+  }
+  async function restoreRevision() {
+    if (!revision) return;
+    const rid = revision.id;
+    await run(() => api.restorePCRevision(scope, pid, vid, rid), async () => {
+      setRevision(null); await read(vid);
+    });
+  }
+
   function switchVersion(version: string) {
+    setRevision(null);
     recordRequest.current++;
     imageRequest.current++;
     setVid(version);
@@ -231,11 +270,26 @@ function PCRecord({ campaign }: { campaign: boolean }) {
     </ColumnSection>}
     {persona.pronouns && <ColumnSection label="Pronouns"><div className="field-hint">{persona.pronouns}</div></ColumnSection>}
     {persona.summary && <ColumnSection label="Summary"><div className="field-hint">{persona.summary}</div></ColumnSection>}
+    {persona.goals && <ColumnSection label="Goals"><div className="field-hint">{persona.goals}</div></ColumnSection>}
+    {persona.player_notes && <ColumnSection label="Notes for the narrator">
+      <div className="field-hint">{persona.player_notes}</div></ColumnSection>}
     {persona.birthdate && <ColumnSection label="Birthdate"><BirthdateDisplay scope={scope} value={persona.birthdate} /></ColumnSection>}
     {detail && <ColumnSection label="Tags"><div className="chips">
       {detail.meta.tags.map((t) => <span key={t} className="chip on">{campaign ? t : tags[t] ?? t}</span>)}
       {!detail.meta.tags.length && <span className="field-hint">no tags</span>}
     </div></ColumnSection>}
+    {detail && <ColumnSection label="History">
+      {revisionError ? <div className="field-hint">Could not load history: {revisionError}</div>
+        : revisions === null ? null
+        : revisions.length === 0 ? <div className="field-hint">No earlier revisions.</div>
+        : <div className="pc-history">{revisions.map((r) =>
+            <button key={r.id} type="button" disabled={mode === "edit"}
+                    title={mode === "edit" ? "Save or cancel the edit first" : undefined}
+                    className={"subtle history-row" + (revision?.id === r.id ? " active" : "")}
+                    onClick={() => void openRevision(r)}>
+              {whenLabel(r.saved)}{r.name !== name ? ` · ${r.name}` : ""}
+            </button>)}</div>}
+    </ColumnSection>}
     {campaign && detail && <LibraryPanel key={`${cid}:pcs:${pid}`} cid={cid} kind="pcs" id={pid}
                                         onMoved={() => { void read(vid, true); }} />}
   </>;
@@ -262,13 +316,32 @@ function PCRecord({ campaign }: { campaign: boolean }) {
           </button>)}
       </div>
       <div className="card-pane-body" role="tabpanel">
-        {tab === "persona" && (mode === "view" ? <>
+        {tab === "persona" && (mode === "view" ? revision ? <div className="pc-revision">
+          <div className="banner">Earlier text, replaced {whenLabel(revision.saved)}. Read-only.</div>
+          <div className="form-actions">
+            <button className="subtle" onClick={() => setRevision(null)}>Back to current</button>
+            <button className="primary" onClick={() => void restoreRevision()}>Restore this text</button>
+          </div>
+          <h3>{revision.persona.name}</h3>
+          {([["Pronouns", revision.persona.pronouns], ["Summary", revision.persona.summary],
+             ["Goals", revision.persona.goals], ["Notes for the narrator", revision.persona.player_notes],
+             ["Birthdate", revision.persona.birthdate]] as const)
+            .filter(([, v]) => v).map(([label, v]) =>
+              <div key={label} className="side-section"><h4>{label}</h4><div className="field-hint">{v}</div></div>)}
+          <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{revision.persona.description}</Markdown></div>
+        </div> : <>
           <div className="form-actions"><button className="subtle" onClick={() => setMode("edit")}>Edit</button></div>
           <div className="detail-rendered"><Markdown components={markdownImageComponents} remarkPlugins={[remarkGfm]}>{persona.description}</Markdown></div>
         </> : <div className="form">
-          <Field label="Name"><input value={persona.name} onChange={(e) => setPersona({ ...persona, name: e.target.value })} /></Field>
-          <Field label="Pronouns"><input value={persona.pronouns} onChange={(e) => setPersona({ ...persona, pronouns: e.target.value })} /></Field>
-          <Field label="Summary"><input value={persona.summary} onChange={(e) => setPersona({ ...persona, summary: e.target.value })} /></Field>
+          <Field label="Name"><input type="text" value={persona.name} onChange={(e) => setPersona({ ...persona, name: e.target.value })} /></Field>
+          <Field label="Pronouns"><input type="text" value={persona.pronouns} onChange={(e) => setPersona({ ...persona, pronouns: e.target.value })} /></Field>
+          <Field label="Summary"><input type="text" value={persona.summary} onChange={(e) => setPersona({ ...persona, summary: e.target.value })} /></Field>
+          {/* Single-line on purpose: both are frontmatter scalars, which the
+              store folds to one line (#65). */}
+          <Field label="Goals"><input type="text" value={persona.goals ?? ""}
+            onChange={(e) => setPersona({ ...persona, goals: e.target.value })} /></Field>
+          <Field label="Notes for the narrator"><input type="text" value={persona.player_notes ?? ""}
+            onChange={(e) => setPersona({ ...persona, player_notes: e.target.value })} /></Field>
           <Field label="Birthdate"><BirthdatePicker scope={scope} value={persona.birthdate ?? ""}
             onChange={(birthdate) => setPersona({ ...persona, birthdate })} ariaLabel="Birthdate" /></Field>
           <Field label="Description"><textarea value={persona.description} rows={8}

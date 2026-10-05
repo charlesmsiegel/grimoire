@@ -45,7 +45,7 @@ import {
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
   type Notice,
-  type PCDetail, type PCSummary, type Persona, type PinRule, type PricingEntry,
+  type PCDetail, type PCRevision, type PCSummary, type Persona, type PinRule, type PricingEntry,
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
@@ -68,7 +68,7 @@ import {
   type ShellPayload, type TodoPayload,
   type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
-  type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta,
+  type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta, type WorldProfile,
 } from "./types";
 
 /** Announce a campaign mutation once it has actually landed, passing the
@@ -1175,14 +1175,19 @@ export const api = {
   // The config carries `first_run`, which is partly a statement about whether
   // the store holds anything — so creating the first world changes the config
   // response even though nothing wrote to config.md through this client (#194).
-  createWorld: (name: string) =>
-    request<{ id: string }>("POST", "/api/worlds", { name }).then((r) => {
+  /** `profile` is optional (#38): a name alone makes the world it always made. */
+  createWorld: (name: string, profile?: Partial<WorldProfile>) =>
+    request<{ id: string }>("POST", "/api/worlds", { name, ...profile }).then((r) => {
       invalidateConfigCache();
       return r;
     }),
   renameWorld: (wid: string, name: string) =>
     request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`,
                                           { name }).then(notifyShell),
+  /** Edit the world's profile and/or name (#38). A field left out of `patch`
+   *  is left as it is on the server. */
+  updateWorld: (wid: string, patch: Partial<WorldProfile> & { name?: string }) =>
+    request<{ id: string; name: string }>("PUT", `/api/worlds/${wid}`, patch).then(notifyShell),
   deleteWorld: (wid: string) => request<{ ok: boolean }>("DELETE", `/api/worlds/${wid}`),
   /** Fork `wid` into a brand-new world called `name` (#41) — a deep copy of the
    *  whole directory, sharing nothing with the world it came from and changing
@@ -2014,6 +2019,16 @@ export const api = {
     request<{ ok: boolean }>("PUT", `${entityBase(scope)}/pcs/${pid}/versions/${vid}`, { persona }),
   deletePCVersion: (scope: EntityScope, pid: string, vid: string) =>
     request<{ ok: boolean }>("DELETE", `${entityBase(scope)}/pcs/${pid}/versions/${vid}`),
+  // PC revision history (#67): the earlier texts of one version. A campaign
+  // lists only what was edited in that campaign, never the world's.
+  listPCRevisions: (scope: EntityScope, pid: string, vid: string) =>
+    request<PCRevision[]>("GET", `${entityBase(scope)}/pcs/${pid}/versions/${vid}/revisions`,
+                          undefined, { fresh: true }),
+  readPCRevision: (scope: EntityScope, pid: string, vid: string, rid: string) =>
+    request<Persona>("GET", `${entityBase(scope)}/pcs/${pid}/versions/${vid}/revisions/${rid}`),
+  restorePCRevision: (scope: EntityScope, pid: string, vid: string, rid: string) =>
+    request<{ ok: boolean }>("POST",
+      `${entityBase(scope)}/pcs/${pid}/versions/${vid}/revisions/${rid}/restore`),
   // PC images (#219) — the character calls one folder over. Kept as their own
   // entries rather than folded into `putImage` & co. with a kind argument: the
   // character helpers are called from a dozen places that have no PC in hand,

@@ -10,12 +10,14 @@ from __future__ import annotations
 # an as-yet-unbound `worlds.paths`.
 from . import lifecycle, paths, read, staging  # noqa: F401
 from .lifecycle import (  # noqa: F401
+    WorldChangedError,
     WorldInUse,
     create_world,
     delete_world,
     fork_world,
     rename_world,
     touch,
+    update_world,
 )
 from .paths import (  # noqa: F401
     WorldNotFound,
@@ -27,5 +29,5 @@ from .paths import (  # noqa: F401
     world_meta_path,
     world_root,
 )
-from .read import has_worlds, list_worlds, read_world, world_name  # noqa: F401
+from .read import has_worlds, list_worlds, profile_of, read_world, world_name  # noqa: F401
 from .staging import WorldIdConflictError  # noqa: F401

@@ -52,6 +52,7 @@ from ..tracker import fields as tracker_fields
 from ..tracker import settings as tracker_settings
 from ..tracker import view as tracker_view
 from ..tracker import walk as tracker_walk
+from ..worlds import read as worlds_read
 
 # Module objects, not names: `_assemble` binds a local `cast` (hence the alias),
 # and `cast._drift_roster` has to stay patchable from the test that counts it.
@@ -362,6 +363,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         "response_candidates": [{"ref": e["ref"], "name": e["name"]}
                                 for e in (eligible_speakers or [])],
         "global_system_prompt": cfg.get("system_prompt", ""),
+        # The campaign's world as its author describes it (#38), read live
+        # through the world like every record the campaign inherits. Public
+        # framing, so not on the actor-scoped blanking list below.
+        "world_overview": worlds_read.profile_of(campaigns_read.world_root_of(cid)),
         "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
         "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
         "budget": targets["opening" if opening_narrator else "continuation"],
@@ -733,6 +738,13 @@ SECTIONS = [
     Section("model_guidance", "Model guidance", "scene/sections/model_guidance.j2", pack.LOCK_IN),
     Section("card_system_prompts", "System prompt",
             "scene/sections/card_system_prompts.j2", pack.LOCK_IN),
+    # What the world is (#38): genre, tone, themes and the author's description,
+    # off `world.md`. BACKGROUND -- it frames, and the cards and world info
+    # already carry most of it piecemeal, so it gives way before anything about
+    # the scene in hand. Renders nothing for a world with no profile, so a
+    # campaign whose world never had one sends the prompt it always sent.
+    Section("world_overview", "World overview",
+            "scene/sections/world_overview.j2", pack.BACKGROUND),
     Section("character_descriptions", "Character descriptions",
             "scene/sections/character_descriptions.j2", pack.LOCK_IN),
     # Three sections rather than one, because they are three kinds of thing and

@@ -30,6 +30,7 @@ from .. import store
 from ..llm import LLMClient
 from . import runs
 from .common import (
+    PC_HISTORY_MISSES,
     _content_fields,
     _dump,
     _require_connection,
@@ -41,6 +42,7 @@ from .common import (
     draft_completion,
     get_llm,
     image_draft_prompt,
+    pc_history_404,
 )
 from .models import (
     AvatarFocus,
@@ -57,6 +59,8 @@ from .models import (
     ScenarioUrlBody,
     SheetBody,
     SheetCreationBody,
+    WorldCreate,
+    WorldUpdate,
 )
 
 router = APIRouter()
@@ -76,8 +80,9 @@ def get_worlds():
 
 
 @router.post("/worlds")
-def post_world(body: NameBody):
-    wid = store.worlds.create_world(body.name)
+def post_world(body: WorldCreate):
+    wid = store.worlds.create_world(body.name, genre=body.genre, tone=body.tone,
+                                    themes=body.themes, description=body.description)
     # A store with a world in it has been set up, whatever happens to that world
     # afterwards -- recording it here rather than waiting for a config read is
     # what makes "deleting your content does not reopen the wizard" true even
@@ -112,15 +117,20 @@ def get_world(wid: str):
 
 
 @router.put("/worlds/{wid}")
-def put_world(wid: str, body: NameBody):
-    name = body.name.strip()
-    if not name:
+def put_world(wid: str, body: WorldUpdate):
+    """Rename the world and/or edit its profile (#38). A field left out is left
+    alone; a name that IS sent must say something."""
+    name = None if body.name is None else body.name.strip()
+    if name is not None and not name:
         raise HTTPException(status_code=400, detail="name is required")
     try:
-        store.worlds.rename_world(wid, name)
+        meta = store.worlds.update_world(wid, name=name, genre=body.genre, tone=body.tone,
+                                         themes=body.themes, description=body.description)
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found")
-    return {"id": wid, "name": name}
+    except store.worlds.WorldChangedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": wid, "name": meta.get("name", wid)}
 
 
 @router.delete("/worlds/{wid}")
@@ -516,18 +526,61 @@ def post_pc_version(wid: str, pid: str, body: PersonaVersionCreate):
 
 @router.put("/worlds/{wid}/pcs/{pid}/versions/{vid}")
 def put_pc_version(wid: str, pid: str, vid: str, body: PersonaVersionUpdate):
+    root = _world_root_or_404(wid)
     try:
-        store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
-                                         scope="world", scope_id=wid,
-                                         actor_ref=f"pcs:{pid}")
+        # Under the world's actor lock since #67: a save now reads the text it
+        # replaces into history, and two unserialized saves would each keep the
+        # same old text and lose the first one's from the trail altogether.
+        with store.locks.world_actor_lock(wid):
+            store.actor_names.require_unique(store.actor_names.persona_name(body.persona),
+                                             scope="world", scope_id=wid,
+                                             actor_ref=f"pcs:{pid}")
+            store.pcs.update_version(root, pid, vid, body.persona)
     except store.actor_names.ActorNameError as exc:
         raise HTTPException(409, detail=str(exc)) from exc
-    try:
-        store.pcs.update_version(_world_root_or_404(wid), pid, vid, body.persona)
     except store.pcs.PCNotFound:
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+# ---- world PC revision history (#67) — the earlier texts of one version, as
+# `store/pcs.py` keeps them on every editor save. Literal segments past
+# `/versions/{vid}/`, so nothing in `entities`' catch-alls can claim them.
+@router.get("/worlds/{wid}/pcs/{pid}/versions/{vid}/revisions")
+def get_pc_revisions(wid: str, pid: str, vid: str):
+    try:
+        return store.pcs.list_revisions(_world_root_or_404(wid), pid, vid)
+    except PC_HISTORY_MISSES as exc:
+        raise pc_history_404(exc) from None
+
+
+@router.get("/worlds/{wid}/pcs/{pid}/versions/{vid}/revisions/{rid}")
+def get_pc_revision(wid: str, pid: str, vid: str, rid: str):
+    try:
+        return store.pcs.read_revision(_world_root_or_404(wid), pid, vid, rid)
+    except PC_HISTORY_MISSES as exc:
+        raise pc_history_404(exc) from None
+
+
+@router.post("/worlds/{wid}/pcs/{pid}/versions/{vid}/revisions/{rid}/restore")
+def post_pc_revision_restore(wid: str, pid: str, vid: str, rid: str):
+    """Make an earlier text current again. Held to the same name rule as an
+    ordinary save (`put_pc_version`): the restored name may since have been
+    taken by another actor in this world."""
+    root = _world_root_or_404(wid)
+    try:
+        with store.locks.world_actor_lock(wid):    # see put_pc_version
+            persona = store.pcs.read_revision(root, pid, vid, rid)
+            store.actor_names.require_unique(store.actor_names.persona_name(persona),
+                                             scope="world", scope_id=wid,
+                                             actor_ref=f"pcs:{pid}")
+            store.pcs.restore_revision(root, pid, vid, rid)
+    except PC_HISTORY_MISSES as exc:
+        raise pc_history_404(exc) from None
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
 
 

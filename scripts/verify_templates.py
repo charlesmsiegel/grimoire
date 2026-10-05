@@ -462,7 +462,9 @@ mod_dir = Path(os.environ["GRIMOIRE_HOME"]) / "modules" / "keeper-arts"
 (mod_dir / "rules" / "core.md").write_text("---\nalways: true\n---\nKeep every roll honest.\n",
                                            encoding="utf-8")
 
-wid = worlds.create_world("W")
+# A world profile (#38), so the World overview section renders here.
+wid = worlds.create_world("W", genre="Coastal gothic", tone="Wry dread",
+                          themes=["salt", "debt"], description="A drowned coast of toll-roads.")
 cid = campaigns.create_campaign("Run", wid, module="keeper-arts")
 croot = campaigns.campaign_root(cid)
 sid = scenes.create_scene(cid, "S1")
@@ -481,7 +483,9 @@ sheets.write(cid, "characters", sera, "keeper", {"grit": {"current": 2, "max": 5
 
 persona = pcs.blank_persona("Hero")
 persona.update({"pronouns": "she/her", "summary": "A debt-ridden courier.",
-                "description": "Quick, kind, unlucky.", "birthdate": "2000-07-05"})
+                "description": "Quick, kind, unlucky.", "birthdate": "2000-07-05",
+                # the profile fields (#65), so pc_block renders its last lines
+                "goals": "Clear the debt.", "player_notes": "Never speak for her."})
 pid, _ = pcs.create_pc(croot, "Hero", [], persona=persona)
 ap.appear(cid, sid, "pcs", pid, "default", "player")
 
@@ -867,7 +871,12 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
         resolved_style = styles.read_style(budget["style_id"]) if budget["style_id"] else None
     except styles.StyleNotFound:
         resolved_style = None
+    world = worlds.read_world(campaign_meta["world"])
     return {"global_system_prompt": cfg.get("system_prompt", ""),
+            # Mirrors context._assemble: the campaign world's profile (#38).
+            "world_overview": {"genre": world["meta"]["genre"], "tone": world["meta"]["tone"],
+                               "themes": world["meta"]["themes"],
+                               "description": world["body"].strip()},
             "budget": targets["continuation"],
             "prose_style_name": resolved_style["meta"]["name"] if resolved_style else "",
             "prose_style_body": resolved_style["body"].strip() if resolved_style else "",
@@ -940,6 +949,7 @@ def rendered_system(data: dict, opener: bool = False) -> str:
               "scene/sections/natural_prose.j2",
               "scene/sections/model_guidance.j2",
               "scene/sections/card_system_prompts.j2",
+              "scene/sections/world_overview.j2",
               "scene/sections/character_descriptions.j2",
               # Catalog order: the voice block sits between who a character IS
               # and what is true of them right now (context.assemble.SECTIONS).

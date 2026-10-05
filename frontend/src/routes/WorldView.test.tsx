@@ -63,6 +63,8 @@ vi.mock("../api/client", () => ({
     listUndescribedImages: vi.fn(), countUndescribedImages: vi.fn(),
     rememberedWorld: vi.fn(), rememberedCharacters: vi.fn(), rememberedAppearances: vi.fn(),
     listPCs: vi.fn(), readPC: vi.fn(),
+    // the PC page asks for the selected version's history (#67)
+    listPCRevisions: vi.fn(() => Promise.resolve([])),
     listPCImages: vi.fn(), getCalendarMonths: vi.fn(),
     listTags: vi.fn(),
     getTrackerFields: vi.fn(), setTrackerFields: vi.fn(),

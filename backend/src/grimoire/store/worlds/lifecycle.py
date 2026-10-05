@@ -21,8 +21,58 @@ class WorldInUse(Exception):
         super().__init__(f"world is used by campaigns: {', '.join(names)}")
 
 
-def create_world(name: str) -> str:
+class WorldChangedError(Exception):
+    """`update_world` kept finding `world.md` rewritten under it."""
+
+
+#: The world profile's frontmatter keys (#38). The description is the body.
+#: `themes` rather than `tags`: a world already has a tag VOCABULARY (`tags.md`,
+#: which gates greetings against PC tags), and these gate nothing -- they say
+#: what the world is about. Absent on a world created before them, which reads
+#: as empty, so no migration.
+PROFILE_KEYS = ("genre", "tone", "themes")
+
+
+def _one_line(value: object) -> str:
+    """A frontmatter scalar folded to the single line `dump_frontmatter` can
+    store -- see `pcs._one_line`, the same constraint."""
+    return " ".join(str(value or "").split())
+
+
+def _themes_text(themes) -> str:
+    """Themes as the comma-joined scalar the store keeps (the `keys`/`owners`
+    convention). A comma inside one theme would split it on the way back, so it
+    folds to a space; empties drop; order is the author's, duplicates removed."""
+    out: list[str] = []
+    for raw in themes or ():
+        t = _one_line(str(raw).replace(",", " "))
+        if t and t not in out:
+            out.append(t)
+    return ",".join(out)
+
+
+def _apply_profile(meta: dict, *, genre=None, tone=None, themes=None) -> None:
+    """Set the given profile keys on `meta`; an emptied one is removed rather
+    than kept as `''`, so a world that never had a profile keeps the file it
+    always had."""
+    for key, value in (("genre", None if genre is None else _one_line(genre)),
+                       ("tone", None if tone is None else _one_line(tone)),
+                       ("themes", None if themes is None else _themes_text(themes))):
+        if value is None:
+            continue
+        if value:
+            meta[key] = value
+        else:
+            meta.pop(key, None)
+
+
+def create_world(name: str, *, genre: str = "", tone: str = "", themes=(),
+                 description: str = "") -> str:
     """Make an empty world and return its id.
+
+    The profile (#38) -- genre, tone, themes, and the description as the body
+    -- is optional; a world created with none of it writes exactly the
+    `world.md` a name-only create always wrote.
 
     Staged and published by one rename, like the fork and the bundle import --
     and here that is not about crash-safety (there is almost nothing to write)
@@ -43,9 +93,11 @@ def create_world(name: str) -> str:
     ensure_home()
     base = slugify(name)
     now = now_iso()
+    meta = {"name": name, "created": now, "updated": now}
+    _apply_profile(meta, genre=genre, tone=tone, themes=themes)
     with staging.staging_tree() as tree:
-        atomic.write_text(tree / "world.md",
-                          dump_frontmatter({"name": name, "created": now, "updated": now}, ""))
+        atomic.write_text(paths.meta_path_of(tree),
+                          dump_frontmatter(meta, _body(description)))
         return staging.publish(tree, base,
                                uniquify(base, lambda c: paths.world_root(c).exists()))
 
@@ -172,8 +224,47 @@ def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:
             and (Path(directory) / n).is_file()}
 
 
+def _body(description: str | None) -> str:
+    text = (description or "").strip()
+    return f"{text}\n" if text else ""
+
+
+def update_world(wid: str, *, name: str | None = None, genre: str | None = None,
+                 tone: str | None = None, themes=None,
+                 description: str | None = None) -> dict:
+    """Change any of the world's name and profile (#38); `None` leaves a field
+    as it is. Returns the frontmatter as written.
+
+    Worlds have no lock, and `world.md` has other unlocked writers -- `touch`
+    after a library edit, the module binding -- so this is a read-modify-write
+    that re-reads before writing and starts over if the file moved, rather than
+    carrying a stale `module` or name back over somebody else's change.
+    `_restamp` gives up in that case because a sort key is cheap to lose; an
+    edit the user typed is not, so it retries and only then refuses with
+    `WorldChangedError`. A rewrite landing between the re-read and the write
+    itself can still be lost -- the window `_restamp` also leaves, and closing
+    it needs the world lock the store does not have."""
+    mp = paths.world_meta_path(wid)
+    for _attempt in range(3):
+        if not mp.exists():
+            raise paths.WorldNotFound(wid)
+        before = mp.read_text(encoding="utf-8")
+        meta, body = parse_frontmatter(before)
+        if name is not None:
+            meta["name"] = name
+        _apply_profile(meta, genre=genre, tone=tone, themes=themes)
+        if description is not None:
+            body = _body(description)
+        meta["updated"] = now_iso()
+        if mp.read_text(encoding="utf-8") != before:
+            continue
+        atomic.write_text(mp, dump_frontmatter(meta, body))
+        return meta
+    raise WorldChangedError(f"world {wid} kept changing while it was being saved")
+
+
 def rename_world(wid: str, name: str) -> None:
-    _restamp(wid, name=name)
+    update_world(wid, name=name)
 
 
 def touch(wid: str) -> None:

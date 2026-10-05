@@ -1,0 +1,12 @@
+{#- The campaign's world, as its author describes it (#38): the profile on the
+    world's `world.md`. Renders nothing at all for a world with no profile.
+    Vars: world_overview ({genre: str, tone: str, themes: [str],
+    description: str — all "" / [] when unset}). -#}
+{%- set w = world_overview -%}
+{%- if w.genre or w.tone or w.themes or w.description -%}
+{%- set lines = [("Genre: " ~ w.genre) if w.genre else "",
+                 ("Tone: " ~ w.tone) if w.tone else "",
+                 ("Themes: " ~ (w.themes | join(", "))) if w.themes else ""] | select | list -%}
+# World overview
+{{ ([lines | join("\n"), w.description] | select | join("\n\n")).strip() }}
+{%- endif -%}

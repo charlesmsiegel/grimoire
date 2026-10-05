@@ -20,7 +20,11 @@ def card_name(card: dict) -> str:
 
 
 def persona_name(persona: dict) -> str:
-    return str(persona.get("name") or "")
+    """The name a persona will be STORED under -- whitespace folded, exactly as
+    `pcs._dump_persona` folds every frontmatter scalar. Checking the raw value
+    would let `"Mara\nVance"` past uniqueness and land as an existing "Mara
+    Vance" (#65)."""
+    return " ".join(str(persona.get("name") or "").split())
 
 
 def _rows(scope: str, scope_id: str) -> list[dict]:

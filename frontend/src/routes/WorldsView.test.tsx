@@ -394,3 +394,22 @@ test("a prefetch that fails is swallowed -- the page's own read is the one that 
   await sleep(10);
   expect(screen.queryByText(/offline/)).toBeNull();
 });
+
+test("a world can be created with its profile, and a card shows the genre", async () => {
+  (api.listWorlds as any).mockResolvedValue([
+    { id: "realm", name: "Realm", genre: "Coastal gothic", created: "", updated: "", counts: {} }]);
+  render(<MemoryRouter><WorldsView /></MemoryRouter>);
+  expect(await screen.findByText("Coastal gothic")).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("World name"), { target: { value: "Saltmarch" } });
+  expect(screen.queryByLabelText("Genre")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "More details" }));
+  fireEvent.change(screen.getByLabelText("Genre"), { target: { value: "Gothic" } });
+  fireEvent.change(screen.getByLabelText("Tone"), { target: { value: "Dread" } });
+  fireEvent.change(screen.getByLabelText("Themes"), { target: { value: "salt, debt, " } });
+  fireEvent.change(screen.getByLabelText("Description"), { target: { value: "A coast." } });
+  fireEvent.click(screen.getByRole("button", { name: "Create" }));
+  await waitFor(() => expect(api.createWorld).toHaveBeenCalledWith("Saltmarch", {
+    genre: "Gothic", tone: "Dread", themes: ["salt", "debt"], description: "A coast." }));
+  // the form closes behind it, ready for the next one-line create
+  await waitFor(() => expect(screen.queryByLabelText("Genre")).not.toBeInTheDocument());
+});

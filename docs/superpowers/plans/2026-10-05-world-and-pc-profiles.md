@@ -23,11 +23,11 @@ slices touch the same files; #38 touches none of them).
 1. `store/pcs.py`: `_history_dir(root, pid, vid)`, `_snapshot(root, pid, vid,
    old_text)`, retention `HISTORY_KEEP = 20`; `update_version` snapshots when
    text changes; `list_revisions`, `read_revision`, `restore_revision`,
-   `PCRevisionNotFound`; `delete_version` removes the version's history dir.
+   `PCRevisionNotFoundError`; `delete_version` removes the version's history dir.
    All writes via `atomic.write_text`; deletes via `unlink`/`rmtree` on paths
    under the PC dir.
 2. Routes: world twins in `routes/worlds.py`, campaign twins in
-   `routes/campaigns.py` (campaign root for reads; lock + `ensure_actor_writable`
+   `routes/campaigns.py` (reads via `overlay.pc_revisions`; lock + `ensure_actor_writable`
    + name-uniqueness for restore).
 3. Tests: store (snapshot on change only, retention, `dir_hash`/`snapshot`
    unchanged, delete_version clears, restore round-trip + undoable, unsafe rid

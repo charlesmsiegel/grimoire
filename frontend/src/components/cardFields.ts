@@ -31,5 +31,7 @@ export const PERSONA_FIELDS: { key: string; label: string }[] = [
   { key: "name", label: "Name" },
   { key: "pronouns", label: "Pronouns" },
   { key: "summary", label: "Summary" },
+  { key: "goals", label: "Goals" },
+  { key: "player_notes", label: "Notes for the narrator" },
   { key: "description", label: "Description" },
 ];

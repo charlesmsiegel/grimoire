@@ -268,6 +268,26 @@ class NameBody(BaseModel):
     name: str
 
 
+class WorldCreate(BaseModel):
+    """`POST /worlds` (#38). Only `name` is required, so the body every client
+    sent before the profile existed is still a complete one."""
+    name: str
+    genre: str = ""
+    tone: str = ""
+    themes: list[str] = []
+    description: str = ""
+
+
+class WorldUpdate(BaseModel):
+    """`PUT /worlds/{wid}`: every field optional, and an absent one is left as
+    it is -- which keeps the rename-only `{name}` body meaning what it meant."""
+    name: str | None = None
+    genre: str | None = None
+    tone: str | None = None
+    themes: list[str] | None = None
+    description: str | None = None
+
+
 class RollBody(BaseModel):
     notation: str
     label: str | None = None
