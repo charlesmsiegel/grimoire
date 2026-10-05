@@ -273,8 +273,61 @@ def test_a_failing_identity_staging_pass_fails_only_the_phase(client, scene, mon
 
     assert _phase(body, "identity")["status"] == "failed"
     assert body["identity"]["status"] == "failed"
+    assert body["identity"]["reason"] == (
+        "the duplicate check's staging step failed; rows staged without alternatives")
     [edit] = _plot_edits(body)
     assert edit["identity_check"]["alternatives"] == []
+
+
+def test_a_defect_in_the_rewrite_fails_only_the_phase(client, scene, monkeypatch):
+    """Steps 9-10 (rewrite, counts, log row) sit in a try of their own: a
+    defect there stages the extraction's rows as extracted, never fails the
+    absorb."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+
+    def broken(self, parsed):
+        raise ZeroDivisionError("division by zero")
+
+    monkeypatch.setattr(identity.Examination, "rewritten", broken)
+    _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+         _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger"}))
+
+    body = _absorb(client, cid, sid)
+
+    assert _phase(body, "identity")["status"] == "failed"
+    block = body["identity"]
+    assert (block["status"], block["counts"]) == ("failed", {})
+    assert block["reason"] == "duplicate check failed: division by zero"
+    [edit] = _plot_edits(body)
+    assert "identity_check" not in edit
+    assert edit["target"]["id"] == "recover-the-harbour-ledger"
+    assert len(_identity_errors(cid)) == 1
+
+
+def test_an_examination_error_fails_only_the_phase(client, scene, monkeypatch):
+    """A non-LLM failure in `examine` (a store read) is the phase's status,
+    not the absorb's: the row stages as new and the resolver is never asked."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+
+    def broken(*a, **k):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr(identity, "examine", broken)
+    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger"}))
+
+    body = _absorb(client, cid, sid)
+
+    assert identity_requests(fake) == []
+    block = body["identity"]
+    assert (block["status"], block["attempted"]) == ("failed", False)
+    assert block["reason"] == "duplicate check failed: disk gone"
+    [edit] = _plot_edits(body)
+    assert "identity_check" not in edit
+    assert edit["target"]["id"] == "recover-the-harbour-ledger"
+    assert len(_identity_errors(cid)) == 1
 
 
 # ------------------------------------------------------------- budget
