@@ -61,7 +61,10 @@ primary checkout's interpreter, which reads the worktree's sources because the
 script puts its own `backend/src` first on `sys.path`.
 
 `apply` prints one row per record with `created`, `updated` or `unchanged`, plus the
-World's id. Every later command needs that id.
+World's id. Every later command needs that id, **including every later `apply`**: a
+plan whose `world` names a World that already exists is refused unless
+`--world-id <wid>` says to add to it. That keeps a new concept from being merged
+into a library World that happens to share its name.
 
 ## Workflow
 
@@ -123,28 +126,28 @@ A complete example, with every key shown. Omit anything you don't need.
      "summary": "A stranger off the packet boat.", "description": "..."}
   ],
   "locations": [
-    {"name": "The Tide Hall", "body": "Where the guild meets ...",
-     "keys": ["Tide Hall"], "fields": {"climate": "temperate-coastal"}}
+    {"name": "The Counting House", "body": "Where the guild meets ...",
+     "keys": ["Counting House"], "fields": {"climate": "temperate-coastal"}}
   ],
   "lore": [
-    {"name": "The Drowned Bell", "body": "...", "keys": ["Drowned Bell", "bell"]},
-    {"name": "Seraphine's Debt", "body": "...", "owners": ["characters:Seraphine"],
+    {"name": "The Salt Pact", "body": "...", "keys": ["Salt Pact", "pact"]},
+    {"name": "The Ledger", "body": "...", "owners": ["characters:Seraphine"],
      "secrecy": "secret"}
   ],
   "groups": [
-    {"name": "The Tide Guild", "body": "...", "keys": ["Tide Guild", "guild"],
-     "fields": {"leader": "characters:Seraphine", "headquarters": "locations:The Tide Hall"}}
+    {"name": "Salt Circle", "body": "...", "keys": ["Salt Circle", "guild"],
+     "fields": {"leader": "characters:Seraphine", "headquarters": "locations:The Counting House"}}
   ],
   "items": [
-    {"name": "Seraphine's Lantern", "body": "...", "owners": ["characters:Seraphine"],
+    {"name": "Salt Knife", "body": "...", "owners": ["characters:Seraphine"],
      "fields": {"holder": "characters:Seraphine"}}
   ],
   "creatures": [],
   "greetings": [
-    {"name": "Off the Packet Boat", "character": "Seraphine", "location": "The Tide Hall",
+    {"name": "Saltmarch Eve", "character": "Seraphine", "location": "The Counting House",
      "body": "{{char}} looks {{user}} over at the quay ...",
-     "leads_to": ["The Guild's Offer"]},
-    {"name": "The Guild's Offer", "character": "Mara", "present": ["Mara", "Seraphine"],
+     "leads_to": ["The Reckoning"]},
+    {"name": "The Reckoning", "character": "Mara", "present": ["Mara", "Seraphine"],
      "requires_tags": ["Outsider"], "predecessor_join": "all",
      "body": "..."}
   ]
@@ -153,10 +156,14 @@ A complete example, with every key shown. Omit anything you don't need.
 
 **References.** Anywhere a record names another one, write its **name**: a greeting's
 `character`, `present`, `location`, `requires_tags`, `leads_to` and `excludes`, a PC's
-`tags`, and an entry's `owners` and ref `fields`. `owners` and ref fields are spelled
-`<kind>:<name>`, where kind is `characters`, `pcs`, `locations`, `lore`, `items`,
-`groups` or `creatures`. An existing record's id also works. A name the plan creates
-works anywhere in the same plan, in any order.
+`tags`, and an entry's `owners` and ref `fields`. Both are spelled `<kind>:<name>`:
+`owners` takes `characters`, `pcs` or `locations` (the only things that can be
+present in a scene), and each ref field takes the kinds `store/entity_schema.py`
+lists for it (a group's `leader` is a character or PC, its `headquarters` a
+location). A name the plan creates works anywhere in the same plan, in any order.
+An existing record's id also works, but a name always wins. A reference that is
+one record's name and another record's id (the leftover from a rename in the app)
+is refused as ambiguous rather than guessed.
 
 **Per kind:**
 
@@ -184,8 +191,11 @@ can follow them or set its own, but it should be consistent with itself.
 
 **Patch semantics.** A key the plan gives is written, a key it omits is left as it
 is, and a record the plan doesn't mention is never touched. Nothing is ever
-deleted. Re-applying the same plan changes nothing (every row reads `unchanged`), so
-iterate on the plan freely: fix it, re-apply, re-check.
+deleted. Re-applying the same plan changes nothing (the World row reads `found`,
+every other row `unchanged`), so iterate on the plan freely: fix it, re-apply with
+`--world-id`, re-check. A character's card fields are written to its default
+version, and a greeting is re-pointed only when the plan names a different
+character, so a version chosen in the app survives a re-apply.
 
 ### 4. Decide activation, per entry
 
@@ -193,8 +203,9 @@ This is where a World most often does the opposite of what its author meant. It 
 also the decision the prompt is built from (`context/world_state.py`):
 
 - **Keyed, unowned**: enters the prompt when a key appears, whole-word and
-  case-insensitive, in recent scene text. This is the right default for nearly
-  every entry. Keys are the names people will actually *say*: the full name, the
+  case-insensitive, in recent scene text, or when semantic recall judges it close
+  to the scene (`context/semantic.py`), if that is enabled. This is the right
+  default for nearly every entry. Keys are the names people will actually *say*: the full name, the
   short name, an in-world synonym.
 - **Keyless, unowned lore/item/group/creature**: **always on**, in every turn's
   prompt, and every turn pays for it. Reserve it for the few facts that are true of
@@ -261,10 +272,10 @@ $PY backend/scripts/create_world.py apply --plan plan.json --dry-run
 ```
 
 Validates everything that can be checked before writing anything: unknown keys,
-names that don't resolve, duplicate names, actor names already used by another
+wrong types, names that don't resolve or are ambiguous, duplicate names, actor names already used by another
 character or PC in this World or its campaigns, field values, secrecy levels,
 plot-map cycles, the calendar and the module. A plan that fails the dry-run would
-also refuse `apply`, so `apply` never leaves half a World behind. Fix every problem
+also refuse `apply`, so a plan problem never leaves half a World behind. Fix every problem
 it lists, then apply:
 
 ```bash

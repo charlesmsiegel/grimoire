@@ -67,9 +67,14 @@ PC_KEYS = {"name", "tags", "pronouns", "summary", "birthdate", "description"}
 GREETING_KEYS = {"name", "body", "character", "present", "location", "requires_tags",
                  "predecessor_join", "pcless", "phase", "sequence", "optional",
                  "leads_to", "excludes"}
-#: The kinds an `owners` ref may name — what `context.world_state.activate`
-#: compares against the scene's present set.
-OWNER_KINDS = ("characters", "pcs", *ENTITY_KINDS)
+#: The kinds an `owners` ref may name: what `context.world_state.activate`
+#: compares against the scene's present set, which holds the cast and the
+#: current location. Nothing makes an item, a group or a creature present, so
+#: an entry owned by one would never activate -- the app's owner picker
+#: (`frontend/src/api/loreOwners.ts`) offers exactly these three.
+OWNER_KINDS = ("characters", "pcs", "locations")
+#: Plan keys holding a list of names (or one comma-separated string).
+LIST_KEYS = {"keys", "owners", "present", "requires_tags", "leads_to", "excludes"}
 
 
 class PlanError(Exception):
@@ -84,13 +89,29 @@ def _norm(name: str) -> str:
     return name.strip().casefold()
 
 
+def _list_ok(value) -> bool:
+    return value is None or isinstance(value, str) or (
+        isinstance(value, list) and all(isinstance(v, str) for v in value))
+
+
 def _as_list(value) -> list[str]:
-    """A plan list, or a comma-separated string spelling one."""
-    if value is None:
-        return []
+    """A plan list, or a comma-separated string spelling one. Anything else
+    reads as empty: validation (`_list_ok`) has refused it before a write."""
     if isinstance(value, str):
         return [v.strip() for v in value.split(",") if v.strip()]
-    return [str(v).strip() for v in value if str(v).strip()]
+    if not _list_ok(value) or value is None:
+        return []
+    return [v.strip() for v in value if v.strip()]
+
+
+def _unique(values: list[str]) -> list[str]:
+    return list(dict.fromkeys(values))
+
+
+def _one_line(text: str) -> bool:
+    """Frontmatter scalars are single lines, split with `splitlines` -- so is
+    everything that counts as a line boundary there (`entity_schema.referenceable`)."""
+    return text.splitlines() == [text]
 
 
 # ---------------------------------------------------------------------------
@@ -118,11 +139,13 @@ class Index:
             self.ids.setdefault(kind, set()).add(rid)
 
     def lookup(self, kind: str, ref: str) -> str | None:
-        """An id for `ref` in `kind`: an exact id first, then a name."""
+        """An id for `ref` in `kind`: a name first, as find-or-create matches,
+        then an exact id."""
         ref = ref.strip()
-        if ref in self.ids.get(kind, set()):
-            return ref
-        return self.by_kind.get(kind, {}).get(_norm(ref))
+        by_name = self.by_kind.get(kind, {}).get(_norm(ref))
+        if by_name is not None:
+            return by_name
+        return ref if ref in self.ids.get(kind, set()) else None
 
     def named(self, kind: str, name: str) -> str | None:
         """The record called `name`. Find-or-create matches on the name alone:
@@ -131,7 +154,14 @@ class Index:
         return self.by_kind.get(kind, {}).get(_norm(name))
 
     def ambiguous(self, kind: str, ref: str) -> bool:
-        return _norm(ref) in self.dupes.get(kind, set())
+        """Two records share this name, or it is one record's name and another
+        record's id -- the case a rename in the app leaves behind, where the
+        old id now belongs to a record called something else."""
+        ref = ref.strip()
+        if _norm(ref) in self.dupes.get(kind, set()):
+            return True
+        by_name = self.by_kind.get(kind, {}).get(_norm(ref))
+        return by_name is not None and by_name != ref and ref in self.ids.get(kind, set())
 
 
 def world_index(root: Path | None) -> Index:
@@ -166,7 +196,8 @@ def find_world(name: str) -> str | None:
 
 def _ref(idx: Index, kind: str, value: str, where: str) -> Iterator[str]:
     if idx.ambiguous(kind, value):
-        yield f"{where}: {value!r} names more than one {kind} record; use its id"
+        yield (f"{where}: {value!r} could mean more than one {kind} record (a shared "
+               "name, or one record's name and another's id); rename one in the app")
     elif idx.lookup(kind, value) is None:
         yield f"{where}: no {kind} record named {value!r}"
 
@@ -193,7 +224,8 @@ def _typed(row: dict, where: str, keys, kind: type, label: str) -> Iterator[str]
             yield f"{where}: {k} must be {label}"
 
 
-def _entries(plan: dict, key: str, allowed: set[str], problems: list[str]) -> list[dict]:
+def _entries(plan: dict, key: str, allowed: set[str], problems: list[str],
+             list_keys: set[str] = LIST_KEYS) -> list[dict]:
     rows = plan.get(key) or []
     if not isinstance(rows, list):
         problems.append(f"{key}: must be a list")
@@ -206,6 +238,10 @@ def _entries(plan: dict, key: str, allowed: set[str], problems: list[str]) -> li
             problems.append(f"{key}[{i}]: every entry needs a non-empty name")
             continue
         where = f"{key} {row['name']!r}"
+        if not _one_line(row["name"]):
+            problems.append(f"{where}: a name must be one line")
+        problems.extend(f"{where}: {k} must be a list of names"
+                        for k in sorted(set(row) & list_keys) if not _list_ok(row[k]))
         unknown = sorted(set(row) - allowed)
         if unknown:
             problems.append(f"{where}: unknown keys {unknown} (allowed: {sorted(allowed)})")
@@ -266,6 +302,9 @@ def _check_fields(kind: str, fields: dict, idx: Index, where: str) -> Iterator[s
     for k in entity_schema.invalid_values(kind, plain):
         yield f"{where}: field {k} has an invalid value {fields[k]!r}"
     for k, spec in refs.items():
+        if not _list_ok(fields.get(k)):
+            yield f"{where}: field {k} must be a reference or a list of them"
+            continue
         values = _as_list(fields.get(k))
         if len(values) > 1 and not spec.get("multi"):
             yield f"{where}: field {k} takes one reference"
@@ -276,6 +315,9 @@ def _check_entity(kind: str, row: dict, idx: Index) -> Iterator[str]:
     where = f"{kind} {row['name']!r}"
     yield from _typed(row, where, ("body",), str, "a string")
     yield from _kind_refs(idx, row.get("owners"), OWNER_KINDS, f"{where} owners")
+    if isinstance(row.get("keys"), list):
+        yield from (f"{where}: key {k!r} has a comma, which the store reads as two keys"
+                    for k in row["keys"] if isinstance(k, str) and "," in k)
     if "secrecy" in row and str(row["secrecy"]).strip().lower() not in entities.SECRECY_LEVELS:
         yield f"{where}: secrecy must be one of {', '.join(entities.SECRECY_LEVELS)}"
     fields = row.get("fields") or {}
@@ -302,6 +344,23 @@ def _check_greeting(row: dict, idx: Index) -> Iterator[str]:
     seq = row.get("sequence")
     if seq is not None and (isinstance(seq, bool) or not isinstance(seq, int) or seq < 1):
         yield f"{where}: sequence must be a positive integer"
+
+
+def _merged_plotmap(rows: list[dict], idx: Index, root: Path | None) -> dict[str, list[str]]:
+    """The `leads_to` graph as it would stand after apply: what is on disk,
+    with each plan greeting's own `leads_to` replacing its stored edges. Nodes
+    are ids, and `new:<name>` for a greeting the plan has yet to create, so a
+    cycle closed half by an earlier apply and half by this one is still seen."""
+    def node(ref: str) -> str:
+        rid = idx.lookup("greetings", ref)
+        return f"new:{_norm(ref)}" if rid in (None, Index.PENDING) else rid
+
+    graph = {src: list(e.get("leads_to") or [])
+             for src, e in (greetings.read_plotmap(root) if root else {}).items()}
+    for g in rows:
+        if "leads_to" in g:
+            graph[node(g["name"])] = [node(t) for t in _as_list(g["leads_to"])]
+    return graph
 
 
 def _check_actor_names(rows: dict, idx: Index, wid: str | None) -> Iterator[str]:
@@ -347,15 +406,15 @@ def _index_plan(plan: dict, idx: Index, problems: list[str]) -> dict[str, list[d
     PENDING so a reference to a record the plan is about to create resolves."""
     tag_names = plan.get("tags") or []
     if not isinstance(tag_names, list) or not all(isinstance(t, str) and t.strip()
-                                                  for t in tag_names):
+                                                  and _one_line(t) for t in tag_names):
         problems.append("tags: must be a list of display names")
         tag_names = []
     for t in tag_names:
         if idx.named("tags", t) is None:
             idx.add("tags", t, Index.PENDING)
     rows = {
-        "characters": _entries(plan, "characters", CHARACTER_KEYS, problems),
-        "pcs": _entries(plan, "pcs", PC_KEYS, problems),
+        "characters": _entries(plan, "characters", CHARACTER_KEYS, problems, set()),
+        "pcs": _entries(plan, "pcs", PC_KEYS, problems, {"tags"}),
         "greetings": _entries(plan, "greetings", GREETING_KEYS, problems),
         **{k: _entries(plan, k, ENTITY_KEYS, problems) for k in ENTITY_KINDS},
     }
@@ -392,10 +451,8 @@ def validate_plan(plan: dict, root: Path | None, wid: str | None) -> list[str]:
             problems.extend(_check_entity(kind, row, idx))
     for row in rows["greetings"]:
         problems.extend(_check_greeting(row, idx))
-    graph = {_norm(g["name"]): [_norm(t) for t in _as_list(g["leads_to"])]
-             for g in rows["greetings"] if "leads_to" in g}
-    problems.extend(f"greetings: leads_to forms a cycle through {' -> '.join(c)}"
-                    for c in _cycles(graph))
+    problems.extend(f"greetings: leads_to would form a cycle through {' -> '.join(c)}"
+                    for c in _cycles(_merged_plotmap(rows["greetings"], idx, root)))
     problems.extend(_check_world_settings(plan, root, wid))
     return problems
 
@@ -449,11 +506,23 @@ def _changed(before: bytes | None, path: Path) -> bool:
 
 
 def _resolve_world(plan: dict, world_id: str | None) -> str | None:
+    """The world to write into: `world_id`, or None for a new one.
+
+    A plan that names an EXISTING world without `--world-id` is refused rather
+    than merged into it. Find-or-create by name is right for the records in a
+    world this skill made; for the world itself it would mean a "new" concept
+    that happens to share a name with somebody's library world silently
+    overwrites that world's records."""
     if world_id is not None:
         if not worlds.world_exists(world_id):
             raise PlanError([f"no world with id {world_id!r}"])
         return world_id
-    return find_world(str(plan.get("world", "")))
+    name = str(plan.get("world", ""))
+    found = find_world(name)
+    if found is not None:
+        raise PlanError([(f"world: a world named {name!r} already exists (id {found!r}); "
+                          f"pass --world-id {found} to add to it, or choose another name")])
+    return None
 
 
 def _ensure_records(plan: dict, root: Path, wid: str, idx: Index,
@@ -506,7 +575,7 @@ def _write_edges(plan: dict, root: Path, idx: Index, report: Report) -> None:
     path = root / "plotmap.json"
     before = _snapshot(path)
     for row in plan.get("greetings") or []:
-        edges = {key: [idx.lookup("greetings", t) for t in _as_list(row[key])]
+        edges = {key: _unique([idx.lookup("greetings", t) for t in _as_list(row[key])])
                  for key in ("leads_to", "excludes") if key in row}
         if edges:
             greetings.set_edges(root, idx.named("greetings", row["name"]), **edges)
@@ -594,7 +663,7 @@ def _write_pc(root: Path, pid: str, row: dict, idx: Index) -> bool:
             persona[f] = row[f]
     pcs.update_version(root, pid, vid, persona)
     if "tags" in row:
-        pcs.set_tags(root, pid, [idx.lookup("tags", t) for t in _as_list(row["tags"])])
+        pcs.set_tags(root, pid, _unique([idx.lookup("tags", t) for t in _as_list(row["tags"])]))
     return before != _dir_snapshot(root / "pcs" / pid)
 
 
@@ -610,12 +679,12 @@ def _write_entity(root: Path, kind: str, eid: str, row: dict, idx: Index) -> boo
     ref_keys = {f["key"] for f in entity_schema.ref_fields(kind)}
     for k, v in (row.get("fields") or {}).items():
         value = ",".join(_resolve_kind_ref(idx, r) for r in _as_list(v)) if k in ref_keys else v
-        fields[k] = value if isinstance(value, str) else str(value)
+        fields[k] = "" if value is None else (value if isinstance(value, str) else str(value))
     entities.update_entity(
         root, kind, eid,
         body=row.get("body"),
         keys=", ".join(_as_list(row["keys"])) if "keys" in row else None,
-        owners=(",".join(_resolve_kind_ref(idx, o) for o in _as_list(row["owners"]))
+        owners=(",".join(_unique([_resolve_kind_ref(idx, o) for o in _as_list(row["owners"])]))
                 if "owners" in row else None),
         secrecy=row.get("secrecy"),
         fields=fields or None)
@@ -629,11 +698,12 @@ def _write_greeting(root: Path, row: dict, idx: Index) -> tuple[str, bool, bool]
     character = idx.lookup("characters", row["character"]) if row.get("character") else None
     kw: dict = {}
     if "present" in row:
-        kw["present"] = [idx.lookup("characters", p) for p in _as_list(row["present"])]
+        kw["present"] = _unique([idx.lookup("characters", p) for p in _as_list(row["present"])])
     if "location" in row:
         kw["location"] = idx.lookup("locations", row["location"]) if row["location"] else ""
     if "requires_tags" in row:
-        kw["requires_tags"] = [idx.lookup("tags", t) for t in _as_list(row["requires_tags"])]
+        kw["requires_tags"] = _unique([idx.lookup("tags", t)
+                                       for t in _as_list(row["requires_tags"])])
     for k in ("predecessor_join", "pcless", "phase", "optional"):
         if k in row:
             kw[k] = row[k]
@@ -646,7 +716,10 @@ def _write_greeting(root: Path, row: dict, idx: Index) -> tuple[str, bool, bool]
         return gid, True, True
     path = root / "greetings" / f"{gid}.md"
     before = _snapshot(path)
-    if "character" in row:
+    stored = greetings.read_greeting(root, gid)["meta"]["character"]
+    if "character" in row and (character or "") != stored:
+        # Only a real change re-points: the plan cannot name a version, so
+        # re-sending the same character would reset one chosen in the app.
         kw["character"] = character or ""
         kw["version"] = characters.default_version(root, character) if character else ""
     if "sequence" in row:
@@ -702,10 +775,14 @@ def _entity_warnings(w: _World) -> Iterator[str]:
             where = f"{kind}/{e['id']}"
             if not entities.read_entity(w.root, kind, e["id"])["body"].strip():
                 yield f"{where}: empty body -- nothing reaches the prompt"
+            yield from (f"{where}: owner {ref} can never be present in a scene, so the "
+                        "owner gate never opens"
+                        for ref in entities.owner_refs(e.get("owners", ""))
+                        if ref.partition(":")[0] not in OWNER_KINDS)
             keyless = not e.get("keys", "").strip()
             unowned = not e.get("owners", "").strip()
             gm_only = entities.normalize_secrecy(e.get("secrecy")) == entities.GM_ONLY
-            if keyless and kind == "locations":
+            if keyless and kind == "locations" and not gm_only:
                 # `context.world_state._world_info` skips a keyless location
                 yield (f"{where}: no keys -- reaches the prompt only as the current setting, "
                        "never because a scene mentions it")
@@ -839,7 +916,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
             wid = _resolve_world(plan, args.world_id)
             root = worlds.world_root(wid) if wid else None
             problems = validate_plan(plan, root, wid)
-            _print({"world": wid, "ok": not problems, "problems": problems})
+            _print({"world": wid or f"(new) {plan.get('world', '')}", "ok": not problems,
+                    "problems": problems})
             return 1 if problems else 0
         _print(apply_plan(plan, args.world_id))
     except PlanError as exc:
