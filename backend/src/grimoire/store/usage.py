@@ -219,7 +219,7 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            duration_ms: int = 0, status: str = "ok", error: str = "",
            attempts: int = 1, post: int | None = None,
            ts: str | None = None, round_id: str = "",
-           response_id: str = "") -> dict | None:
+           response_id: str = "", images: int = 0) -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
 
@@ -266,10 +266,16 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # own: both are slices OF `prompt_tokens` rather than counts beside it
         # (#148), so a reader adding them to a total would count a cached prefix
         # twice. `_add` is where that promise is kept for rollups.
+        # `images` is how many post images the call sent (#377), absent when
+        # none. The money columns already include what a provider charged for
+        # them, but a MODELLED figure cannot -- the rate table prices tokens,
+        # not pictures -- so this is what tells a reader a turn carried images
+        # the estimate may not cover.
         for key, count in (("prompt_tokens", prompt_tokens),
                            ("completion_tokens", completion_tokens),
                            ("cache_read_tokens", cache_read_tokens),
-                           ("cache_write_tokens", cache_write_tokens)):
+                           ("cache_write_tokens", cache_write_tokens),
+                           ("images", images or None)):
             if count is not None:
                 row[key] = int(count)
         if cost_usd is not None:
@@ -492,7 +498,8 @@ class Meter:
             cost_usd=cost, cost_basis=self.usage.get("cost_basis", ""),
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1),
-            post=self.post, round_id=self.round_id, response_id=self.response_id)
+            post=self.post, round_id=self.round_id, response_id=self.response_id,
+            images=self.usage.get("images", 0))
         return self.row
 
 
@@ -746,6 +753,11 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
     bucket["cache_read_tokens"] += _int(row.get("cache_read_tokens"))
     bucket["cache_write_tokens"] += _int(row.get("cache_write_tokens"))
     bucket["duration_ms"] += _int(row.get("duration_ms"))
+    # Only once a row carries one: `_ZERO` has no `images`, so the empty
+    # summary, the persisted rollup and the shell's Costs tail keep their shape
+    # and a bucket written before #377 folds a new row without a KeyError.
+    if images := _int(row.get("images")):
+        bucket["images"] = bucket.get("images", 0) + images
     cost = _float(row.get("cost_usd"))
     if cost is None:
         modelled = rates.estimate(row) if rates is not None else None
