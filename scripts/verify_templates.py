@@ -480,6 +480,87 @@ for label, rows in IDENTITY_INPUTS.items():
             assert cand["line"] in exp[1]["content"], \
                 f"continuity identity user ({label}) does not show {cand['id']}'s line"
 
+# The reconciliation sweep (capstone spec §11.2). Payloads are
+# `reconcile.build_payload`-shaped; three inputs so every optional branch of
+# `user.j2` is taken both ways: pairs and lifecycle findings with every optional
+# field, none, and a temporal pair whose second record is an event.
+from grimoire.store.continuity import reconcile  # noqa: E402
+
+
+def _reconcile_fields(title, status="open", kind="", due=""):
+    return {"title": title, "status": status, "kind": kind, "due": due}
+
+
+def _reconcile_record(letter, ref, fields, **over):
+    return {"letter": letter, "ref": ref, "line": reconcile.snippet_line(ref, fields),
+            "beats": [], "pressure": "", "links": [], "actors": [], "_fields": fields, **over}
+
+
+def _reconcile_candidate(key, vocabulary, records, signal_text=""):
+    return {"key": key, "id": f"candidate-{key}", "vocabulary": vocabulary,
+            "records": records, "signal_text": signal_text}
+
+
+RECONCILE_INPUTS = {
+    "pairs+lifecycle": {
+        "now": "the twelfth of May", "known_scenes": ["001--saltmarch-docks"],
+        "chronicle": [{"id": "001--saltmarch-docks", "one_line": "Mara came ashore."}],
+        "candidates": [
+            _reconcile_candidate("c1", "same_thread", [
+                _reconcile_record("A", "thread:find-the-ledger",
+                                  _reconcile_fields("Find the ledger", "advanced"),
+                                  beats=[{"scene": "001--saltmarch-docks",
+                                          "text": "Winifred learned the ledger exists."},
+                                         {"scene": "", "text": "Winifred went looking."}],
+                                  pressure="stale", actors=["Winifred", "Mara"],
+                                  links=["Find the ledger pays_off The midnight deadline"]),
+                _reconcile_record("B", "thread:recover-the-harbour-ledger",
+                                  _reconcile_fields("Recover the harbour ledger"))],
+                "same title; word overlap 0.42; shared characters: Mara"),
+            _reconcile_candidate("c2", "commitment", [
+                _reconcile_record("A", "commitment:the-midnight-deadline",
+                                  _reconcile_fields("The midnight deadline", kind="threat",
+                                                    due="2026-05-05"),
+                                  pressure="overdue, 5 days ago", actors=["Seraphine"])],
+                "its due date has passed (5 days ago)")]},
+    "bare": {
+        "now": "", "known_scenes": [], "chronicle": [],
+        "candidates": [_reconcile_candidate("c1", "thread", [
+            _reconcile_record("A", "thread:mara-s-map", _reconcile_fields("Mara's map"))])]},
+    "temporal": {
+        "now": "Saltmarch Eve", "known_scenes": [], "chronicle": [],
+        "candidates": [_reconcile_candidate("c1", "temporal", [
+            _reconcile_record("A", "commitment:mara-s-oath",
+                              _reconcile_fields("Mara's oath", due="before the bells stop")),
+            _reconcile_record("B", "event:the-coronation",
+                              {"title": "The coronation", "status": "", "kind": "",
+                               "due": "2026-05-13"})],
+            "the commitment's due could not be placed on the calendar; the event is in 3 days")]},
+}
+for label, payload in RECONCILE_INPUTS.items():
+    exp = reconcile.build_prompt(payload)
+    check(f"continuity reconcile system ({label})", exp[0]["content"],
+          render("continuity_reconcile/system.j2"))
+    check(f"continuity reconcile user ({label})", exp[1]["content"],
+          render("continuity_reconcile/user.j2", **reconcile.template_vars(payload)))
+    for cand in payload["candidates"]:
+        for rec in cand["records"]:
+            fields, (prefix, _, rid) = rec["_fields"], rec["ref"].partition(":")
+            if prefix == "thread":
+                want = render("snippets/plot_thread_line/absorb.j2",
+                              t={"id": rid, "title": fields["title"],
+                                 "status": fields["status"], "latest_beat": ""})
+            elif prefix == "commitment":
+                want = render("snippets/commitment_line/absorb.j2",
+                              c={"id": rid, "title": fields["title"],
+                                 "kind": fields["kind"] or "promise", "status": fields["status"],
+                                 "due": fields["due"], "latest_beat": ""})
+            else:
+                want = f"event: {fields['title']} ({fields['due']})"
+            check(f"continuity reconcile line ({label}, {rec['ref']})", want, rec["line"])
+            assert f"{rec['letter']}: {rec['line']}" in exp[1]["content"], \
+                f"continuity reconcile user ({label}) does not show {rec['ref']}'s line"
+
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402

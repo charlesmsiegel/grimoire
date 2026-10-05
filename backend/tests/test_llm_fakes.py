@@ -17,7 +17,7 @@ import pytest
 
 from grimoire import prompts
 from grimoire.llm_errors import LLMError
-from grimoire.store.continuity import identity
+from grimoire.store.continuity import identity, reconcile
 from tests import llm_fakes
 from tests.llm_fakes import (
     Cassette,
@@ -228,6 +228,7 @@ def _rendered_prompts() -> list[str]:
                        response_actor={"ref": "grimoire", "name": "Grimoire"}),
         prompts.render("tracker/update_system.j2"),
         prompts.render("continuity_identity/system.j2"),
+        prompts.render("continuity_reconcile/system.j2"),
     ]
 
 
@@ -276,3 +277,15 @@ def test_the_identity_body_is_the_shape_the_parser_expects():
     assert decisions is not None
     [decision] = decisions
     assert (decision["row"], decision["decision"]) == ("r1", "new")
+
+
+def test_the_reconcile_body_is_the_shape_the_parser_expects():
+    """The reconciliation sweep's canned reply must decode, or every test that
+    reaches the sweep's model call would see a failed run; it proposes
+    nothing, so no test is handed a decision it did not script."""
+    fake = from_cassette("campaign_flow")
+    reply = fake.cassette.reply([{"role": "system", "content":
+                                  "You are reviewing a campaign's story ledger for records "
+                                  "that may overlap or be finished"}])
+    payload = {"now": "", "chronicle": [], "candidates": [], "known_scenes": []}
+    assert reconcile.parse_output("".join(reply), payload) == {}
