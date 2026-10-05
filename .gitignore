@@ -6,6 +6,9 @@ OLD/
 # ...and the ones agent tooling creates inside the repo
 .claude/worktrees/
 
+# Local Claude permissions (personal machine settings)
+/.claude/settings.local.json
+
 # Brainstorming visual companion
 .superpowers/
 

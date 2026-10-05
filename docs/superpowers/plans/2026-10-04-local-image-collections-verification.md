@@ -1,6 +1,6 @@
 # Local image collections: review and verification
 
-The feature is implemented on `feature/local-image-collections`. Its local service runs from the preserved worktree. Existing main-checkout edits were left in place. Private imports, source inventories, backups, and receipts remain outside this repository.
+The feature was integrated into `main` by fast-forward. The pending tracker disclosure changes and a duplicate test-import correction were committed afterward. The local service now runs from the main checkout. Private imports, source inventories, backups, and receipts remain outside this repository.
 
 ## Theory
 
@@ -56,3 +56,17 @@ The mypy ratchet has the same two failing file/rule pairs on unchanged main: pla
 The final supplemental coverage run used the whole-suite data and passed 549 tests, with two skipped. It reran collection behavior, the corrected facade and route sweep, and added adversarial cases for non-HTTP sources, retargeted/unreadable journals, missing accepted manifests, and journal/member disagreement. Combined backend coverage reached 93.02%, passing the unchanged 93% floor. The added sampler cases also passed on Pydantic 1 (12 sampler tests total). No baseline was loosened. The entire Windows suite remains red for the reproduced unrelated failures described above.
 
 UI behavior was verified with component tests and the production build. Interactive browser verification was unavailable in this session.
+
+## Main integration
+
+The feature and remaining source changes were integrated without merge commits. Repository-local merges and pulls are configured for fast-forward-only integration. Previously published history was preserved.
+
+Fresh checks on the integrated main checkout passed:
+
+- Complete frontend suite: 161 files, 3,365 tests, with coverage enabled.
+- TypeScript, production frontend build, Ruff and ESLint ratchets, and all 128 template checks.
+- Collection behavior, lock checks, public store facade, route safety, and import guards: 777 passed, two skipped.
+- Pydantic 1 collection behavior, public facade, and route safety: 549 passed, two skipped.
+- Live collection metadata, every served member hash, fallback images, and replacement links from the main service.
+
+`make check` still stops at the previously reproduced Windows mypy failures in `atomic.py` and `proclock.py`. The unchanged backend's broad-run Windows failures and coverage results remain documented above; those broad suites were not repeated for this frontend-only integration.
