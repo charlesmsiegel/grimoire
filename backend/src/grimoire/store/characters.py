@@ -1327,23 +1327,48 @@ def _replace_gallery(root: Path, cid: str, vid: str, fresh: list[tuple[int, str]
     Slots not being replaced go (a gallery that shrank would otherwise leave
     orphaned slots past the new count); a slot that now holds a different image
     loses its caption, which described the old one -- a slot that holds the same
-    image keeps it, whether as a placement or as a legacy file. All of it under the slots' locks, so an upload cannot land
-    between the delete and the re-link."""
+    image keeps it, whether as a placement or as a legacy file. All of it under
+    the slots' locks, so an upload cannot land between the delete and the
+    re-link.
+
+    The slots are listed INSIDE that hold, so the replacement acts on the
+    gallery as it stands once it holds the locks -- a listing taken first
+    left out an upload landing before the locks, which then survived on a
+    stale view. A per-name lock can only be taken for a name already known,
+    so a hold whose listing finds a slot it does not cover is released and
+    retaken with that slot too (sorted as a whole, `_image_locks_held`); each
+    retry covers strictly more names. A slot created after the listing, while
+    the hold stands, belongs to an upload that lands after this replacement."""
     d = assets.version_dir(root, cid, vid)
     wanted = {f"gallery_{i}": image_id for i, image_id in fresh}
-    existing = [img["name"] for img in assets.list_images(root, cid, vid)
-                if img["name"].startswith("gallery_")]
-    with assets._image_locks_held(d, *existing, *wanted):
-        for name in existing:
-            if name not in wanted:
-                assets.delete_image(root, cid, vid, name)
-        for name, image_id in wanted.items():
-            placed = assets.image_id(root, cid, vid, name)
-            if placed != image_id:
-                held = placed if placed is not None else _legacy_identity(d, name)
-                assets.link_in(d, name, image_id)
-                if held != image_id:
-                    assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
+    covered = set(_gallery_names(root, cid, vid)) | set(wanted)
+    while True:
+        with assets._image_locks_held(d, *sorted(covered)):
+            existing = _gallery_names(root, cid, vid)
+            if set(existing) <= covered:
+                _replace_held_gallery(root, cid, vid, d, existing, wanted)
+                return
+        covered |= set(existing)
+
+
+def _gallery_names(root: Path, cid: str, vid: str) -> list[str]:
+    return [img["name"] for img in assets.list_images(root, cid, vid)
+            if img["name"].startswith("gallery_")]
+
+
+def _replace_held_gallery(root: Path, cid: str, vid: str, d: Path,
+                          existing: list[str], wanted: dict[str, str]) -> None:
+    """`_replace_gallery`'s writes; the caller holds every slot's lock."""
+    for name in existing:
+        if name not in wanted:
+            assets.delete_image(root, cid, vid, name)
+    for name, image_id in wanted.items():
+        placed = assets.image_id(root, cid, vid, name)
+        if placed != image_id:
+            held = placed if placed is not None else _legacy_identity(d, name)
+            assets.link_in(d, name, image_id)
+            if held != image_id:
+                assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
 
 
 def _legacy_identity(d: Path, name: str) -> str | None:
