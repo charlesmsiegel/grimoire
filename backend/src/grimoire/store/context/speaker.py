@@ -73,6 +73,80 @@ def _named(text: str, names: list[str]) -> str | None:
     return hits.pop() if len(hits) == 1 else None
 
 
+def _clean(names: list[str]) -> list[str]:
+    """Names stripped, blanks and non-strings dropped, each once, in order."""
+    return list(dict.fromkeys(n.strip() for n in names
+                              if isinstance(n, str) and n.strip()))
+
+
+def _standing(names: list[str], history: list[dict]
+              ) -> tuple[dict[str, int], dict[str, int], int]:
+    """Each NPC's silence so far: (`last`, `said`, model-block count).
+
+    `names` are already cleaned. `last[name]` is how many model blocks ago that
+    NPC last spoke and `said[name]` how many they have taken; an NPC who has
+    not spoken is in neither.
+    """
+    # Model blocks only. A player's post is not a turn anyone took, an
+    # unstamped block belongs to no one in particular, and the synthetic
+    # speakers are not characters -- counting any of them would move a real
+    # character's silence.
+    blocks = [m for m in history
+              if m.get("role") == "assistant"
+              and isinstance(m.get("speaker"), str)
+              and m.get("speaker") not in scenes_serialize.SYNTHETIC_SPEAKERS]
+    #: A label the transcript stamped short ("Winifred") canonicalizes to the
+    #: cast name exactly as drift measurement does -- counting it as a stranger
+    #: would nominate a talkative character as never having spoken. A speaker
+    #: who is not in the present cast (a character who has since left, whose
+    #: blocks are still in the transcript) is skipped rather than counted.
+    last: dict[str, int] = {}
+    said: dict[str, int] = {}
+    for pos, m in enumerate(blocks):
+        who = scenes_serialize.match_name(m["speaker"], names) or m["speaker"]
+        if who not in names:
+            continue
+        last[who] = len(blocks) - 1 - pos
+        said[who] = said.get(who, 0) + 1
+    return last, said, len(blocks)
+
+
+def quietest(names: list[str], history: list[dict]) -> list[str]:
+    """Every name, the one silent longest first.
+
+    Longest silence first, then whoever has said least, then cast order -- so a
+    given transcript always ranks the same way. Someone who has never spoken
+    sorts ahead of everyone who has. Works for any number of names; the
+    below-two cutoff is `nominate`'s, not this ranking's.
+    """
+    names = _clean(names)
+    last, said, count = _standing(names, history)
+
+    def silence(name: str) -> int:
+        # Never spoken sorts ahead of everyone who has: one past the longest
+        # silence the transcript could hold.
+        return last[name] + 1 if name in last else count + 1
+
+    return sorted(names, key=lambda n: (-silence(n), said.get(n, 0), names.index(n)))
+
+
+def mentioned(text: str, names: list[str]) -> list[str]:
+    """Every present NPC this text names, in order of first mention, each once.
+
+    The same reading as `_named` -- whole word, case-insensitive, an ambiguous
+    label names nobody -- but it reports all of them rather than refusing when
+    there is more than one. A name is placed where its earliest label (full or
+    first name) appears, so "Seraphine Vale, then Mara" and "Mara, then
+    Seraphine" come out in the order a reader met them.
+    """
+    first: dict[str, int] = {}
+    for label, who in _name_labels(names).items():
+        hit = re.search(rf"(?<!\w){re.escape(label)}(?!\w)", text, re.IGNORECASE)
+        if hit:
+            first[who] = min(hit.start(), first.get(who, hit.start()))
+    return sorted(first, key=lambda who: first[who])
+
+
 def nominate(npc_names: list[str], history: list[dict],
              pending: str = "") -> dict | None:
     """Who should lead this turn, or None for "say nothing".
@@ -106,42 +180,12 @@ def nominate(npc_names: list[str], history: list[dict],
     lead in a two-hander is tokens spent telling the model what the cast list
     already said.
     """
-    names = list(dict.fromkeys(n.strip() for n in npc_names
-                               if isinstance(n, str) and n.strip()))
+    names = _clean(npc_names)
     if len(names) < 2:
         return None
 
-    # Model blocks only. A player's post is not a turn anyone took, an
-    # unstamped block belongs to no one in particular, and the synthetic
-    # speakers are not characters -- counting any of them would move a real
-    # character's silence.
-    blocks = [m for m in history
-              if m.get("role") == "assistant"
-              and isinstance(m.get("speaker"), str)
-              and m.get("speaker") not in scenes_serialize.SYNTHETIC_SPEAKERS]
-    #: How far back each NPC's last block was, and how many they have taken.
-    #: A label the transcript stamped short ("Winifred") canonicalizes to the
-    #: cast name exactly as drift measurement does -- counting it as a stranger
-    #: would nominate a talkative character as never having spoken. A speaker
-    #: who is not in the present cast (a character who has since left, whose
-    #: blocks are still in the transcript) is skipped rather than counted.
-    last: dict[str, int] = {}
-    said: dict[str, int] = {}
-    for pos, m in enumerate(blocks):
-        who = scenes_serialize.match_name(m["speaker"], names) or m["speaker"]
-        if who not in names:
-            continue
-        last[who] = len(blocks) - 1 - pos
-        said[who] = said.get(who, 0) + 1
-
-    def silence(name: str) -> int:
-        # Never spoken sorts ahead of everyone who has: one past the longest
-        # silence the transcript could hold.
-        return last[name] + 1 if name in last else len(blocks) + 1
-
-    # Longest silence first, then whoever has said least, then cast order --
-    # so a given transcript always nominates the same way.
-    ranked = sorted(names, key=lambda n: (-silence(n), said.get(n, 0), names.index(n)))
+    last, _said, _count = _standing(names, history)
+    ranked = quietest(names, history)
     lead = ranked[0]
     reason = "rotation" if last else "opening"
 
