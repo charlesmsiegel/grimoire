@@ -43,6 +43,13 @@ const draftOf = (r: RegexRule): Draft => ({
   max_depth: r.max_depth === null ? "" : String(r.max_depth),
 });
 
+/** The fields the form draws a note for. A refusal naming any other key (`id`,
+ *  `enabled`, `imported`, `rules`) has nowhere to appear and goes to the banner. */
+const FORM_FIELDS = new Set([
+  "name", "pattern", "replacement", "flags", "trim", "targets", "applies",
+  "rewrite_stored", "min_depth", "max_depth",
+]);
+
 const WHOLE = /^\d+$/;
 
 /** Why the form cannot be sent, as the field it belongs to and the words. The
@@ -121,6 +128,9 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
   useEffect(() => {
     setBundle(null); setLoadFailed(false); setSelId(null); setMode("view");
     setError(null); setFailure(null);
+    // A write still in flight belongs to the scope being left, and its `finally`
+    // will not clear this once the scope has moved.
+    setSaving(false);
     void reload();
   }, [reload]);
 
@@ -166,7 +176,10 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
     const mine = live.current;
     setSaving(true); setError(null); setFailure(null);
     try {
-      const saved = await api.putRegex(apiScope, next);
+      // The one place a body is built: the global and connection levels sit on
+      // nothing, so the server refuses an `off` there, and a hand-edited or
+      // synced file may still carry one that a read keeps.
+      const saved = await api.putRegex(apiScope, canOff ? next : { ...next, off: [] });
       if (live.current === mine) setBundle(saved);
       return { ok: true, current: live.current === mine };
     } catch (err) {
@@ -174,7 +187,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         const body = (err as { kind?: string; body?: { index?: number | null; field?: string } })?.body;
         const kind = (err as { kind?: string })?.kind;
         const index = body?.index;
-        if (kind === "invalid_rule" && formIndex !== undefined && body?.field
+        if (kind === "invalid_rule" && formIndex !== undefined && body?.field && FORM_FIELDS.has(body.field)
             && (index === undefined || index === null || index === formIndex)) {
           setFailure({ field: body.field, detail: errorText(err) });
         } else {
@@ -220,7 +233,11 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
     void commit({ ...layer, off });
   }
 
-  const set = (patch: Partial<Draft>) => setDraft({ ...draft, ...patch });
+  const set = (patch: Partial<Draft>) => {
+    setDraft({ ...draft, ...patch });
+    // The server's note was about what was typed there; typing again retires it.
+    if (failure && failure.field in patch) setFailure(null);
+  };
   const toggleTarget = (value: RegexRule["targets"][number], on: boolean) =>
     set({ targets: [...draft.targets.filter((v) => v !== value), ...(on ? [value] : [])] });
   const toggleApply = (value: RegexRule["applies"][number], on: boolean) =>
