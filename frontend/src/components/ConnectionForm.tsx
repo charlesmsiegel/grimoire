@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import type { LLMConnectionKind } from "../api/client";
+import type { VisionOverride } from "../api/types";
 import type { Model } from "../api/models";
 import ModelCombobox from "../routes/ModelCombobox";
 import { Field } from "./Field";
@@ -18,10 +19,13 @@ export type ConnectionFormValue = {
    *  wizard shares the form and has no presets to offer yet. */
   sampler_preset?: string;
   sampler_support?: "" | "standard" | "extended";
+  /** Whether the model may be sent post images (#377); `""` follows the catalog. */
+  vision?: VisionOverride;
 };
 
 export const BLANK_CONNECTION: ConnectionFormValue = {
   kind: "openrouter", name: "", base_url: "", model: "", post_process: "none", reasoning_effort: "",
+  vision: "",
 };
 
 /** The kind/name/credentials/model fields of an LLM connection.
@@ -87,6 +91,7 @@ export function ConnectionForm({
                            models={models} error={modelsError} />
           </Field>
           {modelsHint}
+          <VisionField value={value} models={models} set={set} />
         </>
       )}
 
@@ -148,6 +153,7 @@ export function ConnectionForm({
               </select>
             </Field>
           )}
+          <VisionField value={value} models={models} set={set} />
           <Field label="Prompt post-processing"
                  hint="Strict folds system messages into user turns and forces the sequence to start with a user turn — needed by some coding-style endpoints (e.g. z.ai's GLM) that reject a system message mid-conversation.">
             <select value={value.post_process}
@@ -207,3 +213,32 @@ export const CLAUDE_MODEL_OPTIONS: Model[] = [
   ...CLAUDE_ALIASES.map((m) => ({ id: m.id, name: m.label })),
   ...CLAUDE_PINNED.map((id) => ({ id, name: id })),
 ].map((m) => ({ ...m, context: null, prompt: null, completion: null }));
+
+/** What the catalog says about the selected model's image input (#377). */
+function catalogSays(models: Model[], model: string): string {
+  const vision = models.find((m) => m.id === model)?.vision;
+  if (vision === true) return "Catalog: reads images.";
+  if (vision === false) return "Catalog: text only.";
+  return "Catalog: not stated.";
+}
+
+/** The image override (#377). Not offered for Claude, whose client sends every
+ *  message as one string and so can never carry a picture. */
+function VisionField({ value, models, set }: {
+  value: ConnectionFormValue; models: Model[];
+  set: (patch: Partial<ConnectionFormValue>) => void;
+}) {
+  return (
+    <Field label="Reads images"
+           hint={`${catalogSays(models, value.model)} Auto follows the model list; when it does `
+                 + "not say, post images are not sent. Sending images to a model that cannot read "
+                 + "them fails the turn."}>
+      <select aria-label="Reads images" value={value.vision ?? ""}
+              onChange={(e) => set({ vision: e.target.value as VisionOverride })}>
+        <option value="">Auto</option>
+        <option value="on">Yes</option>
+        <option value="off">No</option>
+      </select>
+    </Field>
+  );
+}

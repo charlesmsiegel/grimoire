@@ -64,6 +64,7 @@ const DRAFT_FIELDS = [
   "backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir",
   "log_level",
   "tracker", "perception_rider",
+  "send_images", "send_images_limit",
   // `theme` is deliberately NOT here. The look is persisted the moment it is
   // picked, by `useThemeSetting`, because three controls now offer it (this
   // page, the first-run wizard, the header toggle) and a draft field would let
@@ -122,7 +123,8 @@ const SECTIONS: SectionDef[] = [
   { id: "setup", group: "The install", label: "First-run setup", fields: [] },
   { id: "context", group: "What the model sees", label: "Context",
     fields: ["context_budget", "context_scan_depth", "archive_depth", "prompt_log_depth",
-             "offscene_known_limit", "speaker_turn_taking"] },
+             "offscene_known_limit", "speaker_turn_taking", "send_images",
+             "send_images_limit"] },
   { id: "layout", group: "What the model sees", label: "Prompt layout",
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
@@ -155,9 +157,9 @@ const GROUPS = SECTIONS.reduce<string[]>(
  *  a component defined during render is a new type every render and React
  *  would remount the input on each keystroke, taking the caret with it. */
 function NumField(
-  { id, label, value, placeholder, unit, caption, decimal = false, onChange }: {
+  { id, label, value, placeholder, unit, caption, decimal = false, disabled = false, onChange }: {
     id: string; label: string; value: string; placeholder?: string;
-    unit?: string; caption?: string; decimal?: boolean;
+    unit?: string; caption?: string; decimal?: boolean; disabled?: boolean;
     onChange: (next: string) => void;
   },
 ) {
@@ -166,13 +168,38 @@ function NumField(
       <label htmlFor={id}>{label}</label>
       <div className="config-input">
         <input id={id} type="text" inputMode={decimal ? "decimal" : "numeric"}
-               value={value} placeholder={placeholder}
+               value={value} placeholder={placeholder} disabled={disabled}
                onChange={(e) => onChange(e.target.value)} />
         {unit && <span className="config-unit" aria-hidden>{unit}</span>}
       </div>
       {caption && <p className="config-caption">{caption}</p>}
     </div>
   );
+}
+
+/** Why images are not reaching the model even though the switch is on (#377).
+ *  Silent when they are, or when the switch is off: the hint exists so turning
+ *  the setting on cannot quietly do nothing. Reads the SAVED answer, so it
+ *  speaks about the connection as stored, not about an unsaved draft. */
+function ImagesReachHint({ reach, on }: { reach?: string; on: boolean }) {
+  if (!on) return null;
+  if (reach === "unknown") {
+    return (
+      <p className="field-hint">
+        Images are not being sent: the connection your scenes use is not known to read images.
+        Open it under Connections to refresh its model list, or set Reads images there.
+      </p>
+    );
+  }
+  if (reach === "no") {
+    return (
+      <p className="field-hint">
+        Images are not being sent: the connection your scenes use cannot read images, so it
+        is sent their descriptions.
+      </p>
+    );
+  }
+  return null;
 }
 
 /** Whether two layouts would store the same thing. Compared field by field
@@ -918,6 +945,31 @@ export default function ConfigView() {
               character rather than advancing a rotation you never saw. It adds a short section to
               every group-scene prompt, and does nothing in a scene with fewer than two characters.
             </p>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                aria-label="Send post images to models that can read them"
+                checked={draft.send_images === "on"}
+                onChange={(e) => edit("send_images", e.target.checked ? "on" : "off")}
+              />
+              Send post images to models that can read them
+            </label>
+            <div className="config-fields">
+              <NumField id="cfg-send-images-limit" label="Images sent" placeholder="3"
+                        caption="the newest in the conversation; 0 sends none"
+                        value={draft.send_images_limit}
+                        disabled={draft.send_images !== "on"}
+                        onChange={(v) => edit("send_images_limit", v)} />
+            </div>
+            <p className="config-copy">
+              A picture in the transcript otherwise reaches the model as its description. With
+              this on, the newest few go to the model as images — on every turn they stay in
+              the conversation, so they are paid for on every one. A model without image input
+              is always sent the descriptions, and under a tight budget pictures are the
+              first thing given up. Whether a model reads images comes from its provider's model
+              list, or from the Reads images setting on the connection.
+            </p>
+            <ImagesReachHint reach={config?.send_images_reach} on={draft.send_images === "on"} />
             {probe && (
               <>
                 <ContextBudgetBar

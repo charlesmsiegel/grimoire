@@ -25,7 +25,12 @@ export type Model = {
   context: number | null;
   prompt: string | null;
   completion: string | null;
+  /** Whether the provider says this model reads images (#377); `null` when it
+   *  did not say. Absent on a catalog cached before the field existed. */
+  vision?: boolean | null;
 };
+/** A connection's image override (#377): `""` follows the catalog. */
+export type VisionOverride = "" | "on" | "off";
 
 export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
 // `model` is what is STORED (what the connection editor edits); `effective_model`
@@ -42,6 +47,7 @@ export type LLMConnection = {
   /** Whether an OpenAI-compatible endpoint takes top-k, min-p and repetition
    *  penalty; "" reads as standard. */
   sampler_support?: "" | "standard" | "extended";
+  vision?: VisionOverride;
   key_set: boolean; rev: string; health: ProviderHealth;
 };
 export type LLMConnectionDetail = LLMConnection & {
@@ -67,6 +73,7 @@ export type LLMConnectionDraft = {
   model?: string; post_process?: "none" | "strict";
   reasoning_effort?: "" | "low" | "high" | "max";
   sampler_preset?: string; sampler_support?: "" | "standard" | "extended";
+  vision?: VisionOverride;
 };
 
 /** The nine sampler parameters, as a preset stores them. Every one optional:
@@ -225,7 +232,16 @@ export type Config = {
   /** "on" adds the perception rider to the prompt; "off" keeps the tracker's
    *  record without that prompt cost. */
   perception_rider: string;
+  /** "on" sends post images to a model that can read them (#377). */
+  send_images: string;
+  /** How many of the newest images in the sent history go out. */
+  send_images_limit: string;
+  /** Whether images would reach the connection the global chat route uses:
+   *  "off" (setting off), "yes", "no" (text only) or "unknown" (the catalog
+   *  does not say). Read-only. */
+  send_images_reach?: SendImagesReach;
 };
+export type SendImagesReach = "off" | "yes" | "no" | "unknown";
 /**
  * The subset of Config the Configuration page writes — the mirror of the
  * backend's `ConfigUpdate`. Named rather than inlined at each call site: it
@@ -246,7 +262,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |
   "replay_fork_threshold" | "advance_fork_threshold" | "log_level" |
-  "tracker" | "perception_rider">>;
+  "tracker" | "perception_rider" | "send_images" | "send_images_limit">>;
 /** One archive written by `store/backups.py`. */
 export type BackupEntry = {
   name: string;
@@ -1205,7 +1221,11 @@ export type UsageTurn = {
  *
  *  `rerolls` counts the calls that RE-answered the post, which is not
  *  `calls - 1`: a turn continued past a dice roll is two calls and one answer. */
-export type UsagePostBucket = UsageBucket & { post: number; rerolls: number };
+export type UsagePostBucket = UsageBucket & {
+  post: number; rerolls: number;
+  /** Post images the post's calls sent (#377); absent when none. */
+  images?: number;
+};
 /** One scene's all-time spend as the campaign list sees it, with the scene
  *  named from its own file. `missing` marks a bucket whose scene has been
  *  deleted — its spend is still in the list, because it is still in the total. */
