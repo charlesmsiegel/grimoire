@@ -716,6 +716,93 @@
       "trimmed": 0
     }
   ],
+  "continuity.drivers.snapshot[the-drowned-ledger]": {
+    "anchors": [],
+    "drivers": [
+      {
+        "actors": [
+          "characters:mara",
+          "characters:seraphine",
+          "pcs:winifred"
+        ],
+        "kind": "thread",
+        "label": "The debt in salt",
+        "links": [],
+        "pressure": {
+          "friendly": "",
+          "in_days": null,
+          "state": "ok"
+        },
+        "ref": "thread:the-debt",
+        "status": "open",
+        "summary": "Mara knows what the debt was for.",
+        "time_anchors": []
+      },
+      {
+        "actors": [
+          "characters:seraphine",
+          "pcs:winifred"
+        ],
+        "kind": "commitment",
+        "label": "Bring salt to the keep",
+        "links": [],
+        "pressure": {
+          "friendly": "",
+          "in_days": null,
+          "state": "ok"
+        },
+        "ref": "commitment:salt-owed",
+        "status": "open",
+        "summary": "Seraphine asked for salt.",
+        "time_anchors": []
+      }
+    ],
+    "fixed": null,
+    "friendly": "",
+    "matching": "basic",
+    "now": ""
+  },
+  "continuity.effective.commitments[the-drowned-ledger]": [
+    {
+      "aliases": [],
+      "due": "2026-01-05",
+      "id": "salt-owed",
+      "kind": "promise",
+      "last_scene": "001--the-tide-comes-in",
+      "latest_beat": "Seraphine asked for salt.",
+      "status": "open",
+      "title": "Bring salt to the keep"
+    }
+  ],
+  "continuity.effective.diagnostics[the-drowned-ledger]": {
+    "broken_links": [],
+    "dangling_aliases": [],
+    "hidden_links": [],
+    "unreadable": []
+  },
+  "continuity.effective.links[the-drowned-ledger]": [],
+  "continuity.effective.render_commitments[the-drowned-ledger]": [
+    "salt-owed: Bring salt to the keep (promise, open), due 2026-01-05 \u2014 Seraphine asked for salt."
+  ],
+  "continuity.effective.render_threads[the-drowned-ledger]": [
+    "the-debt: The debt in salt (open) \u2014 Mara knows what the debt was for."
+  ],
+  "continuity.effective.threads[the-drowned-ledger]": [
+    {
+      "aliases": [],
+      "id": "the-debt",
+      "last_scene": "002--2026-01-02--the-long-quay",
+      "latest_beat": "Mara knows what the debt was for.",
+      "status": "open",
+      "title": "The debt in salt"
+    }
+  ],
+  "continuity.pressure.build[the-drowned-ledger]": {
+    "fixed": null,
+    "friendly": "",
+    "items": [],
+    "now": ""
+  },
   "dossiers.read[the-drowned-ledger/mara]": "",
   "dossiers.read[the-drowned-ledger/seraphine]": "Keeps the tide ledger. Speaks in debts. Has not left the keep.",
   "entities.list_entities[saltmarch/locations]": [

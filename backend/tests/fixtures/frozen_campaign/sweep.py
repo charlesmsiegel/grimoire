@@ -44,7 +44,11 @@ snapshot without anything in `store/` having regressed:
   (`test_calendars.py` and `test_context.py` both assert holiday names), so the
   section is snapshotted rather than stripped. The scene-suggestion prompt
   (`suggest.build_prompt`) lists upcoming holidays from the same package, so
-  it is coupled exactly the same way and snapshotted for the same reason.
+  it is coupled exactly the same way and snapshotted for the same reason. So
+  is `continuity.pressure.build`, and the drivers and anchors composed from
+  it: a holiday item carries the package's name in its ref and label. This
+  fixture has no clock, so pressure lists no holidays and the coupling is
+  latent here, but it is the same exposure.
 - The campaign binds the **built-in** `d20-basic` module pack, which ships
   inside `grimoire.store.builtin_modules` rather than in the fixture, so an
   edit to that pack moves the sheet, rules and check-roster sections. That is
@@ -62,6 +66,7 @@ import tempfile
 from pathlib import Path
 
 from grimoire import store
+from grimoire.store.continuity import drivers, effective, pressure
 
 HERE = Path(__file__).resolve().parent
 HOME = HERE / "home"
@@ -182,6 +187,21 @@ def _campaign(out: dict, cid: str) -> None:
     out[f"commitments.read[{cid}]"] = store.commitments.read(cid)
     out[f"commitments.open_commitments[{cid}]"] = store.commitments.open_commitments(cid)
     out[f"commitments.render_open[{cid}]"] = store.commitments.render_open(cid, with_id=True)
+    # The continuity projections over the same two ledgers. The fixture has no
+    # continuity.json, so these are the absent-file reads: the effective rows
+    # are the physical rows plus `aliases: []`, the renders equal the ones
+    # above, and the diagnostics are empty. Pressure and drivers read the
+    # present through the clock this fixture does not have, so every dated
+    # field they could fabricate is the thing being watched.
+    out[f"continuity.effective.threads[{cid}]"] = effective.threads(cid)
+    out[f"continuity.effective.commitments[{cid}]"] = effective.commitments(cid)
+    out[f"continuity.effective.render_threads[{cid}]"] = effective.render_threads(cid, with_id=True)
+    out[f"continuity.effective.render_commitments[{cid}]"] = \
+        effective.render_commitments(cid, with_id=True)
+    out[f"continuity.effective.links[{cid}]"] = effective.links(cid)
+    out[f"continuity.effective.diagnostics[{cid}]"] = effective.diagnostics(cid)
+    out[f"continuity.pressure.build[{cid}]"] = pressure.build(cid)
+    out[f"continuity.drivers.snapshot[{cid}]"] = drivers.snapshot(cid)
     out[f"relationships.read[{cid}]"] = store.relationships.read(cid)
     out[f"sheets.coverage[{cid}]"] = store.sheets.coverage(cid)
     # The other readers of the open ledgers: what the absorb prompt is shown,
