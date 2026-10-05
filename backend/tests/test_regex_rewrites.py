@@ -499,3 +499,30 @@ def test_a_rewriting_edit_of_a_migrated_legacy_reply_keeps_one_record(client, mo
     assert edit(client, cid, sid, 1, "a...b").status_code == 200
     assert set(records(client, cid, sid)) == {reply["response_id"]}
     assert records(client, cid, sid)[reply["response_id"]]["original"] == "a...b"
+
+
+def test_a_declined_roll_continuation_keeps_the_first_parts_record(client):
+    """A continuation is a new variant of the same response. With no roll line
+    between the parts (a declined roll), the first part is still editable, so
+    its record follows the response onto the continuation's variant rather
+    than going stale with the variant it was made for."""
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    fake = FakeLLM([
+        ['Wait...\n```roll\n{"check":"notice"}\n```'],
+        ['No roll.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    proposal = store.proposals.get(cid, sid)
+    response = client.post(base + "/roll-proposal",
+                           json={"proposal": proposal["id"], "action": "decline"})
+    assert response.status_code == 200 and '"error"' not in response.text, response.text
+
+    shown = messages(client, cid, sid)
+    assert [m["content"] for m in shown[1:]] == ["Wait…", "No roll."]
+    assert shown[1]["rewritten"] is True
+    r = edit(client, cid, sid, 1, "Wait...", restore=True)
+    assert r.status_code == 200, r.text
+    assert store.scenes.read_scene(cid, sid)["messages"][1]["content"] == "Wait..."

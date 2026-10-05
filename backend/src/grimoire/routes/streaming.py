@@ -271,6 +271,19 @@ def _active_variant(cid: str, sid: str, rid: str) -> str:
     return store.responses.variants_by_response(cid, sid).get(rid, (None, []))[0] or ""
 
 
+def _carry_rewrite(cid: str, sid: str, rid: str, before: str) -> None:
+    """Move response `rid`'s rewrite record from variant `before` onto the one
+    now active, when a continuation part made that variant without rewriting
+    anything itself. The parts before it are still the text the record was
+    made for, so the record is still theirs -- left naming `before`, it would
+    stop matching and Restore of the earlier part would be refused."""
+    after = _active_variant(cid, sid, rid)
+    rec = store.regex.rewrites.read_all(cid, sid).get(rid)
+    if after and after != before and rec and rec.get("variant") == before:
+        _record_rewrite(cid, sid, rid, rec["original"], list(rec.get("rules", [])),
+                        str(rec.get("stored", "")), after)
+
+
 def _record_rewrite(cid: str, sid: str, key: str, original: str, fired: list[str],
                     stored: str, variant: str = "") -> None:
     """Record what the store phase changed, from inside the hold that wrote
