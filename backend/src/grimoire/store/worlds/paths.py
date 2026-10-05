@@ -29,7 +29,13 @@ def world_root(wid: str) -> Path:
 
 
 def world_meta_path(wid: str) -> Path:
-    return world_root(wid) / "world.md"
+    return meta_path_of(world_root(wid))
+
+
+def meta_path_of(root: Path) -> Path:
+    """`world.md` under a world root already in hand -- for a caller that
+    resolved the root some other way (a campaign's `world_root_of`)."""
+    return root / "world.md"
 
 
 def world_exists(wid: str) -> bool:

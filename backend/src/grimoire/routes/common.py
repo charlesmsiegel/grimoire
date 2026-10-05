@@ -1030,6 +1030,20 @@ def _world_root_or_404(wid: str):
     return store.worlds.world_root(wid)
 
 
+#: What a PC revision-history route can miss (#67), in the order the route
+#: resolves them: the PC, then its version, then the revision.
+PC_HISTORY_MISSES = (store.pcs.PCNotFound, store.pcs.PCVersionNotFound,
+                     store.pcs.PCRevisionNotFoundError)
+
+
+def pc_history_404(exc: Exception) -> HTTPException:
+    """The 404 for one of `PC_HISTORY_MISSES`, naming which thing was missing."""
+    detail = {store.pcs.PCNotFound: "pc not found",
+              store.pcs.PCVersionNotFound: "version not found",
+              store.pcs.PCRevisionNotFoundError: "revision not found"}[type(exc)]
+    return HTTPException(status_code=404, detail=detail)
+
+
 def _world_char_version_or_404(wid: str, cid: str, vid: str):
     """The world root, once `cid`/`vid` are known to name a real character version.
 

@@ -243,11 +243,21 @@ export type WorldMeta = {
   updated: string;
   counts: Record<string, number>;
   module?: string;
+  /** The world profile (#38). `genre` rides on every shelf row; `tone` and
+   *  `themes` only on `GET /worlds/{wid}`. Empty for a world without one, and
+   *  absent from an older server. */
+  genre?: string;
+  tone?: string;
+  themes?: string[];
   /** Cache-busting token for the world's cover, `""` when it has none. Derived
    *  by the route rather than stored in `world.md` — the same split the
    *  campaigns list makes, and for the same reason. */
   cover?: string;
 };
+/** What a world says about itself (#38): its description is `world.md`'s body,
+ *  the rest its frontmatter. `themes` are descriptive only -- the greeting-
+ *  gating tag vocabulary is a different thing (`listTags`). */
+export type WorldProfile = { genre: string; tone: string; themes: string[]; description: string };
 /** `GET /worlds/{wid}`: the world page's header and its column's numbers in
  *  one read.
  *
@@ -614,7 +624,15 @@ export type ChubImportResult = {
 export type ChubUnlinkedVersion = { character: string; character_name: string; version: string; version_name: string };
 
 // PCs
-export type Persona = { name: string; pronouns: string; summary: string; description: string; birthdate?: string };
+export type Persona = {
+  name: string; pronouns: string; summary: string; description: string; birthdate?: string;
+  /** Profile fields (#65). Optional because a persona written before they
+   *  existed reads them as "", and older payloads may omit them entirely. */
+  goals?: string; player_notes?: string;
+};
+/** One earlier text of a PC version (#67). `saved` is when that text was
+ *  replaced; `name` is the persona name it held. Newest first in a listing. */
+export type PCRevision = { id: string; saved: string; name: string };
 export type PCSummary = {
   id: string; name: string; tags: string[]; default_version: string; versions: VersionRef[];
   // Same derived image fields a CharacterSummary carries, bar `localized_count`

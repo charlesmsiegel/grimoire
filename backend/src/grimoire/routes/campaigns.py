@@ -29,6 +29,7 @@ from ..llm import LLMClient
 from . import characters as character_routes
 from . import runs
 from .common import (
+    PC_HISTORY_MISSES,
     _campaign_root_or_404,
     _content_fields,
     _display_name_or_400,
@@ -50,6 +51,7 @@ from .common import (
     get_llm,
     image_draft_prompt,
     leaves_campaign_unchanged,
+    pc_history_404,
 )
 from .models import (
     AdvanceTime,
@@ -2355,6 +2357,51 @@ def put_campaign_pc_version(cid: str, pid: str, vid: str, body: PersonaVersionUp
         raise HTTPException(status_code=404, detail="pc not found")
     except store.pcs.PCVersionNotFound:
         raise HTTPException(status_code=404, detail="version not found")
+    return {"ok": True}
+
+
+# ---- campaign PC revision history (#67). Read off the CAMPAIGN root, not
+# `overlay.pc_root`: history belongs to the copy that was edited, so a PC this
+# campaign still inherits lists none here rather than showing the world's (the
+# world page is where that lives). Restore takes the path every campaign PC
+# write takes -- lock, materialize, name check -- and so never writes the world.
+@router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/revisions")
+def get_campaign_pc_revisions(cid: str, pid: str, vid: str):
+    _campaign_root_or_404(cid)
+    try:
+        return store.overlay.pc_revisions(cid, pid, vid)
+    except PC_HISTORY_MISSES as exc:
+        raise pc_history_404(exc) from None
+
+
+@router.get("/campaigns/{cid}/pcs/{pid}/versions/{vid}/revisions/{rid}")
+def get_campaign_pc_revision(cid: str, pid: str, vid: str, rid: str):
+    _campaign_root_or_404(cid)
+    try:
+        return store.overlay.pc_revision(cid, pid, vid, rid)
+    except PC_HISTORY_MISSES as exc:
+        raise pc_history_404(exc) from None
+
+
+@router.post("/campaigns/{cid}/pcs/{pid}/versions/{vid}/revisions/{rid}/restore")
+def post_campaign_pc_revision_restore(cid: str, pid: str, vid: str, rid: str):
+    _campaign_root_or_404(cid)
+    try:
+        with store.locks.campaign_lock(cid):
+            # Found BEFORE anything is made writable: only a materialized copy
+            # has history, so a revision that exists means `ensure_actor_writable`
+            # below is a no-op -- and one that does not 404s having written
+            # nothing, rather than having materialized the PC on the way out.
+            persona = store.overlay.pc_revision(cid, pid, vid, rid)
+            store.actor_names.require_unique(store.actor_names.persona_name(persona),
+                                             scope="campaign", scope_id=cid,
+                                             actor_ref=f"pcs:{pid}")
+            root = store.overlay.ensure_actor_writable(cid, "pcs", pid)
+            store.pcs.restore_revision(root, pid, vid, rid)
+    except PC_HISTORY_MISSES as exc:
+        raise pc_history_404(exc) from None
+    except store.actor_names.ActorNameError as exc:
+        raise HTTPException(409, detail=str(exc)) from exc
     return {"ok": True}
 
 

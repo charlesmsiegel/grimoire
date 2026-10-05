@@ -14,9 +14,34 @@ def test_create_read_single_version(tmp_path):
 
 def test_persona_fields_round_trip(tmp_path):
     persona = {"name": "Elara", "pronouns": "she/her", "summary": "scholar",
-               "birthdate": "1990-06-29", "description": "A wanderer."}
+               "birthdate": "1990-06-29", "goals": "find the archive",
+               "player_notes": "never speak for her", "description": "A wanderer."}
     pid, vid = pcs.create_pc(tmp_path, "Elara", [], persona=persona)
     assert pcs.read_persona(tmp_path, pid, vid) == persona
+
+
+def test_a_persona_written_before_the_profile_fields_reads_them_empty(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    p = tmp_path / "pcs" / pid / f"{vid}.md"
+    p.write_text("---\nname: Elara\npronouns: she/her\nsummary: ''\nbirthdate: ''\n---\n\nhero",
+                 encoding="utf-8")
+    persona = pcs.read_persona(tmp_path, pid, vid)
+    assert persona["goals"] == "" and persona["player_notes"] == ""
+    assert persona["description"] == "hero"
+
+
+def test_a_multi_line_scalar_folds_rather_than_splitting_the_frontmatter(tmp_path):
+    # A newline inside a frontmatter value would read back as a second key and
+    # lose the rest of the value -- every scalar folds to one line instead.
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    pcs.update_version(tmp_path, pid, vid, {
+        **pcs.blank_persona("Elara"), "summary": "a scholar\nof salt",
+        "goals": "find the archive\n\n- and the key: below", "description": "line one\nline two"})
+    persona = pcs.read_persona(tmp_path, pid, vid)
+    assert persona["summary"] == "a scholar of salt"
+    assert persona["goals"] == "find the archive - and the key: below"
+    assert persona["description"] == "line one\nline two"   # the body is untouched
+    assert set(persona) == {*pcs.PERSONA_FIELDS, "description"}
 
 
 def test_versions_and_default(tmp_path):
@@ -161,3 +186,77 @@ def test_version_name_survives_a_slug_with_nothing_in_it(tmp_path, version_name)
     pid, vid = pcs.create_pc(tmp_path, "Rook", [], version_name)
     assert vid == "untitled"
     assert pcs.read_persona(tmp_path, pid, vid)["name"] == "Rook"
+
+
+# ---- revision history (#67) ----
+
+def _edit(root, pid, vid, **fields):
+    pcs.update_version(root, pid, vid, {**pcs.read_persona(root, pid, vid), **fields})
+
+
+def test_an_edit_keeps_the_text_it_replaced(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    _edit(tmp_path, pid, vid, description="first")
+    _edit(tmp_path, pid, vid, description="second")
+    revs = pcs.list_revisions(tmp_path, pid, vid)
+    assert [pcs.read_revision(tmp_path, pid, vid, r["id"])["description"] for r in revs] == ["first", ""]
+    assert all(r["name"] == "Elara" and r["saved"].endswith("Z") for r in revs)
+    assert pcs.read_persona(tmp_path, pid, vid)["description"] == "second"
+
+
+def test_a_save_that_changes_nothing_records_nothing(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    _edit(tmp_path, pid, vid)
+    assert pcs.list_revisions(tmp_path, pid, vid) == []
+
+
+def test_history_keeps_only_the_newest_revisions(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    for i in range(pcs.HISTORY_KEEP + 5):
+        _edit(tmp_path, pid, vid, description=f"text {i}")
+    revs = pcs.list_revisions(tmp_path, pid, vid)
+    assert len(revs) == pcs.HISTORY_KEEP
+    newest = pcs.HISTORY_KEEP + 3     # the text the last edit replaced
+    assert pcs.read_revision(tmp_path, pid, vid, revs[0]["id"])["description"] == f"text {newest}"
+
+
+def test_history_is_invisible_to_sync_and_to_the_version_list(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    _edit(tmp_path, pid, vid, description="first")
+    before = (pcs.dir_hash(tmp_path, pid), pcs.snapshot(tmp_path, pid))
+    _edit(tmp_path, pid, vid, description="second")
+    _edit(tmp_path, pid, vid, description="first")   # back to the same bytes, two snapshots later
+    assert len(pcs.list_revisions(tmp_path, pid, vid)) == 3
+    assert (pcs.dir_hash(tmp_path, pid), pcs.snapshot(tmp_path, pid)) == before
+    assert [v["id"] for v in pcs.read_pc(tmp_path, pid)["versions"]] == [vid]
+
+
+def test_restore_puts_the_text_back_and_can_itself_be_undone(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    _edit(tmp_path, pid, vid, description="first", goals="the archive")
+    _edit(tmp_path, pid, vid, description="second", goals="")
+    old = pcs.list_revisions(tmp_path, pid, vid)[0]["id"]
+    restored = pcs.restore_revision(tmp_path, pid, vid, old)
+    assert restored["description"] == "first"
+    assert pcs.read_persona(tmp_path, pid, vid)["goals"] == "the archive"
+    undo = pcs.list_revisions(tmp_path, pid, vid)[0]["id"]
+    assert pcs.read_revision(tmp_path, pid, vid, undo)["description"] == "second"
+
+
+def test_an_unknown_or_unsafe_revision_is_not_found(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    for rid in ("nope", "../default", ""):
+        with pytest.raises(pcs.PCRevisionNotFoundError):
+            pcs.read_revision(tmp_path, pid, vid, rid)
+    with pytest.raises(pcs.PCVersionNotFound):
+        pcs.list_revisions(tmp_path, pid, "missing")
+
+
+def test_deleting_a_version_deletes_its_history(tmp_path):
+    pid, vid = pcs.create_pc(tmp_path, "Elara", [])
+    v2 = pcs.create_version(tmp_path, pid, "Older", pcs.blank_persona("Elara"))
+    _edit(tmp_path, pid, v2, description="draft")
+    pcs.delete_version(tmp_path, pid, v2)
+    again = pcs.create_version(tmp_path, pid, "Older", pcs.blank_persona("Elara"))
+    assert again == v2 and pcs.list_revisions(tmp_path, pid, again) == []
+    assert pcs.list_revisions(tmp_path, pid, vid) == []

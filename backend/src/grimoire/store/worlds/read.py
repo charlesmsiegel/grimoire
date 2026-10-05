@@ -34,7 +34,9 @@ def _world_row(d: Path, mp: Path) -> dict:
         meta, _ = parse_frontmatter(mp.read_text(encoding="utf-8"))
         return {"name": meta.get("name", d.name),
                 "created": meta.get("created", ""),
-                "updated": meta.get("updated", "")}
+                "updated": meta.get("updated", ""),
+                # for the shelf card (#38); "" for a world with no profile
+                "genre": meta.get("genre", "")}
     sig = statcache.signature(mp)
     if sig is None:
         return compute()
@@ -105,13 +107,37 @@ def list_worlds() -> list[dict]:
     return _newest_first(out)
 
 
+def _profile(meta: dict, body: str) -> dict:
+    return {"genre": meta.get("genre", ""), "tone": meta.get("tone", ""),
+            "themes": [t for t in (x.strip() for x in meta.get("themes", "").split(",")) if t],
+            "description": body.strip()}
+
+
+def profile_of(root: Path) -> dict:
+    """A world's profile (#38) -- `{genre, tone, themes: [...], description}` --
+    from a root already in hand. The one parser: `read_world` uses it, and so
+    does the prompt assembler, which reaches the world through a campaign.
+
+    A world.md that is missing or unreadable is an empty profile rather than
+    an error: the prompt section it feeds is framing, and must not be able to
+    take a generation down."""
+    try:
+        meta, body = parse_frontmatter(paths.meta_path_of(root).read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        meta, body = {}, ""
+    return _profile(meta, body)
+
+
 def read_world(wid: str) -> dict:
     mp = paths.world_meta_path(wid)
     if not mp.exists():
         raise paths.WorldNotFound(wid)
     meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
     root = paths.world_root(wid)
-    return {"meta": {"id": wid, **meta}, "body": body,
+    profile = _profile(meta, body)
+    return {"meta": {"id": wid, **meta, "genre": profile["genre"], "tone": profile["tone"],
+                     "themes": profile["themes"]},
+            "body": body,
             "counts": {**entities.entity_counts(root), "characters": characters.character_count(root),
                        "pcs": pcs.pc_count(root), "greetings": greetings.greeting_count(root)}}
 

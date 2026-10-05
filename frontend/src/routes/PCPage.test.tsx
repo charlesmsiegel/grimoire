@@ -12,6 +12,7 @@ vi.mock("../api/client", async () => {
     listTags: vi.fn(), listModules: vi.fn(), getWorldSheetsIndex: vi.fn(),
     getCampaign: vi.fn(), getCampaignModule: vi.fn(), libraryStatus: vi.fn(),
     getCalendarMonths: vi.fn(), getCalendarConfig: vi.fn(),
+    listPCRevisions: vi.fn(), readPCRevision: vi.fn(), restorePCRevision: vi.fn(),
     actorImageUrl: (scope: { id: string }, _kind: string, id: string,
                     version: string, name: string) => `/img/${scope.id}/${id}/${version}/${name}`,
   } };
@@ -40,6 +41,8 @@ beforeEach(() => {
   (api.putPCImage as any).mockResolvedValue({ ok: true });
   (api.getCalendarConfig as any).mockResolvedValue({ primary: { provider: "gregorian" } });
   (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
+  (api.listPCRevisions as any).mockResolvedValue([]);
+  (api.restorePCRevision as any).mockResolvedValue({ ok: true });
 });
 
 function renderPC(url = "/worlds/realm/pcs/mara", state?: object) {
@@ -85,6 +88,86 @@ test("editing a PC saves its persona and returns to read mode", async () => {
   await waitFor(() => expect(api.updatePCVersion).toHaveBeenCalledWith(
     { kind: "world", id: "realm" }, "mara", "default",
     expect.objectContaining({ description: "At Realm." })));
+});
+
+test("goals and narrator notes are edited in the form and shown read-only in the column", async () => {
+  (api.readPC as any).mockResolvedValue({ ...DETAIL, versions: [{ ...DETAIL.versions[0], persona: {
+    ...DETAIL.versions[0].persona, goals: "find the archive", player_notes: "never speak for her",
+  } }] });
+  renderPC();
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  const column = document.querySelector(".context-column") as HTMLElement;
+  expect(within(column).getByText("find the archive")).toBeInTheDocument();
+  expect(within(column).getByText("never speak for her")).toBeInTheDocument();
+  expect(screen.queryByRole("textbox", { name: "Goals" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(screen.getByRole("textbox", { name: "Goals" }), { target: { value: "reach the coast" } });
+  fireEvent.change(screen.getByRole("textbox", { name: "Notes for the narrator" }),
+    { target: { value: "keep her guarded" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save persona" }));
+  await waitFor(() => expect(api.updatePCVersion).toHaveBeenCalledWith(
+    { kind: "world", id: "realm" }, "mara", "default",
+    expect.objectContaining({ goals: "reach the coast", player_notes: "keep her guarded" })));
+});
+
+test("history lists earlier texts, previews one read-only, and restores it", async () => {
+  (api.listPCRevisions as any).mockResolvedValue([
+    { id: "r2", saved: "2026-10-05T12:00:00Z", name: "Mara" },
+    { id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara Vey" },
+  ]);
+  (api.readPCRevision as any).mockResolvedValue({
+    name: "Mara Vey", pronouns: "", summary: "", description: "An older telling.", goals: "go home",
+  });
+  // a fresh object per read, as the network gives: the history list refreshes
+  // when a re-read lands, and an identical reference is no re-read at all
+  (api.readPC as any).mockImplementation(async () => structuredClone(DETAIL));
+  renderPC();
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  const column = document.querySelector(".context-column") as HTMLElement;
+  const rows = await within(column).findAllByRole("button", { name: /2026|\d/ });
+  expect(rows.filter((r) => r.classList.contains("history-row"))).toHaveLength(2);
+  // a row whose text held another name says so
+  fireEvent.click(within(column).getByRole("button", { name: /Mara Vey/ }));
+  const main = screen.getByRole("main");
+  expect(await within(main).findByText("An older telling.")).toBeInTheDocument();
+  expect(within(main).getByText("go home")).toBeInTheDocument();
+  expect(within(main).queryByText("At Saltmarch.")).not.toBeInTheDocument();
+  expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+  expect(api.readPCRevision).toHaveBeenCalledWith({ kind: "world", id: "realm" }, "mara", "default", "r1");
+
+  fireEvent.click(screen.getByRole("button", { name: "Restore this text" }));
+  await waitFor(() => expect(api.restorePCRevision).toHaveBeenCalledWith(
+    { kind: "world", id: "realm" }, "mara", "default", "r1"));
+  // back on the current text, re-read, and history asked again
+  expect(await within(main).findByText("At Saltmarch.")).toBeInTheDocument();
+  await waitFor(() => expect((api.listPCRevisions as any).mock.calls.length).toBeGreaterThan(1));
+});
+
+test("Back to current leaves a preview without restoring", async () => {
+  (api.listPCRevisions as any).mockResolvedValue([{ id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" }]);
+  (api.readPCRevision as any).mockResolvedValue({ ...DETAIL.versions[0].persona, description: "Before." });
+  renderPC();
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  const column = document.querySelector(".context-column") as HTMLElement;
+  fireEvent.click((await within(column).findAllByRole("button")).find((b) => b.classList.contains("history-row"))!);
+  expect(await screen.findByText("Before.")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Back to current" }));
+  expect(await screen.findByText("At Saltmarch.")).toBeInTheDocument();
+  expect(api.restorePCRevision).not.toHaveBeenCalled();
+});
+
+test("history cannot be opened over an unsaved edit", async () => {
+  (api.listPCRevisions as any).mockResolvedValue([{ id: "r1", saved: "2026-10-04T12:00:00Z", name: "Mara" }]);
+  renderPC();
+  await screen.findByRole("heading", { name: "Mara", level: 1 });
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const row = (await screen.findAllByRole("button")).find((b) => b.classList.contains("history-row"))!;
+  expect(row).toBeDisabled();
+});
+
+test("a PC with no history says so", async () => {
+  renderPC();
+  expect(await screen.findByText("No earlier revisions.")).toBeInTheDocument();
 });
 
 test("Art shows linked thumbnails for every image without a large viewer", async () => {

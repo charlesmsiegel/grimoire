@@ -114,6 +114,13 @@ RESOLVER_MODULES = ("entities", "characters", "pcs", "greetings", "assets", "tag
 PURE_WRITERS = frozenset({
     "assets.put_image",    # writes bytes, then deletes only stale same-name siblings
     "assets.write_focus",  # writes focus.json, reads nothing
+    # PC revision history (#67) is campaign-LOCAL: it never inherits, so a
+    # campaign root is its right home. `forget_history` only deletes;
+    # `keep_before_overwrite` reads the very version file its caller is about to
+    # overwrite in the campaign copy, which is the bytes it must keep whether or
+    # not the world holds the same actor.
+    "pcs.forget_history",
+    "pcs.keep_before_overwrite",
 })
 
 #: Code allowed to combine the two, because it owns the invariant that makes a

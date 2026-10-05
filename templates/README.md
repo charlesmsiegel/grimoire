@@ -314,6 +314,10 @@ substituted by code:
   continuity, player control, knowledge, or reply format. The earlier phrase
   and rhythm policy is now optional `styles/natural-prose-legacy.md`.
   Experiment scope: docs/scene-dialogue-guidance.md.
+- `world_overview` — the campaign world's profile (#38), `worlds.read.profile_of`
+  over `campaigns.read.world_root_of`: `{genre, tone, themes: [str],
+  description}`, every value empty when the world has none, in which case
+  `sections/world_overview.j2` renders nothing
 - `npc_cards` — locked card `data` dicts of in-scene NPCs (also feeds the
   card-level system prompts, descriptions, message examples, post-history)
 - `states` — `[{name, current_state, knows, suspects}]` from
@@ -354,7 +358,9 @@ substituted by code:
   `store/context/speaker.py`
 - `relationship_lines` — `relationships.render_present()` lines
 - `players` — seated players: `{kind: "pcs", name, pronouns, summary,
-  description}` (persona) or `{kind: "characters", name, description,
+  description, birthdate, goals, player_notes}` (persona; `pc_block` adds a
+  `Goals:` and a `Narrator guidance:` line for the two profile fields, #65,
+  only when set) or `{kind: "characters", name, description,
   personality}` (card played as player)
 - `ref_names`, `refs` — pcless only: the campaign's player actors (same
   shapes as above), the offscreen reference cast

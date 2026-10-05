@@ -1095,6 +1095,7 @@
         "pcs": 0
       },
       "created": "2026-01-01T09:01:00Z",
+      "genre": "",
       "id": "saltmarch",
       "name": "Saltmarch",
       "updated": "2026-01-01T09:01:00Z"
@@ -1114,8 +1115,11 @@
     },
     "meta": {
       "created": "2026-01-01T09:01:00Z",
+      "genre": "",
       "id": "saltmarch",
       "name": "Saltmarch",
+      "themes": [],
+      "tone": "",
       "updated": "2026-01-01T09:01:00Z"
     }
   }

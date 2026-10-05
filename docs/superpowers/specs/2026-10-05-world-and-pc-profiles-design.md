@@ -24,7 +24,8 @@ read. That is already true of `summary`, which nothing guards today. `_dump_pers
 therefore folds every run of whitespace in each frontmatter scalar into one
 space before writing — for all `PERSONA_FIELDS`, not only the new two, since the
 corruption it prevents is the same one. The description (the body) is
-untouched. The UI uses single-line inputs for both new fields, like Summary.
+untouched. `actor_names.persona_name` folds the same way, so the name the
+uniqueness check compares is the name that will be stored. The UI uses single-line inputs for both new fields, like Summary.
 
 ### Prompt
 
@@ -41,7 +42,7 @@ absent PC's notes are still guidance about that PC.
 
 ### Other readers
 
-- `IncomingReview.tsx`'s `PERSONA_FIELDS` gains both, so a world-side change to
+- `components/cardFields.ts`'s `PERSONA_FIELDS` (read by `IncomingReview.tsx`) gains both, so a world-side change to
   them is visible in the incoming-change diff rather than an invisible change.
 - `store/export.py`'s book export keeps summary + description only: goals and
   table notes are not story text.
@@ -80,15 +81,27 @@ starts empty and records edits made in that campaign — the first entry is the
 inherited text the first campaign edit replaced. A campaign route never writes
 into the world.
 
-`delete_version` removes `history/<vid>/` with the version, so a later version
-reusing the id does not inherit a dead version's trail. `delete_pc` already
+History never outlives its text. `delete_version` removes `history/<vid>/`;
+so do the paths that remove version files without it — a lock purging sibling
+versions (`appearances._purge_other_versions`) and an import replacing the
+locked version. `overlay.dematerialize_actor` (a copy reverting to inherited)
+drops the copy's whole history, and `materialize_actor` clears history residue
+with the version residue — otherwise a restore from a stale entry would
+re-materialize and write old campaign text over an accepted world change.
+
+Library writes that overwrite a campaign version file *in place* — a sync
+accept copying the world's text over a locked, diverged copy, and an import
+over the same id — go through `pcs.keep_before_overwrite`, the one door into
+history, so the campaign edit they clobber is the newest entry.
+
+World PC saves and restores run under `locks.world_actor_lock(wid)` (they did
+not take it before), so two concurrent saves cannot each snapshot the same old
+text and drop one from the trail. Campaign ones already hold the campaign lock. `delete_pc` already
 removes the folder. World fork and bundle export copy the whole world
 directory and so carry history along; that is correct (it is the PC's history).
 
-What history does **not** record: writes that do not go through
-`update_version` — a sync accept/push replacing a version file, a campaign
-`import-version`. Those are library operations with their own review surfaces;
-history is the edit trail of the PC editor.
+What history does not record: world-side library writes (a promote or push
+landing in the world) — those arrive through their own review surfaces.
 
 ### Store API (`store/pcs.py`)
 
@@ -96,7 +109,7 @@ history is the edit trail of the PC editor.
   `saved` is the ISO time the revision was replaced; `name` is the persona name
   it held, so a list row can say whose text it was.
 - `read_revision(root, pid, vid, rid) -> persona dict`. Raises
-  `PCRevisionNotFound` for an unknown or unsafe id.
+  `PCRevisionNotFoundError` for an unknown or unsafe id.
 - `restore_revision(root, pid, vid, rid)` = `update_version` with that persona,
   so the text being replaced is itself snapshotted and a restore is undoable.
 
@@ -108,10 +121,12 @@ World (`routes/worlds.py`) and campaign (`routes/campaigns.py`) twins:
 - `GET  .../pcs/{pid}/versions/{vid}/revisions/{rid}`
 - `POST .../pcs/{pid}/versions/{vid}/revisions/{rid}/restore`
 
-Campaign reads resolve the **campaign** root (not `overlay.pc_root`), so an
-inherited PC lists no history rather than the world's. The campaign restore
-mirrors `put_campaign_pc_version`: under `campaign_lock(cid)`,
-`ensure_actor_writable`, and the persona-name uniqueness check. The world
+Campaign reads go through `overlay.pc_revisions` / `overlay.pc_revision`
+(`test_overlay_guard.py` forbids resolving a PC off a raw campaign root
+anywhere else); they read the **campaign** copy's history, so an inherited PC
+lists none rather than the world's. The campaign restore, under
+`campaign_lock(cid)`, finds the revision *before* `ensure_actor_writable`, so a
+404 has materialized nothing; then the name check and the write. The world
 restore runs the same uniqueness check `put_pc_version` does. 404s:
 `pc not found`, `version not found`, `revision not found`.
 
@@ -122,16 +137,19 @@ current version's revisions (time, newest first; "No earlier revisions"
 otherwise). Clicking one shows it read-only in the Persona tab (rendered
 description + its fields) with **Restore** and **Back to current** buttons.
 Restore calls the route and re-reads. The list refreshes after every save,
-restore, and version switch.
+restore, and version switch, and is disabled while the form is open (opening a
+revision over an unsaved edit would discard it). Ids are validated against the
+timestamp shape, so a sync client's conflict copy in a history folder is not
+listed.
 
 ## #38 — World genre, tone, tags and description
 
 ### Storage: `world.md` carries it
 
-Frontmatter gains `genre`, `tone` and `tags` (comma-joined, the `keys`/`owners`
-convention, since frontmatter is string scalars only); the markdown **body is
+Frontmatter gains `genre`, `tone` and `themes` (comma-joined, the
+`keys`/`owners` convention, since frontmatter is string scalars only); the markdown **body is
 the description**. All single-line fields are whitespace-folded as for
-personas, and tags are stripped of commas and empties. Old worlds have none of
+personas, and themes are stripped of commas and empties. Old worlds have none of
 it and read as empty strings — no migration. Fork copies `world.md`'s
 frontmatter verbatim except identity, so the profile travels with a fork.
 
@@ -144,12 +162,19 @@ the two apart; on disk it is `themes:` in `world.md`.
 
 - `create_world(name, *, genre="", tone="", themes=(), description="")`.
 - `update_world(wid, *, name=None, genre=None, tone=None, themes=None,
-  description=None)` — a partial update through the same read-modify-write
-  `_restamp` does (worlds have no lock); `rename_world` becomes a call to it.
-- `world_profile(wid) -> {"genre", "tone", "themes": [...], "description"}`.
+  description=None)` — a partial read-modify-write. Worlds have no lock and
+  `world.md` has other unlocked writers (`touch`, the module binding), so it
+  re-reads before writing and retries on a changed file, raising
+  `WorldChanged` (409) if it keeps losing; `rename_world` becomes a call to it.
+- `profile_of(root) -> {"genre", "tone", "themes": [...], "description"}` — one
+  parser, used by the world read and by the prompt assembler (which holds a
+  root from `campaigns.read.world_root_of`).
 - `read_world` already returns all frontmatter + body; it additionally returns
   `meta.themes` as a list. `list_worlds`/`list_world_rows` rows gain `genre`
-  (stat-memoized like the rest of the row) so shelf cards can show it.
+  (stat-memoized like the rest of the row) so shelf cards can show it. Both
+  change the frozen campaign's read-only sweep output (`saltmarch` gains an
+  empty `genre` and `themes`), so `snapshot.json` is regenerated deliberately
+  with this change; its prompt renders do not move.
 
 ### Routes
 
@@ -157,7 +182,7 @@ the two apart; on disk it is `themes:` in `world.md`.
   — a body of only `{name}` behaves exactly as before.
 - `PUT /worlds/{wid}` takes `WorldUpdate` with every field optional; a `name`
   that is present must be non-blank (400), absent fields are left alone.
-  Response stays `{id, name}`.
+  Response stays `{id, name}`, the name read back from `world.md`.
 
 ### Prompt: a `world_overview` section
 
@@ -172,8 +197,7 @@ create_campaign" predates the overlay). A campaign with no resolvable world
 gets an empty section.
 
 The template renders nothing when genre, tone, themes and description are all
-empty — so every existing prompt, and the frozen campaign snapshot, is
-unchanged. Otherwise `# World overview`, then `Genre:`, `Tone:`, `Themes:` lines
+empty — so every existing prompt is unchanged. Otherwise `# World overview`, then `Genre:`, `Tone:`, `Themes:` lines
 for the fields that are set, then the description. The world's name is not
 included (it is a library label, often not an in-fiction one).
 
@@ -211,3 +235,21 @@ mirror and section order gain it.
 
 Guided world hub (#39), post-creation world meta editors beyond About (#40),
 the create-world skill (#56), and recording non-editor writes into PC history.
+
+## Review log
+
+Spec gate: `/codex:adversarial-review` could not run in this environment (no
+Codex CLI), so an independent review subagent ran the same adversarial pass.
+Its findings and their resolution, all folded into the text above:
+
+1. History outliving its text through dematerialize / purge / import → those
+   paths drop it (`pcs.forget_history`).
+2. Campaign history read off a raw campaign root fails `test_overlay_guard.py`
+   → reads moved into `store/overlay.py`.
+3. A 404 restore materializing the PC → revision found before materializing.
+4. Concurrent world saves and in-place library overwrites losing history →
+   world actor lock; `keep_before_overwrite` on sync accept and import.
+5. Folded names slipping past uniqueness → `persona_name` folds too.
+6. Frozen sweep output moves → regenerated deliberately.
+7. `world.md` lost updates → re-read-and-retry in `update_world`.
+8–9. Spec drift and UI states → corrected above.

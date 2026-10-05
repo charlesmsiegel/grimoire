@@ -144,6 +144,8 @@ def _purge_other_versions(croot: Path, kind: str, actor_id: str, keep: str) -> N
     for p in d.glob(f"*.{ext}"):
         if p.name not in (f"{keep}.{ext}", _meta_name(kind)):
             p.unlink()
+            if kind == "pcs":
+                pcs.forget_history(croot, actor_id, p.stem)   # #67: history goes with its text
 
 
 def _set_default(croot: Path, kind: str, actor_id: str, vid: str) -> None:
@@ -211,12 +213,18 @@ def import_version(cid: str, kind: str, actor_id: str, version_id: str) -> None:
     ext = _version_ext(kind)
     d = croot / kind / actor_id
     d.mkdir(parents=True, exist_ok=True)
-    atomic.write_text(d / f"{version_id}.{ext}",
-                      (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8"))
+    text = (wroot / kind / actor_id / f"{version_id}.{ext}").read_text(encoding="utf-8")
+    if kind == "pcs":
+        # importing over the same id replaces the campaign's text in place:
+        # keep what it replaced, as an editor save would (#67)
+        pcs.keep_before_overwrite(croot, actor_id, version_id, text)
+    atomic.write_text(d / f"{version_id}.{ext}", text)
     _set_default(croot, kind, actor_id, version_id)
     old = rec["version"]
     if old != version_id and (d / f"{old}.{ext}").exists():
         (d / f"{old}.{ext}").unlink()
+        if kind == "pcs":
+            pcs.forget_history(croot, actor_id, old)
     rec["version"] = version_id
     rec["base"] = base
     paths._write(cid, data)

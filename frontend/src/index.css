@@ -136,6 +136,9 @@ body::before {
   cursor: pointer; padding: 20px 20px 16px; color: var(--ink);
 }
 .world-card h3 { font-family: var(--fd); font-weight: 800; font-size: 30px; margin: 0 0 14px; line-height: 1; }
+/* The world's genre under its name (#38), when it has one. */
+.world-card .world-genre { margin: -8px 0 12px; color: var(--muted); font-style: italic; }
+.world-create-details { max-width: 640px; margin-bottom: 16px; }
 .world-card footer {
   border-top: 1px solid var(--rule-soft); padding-top: 8px;
   font-family: var(--fm); font-size: 10px; color: var(--muted);
@@ -1733,6 +1736,13 @@ a.shelf-promote { text-decoration: none; text-align: center; }
   width: 28px; height: 28px; border: 1px solid var(--line); flex: none;
   display: flex; align-items: center; justify-content: center; font-size: 11px;
 }
+/* PC revision history (#67): one row per earlier text, newest first, in the
+   context column. The row being previewed reads as selected. */
+.pc-history { display: flex; flex-direction: column; gap: 2px; }
+.pc-history .history-row { text-align: left; }
+.pc-history .history-row.active { font-weight: 600; color: var(--ink); }
+.pc-revision .side-section { margin: 10px 0; }
+.pc-revision h3 { margin: 16px 0 8px; }
 .pc-head { display: flex; gap: 18px; align-items: flex-start; margin-bottom: 12px; }
 .pc-head-art { flex: none; }
 .pc-head-art .portrait, .pc-head-art .portrait-initials {

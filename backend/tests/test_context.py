@@ -413,6 +413,23 @@ def test_player_persona_and_user_token(monkeypatch, tmp_path):
     msgs = context.build_messages(cid, sid)
     assert "A wanderer." in msgs[0]["content"]
     assert msgs[-1]["content"] == "I am Elara"
+    # no profile fields set: no profile lines (#65)
+    assert "Goals:" not in msgs[0]["content"]
+    assert "Narrator guidance:" not in msgs[0]["content"]
+
+
+def test_player_persona_carries_goals_and_narrator_guidance(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    pcs.create_pc(worlds.world_root(wid), "Elara", [],
+                  persona={"name": "Elara", "pronouns": "she/her", "summary": "scholar",
+                           "goals": "find the drowned archive",
+                           "player_notes": "never decide what she says",
+                           "description": "A wanderer."})
+    ap.appear(cid, sid, "pcs", "elara", "default", "player")
+    scenes.append_message(cid, sid, "user", "hello")
+    system = context.build_messages(cid, sid)[0]["content"]
+    assert ("A wanderer.\nGoals: find the drowned archive\n"
+            "Narrator guidance: never decide what she says") in system
 
 
 def test_post_history_is_last(monkeypatch, tmp_path):
@@ -4908,3 +4925,17 @@ def test_personal_testimony_and_group_claims_are_bounded(monkeypatch, tmp_path, 
     assert "Before making a group claim" in text
     assert "verify each person's established history" in text
     assert "Personal testimony covers only the speaker's own experience" in text
+
+
+def test_world_overview_renders_the_campaign_worlds_profile(monkeypatch, tmp_path):
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "user", "hello")
+    plain = context.build_messages(cid, sid)[0]["content"]
+    assert "# World overview" not in plain       # no profile: nothing at all
+    worlds.update_world(wid, genre="Coastal gothic", tone="Wry dread",
+                        themes=["salt", "debt"], description="A drowned coast.")
+    system = context.build_messages(cid, sid)[0]["content"]
+    assert ("# World overview\nGenre: Coastal gothic\nTone: Wry dread\n"
+            "Themes: salt, debt\n\nA drowned coast.") in system
+    ids = [s["id"] for s in context.context_sections(cid, sid)]
+    assert "world_overview" in ids

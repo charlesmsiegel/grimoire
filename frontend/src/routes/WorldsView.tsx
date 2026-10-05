@@ -3,9 +3,11 @@ import { useNavigate } from "react-router-dom";
 import { api, type WorldMeta } from "../api/client";
 import { errorText } from "../api/errors";
 import { intentProps } from "../api/prefetch";
+import { Field } from "../components/Field";
 import LibraryPage from "../components/LibraryPage";
 import { byName } from "../sortByName";
 import { sectionHref } from "../worldPaths";
+import { EMPTY_DRAFT, profileOf, type ProfileDraft } from "../worldProfile";
 
 function footerLabel(counts: Record<string, number> | undefined): string {
   const c = counts ?? {};
@@ -21,6 +23,10 @@ export default function WorldsView() {
   const navigate = useNavigate();
   const [worlds, setWorlds] = useState<WorldMeta[]>([]);
   const [name, setName] = useState("");
+  // The profile a new world can be given up front (#38). Behind a toggle, so
+  // the one-line create stays one line for anybody who only wants a name.
+  const [details, setDetails] = useState(false);
+  const [profile, setProfile] = useState<ProfileDraft>(EMPTY_DRAFT);
   // Keyed by id AND version, not a bare boolean: a cover that failed to load
   // must fall back to the placeholder, and a replacement uploaded afterwards
   // must not inherit that failure. Same shape as CampaignsView's map.
@@ -47,8 +53,10 @@ export default function WorldsView() {
   async function create() {
     const trimmed = name.trim();
     if (!trimmed) return;
-    await api.createWorld(trimmed);
+    await (details ? api.createWorld(trimmed, profileOf(profile)) : api.createWorld(trimmed));
     setName("");
+    setProfile(EMPTY_DRAFT);
+    setDetails(false);
     setWorlds(await api.listWorlds());
   }
 
@@ -165,6 +173,8 @@ export default function WorldsView() {
               onKeyDown={(e) => { if (e.key === "Enter") create(); }}
             />
             <button className="btn-accent" onClick={create} disabled={!name.trim()}>Create</button>
+            <button className="subtle" aria-expanded={details}
+                    onClick={() => setDetails((d) => !d)}>{details ? "Fewer details" : "More details"}</button>
             <button className="subtle" disabled={importing} onClick={() => fileRef.current?.click()}>
               {importing ? "Importing…" : "Import"}
             </button>
@@ -178,6 +188,17 @@ export default function WorldsView() {
             />
           </div>
         </div>
+        {details && <div className="form world-create-details">
+          <Field label="Genre"><input type="text" value={profile.genre}
+            onChange={(e) => setProfile({ ...profile, genre: e.target.value })} /></Field>
+          <Field label="Tone"><input type="text" value={profile.tone}
+            onChange={(e) => setProfile({ ...profile, tone: e.target.value })} /></Field>
+          <Field label="Themes" hint="Comma-separated. They describe the world; they gate nothing.">
+            <input type="text" value={profile.themes} onChange={(e) => setProfile({ ...profile, themes: e.target.value })} />
+          </Field>
+          <Field label="Description"><textarea rows={5} value={profile.description}
+            onChange={(e) => setProfile({ ...profile, description: e.target.value })} /></Field>
+        </div>}
         {error && <div className="error" role="alert">{error}</div>}
         <div className="count-label">{worlds.length} {worlds.length === 1 ? "world" : "worlds"}</div>
         <div className="world-grid">
@@ -213,6 +234,7 @@ export default function WorldsView() {
                     )}
                   </div>
                   <h3>{w.name}</h3>
+                  {w.genre && <div className="world-genre">{w.genre}</div>}
                   <footer>{footerLabel(w.counts)}</footer>
                 </button>
               )}

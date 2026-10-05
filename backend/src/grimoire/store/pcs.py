@@ -2,8 +2,9 @@
 
 Mirrors characters.py but with a simpler payload:
   <root>/pcs/<pid>/pc.md          # frontmatter: name, tags (comma-joined), default_version
-  <root>/pcs/<pid>/<vid>.md       # frontmatter: name, pronouns, summary ; body: description
+  <root>/pcs/<pid>/<vid>.md       # frontmatter: PERSONA_FIELDS ; body: description
   <root>/pcs/<pid>/assets/<vid>/  # optional per-version images (#219)
+  <root>/pcs/<pid>/history/<vid>/<rid>.md  # earlier texts of <vid>.md (#67)
 
 Images live in the same per-version asset folder characters use, keyed on
 ``ASSET_BASE`` instead of "characters" -- `store.assets` was already
@@ -15,14 +16,21 @@ invisible to sync and to `overlay.materialize_actor`; assets overlay per file.
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import assets, atomic, image_descriptions, statcache
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import safe_id, slugify, uniquify
 
-PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate")  # frontmatter scalars; description is the body
+#: Frontmatter scalars; the description is the body. `goals` and
+#: `player_notes` (#65) are profile fields the narrator reads -- see `pc_block`
+#: in templates/scene/_persona_blocks.j2. A file written before a field existed
+#: simply lacks the key and `_load_persona` reads it as "", so adding one here
+#: needs no migration.
+PERSONA_FIELDS = ("name", "pronouns", "summary", "birthdate", "goals", "player_notes")
 
 #: The `store.assets` base a PC's images are stored under -- the literal name of
 #: the directory PCs already live in, so `<root>/pcs/<pid>/assets/<vid>/` sits
@@ -40,6 +48,22 @@ class PCNotFound(Exception):
 
 class PCVersionNotFound(Exception):
     pass
+
+
+class PCRevisionNotFoundError(Exception):
+    pass
+
+
+#: How many earlier texts each version keeps (#67). A structural bound, so a
+#: PC edited every session for years does not grow without limit; it says
+#: nothing about how anybody edits, and is cheap to raise.
+HISTORY_KEEP = 20
+
+#: The directory, beside the version files, that history lives under.
+#: Deliberately a SUBDIRECTORY: `_version_ids` globs `*.md` non-recursively and
+#: `snapshot`/`dir_hash` name their files explicitly, so nothing in here is a
+#: version, is hashed for sync, or is copied by `overlay.materialize_actor`.
+_HISTORY_DIR = "history"
 
 
 def _pcs_dir(root: Path) -> Path:
@@ -80,11 +104,22 @@ def _new_version_id(root: Path, pid: str, version_name: str) -> str:
 
 
 def blank_persona(name: str) -> dict:
-    return {"name": name, "pronouns": "", "summary": "", "birthdate": "", "description": ""}
+    return {**dict.fromkeys(PERSONA_FIELDS, ""), "name": name, "description": ""}
+
+
+def _one_line(value: object) -> str:
+    """A frontmatter scalar as the single line `dump_frontmatter` can store.
+
+    `frontmatter` writes `key: value` lines, so a newline inside a value would
+    be read back as a second, bogus key and the rest of the value lost. Every
+    whitespace run folds to one space instead -- the summary has always been
+    exposed to this, and the profile fields (#65) are where a pasted list of
+    goals would hit it first."""
+    return " ".join(str(value or "").split())
 
 
 def _dump_persona(persona: dict) -> str:
-    meta = {f: persona.get(f, "") for f in PERSONA_FIELDS}
+    meta = {f: _one_line(persona.get(f, "")) for f in PERSONA_FIELDS}
     return dump_frontmatter(meta, persona.get("description", ""))
 
 
@@ -136,7 +171,137 @@ def create_version(root: Path, pid: str, version_name: str, persona: dict) -> st
 
 
 def update_version(root: Path, pid: str, vid: str, persona: dict) -> None:
-    atomic.write_text(require_version(root, pid, vid), _dump_persona(persona))
+    """Overwrite a version's persona, keeping the text it replaces (#67).
+
+    The earlier text is copied into the version's history first, and only when
+    the write changes something: a Save with no edits must not push a real
+    revision out of the retention window to record a duplicate. Snapshot then
+    write, in that order, so a crash between the two leaves an extra history
+    entry rather than an edit with no record of what it replaced."""
+    p = require_version(root, pid, vid)
+    text = _dump_persona(persona)
+    keep_before_overwrite(root, pid, vid, text)
+    atomic.write_text(p, text)
+
+
+# ---- revision history (#67) ------------------------------------------------
+#
+# Versions are authored VARIANTS a campaign can lock (and locking purges the
+# siblings), so they cannot double as an edit trail. History is the edit trail:
+# every text `update_version` replaced, per version, newest kept. It records
+# what went through the editor -- a sync accept or an import-version replaces a
+# version file through its own reviewed path and is not an edit of this kind.
+#
+# Scope is whichever root was written: a world edit keeps world history, a
+# campaign edit keeps the campaign copy's. Campaign history therefore starts
+# with the first campaign edit, and its first entry is the inherited text that
+# edit replaced.
+
+def _history_dir(root: Path, pid: str, vid: str) -> Path:
+    return _pc_dir(root, pid) / _HISTORY_DIR / vid
+
+
+#: A revision id: the UTC timestamp `_record_revision` mints, plus the
+#: `uniquify` suffix two snapshots in one microsecond would need. Anything else
+#: in a history folder -- a sync client's conflict copy, a hand-placed file --
+#: is not a revision and is not listed.
+_REVISION_ID = re.compile(r"\d{8}T\d{12}Z(-\d+)?")
+
+
+def _revision_ids(root: Path, pid: str, vid: str) -> list[str]:
+    """Oldest first. Ids are UTC timestamps, so name order is time order --
+    on one machine. A store shared between devices orders by each device's
+    clock, which is the same trust every other stamp in the store extends."""
+    d = _history_dir(root, pid, vid)
+    if not d.is_dir():
+        return []
+    return sorted(p.stem for p in d.glob("*.md") if _REVISION_ID.fullmatch(p.stem))
+
+
+def keep_before_overwrite(root: Path, pid: str, vid: str, new_text: str) -> None:
+    """Keep the version's current text in its history if `new_text` replaces it.
+
+    The one door into history. `update_version` calls it for editor saves, and
+    the library operations that overwrite a CAMPAIGN copy's version file in
+    place -- a sync accept that copies the world's text over a diverged copy, an
+    import of a locked version -- call it too, so the edit they clobber is the
+    newest entry rather than silently gone. A missing file, or an identical one,
+    records nothing."""
+    p = _version_path(root, pid, vid)
+    try:
+        before = p.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+    if before != new_text:
+        _record_revision(root, pid, vid, before)
+
+
+def forget_history(root: Path, pid: str, vid: str | None = None) -> None:
+    """Drop one version's history, or (`vid=None`) the whole PC's.
+
+    For every path that removes version files without `delete_version` --
+    a lock purging sibling versions, an import replacing the locked one, a
+    campaign copy reverting to inherited -- so a history never outlives the
+    text it is the history of, and a later version reusing the id starts
+    clean."""
+    if not safe_id(pid) or (vid is not None and not safe_id(vid)):
+        return
+    target = _pc_dir(root, pid) / _HISTORY_DIR
+    shutil.rmtree(target / vid if vid is not None else target, ignore_errors=True)
+
+
+def _record_revision(root: Path, pid: str, vid: str, text: str) -> None:
+    d = _history_dir(root, pid, vid)
+    d.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    rid = uniquify(stamp, lambda c: (d / f"{c}.md").exists())
+    atomic.write_text(d / f"{rid}.md", text)
+    for old in _revision_ids(root, pid, vid)[:-HISTORY_KEEP]:
+        (d / f"{old}.md").unlink(missing_ok=True)
+
+
+def _saved_at(rid: str) -> str:
+    """The ISO time a revision id names -- when that text was replaced."""
+    try:
+        when = datetime.strptime(rid[:22], "%Y%m%dT%H%M%S%fZ").replace(tzinfo=UTC)
+    except ValueError:
+        return ""
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def list_revisions(root: Path, pid: str, vid: str) -> list[dict]:
+    """The earlier texts of `vid`, newest first: `{id, saved, name}`.
+
+    `name` is the persona name the text held, so a row can say whose text it
+    was when a rename is among the edits."""
+    require_version(root, pid, vid)
+    d = _history_dir(root, pid, vid)
+    out = []
+    for rid in reversed(_revision_ids(root, pid, vid)):
+        try:
+            name = _load_persona((d / f"{rid}.md").read_text(encoding="utf-8"))["name"]
+        except (OSError, UnicodeDecodeError):
+            continue   # pruned or unreadable between the listing and the read
+        out.append({"id": rid, "saved": _saved_at(rid), "name": name})
+    return out
+
+
+def read_revision(root: Path, pid: str, vid: str, rid: str) -> dict:
+    require_version(root, pid, vid)
+    p = _history_dir(root, pid, vid) / f"{rid}.md"
+    if not safe_id(rid) or not p.is_file():
+        raise PCRevisionNotFoundError(rid)
+    return _load_persona(p.read_text(encoding="utf-8"))
+
+
+def restore_revision(root: Path, pid: str, vid: str, rid: str) -> dict:
+    """Put an earlier text back as the version's current one; return it.
+
+    A restore is an ordinary `update_version`, so the text it replaces goes
+    into history too and the restore can itself be undone."""
+    persona = read_revision(root, pid, vid, rid)
+    update_version(root, pid, vid, persona)
+    return persona
 
 
 def set_default_version(root: Path, pid: str, vid: str) -> None:
@@ -268,6 +433,9 @@ def delete_version(root: Path, pid: str, vid: str) -> None:
     # the persona was the only thing that made this version's art addressable;
     # after the unlink for the reason characters.delete_version gives (#360)
     assets.delete_version_images(root, pid, vid, ASSET_BASE)
+    # ...and its history, so a later version reusing the id does not inherit a
+    # dead version's edit trail (#67).
+    forget_history(root, pid, vid)
     meta = _read_meta(root, pid)
     if meta.get("default_version") == vid:
         _write_meta(root, pid, meta.get("name", pid), _tags_of(meta), _version_ids(root, pid)[0])
