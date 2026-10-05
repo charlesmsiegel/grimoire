@@ -4641,7 +4641,8 @@ def _diff_side(entry: dict) -> dict:
     would put the whole of both prompts in a response that exists to say what is
     different about them."""
     return {k: entry.get(k) for k in
-            ("id", "task", "ts", "model", "total_tokens", "dropped_tokens", "budget_tokens")}
+            ("id", "task", "ts", "model", "total_tokens", "dropped_tokens", "budget_tokens",
+             "token_count")}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts/{eid}/diff")
@@ -4682,7 +4683,8 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         conn, _resolution, _routed = _standing_connection("chat", cid)
         model = effective_model(conn) if conn is not None else ""
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model,
-                **store.context.context_breakdown(cid, sid, model=model)}
+                **store.context.context_breakdown(cid, sid, model=model),
+                "token_count": store.tokens.counting(model)}
     else:
         other = store.prompt_log.read_entry(cid, against, scene=sid)
         if other is None:

@@ -44,7 +44,11 @@ def test_the_context_window_is_read_from_vllms_field_too():
                           "max_model_len": 4096})["context"] == 8192
 
 
-@pytest.mark.parametrize("value", [None, 0, -1, "8192", True])
+def test_a_whole_float_context_is_still_a_window():
+    assert catalog.entry({"id": "m", "context_length": 128000.0})["context"] == 128000
+
+
+@pytest.mark.parametrize("value", [None, 0, -1, "8192", True, 1.5])
 def test_a_context_field_that_is_not_a_positive_integer_is_unknown(value):
     assert catalog.entry({"id": "m", "context_length": value})["context"] is None
 

@@ -135,6 +135,9 @@ android/                          ← new top-level Gradle project
   WebView — while `httpx` in the embedded interpreter opens its own sockets.
   The setup a user needs (LAN address instead of `localhost`, a server bound to
   the network) is in `android/README.md`, "Using a local LLM server".
+  One thing to re-check before raising `targetSdk`: newer Android releases are
+  introducing a local-network permission enforced below the Java stack, which
+  would reach these sockets too. At today's `targetSdk = 34` it does not apply.
 - **Single origin.** WebView loads the SPA *from the Python server*, exactly like
   desktop. We deliberately do not use `WebViewAssetLoader` for the static files —
   splitting origins between assets and API would reintroduce CORS and cookie/URL

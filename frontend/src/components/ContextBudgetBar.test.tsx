@@ -9,7 +9,7 @@ const section = (tier: string, tokens: number, dropped = false) => ({
 const ctx = (over: Partial<SceneContext> = {}): SceneContext => ({
   model: "m", total_tokens: 1_000, dropped_tokens: 0, budget_tokens: 4_000,
   sections: [section("lock-in", 400), section("history", 600)],
-  token_count: { tokenizer: "cl100k_base", exact: true },
+  token_count: { tokenizer: "cl100k_base", native: true },
   ...over,
 });
 
@@ -49,10 +49,11 @@ test("a tier the client's union has not caught up with still lands in the bar", 
 
 test("marks the total as an estimate when the tokenizer was not the model's own", () => {
   render(<ContextBudgetBar label="LAST TURN" ctx={ctx({
-    model: "llama3.1:8b", token_count: { tokenizer: "cl100k_base", exact: false },
+    model: "llama3.1:8b", token_count: { tokenizer: "cl100k_base", native: false },
   })} />);
-  const total = screen.getByText("≈ 1,000 / 4,000 · 25%");
-  expect(total).toHaveAttribute("title", expect.stringMatching(/llama3\.1:8b uses its own/));
+  expect(screen.getByText("≈ 1,000 / 4,000 · 25%")).toBeInTheDocument();
+  // Visible text, not a hover title: the Android app has no hover.
+  expect(screen.getByText(/llama3\.1:8b uses its own/)).toBeInTheDocument();
 });
 
 test("a snapshot frozen before tokenizers were recorded reads as an estimate", () => {

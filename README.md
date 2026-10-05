@@ -262,7 +262,9 @@ providers that offer an OpenAI-style endpoint.
 3. Press **Fetch models** (**Refresh models** on a saved connection). Grimoire asks the endpoint's `/models` list and
    offers what it returns; a server that does not serve one (or is not running
    yet) leaves the field as free text, so type the model name the server uses.
-   **Test connection** asks the same endpoint, so it costs no generation.
+   **Test connection** asks the same endpoint, so it costs no generation —
+   which also means a server with no `/models` fails the test even when
+   generation works. Send a turn to be sure.
 4. Some endpoints reject a system message part-way through a conversation. If
    yours does, set **Prompt post-processing** to *Strict*.
 

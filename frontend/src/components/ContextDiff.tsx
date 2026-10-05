@@ -1,5 +1,6 @@
 import { type ContextDiffLine, type PromptDiff, type PromptDiffSection,
          type PromptDiffSide } from "../api/client";
+import { approxMark } from "./ContextBreakdown";
 import { taskLabel, whenLabel } from "./turnLabels";
 
 /** The `id` the server gives the composition as it stands now, as opposed to a
@@ -53,7 +54,8 @@ export function ContextDiff({ diff, recomputing = false }:
         <p className="field-hint">A turn has landed since this was computed; recomputing…</p>
       )}
       <div className="ctx-tokens">
-        {diff.base.total_tokens.toLocaleString()} → {diff.head.total_tokens.toLocaleString()} tok
+        {approxMark(diff.base)}{diff.base.total_tokens.toLocaleString()}
+        {" → "}{approxMark(diff.head)}{diff.head.total_tokens.toLocaleString()} tok
         {delta !== 0 && <span className={"ctx-delta " + (delta > 0 ? "up" : "down")}>
           {signed(delta)}
         </span>}
@@ -124,7 +126,8 @@ export function ContextDiff({ diff, recomputing = false }:
           on every fetch and never reordered in place, so position IS identity
           here and a "stable" key would be the invented one. */}
       {/* eslint-disable-next-line react/no-array-index-key */}
-      {moved.map((s, i) => <DiffSection key={`${i}:${s.id}:${s.status}`} section={s} />)}
+      {moved.map((s, i) => <DiffSection key={`${i}:${s.id}:${s.status}`} section={s}
+                                        counters={counters(diff)} />)}
 
       {/* Only alongside a list of changes: after "nothing changed — every
           section is identical", a line saying some were not shown reads as a
@@ -138,7 +141,17 @@ export function ContextDiff({ diff, recomputing = false }:
   );
 }
 
-function DiffSection({ section }: { section: PromptDiffSection }) {
+/** The two sides' tokenizers when both are recorded and they differ, else
+ *  null. A capture frozen before counters were recorded names none, and
+ *  guessing it would be the "guess printed in the voice of a fact" below. */
+function counters(diff: PromptDiff): [string, string] | null {
+  const a = diff.base.token_count?.tokenizer;
+  const b = diff.head.token_count?.tokenizer;
+  return a && b && a !== b ? [a, b] : null;
+}
+
+function DiffSection({ section, counters }:
+                     { section: PromptDiffSection; counters: [string, string] | null }) {
   const before = section.base?.tokens ?? 0;
   const after = section.head?.tokens ?? 0;
 
@@ -158,7 +171,7 @@ function DiffSection({ section }: { section: PromptDiffSection }) {
       )}
       {/* What the packer did to it, which is a change the words cannot show:
           a section can be identical and still not have been sent. */}
-      {flagNotes(section).map((note) => (
+      {flagNotes(section, counters).map((note) => (
         <div className="field-hint" key={note}>{note}</div>
       ))}
       {section.diff.length > 0 && (
@@ -199,7 +212,8 @@ const PINNED = "Pinned, so the packer left it alone.";
  *  packer then cut never reached the model, and reading its inserted lines
  *  without that would be reading a prompt that was not sent.
  */
-function flagNotes(section: PromptDiffSection): string[] {
+function flagNotes(section: PromptDiffSection,
+                   counters: [string, string] | null = null): string[] {
   const { base, head } = section;
   const only = head ?? base;
   if (!base || !head) {
@@ -254,11 +268,15 @@ function flagNotes(section: PromptDiffSection): string[] {
   // unimportable, which is every Android capture, and a store in a synced
   // folder is compared on whichever device opened it. A trailing newline
   // `splitlines` cannot see and a tokenizer rounding boundary are two more.
-  // `PromptDiffFacts` records neither the counter nor the grouping, so naming
-  // any one of them is a guess printed in the voice of a fact.
+  // The grouping is not recorded, so naming it would be a guess printed in the
+  // voice of a fact. The counter is, when both captures carry `token_count`:
+  // then a different tokenizer is said by name, and otherwise the note names
+  // the symptom and stops.
   if (section.diff.length === 0 && base.tokens !== head.tokens && !notes.length)
-    notes.push("Identical text, counted differently — what moved is the"
-               + " measurement, not the words.");
+    notes.push(counters
+      ? `Identical text, counted by a different tokenizer (${counters[0]} → ${counters[1]}).`
+      : "Identical text, counted differently — what moved is the"
+        + " measurement, not the words.");
   return notes;
 }
 

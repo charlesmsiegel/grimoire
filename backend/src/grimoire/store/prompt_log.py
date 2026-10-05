@@ -252,6 +252,10 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
     keep = depth()
     if keep <= 0:
         return None
+    # How these counts were made, frozen with them: the model and the tokenizer
+    # both change, and a past turn is described by its own. Taken before the
+    # lock, though `counting` never waits anyway (it reads the loader's state).
+    counted = tokens.counting(model)
     row = {"scene": sid, "task": task, "model": model,
            "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
            "total_tokens": breakdown.get("total_tokens", 0),
@@ -278,12 +282,10 @@ def record(cid: str, sid: str, task: str, breakdown: dict, model: str = "") -> s
             # would then refuse the entry it had just listed.
             _root(cid).mkdir(parents=True, exist_ok=True)
             payload = {k: v for k, v in row.items() if k != "scene"}
-            # How these counts were made, frozen with them: the model and the
-            # tokenizer both change, and a past turn is described by its own.
             # Payload only, like the sections -- the list view never shows it.
             # An entry written before this existed has none, which the
             # inspector reads as "estimate", the answer it cannot rule out.
-            payload["token_count"] = tokens.counting(model)
+            payload["token_count"] = counted
             atomic.write_text(_entry_path(cid, eid),
                               json.dumps({"id": eid, **payload, **breakdown}, indent=2) + "\n")
             evicted = index["entries"][:max(0, len(index["entries"]) - keep)]

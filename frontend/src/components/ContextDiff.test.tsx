@@ -103,7 +103,7 @@ test("a section renamed since the captured turn names its old label", () => {
 test("the two totals are shown with the delta between them", () => {
   render(<ContextDiff diff={diff({ base: side({ total_tokens: 1000 }),
                                    head: side({ id: "live", total_tokens: 1240 }) })} />);
-  screen.getByText(/1,000 → 1,240 tok/);
+  screen.getByText(/≈ 1,000 → ≈ 1,240 tok/);
   screen.getByText("+240");
 });
 
@@ -278,6 +278,30 @@ test("identical words at a different cost say so, rather than a bare delta", () 
   })} />);
   screen.getByText(/Identical text, counted differently/);
   screen.getByText("−12");
+});
+
+test("when both captures name their tokenizer, a counter change is said by name", () => {
+  // An Android capture (counted by length) against a desktop preview: the
+  // one cause of an identical-text delta the payload can actually prove.
+  render(<ContextDiff diff={diff({
+    base: side({ token_count: { tokenizer: "heuristic", native: false } }),
+    head: side({ id: "live", task: "live", ts: "",
+                 token_count: { tokenizer: "cl100k_base", native: false } }),
+    sections: [section({ id: "history", label: "Conversation history", status: "changed",
+                         base: facts({ tokens: 54 }), head: facts({ tokens: 42 }),
+                         diff: [] })],
+  })} />);
+  screen.getByText("Identical text, counted by a different tokenizer (heuristic → cl100k_base).");
+});
+
+test("a native count on both sides carries no estimate mark", () => {
+  const native = { tokenizer: "cl100k_base", native: true };
+  render(<ContextDiff diff={diff({
+    base: side({ total_tokens: 1000, token_count: native }),
+    head: side({ id: "live", task: "live", ts: "", total_tokens: 1240, token_count: native }),
+    sections: [section()],
+  })} />);
+  screen.getByText(/^1,000 → 1,240 tok/);
 });
 
 test("a section with lines to show is not given the counted-differently note", () => {

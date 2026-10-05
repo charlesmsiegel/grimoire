@@ -12,14 +12,14 @@ const models = [{ id: "gpt-4", name: "GPT-4", context: 200, prompt: null, comple
 
 test("a count made with the model's own tokenizer is shown plain", () => {
   render(<ContextBreakdown models={models}
-                           ctx={ctx({ token_count: { tokenizer: "cl100k_base", exact: true } })} />);
+                           ctx={ctx({ token_count: { tokenizer: "cl100k_base", native: true } })} />);
   expect(screen.getByText("100 / 200 tok")).toBeInTheDocument();
   expect(screen.queryByText(/Estimated/)).toBeNull();
 });
 
 test("another model's tokenizer marks the counts as estimates and says whose", () => {
   render(<ContextBreakdown models={models} ctx={ctx({
-    model: "anthropic/claude-sonnet-4.5", token_count: { tokenizer: "cl100k_base", exact: false },
+    model: "anthropic/claude-sonnet-4.5", token_count: { tokenizer: "cl100k_base", native: false },
   })} />);
   expect(screen.getByText("≈ 100 tok")).toBeInTheDocument();
   expect(screen.getByText(/counted with cl100k_base .* anthropic\/claude-sonnet-4\.5 uses its own/))
@@ -28,7 +28,7 @@ test("another model's tokenizer marks the counts as estimates and says whose", (
 
 test("the length heuristic says it is one", () => {
   render(<ContextBreakdown models={models}
-                           ctx={ctx({ token_count: { tokenizer: "heuristic", exact: false } })} />);
+                           ctx={ctx({ token_count: { tokenizer: "heuristic", native: false } })} />);
   expect(screen.getByText("≈ 100 / 200 tok")).toBeInTheDocument();
   expect(screen.getByText(/about four characters each/)).toBeInTheDocument();
 });

@@ -1,4 +1,4 @@
-import { type SceneContext } from "../api/client";
+import { type SceneContext, type TokenCounting } from "../api/client";
 import { type Model } from "../api/models";
 
 /** The context panel's body: the fill bar, the totals, and one collapsible row
@@ -62,8 +62,8 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
 /** "≈ " when these counts are not the model's own tokenizer's, "" when they
  *  are. A snapshot frozen before the server said which tokenizer counted is an
  *  estimate too: that is the answer nobody can rule out. */
-export function approxMark(ctx: SceneContext): string {
-  return ctx.token_count?.exact ? "" : "≈ ";
+export function approxMark(ctx: { token_count?: TokenCounting | null }): string {
+  return ctx.token_count?.native ? "" : "≈ ";
 }
 
 /** Why the counts are estimates, in one sentence. Only meaningful when
@@ -78,7 +78,8 @@ export function estimateNote(ctx: SceneContext): string {
     return "Estimated: no tokenizer is available here, so tokens are counted as "
       + "about four characters each. The provider's own count will differ.";
   }
-  return `Estimated: counted with ${tokenizer} (OpenAI's GPT-4 tokenizer); `
+  const whose = tokenizer === "cl100k_base" ? " (OpenAI's GPT-4 tokenizer)" : "";
+  return `Estimated: counted with ${tokenizer}${whose}; `
     + `${model} uses its own, so the provider's count will differ.`;
 }
 
