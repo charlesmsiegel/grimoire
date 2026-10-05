@@ -466,3 +466,23 @@ def test_extend_on_a_closed_branch_is_refused(client):
     result = client.post(f"/api/campaigns/{cid}/scenes/{branch}/responses/{branch_rid}/extend")
     assert result.status_code == 409 and result.json()["kind"] == "branch_closed"
     assert fake.calls == 0
+
+
+def test_a_fallback_capture_records_the_tail_that_fallback_was_sent(monkeypatch, tmp_path):
+    """Plan-gate ruling 5: the prompt log holds a fallback's own ending."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    recorded = []
+    monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
+    monkeypatch.setattr(character_turns, "_record_prompt",
+                        lambda cid, sid, task, breakdown, **kw: recorded.append((task, kw)))
+    monkeypatch.setattr(character_turns, "_fallback_connection",
+                        lambda: {"kind": "openai_compatible", "model": "fb", "prefill": False})
+    conn = {"kind": "openrouter", "model": "m", "prefill": True}
+    tailed = character_turns._extend_messages(_SNAP, conn, "Mara waits", "", None)
+    character_turns._capture("c", "s", "extend", tailed, conn)
+    assert recorded[-1][1]["messages"][-1] == {"role": "assistant", "content": "Mara waits"}
+    tailed.for_model("fb")          # what dispatch does on the fallback attempt
+    task, kw = recorded[-1]
+    assert task == "extend" and kw["model"] == "fb"
+    assert kw["messages"][-2] == {"role": "assistant", "content": "Mara waits"}
+    assert kw["messages"][-1]["role"] == "user"
