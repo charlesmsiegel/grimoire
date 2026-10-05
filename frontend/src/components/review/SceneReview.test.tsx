@@ -3564,3 +3564,426 @@ test("moving to the wrap-up url does not throw away decisions in progress", asyn
     .getByLabelText("all 1 answered")).toBeInTheDocument();
   expect(screen.getByText(/0 accepted · 1 rejected/)).toBeInTheDocument();
 });
+
+// ---- the existing-record check (continuity identity, Slice C) -------------
+//
+// A proposed-new plot thread or commitment the identity step examined carries
+// `identity_check`: what was decided, why, the stored records it might be, and
+// SERVER-rendered alternatives the reviewer can swap the row to wholesale.
+
+const TITHE_BEAT = "The guild demanded Mara pay the Saltmarch tithe.";
+const LOW_CITED = { certainty: 0.8, quote: "Pay the tithe by dawn.", speaker: "Mara",
+                    authority: "self", score: 0.8, band: "low" };
+const MEDIUM_CITED = { ...LOW_CITED, band: "medium" };
+const LEDGER_SIGNALS = { title_equal: false, slug_equal: false, tokens: 0.3, chars: 0.4,
+                         cosine: null, actors: ["mara"], scenes: [], anchors: [],
+                         via: "lexical" };
+const LEDGER_CANDIDATE = {
+  ref: "thread:find-the-ledger", title: "Find the ledger", status: "open",
+  latest_beat: "Winifred learned the harbour ledger exists.", signals: LEDGER_SIGNALS };
+const LEDGER_BEFORE = "Find the ledger — open — Winifred learned the harbour ledger exists.";
+/** The row staged as a new thread, as the server renders it. */
+const TITHE_AS_NEW = {
+  id: "plot:the-saltmarch-tithe", kind: "plot",
+  target: { kind: "plot", id: "the-saltmarch-tithe" },
+  label: "The Saltmarch tithe — open", field: "beat", authored: false,
+  before: "", after: TITHE_BEAT,
+  payload: { id: "the-saltmarch-tithe", title: "The Saltmarch tithe", status: "open",
+             scene: "s1" } };
+/** The same row staged onto the stored thread it may be. */
+const ONTO_LEDGER = {
+  id: "plot:find-the-ledger", kind: "plot", target: { kind: "plot", id: "find-the-ledger" },
+  label: "Find the ledger — advanced", field: "beat", authored: false,
+  before: LEDGER_BEFORE, after: TITHE_BEAT,
+  payload: { id: "find-the-ledger", title: "Find the ledger", status: "advanced",
+             scene: "s1" } };
+const identityCheck = (over: Record<string, unknown> = {}) => ({
+  decision: "uncertain", status: "accepted", reason: "both are about what Mara owes the guild",
+  proposed: { title: "The Saltmarch tithe", why_new: "", distinguished_from: [] },
+  candidates: [LEDGER_CANDIDATE], alternatives: [{ ...ONTO_LEDGER, review: LOW_CITED }],
+  ...over });
+const UNCERTAIN_TITHE = { ...TITHE_AS_NEW, review: LOW_CITED, identity_check: identityCheck() };
+/** A plain, unexamined row moving the stored thread itself. */
+const LEDGER_CLOSE = {
+  ...ONTO_LEDGER, label: "Find the ledger — closed", after: "Winifred found the ledger.",
+  payload: { ...ONTO_LEDGER.payload, status: "closed" }, review: MEDIUM_CITED };
+const IDENTITY_OK = { status: "ok", reason: null, attempted: true, budget_exhausted: false,
+                      matching: "semantic", counts: {} };
+const PHASES_WITH_IDENTITY = PHASES_NONE_CUT.map((p) => (
+  p.name === "identity" ? { ...p, status: "ok", attempted: true } : p));
+const UNCERTAIN_HINT = "Possible existing record — reject this row, or switch it to the "
+  + "existing record, if it is the same business.";
+const NO_ALTERNATIVE_HINT = "The matching record is closed or already used by another row in "
+  + "this scene; this stays a new record unless you reject it.";
+const USE_LEDGER = "Use Find the ledger instead of The Saltmarch tithe — open";
+const saveButton = () =>
+  screen.getByRole("button", { name: /accept all .* & save|save \d+ decisions/i });
+const sentEdits = (call = 0) => (api.saveChronicle as any).mock.calls[call][2].edits;
+
+async function openIdentityReview(edits: unknown[], over: Record<string, unknown> = {}) {
+  absorbWithPhases(PHASES_WITH_IDENTITY, { edits, identity: IDENTITY_OK, ...over });
+  return openAbsorb();
+}
+
+test("an uncertain row arrives unticked in the low drawer wearing the chip, hint and a Use … instead button",
+  async () => {
+    await openIdentityReview([UNCERTAIN_TITHE]);
+    expect(reviewColumn().getByRole("button", { name: /low confidence/i })).toHaveTextContent("1");
+    const card = cardFor(/The Saltmarch tithe/);
+    expect(card).not.toHaveClass("approved");
+    const chip = within(card).getByText("Possible existing record");
+    expect(chip).toHaveClass("absorb-identity-badge");
+    expect(chip.getAttribute("title")).toBe("both are about what Mara owes the guild");
+    // the reason is visible text, not only a tooltip
+    expect(within(card).getByText("both are about what Mara owes the guild")).toBeTruthy();
+    expect(within(card).getByText(UNCERTAIN_HINT)).toBeTruthy();
+    expect(within(card).getByText(/Winifred learned the harbour ledger exists/)).toBeTruthy();
+    const use = within(card).getByRole("button", { name: USE_LEDGER });
+    expect(use).toHaveTextContent("Use Find the ledger instead");
+    expect(use).not.toBeDisabled();
+  });
+
+test("an uncertain row whose only candidate is closed shows the chip, the reason, the candidate's closed status and the no-alternative hint, and no Use … instead button",
+  async () => {
+    const downgraded = {
+      ...UNCERTAIN_TITHE,
+      identity_check: identityCheck({
+        status: "downgraded", reason: "that record is already closed or resolved",
+        candidates: [{ ...LEDGER_CANDIDATE, status: "closed" }], alternatives: [] }) };
+    await openIdentityReview([downgraded]);
+    const card = cardFor(/The Saltmarch tithe/);
+    expect(within(card).getByText("Possible existing record")).toBeTruthy();
+    expect(within(card).getByText("that record is already closed or resolved")).toBeTruthy();
+    // the candidate's own status, so a closed one reads as closed
+    expect(card.querySelector(".absorb-identity li")?.textContent).toMatch(/Find the ledger.*closed/);
+    expect(within(card).getByText(NO_ALTERNATIVE_HINT)).toBeTruthy();
+    expect(within(card).queryByText(UNCERTAIN_HINT)).toBeNull();
+    expect(within(card).queryByRole("button", { name: /^Use .* instead/ })).toBeNull();
+  });
+
+test("the second of two rows mapped to one record shows the chip and the no-alternative hint",
+  async () => {
+    const first = { ...ONTO_LEDGER, review: MEDIUM_CITED,
+      identity_check: identityCheck({ decision: "existing", reason: "the same search",
+        alternatives: [{ ...TITHE_AS_NEW, review: MEDIUM_CITED }] }) };
+    const second = {
+      ...TITHE_AS_NEW, id: "plot:the-saltmarch-ledger",
+      target: { kind: "plot", id: "the-saltmarch-ledger" }, label: "The Saltmarch ledger — open",
+      payload: { ...TITHE_AS_NEW.payload, id: "the-saltmarch-ledger",
+                 title: "The Saltmarch ledger" },
+      review: LOW_CITED,
+      identity_check: identityCheck({
+        status: "downgraded", reason: "another row in this scene already moves that record",
+        proposed: { title: "The Saltmarch ledger", why_new: "", distinguished_from: [] },
+        alternatives: [] }) };
+    await openIdentityReview([first, second]);
+    const card = cardFor(/The Saltmarch ledger/);
+    expect(within(card).getByText("Possible existing record")).toBeTruthy();
+    expect(within(card).getByText("another row in this scene already moves that record"))
+      .toBeTruthy();
+    expect(within(card).getByText(NO_ALTERNATIVE_HINT)).toBeTruthy();
+    expect(within(card).queryByRole("button", { name: /^Use .* instead/ })).toBeNull();
+  });
+
+test("an accepted retarget wears \"Matched an existing record\" and \"Keep as a new record\" restores the model's title and id",
+  async () => {
+    const accepted = { ...ONTO_LEDGER, review: MEDIUM_CITED,
+      identity_check: identityCheck({ decision: "existing", reason: "the same search",
+        alternatives: [{ ...TITHE_AS_NEW, review: MEDIUM_CITED }] }) };
+    await openIdentityReview([accepted]);
+    const card = cardFor(/Find the ledger — advanced/);
+    expect(within(card).getByText("Matched an existing record")).toBeTruthy();
+    expect(within(card).queryByText("Possible existing record")).toBeNull();
+    const keep = within(card).getByRole("button", {
+      name: "Keep The Saltmarch tithe as a new record instead of Find the ledger — advanced" });
+    expect(keep).toHaveTextContent(/^Keep as a new record$/);
+    fireEvent.click(keep);
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+    const [row] = sentEdits();
+    expect(row).toMatchObject({ id: "plot:the-saltmarch-tithe",
+      target: { kind: "plot", id: "the-saltmarch-tithe" }, before: "",
+      payload: { id: "the-saltmarch-tithe", title: "The Saltmarch tithe" } });
+  });
+
+test("Use … instead swaps the row in place and the save sends the alternative's id, target, before and payload in the same position",
+  async () => {
+    const lore = { id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
+      label: "The Pact — lore", field: "body", authored: false,
+      before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning.",
+      review: MEDIUM_CITED };
+    const state = { id: "character_state:seraphine", kind: "character_state",
+      target: { kind: "characters", id: "seraphine" }, label: "Seraphine — current state",
+      field: "current_state", before: "Wary.", after: "Loyal now.", authored: false,
+      review: { ...MEDIUM_CITED, band: "high" } };
+    await openIdentityReview([state, UNCERTAIN_TITHE, lore]);
+    fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+    const sent = sentEdits();
+    expect(sent.map((e: any) => e.id))
+      .toEqual(["character_state:seraphine", "plot:find-the-ledger", "lore:the-pact"]);
+    expect(sent[1]).toMatchObject({ target: ONTO_LEDGER.target, before: LEDGER_BEFORE,
+                                    payload: ONTO_LEDGER.payload, label: ONTO_LEDGER.label });
+    // the check's own account of the row survives the swap
+    expect(sent[1].identity_check).toMatchObject({ decision: "uncertain",
+                                                   candidates: [LEDGER_CANDIDATE] });
+  });
+
+test("the save body never carries identity_check.alternatives, swapped or not", async () => {
+  const other = { ...UNCERTAIN_TITHE, id: "plot:the-saltmarch-ledger",
+    target: { kind: "plot", id: "the-saltmarch-ledger" }, label: "The Saltmarch ledger — open",
+    payload: { ...TITHE_AS_NEW.payload, id: "the-saltmarch-ledger",
+               title: "The Saltmarch ledger" },
+    identity_check: identityCheck({ candidates: [{ ...LEDGER_CANDIDATE,
+      ref: "thread:mara-s-map", title: "Mara's map" }],
+      alternatives: [{ ...ONTO_LEDGER, id: "plot:mara-s-map",
+        target: { kind: "plot", id: "mara-s-map" }, label: "Mara's map — advanced",
+        payload: { ...ONTO_LEDGER.payload, id: "mara-s-map", title: "Mara's map" } }] }) };
+  await openIdentityReview([UNCERTAIN_TITHE, other]);
+  fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const sent = sentEdits();
+  expect(sent).toHaveLength(2);
+  for (const e of sent) {
+    expect(e.identity_check).toBeTruthy();
+    expect("alternatives" in e.identity_check).toBe(false);
+    expect("approved" in e).toBe(false);
+  }
+});
+
+test("undo after a swap offers the original back and swapping back restores it", async () => {
+  await openIdentityReview([UNCERTAIN_TITHE]);
+  fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
+  // a swap is a verdict: the row folds to a line the reviewer can undo
+  fireEvent.click(await screen.findByRole("button", { name: "Undo Find the ledger — advanced" }));
+  const back = screen.getByRole("button", {
+    name: "Keep The Saltmarch tithe as a new record instead of Find the ledger — advanced" });
+  expect(back).toHaveTextContent("Keep as a new record");
+  fireEvent.click(back);
+  // ...and the original's own switch is offered again
+  fireEvent.click(await screen.findByRole("button", { name: "Undo The Saltmarch tithe — open" }));
+  expect(screen.getByRole("button", { name: USE_LEDGER })).toBeTruthy();
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const [row] = sentEdits();
+  expect(row).toMatchObject({ ...TITHE_AS_NEW, review: LOW_CITED });
+  expect(row.resolve).toBeUndefined();
+  expect(row.resolve_from).toBeUndefined();
+});
+
+test("a swap clears that row's unanswered conflict", async () => {
+  const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [{ id: TITHE_AS_NEW.id, label: TITHE_AS_NEW.label, kind: "plot",
+                    field: "beat", before: "", after: TITHE_BEAT,
+                    stored: "The Saltmarch tithe — open — someone else opened it",
+                    reason: "this plot thread changed since the scene was absorbed",
+                    mergeable: false, merged: TITHE_BEAT, index: 0 }] }));
+  await openIdentityReview([UNCERTAIN_TITHE]);
+  fireEvent.click(saveButton());
+  await screen.findByText(/One proposed change no longer matches/);
+  fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
+  expect(screen.queryByText(/no longer match/)).toBeNull();
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalledTimes(2));
+  expect(sentEdits(1)[0].id).toBe("plot:find-the-ledger");
+});
+
+test("Use … instead is disabled when another row already targets that record", async () => {
+  await openIdentityReview([UNCERTAIN_TITHE, LEDGER_CLOSE]);
+  expect(screen.getByRole("button", { name: USE_LEDGER })).toBeDisabled();
+});
+
+test("rows without identity_check, and reviews stored before this slice, show no chip",
+  async () => {
+    // No `identity` block, no identity phase row, no `identity_check`: exactly
+    // what a review stored before the check existed carries.
+    absorbWithPhases(PHASES_NONE_CUT.filter((p) => p.name !== "identity"),
+                     { edits: [{ ...TITHE_AS_NEW, review: LOW_CITED }] });
+    await openAbsorb();
+    cardFor(/The Saltmarch tithe/);
+    expect(screen.queryByText("Possible existing record")).toBeNull();
+    expect(screen.queryByText("Matched an existing record")).toBeNull();
+    expect(document.querySelector(".absorb-identity")).toBeNull();
+    expect(screen.queryByText(/existing-record check/)).toBeNull();
+    expect(screen.queryByText(/Basic matching/)).toBeNull();
+  });
+
+test("an accepted new row wears no chip but still lists its candidates and offers the switch",
+  async () => {
+    await openIdentityReview([{ ...UNCERTAIN_TITHE, review: MEDIUM_CITED,
+      identity_check: identityCheck({ decision: "new", reason: "a different obligation" }) }]);
+    const card = cardFor(/The Saltmarch tithe/);
+    expect(within(card).queryByText("Possible existing record")).toBeNull();
+    expect(within(card).queryByText("Matched an existing record")).toBeNull();
+    expect(within(card).getByText("a different obligation")).toBeTruthy();
+    expect(within(card).getByRole("button", { name: USE_LEDGER })).toBeTruthy();
+  });
+
+test("a budget-cut identity phase is listed as the existing-record check under Cut short",
+  async () => {
+    absorbWithPhases(PHASES_NONE_CUT.map((p) => (p.name === "identity"
+      ? { ...p, status: "failed", reason: "the absorb time budget ran out",
+          attempted: false, budget_exhausted: true }
+      : p)), { identity: { ...IDENTITY_OK, status: "failed", attempted: false,
+                     budget_exhausted: true, reason: "the absorb time budget ran out" } });
+    await openAbsorb();
+    await screen.findByText(/only partly absorbed/);
+    expect(screen.getByText(/Cut short: the existing-record check\./)).toBeInTheDocument();
+  });
+
+test("a conflict after an untouched low row lands on its own row", async () => {
+  const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+  const lore = { id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
+    label: "The Pact — lore", field: "body", authored: false,
+    before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning.",
+    review: MEDIUM_CITED };
+  // The batch is every row not REJECTED, so the untouched low row is batch 0
+  // and the lore row batch 1 -- not batch 0, as counting approved rows had it.
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [{ ...PACT_CONFLICT, index: 1 }] }));
+  await openIdentityReview([UNCERTAIN_TITHE, lore]);
+  fireEvent.click(saveButton());
+  await screen.findByText(/One proposed change no longer matches/);
+  showProposal(() => screen.queryByRole("button", { name: /Keep stored The Pact/ }));
+  expect(screen.getByRole("button", { name: /Keep stored The Pact/ })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /Keep stored The Saltmarch tithe/ })).toBeNull();
+});
+
+test("a conflict on the untouched low row itself is shown, and its drawer opens", async () => {
+  const { ApiError } = await vi.importActual<typeof import("../../api/client")>("../../api/client");
+  const lore = { id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
+    label: "The Pact — lore", field: "body", authored: false,
+    before: "Signed at dusk.", after: "Signed at dusk.\n\nBroken by morning.",
+    review: MEDIUM_CITED };
+  (api.saveChronicle as any).mockRejectedValueOnce(new ApiError(
+    409, "some proposed changes no longer match what is stored", "edit_conflicts",
+    { conflicts: [{ id: TITHE_AS_NEW.id, label: TITHE_AS_NEW.label, kind: "plot",
+                    field: "beat", before: "", after: TITHE_BEAT,
+                    stored: "The Saltmarch tithe — open — someone else opened it",
+                    reason: "this plot thread changed since the scene was absorbed",
+                    mergeable: false, merged: TITHE_BEAT, index: 0 }] }));
+  await openIdentityReview([UNCERTAIN_TITHE, lore]);
+  // leave the low drawer, so the conflicted row is off screen when the save comes back
+  fireEvent.click(reviewColumn().getByRole("button", { name: /world records & cards/i }));
+  expect(screen.queryByRole("button", { name: USE_LEDGER })).toBeNull();
+  fireEvent.click(saveButton());
+  await screen.findByText(/One proposed change no longer matches/);
+  expect(screen.getByRole("button", { name: /Keep stored The Saltmarch tithe/ })).toBeTruthy();
+});
+
+test("renaming the scene repoints alternatives, then swapping and saving sends the new scene",
+  async () => {
+    const STALE = "debt, open — Mara owes the guild. [1 beat, last moved in s1]";
+    const debtCandidate = { ...LEDGER_CANDIDATE, ref: "commitment:maras-debt",
+      title: "Mara's debt to the Saltmarch guild" };
+    const ontoDebt = { id: "commitment:maras-debt", kind: "commitment",
+      target: { kind: "commitments", id: "maras-debt" },
+      label: "Mara's debt to the Saltmarch guild — debt, open", field: "beat", authored: false,
+      before: STALE, after: TITHE_BEAT, review: LOW_CITED,
+      payload: { id: "maras-debt", title: "Mara's debt to the Saltmarch guild", kind: "",
+                 status: "", due: null, scene: "s1" } };
+    const tithe = { id: "commitment:the-saltmarch-tithe", kind: "commitment",
+      target: { kind: "commitments", id: "the-saltmarch-tithe" },
+      label: "The Saltmarch tithe — debt", field: "beat", authored: false,
+      before: "", after: TITHE_BEAT, review: LOW_CITED,
+      payload: { id: "the-saltmarch-tithe", title: "The Saltmarch tithe", kind: "debt",
+                 status: "", due: null, scene: "s1" },
+      identity_check: identityCheck({ candidates: [debtCandidate], alternatives: [ontoDebt] }) };
+    (api.renameScene as any).mockResolvedValue({ id: "s1-renamed", title: "New" });
+    (api.saveChronicle as any).mockResolvedValue({ id: "s1-renamed", one_line: "o", summary: "s",
+      keywords: [], cast: [], location: "", date: "", absorbed: "t", applied: [], failures: [] });
+    await openIdentityReview([tithe]);
+
+    fireEvent.click(screen.getByRole("button", { name: /rename/i }));
+    const input = screen.getByDisplayValue("Old");
+    fireEvent.change(input, { target: { value: "New" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(api.renameScene).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Use Mara's debt to the Saltmarch guild instead of The Saltmarch tithe — debt" }));
+    fireEvent.click(saveButton());
+    await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+    expect((api.saveChronicle as any).mock.calls[0][1]).toBe("s1-renamed");
+    const [row] = sentEdits();
+    expect(row.id).toBe("commitment:maras-debt");
+    expect(row.payload.scene).toBe("s1-renamed");
+    expect(row.before).toBe("debt, open — Mara owes the guild. [1 beat, last moved in s1-renamed]");
+  });
+
+test("a swap keeps the reviewer's edited beat", async () => {
+  await openIdentityReview([UNCERTAIN_TITHE]);
+  fireEvent.change(screen.getByLabelText("After The Saltmarch tithe — open"),
+                   { target: { value: "Mara refused the tithe outright." } });
+  fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
+  fireEvent.click(saveButton());
+  await waitFor(() => expect(api.saveChronicle).toHaveBeenCalled());
+  const [row] = sentEdits();
+  expect(row).toMatchObject({ id: "plot:find-the-ledger", target: ONTO_LEDGER.target,
+                              before: LEDGER_BEFORE, payload: ONTO_LEDGER.payload,
+                              after: "Mara refused the tithe outright." });
+});
+
+test("un-rejecting a row whose record a swapped row now targets blocks the save", async () => {
+  await openIdentityReview([UNCERTAIN_TITHE, LEDGER_CLOSE]);
+  const column = reviewColumn();
+  fireEvent.click(column.getByRole("button", { name: /plot & commitments/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Reject Find the ledger — closed" }));
+  fireEvent.click(column.getByRole("button", { name: /low confidence/i }));
+  // with the other row rejected the switch is open, and taken
+  fireEvent.click(screen.getByRole("button", { name: USE_LEDGER }));
+  fireEvent.click(column.getByRole("button", { name: /plot & commitments/i }));
+  fireEvent.click(screen.getByRole("button", { name: "Reject Find the ledger — closed" }));
+  fireEvent.click(saveButton());
+  const notice = await screen.findByText(/write the same record/);
+  expect(notice.textContent).toContain("Find the ledger — advanced");
+  expect(notice.textContent).toContain("Find the ledger — closed");
+  expect(api.saveChronicle).not.toHaveBeenCalled();
+  // the drawer holding the clash is the one on screen
+  expect(screen.getByText(/APPROVED · Find the ledger — advanced/)).toBeTruthy();
+});
+
+test("a failed identity phase with no checked rows says only that the check could not run",
+  async () => {
+    const failed = { ...IDENTITY_OK, status: "failed", reason: "the resolver call failed" };
+    absorbWithPhases(PHASES_WITH_IDENTITY, { identity: failed,
+      edits: [{ ...TITHE_AS_NEW, review: LOW_CITED }] });
+    const { unmount } = await openAbsorb();
+    expect(screen.getByText("The existing-record check could not run.")).toBeTruthy();
+    expect(screen.queryByText(/rows still list/)).toBeNull();
+    unmount();
+
+    absorbWithPhases(PHASES_WITH_IDENTITY, { identity: failed,
+      edits: [{ ...UNCERTAIN_TITHE, identity_check: identityCheck({ decision: "unchecked",
+        status: "hint_only", reason: "the check could not run" }) }] });
+    await openAbsorb();
+    expect(screen.getByText(
+      "The existing-record check could not run; rows still list their possible matches."))
+      .toBeTruthy();
+  });
+
+test("basic matching is named when the possible-match lists came from basic matching",
+  async () => {
+    const BASIC = "Basic matching active — semantic matching not configured";
+    absorbWithPhases(PHASES_WITH_IDENTITY, { identity: { ...IDENTITY_OK, matching: "basic" },
+      edits: [UNCERTAIN_TITHE] });
+    let view = await openAbsorb();
+    expect(screen.getByText(BASIC)).toBeTruthy();
+    view.unmount();
+
+    // semantic matching, or nothing listed, says nothing about it
+    absorbWithPhases(PHASES_WITH_IDENTITY, { identity: IDENTITY_OK, edits: [UNCERTAIN_TITHE] });
+    view = await openAbsorb();
+    expect(screen.queryByText(BASIC)).toBeNull();
+    view.unmount();
+
+    absorbWithPhases(PHASES_WITH_IDENTITY, { identity: { ...IDENTITY_OK, matching: "basic" },
+      edits: [{ ...TITHE_AS_NEW, review: LOW_CITED }] });
+    await openAbsorb();
+    expect(screen.queryByText(BASIC)).toBeNull();
+  });

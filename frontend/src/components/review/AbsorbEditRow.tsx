@@ -4,16 +4,22 @@
 // the row's position in `editRows`, which is what the conflict verdicts (#111)
 // and the submitted batch are both keyed on, so it is passed in rather than
 // recomputed from either list's own ordering.
-import { AUTHORITY_LABELS, CONTRADICTION_SOURCES, isUncited, type EditRow } from "./editRows";
+import {
+  AUTHORITY_LABELS, CONTRADICTION_SOURCES, IDENTITY_NO_ALTERNATIVE_HINT, IDENTITY_UNCERTAIN_HINT,
+  identityChip, isCandidateAlternative, isUncited, targetTaken, type EditRow,
+} from "./editRows";
 import type { SceneReview } from "./useSceneReview";
 
 export default function AbsorbEditRow({ e, i, review }: {
   e: EditRow; i: number; review: SceneReview;
 }) {
   const {
-    absorb, conflictByRow, contradictionById, decide, editRow, editPayload,
-    resolveConflict, setReviewQuote,
+    absorb, conflictByRow, contradictionById, decide, editRow, editPayload, editRows,
+    resolveConflict, setReviewQuote, switchToAlternative,
   } = review;
+  const ic = e.identity_check;
+  const chip = identityChip(e);
+  const alternatives = ic?.alternatives ?? [];
   const isNewRecord = e.kind === "new_character" || e.kind === "new_location" || e.kind === "new_lore";
   const conflict = conflictByRow.get(i);
   const setPayload = (patch: Record<string, unknown>) => editPayload(i, patch);
@@ -74,6 +80,13 @@ export default function AbsorbEditRow({ e, i, review }: {
                        `"${contradictionById.get(e.id)!.label}"`}>
             later scene disagrees
           </span>)}
+        {/* The existing-record check (spec §10.3), modelled on the badge
+            above: advisory, and the reason is a tooltip here AND visible text
+            in the block below, since a tooltip alone is unreachable on touch. */}
+        {ic && chip && (
+          <span className="chip absorb-identity-badge" title={ic.reason || undefined}>
+            {chip}
+          </span>)}
       </div>
       {/* Under the label rather than the diff for the rows whose "diff" is an
           editable textarea: the citation is what the proposal RESTS on, and a
@@ -84,6 +97,41 @@ export default function AbsorbEditRow({ e, i, review }: {
           {e.review.quote && <q>{e.review.quote}</q>}
           {e.review.speaker && (e.review.quote ? ` — ${e.review.speaker}` : e.review.speaker)}
         </p>)}
+      {ic && (
+        <div className="absorb-identity">
+          {ic.reason && <p className="field-hint">{ic.reason}</p>}
+          {/* The spec's hint names a switch; a row with nothing to switch to
+              (its only candidate is closed, or another row holds it) gets the
+              sentence that is true of it instead. */}
+          {ic.decision === "uncertain" && (
+            <p className="field-hint">
+              {alternatives.length > 0 ? IDENTITY_UNCERTAIN_HINT : IDENTITY_NO_ALTERNATIVE_HINT}
+            </p>)}
+          {ic.candidates.length > 0 && (
+            <ul className="absorb-identity-candidates">
+              {ic.candidates.map((c) => (
+                <li key={c.ref}>
+                  <strong>{c.title}</strong>{c.status && ` · ${c.status}`}
+                  {c.latest_beat && ` — ${c.latest_beat}`}
+                </li>))}
+            </ul>)}
+          {alternatives.length > 0 && (
+            <div className="form-actions">
+              {alternatives.map((alt, k) => {
+                const title = (typeof alt.payload?.title === "string" && alt.payload.title)
+                  || alt.label;
+                const onto = isCandidateAlternative(alt, ic);
+                return (
+                  <button key={alt.id} className="subtle"
+                          aria-label={onto ? `Use ${title} instead of ${e.label}`
+                                           : `Keep ${title} as a new record instead of ${e.label}`}
+                          disabled={targetTaken(editRows, alt, i)}
+                          onClick={() => switchToAlternative(i, k)}>
+                    {onto ? `Use ${title} instead` : "Keep as a new record"}
+                  </button>);
+              })}
+            </div>)}
+        </div>)}
       {conflict && (
         <div className="absorb-conflict">
           <p className="field-hint">{conflict.reason} — it now reads:</p>

@@ -6,7 +6,7 @@
 // `CampaignView` before the review moved out of it (#378); it is separated from
 // `useSceneReview` so the routing rules can be tested — and read — without
 // mounting anything.
-import type { AbsorbPhase, Dossiers, StagedEdit } from "../../api/client";
+import type { AbsorbPhase, Dossiers, IdentityCheck, StagedEdit } from "../../api/client";
 
 /** A staged edit plus the reviewer's standing verdict on it.
  *
@@ -23,6 +23,7 @@ export type EditRow = StagedEdit & {
 // wire names say where the work happens; these say what the reviewer lost.
 export const PHASE_LABELS: Record<AbsorbPhase["name"], string> = {
   extraction: "the scene summary",
+  identity: "the existing-record check",
   dossiers: "NPC dossiers",
   voice: "voice checks",
   audit: "mechanics audit",
@@ -140,4 +141,85 @@ export function dossierNotice(d: Dossiers): string {
   // the ground at all (an unreadable cast).
   return d.status === "degraded" ? `Some NPC dossiers were not prepared: ${d.reason}`
                                  : `NPC dossier refresh failed: ${d.reason}`;
+}
+
+// ---- the existing-record check (spec §10.3) -------------------------------
+
+/** What an uncertain row says when there is a record to switch it to. */
+export const IDENTITY_UNCERTAIN_HINT =
+  "Possible existing record — reject this row, or switch it to the existing record, "
+  + "if it is the same business.";
+
+/** ...and when there is not: its only candidate is closed, or another row in
+ *  the batch already moves it, so the sentence above would point at a switch
+ *  the row does not offer. */
+export const IDENTITY_NO_ALTERNATIVE_HINT =
+  "The matching record is closed or already used by another row in this scene; "
+  + "this stays a new record unless you reject it.";
+
+/** One row as the save sends it. `approved` is the panel's display verdict and
+ *  never the server's business; the alternatives are complete staged rows the
+ *  server rendered for the swap, and sending them back would only make the
+ *  body heavier. Everything else -- `rejected` and `judged` included -- goes
+ *  exactly as it always did, so a row with no identity check is unchanged. */
+export function wireEdit(row: EditRow): StagedEdit {
+  const { approved: _approved, ...rest } = row;
+  if (!rest.identity_check) return rest;
+  const { alternatives: _alternatives, ...check } = rest.identity_check;
+  return { ...rest, identity_check: check };
+}
+
+/** The chip a row the check examined wears, or null for none.
+ *
+ *  Every row the check did not settle wears "Possible existing record" --
+ *  WITH or without alternatives, because the ones without are the downgrades
+ *  (the only candidate is closed, or another row already holds it), and those
+ *  are the rows most in need of a second look. An accepted retarget wears the
+ *  second wording so its escape hatch is discoverable; "matched" says what was
+ *  staged, not that it is true. An accepted `new` wears nothing: the check
+ *  found nothing to flag, though its block still lists what it compared. */
+export function identityChip(e: StagedEdit): string | null {
+  const ic = e.identity_check;
+  if (!ic) return null;
+  if (ic.decision === "uncertain" || ic.decision === "unchecked" || ic.status === "hint_only") {
+    return "Possible existing record";
+  }
+  if (ic.decision === "existing" && ic.status === "accepted") return "Matched an existing record";
+  return null;
+}
+
+/** Whether an alternative stages onto one of the row's candidates, as against
+ *  being the as-new variant. Candidate refs are PREFIXED canonical refs
+ *  (`thread:find-the-ledger`) while a staged target is a bare id under the
+ *  store's own kind (`plot` / `commitments`), so the comparison spells the
+ *  prefix out. It also classifies the original row pushed back after a swap:
+ *  an accepted retarget's original targets a candidate, an as-new one does not. */
+export function isCandidateAlternative(alt: StagedEdit, ic: IdentityCheck): boolean {
+  const ref = `${alt.target.kind === "plot" ? "thread" : "commitment"}:${alt.target.id}`;
+  return ic.candidates.some((c) => c.ref === ref);
+}
+
+/** The kinds two rows of which may not write the same record in one save. */
+const TARGETED: StagedEdit["kind"][] = ["plot", "commitment"];
+
+/** Whether another live row already writes the record `alt` would. A swap
+ *  must not make two rows move one thread: `check_conflicts` judges every
+ *  row against the pre-write store, so both would pass and the later status
+ *  would win. `skip` is the row being swapped, which is about to stop
+ *  targeting what it targets now. */
+export function targetTaken(rows: readonly EditRow[], alt: StagedEdit, skip: number): boolean {
+  return rows.some((r, j) => j !== skip && !r.rejected && r.kind === alt.kind
+                             && r.target.id === alt.target.id);
+}
+
+/** Every set of two or more non-rejected plot / commitment rows writing one
+ *  record, as row indices. Empty when the batch is clean. */
+export function targetClashes(rows: readonly EditRow[]): number[][] {
+  const byTarget = new Map<string, number[]>();
+  rows.forEach((r, i) => {
+    if (r.rejected || !TARGETED.includes(r.kind)) return;
+    const key = `${r.kind}:${r.target.id}`;
+    byTarget.set(key, [...(byTarget.get(key) ?? []), i]);
+  });
+  return [...byTarget.values()].filter((idx) => idx.length > 1);
 }

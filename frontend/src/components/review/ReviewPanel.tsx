@@ -10,9 +10,13 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
     openSection, uncitedRows, saveError, saveAbsorb, discard,
     approvedCount, rejectedCount,
     undecidedCount, saving, reviewBusy, retryAudit, retryingAudit,
-    retryDossiers, retryingDossiers,
+    retryDossiers, retryingDossiers, targetClashRows,
   } = review;
   if (!absorb) return null;
+  // Whether any row carries the existing-record check's account of itself. A
+  // check that failed outright may have failed before examining anything, and
+  // then no row lists a possible match -- so the notice must not say they do.
+  const checkedRows = absorb.edits.some((e) => e.identity_check);
   return (
     <div className="absorb-panel">
       <h4>Review scene summary</h4>
@@ -46,6 +50,17 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
             the rest.
           </p>
         </div>)}
+      {absorb.identity?.status === "failed" && (
+        <div className="mechanics-notice">
+          <p>{checkedRows
+            ? "The existing-record check could not run; rows still list their possible matches."
+            : "The existing-record check could not run."}</p>
+        </div>)}
+      {/* Where the possible-match lists came from (spec §3.3): without an
+          embeddings connection they are word and cast overlap only, and a
+          reviewer weighing a short list deserves to know it is the short one. */}
+      {absorb.identity?.matching === "basic" && checkedRows && (
+        <p className="field-hint">Basic matching active — semantic matching not configured</p>)}
       {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
         <p className="field-hint">mechanics audited clean</p>)}
       {absorb.mechanics.warnings.length > 0 && (
@@ -102,6 +117,13 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
             <p className="field-hint">
               Never attempted, skipped: {absorb.voice.skipped.join(", ")}
             </p>)}
+        </div>)}
+      {targetClashRows.length > 0 && (
+        <div className="mechanics-notice">
+          <p>{targetClashRows.map((idx) => idx.map((i) => editRows[i].label).join(" and "))
+                .join("; ")}
+            {" would write the same record — nothing was saved. Reject one of them, "
+             + "or switch it to another record, then save again."}</p>
         </div>)}
       {conflictByRow.size > 0 && (
         <div className="mechanics-notice">

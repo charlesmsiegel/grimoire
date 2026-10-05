@@ -10,11 +10,11 @@
 // and the fact that a saved review invalidates every panel on the page.
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, type EditConflict, type SceneAbsorb,
+  api, type EditConflict, type SceneAbsorb, type StagedEdit,
 } from "../../api/client";
 import {
   approvedByDefault, drawerKey, EDIT_GROUPS, editBand, isUncited, SCENE_STAMPED,
-  type EditRow,
+  targetClashes, wireEdit, type EditRow,
 } from "./editRows";
 
 export type SceneReview = ReturnType<typeof useSceneReview>;
@@ -220,6 +220,11 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   // banner's Retry is wired to chat generation, so pointing a save failure at
   // it invites the user to generate another reply with the review still open.
   const [saveError, setSaveError] = useState<string | null>(null);
+  // A save this panel refused before sending, because two live rows would
+  // write one plot thread or commitment. Latched as a flag rather than as the
+  // rows themselves: the notice reads the clash off `editRows` on every render,
+  // so rejecting or switching one of the pair clears it without a second save.
+  const [clashRefused, setClashRefused] = useState(false);
 
   // Every in-flight operation that rewrites the open review. `saveAbsorb`'s
   // conflict bookkeeping is built on "`saving` latches the panel for the whole
@@ -320,6 +325,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setEditRows([]);
     setConflicts([]);
     setSaveError(null);
+    setClashRefused(false);
     // Leaving the campaign section entirely unmounts instead of re-running this,
     // so the release above never happens on that path — abort here or the retry
     // outlives the screen that could use it.
@@ -340,6 +346,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setGeneration(gen);
     setStale(null, null);
     setEditRows(review.edits.map((e) => ({ ...e, approved: approvedByDefault(e) })));
+    setClashRefused(false);
     // A fresh review opens on whichever drawer needs a person, which
     // `openSection` works out — but the *stored* choice has to be reset, or
     // the drawer the last review left open is the one this one lands in.
@@ -646,6 +653,20 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   async function saveAbsorb() {
     const sid = absorbSid ?? activeId;
     if (!absorb || !sid || saving) return;
+    // Two live rows writing one thread or commitment are refused HERE, because
+    // the server would take both: `check_conflicts` judges every row against
+    // the pre-write store, so each passes on its own and the later status
+    // silently wins. A swap can reach this state where the swap button cannot
+    // see it (reject B, swap A onto B's record, un-reject B). Shown like a
+    // conflict: named, and with the drawer holding it opened.
+    const clashes = targetClashes(editRows);
+    if (clashes.length > 0) {
+      setClashRefused(true);
+      setReviewSection(drawerKey(editRows[clashes[0][0]]));
+      setSaveError(null);
+      return;
+    }
+    setClashRefused(false);
     setSaving(true);
     setSaveError(null);
     // captured before editRows is cleared below -- failures only carry
@@ -667,7 +688,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // least confident work and looked identical to approving it. Neither
         // direction is safe by default; this one is at least legible, because
         // the count of what will be accepted is on the button.
-        edits: editRows.filter((e) => !e.rejected).map(({ approved, ...e }) => e),
+        //
+        // `wireEdit` drops what is the panel's and not the server's: the
+        // display verdict, and the identity check's alternatives.
+        edits: editRows.filter((e) => !e.rejected).map(wireEdit),
         // Same token on every attempt, so the retry below cannot commit twice
         // when the first PUT landed and only its response was lost (#235).
         commit_token: absorb.commit_token });
@@ -680,6 +704,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
       setGeneration(null);
       setEditRows([]);
       setConflicts([]);
+      setClashRefused(false);
       onSaved();
     } catch (err: any) {
       // A contradiction is not a failed save (#111): the server refused the
@@ -691,14 +716,17 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         // Resolve each verdict to the ROW it belongs to, here and now, while
         // `editRows` is still the exact array this batch was built from
         // (`saving` latches the panel for the whole round-trip). The server
-        // stamps a batch index; `approvedIdx` is that batch's row numbers, so
-        // the two line up positionally even when the response has dropped the
-        // unconflicted rows in between. Storing row numbers rather than the
-        // raw verdicts also survives what comes next: unapproving a row is the
-        // keep answer, and it would shift every batch index after it.
-        const approvedIdx = editRows.flatMap((r, i) => (r.approved ? [i] : []));
+        // stamps a batch index; `batchIdx` is that batch's row numbers -- every
+        // row not REJECTED, which is what the body above sent -- so the two
+        // line up positionally even when the response has dropped the
+        // unconflicted rows in between. (It once counted APPROVED rows, which
+        // put a conflict after an untouched `low` row on the wrong row, or
+        // dropped it.) Storing row numbers rather than the raw verdicts also
+        // survives what comes next: rejecting a row is the keep answer, and it
+        // would shift every batch index after it.
+        const batchIdx = editRows.flatMap((r, i) => (!r.rejected ? [i] : []));
         const rows = ((err.body?.conflicts ?? []) as EditConflict[])
-          .map((c) => ({ row: approvedIdx[c.index] ?? -1, conflict: c }))
+          .map((c) => ({ row: batchIdx[c.index] ?? -1, conflict: c }))
           .filter((p) => p.row >= 0);
         setConflicts(rows);
         // A refusal on a collapsed row has to be answerable, and the save is
@@ -815,6 +843,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     setEditRows([]);
     setEditFailures([]);
     setSaveError(null);
+    setClashRefused(false);
     setConflicts([]);
     setReviewQuote("");
   }
@@ -836,11 +865,13 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
 
   // Conflicts still showing, keyed by their row. Already bound to a row when
   // the refusal arrived; all that is left is to drop the ones whose row has
-  // since been unapproved, which IS the keep answer.
+  // since been rejected, which IS the keep answer. Not "unapproved": an
+  // untouched `low` row is in the batch, so a conflict on it is as real as one
+  // on a ticked row and has to stay answerable.
   const conflictByRow = useMemo(() => {
     const out = new Map<number, EditConflict>();
     for (const { row, conflict } of conflicts) {
-      if (editRows[row]?.approved) out.set(row, conflict);
+      if (editRows[row] && !editRows[row].rejected) out.set(row, conflict);
     }
     return out;
   }, [conflicts, editRows]);
@@ -899,6 +930,47 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
   function approveAllCited() {
     setEditRows((rows) => rows.map((r) =>
       (isUncited(r) ? r : { ...r, approved: true, rejected: false })));
+  }
+
+  /** Swap row `i` wholesale for its identity check's alternative `k`.
+   *
+   *  The alternative is a complete row the server rendered -- id, target,
+   *  label, payload and the `before` token `check_conflicts` will verify -- so
+   *  nothing is computed here; the row simply BECOMES it, at the same index,
+   *  which is what keeps the batch positions the conflict verdicts are bound
+   *  to. What the reviewer brought to the row comes along:
+   *
+   *  - the beat. Every alternative is rendered from the same extracted row, so
+   *    each carries the beat this row was staged with, and the row's `after`
+   *    differs from it exactly when the reviewer rewrote it -- so the row's
+   *    `after` is the one the swapped-in row takes either way;
+   *  - the citation, when the alternative has none of its own;
+   *  - the check itself: its candidates stay, and the row being displaced
+   *    joins the alternatives (stripped of every verdict and answer), so the
+   *    swap is one click from undone.
+   *
+   *  A swap is a verdict, so the row lands approved and judged, and any
+   *  unanswered conflict on it is dropped: it was about a record this row no
+   *  longer writes. */
+  function switchToAlternative(i: number, k: number) {
+    setEditRows((rows) => rows.map((r, j) => {
+      const ic = r.identity_check;
+      const alt = ic?.alternatives?.[k];
+      if (j !== i || !ic || !alt) return r;
+      const {
+        approved: _a, rejected: _r, judged: _j, resolve: _res, resolve_from: _from,
+        identity_check: _ic, ...displaced
+      } = r;
+      const others = (ic.alternatives ?? []).filter((_, n) => n !== k);
+      return {
+        ...alt,
+        after: r.after,
+        review: alt.review ?? r.review,
+        identity_check: { ...ic, alternatives: [...others, displaced] },
+        approved: true, rejected: false, judged: true,
+      };
+    }));
+    setConflicts((cs) => cs.filter((c) => c.row !== i));
   }
 
   // Replaces absorb.mechanics with a fresh audit and swaps in its sheet
@@ -1087,8 +1159,10 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     const from = `, last moved in ${oldId}]`;
     const to = `, last moved in ${newId}]`;
     const repoint = (v: string) => (v.endsWith(from) ? v.slice(0, -from.length) + to : v);
-    setAbsorbSid((s) => (s === oldId ? newId : s));
-    setEditRows((rows) => rows.map((r) => {
+    // One rule for a row and for every alternative it could be swapped for:
+    // an alternative is a complete staged row, and swapping one in after a
+    // rename must not bring the old scene back with it.
+    const repointEdit = <T extends StagedEdit>(r: T): T => {
       if (!SCENE_STAMPED.includes(r.kind)) return r;
       const next = { ...r };
       if (r.payload?.scene === oldId) next.payload = { ...r.payload, scene: newId };
@@ -1096,8 +1170,15 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
         next.before = repoint(r.before);
         if (r.resolve_from !== undefined) next.resolve_from = repoint(r.resolve_from);
       }
+      const alternatives = r.identity_check?.alternatives;
+      if (r.identity_check && alternatives) {
+        next.identity_check = { ...r.identity_check,
+                                alternatives: alternatives.map(repointEdit) };
+      }
       return next;
-    }));
+    };
+    setAbsorbSid((s) => (s === oldId ? newId : s));
+    setEditRows((rows) => rows.map(repointEdit));
     // An UNANSWERED conflict carries the same fingerprint, and it is the value
     // `resolveConflict` copies into `resolve_from` when the reviewer clicks
     // Replace. The server's own repoint has already moved the stored record onto
@@ -1173,6 +1254,8 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
    *  drawer, so a caller reading the previous value out of one would not get
    *  back the value it had just set. */
   const openDrawer = (key: string) => setReviewSection(key);
+  /** The rows a refused save named as writing one record, while they still do. */
+  const targetClashRows = clashRefused ? targetClashes(editRows) : [];
 
   return {
     absorb, absorbSid, generation, holdsScene,
@@ -1201,7 +1284,7 @@ export function useSceneReview({ cid, activeId, rolling, fail, clearError, dismi
     absorbing: absorbing || adopting,
     saving, reviewBusy, retryingAudit, retryingDossiers,
     endScene, stopAbsorb, saveAbsorb, discard, decide, editRow, editPayload,
-    resolveConflict,
+    resolveConflict, switchToAlternative, targetClashRows,
     approveAllCited, retryAudit, retryDossiers, sceneRenamed,
     budgetCutPhases, approvedCount, rejectedCount, undecidedCount,
     uncitedRows, lowRows, groupCounts, shownRows,

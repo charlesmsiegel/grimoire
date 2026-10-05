@@ -5,9 +5,10 @@
 // shows up there as a row missing from a drawer, three hundred lines from the
 // line that decided it.
 import {
-  approvedByDefault, dossierNotice, drawerKey, editBand, groupOf, isUncited,
+  approvedByDefault, dossierNotice, drawerKey, editBand, groupOf, identityChip,
+  isCandidateAlternative, isUncited, wireEdit,
 } from "./editRows";
-import type { Dossiers, StagedEdit } from "../../api/client";
+import type { Dossiers, IdentityCheck, StagedEdit } from "../../api/client";
 
 const edit = (over: Partial<StagedEdit> = {}) => ({
   id: "lore:the-pact", kind: "lore", target: { kind: "lore", id: "the-pact" },
@@ -90,4 +91,97 @@ test("a phase that produced something is never reported as failed", () => {
     .toBe("Some NPC dossiers were not prepared: ran out of time");
   expect(dossierNotice(dossiers({ status: "failed", reason: "the cast is unreadable" })))
     .toBe("NPC dossier refresh failed: the cast is unreadable");
+});
+
+// ---- the existing-record check (continuity identity) ----------------------
+
+const ledgerCandidate = (status = "open") => ({
+  ref: "thread:find-the-ledger", title: "Find the ledger", status,
+  latest_beat: "Winifred learned the harbour ledger exists.",
+  signals: { title_equal: false, slug_equal: false, tokens: 0.4, chars: 0.5, cosine: null,
+             actors: [], scenes: [], anchors: [], via: "lexical" as const },
+});
+
+const asNew = edit({
+  id: "plot:recover-the-harbour-ledger", kind: "plot",
+  target: { kind: "plot", id: "recover-the-harbour-ledger" },
+  label: "Recover the harbour ledger — open", field: "beat", before: "",
+  after: "Winifred went looking for the harbour ledger.",
+  payload: { id: "recover-the-harbour-ledger", title: "Recover the harbour ledger",
+             status: "open", scene: "s1" },
+});
+const ontoLedger = edit({
+  id: "plot:find-the-ledger", kind: "plot", target: { kind: "plot", id: "find-the-ledger" },
+  label: "Find the ledger — advanced", field: "beat",
+  before: "Find the ledger — open — Winifred learned the harbour ledger exists.",
+  after: "Winifred went looking for the harbour ledger.",
+  payload: { id: "find-the-ledger", title: "Find the ledger", status: "advanced", scene: "s1" },
+});
+
+const check = (over: Partial<IdentityCheck> = {}): IdentityCheck => ({
+  decision: "uncertain", status: "accepted", reason: "the two may be the same search",
+  proposed: { title: "Recover the harbour ledger", why_new: "", distinguished_from: [] },
+  candidates: [ledgerCandidate()], alternatives: [ontoLedger], ...over,
+});
+
+test("wireEdit strips approved and alternatives and keeps the rest", () => {
+  const row = { ...asNew, review: cited({ band: "low" }), identity_check: check(),
+                approved: false, rejected: false, judged: true, resolve: "replace" as const,
+                resolve_from: "x" };
+  const wire = wireEdit(row);
+  expect("approved" in wire).toBe(false);
+  expect(wire.identity_check && "alternatives" in wire.identity_check).toBe(false);
+  // everything else rides along exactly as the save body always sent it
+  const { approved: _a, identity_check: ic, ...rest } = row;
+  const { alternatives: _alts, ...icRest } = ic;
+  expect(wire).toEqual({ ...rest, identity_check: icRest });
+  // the caller's row is not mutated
+  expect(row.identity_check.alternatives).toHaveLength(1);
+});
+
+test("wireEdit leaves a row with no identity check exactly as the save always sent it", () => {
+  const row = { ...edit({ review: cited() }), approved: true, judged: false };
+  const { approved: _a, ...rest } = row;
+  expect(wireEdit(row)).toEqual(rest);
+  expect("identity_check" in wireEdit(row)).toBe(false);
+});
+
+test("a low uncertain row is not approved by default", () => {
+  // Characterization: the band, not the check, is what withholds the tick --
+  // the server stages every uncertain or unanswered row at `low`.
+  expect(approvedByDefault({ ...asNew, review: cited({ band: "low" }),
+                             identity_check: check() })).toBe(false);
+});
+
+test("identityChip wording per decision", () => {
+  expect(identityChip(asNew)).toBeNull();
+  expect(identityChip({ ...asNew, identity_check: check() })).toBe("Possible existing record");
+  // an uncertain row with nothing to switch to still wears it -- those are the
+  // downgrades, the rows most in need of a second look
+  expect(identityChip({ ...asNew, identity_check: check({ alternatives: [] }) }))
+    .toBe("Possible existing record");
+  expect(identityChip({ ...asNew, identity_check: check({ status: "downgraded" }) }))
+    .toBe("Possible existing record");
+  expect(identityChip({ ...asNew, identity_check: check({ decision: "unchecked",
+                                                           status: "hint_only" }) }))
+    .toBe("Possible existing record");
+  expect(identityChip({ ...asNew, identity_check: check({ decision: "new",
+                                                           status: "hint_only" }) }))
+    .toBe("Possible existing record");
+  expect(identityChip({ ...ontoLedger, identity_check: check({ decision: "existing",
+                                                                alternatives: [asNew] }) }))
+    .toBe("Matched an existing record");
+  expect(identityChip({ ...asNew, identity_check: check({ decision: "new" }) })).toBeNull();
+});
+
+test("isCandidateAlternative compares prefixed refs", () => {
+  expect(isCandidateAlternative(ontoLedger, check())).toBe(true);
+  expect(isCandidateAlternative(asNew, check())).toBe(false);
+  // a commitment alternative is matched under the commitment prefix, never the thread one
+  const debt = edit({ id: "commitment:the-debt", kind: "commitment",
+                      target: { kind: "commitments", id: "the-debt" } });
+  expect(isCandidateAlternative(debt, check())).toBe(false);
+  expect(isCandidateAlternative(debt, check({ candidates: [
+    { ...ledgerCandidate(), ref: "commitment:the-debt", title: "Mara's debt to the Saltmarch guild" }] })))
+    .toBe(true);
 });
