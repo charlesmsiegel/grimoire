@@ -78,6 +78,7 @@ _KIND = "continuity-reconcile"
 #: A ledger edit's kind -> the ref prefix of the record it moves.
 _TOUCHED_PREFIX = {"plot": "thread", "commitment": "commitment"}
 _UNDECODABLE = "the reconciliation check returned no readable answer"
+_MALFORMED = "continuity.json is malformed; nothing this sweep found was saved"
 #: Every decision word once, in vocabulary order: the log row counts each.
 _WORDS = tuple(dict.fromkeys(w for words in reconcile.DECISIONS.values() for w in words))
 
@@ -226,7 +227,7 @@ def _blank_result(full: bool, sweep: reconcile.Sweep) -> dict:
     return {"sweep": "full" if full else "incremental", "matching": sweep.matching,
             "embedding": sweep.embedding, "llm": "off", "reason": "", "candidates": 0,
             "adjudicated": 0, "pairs_capped": sweep.pairs_capped, "superseded": False,
-            "follow_on": False}
+            "continuity": sweep.continuity, "follow_on": False}
 
 
 def _failed(result: dict, error: dict) -> dict:
@@ -236,15 +237,25 @@ def _failed(result: dict, error: dict) -> dict:
     return {"state": "failed", "error": {**error, "sweep": result["sweep"]}, "result": result}
 
 
+def _malformed(result: dict) -> dict:
+    """continuity.json is malformed, so the cache was left as it is (Decision
+    2): the pass saved nothing, and the run says so rather than landing."""
+    result["continuity"] = "malformed"
+    return _failed(result, {"kind": "malformed", "detail": _MALFORMED, "status": 409})
+
+
 def _stopped(persisted: dict, result: dict) -> dict | None:
     """The outcome a persist ends the pass with, or None to carry on: a
-    failed write fails the run, a stopped or forgotten run is ``cancelled``, and
-    a superseded run or a deleted campaign lands with nothing more to do."""
+    failed write fails the run, a stopped or forgotten run is ``cancelled``, a
+    persist refused by a malformed continuity.json fails the run, and a
+    superseded run or a deleted campaign lands with nothing more to do."""
     if persisted.get("error"):
         return _failed(result, persisted["error"])
     result.update(candidates=persisted["candidates"], superseded=persisted["superseded"])
     if persisted["cancelled"]:
         return {"state": "cancelled", "result": result}
+    if persisted.get("continuity") == "malformed":
+        return _malformed(result)
     if persisted["superseded"] or persisted["gone"]:
         return {"state": "landed", "result": result}
     return None
@@ -296,7 +307,7 @@ def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -
         "info", __name__, "continuity reconcile", kind="continuity-reconcile",
         campaign=cid, sweep=result["sweep"], matching=result["matching"],
         embedding=result["embedding"], embedding_error=sweep.embedding_error,
-        llm=result["llm"], candidates=result["candidates"],
+        llm=result["llm"], continuity=result["continuity"], candidates=result["candidates"],
         deterministic=sum(via != "semantic" for via in vias),
         semantic=sum(via == "semantic" for via in vias),
         adjudicated=result["adjudicated"], pairs_capped=result["pairs_capped"],
@@ -314,10 +325,13 @@ async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
     def stillborn() -> bool:
         return run.cancel_requested or run.forgotten
 
-    first = await _persist(run, lambda: reconcile.persist_found(cid, sweep,
-                                                                stillborn=stillborn))
     proposals: dict = {}
-    outcome = _stopped(first, result)
+    if sweep.continuity == "malformed":
+        outcome: dict | None = _malformed(result)
+    else:
+        first = await _persist(run, lambda: reconcile.persist_found(cid, sweep,
+                                                                    stillborn=stillborn))
+        outcome = _stopped(first, result)
     if outcome is None:
         outcome, proposals = await _adjudicate(run, cid, client, sweep, result, stillborn)
     if outcome["state"] != "cancelled":
