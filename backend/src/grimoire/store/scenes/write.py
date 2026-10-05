@@ -793,6 +793,24 @@ def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
 
 
 @locking._serialized
+def set_branch_keys(cid: str, sid: str, group: str, of: str | None = None) -> None:
+    """Stamp a scene's branch group, and the identity it was branched from.
+
+    `updated` is left alone: the transcript did not change, and the scenes list
+    sorts on it. Closedness is not stored here or anywhere — `read.list_scenes`
+    derives it from the group's `done` flags.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["branch_group"] = group
+    if of:
+        meta["branch_of"] = of
+    atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
 def replace_messages(cid: str, sid: str, messages: list[dict], *, preserve_turn_sizes: bool = False) -> None:
     """Publish an identity-preserving transcript mutation in one atomic write."""
     p = paths._scene_path(cid, sid)

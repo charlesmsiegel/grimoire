@@ -776,3 +776,17 @@ def test_an_unflagged_chapter_carries_no_excluded_key(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "The Pier")
     scenes.append_message(cid, sid, "user", "hi")
     assert all("excluded" not in m for m in export.collect(cid)["chapters"][0]["messages"])
+
+
+def test_a_closed_branch_is_not_a_chapter(monkeypatch, tmp_path):
+    """A book holds one past: the sibling of an absorbed scene is left out."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    a = scenes.create_scene(cid, "Mara")
+    b = scenes.create_scene(cid, "Winifred")
+    for sid in (a, b):
+        scenes.append_message(cid, sid, "user", "Mara waits.")
+    g = scenes.ensure_identity(cid, a)
+    scenes.write.set_branch_keys(cid, b, g, of=g)
+    scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
+    chapters = export.collect(cid)["chapters"]
+    assert len(chapters) == 1

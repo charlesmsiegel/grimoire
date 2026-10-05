@@ -455,7 +455,10 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     provider = calendars.get_provider(calendars.read_calendar(croot)["primary"])
     images = Images()
 
-    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
+    # A closed branch is left out: its group's absorbed member is the past the
+    # book tells, and a book holds one past.
+    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])
+            if not s.get("closed_by")]
     chapters = [_chapter(cid, provider, sid, i, images, image_prefix)
                 for i, sid in enumerate(sids, start=1)]
     appendix = _appendix_entries(cid, appearances_paths.locked_actor_root(cid), sids, images, image_prefix)
@@ -780,7 +783,10 @@ def build_json(cid: str) -> tuple[bytes, str]:
     formats number their chapters by, stated rather than left implicit in the
     order of a JSON array a consumer may well re-sort."""
     campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
-    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
+    # A closed branch is left out: its group's absorbed member is the past the
+    # book tells, and a book holds one past.
+    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])
+            if not s.get("closed_by")]
     scene_docs = [scenes_read.read_scene(cid, sid) for sid in sids]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),

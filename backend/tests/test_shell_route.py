@@ -448,3 +448,15 @@ def test_ledger_open_ignores_a_garbled_continuity_file(client, campaign):
     (store.campaigns.campaign_root(campaign) / "continuity.json").write_text(
         "{ no", encoding="utf-8")
     assert _shell(client, campaign)["campaign"]["ledger_open"] == 2
+
+
+def test_a_closed_branch_is_not_open(client, campaign):
+    """A sibling of an absorbed scene is read-only: it is not open work."""
+    a = client.post(f"/api/campaigns/{campaign}/scenes", json={"title": "Mara"}).json()["id"]
+    b = client.post(f"/api/campaigns/{campaign}/scenes", json={"title": "Winifred"}).json()["id"]
+    g = store.scenes.ensure_identity(campaign, a)
+    store.scenes.write.set_branch_keys(campaign, b, g, of=g)
+    store.scenes.mark_absorbed(campaign, a, "It ended.", "It ended, at length.")
+    block = _shell(client, campaign)["campaign"]
+    assert block["open"] == []
+    assert block["scenes"] == 2
