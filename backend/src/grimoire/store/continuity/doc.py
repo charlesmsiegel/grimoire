@@ -45,6 +45,16 @@ SECTIONS = ("aliases", "links", "suppressions")
 VERSION = 1
 
 
+# What reading the file can raise. ValueError covers JSONDecodeError and
+# UnicodeDecodeError (both subclasses) and the plain ValueError `json.loads`
+# raises for an integer literal past the int-conversion digit limit;
+# RecursionError is what it raises for nesting deep enough to exhaust the
+# scanner. Both are hand-edit shapes, and `read` promises never to raise over
+# the file -- every prompt section, the briefing and the advance digest read
+# through it.
+_UNREADABLE = (ValueError, RecursionError, OSError)
+
+
 class ContinuityError(Exception):
     """A continuity.json (or one section of it) the writer refuses to publish over,
     or a record a restore refuses to put back."""
@@ -71,7 +81,7 @@ def read(cid: str) -> dict:
     """The stored decisions, with every malformed part reading as empty."""
     try:
         raw = _load(cid)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+    except _UNREADABLE:
         raw = None
     if not isinstance(raw, dict):
         raw = {}
@@ -88,7 +98,7 @@ def malformed(cid: str) -> list[str]:
     non-object top level, else the sections present but not objects."""
     try:
         raw = _load(cid)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+    except _UNREADABLE:
         return ["file"]
     if raw is None:
         return []
@@ -101,7 +111,7 @@ def _mutable(cid: str, section: str) -> dict:
     """`read` for a writer: the whole stored document, refusing what it cannot read."""
     try:
         raw = _load(cid)
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+    except _UNREADABLE as e:
         raise ContinuityError("continuity.json cannot be read") from e
     if raw is None:
         raw = {}

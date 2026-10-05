@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
-from grimoire.store.continuity import doc
+from grimoire.store.continuity import doc, effective
 
 
 @pytest.fixture
@@ -347,6 +347,46 @@ def test_a_garbled_file_empties_only_its_own_section(client, filename, section):
     other = "commitments" if section == "plot" else "plot"
     assert len(body[other]) == 1
     assert body["last_time"]["one_line"] == "It happened."
+
+
+def test_a_continuity_file_json_refuses_still_briefs_the_obligations(client):
+    """A continuity.json `json.loads` refuses with a plain ValueError (an
+    integer literal past the 4300-digit limit) costs the merge, never the rows:
+    the briefing still lists the open thread and the open commitment."""
+    _wid, cid = _campaign(client)
+    past = store.scenes.create_scene(cid, "The Pier at Dusk")
+    now = store.scenes.create_scene(cid, "The Counting House")
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "open", "beat", past)
+    store.commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                                   "", "beat", past)
+    (store.campaigns.campaign_root(cid) / "continuity.json").write_text(
+        '{"aliases": {}, "n": ' + "9" * 5000 + "}", encoding="utf-8")
+
+    body = _brief(client, cid, now)
+    assert [r["id"] for r in body["plot"]] == ["maras-map"]
+    assert [r["id"] for r in body["commitments"]] == ["maras-oath"]
+
+
+def test_a_continuity_side_failure_falls_back_to_the_physical_rows(client, monkeypatch):
+    """Defence in depth past `doc.read`: whatever else makes the effective
+    projection raise costs the merge (spec 3.9), never the obligations -- the
+    rows fall back to the physical ledgers, as the prompt render helpers do."""
+    _wid, cid = _campaign(client)
+    past = store.scenes.create_scene(cid, "The Pier at Dusk")
+    now = store.scenes.create_scene(cid, "The Counting House")
+    store.plot.set_movement(cid, "maras-map", "Mara's map", "open", "beat", past)
+    store.commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                                   "", "beat", past)
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("an unanticipated continuity.json shape")
+
+    monkeypatch.setattr(effective, "threads", _boom)
+    monkeypatch.setattr(effective, "commitments", _boom)
+
+    body = _brief(client, cid, now)
+    assert [r["id"] for r in body["plot"]] == ["maras-map"]
+    assert [r["id"] for r in body["commitments"]] == ["maras-oath"]
 
 
 def test_a_garbled_chronicle_still_serves_the_other_sections(client):

@@ -20,7 +20,7 @@ from grimoire.store import (
     scenes,
     worlds,
 )
-from grimoire.store.continuity import doc
+from grimoire.store.continuity import doc, effective
 
 
 def _campaign(monkeypatch, tmp_path, calendar="gregorian"):
@@ -597,4 +597,50 @@ def test_digest_owes_canonical_commitments(monkeypatch, tmp_path):
     assert [r["id"] for r in rows] == ["maras-oath"]
     assert rows[0]["aliases"] == [{"ref": "commitment:maras-promise",
                                    "title": "Mara's promise", "status": "open"}]
+    assert digest["aging"]["overdue"] == 1
+
+
+def test_digest_still_owes_commitments_over_a_continuity_file_json_refuses(monkeypatch, tmp_path):
+    """A continuity.json `json.loads` refuses with a plain ValueError (an
+    integer literal past the 4300-digit limit) costs the merge, never the
+    obligations: the preview still lists the thread and the commitment, and
+    still counts the commitment overdue on the far side of the skip."""
+    cid = _campaign(monkeypatch, tmp_path)
+    plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara found a page.",
+                      "001--the-pier-at-dusk")
+    commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                             "2026-05-12", "Mara swore it.", "001--the-pier-at-dusk")
+    (campaigns.campaign_root(cid) / "continuity.json").write_text(
+        '{"aliases": {}, "n": ' + "9" * 5000 + "}", encoding="utf-8")
+    clock.advance(cid, to="2026-05-10", reason="start")
+
+    digest = clock.preview(cid, days=5)
+
+    assert [t["id"] for t in digest["open_threads"]] == ["maras-map"]
+    assert [c["id"] for c in digest["commitments"]] == ["maras-oath"]
+    assert digest["aging"]["overdue"] == 1
+
+
+def test_digest_falls_back_to_the_physical_ledgers_on_a_continuity_side_failure(
+        monkeypatch, tmp_path):
+    """Defence in depth past `doc.read`: whatever else makes the effective
+    projection raise costs the merge (spec 3.9), never the obligations -- the
+    digest falls back to the physical ledgers and still ages them."""
+    cid = _campaign(monkeypatch, tmp_path)
+    plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara found a page.",
+                      "001--the-pier-at-dusk")
+    commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                             "2026-05-12", "Mara swore it.", "001--the-pier-at-dusk")
+    clock.advance(cid, to="2026-05-10", reason="start")
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("an unanticipated continuity.json shape")
+
+    monkeypatch.setattr(effective, "threads", _boom)
+    monkeypatch.setattr(effective, "commitments", _boom)
+
+    digest = clock.preview(cid, days=5)
+
+    assert [t["id"] for t in digest["open_threads"]] == ["maras-map"]
+    assert [c["id"] for c in digest["commitments"]] == ["maras-oath"]
     assert digest["aging"]["overdue"] == 1
