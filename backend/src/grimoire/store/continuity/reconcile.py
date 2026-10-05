@@ -225,6 +225,9 @@ class Sweep:
         self.model_only: dict[str, dict] = {}
         #: Refs whose every pair was scored this sweep.
         self.rescored: frozenset[str] = frozenset()
+        #: Unordered ref pairs scored with every signal they can have (a
+        #: cosine, when a space is configured) and admitted by no clause.
+        self.refuted: frozenset[frozenset[str]] = frozenset()
         #: Ref -> current identity hash, for every ref in the pools.
         self.hashes: dict[str, str] = {}
         #: Ref -> hash of the identity text alone (no space salt), for every ref
@@ -290,25 +293,28 @@ def _order(subjects: list[similarity.Subject], hashes: dict[str, str], basis: di
 
 
 def _signals(a: similarity.Subject, b: similarity.Subject,
-             vecs: dict[str, list[float]]) -> dict | None:
-    """The pair's similarity signals with the clause that admitted it, or None."""
+             vecs: dict[str, list[float]]) -> dict:
+    """The pair's similarity signals, with ``via`` the clause that admitted
+    it or None."""
     signals = similarity.lexical(a, b)
     if vecs:
         signals = similarity.with_cosine(signals, a, b, vecs)
-    via = similarity.admitted_by(signals)
-    return None if via is None else {**signals, "via": via}
+    return {**signals, "via": similarity.admitted_by(signals)}
 
 
 def _score_pairs(to_score: list[str], subjects: list[similarity.Subject],
-                 vecs: dict[str, list[float]],
-                 budget: int) -> tuple[dict, frozenset, int, bool]:
+                 vecs: dict[str, list[float]], budget: int,
+                 semantic: bool) -> tuple[dict, frozenset, frozenset, int, bool]:
     """Score each ref in `to_score` once against every other subject, each
     unordered pair once, stopping at `budget` pairs. Returns the plausible
-    pairs (``(scored ref, other ref) -> signals``), the refs whose every pair
-    was scored, the pair count and whether the budget cut the sweep short."""
+    pairs (``(scored ref, other ref) -> signals``), the refuted pairs (no
+    clause admits them, and -- with a space configured, `semantic` -- the
+    cosine was there to ask), the refs whose every pair was scored, the pair
+    count and whether the budget cut the sweep short."""
     by_ref = {s.ref: s for s in subjects}
     done: set[frozenset[str]] = set()
     kept: dict[tuple[str, str], dict] = {}
+    refuted: set[frozenset[str]] = set()
     finished: set[str] = set()
     count = 0
     for ref in to_score:
@@ -317,14 +323,16 @@ def _score_pairs(to_score: list[str], subjects: list[similarity.Subject],
             if other.ref == ref or pair in done:
                 continue
             if count >= budget:
-                return kept, frozenset(finished), count, True
+                return kept, frozenset(refuted), frozenset(finished), count, True
             done.add(pair)
             count += 1
             signals = _signals(by_ref[ref], other, vecs)
-            if signals is not None:
+            if signals["via"] is not None:
                 kept[(ref, other.ref)] = signals
+            elif not semantic or signals["cosine"] is not None:
+                refuted.add(pair)
         finished.add(ref)
-    return kept, frozenset(finished), count, False
+    return kept, frozenset(refuted), frozenset(finished), count, False
 
 
 def _top_k(scored: dict[tuple[str, str], dict], by_ref: dict[str, similarity.Subject],
@@ -378,9 +386,11 @@ def _pairs(sweep: Sweep, current: pending.Current, subjects: list[similarity.Sub
     none was paired against the records that could not be read -- so nothing
     is reported rescored, and a persist keeps the cached pairs rather than
     retract them on a partial view."""
-    scored, finished, count, capped = _score_pairs(order, subjects, vecs, RECONCILE_MAX_PAIRS)
+    scored, refuted, finished, count, capped = _score_pairs(
+        order, subjects, vecs, RECONCILE_MAX_PAIRS, sweep.embedding != "off")
     by_ref = {s.ref: s for s in subjects}
     sweep.rescored = _rescored(sweep, finished, by_ref, vecs, pools_whole)
+    sweep.refuted = refuted
     sweep.pairs_scored, sweep.pairs_capped = count, capped
     for a, b in sorted(_top_k(scored, by_ref, finished)):
         kind = "possible_duplicate" if by_ref[a].kind == by_ref[b].kind else "possible_relation"
@@ -713,16 +723,23 @@ def _commit(cid: str, sweep: Sweep, build: Build, stillborn: Callable[[], bool])
 
 def _retracted(key: str, record: dict, sweep: Sweep) -> bool:
     """Decision 8: a cached record this sweep asked about again and did not
-    find. A pair is asked again when one of its refs was rescored; a stale or
-    overdue finding when its source was read whole; a temporal pair when the
-    calendar, commitments and events were. A touched re-check is never asked
-    again by a sweep, so it is never retracted by one."""
+    find. A pair is asked again when it was scored with every signal it can
+    have and no clause admits it, or when both of its refs were rescored --
+    the top k is ranked only from a rescored endpoint, so with one endpoint
+    rescored (an End Scene's changed ref beside an unchanged one; a ref a
+    vector outage left unscored) a plausible pair the other endpoint's top k
+    kept was never ranked again, and retracting it would drop its proposal
+    until the next Refresh re-found it (Decision 10, §26). A stale or overdue
+    finding is asked again when its source was read whole; a temporal pair
+    when the calendar, commitments and events were. A touched re-check is
+    never asked again by a sweep, so it is never retracted by one."""
     if key in sweep.discovered:
         return False
     if pending.is_temporal(record):
         return sweep.lifecycle_checked["temporal"] and key not in sweep.temporal_ids
     if record["kind"] in candidates.PAIR_KINDS:
-        return any(ref in sweep.rescored for ref in record["refs"])
+        return (frozenset(record["refs"]) in sweep.refuted
+                or all(ref in sweep.rescored for ref in record["refs"]))
     reason = record["signals"].get("reason")
     return reason in _RETRACTABLE and sweep.lifecycle_checked[reason]
 
