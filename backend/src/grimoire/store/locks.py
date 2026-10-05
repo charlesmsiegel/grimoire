@@ -245,6 +245,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # read-modify-writes lose one decision. New module, so it starts inside the
     # exclusion rather than joining the frozen `UNREVIEWED` backlog.
     "store.continuity.doc",
+    # continuity_candidates.json (the reconcile sweep's derived findings) is
+    # rewritten whole by `write` and `drop` in `continuity.candidates`, so two
+    # unlocked read-modify-writes lose one -- a dropped finding comes back, or
+    # a sweep's persist is undone. New module, so it starts inside the
+    # exclusion rather than joining the frozen `UNREVIEWED` backlog.
+    "store.continuity.candidates",
     # The campaign's cover image (`<campaign>/assets/cover.<ext>`). A new
     # module mutating campaign-scoped state, so it starts inside the exclusion
     # rather than joining the frozen `UNREVIEWED` backlog: `put_cover` and

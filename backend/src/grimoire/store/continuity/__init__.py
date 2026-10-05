@@ -14,6 +14,8 @@ guard forbids. Importers name the submodule they want:
 ``from .continuity import doc``, ``from ..store.continuity import effective``.
 
 - ``doc`` -- continuity.json IO and its primitive mutators (the only writer).
+- ``candidates`` -- the derived candidate cache (`continuity_candidates.json`);
+  rebuildable, never journalled.
 - ``canon`` -- ref grammar, alias-graph resolution, link/candidate ids and
   fingerprints.
 - ``effective`` -- the live resolver, the effective records/links every
