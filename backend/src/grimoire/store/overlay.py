@@ -1871,9 +1871,27 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
         # promotes the picture (PR review).
         resolved = read_descriptions(cid, aid, vid, base)
         union = {i["name"] for i in list_images(cid, aid, vid, base)}
+        cdir = assets.version_dir(croot, aid, vid, base)
+        # The campaign's OWN image-bearing placement that has not arrived yet
+        # (mid-sync) is its pick, not a gap: refused before anything is copied
+        # up, in `_check_promotable`'s order -- the promoted slot first, the
+        # avatar only once the slot exists at all (so a missing one is still
+        # "not found") -- since a copy-up landed before a refusal would leave
+        # the campaign holding a slot it no longer inherits.
+        assets.check_arrived(cdir, name)
+        if (assets.image_path(croot, aid, vid, name, base) is not None
+                or assets.image_path(wroot, aid, vid, name, base) is not None):
+            assets.check_arrived(cdir, assets.AVATAR)
         for n in (name, assets.AVATAR):
             if not (inherits and assets.image_path(croot, aid, vid, n, base) is None
                     and _asset_ref(base, aid, vid, n) not in deleted(cid)):
+                continue
+            # Belt and braces for the check above: never link over an
+            # image-bearing campaign placement, arrived or not. An image-less
+            # one (a crop over the inherited avatar) is still filled, under its
+            # crop.
+            held = image_refs.read(cdir, n)
+            if held is not None and held.image is not None:
                 continue
             src = assets.image_path(wroot, aid, vid, n, base)
             if src is None:
@@ -1900,7 +1918,7 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
             placed = assets.resolve(assets.version_dir(wroot, aid, vid, base), n)
             image_id = (placed.image_id if placed is not None
                         else image_store.ingest(src.read_bytes(), src.suffix[1:]).id)
-            assets.link_in(assets.version_dir(croot, aid, vid, base), n, image_id)
+            assets.link_in(cdir, n, image_id)
         assets.promote_image(croot, aid, vid, name, base)
         # When there was no avatar to swap into the promoted slot, the swap
         # leaves no campaign file at `name`, so the inherited image there would

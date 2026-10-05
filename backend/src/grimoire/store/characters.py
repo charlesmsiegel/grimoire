@@ -1341,19 +1341,24 @@ def _replace_gallery(root: Path, cid: str, vid: str, fresh: list[tuple[int, str]
     the hold stands, belongs to an upload that lands after this replacement."""
     d = assets.version_dir(root, cid, vid)
     wanted = {f"gallery_{i}": image_id for i, image_id in fresh}
-    covered = set(_gallery_names(root, cid, vid)) | set(wanted)
+    # Before the hold: `list_images`, which also runs the read-side repairs.
+    covered = set(_gallery_names(assets.list_images(root, cid, vid))) | set(wanted)
     while True:
         with assets._image_locks_held(d, *sorted(covered)):
-            existing = _gallery_names(root, cid, vid)
+            # Under the hold: `list_in`, which repairs nothing. `list_images`
+            # heals a stranded promotion, and that takes {avatar, a gallery
+            # slot, promote-tmp} BLOCKING -- while these gallery locks are held,
+            # against a promotion holding `avatar` and waiting for one of them,
+            # that is an ABBA wedge.
+            existing = _gallery_names(assets.list_in(d))
             if set(existing) <= covered:
                 _replace_held_gallery(root, cid, vid, d, existing, wanted)
                 return
         covered |= set(existing)
 
 
-def _gallery_names(root: Path, cid: str, vid: str) -> list[str]:
-    return [img["name"] for img in assets.list_images(root, cid, vid)
-            if img["name"].startswith("gallery_")]
+def _gallery_names(rows: list[dict]) -> list[str]:
+    return [img["name"] for img in rows if img["name"].startswith("gallery_")]
 
 
 def _replace_held_gallery(root: Path, cid: str, vid: str, d: Path,

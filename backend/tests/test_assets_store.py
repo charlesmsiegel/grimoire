@@ -1546,6 +1546,26 @@ def test_promote_an_unresolved_slot_with_no_legacy_file_is_not_yet_available(tmp
         assets.promote_image(tmp_path, "sera", "default", "gallery_7")
 
 
+def test_promote_checks_its_own_slot_before_an_unarrived_avatar(tmp_path):
+    """With the avatar placed but not arrived, a slot that does not exist is
+    still "not found" and an unsupported file is still a bad request: the
+    slot's own state is asked first, the avatar's last."""
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    _unresolved_ref_beside_legacy(d, assets.AVATAR, 107)
+    (d / "avatar.png").unlink()            # the placement alone, unresolved
+    with pytest.raises(FileNotFoundError) as got:
+        assets.promote_image(tmp_path, "sera", "default", "gallery_9")
+    assert not isinstance(got.value, assets.ImageNotYetAvailableError)
+    (d / "gallery_1.bmp").write_bytes(b"external")
+    with pytest.raises(ValueError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    # A real slot against the unarrived avatar is the not-yet-available refusal.
+    assets.put_image(tmp_path, "sera", "default", "gallery_2", _png(110), "png")
+    with pytest.raises(assets.ImageNotYetAvailableError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_2")
+
+
 def test_a_write_finishes_an_interrupted_promotion_first(tmp_path, monkeypatch):
     """A write landing before any read must not turn a half-done swap into a
     state recovery no longer recognises -- which discards the journal, and with

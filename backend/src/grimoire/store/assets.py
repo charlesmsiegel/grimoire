@@ -1358,17 +1358,29 @@ def _check_promotable(d: Path, name: str) -> None:
     - `FileNotFoundError`: `name` holds no image at all.
     - `ValueError`: either side is an externally placed file of an extension
       never accepted.
+
+    Asked in that order for `name` -- not arrived, then absent, then the
+    extension -- and the avatar's arrival last, so a slot that does not
+    exist is "not found" and an unsupported file a bad request whatever state
+    the avatar is in.
     """
-    for slot in (name, AVATAR):
-        ref = image_refs.read(d, slot)
-        if ref is not None and ref.image is not None and image_refs.resolve(d, slot) is None:
-            raise ImageNotYetAvailableError(f"image not yet available (still syncing?): {slot}")
+    check_arrived(d, name)
     src = path_in(d, name)
     if src is None:
         raise FileNotFoundError(name)
     for p in (src, path_in(d, AVATAR)):
         if p is not None and not _norm_ext(p.suffix):
             raise ValueError(f"unsupported image type: {p.name}")
+    check_arrived(d, AVATAR)
+
+
+def check_arrived(d: Path, slot: str) -> None:
+    """`ImageNotYetAvailableError` when `slot` holds an image-bearing placement
+    that does not resolve yet. Public for `overlay.promote_image`, which must
+    ask before it copies anything up."""
+    ref = image_refs.read(d, slot)
+    if ref is not None and ref.image is not None and image_refs.resolve(d, slot) is None:
+        raise ImageNotYetAvailableError(f"image not yet available (still syncing?): {slot}")
 
 
 def _finish_promotion(d: Path, name: str, journal: dict) -> None:

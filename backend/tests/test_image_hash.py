@@ -269,25 +269,81 @@ def test_opaque_cases(monkeypatch):
     assert _assert_opaque(b"").reason == "undecodable"
 
 
-def test_no_decompression_bomb_warning_escapes(monkeypatch, recwarn):
-    # Between Pillow's warning and error thresholds Image.open warns on stderr;
-    # identity has a budget of its own, so the warning is noise and must not
-    # escape -- not as a printed warning, and not (under -W error) as a raise
-    # that would turn a decodable picture into an "undecodable" opaque id.
-    w, h = 24, 16
-    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", w * h - 1)  # warn, not raise
-    # Pillow checks each band's crop too; a band is at most _BAND_PIXELS, far
-    # below the real threshold, so the probe keeps it below the lowered one.
-    monkeypatch.setattr(image_hash, "_BAND_PIXELS", w)
+def _bomb_warnings(caught) -> list:
+    return [w for w in caught if issubclass(w.category, Image.DecompressionBombWarning)]
+
+
+def test_the_decompression_bomb_warning_is_filtered_at_import():
+    # One targeted, import-time filter rather than a per-call catch_warnings
+    # (which swaps process-wide state from many threads): identity's own
+    # budgets bound every decode, so Pillow's warning is noise. Checked in a
+    # fresh interpreter, since pytest restores the warning filters around
+    # collection and every test, which would discard an import-time one here.
+    import subprocess
+    import sys
+
+    probe = (
+        "import io, warnings, hashlib\n"
+        "from PIL import Image\n"
+        "from grimoire.store import image_hash\n"
+        "assert any(f[0] == 'ignore' and f[2] is Image.DecompressionBombWarning\n"
+        "           for f in warnings.filters)\n"
+        "Image.MAX_IMAGE_PIXELS = 24 * 16 - 1\n"
+        "b = io.BytesIO(); Image.new('RGB', (24, 16)).save(b, 'PNG')\n"
+        "got = image_hash.pixel_identity(b.getvalue(), hashlib.sha256(b.getvalue()).hexdigest())\n"
+        "assert got.identity == 'pixels', got\n"
+    )
+    done = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                          timeout=120, check=False)
+    assert done.returncode == 0, done.stderr
+    assert "DecompressionBombWarning" not in done.stderr
+
+
+def test_no_decompression_bomb_warning_escapes(monkeypatch):
+    # Between Pillow's warning and error thresholds Image.open (and each
+    # band's crop) warns on stderr; under the import-time filter none of it
+    # escapes, and the picture is still named by its pixels.
     import warnings
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("error", Image.DecompressionBombWarning)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 24 * 16 - 1)  # warn, not raise
+    with warnings.catch_warnings(record=True) as caught:
+        image_hash._ignore_bomb_warnings()   # pytest dropped the import-time one
         got = _ident(_read("base.png"))
     assert got.identity == "pixels"
     assert got.id == _id_unpatched("base.png")
-    _ident(_read("base.png"))
-    assert not [w for w in recwarn if issubclass(w.category, Image.DecompressionBombWarning)]
+    assert not _bomb_warnings(caught)
+
+
+def _gif_frame_grown_to(w: int, h: int) -> bytes:
+    """A two-frame 4x4 GIF whose second frame's descriptor claims `w` x `h` --
+    which Pillow answers by growing the canvas when it seeks there."""
+    import struct
+
+    frames = [Image.new("P", (4, 4), c) for c in (1, 2)]
+    for im in frames:
+        im.putpalette([0, 0, 0, 255, 0, 0, 0, 255, 0] + [0] * 759)
+    buf = io.BytesIO()
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:], duration=100, loop=0)
+    data = bytearray(buf.getvalue())
+    at = [i for i in range(len(data))
+          if data[i] == 0x2C and data[i + 5:i + 9] == struct.pack("<HH", 4, 4)][-1]
+    data[at + 5:at + 9] = struct.pack("<HH", w, h)
+    return bytes(data)
+
+
+def test_a_gif_frame_that_grows_the_canvas_past_the_budget_is_over_budget():
+    # The header says 4x4; the budget check on it passes. A later frame grows
+    # Pillow's canvas to 100 MP on seek -- past Pillow's warning threshold
+    # (silenced) and the static budget, which the frame walk enforces per frame.
+    import warnings
+
+    for w, h in ((10000, 10000), (20000, 20000)):   # Pillow's warning, then its error
+        data = _gif_frame_grown_to(w, h)
+        with warnings.catch_warnings(record=True) as caught:
+            image_hash._ignore_bomb_warnings()   # pytest dropped the import-time one
+            got = _ident(data)
+        assert (got.identity, got.reason) == ("bytes", "over-budget"), (w, h)
+        assert not _bomb_warnings(caught)
 
 
 def _id_unpatched(name: str) -> str:
