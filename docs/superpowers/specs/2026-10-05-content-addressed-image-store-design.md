@@ -157,9 +157,9 @@ the bytes that get stored.
 
 | Format | Kept | Dropped |
 |---|---|---|
-| PNG | IHDR, PLTE, tRNS, IDAT, IEND, colour chunks (iCCP, gAMA, cHRM, sRGB, cICP), the animation chunks (acTL, fcTL, fdAT) | text chunks (tEXt, zTXt, iTXt — including card `chara`/`ccv3`) and other ancillary chunks |
-| JPEG | SOI, APP0 JFIF, APP2 ICC, APP14 Adobe, every coding segment | XMP and other APP1 data, APP13 IPTC, COM |
-| WebP | ICCP, the ANIM/ANMF/ALPH and image chunks | EXIF and XMP chunks (the VP8X flags are rewritten) |
+| PNG | IHDR, PLTE, tRNS, IDAT, IEND, colour chunks (iCCP, gAMA, cHRM, sRGB, cICP), the animation chunks (acTL, fcTL, fdAT), sBIT and pHYs | text chunks (tEXt, zTXt, iTXt — including card `chara`/`ccv3`) and other ancillary chunks |
+| JPEG | SOI, APP0 JFIF (rebuilt with no thumbnail), APP2 ICC, APP14 Adobe, every coding segment | XMP and other APP1 data, APP13 IPTC, COM, JFXX and other APP0 |
+| WebP | allowlist only: VP8, VP8L, VP8X, ALPH, ANIM, ANMF, ICCP | every other chunk, including EXIF and XMP (the VP8X flags are rewritten) |
 | GIF | NETSCAPE loop extension, everything structural | comment extensions, other application extensions (including XMP) |
 
 Orientation is the one piece of metadata that is kept:
@@ -230,10 +230,16 @@ them would collapse pictures that display differently.
 
 `color` describes how the samples are to be interpreted:
 
-- the embedded ICC profile bytes, if any;
-- otherwise, for PNG, a canonical serialization of gAMA/cHRM/sRGB/cICP as
-  Pillow reports them;
-- otherwise empty.
+- for PNG, the concatenation, in file order, of `type + payload` for every
+  `iCCP`, `gAMA`, `cHRM`, `sRGB` and `cICP` chunk before the first IDAT, read
+  from the bytes (Pillow drops cICP, and the raw `iCCP` payload is used as it
+  stands);
+- for other formats, the embedded ICC profile bytes;
+- otherwise empty, in every format, so identical pixels in PNG and JPEG share
+  an id.
+
+The PNG form can only split an id that a decoded-profile comparison would
+merge, never merge one it would split.
 
 A colour chunk changes what is displayed from identical samples, so it is part
 of identity. Sanitization never drops colour chunks, so this is stable.
@@ -272,6 +278,13 @@ merge of pictures that display differently, or without unbounded memory:
   - more than 16 MP static;
   - more than 64 MP of total frame area, more than 1000 frames, or any single frame above the static budget, animated;
 - an animated PNG that carries an orientation the browser rule would apply. Whether browsers rotate an animated PNG is unverified, and opaque identity can never merge two pictures;
+- a GIF whose NETSCAPE or ANIMEXTS loop extension comes after the first image
+  descriptor. Pillow reads the loop count only before frame 0, while browsers
+  honour it anywhere, so hashing it would merge a once-played GIF with a
+  looping one;
+- a container the sanitizer could not parse. Its bytes are stored as received,
+  so it must not be a blob that a clean upload of the same picture dedupes
+  onto;
 - bytes that sniff as a supported format but fail to decode.
 
 On the budget: a 16 MP image is 64 MB per RGBA copy, and the transpose plus the
@@ -423,8 +436,10 @@ which absorbs `focus.json`.
 **Writes:**
 
 - A placement is written with `atomic.write_text`.
-- It is written under the per-name image lock, which becomes process-scoped
-  (§11, migration) and striped the same way.
+- It is written under the per-name image lock. In stage 1 that lock is still
+  in-process. Making it process-scoped and striped is **deferred to stage 4**,
+  where a second process doing migration is the first thing that needs it
+  (§11).
 
 **A placement with no `image` is an occurrence override:**
 
@@ -1111,3 +1126,20 @@ been folded in above.
 | **M4** No-webp-anim builds | opaque identity (§1.3) |
 | **M5** Crash between delete and sweep | sweep first, then delete (§9) |
 | **M6** Bundle mutates the store before publish | only harmless writes happen before publish (§10) |
+
+### Final-review amendments (stage 1)
+
+The whole-branch code review and the spec-conformance review produced these
+changes. They were made before `px1` shipped, so the version stays `px1`.
+
+- **Two new opaque cases:** a late GIF loop extension, and an unsanitizable
+  container (§1.3).
+- **Sanitizer table brought into line with the code:** PNG keeps sBIT and
+  pHYs; the JPEG JFIF segment is rebuilt with no thumbnail; WebP chunks are an
+  allowlist (§1.1).
+- **The PNG colour descriptor** is the raw colour chunks (§1.3).
+- **The per-name image lock** stays in-process until stage 4 (§4).
+- **A bundle can never claim an id it does not contain:** a staged ref whose id
+  is not among the bundle's own objects loses its image on import (§10).
+- **Bundle collection manifests:** a manifest whose format is not 1 is refused
+  until stage 3 moves bundles to a new format.
