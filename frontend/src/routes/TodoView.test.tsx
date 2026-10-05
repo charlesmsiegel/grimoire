@@ -133,7 +133,7 @@ test("the scope chip stays away when every chore is the same kind", async () => 
     chores: [
       chore({ id: "sheets", scope: "campaign" }),
       chore({ id: "owed", scope: "campaign", group: "Story & continuity", n: 2,
-              what: "2 open threads with a deadline" }),
+              what: "2 open commitments with a deadline" }),
     ],
     ignored: [], count: 2,
   });
@@ -160,7 +160,7 @@ test("the list and Groups column follow the server's thematic order", async () =
       chore({ id: "cover", group: "Artwork", what: "Campaign without a cover" }),
       chore({ id: "avatars", group: "Character & voice", what: "3 characters without an avatar" }),
       chore({ id: "world-taglines", scope: "world", group: "Character & voice", what: "2 characters with no tagline" }),
-      chore({ id: "owed", group: "Story & continuity", what: "2 open threads" }),
+      chore({ id: "owed", group: "Story & continuity", what: "2 open commitments" }),
     ],
     ignored: [], count: 6, groups,
   });

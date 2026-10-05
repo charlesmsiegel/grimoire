@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire.main import create_app
+from grimoire.store.continuity import doc as continuity_doc
 
 
 @pytest.fixture
@@ -413,4 +414,37 @@ def test_ledger_open_counts_open_commitments(client, campaign):
                                ("winifreds-promise", "Winifred's promise", "open"),
                                ("seraphines-favour", "Seraphine's favour", "fulfilled")):
         store.commitments.set_movement(campaign, mid, title, "promise", status, "", "", sid)
+    assert _shell(client, campaign)["campaign"]["ledger_open"] == 2
+
+
+def test_ledger_open_counts_effective_open_commitments(client, campaign):
+    """A merged pair is one open commitment, and a fulfilled one is none."""
+    sid = store.scenes.create_scene(campaign, "The Pier at Dusk")
+    for mid, title, status in (("mara-s-oath", "Mara's oath", "open"),
+                               ("winifred-s-promise", "Winifred's promise", "open"),
+                               ("seraphine-s-favour", "Seraphine's favour", "fulfilled")):
+        store.commitments.set_movement(campaign, mid, title, "promise", status, "", "", sid)
+    continuity_doc.put_alias(campaign, "commitment:mara-s-oath",
+                             {"to": "commitment:winifred-s-promise", "created": "",
+                              "source": "manual", "note": ""})
+    assert _shell(client, campaign)["campaign"]["ledger_open"] == 1
+
+
+def test_ledger_open_is_null_on_a_garbled_ledger(client, campaign):
+    """A count nobody could take is `None`, never a 500 and never `0`."""
+    (store.campaigns.campaign_root(campaign) / "commitments.json").write_text(
+        "{ no", encoding="utf-8")
+    body = _shell(client, campaign)
+    assert body["campaign"] is not None
+    assert body["campaign"]["ledger_open"] is None
+
+
+def test_ledger_open_ignores_a_garbled_continuity_file(client, campaign):
+    """Garbled aliases read as none, so the count is the physical one."""
+    sid = store.scenes.create_scene(campaign, "The Pier at Dusk")
+    for mid, title in (("mara-s-oath", "Mara's oath"),
+                       ("winifred-s-promise", "Winifred's promise")):
+        store.commitments.set_movement(campaign, mid, title, "promise", "open", "", "", sid)
+    (store.campaigns.campaign_root(campaign) / "continuity.json").write_text(
+        "{ no", encoding="utf-8")
     assert _shell(client, campaign)["campaign"]["ledger_open"] == 2
