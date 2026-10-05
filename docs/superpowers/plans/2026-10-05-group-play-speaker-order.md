@@ -167,6 +167,11 @@ def test_next_planned_skips_newly_sitting_out():
 - [ ] **Step 4: Run** the same tests, then `tests/test_import_guard.py tests/test_store_api_baseline.py tests/test_lock_domain_guard.py`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(group-play): pure settings and speaker planner`
 
+**Amendments (review, fix round on Task 2's module — `store/group_play.py`):**
+- `plan_post(..., author: str | None = None)`: a ref equal to `author` is never counted as named (a character naming themselves does not count). Test `test_self_mention_is_not_named`: natural, all talkativeness 0, `author="characters:mara"`, trigger "Mara thinks." → Mara is not first (falls to the quietest-other fallback).
+- Directed `eligible` keeps every `force` ref that is present in the roster even when it is in `sitting_out` (explicit pick wins). Test `test_forced_sitting_out_actor_stays_eligible`.
+- `plan_continue` list mode locates `last["ref"]` in the FULL configured sequence (order_list refs then roster refs, before filtering availability), then scans forward, wrapping, to the next available ref. Test `test_list_continue_anchor_survives_last_speaker_sitting_out`: order_list `[mara, winifred, seraphine]`, Winifred sits out, last=Winifred → Seraphine.
+
 ---
 
 ### Task 3: Storage and `/group` routes
@@ -241,6 +246,10 @@ Engine rules:
 - [ ] **Step 4: Run** the new file plus `tests/test_character_turns.py tests/test_response_controls_routes.py tests/test_response_mechanics.py tests/test_scene_freeze.py tests/test_turn_follow_ups.py`. Expected: all PASS (default directed behaviour unchanged).
 - [ ] **Step 5: Commit** `feat(group-play): rounds follow the scene's speaker order`
 
+**Amendments (review):**
+- `_prepare` resolves the speaker's display name from the round's `eligible` and, failing that, from the current full `roster(cid, sid)` before falling back to "Grimoire" — so an explicitly targeted actor is never stamped "Grimoire". Test `test_reply_as_sitting_out_npc_in_directed_keeps_its_name`.
+- A Manual-mode player post with no `speaker_ref` generates nothing, so `post_chat` must not refuse it for a missing connection: when the scene's mode is manual and the turn is a non-director post without `speaker_ref`, a `missing_key`-style failure from `_require_connection` is tolerated and the post is appended with the round completing immediately (no LLM, no tracker start that needs a client beyond what `_chat_run` already does without a connection — if the tracker path requires a connection, skip starting it). Test `test_manual_post_needs_no_connection` (delete the openrouter connection, POST content → 200, post appended). If this cannot be done without touching unrelated paths, report DONE_WITH_CONCERNS describing why.
+
 ---
 
 ### Task 5: Auto-continue rounds
@@ -281,6 +290,10 @@ Rules:
 - [ ] **Step 3: Implement** per the rules.
 - [ ] **Step 4: Run** the full backend suite: `make check-py`. Expected: PASS. Then `make check-lint check-mypy`, and fix any new findings.
 - [ ] **Step 5: Commit** `feat(group-play): opt-in automatic rounds with cap and stop`
+
+**Amendments (review):**
+- Follow-on rounds pass `author=<ref of the contribution used as trigger>` to `plan_post`, so a speaker naming themselves does not lead the next round.
+- Stop clears the round's remaining `plan` (`plan=[]`), sets `auto_remaining=0` and sets `stopped=True` on the round. `_successor` returns `next=None` for a `stopped` round in every mode, so Retry finishes only the interrupted contribution and generates nothing after it. Test `test_stop_mid_round_retry_generates_only_the_interrupted_reply`: seed THREE NPCs (add Seraphine), list mode, `auto_rounds=0`; stop on the first `delta` of the first speaker; Retry → exactly one more call; transcript has one response from the first speaker only.
 
 ---
 
@@ -334,13 +347,17 @@ Rules:
 - [ ] **Step 4: Run** the same, then `make check-web check-eslint`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(play): group order panel and round indicator`
 
+**Amendments (review):**
+- Reordering in List mode merges the visible permutation into the existing `order_list`: refs not currently displayed (characters who left) keep their positions; the visible refs are written into the slots visible refs occupied, in the new order, and visible refs not yet in the list are appended. Test `"reordering keeps an absent character's stored position"`.
+- Saves are serialized and optimistic: the panel keeps a local `latest` settings value updated immediately on each change, sends PUTs one at a time in order (each built from `latest` at send time), and on a failed PUT reverts `latest` to the last server-confirmed settings and shows the alert. Test `"two quick edits both reach the server"` (slider then sit-out before the first PUT resolves; the second PUT body contains both changes).
+
 ---
 
 ### Task 8: Documentation and full gate
 
 **Files:**
 - Modify: `docs/character-responses.md` (a "Speaker order" section: the four modes, talkativeness, sit out, auto rounds and what stops them, where settings live)
-- Modify: `frontend/src/routes/ConfigView.tsx:877` copy, if it still names "Respond as": use "Reply-as chips and Continue each request one additional contribution."
+- Modify: `frontend/src/routes/ConfigView.tsx:877` copy, if it still names "Respond as": use "Continue, or a reply chip with an empty composer, requests one additional contribution; a reply chip with text posts it with that character leading the round."
 
 - [ ] **Step 1:** Write the docs section from the spec. Use invented names only, and no store-content measurements.
 - [ ] **Step 2: Run** `make check`. Expected: every target passes. If a ratchet reports an *improvement*, run `make baseline` and include the baseline files.
