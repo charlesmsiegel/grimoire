@@ -74,12 +74,15 @@ def _project_history(messages: list[dict], reduce=None) -> list[dict]:
 def _chosen_images(messages: list[dict], images: int, cid: str) -> set[tuple[int, int]]:
     """`(message index, image index)` of the newest `images` sendable pictures:
     newest message first and, within one, the later image first. Director notes
-    are skipped, as the projection skips them. "Sendable" is
+    and posts hidden from context are skipped, as the projection skips them --
+    a picture that is never sent must not take a slot from one that is.
+    "Sendable" is
     `post_images.eligible` -- an app image this campaign resolves to a file it
     can decode -- so a remote or broken picture never takes a slot."""
     chosen: set[tuple[int, int]] = set()
     for i in range(len(messages) - 1, -1, -1):
-        if scenes_serialize.is_director_note(messages[i]):
+        if (scenes_serialize.is_director_note(messages[i])
+                or scenes_serialize.is_excluded(messages[i])):
             continue
         links = export.image_links(messages[i]["content"])
         for j in range(len(links) - 1, -1, -1):

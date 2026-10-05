@@ -9,6 +9,7 @@ from grimoire import routes, store
 from grimoire.routes import character_turns
 from grimoire.store import campaigns, chronicle, entities
 from grimoire.store.absorb import routing as absorb_routing
+from grimoire.store.context import story
 from grimoire.store.scenes import serialize
 from tests.llm_fakes import FakeLLM
 from tests.test_character_turns import seed
@@ -365,7 +366,7 @@ def test_an_all_excluded_scene_is_empty_to_absorb_dossiers_and_the_fold(client):
     assert fake.calls == 0
 
 
-# --- group play: the speaker-order planner ----------------------------------
+# --- group play: the speaker-order planner and image slots ------------------
 
 def test_the_speaker_order_planner_continues_from_the_last_post_in_context(client):
     # List order Mara, Winifred: an empty send continues after the newest
@@ -386,3 +387,10 @@ def test_the_speaker_order_planner_continues_from_the_last_post_in_context(clien
     response = client.post(base + "/chat", json={"content": ""})
     assert "error" not in response.text, response.text
     assert speakers(cid, sid) == ["Mara", "Winifred", "Winifred"]
+
+
+def test_an_excluded_post_takes_no_image_slot(monkeypatch):
+    monkeypatch.setattr(story.post_images, "eligible", lambda cid, url: True)
+    ms = [{"role": "assistant", "speaker": "Mara", "content": "![the gate](/a.png)"},
+          {"role": "user", "content": "ooc: ![my cat](/b.png)", "excluded": STAMP}]
+    assert story._chosen_images(ms, 1, "c") == {(0, 0)}
