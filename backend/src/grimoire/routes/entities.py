@@ -298,10 +298,16 @@ def _adopt_preview(meta: dict) -> dict:
     return {"fields": res.fields, "unmapped": list(res.unmapped)}
 
 
-def _world_adopt(root, kind: str, eid: str, meta: dict) -> dict:
+def _world_adopt(root, kind: str, eid: str) -> dict:
     """Write the fields a record's stash would still add; return what landed.
-    Nothing pending writes nothing, so a second call is a no-op."""
-    fields = store.lorebook.pending_adopt(meta).fields
+    Nothing pending writes nothing, so a second call is a no-op.
+
+    The pending set is computed from a read taken here, at the write boundary,
+    and never from the caller's earlier one: a field an author saved since the
+    preview is held by the record and is left alone. World entity writes take
+    no lock anywhere today, so this narrows the window to one read-then-write
+    rather than closing it; a lock would have to be taken by every writer."""
+    fields = store.lorebook.pending_adopt(store.entities.read_entity(root, kind, eid)["meta"]).fields
     if fields:
         store.entities.update_entity(root, kind, eid, fields=fields)
     return fields
@@ -341,7 +347,7 @@ def post_world_adopt_st(wid: str):
     skipped: list[dict] = []
     for kind in store.entities.ENTITY_KINDS:
         _adopt_bulk(kind, store.entities.list_entities(root, kind),
-                    lambda k, e, m: _world_adopt(root, k, e, m), applied, skipped)
+                    lambda k, e, m: _world_adopt(root, k, e), applied, skipped)
     return {"applied": applied, "skipped": skipped}
 
 
@@ -371,20 +377,28 @@ def get_world_entity_adopt_st(wid: str, kind: str, eid: str):
 @router.post("/worlds/{wid}/{kind}/{eid}/adopt-st")
 def post_world_entity_adopt_st(wid: str, kind: str, eid: str):
     root = _world_entity_or_404(wid, kind, eid)
-    meta = store.entities.read_entity(root, kind, eid)["meta"]
-    return {"applied": _world_adopt(root, kind, eid, meta)}
+    return {"applied": _world_adopt(root, kind, eid)}
 
 
 @router.get("/campaigns/{cid}/{kind}/{eid}/adopt-st")
 def get_campaign_entity_adopt_st(cid: str, kind: str, eid: str):
     _campaign_entity_or_404(cid, kind, eid)
-    return _adopt_preview(store.overlay.read_entity(cid, kind, eid)["meta"])
+    meta = store.overlay.read_entity(cid, kind, eid)["meta"]
+    # `inherited`: the campaign only reads the world's file, so applying here is
+    # refused (adopting would materialize a copy Undo cannot remove, and the
+    # record would stop following its world). The fields are still reported --
+    # they are what the world's copy has to offer.
+    return {**_adopt_preview(meta),
+            "inherited": not store.overlay.has_own_copy(cid, kind, eid)}
 
 
 @router.post("/campaigns/{cid}/{kind}/{eid}/adopt-st")
 def post_campaign_entity_adopt_st(cid: str, kind: str, eid: str):
     _campaign_entity_or_404(cid, kind, eid)
     with store.locks.campaign_lock(cid):
+        if not store.overlay.has_own_copy(cid, kind, eid):
+            raise HTTPException(status_code=409,
+                                detail="inherited from the world; adopt it in the world")
         meta = store.overlay.read_entity(cid, kind, eid)["meta"]
         return {"applied": _campaign_adopt(cid, kind, eid, meta)}
 

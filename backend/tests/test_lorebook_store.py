@@ -247,7 +247,7 @@ def test_normalize_preserves_regex_flag_and_entry_extensions():
 
 def test_stash_keeps_previously_lost_fields():
     out = lorebook._normalize({"entries": [
-        {"keys": ["tide"], "name": "Tide", "content": "x", "sticky": 2, "cooldown": 3,
+        {"keys": ["tide"], "name": "Saltmarch Charter", "content": "x", "sticky": 2, "cooldown": 3,
          "delay": 1, "ignoreBudget": True, "group": "g", "vectorized": True}]})
     assert out[0]["extensions"] == {"sticky": 2, "cooldown": 3, "delay": 1,
                                     "ignoreBudget": True, "group": "g", "vectorized": True}
@@ -260,7 +260,7 @@ def test_stash_keeps_previously_lost_fields():
 ])
 def test_stash_keeps_every_spelling_of_the_lost_rows(field):
     out = lorebook._normalize({"entries": [
-        {"keys": ["tide"], "name": "Tide", "content": "x", field: "v"}]})
+        {"keys": ["tide"], "name": "Saltmarch Charter", "content": "x", field: "v"}]})
     assert out[0]["extensions"] == {field: "v"}
 
 
@@ -307,6 +307,9 @@ AUDIT_ROWS = [
     ({"selectiveLogic": 9, "keysecondary": ["tide"]}, {"secondary_keys": "tide"}),
     ({"sticky": True}, {}),
     ({"keysecondary": "tide"}, {}),
+    # a key that spans lines cannot be written to a single-line scalar: dropped
+    ({"keysecondary": ["tide", "har\nbour", "salt\u2028"]}, {"secondary_keys": "tide, salt"}),
+    ({"keysecondary": ["a\rb"]}, {}),
 ]
 
 
@@ -375,7 +378,7 @@ def test_adopt_ignores_a_non_dict_extensions_object():
 
 def test_commit_writes_native_fields_and_stash(tmp_path):
     entries = lorebook._normalize({"entries": [
-        {"keys": ["tide"], "name": "Tide", "content": "x", "keysecondary": ["salt"],
+        {"keys": ["tide"], "name": "Saltmarch Charter", "content": "x", "keysecondary": ["salt"],
          "selectiveLogic": 2, "sticky": 2, "probability": 50}]})
     [created] = lorebook.commit(tmp_path, entries)
     meta = entities.read_entity(tmp_path, created["kind"], created["id"])["meta"]
@@ -387,7 +390,7 @@ def test_commit_writes_native_fields_and_stash(tmp_path):
 
 
 def test_reimport_is_still_a_noop(tmp_path):
-    book = {"entries": [{"keys": ["tide"], "name": "Tide", "content": "x",
+    book = {"entries": [{"keys": ["tide"], "name": "Saltmarch Charter", "content": "x",
                          "keysecondary": ["salt"], "sticky": 2}]}
     assert len(lorebook.commit(tmp_path, lorebook._normalize(book))) == 1
     assert lorebook.commit(tmp_path, lorebook._normalize(book)) == []
@@ -396,7 +399,7 @@ def test_reimport_is_still_a_noop(tmp_path):
 
 def test_pending_adopt_skips_fields_the_record_has():
     stash = {"sticky": 2, "cooldown": 3, "probability": 40}
-    meta = {"name": "Tide", "sticky": "5", "st_extensions": json.dumps(stash)}
+    meta = {"name": "Saltmarch Charter", "sticky": "5", "st_extensions": json.dumps(stash)}
     res = lorebook.pending_adopt(meta)
     assert res.fields == {"cooldown": "3"}
     assert res.unmapped == ("probability",)
@@ -408,7 +411,7 @@ def test_pending_adopt_treats_a_blank_value_as_not_there():
 
 
 def test_pending_adopt_is_empty_without_a_stash():
-    res = lorebook.pending_adopt({"name": "Tide"})
+    res = lorebook.pending_adopt({"name": "Saltmarch Charter"})
     assert res.fields == {} and res.unmapped == ()
 
 
