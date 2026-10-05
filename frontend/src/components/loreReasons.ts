@@ -33,7 +33,7 @@ function describeMain(reason: LoreReason, name: (ref: string) => string): string
     case "key": {
       const keys = reason.secondary ? `'${reason.key}' + '${reason.secondary}'` : `'${reason.key}'`;
       if (reason.post != null) return `key ${keys} in post #${reason.post}`;
-      if (reason.seed) return `key ${keys} in this turn's note`;
+      if (reason.seed) return `key ${keys} in this turn's input`;
       return `key ${keys}`;
     }
     case "keyless":

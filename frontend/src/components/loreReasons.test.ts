@@ -14,7 +14,7 @@ test("a key reason names the key and the post", () => {
 
 test("a key matched in the seed names the turn's note", () => {
   expect(describeReason({ type: "key", key: "Saltmarch", secondary: null, post: null, seed: true }, names))
-    .toBe("key 'Saltmarch' in this turn's note");
+    .toBe("key 'Saltmarch' in this turn's input");
 });
 
 test("a key reason with a secondary cites both keys", () => {
