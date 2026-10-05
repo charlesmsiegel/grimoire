@@ -102,6 +102,15 @@ def _is_actor_ref(ref: str) -> bool:
     return bool(sep) and kind in KNOWN_BY_KINDS and entity_schema.referenceable(eid)
 
 
+def single_line(value: str) -> bool:
+    """Can this string be a frontmatter scalar? The writer puts a value on one
+    line and the reader splits with `str.splitlines`, so anything `splitlines`
+    treats as a boundary (not just `\\n` and `\\r`) truncates the record on its
+    way back -- the rule `entity_schema.referenceable` holds refs to, asked the
+    same way. The empty string is no lines and is fine."""
+    return value.splitlines() in ([], [value])
+
+
 def _blank(value: object) -> bool:
     return isinstance(value, str) and not value.strip()
 
@@ -149,11 +158,18 @@ def _field_ok(key: str, value: object) -> bool:
     return True  # secondary_keys: any comma list
 
 
+def _refused(key: str, value: object) -> bool:
+    # A line boundary is refused whatever the field and whatever else the value
+    # says: even a blank "\n" or a "2\n" would be written as-is and corrupt
+    # the record, though `parse` would have read it as empty or as 2.
+    if isinstance(value, str) and not single_line(value):
+        return True
+    return not _blank(value) and not _field_ok(key, value)
+
+
 def invalid(fields: Mapping[str, object]) -> list[str]:
     """Sorted keys, among the catalog's, whose value a save must refuse. A
-    blank string is valid (it clears the field); keys outside the catalog are
-    not this module's to judge."""
-    return sorted(
-        k for k in FIELD_KEYS
-        if k in fields and not _blank(fields[k]) and not _field_ok(k, fields[k])
-    )
+    blank string is valid (it clears the field); a value that spans lines is
+    not, since the frontmatter writer cannot carry one. Keys outside the
+    catalog are not this module's to judge."""
+    return sorted(k for k in FIELD_KEYS if k in fields and _refused(k, fields[k]))

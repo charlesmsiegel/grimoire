@@ -1,7 +1,10 @@
 """The activation-control fields on a world-info entry: what they are, how a
 hand-edited value reads (leniently, never raising), and how an editor save is
 refused (strictly, naming the key)."""
+import pytest
+
 from grimoire.store import lore_fields
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.lore_fields import FIELD_KEYS, Controls, invalid, parse
 
 
@@ -138,3 +141,35 @@ def test_invalid_rejects_out_of_bound_and_odd_values():
 def test_invalid_rejects_non_string_values():
     assert invalid({"sticky": True, "secondary_keys": ["a"],
                     "known_by": 3}) == ["known_by", "secondary_keys", "sticky"]
+
+
+# Every character `str.splitlines` splits on: the frontmatter writer puts a value
+# on one line and the reader splits with `splitlines`, so each of these
+# truncates the record on its way back.
+LINE_BOUNDARIES = ["\n", "\r", "\r\n", "\v", "\f", "\x1c", "\x1d", "\x1e",
+                   "\x85", "\u2028", "\u2029"]
+
+
+@pytest.mark.parametrize("boundary", LINE_BOUNDARIES)
+def test_invalid_rejects_a_value_spanning_lines(boundary):
+    bad = {"secondary_keys": f"tide{boundary}harbour",
+           "known_by": f"characters:mara{boundary}x",
+           "key_logic": f"and_any{boundary}", "sticky": f"2{boundary}"}
+    assert invalid(bad) == ["key_logic", "known_by", "secondary_keys", "sticky"]
+    # even a value that is otherwise blank would be written as-is
+    assert invalid({"keep": boundary}) == ["keep"]
+
+
+def test_invalid_accepts_a_tab_inside_a_value():
+    assert invalid({"secondary_keys": "tide,\tharbour"}) == []
+
+
+@pytest.mark.parametrize("boundary", LINE_BOUNDARIES)
+def test_single_line_agrees_with_what_frontmatter_can_carry(boundary):
+    value = f"tide{boundary}harbour"
+    meta, _ = parse_frontmatter(dump_frontmatter({"secondary_keys": value}, "body"))
+    assert meta.get("secondary_keys") != value
+    assert not lore_fields.single_line(value)
+    ok = "tide, harbour"
+    meta, _ = parse_frontmatter(dump_frontmatter({"secondary_keys": ok}, "body"))
+    assert meta["secondary_keys"] == ok and lore_fields.single_line(ok)

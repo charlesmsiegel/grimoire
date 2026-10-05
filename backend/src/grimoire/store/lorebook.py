@@ -205,7 +205,11 @@ def _secondary_keys(stash: Mapping[str, object]) -> str | None:
     raw = _pick(stash, "keysecondary", "secondary_keys")
     if not isinstance(raw, list):
         return None
-    keys = [k.strip() for k in raw if isinstance(k, str) and k.strip()]
+    # A key with a line boundary inside it cannot be written into a single-line
+    # scalar (see `lore_fields.single_line`); dropped like any other unusable
+    # key. One only padded with a boundary is the key, once stripped.
+    keys = [k for k in (k.strip() for k in raw if isinstance(k, str))
+            if k and lore_fields.single_line(k)]
     return ", ".join(keys) or None
 
 
