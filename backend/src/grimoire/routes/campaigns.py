@@ -26,6 +26,8 @@ from fastapi.responses import JSONResponse, Response
 
 from .. import store
 from ..llm import LLMClient
+from ..store.continuity import doc as continuity_doc
+from ..store.continuity import review as continuity_review
 from . import characters as character_routes
 from . import runs
 from .common import (
@@ -449,6 +451,13 @@ def delete_campaign_event(cid: str, eid: str):
     that succeeded. The lock is an `RLock` and both mutators take it themselves,
     so this costs two reentrant acquires and closes the window; neither of them
     runs calendar code, which is the thing that must never happen under it.
+
+    Reviewed continuity links naming the event go in the same hold, for the same
+    reason: a link is keyed by ``event:<id>``, so one left behind would bind to a
+    recreation of the same name and date a commitment against the wrong day. A
+    continuity.json that cannot be read does not refuse the delete -- an event
+    can never be a merge target, so nothing here can be orphaned, and any link
+    left behind reports itself as broken in the continuity read.
     """
     _campaign_root_or_404(cid)
     with store.locks.campaign_lock(cid):
@@ -463,6 +472,8 @@ def delete_campaign_event(cid: str, eid: str):
         # that actually landed as an error.
         with contextlib.suppress(store.notices.NoticeError):
             store.notices.forget_event(cid, eid)
+        with contextlib.suppress(continuity_doc.ContinuityError):
+            continuity_review.forget_ref(cid, f"event:{eid}")
     return {"ok": True}
 
 

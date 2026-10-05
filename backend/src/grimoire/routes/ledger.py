@@ -56,6 +56,9 @@ import logging
 from fastapi import APIRouter, HTTPException
 
 from .. import store
+from ..store.continuity import doc as continuity_doc
+from ..store.continuity import effective as continuity_effective
+from ..store.continuity import review as continuity_review
 from .models import (
     ChronicleLineSave,
     CommitmentSave,
@@ -81,6 +84,48 @@ def _label(title: str, what: str) -> str:
     return f"{title} — {what}"
 
 
+def _live_target(cid: str, prefix: str, rid: str, physical: bool) -> str:
+    """The record a hand edit addressed to `rid` should land on.
+
+    A thread or commitment merged into another (a continuity alias) is hidden
+    behind its canonical, and its own status no longer counts -- so an edit
+    addressed to it lands on the canonical rather than vanishing into a record
+    nothing reads (capstone spec §7.2). Only a LIVE alias redirects:
+    `live_canon` follows a merge only to a record that is really there, so a
+    merge into something since deleted, or a hand-edited cross-type one, leaves
+    the edit on the record it named instead of conjuring the missing target.
+    ``physical`` asks for the record itself regardless.
+    """
+    if physical:
+        return rid
+    live = continuity_effective.live_canon(cid).get(f"{prefix}:{rid}")
+    return live.partition(":")[2] if live else rid
+
+
+def _refuse_unsafe_delete(cid: str, ref: str, force: bool) -> None:
+    """Refuse, before anything is written, a delete whose continuity cascade
+    could not be carried out or would orphan merged records.
+
+    A continuity.json whose aliases or links cannot be read gives no honest
+    answer to "is anything merged into this?", and a cascade that failed after
+    the delete had landed would report a completed write as an error -- so a
+    malformed file refuses the delete up front. A record others are merged into
+    is refused unless forced: deleting it un-merges them, which is the reader's
+    call to make knowingly (spec §5.7).
+    """
+    if set(continuity_doc.malformed(cid)) & {"file", "aliases", "links"}:
+        raise HTTPException(status_code=409, detail={
+            "kind": "malformed",
+            "detail": "continuity.json cannot be read; repair it before deleting records"})
+    merged = continuity_review.merged_sources(cid, ref)
+    if merged and not force:
+        raise HTTPException(status_code=409, detail={
+            "kind": "has_merged_records",
+            "detail": "other records are merged into this one; unmerge them first, "
+                      "or delete anyway",
+            "refs": merged})
+
+
 # --------------------------------------------------------------------- threads
 
 
@@ -104,7 +149,7 @@ def post_thread(cid: str, body: ThreadSave):
 
 
 @router.put("/campaigns/{cid}/ledger/threads/{pid}")
-def put_thread(cid: str, pid: str, body: ThreadSave):
+def put_thread(cid: str, pid: str, body: ThreadSave, physical: bool = False):
     """Edit one thread: its title, its status, the scene it was last moved in,
     and optionally a beat to append.
 
@@ -112,26 +157,33 @@ def put_thread(cid: str, pid: str, body: ThreadSave):
     `plot.set_movement` has always added one and there is no such thing as
     editing the list in place. Sending none leaves the beats alone, which is the
     ordinary case for closing a thread.
+
+    Addressed to a thread merged into another, the edit lands on the canonical
+    (`_live_target`); the response's ``id`` says which record was written.
     """
     _campaign_or_404(cid)
     with store.locks.campaign_lock(cid):
         if store.plot.get(cid, pid) is None:
             raise HTTPException(status_code=404, detail="thread not found")
+        target = _live_target(cid, "thread", pid, physical)
         title = body.title.strip()
-        with store.undo.journalled(cid, {"w": "plot", "id": pid},
-                                   kind="plot", ref={"kind": "plot", "id": pid},
-                                   field="thread", label=_label(title or pid, "thread")):
+        label = (_label(title or pid, "thread") if target == pid else
+                 f"{continuity_review.describe(cid, 'thread:' + target)} — thread "
+                 f"(via merged {continuity_review.describe(cid, 'thread:' + pid)})")
+        with store.undo.journalled(cid, {"w": "plot", "id": target},
+                                   kind="plot", ref={"kind": "plot", "id": target},
+                                   field="thread", label=label):
             # `set_movement` reads a blank title or an unknown status as "keep
             # what is stored", which is the behaviour this route wants too: a
             # payload that only closes a thread must not blank its title.
-            store.plot.set_movement(cid, pid, title, body.status or "",
+            store.plot.set_movement(cid, target, title, body.status or "",
                                     body.beat or "", body.scene if body.scene is not None
-                                    else (store.plot.get(cid, pid) or {}).get("last_scene", ""))
-    return {"ok": True}
+                                    else (store.plot.get(cid, target) or {}).get("last_scene", ""))
+    return {"ok": True, "id": target}
 
 
 @router.delete("/campaigns/{cid}/ledger/threads/{pid}")
-def delete_thread(cid: str, pid: str):
+def delete_thread(cid: str, pid: str, force: bool = False):
     """Remove a thread outright — for one the extraction invented, which is a
     different act from closing it. A closed thread stays on the ledger saying it
     happened; that is the wrong thing to say about a thread that never did."""
@@ -140,11 +192,15 @@ def delete_thread(cid: str, pid: str):
         thread = store.plot.get(cid, pid)
         if thread is None:
             raise HTTPException(status_code=404, detail="thread not found")
+        _refuse_unsafe_delete(cid, f"thread:{pid}", force)
         title = str(thread.get("title") or pid)
         with store.undo.journalled(cid, {"w": "plot", "id": pid},
                                    kind="plot", ref={"kind": "plot", "id": pid},
                                    field="thread", label=_label(title, "thread deleted")):
             store.plot.restore(cid, pid, None)
+        # Under the same hold: the id is free the moment this returns, and a
+        # thread recreated under it must not inherit this one's merges or links.
+        continuity_review.forget_ref(cid, f"thread:{pid}")
     return {"ok": True}
 
 
@@ -170,40 +226,46 @@ def post_commitment(cid: str, body: CommitmentSave):
 
 
 @router.put("/campaigns/{cid}/ledger/commitments/{mid}")
-def put_commitment(cid: str, mid: str, body: CommitmentSave):
+def put_commitment(cid: str, mid: str, body: CommitmentSave, physical: bool = False):
     """Edit one commitment. `due` is three-valued the whole way down, as
     `commitments.set_movement` documents: absent keeps the stored deadline, `""`
-    clears it, text sets it."""
+    clears it, text sets it. Addressed to a merged commitment, the edit lands on
+    its canonical, as `put_thread`'s does."""
     _campaign_or_404(cid)
     with store.locks.campaign_lock(cid):
-        record = store.commitments.get(cid, mid)
-        if record is None:
+        if store.commitments.get(cid, mid) is None:
             raise HTTPException(status_code=404, detail="commitment not found")
+        target = _live_target(cid, "commitment", mid, physical)
+        record = store.commitments.get(cid, target) or {}
         title = body.title.strip()
-        with store.undo.journalled(cid, {"w": "commitment", "id": mid},
-                                   kind="commitment", ref={"kind": "commitment", "id": mid},
-                                   field="commitment",
-                                   label=_label(title or mid, "commitment")):
+        label = (_label(title or mid, "commitment") if target == mid else
+                 f"{continuity_review.describe(cid, 'commitment:' + target)} — commitment "
+                 f"(via merged {continuity_review.describe(cid, 'commitment:' + mid)})")
+        with store.undo.journalled(cid, {"w": "commitment", "id": target},
+                                   kind="commitment", ref={"kind": "commitment", "id": target},
+                                   field="commitment", label=label):
             store.commitments.set_movement(
-                cid, mid, title, body.kind or "", body.status or "", body.due,
+                cid, target, title, body.kind or "", body.status or "", body.due,
                 body.beat or "",
                 body.scene if body.scene is not None else record.get("last_scene", ""))
-    return {"ok": True}
+    return {"ok": True, "id": target}
 
 
 @router.delete("/campaigns/{cid}/ledger/commitments/{mid}")
-def delete_commitment(cid: str, mid: str):
+def delete_commitment(cid: str, mid: str, force: bool = False):
     _campaign_or_404(cid)
     with store.locks.campaign_lock(cid):
         record = store.commitments.get(cid, mid)
         if record is None:
             raise HTTPException(status_code=404, detail="commitment not found")
+        _refuse_unsafe_delete(cid, f"commitment:{mid}", force)
         title = str(record.get("title") or mid)
         with store.undo.journalled(cid, {"w": "commitment", "id": mid},
                                    kind="commitment", ref={"kind": "commitment", "id": mid},
                                    field="commitment",
                                    label=_label(title, "commitment deleted")):
             store.commitments.restore(cid, mid, None)
+        continuity_review.forget_ref(cid, f"commitment:{mid}")
     return {"ok": True}
 
 
