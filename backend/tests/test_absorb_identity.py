@@ -354,6 +354,7 @@ def test_a_budget_cut_embed_is_the_budget_not_the_provider(client, scene, monkey
     block = body["identity"]
     assert (block["status"], block["budget_exhausted"], block["reason"]) == (
         "degraded", True, BUDGET_SEMANTIC)
+    assert block["fallback"] == BUDGET_SEMANTIC
     assert _identity_errors(cid) == []
 
 
@@ -562,6 +563,53 @@ def test_embedding_failure_degrades_the_phase_and_keeps_lexical_candidates(
     for value in row.values():
         assert RECOVER_THE_LEDGER["title"] not in str(value)
         assert RECOVER_THE_LEDGER["beat"] not in str(value)
+
+
+def test_an_embedding_failure_survives_a_partial_resolver_answer(client, scene, monkeypatch):
+    # The phase's `reason` can name one thing, and a partial answer outranks
+    # the embed. The fallback is a fact about where the possible-match lists
+    # came from, so it is reported on its own field, not lost to the reason.
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _configure_embeddings(monkeypatch, FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "connection refused")))
+    _llm(client, _extraction(plot=[RECOVER_THE_LEDGER, FIND_THE_HARBOUR_LEDGER]),
+         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+
+    block = _absorb(client, cid, sid)["identity"]
+
+    assert (block["status"], block["reason"], block["matching"], block["fallback"]) == (
+        "degraded", "the duplicate check left some rows unanswered", "semantic",
+        DEGRADED_SEMANTIC)
+
+
+def test_an_embedding_failure_survives_a_failed_resolver(client, scene, monkeypatch):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _configure_embeddings(monkeypatch, FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "connection refused")))
+    _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+         error={"kind": "network", "message": "connection reset"})
+
+    body = _absorb(client, cid, sid)
+
+    block = body["identity"]
+    assert (block["status"], block["fallback"]) == ("failed", DEGRADED_SEMANTIC)
+    assert "connection reset" in block["reason"]
+    [edit] = _plot_edits(body)
+    assert edit["identity_check"]["status"] == "hint_only"
+
+
+def test_semantic_matching_that_stood_reports_no_fallback(client, scene, monkeypatch):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _configure_embeddings(monkeypatch, FakeEmbeddings())
+    _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+         _decisions({"row": "r1", "decision": "new"}))
+
+    block = _absorb(client, cid, sid)["identity"]
+
+    assert (block["status"], block["matching"], block["fallback"]) == ("ok", "semantic", "")
 
 
 def test_identity_embedding_deadline_never_exceeds_the_absorb_budget(client, scene, monkeypatch):

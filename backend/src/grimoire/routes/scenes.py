@@ -1776,15 +1776,21 @@ def _embedding_reason(cid: str, sid: str, exam: continuity_identity.Examination,
     provider -- the line `BudgetRefused.llm_call_failed` and `_budget_overrun`
     draw for LLM calls -- so it writes no error row. Any other failure writes
     one counts-only row, so a dead endpoint reaches the error store (#156):
-    the detail is a constant, never a title, beat or identity text."""
+    the detail is a constant, never a title, beat or identity text.
+
+    The reason is also written to `block["fallback"]`, which no later outcome
+    overwrites: `reason` names one thing, and a partial or failed resolver
+    outranks the embed there, while the possible-match lists are still the
+    word-and-cast ones the reviewer has to be told about."""
     if exam.embedding != "failure":
         return ""
     if budget.spent():
-        block["budget_exhausted"] = True
+        block.update(budget_exhausted=True, fallback=_SEMANTIC_BUDGET)
         return _SEMANTIC_BUDGET
     store.errors.record("continuity-identity", exam.embedding_error or "network",
                         "semantic matching failed; basic matching used",
                         campaign=cid, scene=sid, task="continuity-identity")
+    block["fallback"] = _SEMANTIC_UNAVAILABLE
     return _SEMANTIC_UNAVAILABLE
 
 
@@ -1856,11 +1862,13 @@ async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, wh
     but for `Abandoned` and cancellation: every failure -- the examination,
     the embeddings provider, the routed call, its reply, the rewrite -- is
     this phase's status, and the extraction's rows still stage. `matching`
-    is set on every path from the one definition the continuity read uses.
+    is set on every path from the one definition the continuity read uses;
+    `fallback` is non-empty when semantic matching was configured but did not
+    stand this run, whatever `status` and `reason` came to.
     """
     block = {"status": "skipped", "reason": "no new records proposed", "attempted": False,
              "budget_exhausted": False, "matching": continuity_similarity.matching(),
-             "counts": {}}
+             "fallback": "", "counts": {}}
     if not continuity_identity.has_proposals(parsed):
         return parsed, block
     exam: continuity_identity.Examination | None = None

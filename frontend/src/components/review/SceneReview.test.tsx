@@ -4063,6 +4063,36 @@ test("a degraded identity phase says why, even with semantic matching configured
     expect(screen.queryByText(reason)).toBeNull();
   });
 
+test("a semantic fallback is named even when a partial or failed resolver owns the reason",
+  async () => {
+    // The phase's reason names one thing; a partial answer or a failed
+    // resolver outranks the embed there. `fallback` keeps the embed's account,
+    // and the reviewer must still be told the lists are the short ones.
+    const fallback = "semantic matching unavailable — basic matching used";
+    const unchecked = { ...UNCERTAIN_TITHE, identity_check: identityCheck({
+      decision: "unchecked", status: "hint_only", reason: "the check could not run" }) };
+    absorbWithPhases(PHASES_WITH_IDENTITY, { edits: [unchecked], identity: {
+      ...IDENTITY_OK, status: "degraded", fallback,
+      reason: "the duplicate check left some rows unanswered" } });
+    let view = await openAbsorb();
+    expect(screen.getByText(/left some rows unanswered/)).toBeTruthy();
+    expect(screen.getByText(fallback)).toBeTruthy();
+    view.unmount();
+
+    absorbWithPhases(PHASES_WITH_IDENTITY, { edits: [unchecked], identity: {
+      ...IDENTITY_OK, status: "failed", fallback, reason: "duplicate check failed: boom" } });
+    view = await openAbsorb();
+    expect(screen.getByText(/could not run; rows still list/)).toBeTruthy();
+    expect(screen.getByText(fallback)).toBeTruthy();
+    view.unmount();
+
+    // the embed alone: the degraded notice already says it, once
+    absorbWithPhases(PHASES_WITH_IDENTITY, { edits: [UNCERTAIN_TITHE], identity: {
+      ...IDENTITY_OK, status: "degraded", fallback, reason: fallback } });
+    await openAbsorb();
+    expect(screen.getAllByText(new RegExp(fallback))).toHaveLength(1);
+  });
+
 test("basic matching is named when the possible-match lists came from basic matching",
   async () => {
     const BASIC = "Basic matching active — semantic matching not configured";

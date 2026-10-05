@@ -1636,10 +1636,14 @@ export type AbsorbPhase = PhaseAttempt & {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
 };
 /** The existing-record check's phase block (spec §10.4). `matching` says where
- *  the possible-match lists came from; `counts` is flat and text-free. */
+ *  the possible-match lists came from; `counts` is flat and text-free.
+ *  `fallback` is why semantic matching, though configured, did not stand this
+ *  run (empty when it did) -- kept apart from `reason`, which a partial or
+ *  failed resolver owns. Absent on reviews stored before it existed. */
 export type IdentityPhase = PhaseAttempt & {
   status: "ok" | "degraded" | "failed" | "skipped"; reason: string | null;
   matching: "basic" | "semantic";
+  fallback?: string;
   counts: Record<string, number>;
 };
 export type SceneAbsorb = {
