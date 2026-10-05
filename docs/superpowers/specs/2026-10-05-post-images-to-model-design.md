@@ -381,8 +381,11 @@ response that produced it, `None` for anything that was not one — set by both
 adapters where they already map a status to a kind. `bad_response` alone cannot
 carry this decision: it is also what a 500, 502 or 503 maps to, and re-sending
 as text on a server error would drop the pictures from a turn that a plain
-retry would have served. `REJECTED_STATUSES = {400, 413, 415, 422}` is the
-provider saying "not this request".
+retry would have served. `REJECTED_STATUSES = {400, 404, 413, 415, 422}` is
+the provider saying "not this request" -- 404 because OpenRouter answers "No
+endpoints found that support image input" with one when no endpoint it may
+route to takes images; a 404 for a genuinely missing model costs one extra text
+attempt that fails the same way.
 
 When the messages carry refs (`has_refs`, a pure check — no resolver runs while
 routes are built, so nothing reads a sidecar on the event loop),
@@ -514,7 +517,7 @@ prefix stable.
 - `LLMClient`: a vision route receives `image_url` parts with `data:` URIs only
   in user messages, the holder's `images` count; a text route the identical
   `images=0` string; a claude fallback kept and sent text; a draft's
-  `image_url` parts still exclude it; a 400/413/415/422 after images were sent
+  `image_url` parts still exclude it; a 400/404/413/415/422 after images were sent
   retried once on the same connection as text (on the fallback too), a 5xx or
   a 429 not, a rejection on an attempt that sent no image not, no "fallback
   failed too" for a lone primary, the degrade's own error reported when it

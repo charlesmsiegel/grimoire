@@ -68,9 +68,9 @@ def test_the_inspector_shows_the_images_only_when_they_would_be_sent(client):
     assert "history_images" not in {r["id"] for r in body["sections"]}
 
 
-def test_a_regenerate_replays_the_frozen_prompt_in_this_campaign(client):
-    """A reroll replays the snapshot frozen for the reply it replaces; the
-    references in it resolve against the campaign running the reroll."""
+def test_a_narrator_regenerate_recomposes_with_the_reference(client):
+    """`/regenerate` recomposes the turn (it does not replay a snapshot), and
+    the recomposition carries the picture like any other turn."""
     cid, sid = _setup(client)
     _chat(client, cid, sid)
     cap = CapturingOpenRouter()
@@ -79,5 +79,26 @@ def test_a_regenerate_replays_the_frozen_prompt_in_this_campaign(client):
         assert r.status_code == 200
         for _ in r.iter_lines():
             pass
+    assert cap.messages.campaign == cid
+    assert any(cp.image_refs(m["content"]) for m in cap.messages)
+
+
+def test_a_character_reroll_replays_its_snapshot_in_this_campaign(client):
+    """A character reroll replays the prompt frozen for the response it
+    replaces (`from_snapshot`); the references in it resolve against the
+    campaign running the reroll, and the stored snapshot holds no bytes."""
+    import json
+
+    cid, sid = _setup(client)
+    _chat(client, cid, sid)
+    rid = store.scenes.read_scene(cid, sid)["messages"][-1]["response_id"]
+    record = store.responses.get(cid, sid, rid, private=True)
+    frozen = json.dumps(record["snapshot"])
+    assert '"image_ref"' in frozen and "data:" not in frozen
+    cap = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: cap
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate",
+                         json={})
+    assert "error" not in result.text, result.text
     assert cap.messages.campaign == cid
     assert any(cp.image_refs(m["content"]) for m in cap.messages)
