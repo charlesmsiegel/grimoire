@@ -220,6 +220,11 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # (#115), so it starts inside the exclusion rather than joining the
     # `UNREVIEWED` backlog `plot` sits in.
     "store.commitments",
+    # continuity.json (the capstone's aliases, links and suppressions) is
+    # rewritten whole by every mutator in `continuity.doc`, so two unlocked
+    # read-modify-writes lose one decision. New module, so it starts inside the
+    # exclusion rather than joining the frozen `UNREVIEWED` backlog.
+    "store.continuity.doc",
     # The campaign's cover image (`<campaign>/assets/cover.<ext>`). A new
     # module mutating campaign-scoped state, so it starts inside the exclusion
     # rather than joining the frozen `UNREVIEWED` backlog: `put_cover` and

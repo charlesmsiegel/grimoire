@@ -56,6 +56,7 @@ from . import (
     commits,
     config,
     context,
+    continuity,
     covers,
     dice,
     dossiers,
@@ -267,6 +268,10 @@ __all__ = [
     "birthdays",
     "commitments",
     "commits",
+    # Reviewed aliases, links and suppressions over plot threads and
+    # commitments (the continuity capstone) -- the decisions half of the
+    # ledger these two sit beside.
+    "continuity",
     "facts",
     "assets",
     "fetch",
