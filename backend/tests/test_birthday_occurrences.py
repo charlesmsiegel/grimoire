@@ -7,6 +7,8 @@ whole window per actor and loses an actor whose walk raises anywhere in it.
 
 from __future__ import annotations
 
+import pytest
+
 from grimoire.store import birthdays, calendars, campaigns, characters, clock, overlay, worlds
 
 
@@ -141,6 +143,27 @@ def test_a_bad_birthdate_skips_only_that_actor(monkeypatch, tmp_path):
     _actor(cid, "Mara", "--05-32")
     _actor(cid, "Winifred", "--05-09")
     assert [r["name"] for r in _occ(cid)] == ["Winifred"]
+
+
+# A birthdate PUT stores any string, so a card can carry text whose read fails
+# with something other than `CalendarError`: `"²".isdigit()` is True but
+# `int("²")` raises ValueError, and a year past `date`'s range (or the Hebrew
+# provider's arithmetic) raises OverflowError. Each must cost only that actor.
+_UNREADABLE = [
+    ("gregorian", "2026-05-08", "--05-²", "--05-09"),
+    ("gregorian", "2026-05-08", "99999999999999999999-05-09", "--05-09"),
+    ("hebrew", "5786-Shevat-20", "99999999999999-Adar-14", "--Shevat-25"),
+]
+
+
+@pytest.mark.parametrize("calendar,now,bad,good", _UNREADABLE)
+def test_an_unreadable_birthdate_skips_only_that_actor(monkeypatch, tmp_path, calendar, now, bad, good):
+    cid = _campaign(monkeypatch, tmp_path, calendar=calendar, now=now)
+    _actor(cid, "Mara", bad)
+    _actor(cid, "Winifred", good)
+    assert [r["name"] for r in _occ(cid)] == ["Winifred"]
+    got = birthdays.upcoming(cid, clock.now(cid), [], visible_characters=True)
+    assert [r["name"] for r in got] == ["Winifred"]
 
 
 def _project(cid, row):
