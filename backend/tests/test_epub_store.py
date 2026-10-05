@@ -435,11 +435,14 @@ def test_build_epub_drops_a_cover_that_vanishes_mid_export(monkeypatch, tmp_path
     """The panel that replaces a cover sits next to the Export menu, so this
     window is reachable. An export must degrade, not 500."""
     _wid, cid, _s1, _s2 = _fixture_campaign(monkeypatch, tmp_path)
-    covers.put_cover(cid, _png(), "png")
+    # A size no other picture in the fixture has: identical bytes are ONE blob
+    # in the image store, and only the cover's may vanish here.
+    covers.put_cover(cid, _png((7, 5)), "png")
+    stored = covers.cover_path(cid)
     real = pathlib.Path.read_bytes
 
     def vanishing(self, *a, **k):
-        if self.name == "cover.png":
+        if self == stored:
             raise OSError("gone")
         return real(self, *a, **k)
 

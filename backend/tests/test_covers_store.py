@@ -4,7 +4,7 @@ import pathlib
 import pytest
 from PIL import Image
 
-from grimoire.store import campaigns, covers, worlds
+from grimoire.store import assets, campaigns, covers, image_refs, image_store, worlds
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
@@ -28,7 +28,9 @@ def test_put_read_delete_round_trip(cid):
     assert covers.put_cover(cid, data, "png") == "png"
     p = covers.cover_path(cid)
     assert p is not None and p.read_bytes() == data
-    assert p == campaigns.campaign_root(cid) / "assets" / "cover.png"
+    # the bytes live in the image store; the campaign holds the placement
+    assert image_store.blob_sha_of(p) is not None
+    assert image_refs.read(campaigns.campaign_root(cid) / "assets", "cover") is not None
     assert covers.cover_version(cid) != ""
 
     covers.delete_cover(cid)
@@ -42,7 +44,8 @@ def test_replacing_across_extensions_leaves_one_file(cid):
     covers.put_cover(cid, first, "png")
     covers.put_cover(cid, second, "jpg")
     d = campaigns.campaign_root(cid) / "assets"
-    assert [p.name for p in sorted(d.iterdir())] == ["cover.jpg"]
+    assert [i["name"] for i in assets.list_in(d)] == ["cover"]
+    assert not [p for p in d.iterdir() if p.is_file()]      # no legacy file left
     read_back = covers.cover_path(cid).read_bytes()
     assert read_back == second
     assert read_back != first
@@ -71,7 +74,8 @@ def test_foreign_sibling_is_ignored_and_kept(cid):
     import os
     os.utime(stray, (2 ** 31, 2 ** 31))  # newest, so a naive glob would pick it
 
-    assert covers.cover_path(cid).name == "cover.png"
+    assert covers.cover_path(cid) != stray
+    assert covers.cover_path(cid).suffix == ".png"
     # A replace's stale-sibling cleanup must stay scoped to supported
     # extensions too -- pin that at the `covers` layer, not only at `assets`.
     covers.put_cover(cid, _png((5, 5)), "jpg")
@@ -101,9 +105,16 @@ def test_cover_version_survives_a_vanishing_file(cid, monkeypatch):
     resolution tolerate a concurrent unlink at all), so patching every
     `Path.stat` call still lets resolution succeed and only trips the
     unguarded `stat()` inside `image_version`.
+
+    A LEGACY cover file, planted by hand: a stored cover is a blob now, whose
+    token is its name and is never statted, so only a legacy file still has
+    this race.
     """
-    covers.put_cover(cid, _png(), "png")
+    d = campaigns.campaign_root(cid) / "assets"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "cover.png").write_bytes(_png())
     p = covers.cover_path(cid)
+    assert p == d / "cover.png"
     real_stat = pathlib.Path.stat
 
     def flaky_stat(self, *a, **k):
@@ -170,7 +181,8 @@ def test_a_world_cover_round_trips_and_is_confirmed_on_removal(wid):
     assert covers.put_world_cover(wid, data, covers.validate(data)) == "png"
     p = covers.world_cover_path(wid)
     assert p is not None and p.read_bytes() == data
-    assert p == worlds.world_root(wid) / "assets" / "cover.png"
+    assert image_store.blob_sha_of(p) is not None
+    assert image_refs.read(worlds.world_root(wid) / "assets", "cover") is not None
     assert covers.world_cover_version(wid)
 
     covers.delete_world_cover(wid)
@@ -192,7 +204,8 @@ def test_replacing_a_world_cover_leaves_one_file(wid):
     covers.put_world_cover(wid, _png(), "png")
     covers.put_world_cover(wid, _png((6, 6), color=(200, 100, 50)), "jpg")
     d = worlds.world_root(wid) / "assets"
-    assert [p.name for p in sorted(d.iterdir())] == ["cover.jpg"]
+    assert [i["name"] for i in assets.list_in(d)] == ["cover"]
+    assert not [p for p in d.iterdir() if p.is_file()]      # no legacy file left
 
 
 def test_a_file_that_is_not_ours_survives_a_world_cover_replace_and_remove(wid):

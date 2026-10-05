@@ -1191,7 +1191,8 @@ def test_campaign_library_upload_stores_the_extension_the_bytes_are(client):
     r = client.put(f"/api/campaigns/{cid}/images/map",
                    files={"file": ("map.png", io.BytesIO(jpeg), "image/png")})
     assert r.status_code == 200 and r.json()["ext"] == "jpg"
-    assert (store.campaigns.campaign_root(cid) / "assets" / "images" / "map.jpg").exists()
+    stored = store.campaign_images.image_path(cid, "map")
+    assert stored is not None and stored.suffix == ".jpg"
     got = client.get(f"/api/campaigns/{cid}/images/map")
     assert got.content == jpeg and got.headers["content-type"] == "image/jpeg"
 
@@ -1294,9 +1295,13 @@ def test_image_upload_names_every_format_the_store_accepts(client):
     cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Sera"}).json()["character"]
     base = f"/api/worlds/{wid}/characters/{cid}/versions/default/images"
 
-    for fmt, ext, media in (("PNG", "png", "image/png"), ("JPEG", "jpg", "image/jpeg"),
-                            ("GIF", "gif", "image/gif"), ("WEBP", "webp", "image/webp")):
-        data = _image_bytes(fmt)
+    for i, (fmt, ext, media) in enumerate((
+            ("PNG", "png", "image/png"), ("JPEG", "jpg", "image/jpeg"),
+            ("GIF", "gif", "image/gif"), ("WEBP", "webp", "image/webp"))):
+        # A different PICTURE per format: the image store keeps one encoding
+        # per picture (the first to arrive), so the same pixels re-encoded
+        # would keep answering in the first format.
+        data = _image_bytes(fmt, size=(4 + i, 4))
         r = client.put(f"{base}/avatar",
                        files={"file": ("avatar.jpeg", io.BytesIO(data), "image/jpeg")})
         assert r.status_code == 200 and r.json() == {"name": "avatar", "ext": ext}, fmt
@@ -14691,7 +14696,7 @@ def test_campaign_cover_stored_format_beats_the_filename(client):
     data = _png_bytes()
     r = client.put(url, files={"file": ("c.jpg", io.BytesIO(data), "image/jpeg")})
     assert r.status_code == 200 and r.json()["ext"] == "png"
-    assert (store.campaigns.campaign_root(cid) / "assets" / "cover.png").exists()
+    assert store.covers.cover_path(cid).suffix == ".png"
 
     got = client.get(url)
     assert got.content == data and got.headers["content-type"].startswith("image/png")

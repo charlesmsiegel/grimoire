@@ -26,6 +26,19 @@ from grimoire.store import (
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 
 
+@pytest.fixture(autouse=True, scope="session")
+def _default_home_never_the_real_one(tmp_path_factory):
+    """The floor under `_isolate_bootstrap_pointer`'s per-test `DEFAULT_HOME`.
+
+    A test that calls `monkeypatch.undo()` mid-test (to lift a fault it
+    injected) also undoes that per-test patch, and the rest of the test would
+    then resolve the real `~/.grimoire`. Patched once for the session, outside
+    every test's `monkeypatch`, what an undo restores is this directory."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(paths, "DEFAULT_HOME", tmp_path_factory.mktemp("default-home"))
+        yield
+
+
 @pytest.fixture(autouse=True)
 def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
     """Keep every test off the developer's REAL `~/.grimoire.json`.
@@ -46,6 +59,13 @@ def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
     """
     monkeypatch.setattr(paths, "pointer_path",
                         lambda: tmp_path / "bootstrap" / ".grimoire.json")
+    # The same reasoning one step further down `home()`'s chain: with neither
+    # the env var nor a pointer, the root is `DEFAULT_HOME` -- the developer's
+    # real `~/.grimoire`. Since images go into the global content-addressed
+    # store (`store.image_store`, rooted at `home()` rather than at the record
+    # root a test passes in), a store-level test that writes an image without
+    # setting `GRIMOIRE_HOME` would otherwise put its blob in that real library.
+    monkeypatch.setattr(paths, "DEFAULT_HOME", tmp_path / "default-home")
 
 
 def pytest_configure(config):

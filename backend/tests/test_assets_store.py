@@ -1,9 +1,41 @@
 import errno
+import io
 import os
+import re
 
 import pytest
+from PIL import Image
 
-from grimoire.store import assets
+from grimoire.store import assets, image_refs, image_store
+
+
+@pytest.fixture(autouse=True)
+def _home(tmp_path):
+    """The image store is global (`paths.home()`), so every test here points it
+    at a directory of its own -- one that is not `tmp_path` itself, which most
+    of these tests use as a record ROOT, so a listing of it never meets the
+    store's own `assets/` tree.
+
+    Its own `MonkeyPatch`, not the test's: several tests here call
+    `monkeypatch.undo()` mid-test to lift a fault they injected, and that must
+    not also move the store out from under the reads that follow."""
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+        yield
+
+
+def _png(seed: int = 0) -> bytes:
+    """A real, decodable PNG made from arithmetic."""
+    im = Image.new("RGB", (8, 6))
+    im.putdata([((x * 9 + seed) % 256, (y * 17 + seed) % 256, (x * y + seed) % 256)
+                for y in range(6) for x in range(8)])
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
+
+
+def _vdir(tmp_path, cid="sera", vid="default"):
+    return tmp_path / "characters" / cid / "assets" / vid
 
 
 def _named(imgs):
@@ -165,7 +197,9 @@ def test_focus_cleared_when_avatar_changes(tmp_path):
 def test_base_param_roots_other_kinds(tmp_path):
     assets.put_image(tmp_path, "docks", "default", "avatar", b"i", "png", base="locations")
     p = assets.image_path(tmp_path, "docks", "default", "avatar", base="locations")
-    assert p is not None and "locations" in p.parts
+    assert p is not None
+    assert image_refs.read(tmp_path / "locations" / "docks" / "assets" / "default",
+                           "avatar") is not None
     # not visible under the default characters/ base
     assert assets.image_path(tmp_path, "docks", "default", "avatar") is None
     assert _named(assets.list_images(tmp_path, "docks", "default", base="locations")) == [
@@ -180,11 +214,15 @@ def test_list_images_version_token_tracks_content(tmp_path):
     assets.put_image(tmp_path, "c", "v1", "avatar", b"png-one", "png")
     first = assets.list_images(tmp_path, "c", "v1")
     assert first[0]["v"]
-    import os
-    p = tmp_path / "characters" / "c" / "assets" / "v1" / "avatar.png"
+    assets.put_image(tmp_path, "c", "v1", "avatar", b"png-two", "png")
+    assert assets.list_images(tmp_path, "c", "v1")[0]["v"] != first[0]["v"]
+
+    # A legacy file's token is its stat, so it moves with the file.
+    p = tmp_path / "characters" / "c" / "assets" / "v1" / "gallery_1.png"
+    p.write_bytes(b"legacy")
+    before = assets.list_images(tmp_path, "c", "v1")[1]["v"]
     os.utime(p, ns=(p.stat().st_atime_ns, p.stat().st_mtime_ns + 1_000_000))
-    second = assets.list_images(tmp_path, "c", "v1")
-    assert second[0]["v"] != first[0]["v"]
+    assert assets.list_images(tmp_path, "c", "v1")[1]["v"] != before
 
 
 def test_a_failed_image_write_keeps_the_previous_image(tmp_path, monkeypatch):
@@ -232,9 +270,13 @@ def test_an_orphaned_sibling_still_resolves_to_the_newest(tmp_path, monkeypatch)
 def test_lookup_survives_a_sibling_vanishing_mid_scan(tmp_path, monkeypatch):
     """put_image writes the new extension then unlinks the stale one, so a
     concurrent reader can glob a path that is gone by the time it stats. The
-    old sorted(...)[0] never stat'd, so raising here would be a regression."""
-    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"real", "png")
+    old sorted(...)[0] never stat'd, so raising here would be a regression.
+
+    The legacy rule, so the avatar is a legacy file planted by hand: `put_image`
+    writes a placement now, and a placement is never globbed."""
     d = tmp_path / "characters" / "sera" / "assets" / "default"
+    d.mkdir(parents=True)
+    (d / "avatar.png").write_bytes(b"real")
     (d / "avatar.jpg").write_bytes(b"about to vanish")
     (d / "avatar.jpg").unlink()
 
@@ -591,9 +633,10 @@ def test_concurrent_promotions_neither_collide_nor_lose_an_image(tmp_path):
 
     assert not errors, f"a concurrent promotion raised: {errors}"
     assert not any(t.is_alive() for t in threads), "a promotion deadlocked"
-    files = _image_files(tmp_path)
-    assert sorted(p.stem for p in files) == ["avatar", "gallery_1", "gallery_2"]
-    assert sorted(p.read_bytes() for p in files) == [b"A", b"B", b"C"]
+    names = [i["name"] for i in assets.list_images(tmp_path, "sera", "default")]
+    assert names == ["avatar", "gallery_1", "gallery_2"]
+    assert sorted(assets.image_path(tmp_path, "sera", "default", n).read_bytes()
+                  for n in names) == [b"A", b"B", b"C"]
 
 
 def test_a_promotion_racing_an_upload_does_not_interleave(tmp_path):
@@ -678,14 +721,15 @@ def test_path_in_returns_newest_and_puts_round_trip(tmp_path):
     assert assets.path_in(d, "cover") is None          # directory absent
     assert assets.put_in(d, "cover", b"one", "png") == "png"
     p = assets.path_in(d, "cover")
-    assert p is not None and p.name == "cover.png" and p.read_bytes() == b"one"
+    assert p is not None and p.suffix == ".png" and p.read_bytes() == b"one"
+    assert image_store.blob_sha_of(p) is not None
 
 
 def test_put_in_replaces_across_extensions(tmp_path):
     d = tmp_path / "assets"
     assets.put_in(d, "cover", b"one", "png")
     assets.put_in(d, "cover", b"two", "jpg")
-    assert [p.name for p in sorted(d.iterdir())] == ["cover.jpg"]
+    assert [(i["name"], i["ext"]) for i in assets.list_in(d)] == [("cover", "jpg")]
     assert assets.path_in(d, "cover").read_bytes() == b"two"
 
 
@@ -701,7 +745,8 @@ def test_supported_only_ignores_and_spares_a_foreign_sibling(tmp_path):
     """A store directory is one a human browses and a sync client writes into:
     a `cover.txt` must neither become the cover nor be deleted by us."""
     d = tmp_path / "assets"
-    assets.put_in(d, "cover", b"png", "png")
+    d.mkdir()
+    (d / "cover.png").write_bytes(b"png")    # legacy: a placement is never globbed
     (d / "cover.txt").write_text("sync conflict note", encoding="utf-8")
     os.utime(d / "cover.txt", (2 ** 31, 2 ** 31))  # newest by mtime
 
@@ -710,6 +755,7 @@ def test_supported_only_ignores_and_spares_a_foreign_sibling(tmp_path):
 
     assets.put_in(d, "cover", b"jpg", "jpg", supported_only=True)
     assert (d / "cover.txt").exists()
+    assert not (d / "cover.png").exists()       # the supported sibling is replaced
 
     assets.delete_in(d, "cover", supported_only=True)
     assert assets.path_in(d, "cover", supported_only=True) is None
@@ -756,3 +802,287 @@ def test_a_symlinked_asset_folder_loses_the_link_not_the_library(tmp_path):
     assets.delete_version_images(tmp_path, "sera", "older")
     assert not d.exists() and not d.is_symlink()
     assert (library / "avatar.png").read_bytes() == b"a"   # the target is somebody else's
+
+
+# ---- placements: images live in the content-addressed store ---------------
+
+_SHA = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def test_put_writes_ref_not_file(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", "avatar", _png(), "png")
+    d = _vdir(tmp_path)
+    assert not list(d.rglob("*.png"))
+    assert (d / "image-refs" / "avatar.json").is_file()
+    p = assets.image_path(tmp_path, "sera", "default", "avatar")
+    assert p is not None and p.is_relative_to(image_store.store_root())
+    assert image_store.blob_sha_of(p) is not None
+
+
+def test_same_bytes_two_slots_one_blob(tmp_path):
+    data = _png(3)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, data, "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", data, "png")
+    blobs = [p for p in (image_store.store_root() / "blobs").rglob("*") if p.is_file()]
+    assert len(blobs) == 1
+    rows = assets.list_images(tmp_path, "sera", "default")
+    assert [r["name"] for r in rows] == ["avatar", "gallery_1"]
+    assert rows[0]["image_id"] == rows[1]["image_id"]
+    assert (assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+            == assets.image_path(tmp_path, "sera", "default", "gallery_1"))
+
+
+def test_delete_one_placement_keeps_other_and_store(tmp_path):
+    data = _png(4)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, data, "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", data, "png")
+    blob = assets.image_path(tmp_path, "sera", "default", "gallery_1")
+    assets.delete_image(tmp_path, "sera", "default", assets.AVATAR)
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is None
+    assert not (_vdir(tmp_path) / "image-refs" / "avatar.json").exists()
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_1") == blob
+    assert blob.read_bytes()            # the store keeps the blob (GC is stage 4)
+    assert [r["name"] for r in assets.list_images(tmp_path, "sera", "default")] == ["gallery_1"]
+
+
+def test_ref_wins_over_legacy_and_unresolved_ref_falls_back(tmp_path):
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    legacy = d / "avatar.png"
+    legacy.write_bytes(b"LEGACY")
+    obj = image_store.ingest(_png(5), "png")
+    image_refs.write(d, assets.AVATAR, obj.id)
+
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert p == image_store.blob_path(obj.blob_sha256, obj.ext)
+    [row] = assets.list_images(tmp_path, "sera", "default")
+    assert row["image_id"] == obj.id and row["v"] == obj.blob_sha256
+
+    p.unlink()                         # the blob has not synced in yet
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) == legacy
+    [row] = assets.list_images(tmp_path, "sera", "default")
+    assert "image_id" not in row and row["ext"] == "png"
+
+    legacy.unlink()
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is None
+    assert assets.list_images(tmp_path, "sera", "default") == []
+
+
+def test_list_row_shapes(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(6), "png")
+    (_vdir(tmp_path) / "gallery_1.webp").write_bytes(b"LEGACY")
+    ref_row, legacy_row = assets.list_images(tmp_path, "sera", "default")
+    assert set(ref_row) == {"name", "ext", "v", "image_id"}
+    assert _SHA.match(ref_row["v"]) and ref_row["ext"] == "png"
+    assert set(legacy_row) == {"name", "ext", "v"}
+    assert legacy_row["ext"] == "webp"
+    assert re.fullmatch(r"[0-9a-f]+-[0-9a-f]+", legacy_row["v"])
+    assert assets.list_in(_vdir(tmp_path)) == [ref_row, legacy_row]
+
+
+def test_names_in_and_free_gallery_see_refs(tmp_path):
+    for i in (1, 2):
+        assets.put_image(tmp_path, "sera", "default", f"gallery_{i}", _png(10 + i), "png")
+    d = _vdir(tmp_path)
+    assert not [p for p in d.iterdir() if p.is_file()]      # refs only
+    assert assets.names_in(d) == ({"gallery_1", "gallery_2"}, False)
+    assert assets._free_gallery(d) == "gallery_3"
+    # an image-less override is not an image
+    assets.write_focus(tmp_path, "sera", "default", 20)
+    assert assets.names_in(d)[0] == {"gallery_1", "gallery_2"}
+
+
+def test_version_art_uncacheable_while_ref_unresolved(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(7), "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(8), "png")
+    images, _focus, stamps = assets.version_art(tmp_path, "sera", "default")
+    assert stamps is not None
+    refs = os.fspath(_vdir(tmp_path) / "image-refs")
+    assert any(s[0] == refs for s in stamps)
+    assert any(s[0] == os.path.join(refs, "avatar.json") for s in stamps)
+    avatar = next(i for i in images if i["name"] == assets.AVATAR)
+    assert avatar["v"] == assets.image_version(
+        assets.image_path(tmp_path, "sera", "default", assets.AVATAR))
+
+    blob = assets.image_path(tmp_path, "sera", "default", "gallery_1")
+    data = blob.read_bytes()
+    blob.unlink()
+    images, _focus, stamps = assets.version_art(tmp_path, "sera", "default")
+    assert stamps is None
+    assert [i["name"] for i in images] == [assets.AVATAR]
+
+    blob.write_bytes(data)
+    images, _focus, stamps = assets.version_art(tmp_path, "sera", "default")
+    assert stamps is not None
+    assert [i["name"] for i in images] == [assets.AVATAR, "gallery_1"]
+
+
+def test_image_version_of_a_blob_is_its_sha(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(9), "png")
+    p = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    assert assets.image_version(p) == image_store.blob_sha_of(p)
+
+
+def test_focus_lives_on_ref(tmp_path):
+    d = _vdir(tmp_path)
+    a, b = _png(20), _png(21)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, a, "png")
+    assets.write_focus(tmp_path, "sera", "default", 43)
+    assert not (d / assets.FOCUS_FILE).exists()
+    assert image_refs.read(d, assets.AVATAR).focus == 43
+    assert assets.read_focus(tmp_path, "sera", "default") == 43
+
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, a, "png")   # same bytes
+    assert assets.read_focus(tmp_path, "sera", "default") == 43
+
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b, "png")   # new picture
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+    assert image_refs.read(d, assets.AVATAR).focus is None
+
+    assets.write_focus(tmp_path, "sera", "default", 12)
+    assets.clear_focus(tmp_path, "sera", "default")
+    ref = image_refs.read(d, assets.AVATAR)
+    assert ref.focus is None and ref.image is not None     # clearing keeps the image
+
+
+def test_focus_override_without_avatar(tmp_path):
+    d = _vdir(tmp_path)
+    assets.write_focus(tmp_path, "sera", "default", 55)
+    ref = image_refs.read(d, assets.AVATAR)
+    assert ref is not None and ref.image is None and ref.focus == 55
+    assert not (d / assets.FOCUS_FILE).exists()
+    assert assets.read_focus(tmp_path, "sera", "default") == 55
+    assert assets.list_images(tmp_path, "sera", "default") == []
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is None
+
+    assets.clear_focus(tmp_path, "sera", "default")       # an image-less ref goes entirely
+    assert not image_refs.ref_path(d, assets.AVATAR).exists()
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+
+def test_focus_beside_a_legacy_avatar_stays_in_focus_json(tmp_path):
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "avatar.png").write_bytes(b"LEGACY")
+    assets.write_focus(tmp_path, "sera", "default", 61)
+    assert (d / assets.FOCUS_FILE).exists()
+    assert not image_refs.ref_path(d, assets.AVATAR).exists()
+    assert assets.read_focus(tmp_path, "sera", "default") == 61
+    assets.clear_focus(tmp_path, "sera", "default")
+    assert not (d / assets.FOCUS_FILE).exists()
+
+
+def test_unsniffable_bytes_round_trip(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, b"\x89PNG", "png")
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR).read_bytes() == b"\x89PNG"
+
+
+def test_put_in_passes_the_source_url_through(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(22), "png",
+                     source_url="https://example.invalid/seraphine.png")
+    iid = assets.image_id(tmp_path, "sera", "default", assets.AVATAR)
+    assert iid is not None
+    assert "example.invalid" in str(image_store.read(iid).raw.get("sources"))
+
+
+def test_put_in_returns_the_blob_ext(tmp_path):
+    # the bytes sniff as PNG whatever the caller called them
+    assert assets.put_in(tmp_path / "lib", "map", _png(23), "jpg") == "png"
+
+
+def test_heal_slot_choice_with_ref_avatar(tmp_path):
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(30), "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(31), "png")
+    avatar = assets.image_path(tmp_path, "sera", "default", assets.AVATAR)
+    d = _vdir(tmp_path)
+    (d / "promote-tmp.png").write_bytes(b"STRANDED")
+
+    rows = assets.list_images(tmp_path, "sera", "default")
+    assert [r["name"] for r in rows] == ["avatar", "gallery_1", "gallery_2"]
+    assert (d / "gallery_2.png").read_bytes() == b"STRANDED"
+    assert not (d / "promote-tmp.png").exists()
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) == avatar
+
+
+def test_link_in_and_resolve(tmp_path):
+    d = tmp_path / "lib"
+    d.mkdir()
+    (d / "map.webp").write_bytes(b"LEGACY")
+    obj = image_store.ingest(_png(40), "png")
+    image_refs.write(d, "map", obj.id, focus=10)
+    assets.link_in(d, "map", obj.id, keep_focus=True)
+    assert not (d / "map.webp").exists()
+    r = assets.resolve(d, "map")
+    assert r is not None and r.image_id == obj.id and r.focus == 10
+    other = image_store.ingest(_png(41), "png")
+    assets.link_in(d, "map", other.id)
+    assert image_refs.read(d, "map") == image_refs.Ref("map", other.id, None)
+    with pytest.raises(ValueError):
+        assets.link_in(d, "../map", other.id)
+    with pytest.raises(ValueError):
+        assets.link_in(d, "map", "px1-not-an-id")
+    assert assets.resolve(d, "nothing") is None
+
+
+def test_adopt_legacy(tmp_path):
+    d = tmp_path / "lib"
+    d.mkdir()
+    data = _png(50)
+    (d / "map.png").write_bytes(data)
+    iid = assets.adopt_legacy(d, "map")
+    assert iid is not None and not (d / "map.png").exists()
+    assert image_refs.read(d, "map").image == iid
+    assert assets.path_in(d, "map").read_bytes() == data
+    assert assets.adopt_legacy(d, "map") == iid          # already ref-backed
+    assert assets.adopt_legacy(d, "missing") is None
+
+
+def test_adopting_a_legacy_avatar_carries_its_focus(tmp_path):
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "avatar.png").write_bytes(_png(51))
+    assets.write_focus(tmp_path, "sera", "default", 33)            # legacy focus.json
+    assert assets.adopt_legacy(d, assets.AVATAR) is not None
+    assert assets.read_focus(tmp_path, "sera", "default") == 33
+    assert not (d / assets.FOCUS_FILE).exists()
+
+
+def test_image_id(tmp_path):
+    assert assets.image_id(tmp_path, "sera", "default", assets.AVATAR) is None
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(60), "png")
+    [row] = assets.list_images(tmp_path, "sera", "default")
+    assert assets.image_id(tmp_path, "sera", "default", assets.AVATAR) == row["image_id"]
+    assert assets.image_id(tmp_path, "..", "default", assets.AVATAR) is None
+
+
+def test_campaign_focus_override_list_and_detail_agree(tmp_path):
+    from grimoire.store import campaigns, characters, overlay, worlds
+
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    chid, vid = characters.create_character(wroot, "Seraphine")
+    assets.put_image(wroot, chid, vid, assets.AVATAR, _png(70), "png")
+    assets.write_focus(wroot, chid, vid, 10)
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    croot = campaigns.campaign_root(cid)
+
+    def row():
+        return next(r for r in overlay.list_characters(cid) if r["id"] == chid)
+
+    assert overlay.read_focus(cid, chid, vid) == 10 == row()["avatar_focus"]
+
+    assets.write_focus(croot, chid, vid, 40)       # the campaign's override, inherited art
+    ref = image_refs.read(_vdir(croot, chid, vid), assets.AVATAR)
+    assert ref is not None and ref.image is None
+    assert overlay.read_focus(cid, chid, vid) == 40
+    assert row()["avatar_focus"] == 40
+    facts = characters.version_facts(croot, chid, vid, crop=True)
+    assert facts["focus_file"] is True and facts["focus"] == 40
+    # the art is still the world's
+    assert row()["has_avatar"] is True
+    assert overlay.list_images(cid, chid, vid)[0]["image_id"] == assets.image_id(
+        wroot, chid, vid, assets.AVATAR)
+
+    # a later world crop does not reach past the campaign's override
+    assets.write_focus(wroot, chid, vid, 90)
+    assert overlay.read_focus(cid, chid, vid) == 40 == row()["avatar_focus"]

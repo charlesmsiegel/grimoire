@@ -1,6 +1,6 @@
 import pytest
 
-from grimoire.store import assets, pcs
+from grimoire.store import assets, image_refs, pcs
 
 
 def test_create_read_single_version(tmp_path):
@@ -127,7 +127,9 @@ def test_pc_images_live_under_the_pcs_base(tmp_path):
     character and a PC can share an id, and their portraits must not."""
     pid, vid = pcs.create_pc(tmp_path, "Mara", [])
     assets.put_image(tmp_path, pid, vid, assets.AVATAR, b"pc", "png", pcs.ASSET_BASE)
-    assert (tmp_path / "pcs" / pid / "assets" / vid / "avatar.png").read_bytes() == b"pc"
+    assert image_refs.read(tmp_path / "pcs" / pid / "assets" / vid, assets.AVATAR) is not None
+    assert assets.image_path(tmp_path, pid, vid, assets.AVATAR,
+                             pcs.ASSET_BASE).read_bytes() == b"pc"
     assert not (tmp_path / "characters" / pid).exists()
 
 

@@ -681,14 +681,17 @@ def _build_version_facts(root: Path, cid: str, vid: str, *, crop: bool = False,
     - with `crop`, `avatar_file` -- whether `assets.image_path` finds any
       `avatar.*` file, of ANY extension, which is `overlay.read_focus`'s test
       for "this root owns the crop" and not the same question as an `avatar`
-      among the names -- and `focus_file`, whether `focus.json` exists, the
-      other half of that test. Only the campaign side of a merge asks, so
-      only it pays the glob.
+      among the names -- and `focus_file`, whether the folder owns a crop
+      record (`assets.owns_focus`: an avatar placement, the image-less
+      occurrence override included, or `focus.json`), the other half of that
+      test. Only the campaign side of a merge asks, so only it pays the glob.
 
     Stamped as `assets.version_art` stamps the art, plus the character
     directory, whose listing covers `tagline.md` arriving, and `tagline.md`
     itself when present. `avatar_file` and `focus_file` are both a question
-    about the art folder's LISTING, which its stamp covers.
+    about the art folder's LISTING, which its stamp covers -- and about
+    ``image-refs/avatar.json``, which `version_art` stamps, with the
+    placements folder whose listing covers it arriving.
 
     A root that has no directory for this character at all -- a campaign that
     holds nothing of an inherited one, the common case -- answers every
@@ -716,8 +719,7 @@ def _build_version_facts(root: Path, cid: str, vid: str, *, crop: bool = False,
         "avatar_v": next((i["v"] for i in images if i["name"] == assets.AVATAR), None),
         "focus": focus,
         "avatar_file": (crop and assets.image_path(root, cid, vid, assets.AVATAR) is not None),
-        "focus_file": (crop and safe_id(vid)
-                       and (d / "assets" / vid / assets.FOCUS_FILE).exists()),
+        "focus_file": crop and assets.owns_focus(root, cid, vid),
         "tagline": taglines.read(root, cid),
     }
     return facts, (tuple(dict.fromkeys(stamps)) if cacheable else None)

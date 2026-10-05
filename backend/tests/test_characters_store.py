@@ -3,7 +3,7 @@ import json
 import pytest
 
 from grimoire.store import characters as ch
-from grimoire.store import fetch, voice_anchors
+from grimoire.store import fetch, image_sanitize, voice_anchors
 
 
 def test_create_and_read_single_card(tmp_path):
@@ -125,7 +125,8 @@ def test_png_import_saves_avatar(tmp_path):
     blob = cards.dumps(ch.blank_card("Imp"), "png")
     cid, vid = ch.import_card(tmp_path, blob, "png")
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
-    assert p is not None and p.read_bytes() == blob
+    # the store keeps the picture with its metadata (the card chunk) stripped
+    assert p is not None and p.read_bytes() == image_sanitize.sanitize(blob)
 
 
 def test_json_import_downloads_avatar_url(tmp_path, monkeypatch):
@@ -151,7 +152,7 @@ def test_import_card_update_vid_overwrites_in_place(tmp_path):
     assert {v["id"] for v in ch.read_character(tmp_path, cid)["versions"]} == {vid}  # no new version
     assert ch.read_card(tmp_path, cid, vid)["data"]["name"] == "Imp Updated"
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
-    assert p is not None and p.read_bytes() == new_png
+    assert p is not None and p.read_bytes() == image_sanitize.sanitize(new_png)
 
 
 def test_import_card_update_vid_downloads_avatar_for_json(tmp_path, monkeypatch):
@@ -1274,7 +1275,8 @@ def test_png_import_still_prefers_the_pngs_own_pixels(tmp_path):
     cid, vid = ch.import_card(tmp_path, blob, "png")
 
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
-    assert p is not None and p.read_bytes() == blob  # the file, not the card's icon
+    # the file (its card chunk stripped by the store), not the card's icon
+    assert p is not None and p.read_bytes() == image_sanitize.sanitize(blob)
     # and the entry we did not consume is still on the card
     assert len(ch.read_card(tmp_path, cid, vid)["data"]["assets"]) == 1
 

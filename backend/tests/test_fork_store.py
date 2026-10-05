@@ -145,8 +145,13 @@ def test_a_materialized_records_images_travel_with_the_fork(wid, cid):
                      base="locations")
 
     child = fork.fork_campaign(cid, "Branch")["id"]
-    copied = campaigns.campaign_root(child) / "locations" / eid / "assets" / "default"
-    assert (copied / f"{assets.AVATAR}.png").read_bytes() == b"pretend-png"
+    # the placement travels with the tree and resolves to the same bytes
+    copied = assets.image_path(campaigns.campaign_root(child), eid, "default",
+                               assets.AVATAR, base="locations")
+    assert copied is not None and copied.read_bytes() == b"pretend-png"
+    assert assets.image_id(campaigns.campaign_root(child), eid, "default", assets.AVATAR,
+                           base="locations") == assets.image_id(
+        croot, eid, "default", assets.AVATAR, base="locations")
 
 
 def test_a_copy_that_fails_partway_leaves_no_campaign_behind(cid, monkeypatch):

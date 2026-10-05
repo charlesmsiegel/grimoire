@@ -169,8 +169,10 @@ def _same_size(old: str, new: str) -> str:
 @pytest.fixture
 def realm(monkeypatch, tmp_path):
     """A world with a varied cast: a multi-version character with a gallery,
-    a crop, a tagline and a voice anchor; one with no art at all; and one
-    whose avatar has a stale sibling of another extension."""
+    a crop, a tagline and a voice anchor, all placements; one with no art at
+    all; and one whose LEGACY avatar file has a stale sibling of another
+    extension -- planted by hand, since `put_image` writes a placement now and
+    the legacy files are only ever read."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
     root = worlds.world_root(wid)
@@ -184,8 +186,10 @@ def realm(monkeypatch, tmp_path):
     voice_anchors.write(root, ser, "Speaks in ledgers and tides.")
     mara, _ = characters.create_character(root, "Mara")
     win, wv = characters.create_character(root, "Winifred")
-    assets.put_image(root, win, wv, assets.AVATAR, PNG + b"w", "png")
-    (root / "characters" / win / "assets" / wv / "avatar.gif").write_bytes(b"GIF89a-old")
+    wdir = root / "characters" / win / "assets" / wv
+    wdir.mkdir(parents=True)
+    (wdir / "avatar.png").write_bytes(PNG + b"w")
+    (wdir / "avatar.gif").write_bytes(b"GIF89a-old")
     (root / "characters" / "dossier-only").mkdir()      # no character.md: never listed
     _age(root)
     return {"wid": wid, "root": root, "ser": ser, "sv": sv, "alt": alt,
@@ -408,6 +412,9 @@ def test_tagline_and_voice_anchor_arrive_change_and_leave(realm):
 
 
 def test_a_crop_written_and_edited_in_place(realm):
+    """Both homes of a crop: `focus.json` beside a legacy avatar (Winifred),
+    and the avatar placement's own `focus` (Séraphine). Each is edited in
+    place, which moves no directory -- only the file's own stamp can tell."""
     root, win, wv = realm["root"], realm["win"], realm["wv"]
     _check(root)
     assets.write_focus(root, win, wv, 10)
@@ -418,6 +425,16 @@ def test_a_crop_written_and_edited_in_place(realm):
                                         json.dumps({"avatar": 90})))
     _bump(focus)
     assert next(r for r in _check(root) if r["id"] == win)["avatar_focus"] == 90
+
+    ser, sv = realm["ser"], realm["sv"]
+    assets.write_focus(root, ser, sv, 10)
+    _age(root)
+    assert next(r for r in _held(root) if r["id"] == ser)["avatar_focus"] == 10
+    ref = root / "characters" / ser / "assets" / sv / "image-refs" / "avatar.json"
+    text = ref.read_text(encoding="utf-8")
+    _rewrite_in_place(ref, _same_size(text, text.replace('"focus": 10', '"focus": 90')))
+    _bump(ref)
+    assert next(r for r in _check(root) if r["id"] == ser)["avatar_focus"] == 90
 
 
 def test_a_write_inside_the_racy_window_is_never_served_stale(realm):
