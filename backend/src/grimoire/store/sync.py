@@ -774,7 +774,10 @@ def promoted_intact(cid: str, kind: str, eid: str) -> bool:
     DID land looks like once the world record has been edited since; the two
     cannot be told apart from here, so both read as not published, which errs
     toward reporting a publish that happened rather than claiming one that did
-    not.
+    not. The same goes for the pre-slim ``""`` reservation `_recorded_base`
+    writes before the real base: a crash between the two reads as not intact,
+    and `promote` then refuses the world file it finds -- reported, never
+    overwritten.
     """
     if kind not in entities.SYNCED_KINDS or not safe_id(eid):
         return False

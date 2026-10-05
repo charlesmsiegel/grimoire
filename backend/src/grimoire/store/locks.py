@@ -170,6 +170,8 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # `prune`) take the same reentrant lock around deciding which keys to touch
     # from the transcript and the write itself -- or a cut or a swipe lands
     # between the two and the flags go to keys that are no longer there.
+    # `store.absorb.publish` is unlisted for the same reason: it writes only
+    # through `sync.promote`, and takes `campaign_lock(cid)` itself anyway.
     "store.tracker.records",
     # The steering log is a read-modify-write of one whole file, appended
     # beside `alternates.archive` inside the regenerate route's lock hold
