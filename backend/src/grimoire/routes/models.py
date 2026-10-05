@@ -209,6 +209,16 @@ class RegexImport(BaseModel):
     rows: list[dict] = []
 
 
+class QuickReplySetBody(BaseModel):
+    """A whole quick-reply set, replacing what is stored. Loose on purpose: every
+    rule is checked in `store.quick_replies`, so a violation is a 400 with a
+    `kind`, never a pydantic 422. `expect` is the digest of the set the caller
+    read; a stored set that has moved since refuses the write (409)."""
+
+    replies: list[dict] = []
+    expect: str = ""
+
+
 class TrackerLayer(BaseModel):
     """One layer of tracker field definitions (world, campaign or scene)."""
 

@@ -221,3 +221,62 @@ def test_fork_and_bundle_carry_the_sets(home, tmp_path):
     world_bundle.write_bundle(wid, tmp_path / "b.zip")
     new = world_bundle.import_bundle(tmp_path / "b.zip")
     assert qr.world_set(new)["replies"] == w["replies"]
+
+
+# --- routes -------------------------------------------------------------------
+
+def _world_and_campaign():
+    wid = store.worlds.create_world("Realm")
+    return wid, store.campaigns.create_campaign("Saltmarch", wid)
+
+
+def test_routes_round_trip_and_layer(client):
+    wid, cid = _world_and_campaign()
+    w = client.get(f"/api/worlds/{wid}/quick-replies").json()
+    assert w["replies"] == [] and w["version"] == 1
+    r = client.put(f"/api/worlds/{wid}/quick-replies", json={"expect": w["digest"], "replies": [
+        {"id": "a", "label": "Look around", "kind": "send", "text": "I take in the room."}]})
+    assert r.status_code == 200 and r.json()["replies"][0]["mode"] == "send"
+    c = client.get(f"/api/campaigns/{cid}/quick-replies").json()
+    assert c["replies"] == [] and [x["id"] for x in c["inherited"]] == ["a"]
+    assert client.get(f"/api/campaigns/{cid}/quick-replies/effective").json()["replies"][0]["id"] == "a"
+    r = client.put(f"/api/campaigns/{cid}/quick-replies",
+                   json={"expect": c["digest"], "replies": [{"id": "a", "hidden": True}]})
+    assert r.status_code == 200
+    assert r.json()["inherited"][0]["id"] == "a" and r.json()["replies"] == [{"id": "a", "hidden": True}]
+    assert client.get(f"/api/campaigns/{cid}/quick-replies/effective").json() == {"replies": []}
+
+
+@pytest.mark.parametrize("entry,kind", [
+    ({"label": "x" * 41, "kind": "send", "text": "t"}, "invalid_quick_reply"),
+    ({"label": "R", "kind": "roll", "notation": "2q6"}, "invalid_quick_reply"),
+    ({"label": "R", "kind": "nope"}, "invalid_quick_reply"),
+    ({"label": "R", "kind": "plugin"}, "plugin_api_unavailable"),
+])
+def test_bad_entries_are_400_not_422(client, entry, kind):
+    wid, cid = _world_and_campaign()
+    digest = client.get(f"/api/worlds/{wid}/quick-replies").json()["digest"]
+    r = client.put(f"/api/worlds/{wid}/quick-replies", json={"expect": digest, "replies": [entry]})
+    assert r.status_code == 400 and r.json()["kind"] == kind and r.json()["detail"]
+    digest = client.get(f"/api/campaigns/{cid}/quick-replies").json()["digest"]
+    r = client.put(f"/api/campaigns/{cid}/quick-replies", json={"expect": digest, "replies": [entry]})
+    assert r.status_code == 400 and r.json()["kind"] == kind
+
+
+def test_stale_expect_is_409_set_changed(client):
+    wid, cid = _world_and_campaign()
+    for path in (f"/api/worlds/{wid}/quick-replies", f"/api/campaigns/{cid}/quick-replies"):
+        digest = client.get(path).json()["digest"]
+        body = {"expect": digest, "replies": [{"id": "a", "label": "A", "kind": "opener"}]}
+        assert client.put(path, json=body).status_code == 200
+        r = client.put(path, json={**body, "replies": []})
+        assert r.status_code == 409 and r.json()["kind"] == "set_changed"
+
+
+def test_unknown_ids_are_404(client):
+    body = {"expect": "", "replies": []}
+    assert client.get("/api/worlds/nope/quick-replies").status_code == 404
+    assert client.put("/api/worlds/nope/quick-replies", json=body).status_code == 404
+    assert client.get("/api/campaigns/nope/quick-replies").status_code == 404
+    assert client.put("/api/campaigns/nope/quick-replies", json=body).status_code == 404
+    assert client.get("/api/campaigns/nope/quick-replies/effective").status_code == 404

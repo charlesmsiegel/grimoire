@@ -23,6 +23,8 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``search``      /search, the keyword sweep over content and facts
   ``tracker``     /campaigns/{cid}/tracker, the scene state tracker
   ``regex_rules`` /regex, the output-processing rule files and their test pane
+  ``quick_replies`` /worlds/{wid}/quick-replies and /campaigns/{cid}/quick-replies,
+                  the composer's one-tap buttons
   ``entities``    the generic /{kind} entity surface for both scopes
 
 ORDERING: FastAPI matches in registration order and never backtracks, so the
@@ -72,6 +74,7 @@ from . import (
     modules,
     observability,
     passage_characters,
+    quick_replies,
     regex_rules,
     runs,
     scenes,
@@ -169,7 +172,7 @@ def _compose(domain: APIRouter) -> None:
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, greetings,
                 runs, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
-                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules):
+                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
     _compose(_domain.router)
 
 _compose(entities.router)  # keep last: generic /{kind} catch-alls
