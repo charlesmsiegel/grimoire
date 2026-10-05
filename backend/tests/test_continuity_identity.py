@@ -667,8 +667,8 @@ def test_build_prompt_with_no_optional_fields_renders():
 
 
 def _candidate_text_bytes(cand):
-    fields = [cand["id"], cand["title"], cand["kind"], cand["due"], cand["latest_beat"],
-              *cand["earlier"]]
+    fields = [cand["id"], cand["title"], cand["kind"], cand["status"], cand["due"],
+              cand["latest_beat"], *cand["earlier"]]
     return sum(len(f.encode("utf-8")) for f in fields)
 
 
@@ -1148,3 +1148,23 @@ def test_a_sibling_of_a_row_not_retargeted_is_untouched(cid, s0, sid, word):
     assert out["plot_movements"][1] == RECOVER_THE_LEDGER_TWIN
     assert _targets(cid, sid, out, "plot") == [
         ("recover-the-harbour-ledger", RECOVER_THE_LEDGER["beat"])]
+
+
+def test_a_hand_edited_long_status_shares_the_identity_text_bound(cid, s0, sid):
+    # A ledger route only stores a known status, but plot.json is hand-editable
+    # and `effective.records` passes a status through as written: it is shown
+    # inside the same budget as the rest of the candidate, never whole.
+    bound = similarity.CONTINUITY_IDENTITY_BYTES
+    record = {"title": "Find the ledger", "status": "closed" + "z" * (10 * bound),
+              "beats": [{"text": "Mara hid it.", "scene": s0}]}
+    stored = similarity.subject("thread", "thread:find-the-ledger", record)
+    examined = identity.Examined("plot_movements", 0, "r1", "thread",
+                                 {"title": "Find that ledger again", "beat": "Winifred looks."},
+                                 "find-that-ledger-again", [(stored, {"via": "lexical"})], [])
+    [row] = identity.Examination([examined], 1, "basic", "off", "", 0, set(),
+                                 {}).prompt_rows()
+    [cand] = row["candidates"]
+    assert _candidate_text_bytes(cand) <= bound
+    assert cand["status"].startswith("closed")
+    _, user = identity.build_prompt([row])
+    assert len(user["content"].encode("utf-8")) <= 2 * bound
