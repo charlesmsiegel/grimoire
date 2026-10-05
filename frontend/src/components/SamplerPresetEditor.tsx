@@ -145,7 +145,14 @@ export function SamplerPresetEditor() {
     setMode("edit");   // `+ New` goes straight to the form
   }
 
+  /** Retire any file read still in flight: its result belongs to an import
+   *  session that has ended, and must not fill in the next one. */
+  function retireReads() {
+    picked.current += 1;
+  }
+
   function startImport() {
+    retireReads();
     setError(null);
     setReport(null);
     setPid(null);
@@ -384,7 +391,10 @@ export function SamplerPresetEditor() {
             <div className="form-actions">
               <button className="primary" onClick={() => void runImport()}
                       disabled={busy || !file}>Import</button>
-              <button className="subtle" onClick={() => setMode("view")}>Cancel</button>
+              <button className="subtle"
+                      onClick={() => { retireReads(); setFile(null); setMode("view"); }}>
+                Cancel
+              </button>
             </div>
           </div>
         )}

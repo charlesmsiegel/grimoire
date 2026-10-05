@@ -248,3 +248,16 @@ def test_a_macro_only_stop_list_is_invalid_and_not_also_neutral():
 def test_an_empty_stop_list_is_neutral():
     _, report = sp.from_sillytavern({"stopping_strings": []})
     assert report["neutral"][0]["param"] == "stop"
+
+
+def test_deleting_an_overlong_id_is_not_found_not_an_oserror():
+    sp.create_preset("Warm")   # the directory exists, so the stat really runs
+    with pytest.raises(sp.PresetNotFoundError):
+        sp.delete_preset("a" * 1000)
+
+
+@pytest.mark.parametrize("body", ["[1, 2]", "3", '"text"', '{"rev": "x"}', '{"models": null}'])
+def test_a_mangled_catalog_sidecar_reads_as_nothing_cached(tmp_path, body):
+    cid = store.llm_connections.create_connection("openrouter", "OR", api_key="k")
+    (tmp_path / "llm_connections" / f"{cid}.models.json").write_text(body, encoding="utf-8")
+    assert store.llm_connections.cached_models(cid)["models"] == []

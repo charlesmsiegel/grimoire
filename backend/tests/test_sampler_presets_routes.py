@@ -281,3 +281,21 @@ def test_a_malformed_catalog_sidecar_degrades_to_unverified(client):
         live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context")
         assert live.status_code == 200, live.text
         assert live.json()["sampling"]["applied"] == {"temperature": 0.6}
+
+
+def test_deleting_an_overlong_id_is_a_404(client):
+    _preset(client)
+    assert client.delete("/api/sampler-presets/" + "a" * 1000).status_code == 404
+
+
+def test_a_non_object_catalog_sidecar_does_not_fail_a_turn(client):
+    cid, sid = _scene(client)
+    sidecar = store.paths.home() / "llm_connections" / "openrouter.models.json"
+    for body in ("[1, 2]", "3"):
+        sidecar.write_text(body, encoding="utf-8")
+        live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context")
+        assert live.status_code == 200, live.text
+        provider = ScriptedProvider(chunks=("Mara nods.",))
+        _real_facade(client, openrouter=provider)
+        assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                           json={"content": "Go?"}).status_code == 200

@@ -233,10 +233,17 @@ def cached_models(id: str) -> dict:
         sidecar = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return empty
+    # A sidecar is a file a sync or a hand can mangle into any JSON at all. It
+    # is read on every OpenRouter generation now (the sampler split asks it
+    # which parameters the model takes), so a scalar, an array or a missing
+    # key must read as "nothing cached" -- never as an exception that fails
+    # the turn.
+    if not isinstance(sidecar, dict) or not isinstance(sidecar.get("models"), list):
+        return empty
     conn = _read(id)
     if conn is None or sidecar.get("rev") != conn["rev"]:
         return empty
-    return {"models": sidecar["models"], "fetched_at": sidecar["fetched_at"],
+    return {"models": sidecar["models"], "fetched_at": sidecar.get("fetched_at", ""),
             # `.get`, not `[...]`: a sidecar written before #398 has no
             # `fetched_by`, and a refresh is not worth failing over a field
             # that only decides whether a lost response can be recovered.

@@ -153,7 +153,16 @@ def delete_preset(pid: str) -> None:
     ordering and reason: a failure between the two then leaves a preset
     nothing names, never a name with no preset.
     """
-    if not safe_id(pid) or not _path(pid).exists():
+    if not safe_id(pid):
+        raise PresetNotFoundError(pid)
+    try:
+        # Inside a try for `read_preset`'s reason: an id longer than the
+        # filesystem's NAME_MAX raises ENAMETOOLONG from the stat itself, and
+        # a name the filesystem cannot hold is a preset that does not exist.
+        present = _path(pid).exists()
+    except OSError:
+        present = False
+    if not present:
         raise PresetNotFoundError(pid)
     cfg = config.read_config()
     dangling = {key: "" for key in routing.PRESET_CONFIG_KEYS if cfg.get(key) == pid}
