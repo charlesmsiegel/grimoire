@@ -268,3 +268,77 @@ def test_read_all_never_raises(client):
     path.write_text(json.dumps({"k": "not a record", "j": {"original": 3}}), encoding="utf-8")
     assert rewrites.read_all(cid, sid) == {}
     assert rewrites.read_all(cid, "no-such-scene") == {}
+
+
+def test_restore_without_a_record_is_refused(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", content="Wait...",
+         speaker_ref="characters:mara")
+    # The player's post was not rewritten (the rule is model-only).
+    r = edit(client, cid, sid, 0, "anything {{user}}", restore=True)
+    assert r.status_code == 409
+    assert r.json()["kind"] == "rewrite_stale"
+    assert store.scenes.read_scene(cid, sid)["messages"][0]["content"] == "Wait..."
+
+
+def test_restore_after_an_unrewritten_reroll_is_refused(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    rid = messages(client, cid, sid)[-1]["response_id"]
+    original = records(client, cid, sid)[rid]["original"]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([["Plain words."]])
+    result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/regenerate",
+                         json={})
+    assert '"error"' not in result.text, result.text
+
+    r = edit(client, cid, sid, 1, original, restore=True)
+    assert r.status_code == 409
+    assert r.json()["kind"] == "rewrite_stale"
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["content"] == "Plain words."
+    assert set(records(client, cid, sid)) == {rid}
+
+
+def test_restore_with_other_content_is_refused(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    send(client, cid, sid, "She paused... then spoke.", speaker_ref="characters:mara")
+    rid = messages(client, cid, sid)[-1]["response_id"]
+
+    r = edit(client, cid, sid, 1, "Something else entirely.", restore=True)
+    assert r.status_code == 409
+    assert r.json()["kind"] == "rewrite_stale"
+    assert store.scenes.read_scene(cid, sid)["messages"][-1]["content"] == "She paused… then spoke."
+    assert set(records(client, cid, sid)) == {rid}
+
+
+WIPE = {"name": "Wipe", "pattern": r"[\s\S]+", "replacement": " ",
+        "rewrite_stored": True, "applies": [], "targets": ["model", "user"]}
+
+
+def test_a_rewrite_that_empties_a_reply_is_not_applied(client, caplog):
+    cid, sid = seed(client)
+    put_rules(client, cid, WIPE)
+    send(client, cid, sid, "Every word of this.", content="Mine too.",
+         speaker_ref="characters:mara")
+
+    post, reply = store.scenes.read_scene(cid, sid)["messages"][-2:]
+    assert reply["content"] == "Every word of this."
+    assert post["content"] == "Mine too."
+    assert records(client, cid, sid) == {}
+    assert not (store.campaigns.paths.campaign_root(cid) / "rewrites").exists()
+    logged = [r.getMessage() for r in caplog.records if "empties the text" in r.getMessage()]
+    assert logged
+    assert not any("Every word" in m or "Mine too" in m for m in logged)
+
+
+def test_a_rewrite_that_empties_a_legacy_reply_is_not_applied(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    cid, sid = seed(client)
+    put_rules(client, cid, WIPE)
+    send(client, cid, sid, "Every word of this.")
+    reply = store.scenes.read_scene(cid, sid)["messages"][-1]
+    assert reply["content"] == "Every word of this."
+    assert "post_id" not in reply
+    assert records(client, cid, sid) == {}

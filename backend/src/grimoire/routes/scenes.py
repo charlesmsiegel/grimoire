@@ -5080,6 +5080,8 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
             # line has no role. A restore runs no phase at all: it would
             # rewrite the original straight back.
             key = target.get("response_id") or target.get("post_id")
+            if body.restore:
+                _require_restorable(cid, sid, target, key, body.content)
             role = store.regex.apply.role_of(target)
             original = content
             fired: list[str] = []
@@ -5109,6 +5111,25 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
     except store.scenes.RollMessageImmutable:
         raise HTTPException(status_code=400, detail="a dice roll's transcript line can't be edited")
     return {"ok": True}
+
+
+def _require_restorable(cid: str, sid: str, target: dict, key: str | None,
+                        content: str) -> None:
+    """Refuse a restore that does not undo exactly the rewrite on record.
+
+    A restore writes raw text past the macros and the store phase, so it is
+    allowed only as the inverse of a recorded rewrite: the message at `index`
+    has a key, its record still describes it (`_still_rewritten` -- not a
+    reroll or swipe that moved past it, nor a different message a cut in
+    another tab renumbered into this slot), and `content` is that record's
+    original. Anything else is a stale view of the scene, answered 409 for the
+    client to re-read rather than written over whatever is there now."""
+    rec = store.regex.rewrites.read_all(cid, sid).get(key or "")
+    if (not key or rec is None or not _still_rewritten(target, {key: rec})
+            or content != rec.get("original")):
+        raise HTTPException(409, detail={
+            "kind": "rewrite_stale",
+            "detail": "This message no longer matches its recorded rewrite; reload the scene."})
 
 
 def _forget_rewrite(cid: str, sid: str, key: str) -> None:
