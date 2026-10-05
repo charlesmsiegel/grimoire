@@ -8,6 +8,7 @@ import { SavedThinking } from "../Thinking";
 import { TrackerDisclosure } from "../tracker/TrackerDisclosure";
 import { RenderedMarkdown } from "./StreamingMarkdown";
 import { quotedIn } from "./citation";
+import { useSwipe } from "./useSwipe";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
 // Prefixed with an invisible separator so it can never collide with a real
@@ -53,6 +54,9 @@ export type TranscriptActions = {
   openActor: (kind: string, id: string) => void;
   openReroll: () => void;
   stepAlternate: (delta: number) => void;
+  /** Step the last response's variants: ‹ is -1, › is +1. At the newest, +1
+   *  generates a new one (the ›, the touch swipe — never the → key). */
+  stepVariant: (delta: -1 | 1) => void;
   /** Open (or keep typing into) the edit form for one post. */
   edit: (index: number, text: string) => void;
   cancelEdit: () => void;
@@ -81,10 +85,21 @@ export type TranscriptSwipe = {
   active: number | null; count: number; title: string | undefined; disabled: boolean;
 };
 
-/** What hangs off the reroll row, when this run holds it: the swipe control,
- *  and the reroll popover's guidance and route while it is open. */
+/** The ledger's swipe control, on the last response. `position` and `count`
+ *  are over the COMPLETE variants only; `generates` is true at the newest,
+ *  where › makes another rather than stepping. Both disabled flags are worked
+ *  out by the view, which is the one that knows every guard. */
+export type TranscriptVariantSwipe = {
+  position: number; count: number; title?: string;
+  previousDisabled: boolean; nextDisabled: boolean; generates: boolean;
+};
+
+/** What hangs off the reroll row, when this run holds it: the swipe control
+ *  (the legacy alternates', or the ledger's on a response), and the reroll
+ *  popover's guidance and route while it is open. */
 export type TranscriptReroll = {
   swipe: TranscriptSwipe | null;
+  variantSwipe: TranscriptVariantSwipe | null;
   pop: { prompt: string; route: RerollRoute } | null;
 };
 
@@ -191,6 +206,8 @@ export const TranscriptRun = memo(function TranscriptRun({
             busy={ctx.busy} rolling={ctx.rolling} active={ctx.active}
             rerollButton={rerollRow && ctx.canReroll && !m.response_id}
             swipe={rerollRow && !m.response_id ? reroll?.swipe ?? null : null}
+            variantSwipe={rerollRow && m.response_id && ctx.lastOfResponse.has(index)
+              ? reroll?.variantSwipe ?? null : null}
             rerollPop={rerollRow && ctx.canReroll ? reroll?.pop ?? null : null}
             canReplayAfter={index < ctx.lastIndex}
             chip={m.role === "user" || m.speaker === DIRECTOR_SPEAKER
@@ -221,7 +238,7 @@ export const TranscriptRun = memo(function TranscriptRun({
  *  re-renders then — once per turn — but a keystroke or a delta reaches none. */
 export const TranscriptPost = memo(function TranscriptPost({
   m, index, actor, speaker, cited, editingText, busy, rolling, active, rerollButton, swipe,
-  rerollPop, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
+  variantSwipe, rerollPop, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
   trackerLabels, trackerEnabled, trackerRerun, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
 }: {
   m: Message; index: number;
@@ -233,6 +250,8 @@ export const TranscriptPost = memo(function TranscriptPost({
   busy: boolean; rolling: boolean; active: boolean;
   rerollButton: boolean;
   swipe: TranscriptSwipe | null;
+  /** The ledger's arrows, on the one row that is the swipe target; else null. */
+  variantSwipe: TranscriptVariantSwipe | null;
   rerollPop: { prompt: string; route: RerollRoute } | null;
   canReplayAfter: boolean;
   chip: UsagePostBucket | undefined;
@@ -252,9 +271,18 @@ export const TranscriptPost = memo(function TranscriptPost({
   actions: TranscriptActions;
 }) {
   const editing = editingText !== null;
+  // Every row calls it (a hook cannot be conditional); only the swipe target
+  // spreads the handlers, and only it is enabled. `stepVariant` re-checks the
+  // disabled flags, so a swipe can do nothing the arrows could not.
+  const gesture = useSwipe({
+    enabled: variantSwipe !== null && !editing,
+    onNext: () => actions.stepVariant(1),
+    onPrevious: () => actions.stepVariant(-1),
+  });
   return (
     /* `.cited` marks the line a hovered citation was taken from. */
-    <div className={`msg ${m.role}` + (cited ? " cited" : "")}>
+    <div className={`msg ${m.role}` + (cited ? " cited" : "") + (variantSwipe ? " swipe-target" : "")}
+         {...(variantSwipe ? gesture : {})}>
       <span className="msg-gutter">
         {!editing && !busy && (
           <span className="gutter-icons">
@@ -273,6 +301,21 @@ export const TranscriptPost = memo(function TranscriptPost({
                 <button className="msg-edit" aria-label="Next alternate"
                         disabled={swipe.disabled}
                         onClick={() => actions.stepAlternate(1)}>›</button>
+              </span>
+            )}
+            {variantSwipe && (
+              <span className="swipe-nav">
+                <button className="msg-edit" aria-label="Previous reply variant"
+                        disabled={variantSwipe.previousDisabled}
+                        onClick={() => actions.stepVariant(-1)}>‹</button>
+                <span className="swipe-count" title={variantSwipe.title}>
+                  {variantSwipe.position + 1}/{variantSwipe.count}
+                </span>
+                <button className="msg-edit"
+                        aria-label={variantSwipe.generates
+                          ? "Generate a new reply variant" : "Next reply variant"}
+                        disabled={variantSwipe.nextDisabled}
+                        onClick={() => actions.stepVariant(1)}>›</button>
               </span>
             )}
             {m.speaker !== ROLL_SPEAKER && active && (

@@ -32,6 +32,10 @@ export async function campaignApiMock() {
       retry: vi.fn(),
       regenerate: vi.fn(),
       getResponse: vi.fn(), deleteResponse: vi.fn(), activateResponseVariant: vi.fn(),
+      // The swipe read for the last response. Listed here because `...actual`
+      // does not reach inside `api`: without it every suite would call
+      // `undefined(...)` on every scene that ends on a response.
+      getResponseSwipe: vi.fn(),
       regenerateResponse: vi.fn(), passageCharacterEvidence: vi.fn(), draftPassageCharacter: vi.fn(), savePassageCharacter: vi.fn(),
       // Stop. Closing the connection is no longer the cancel -- a turn outlives
       // its socket now -- so the run has to be told, and a mock without this

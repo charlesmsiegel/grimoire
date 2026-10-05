@@ -66,7 +66,10 @@ import { RegexTestDialog, type RegexTestTarget } from "../components/play/RegexT
 import {
   DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun,
   type TranscriptActions, type TranscriptContext, type TranscriptReroll, type TranscriptRunData,
+  type TranscriptVariantSwipe,
 } from "../components/play/TranscriptPost";
+import { useResponseSwipe } from "../components/play/useResponseSwipe";
+import { swipeTitle } from "../components/play/swipeTitle";
 
 // The transcript's four kinds of line — a roll, a transition, a director note
 // and what a shown note is labelled — are defined beside the row that renders
@@ -3241,6 +3244,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // requests the player is waiting on, so there is a client here by
         // construction. It is only the turn whose end this side can miss.
       }
+      // However it ended: a turn that landed on the swipe target's response, or
+      // one that failed and left its content alone, both move what the swipe
+      // read answers without necessarily moving the text it refetches on.
+      responseSwipe.refresh();
     }
     // Landed means the backend said so, not that the promise resolved -- and
     // not that it produced anything: an ephemeral turn that finished cleanly
@@ -3503,17 +3510,32 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       else await api.deleteResponse(cid, sid, id);
       if (cidRef.current === cid && activeIdRef.current === sid) await selectScene(sid);
     } catch (err) { fail(err); }
-    finally { release(); }
+    finally {
+      release();
+      // Success or refusal alike: a 409 means the server's state is not the one
+      // the arrows were drawn from, and an activate that landed may have left
+      // the content unchanged (a variant with the same text).
+      responseSwipe.refresh();
+    }
   }
 
-  async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
+  /** `keepPending` is the swipe's ›: a ledger reroll streams the frozen
+   *  snapshot and the server ignores `response`, so sending the pending
+   *  one-shot override -- and clearing it on landing -- would spend the
+   *  player's next-turn length chip on a request that never used it. */
+  async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE,
+                                { keepPending = false }: { keepPending?: boolean } = {}) {
     if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
     const sid = activeId;
+    const response = keepPending ? undefined : pendingResponse ?? undefined;
     const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
       api.regenerateResponse(cid, sid, id, onEvent,
-        { guidance, response: pendingResponse ?? undefined, ...route }, signal, attempt, onIndex),
+        { guidance, response, ...route }, signal, attempt, onIndex),
       undefined, true, "", true);
-    if (landed) setPendingResponse(null);
+    if (landed && !keepPending) setPendingResponse(null);
+    // A failed generate keeps the previous variant (`replacement_incomplete`),
+    // so the content does not change and nothing else would refetch the count.
+    responseSwipe.refresh();
   }
 
   async function respondAs(ref: string) {
@@ -4021,6 +4043,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     (hasUserPost ?? messages.some((x) => x.role === "user"));
   const rerollAt = rerollIndex < 0 ? -1 : firstIndex + rerollIndex;
 
+  // The ledger's swipe target (spec §6): the post Reroll hangs off, when it is
+  // a response. Nothing after it can share its id (only transitions follow, and
+  // they are not responses), so it is also the last part of that response —
+  // the one `TranscriptPost` hangs the response's controls off. Only while the
+  // posts on screen are the active scene's: the read is addressed by
+  // `activeId`, and a target taken from another scene's transcript would ask
+  // about a response this scene does not have. A trailing reply with no
+  // response id keeps the legacy alternates arrows below.
+  const swipeTarget = transcriptIsActive && rerollIndex >= 0
+    && messages[rerollIndex].role === "assistant" && messages[rerollIndex].response_id
+    ? messages[rerollIndex] : null;
+  const responseSwipe = useResponseSwipe({
+    cid, sid: swipeTarget ? activeId : null, rid: swipeTarget?.response_id ?? null,
+    content: swipeTarget?.content ?? null, windowToken: loaded?.token,
+  });
+
   // The swipe control hangs off the same message as Reroll — they act on the
   // same generation, so it renders against `rerollAt` (absolute), not
   // `rerollIndex` (window-relative), like every other per-post affordance.
@@ -4239,6 +4277,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setRerollRoute(NO_REROLL_ROUTE);
     },
     stepAlternate: (delta) => void pickAlternate(stepAlternate(delta)),
+    stepVariant,
     edit: (index, text) => setEditing({ index, text }),
     cancelEdit: () => setEditing(null),
     saveEdit: () => void saveEdit(),
@@ -4262,24 +4301,78 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   });
 
   const editingAny = editing !== null;
+  const responseDisabled = busy || rolling || sceneLocked || editingAny || renamesInFlight > 0;
+
+  // The ledger's arrows, worked out once for the row, the keys and the gesture.
+  // Shown with two complete variants to tour, or one that can be rerolled (so
+  // › has somewhere to go). An active variant that is not complete has no
+  // place among the complete ones to count from, so it shows none — the
+  // Response variants disclosure still lists it.
+  //
+  // `blocked` is every refusal the client can know about: the transcript's own
+  // guards; a landed review, whose watermark digests the content a swipe would
+  // change; any proposal, which `activate` would supersede; the server's
+  // `editable` and `round_open`; and a read still outstanding, whose count may
+  // be stale. Generating also needs what the reroll needs. The server still
+  // answers a race with 409, which `mutateResponse` reports.
+  const { swipe: ledgerSwipe, complete: swipeComplete, position: swipePosition,
+          pending: swipePending } = responseSwipe;
+  const swipeCount = swipeComplete.length;
+  const swipeShown = !!ledgerSwipe && swipePosition !== null
+    && (swipeCount >= 2 || (swipeCount === 1 && ledgerSwipe.can_reroll));
+  const swipeBlocked = responseDisabled || !!absorb || proposal !== null || swipePending
+    || !ledgerSwipe?.editable || !!ledgerSwipe.round_open;
+  const swipeGenerates = swipeShown && swipePosition === swipeCount - 1;
+  const swipePrevDisabled = swipeBlocked || swipePosition === 0;
+  const swipeNextDisabled = swipeBlocked
+    || (swipeGenerates && (!canReroll || !ledgerSwipe?.can_reroll));
+  const swipeTip = ledgerSwipe ? swipeTitle(ledgerSwipe) : undefined;
+  // Memoized on the primitives above, so a render that changes none of them
+  // hands the row the same object.
+  const variantSwipe = useMemo<TranscriptVariantSwipe | null>(() => (
+    swipeShown && swipePosition !== null
+      ? { position: swipePosition, count: swipeCount, title: swipeTip,
+          previousDisabled: swipePrevDisabled, nextDisabled: swipeNextDisabled,
+          generates: swipeGenerates }
+      : null
+  ), [swipeShown, swipePosition, swipeCount, swipeTip, swipePrevDisabled, swipeNextDisabled,
+      swipeGenerates]);
+
+  /** ‹ / › on the last response, from the arrows and the touch swipe. Each
+   *  re-checks its own disabled flag, so a gesture can do nothing the button
+   *  beside it could not. At the newest, › generates — the reroll popover's
+   *  plain submit, keeping the pending length chip. */
+  function stepVariant(delta: -1 | 1) {
+    const rid = swipeTarget?.response_id;
+    if (!variantSwipe || !rid) return;
+    if (delta < 0 ? variantSwipe.previousDisabled : variantSwipe.nextDisabled) return;
+    if (delta > 0 && variantSwipe.generates) {
+      void rerollResponse(rid, "", NO_REROLL_ROUTE, { keepPending: true });
+      return;
+    }
+    const vid = swipeComplete[variantSwipe.position + delta];
+    if (vid) void mutateResponse(rid, vid);
+  }
+
   const transcriptReroll = useMemo<TranscriptReroll>(() => ({
     swipe: canSwipe
       ? { active: alternates.active, count: altCount, title: altTitle,
           disabled: rolling || editingAny || sceneLocked }
       : null,
+    variantSwipe,
     pop: rerollPrompt !== null ? { prompt: rerollPrompt, route: rerollRoute } : null,
   }), [canSwipe, alternates.active, altCount, altTitle, rolling, editingAny, sceneLocked,
-       rerollPrompt, rerollRoute]);
+       variantSwipe, rerollPrompt, rerollRoute]);
   const transcriptCtx = useMemo<TranscriptContext>(() => ({
     cid, sid: activeId ?? "",
     loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
     busy, rolling, active: transcriptIsActive,
-    responseDisabled: busy || rolling || sceneLocked || editingAny || renamesInFlight > 0,
+    responseDisabled,
     lastIndex: firstIndex + messages.length - 1,
     rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
     trackerRerun,
-  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, sceneLocked,
-       editingAny, renamesInFlight, firstIndex, messages.length, rerollAt, canReroll,
+  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, responseDisabled,
+       firstIndex, messages.length, rerollAt, canReroll,
        postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 
   // The rows themselves, as one list built only when one of its inputs moves.
@@ -4428,6 +4521,26 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // review).
       enabled: !absorb && !busy && !rolling && !editing && canReroll,
       run: () => setRerollPrompt(""),
+    },
+    // The last response's ‹ and ›, carrying their buttons' disabled flags. →
+    // at the newest variant opens the reroll box, as `r` does, rather than
+    // generating as › does: the rule above, and a bare arrow is easily pressed
+    // with a tab button or any other non-typing control focused. Its enabled
+    // flag there already requires what that box's submit needs to reach the
+    // ledger reroll rather than fall through to Replay.
+    {
+      keys: "arrowleft", label: "Previous reply variant", group: "IN THIS SCENE",
+      enabled: !!variantSwipe && !variantSwipe.previousDisabled,
+      run: () => stepVariant(-1),
+    },
+    {
+      keys: "arrowright", label: "Next reply variant", group: "IN THIS SCENE",
+      enabled: !!variantSwipe && !variantSwipe.nextDisabled,
+      run: () => {
+        if (!variantSwipe?.generates) return stepVariant(1);
+        setRerollPrompt("");
+        setRerollRoute(NO_REROLL_ROUTE);
+      },
     },
     {
       keys: "t", label: "Retry the turn that failed", group: "IN THIS SCENE",

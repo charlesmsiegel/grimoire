@@ -149,6 +149,10 @@ export function installCampaignMocks() {
   (api.regenerate as any).mockImplementation(streamsDone);
   (api.getAlternates as any).mockResolvedValue({ active: null, alternates: [] });
   (api.pickAlternate as any).mockResolvedValue({ ok: true });
+  // "No arrows": a failed swipe read hides them, so the suites that predate
+  // swipes render the gutter they were written against. The tests that want
+  // arrows say what the read answers.
+  (api.getResponseSwipe as any).mockRejectedValue(new Error("no swipe read"));
   (api.getRollProposal as any).mockResolvedValue({ record: null });
   (api.resolveProposal as any).mockImplementation(streamsDone);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
