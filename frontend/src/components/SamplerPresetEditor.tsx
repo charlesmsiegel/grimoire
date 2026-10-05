@@ -115,6 +115,8 @@ export function SamplerPresetEditor() {
   const [importName, setImportName] = useState("");
   const [withMax, setWithMax] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  /** Which file pick is current; a slower read of an earlier pick is ignored. */
+  const picked = useRef(0);
 
   const reload = useCallback(() => api.listSamplerPresets().then((r) => {
     setPresets(r.presets);
@@ -194,11 +196,17 @@ export function SamplerPresetEditor() {
 
   function pickFile(f: File | undefined) {
     setError(null);
-    if (!f) return;
+    // Only the latest pick may land: a large file read first can finish after
+    // a second pick (or a cleared input), and without this it would overwrite
+    // the selection the input now shows -- importing the wrong preset under
+    // the right name.
+    const pick = (picked.current += 1);
+    if (!f) { setFile(null); return; }
     // FileReader rather than `Blob.text()`: the same result, and it is the one
     // every browser the Android WebView ships with has had for longest.
     const reader = new FileReader();
     reader.onload = () => {
+      if (pick !== picked.current) return;
       try {
         setFile({ name: f.name,
                   data: JSON.parse(typeof reader.result === "string" ? reader.result : "") });
@@ -208,7 +216,7 @@ export function SamplerPresetEditor() {
         setError(`${f.name} is not a JSON file`);
       }
     };
-    reader.onerror = () => setError(`Could not read ${f.name}`);
+    reader.onerror = () => { if (pick === picked.current) setError(`Could not read ${f.name}`); };
     reader.readAsText(f);
   }
 

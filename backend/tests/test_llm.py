@@ -86,7 +86,10 @@ async def test_missing_kind_defaults_to_openrouter():
 
 
 # ---- the catalog and the probe are dispatched by kind too (#146, #149) ----
-from tests.llm_fakes import RecordingProvider  # noqa: E402 - see the late imports above
+from tests.llm_fakes import (  # noqa: E402 - see the late imports above
+    RecordingProvider,
+    RefusingProvider,
+)
 
 
 def _asking_client(**kinds):
@@ -1216,31 +1219,15 @@ def _sampled(conn, params, scope="connection", name="Warm"):
                                  "scope": scope, "params": params}}
 
 
-class KwargRecorder:
-    """Records each attempt's (model, kwargs); fails the models in `failing`."""
-
-    def __init__(self, failing=(), kind="bad_response", status=None,
-                 why="temperature must be at most 1"):
-        self.failing = set(failing)
-        self.kind, self.status, self.why = kind, status, why
-        self.calls = []
-
-    async def stream(self, messages, model="", *args, **kwargs):
-        self.calls.append((model, kwargs))
-        if model in self.failing:
-            raise LLMError(self.kind, f"{model} refused: {self.why}", status=self.status)
-        yield f"from {model}"
-
-
 async def test_no_preset_passes_no_sampling_kwarg():
-    provider = KwargRecorder()
+    provider = RefusingProvider()
     client = _retry_client(provider)
     [c async for c in client.stream([], _route("a", "primary"))]
     assert "sampling" not in provider.calls[0][1]
 
 
 async def test_the_applied_split_reaches_the_provider():
-    provider = KwargRecorder()
+    provider = RefusingProvider()
     client = _retry_client(provider)
     conn = _sampled(_route("a", "primary"), {"temperature": 0.7, "min_p": 0.05})
     [c async for c in client.stream([], conn)]
@@ -1264,7 +1251,7 @@ async def test_a_standard_endpoint_is_sent_only_the_openai_params():
 
 
 async def test_a_route_scoped_preset_follows_the_route_onto_the_fallback():
-    provider = KwargRecorder(failing={"primary"})
+    provider = RefusingProvider(failing={"primary"})
     client = _retry_client(provider, retries=0,
                            fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
     conn = _sampled(_route("a", "primary"), {"temperature": 0.2}, scope="global")
@@ -1275,7 +1262,7 @@ async def test_a_route_scoped_preset_follows_the_route_onto_the_fallback():
 
 async def test_a_route_cleared_preset_clears_the_fallbacks_too():
     """The sentinel keeps a role-play cap off absorb; a 429 must not undo it."""
-    provider = KwargRecorder(failing={"primary"})
+    provider = RefusingProvider(failing={"primary"})
     client = _retry_client(provider, retries=0,
                            fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
     conn = _sampled(_route("a", "primary"), {}, scope="campaign")
@@ -1284,7 +1271,7 @@ async def test_a_route_cleared_preset_clears_the_fallbacks_too():
 
 
 async def test_a_connection_level_preset_stays_with_its_connection():
-    provider = KwargRecorder(failing={"primary"})
+    provider = RefusingProvider(failing={"primary"})
     client = _retry_client(provider, retries=0,
                            fallback=lambda: _sampled(_route("b", "backup"), {"max_tokens": 300}))
     conn = _sampled(_route("a", "primary"), {"temperature": 0.2})
@@ -1295,7 +1282,7 @@ async def test_a_connection_level_preset_stays_with_its_connection():
 @pytest.mark.parametrize("status", [400, 422])
 async def test_a_refused_preset_is_not_handed_to_the_fallback(status):
     seen = []
-    provider = KwargRecorder(failing={"primary"}, status=status)
+    provider = RefusingProvider(failing={"primary"}, status=status)
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        timeout=0, retries=2, fallback=lambda: _route("b", "backup"),
                        observer=lambda conn, err: seen.append((conn["id"], err)))
@@ -1310,13 +1297,13 @@ async def test_a_refused_preset_is_not_handed_to_the_fallback(status):
 
 
 async def test_a_400_with_no_preset_still_falls_back():
-    provider = KwargRecorder(failing={"primary"}, status=400)
+    provider = RefusingProvider(failing={"primary"}, status=400)
     client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
     assert [c async for c in client.stream([], _route("a", "primary"))] == ["from backup"]
 
 
 async def test_a_500_with_a_preset_still_falls_back():
-    provider = KwargRecorder(failing={"primary"}, status=500)
+    provider = RefusingProvider(failing={"primary"}, status=500)
     client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
     conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
     assert [c async for c in client.stream([], conn)] == ["from backup"]
@@ -1324,7 +1311,7 @@ async def test_a_500_with_a_preset_still_falls_back():
 
 async def test_a_400_whose_params_were_all_dropped_still_falls_back():
     """Nothing was sent, so nothing in the preset can be what was refused."""
-    provider = KwargRecorder(failing={"primary"}, status=400)
+    provider = RefusingProvider(failing={"primary"}, status=400)
     client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
     conn = {**_sampled(_route("a", "primary"), {"min_p": 0.1}), "model_params": ["temperature"]}
     assert [c async for c in client.stream([], conn)] == ["from backup"]
@@ -1335,7 +1322,7 @@ async def test_a_400_that_names_no_sent_param_still_falls_back():
     """A context overflow is a 400 too; a preset being attached must not turn it
     into a preset refusal that skips the fallback and the health verdict."""
     seen = []
-    provider = KwargRecorder(failing={"primary"}, status=400,
+    provider = RefusingProvider(failing={"primary"}, status=400,
                              why="maximum context length is 8192 tokens")
     client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
                        timeout=0, retries=0, fallback=lambda: _route("b", "backup"),
@@ -1346,7 +1333,7 @@ async def test_a_400_that_names_no_sent_param_still_falls_back():
 
 
 async def test_a_refusal_spelled_with_hyphens_is_still_recognized():
-    provider = KwargRecorder(failing={"primary"}, status=400, why="unknown field: repeat_penalty")
+    provider = RefusingProvider(failing={"primary"}, status=400, why="unknown field: repeat_penalty")
     client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
     conn = {**_sampled(_conn("openai_compatible", id="a", model="primary", base_url="http://x"),
                        {"repetition_penalty": 1.1}), "sampler_support": "extended"}
@@ -1356,7 +1343,7 @@ async def test_a_refusal_spelled_with_hyphens_is_still_recognized():
 
 
 async def test_a_fallback_that_refuses_the_preset_reports_both_failures():
-    provider = KwargRecorder(failing={"primary", "backup"}, status=400)
+    provider = RefusingProvider(failing={"primary", "backup"}, status=400)
     client = _retry_client(provider, retries=0,
                            fallback=lambda: _sampled(_route("b", "backup"), {"temperature": 2}))
     conn = _route("a", "primary")   # the primary sent nothing, so it falls back

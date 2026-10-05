@@ -290,9 +290,15 @@ def _map_one(name: str, key: str, value: object, include_max_tokens: bool,
     """File one SillyTavern value under exactly one of the report's lists, and
     into `params` when it is stored."""
     if name == "stop":
-        value = _without_macros(_stop_list(value), key, report)
+        decoded = _stop_list(value)
+        value = _without_macros(decoded, key, report)
         if value == []:
-            report["neutral"].append({"param": name, "from": key, "value": []})
+            # Neutral only when the FILE's list was empty. One emptied by
+            # removing macros has had every entry reported as invalid already,
+            # and calling it the off position as well would file one input
+            # under two contradictory lists.
+            if decoded == []:
+                report["neutral"].append({"param": name, "from": key, "value": []})
             return
     if name == "max_tokens" and not include_max_tokens:
         report["skipped"].append({"param": name, "from": key, "value": value,

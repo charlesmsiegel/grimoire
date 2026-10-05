@@ -94,14 +94,20 @@ def _check(p: Param, value: object) -> object:
     # temperature.
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"{p.name} must be a number")
-    if not math.isfinite(value):
+    # An int is always finite, and asking `math.isfinite` about a thousand-digit
+    # one converts it to a float first and raises OverflowError -- which no
+    # caller catches, so a typed `top_k` of 1e1000-as-digits was a 500.
+    if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{p.name} must be a finite number")
     if p.kind == "int":
         if value != int(value):
             raise ValueError(f"{p.name} must be a whole number")
         value = int(value)
     else:
-        value = float(value)
+        try:
+            value = float(value)
+        except OverflowError:
+            raise ValueError(f"{p.name} must be between {p.low:g} and {p.high:g}") from None
     if not p.low <= value <= p.high:
         raise ValueError(f"{p.name} must be between {p.low:g} and {p.high:g}")
     return value
@@ -161,7 +167,9 @@ def split(conn: dict) -> tuple[dict, list[dict]]:
     kind = conn.get("kind", "openrouter") if isinstance(conn, dict) else "openrouter"
     extended = conn.get("sampler_support") == "extended"
     listed = conn.get("model_params")
-    listed = set(listed) if isinstance(listed, list) else None
+    # Strings only: a hand-edited or sync-mangled catalog with an object in the
+    # list must cost that entry, not the turn (`set` of a dict raises).
+    listed = {x for x in listed if isinstance(x, str)} if isinstance(listed, list) else None
     applied: dict = {}
     dropped: list[dict] = []
     for p in PARAMS:
