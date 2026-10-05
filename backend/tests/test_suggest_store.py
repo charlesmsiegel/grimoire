@@ -148,6 +148,20 @@ def test_build_snapshot_dormancy_counts_scenes_since_last_advance(monkeypatch, t
     assert threads["orphan"]["dormancy"] == 2  # unknown last_scene -> maximally cold (len scene_ids)
 
 
+def test_snapshot_threads_are_canonical(monkeypatch, tmp_path):
+    """A merged-away thread is not a second suggestion signal: the snapshot
+    lists the canonical alone, still annotated with its dormancy."""
+    from grimoire.store.continuity import doc
+    cid = _campaign(monkeypatch, tmp_path)
+    plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Winifred inks it.", "001--gate")
+    plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara finds it.", "002--causeway")
+    doc.put_alias(cid, "thread:maras-map",
+                  {"to": "thread:winifreds-chart", "created": "", "source": "manual", "note": ""})
+    snap = suggest.build_snapshot(cid)
+    assert [t["id"] for t in snap["open_threads"]] == ["winifreds-chart"]
+    assert "dormancy" in snap["open_threads"][0]
+
+
 def test_build_prompt_includes_signals():
     snap = {"now": "2026-01-01", "friendly": "Jan 1",
             "notation": {"example": "", "months": []}, "holidays_today": ["New Year"],

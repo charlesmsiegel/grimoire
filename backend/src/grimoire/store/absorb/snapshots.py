@@ -13,19 +13,18 @@ from __future__ import annotations
 from ... import prompts
 from .. import (
     characters,
-    commitments,
     entities,
     facts,
     groupstate,
     overlay,
     playstate,
-    plot,
     relationships,
     steering,
 )
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..campaigns import paths as campaigns_paths
+from ..continuity import effective
 
 
 def relationships_snapshot(cid: str, sid: str) -> str:
@@ -40,17 +39,19 @@ def relationships_snapshot(cid: str, sid: str) -> str:
 
 def plot_snapshot(cid: str) -> str:
     """Rendered open/advanced plot threads (id + title + status + latest beat) — feeds the
-    prompt so the model advances the right thread. Campaign-wide (not scene-scoped);
-    tolerant of a garbled plot.json."""
-    return "\n".join(plot.render_open(cid, with_id=True))
+    prompt so the model advances the right thread. Effective rows: a merged-away
+    thread is folded into its canonical, so only the canonical id is offered.
+    Campaign-wide (not scene-scoped); tolerant of a garbled plot.json."""
+    return "\n".join(effective.render_threads(cid, with_id=True))
 
 
 def commitment_snapshot(cid: str) -> str:
     """Rendered unresolved commitments (id + title + kind + status + due + latest
     beat) — feeds the prompt so the model resolves the commitment the scene
-    actually paid off rather than opening a duplicate. Campaign-wide (not
-    scene-scoped); tolerant of a garbled commitments.json."""
-    return "\n".join(commitments.render_open(cid, with_id=True))
+    actually paid off rather than opening a duplicate. Effective rows, canonical
+    ids only, as `plot_snapshot`. Campaign-wide (not scene-scoped); tolerant of a
+    garbled commitments.json."""
+    return "\n".join(effective.render_commitments(cid, with_id=True))
 
 
 #: How many standing facts the extraction prompt is primed with. The one

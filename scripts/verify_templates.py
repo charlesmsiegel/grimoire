@@ -429,6 +429,8 @@ from grimoire.store import taglines as tstore
 from grimoire.store import voice_anchors as vastore
 from grimoire.store import voice_drift as vdstore
 from grimoire.store import weather as wstore
+from grimoire.store.continuity import doc as continuity_doc  # noqa: E402
+from grimoire.store.continuity import effective  # noqa: E402
 from grimoire.store.tracker import fields as tfields  # noqa: E402
 from grimoire.store.tracker import records as trecords  # noqa: E402
 from grimoire.store.tracker import settings as tsettings  # noqa: E402
@@ -900,8 +902,8 @@ def gather(scene_id: str, pcless: bool, wi_seed: str = "", full_recap: int = 0) 
             "relationship_lines": relationship_lines, "players": players,
             "ref_names": ref_names, "refs": refs, "story_entries": story_entries,
             "archive_entries": archive_entries,
-            "plot_lines": plot.render_open(cid, with_id=False),
-            "commitment_lines": commitments.render_open(cid, with_id=False), "today": today,
+            "plot_lines": effective.render_threads(cid, with_id=False),
+            "commitment_lines": effective.render_commitments(cid, with_id=False), "today": today,
             "weather": weather_now,
             "current_setting": current_setting,
             "current_setting_secret": current_setting_secret,
@@ -1183,9 +1185,57 @@ check("commitment lines (context form)", "\n".join(commitments.render_open(cid, 
 check("commitment lines (absorb form)", "\n".join(commitments.render_open(cid, with_id=True)),
       "\n".join(render("snippets/commitment_line/absorb.j2", c=c) for c in owed))
 
+# The identity law (capstone spec §7.1) on the full fixture: with no alias, the
+# effective renders the prompts now read ARE the physical ones.
+for w in (False, True):
+    form = "absorb" if w else "context"
+    check(f"plot lines (effective == physical, no aliases, {form})",
+          "\n".join(effective.render_threads(cid, w)), "\n".join(plot.render_open(cid, w)))
+    check(f"commitment lines (effective == physical, no aliases, {form})",
+          "\n".join(effective.render_commitments(cid, w)),
+          "\n".join(commitments.render_open(cid, w)))
+
 standing = fstore.active(cid)
 check("fact lines", "\n".join(fstore.render_active(cid)),
       "\n".join(render("snippets/fact_line.j2", f=f) for f in standing))
+
+# A merged campaign, created after every other check so nothing else sees it.
+# The expectations are written out by hand rather than rendered over
+# `effective.threads` -- that is what the helper does, so the comparison could
+# not fail. The canonical's beat is the earlier scene and the SOURCE's the later
+# one, so the merged latest beat must come from the source; the canonical's
+# status and title are its own, so a source's winning fails too.
+cid_merged = campaigns.create_campaign("Saltmarch", wid)
+plot.set_movement(cid_merged, "winifred-s-chart", "Winifred's chart", "advanced",
+                  "Winifred inks the coastline", "001--gate")
+plot.set_movement(cid_merged, "mara-s-map", "Mara's map", "open",
+                  "The map names the Saltmarch causeway", "002--causeway")
+commitments.set_movement(cid_merged, "winifred-s-promise", "Winifred's promise", "promise",
+                         "open", None, "Winifred swore it at dawn", "001--gate")
+commitments.set_movement(cid_merged, "mara-s-oath", "Mara's oath", "promise",
+                         "open", None, "Mara swore it at the gate", "002--causeway")
+for src, to in (("thread:mara-s-map", "thread:winifred-s-chart"),
+                ("commitment:mara-s-oath", "commitment:winifred-s-promise")):
+    continuity_doc.put_alias(cid_merged, src,
+                             {"to": to, "created": "", "source": "manual", "note": ""})
+check("plot lines (effective, merged, absorb)",
+      "winifred-s-chart: Winifred's chart (advanced) — The map names the Saltmarch causeway",
+      "\n".join(effective.render_threads(cid_merged, True)))
+check("plot lines (effective, merged, context)",
+      "Winifred's chart (advanced): The map names the Saltmarch causeway",
+      "\n".join(effective.render_threads(cid_merged, False)))
+check("commitment lines (effective, merged, absorb)",
+      "winifred-s-promise: Winifred's promise (promise, open) — Mara swore it at the gate",
+      "\n".join(effective.render_commitments(cid_merged, True)))
+check("commitment lines (effective, merged, context)",
+      "Winifred's promise (promise, open): Mara swore it at the gate",
+      "\n".join(effective.render_commitments(cid_merged, False)))
+check("merged source hidden (threads)", "False",
+      str(any("mara-s-map" in line for line in effective.render_threads(cid_merged, True))))
+check("merged source hidden (commitments)", "False",
+      str(any("mara-s-oath" in line for line in effective.render_commitments(cid_merged, True))))
+check("merged ids are canonical", "winifred-s-chart",
+      ",".join(t["id"] for t in effective.threads(cid_merged)))
 
 # ---------------------------------------------------------------------------
 

@@ -239,8 +239,8 @@ def test_unattributed_campaign_material_never_reaches_writer(cast_scene, monkeyp
     assembly = context.assemble
     monkeypatch.setattr(assembly.story, "_story_entries", lambda *args, **kwargs: ["PRIVATE_RECAP"])
     monkeypatch.setattr(assembly.archive, "_archive_entries", lambda *args, **kwargs: ["PRIVATE_ARCHIVE"])
-    monkeypatch.setattr(assembly.plot, "render_open", lambda *args, **kwargs: ["PRIVATE_PLOT"])
-    monkeypatch.setattr(assembly.commitments, "render_open", lambda *args, **kwargs: ["PRIVATE_COMMITMENT"])
+    monkeypatch.setattr(assembly.effective, "render_threads", lambda *args, **kwargs: ["PRIVATE_PLOT"])
+    monkeypatch.setattr(assembly.effective, "render_commitments", lambda *args, **kwargs: ["PRIVATE_COMMITMENT"])
     text = str(context.compose_turn(*cast_scene, actor_ref="characters:mara")[0])
     for value in ("PRIVATE_RECAP", "PRIVATE_ARCHIVE", "PRIVATE_PLOT", "PRIVATE_COMMITMENT"):
         assert value not in text

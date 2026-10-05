@@ -50,6 +50,7 @@ from grimoire.store import (
 )
 from grimoire.store.context import archive, art, assemble, story, world_state
 from grimoire.store.context import cast as cast_data
+from grimoire.store.continuity import effective
 from grimoire.store.scenes import paths as scene_paths
 
 NPC = "characters:mara"
@@ -182,8 +183,8 @@ def test_what_an_npc_compose_discards_is_never_computed(saltmarch, monkeypatch):
 
     for module, name in ((cast_data, "_cast_directory_data"), (art, "catalogue"),
                          (archive, "_archive_entries"), (story, "_story_entries"),
-                         (story, "_relationship_lines"), (plot, "render_open"),
-                         (commitments, "render_open"), (world_state, "_group_states"),
+                         (story, "_relationship_lines"), (effective, "render_threads"),
+                         (effective, "render_commitments"), (world_state, "_group_states"),
                          (world_state, "_today_data")):
         monkeypatch.setattr(module, name, forbidden)
     assert _npc_turn(monkeypatch, cid, sid) == shipped
