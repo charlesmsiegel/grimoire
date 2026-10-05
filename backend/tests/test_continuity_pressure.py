@@ -97,6 +97,38 @@ _BROKEN_PROVIDER_SRC = textwrap.dedent(
 )
 
 
+#: Plugins that construct fine and then raise something that is not a
+#: CalendarError on a day: `parse` and `describe` on every input, `describe`
+#: only, or `describe` on one day only (Gregorian otherwise).
+_DAY_RAISING_PROVIDER_SRC = textwrap.dedent(
+    """
+    from grimoire.store.calendars.base import register
+    from grimoire.store.calendars.gregorian import GregorianProvider
+
+    class _NoDays(GregorianProvider):
+        def parse(self, native):
+            raise RuntimeError("this calendar plugin cannot read a day")
+
+        def describe(self, fixed):
+            raise RuntimeError("this calendar plugin cannot name a day")
+
+    class _NoNames(GregorianProvider):
+        def describe(self, fixed):
+            raise RuntimeError("this calendar plugin cannot name a day")
+
+    class _OneBadDay(GregorianProvider):
+        def describe(self, fixed):
+            if self.format(fixed) == "2026-05-20":
+                raise RuntimeError("this calendar plugin cannot name this day")
+            return super().describe(fixed)
+
+    register("no-days-test-calendar", _NoDays, "No Days")
+    register("no-names-test-calendar", _NoNames, "No Names")
+    register("one-bad-day-test-calendar", _OneBadDay, "One Bad Day")
+    """
+)
+
+
 def _block(provider: str) -> dict:
     return {"provider": provider, "region": "", "custom_holidays": [], "anchor": None}
 
@@ -477,6 +509,67 @@ def test_a_raising_plugin_degrades_to_undated_items(monkeypatch, tmp_path):
     assert (item["fixed"], item["in_days"], item["state"]) == (None, None, "ok")
     assert not [i for i in out["items"]
                 if i["kind"] in {"holiday", "birthday", "deadline", "linked_deadline"}]
+
+
+def test_a_plugin_that_cannot_read_a_day_degrades_to_undated_items(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "The coronation", "2026-05-12")
+    _plugin(tmp_path, "day_raising_test", _DAY_RAISING_PROVIDER_SRC)
+    _primary(cid, "no-days-test-calendar")
+    assert calendars.primary_provider(_root(cid)) is not None
+
+    for now in (None, "2026-05-10"):
+        out = pressure.build(cid, now=now)
+        assert (out["fixed"], out["friendly"]) == (None, "")
+        [item] = out["items"]
+        assert (item["ref"], item["native"]) == (f"event:{eid}", "2026-05-12")
+        assert (item["fixed"], item["in_days"], item["state"], item["friendly"]) == (
+            None, None, "ok", "")
+
+
+def test_a_plugin_that_cannot_name_a_day_keeps_the_dates(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "The coronation", "2026-05-12")
+    _plugin(tmp_path, "day_raising_test", _DAY_RAISING_PROVIDER_SRC)
+    _primary(cid, "no-names-test-calendar")
+
+    out = pressure.build(cid)
+    assert (out["fixed"], out["friendly"]) == (F(cid, "2026-05-10"), "")
+    [item] = out["items"]
+    assert item["ref"] == f"event:{eid}"
+    assert (item["fixed"], item["in_days"], item["state"], item["friendly"]) == (
+        F(cid, "2026-05-12"), 2, "upcoming", "")
+
+
+def test_one_unnameable_day_costs_only_that_items_label(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    coronation = events.create(cid, "The coronation", "2026-05-12")
+    audience = events.create(cid, "Mara's audience", "2026-05-20")
+    _plugin(tmp_path, "day_raising_test", _DAY_RAISING_PROVIDER_SRC)
+    _primary(cid, "one-bad-day-test-calendar")
+
+    good, bad = _items(cid, "event")
+    assert (good["ref"], bad["ref"]) == (f"event:{coronation}", f"event:{audience}")
+    assert good["friendly"] == calendars.friendly(_provider(cid), "2026-05-12") != ""
+    assert (bad["fixed"], bad["in_days"], bad["state"], bad["friendly"]) == (
+        F(cid, "2026-05-20"), 10, "upcoming", "")
+
+
+def test_an_overflowing_event_date_costs_only_that_event(monkeypatch, tmp_path):
+    date = "99999999999999999999-05-09"   # Gregorian parse: OverflowError, not CalendarError
+    cid = _campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "The coronation", "2026-05-12")
+    before = _items(cid, "event")
+    path = _root(cid) / "events.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["x"] = {"name": "Bad", "date": date, "fired": None}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    items = _items(cid, "event")
+    assert [i["ref"] for i in items] == [f"event:{eid}", "event:x"]
+    assert items[0] == before[0]
+    assert (items[1]["fixed"], items[1]["in_days"], items[1]["state"], items[1]["friendly"],
+            items[1]["native"]) == (None, None, "ok", "", date)
 
 
 def test_sources_restrict_the_work_done(monkeypatch, tmp_path):

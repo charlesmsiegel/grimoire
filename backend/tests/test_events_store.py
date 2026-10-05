@@ -161,6 +161,22 @@ def test_an_unreadable_date_sorts_last_and_keeps_its_row(monkeypatch, tmp_path):
     assert rows[-1]["friendly"] == ""
 
 
+def test_an_overflowing_date_sorts_last_and_keeps_its_row(monkeypatch, tmp_path):
+    """A huge hand-edited year overflows Gregorian's `date` before the provider
+    can raise CalendarError: that row reads as undated, and costs no other."""
+    cid = _campaign(monkeypatch, tmp_path)
+    events.create(cid, "Real", "2026-05-09")
+    data = events.read(cid)
+    data["broken"] = {"name": "Broken", "date": "99999999999999999999-05-09",
+                      "note": "", "fired": None}
+    events._path(cid).write_text(json.dumps(data), encoding="utf-8")
+    rows = events.list_events(cid, _provider(cid), _fixed(cid, "2026-06-01"))
+    assert [r["name"] for r in rows] == ["Real", "Broken"]
+    assert (rows[0]["passed"], rows[-1]["passed"], rows[-1]["friendly"]) == (True, False, "")
+    assert events.crossed(cid, _provider(cid), _fixed(cid, "2026-05-01"),
+                          _fixed(cid, "2026-05-10"))[0]["name"] == "Real"
+
+
 # ---- the crossing predicates ----------------------------------------------
 
 def test_crossed_is_half_open_at_the_start(monkeypatch, tmp_path):
