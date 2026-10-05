@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from grimoire.store import (
     appearances,
     calendars,
@@ -281,6 +283,36 @@ def test_offscreen_drops_player_tokens(monkeypatch, tmp_path):
     assert offscreen[MAP]["actors"] == [f"characters:{winifred}"]
     assert offscreen[bday["ref"]]["actors"] == []
     assert offscreen[bday["ref"]]["label"] == "Seraphine"
+
+
+def _garble_file(path):
+    path.write_text("{ no", encoding="utf-8")
+
+
+def _drop_a_role(path):
+    record = json.loads(path.read_text(encoding="utf-8"))
+    del next(iter(record.values()))["role"]
+    path.write_text(json.dumps(record), encoding="utf-8")
+
+
+@pytest.mark.parametrize("damage", [_garble_file, _drop_a_role],
+                         ids=["garbled-file", "entry-without-role"])
+def test_offscreen_fails_closed_on_an_unreadable_roster(monkeypatch, tmp_path, damage):
+    """With no roster nobody can say who the player is, so `offscreen` drops
+    every actor rather than letting a player-seated character through on the
+    chronicle's cast."""
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mvid = overlay.create_character(cid, "Mara")
+    winifred, wvid = overlay.create_character(cid, "Winifred")
+    appearances.appear(cid, S1, "characters", mara, mvid, "player")
+    appearances.appear(cid, S1, "characters", winifred, wvid, "npc")
+    _write_chronicle(cid, {S1: [f"characters/{mara}"]})
+    _thread(cid, scene=S1)
+    assert _by_ref(cid, offscreen=True)[MAP]["actors"] == [f"characters:{winifred}"]
+
+    damage(_root(cid) / "appearances.json")
+    assert _by_ref(cid)[MAP]["actors"] == [f"characters:{mara}"]   # the chronicle still casts her
+    assert _by_ref(cid, offscreen=True)[MAP]["actors"] == []
 
 
 # ---- failure ----------------------------------------------------------------

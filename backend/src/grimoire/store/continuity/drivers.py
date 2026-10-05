@@ -18,7 +18,9 @@ the merged `last_scene`, not the canonical's alone.
 `offscreen` drops the player's tokens from every `actors` list -- every `pcs:*`
 and every roster actor seated as `player`, the set `suggest.build_snapshot`
 strips, recomputed from the roster because this module may not import
-`suggest`. A PC's birthday stays a driver, with no actors.
+`suggest`. A PC's birthday stays a driver, with no actors. When `offscreen` is
+set and the roster cannot be read, every `actors` list is empty: the filter
+fails closed rather than open.
 
 Read-only and pure: nothing here writes, takes a lock, or calls a model or an
 embedding endpoint (`matching` only reads config). Every input is read through
@@ -85,17 +87,29 @@ def _record_pressure(ref: str, items: list[dict], stale: bool) -> dict:
     return {"state": "stale" if stale else "ok", "in_days": None, "friendly": ""}
 
 
-def _dropped(cid: str, offscreen: bool) -> frozenset[str]:
-    """The roster's player tokens (the `pcs:*` ones are dropped by prefix)."""
+#: The player tokens when the roster cannot be read: anyone may be the player.
+Players = frozenset[str] | None
+
+
+def _dropped(cid: str, offscreen: bool) -> Players:
+    """The roster's player tokens (the `pcs:*` ones are dropped by prefix), or
+    None when `offscreen` is set and the roster cannot be read -- a garbled
+    appearances.json, or one hand-edited entry with no `role`. The filter then
+    fails closed: the chronicle's cast still names a player-seated character,
+    and nothing left can say which one she is."""
     if not offscreen:
         return frozenset()
-    roster: list[dict] = _soft(appearances_cast.roster, [], cid)
+    roster: list[dict] | None = _soft(appearances_cast.roster, None, cid)
+    if roster is None:
+        return None
     return frozenset(f"{a['kind']}:{a['id']}" for a in roster if a.get("role") == "player")
 
 
-def _keep(actors: list[str], offscreen: bool, players: frozenset[str]) -> list[str]:
+def _keep(actors: list[str], offscreen: bool, players: Players) -> list[str]:
     if not offscreen:
         return actors
+    if players is None:
+        return []
     return [a for a in actors if not a.startswith("pcs:") and a not in players]
 
 
@@ -107,7 +121,7 @@ def _is_stale(actx: dict | None, row: dict) -> bool:
 
 
 def _record_drivers(cid: str, now: dict, offscreen: bool,
-                    players: frozenset[str]) -> list[dict]:
+                    players: Players) -> list[dict]:
     """A driver per live canonical thread and commitment."""
     rows: list[tuple[str, dict]] = []
     for kind, read in zip(_RECORD_KINDS, (effective.threads, effective.commitments),
@@ -129,7 +143,7 @@ def _record_drivers(cid: str, now: dict, offscreen: bool,
 
 
 def _temporal_drivers(items: list[dict], offscreen: bool,
-                      players: frozenset[str]) -> list[dict]:
+                      players: Players) -> list[dict]:
     """A driver per event, holiday and birthday pressure item."""
     out = []
     for item in items:
