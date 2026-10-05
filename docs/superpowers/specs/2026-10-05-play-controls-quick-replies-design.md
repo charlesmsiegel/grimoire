@@ -15,17 +15,20 @@ programme to run without stopping.
 ## A quick reply
 
 ```json
-{"id": "qr-1", "label": "Look around", "kind": "send",
+{"id": "3f9c…", "label": "Look around", "kind": "send",
  "text": "I take in the room.", "mode": "send"}
 ```
+
+Ids are minted by the server (uuid4 hex) for any entry saved without one, so a
+campaign reply can never collide with an unrelated world reply by accident.
 
 | `kind` | Fields | Does |
 |---|---|---|
 | `send` | `text`, `mode` | posts `text` as the player (Speak) |
 | `direct` | `text`, `mode` | sends `text` as a director note (OOC instruction) |
-| `roll` | `notation`, `label?` | rolls the saved dice string (`POST .../roll`) |
-| `task` | `task` | runs an auxiliary task: `rolling_summary`, `scene_break` or `suggestions` |
-| `opener` | — | opens the opener generator (only on a scene with no posts) |
+| `roll` | `notation`, `roll_label?` | rolls the saved dice string (`POST .../roll`); `roll_label` is the transcript label, distinct from the button `label` |
+| `task` | `task` | `rolling_summary` or `scene_break` (run now, forced), or `next_scene` (open the next-scene chooser, which fetches its own suggestions) |
+| `opener` | — | expands and focuses the opener generator (only on a landed scene with no posts) |
 
 - `mode` for the text kinds: `send` (send immediately) or `insert` (put the
   text in the composer for the player to edit and send) — SillyTavern offers
@@ -109,3 +112,76 @@ Frontend:
 - disabled states mirror the controls they stand for;
 - the editor follows the list/detail tests (row → read-only view, Edit → form,
   + New → form), and campaign override/hide create the right entries.
+
+## Gate resolutions (binding where they refine the text above)
+
+Spec → planning gate: independent adversarial review (stand-in for
+`/codex:adversarial-review`, Codex CLI unavailable; owner-approved).
+
+**Tasks.** `rolling_summary` and `scene_break` call their routes with
+`force=true` and `upto=<messages.length>` (the same bound the inspector panel
+uses, so a fold cannot swallow an unanswered post), and are disabled while
+`sceneLocked`, while no connection is `ready`, and while the same task is
+already running from either the strip or the inspector. Their outcome
+(`refreshed`/`asked` false, or an error) is shown as a composer notice; a
+success bumps the inspector key as the panel does. `next_scene` opens
+`NewSceneChooser`, whose own hook fetches suggestions — the campaign-level
+suggestions draft is not called directly, because its only consumer is that
+chooser.
+
+**Sending.** The parameterised send path (`sendText(text, director)`) never
+reads or clears the composer's `input`, so a draft survives a quick reply;
+every use of `directing` in that path takes the parameter. On failure the
+canned text is not handed back to the composer (it is re-tappable) and the
+composer mode is not flipped. A quick reply consumes the pending one-shot
+response targets exactly as Send does (the player set them for the next turn).
+In a scene with no player character (Speak disabled there), a `send` reply is
+disabled with the title "This scene has no player character". `text` must
+contain a non-space character (an empty send is the "next NPC round" path and
+is not a quick reply).
+
+**Insert.** Into an empty composer: the text, and a `direct` insert switches the
+composer to Direct (a `send` insert to Speak). Into a same-kind draft: appended
+after a blank line. Into a different-kind draft: refused with the existing
+held-draft notice — one composer carries one mode.
+
+**Roll.** Disabled by the dice button's real guards — `!activeId || busy ||
+sceneLocked || messages.length === 0 || rolling` — and while `moduleBound` is
+still unknown. `doRoll` becomes `doRoll(notation, label)` with its own notice
+for errors (the popover's form error is unreachable from the strip), still
+taking the roll latch and asking for follow-ups. **This deliberately overrides
+the recorded rule that hides the dice button in a campaign with no mechanics
+module** (freeform play): a saved roll is something the player configured, and
+the roll route has no module gate.
+
+**Opener.** The opener generator is already rendered inside the empty-scene
+cast panel; the quick reply expands that panel (controlled `open`) and focuses
+the opener prompt rather than mounting a second, stateful copy. Enabled when
+the cast panel is mounted (a landed scene with no posts) and a connection is
+ready.
+
+**Sets.** `{"version": 1, "replies": [...]}`; at most 50 entries; ids unique
+within a set; a hide entry is `{"id", "hidden": true}` and nothing else.
+Request models are loose (`kind: str`, optional fields, the `TrackerLayer`
+`list[dict]` style) and every rule is checked in the store, so violations are
+400s, not pydantic 422s; the store normalises each entry to its kind's fields
+(no `null`s written). Reads salvage per entry: an entry of an unknown kind (a
+future `plugin`, a newer build's kind) is kept verbatim on disk and preserved
+across a PUT, but not shown. **Concurrency**: every PUT carries `expect`, the
+digest of the set the client read, and is refused 409 `set_changed` when the
+file moved — override and hide are client read-modify-writes and would
+otherwise lose an update. A campaign with no world has an empty world set. The
+world writer is atomic-only (no world lock, as the tracker's world layer).
+A campaign PUT bumps the campaign's write token and activity stamp like any
+campaign write; that is accepted.
+
+**Editor.** Reorder with ↑/↓ in the rail (order is the contract). The campaign
+view's inherited world replies offer Override, Hide, and — on a hidden one —
+Show (removes the hide entry). Mounting touches `worldPaths.ts`
+(`FLAT_SECTIONS`, `SectionTarget`), `WorldView.tsx` (`IndexKey`, `INDEX`
+Writing group, the campaign-shape filter — world-only like tracker — `countOf`,
+render), `CampaignHub.tsx` (panel union, Settings list), and the store
+facade's `__all__`.
+
+**One-tap sends** are the feature; the strip's buttons carry their full text in
+a `title` so a mis-tap is at least visible before it happens.
