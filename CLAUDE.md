@@ -621,10 +621,11 @@ would answer neither question.
   `put_image` ingest the bytes into `<home>/assets/image-store/`, `link_in`
   places an image already there, and either way the record keeps only a
   placement, `image-refs/<name>.json`. Copying, forking or promoting
-  art moves placements and writes no bytes. A route or script that writes a
-  `.png` into a record directory is a regression, and the surface roster in
-  `backend/tests/test_image_surfaces.py` fails on it. What the store promises
-  is in `docs/store-guarantees.md`; the design is
+  art moves placements and writes no bytes; a legacy file not yet migrated
+  is still copied as a file, and promoting one ingests it first. A route or
+  script that writes a `.png` into a record directory is a regression, and
+  the surface roster in `backend/tests/test_image_surfaces.py` fails on it.
+  What the store promises is in `docs/store-guarantees.md`; the design is
   `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
 - **Adding an LLM call site?** Resolve its connection with
   `_require_connection(<task>, cid)` and name the task the call meters under.

@@ -1915,3 +1915,146 @@ def test_png_import_keeps_plane_when_carried_avatar_is_a_different_picture(tmp_p
     cid, vid = ch.import_card(tmp_path, png, "png")
     p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
     assert p.suffix == ".png" and p.read_bytes() != other
+
+
+# ---- final review: the PNG plane is the carried avatar as a browser shows it ----
+
+def _noise_rgb(seed: int, size=(24, 16)):
+    import random
+
+    from PIL import Image
+    rng = random.Random(seed)
+    im = Image.new("RGB", size)
+    im.putdata([(rng.randrange(256), rng.randrange(256), rng.randrange(256))
+                for _ in range(size[0] * size[1])])
+    return im
+
+
+def _jpeg_bytes(im, **kw) -> bytes:
+    import io
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=90, **kw)
+    return buf.getvalue()
+
+
+def _exif6_jpeg() -> bytes:
+    from PIL import Image
+    ex = Image.Exif()
+    ex[0x0112] = 6
+    return _jpeg_bytes(_noise_rgb(31), exif=ex.tobytes())
+
+
+def _icc_jpeg() -> bytes:
+    from PIL import ImageCms
+    icc = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+    return _jpeg_bytes(_noise_rgb(32), icc_profile=icc)
+
+
+def _animated_gif() -> bytes:
+    import io
+
+    from PIL import Image
+    frames = [Image.new("RGB", (12, 10), c) for c in ((255, 0, 0), (0, 0, 255))]
+    buf = io.BytesIO()
+    frames[0].save(buf, "GIF", save_all=True, append_images=frames[1:],
+                   duration=[90, 140], loop=0)
+    return buf.getvalue()
+
+
+def _round_trip_png(tmp_path, monkeypatch, avatar: bytes, ext: str):
+    """Export a character whose avatar is `avatar` as a PNG card, import that
+    card into a fresh store. Returns (stored original, exported blob, the
+    source card hash, the imported avatar path, the imported card hash)."""
+    from grimoire.store import assets
+    src, dest = tmp_path / "src", tmp_path / "dest"
+    src.mkdir()
+    dest.mkdir()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(src))
+    cid, vid = ch.create_character(src, "Seraphine")
+    assets.put_image(src, cid, vid, assets.AVATAR, avatar, ext)
+    original = assets.image_path(src, cid, vid, assets.AVATAR).read_bytes()
+    source_hash = ch.card_hash(src, cid, vid)
+    blob, _name = ch.export_card(src, cid, vid, "png")
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(dest))  # a fresh store
+    new_cid, new_vid = ch.import_card(dest, blob, "png")
+    p = assets.image_path(dest, new_cid, new_vid, assets.AVATAR)
+    return original, blob, source_hash, p, ch.card_hash(dest, new_cid, new_vid)
+
+
+def test_png_round_trip_of_an_exif_oriented_jpeg_keeps_the_original(tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image, ImageOps
+    original, blob, source_hash, p, new_hash = _round_trip_png(
+        tmp_path, monkeypatch, _exif6_jpeg(), "jpg")
+    assert p.read_bytes() == original and p.suffix == ".jpg"
+    assert new_hash == source_hash
+    # The plane is drawn upright: the stored JPEG turned the way a browser turns it.
+    with Image.open(io.BytesIO(original)) as im:
+        upright = ImageOps.exif_transpose(im).convert("RGB")
+    with Image.open(io.BytesIO(blob)) as plane:
+        assert plane.size == upright.size == (16, 24)
+        assert plane.convert("RGB").tobytes() == upright.tobytes()
+
+
+def test_png_round_trip_of_an_icc_jpeg_keeps_the_original(tmp_path, monkeypatch):
+    original, _blob, source_hash, p, new_hash = _round_trip_png(
+        tmp_path, monkeypatch, _icc_jpeg(), "jpg")
+    assert b"ICC_PROFILE" in original
+    assert p.read_bytes() == original and p.suffix == ".jpg"
+    assert new_hash == source_hash
+
+
+def test_png_round_trip_of_an_animated_gif_keeps_the_animation(tmp_path, monkeypatch):
+    import io
+
+    from PIL import Image
+    original, _blob, source_hash, p, new_hash = _round_trip_png(
+        tmp_path, monkeypatch, _animated_gif(), "gif")
+    assert p.read_bytes() == original and p.suffix == ".gif"
+    with Image.open(io.BytesIO(p.read_bytes())) as im:
+        assert im.n_frames == 2
+    assert new_hash == source_hash
+
+
+def test_png_import_keeps_a_plane_that_is_the_carried_picture_turned(tmp_path, monkeypatch):
+    """The same raster, but not as a browser shows the carried copy: the plane
+    is a different picture on screen, so it stays."""
+    import base64
+    import io
+
+    from grimoire.store import assets, cards
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    carried = _exif6_jpeg()
+    from PIL import Image
+    with Image.open(io.BytesIO(carried)) as im:
+        buf = io.BytesIO()
+        im.convert("RGB").save(buf, "PNG")              # NOT turned
+    card = ch.blank_card("Mara")
+    card["data"]["assets"] = [{
+        "type": "icon", "name": "main", "ext": "jpg",
+        "uri": "data:image/jpeg;base64," + base64.b64encode(carried).decode()}]
+    png = cards.dumps(card, "png", avatar=(buf.getvalue(), "png"))
+    cid, vid = ch.import_card(tmp_path, png, "png")
+    assert assets.image_path(tmp_path, cid, vid, assets.AVATAR).suffix == ".png"
+
+
+def test_chub_redownload_keeps_the_caption_of_a_legacy_slot(tmp_path, monkeypatch):
+    """A gallery slot written before the image store (a bare `gallery_0.png`)
+    holding the very picture chub serves again keeps its caption: identity is
+    compared for legacy slots too, not only for placements."""
+    from grimoire.store import assets, image_descriptions
+    picture = _gallery_png(4)
+    cid, vid, node = _gallery_setup(tmp_path, monkeypatch, ["u/1"],
+                                    {"u/1": (picture, "png")})
+    d = assets.version_dir(tmp_path, cid, vid)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "gallery_0.png").write_bytes(picture)
+    assets.edit_sidecar(d, assets.DESCRIPTIONS_FILE, {"gallery_0": "Mara at the quay"})
+    assert assets.image_id(tmp_path, cid, vid, "gallery_0") is None   # legacy, not placed
+
+    list(ch.download_chub_gallery_stream(tmp_path, cid, vid, node))
+
+    assert image_descriptions.read_all(tmp_path, cid, vid).get("gallery_0") == "Mara at the quay"
+    assert assets.image_id(tmp_path, cid, vid, "gallery_0") is not None

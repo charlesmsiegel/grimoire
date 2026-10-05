@@ -954,16 +954,41 @@ def _carried_uri(uri: str) -> bool:
     return uri.startswith("data:") or cards.embedded_path(uri) is not None
 
 
-def _pixel_id(blob: bytes) -> str:
-    return image_hash.pixel_identity(blob, hashlib.sha256(blob).hexdigest()).id
+def _shown(blob: bytes) -> tuple[tuple[int, int], bytes] | None:
+    """`(size, digest)` of what `blob` shows first: frame 0, turned upright the
+    way a browser turns it (`image_hash.orientation`), as RGBA8 -- the colour
+    profile ignored, alpha kept. None when it does not decode, or is larger
+    than pixel identity would decode."""
+    try:
+        with Image.open(BytesIO(blob)) as im:
+            if im.size[0] * im.size[1] > image_hash.STATIC_BUDGET:
+                return None
+            im.seek(0)
+            turn = image_hash.orientation(im)
+            rgba = im.convert("RGBA")
+            if turn is not None:
+                rgba = rgba.transpose(turn)
+            return rgba.size, hashlib.sha256(rgba.tobytes()).digest()
+    except Exception:  # noqa: BLE001 -- an undecodable plane is not the same picture
+        return None
 
 
 def _plane_is_the_carried_avatar(png: bytes, carried: bytes) -> bool:
     """Is the PNG's image plane the card's carried avatar, so that the carried
     copy (the original bytes, lossless) should be the one stored? True for our
-    placeholder plane, and for a plane that IS the same picture -- what an
-    export of a non-PNG avatar writes now that it re-encodes the pixels."""
-    return cards.is_placeholder_png(png) or _pixel_id(png) == _pixel_id(carried)
+    placeholder plane, and for a plane that IS the same picture -- what a PNG
+    export of a non-PNG avatar writes (`_png_plane_of`).
+
+    "The same picture" is what that export would have drawn from the carried
+    copy, compared as decoded pixels -- not pixel identity, which also counts
+    the colour profile, the orientation and the animation, and a plane carries
+    none of those: comparing ids sent an EXIF-turned JPEG, an ICC JPEG and an
+    animated GIF back in as their flat re-encodes."""
+    if cards.is_placeholder_png(png):
+        return True
+    plane = _png_plane_of((carried, fetch.sniff_ext(carried) or ""))
+    mine = _shown(png)
+    return mine is not None and mine == _shown(plane if plane is not None else carried)
 
 
 def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
@@ -1302,7 +1327,7 @@ def _replace_gallery(root: Path, cid: str, vid: str, fresh: list[tuple[int, str]
     Slots not being replaced go (a gallery that shrank would otherwise leave
     orphaned slots past the new count); a slot that now holds a different image
     loses its caption, which described the old one -- a slot that holds the same
-    image keeps it. All of it under the slots' locks, so an upload cannot land
+    image keeps it, whether as a placement or as a legacy file. All of it under the slots' locks, so an upload cannot land
     between the delete and the re-link."""
     d = assets.version_dir(root, cid, vid)
     wanted = {f"gallery_{i}": image_id for i, image_id in fresh}
@@ -1313,9 +1338,24 @@ def _replace_gallery(root: Path, cid: str, vid: str, fresh: list[tuple[int, str]
             if name not in wanted:
                 assets.delete_image(root, cid, vid, name)
         for name, image_id in wanted.items():
-            if assets.image_id(root, cid, vid, name) != image_id:
+            placed = assets.image_id(root, cid, vid, name)
+            if placed != image_id:
+                held = placed if placed is not None else _legacy_identity(d, name)
                 assets.link_in(d, name, image_id)
-                assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
+                if held != image_id:
+                    assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
+
+
+def _legacy_identity(d: Path, name: str) -> str | None:
+    """The id a slot's legacy file (one written before the image store) would
+    be ingested under, without ingesting it; None when there is none to read."""
+    p = assets.path_in(d, name)
+    if p is None:
+        return None
+    try:
+        return image_store.identify(p.read_bytes(), p.suffix)
+    except (OSError, ValueError):
+        return None
 
 
 def _download_gallery(root: Path, cid: str, vid: str, node: dict) -> dict:
@@ -1407,15 +1447,23 @@ def _png_plane_of(avatar: tuple[bytes, str] | None) -> bytes | None:
     """The avatar re-encoded as a PNG, for a PNG export's image plane -- None
     for a missing avatar, an avatar that is already a PNG (it is used as is) or
     one Pillow cannot decode (the exporter then falls back to its placeholder,
-    and the original still rides in the card)."""
+    and the original still rides in the card).
+
+    The plane is the first frame turned upright by the browser's rule
+    (`image_hash.orientation`): a PNG written without the EXIF that turned the
+    original would otherwise show it on its side."""
     if avatar is None or avatar[1] == "png":
         return None
     try:
         with Image.open(BytesIO(avatar[0])) as im:
             im.seek(0)  # an animation's first frame
+            turn = image_hash.orientation(im)
             has_alpha = "A" in im.getbands() or "transparency" in im.info
+            frame = im.convert("RGBA" if has_alpha else "RGB")
+            if turn is not None:
+                frame = frame.transpose(turn)
             out = BytesIO()
-            im.convert("RGBA" if has_alpha else "RGB").save(out, "PNG")
+            frame.save(out, "PNG")
     except Exception:  # noqa: BLE001 -- an export must not fail over an image it cannot decode
         return None
     return out.getvalue()

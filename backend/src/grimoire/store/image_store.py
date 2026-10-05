@@ -335,17 +335,40 @@ def _ingest_hit(image_id: str, sha: str, data: bytes,
         return _finish(image_id, copy.deepcopy(obj.raw), False, source_url)
 
 
-def _prepared(data: bytes, ext: str, sanitize: bool) -> tuple[bytes, str, str]:
-    """`(bytes, ext, sha)` as the store would keep them: sniffed (falling back
-    to the caller's `ext`, validated) and sanitised where they sniff."""
+@dataclass(frozen=True)
+class _Prepared:
+    data: bytes
+    ext: str
+    sha: str
+    #: The sanitizer could not parse bytes that sniff as an image, so they are
+    #: kept exactly as received, metadata and all.
+    unsanitizable: bool
+
+
+def _prepared(data: bytes, ext: str) -> _Prepared:
+    """The bytes as the store would keep them: sniffed (falling back to the
+    caller's `ext`, validated) and sanitized where they sniff."""
     sniffed = fetch.sniff_ext(data)
+    unsanitizable = False
     if sniffed is None:
         ext = _norm_ext(ext)
     else:
         ext = sniffed
-        if sanitize:
-            data = image_sanitize.sanitize(data)
-    return data, ext, hashlib.sha256(data).hexdigest()
+        data, clean = image_sanitize.sanitize_checked(data)
+        unsanitizable = not clean
+    return _Prepared(data, ext, hashlib.sha256(data).hexdigest(), unsanitizable)
+
+
+def _identity(p: _Prepared) -> image_hash.PixelIdentity:
+    """The identity `p` is stored under.
+
+    Bytes the sanitizer returned as received are opaque, however well they
+    decode: named by their pixels, they would share an object with a clean
+    upload of the same picture, and a first arrival's blob -- whatever notes it
+    carries -- is the one that object keeps for everybody (spec section 5)."""
+    if p.unsanitizable:
+        return image_hash.opaque(p.sha, "unsanitizable")
+    return image_hash.pixel_identity(p.data, p.sha)
 
 
 def identify(data: bytes, ext: str) -> str:
@@ -358,24 +381,25 @@ def identify(data: bytes, ext: str) -> str:
     only when it exists, and a hit is validated exactly as ingest validates it,
     without restoring a missing blob.
     """
-    data, _ext, sha = _prepared(data, ext, True)
-    hit = _index_lookup(sha)
+    p = _prepared(data, ext)
+    hit = _index_lookup(p.sha)
     if hit is not None:
         obj = read(hit)
-        if obj is not None and obj.blob_sha256 == sha:
+        if obj is not None and obj.blob_sha256 == p.sha:
             return hit
-    return image_hash.pixel_identity(data, sha).id
+    return _identity(p).id
 
 
-def ingest(data: bytes, ext: str, *, source_url: str | None = None,
-           sanitize: bool = True) -> ImageObject:
+def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObject:
     """Store `data` and return its object -- the one way in (spec section 5).
 
-    `ext` is used only when the bytes do not sniff as an image; such bytes are
-    stored verbatim under it with opaque identity. ``sanitize=False`` is for
-    bundle import, whose blobs are already stored bytes.
+    Every caller's bytes are sanitized here, bundle import's included; there
+    is no way around it. `ext` is used only when the bytes do not sniff as an
+    image; such bytes are stored verbatim under it, and a container that sniffs
+    but does not parse is stored verbatim with opaque identity (`_identity`).
     """
-    data, ext, sha = _prepared(data, ext, sanitize)
+    p = _prepared(data, ext)
+    data, ext, sha = p.data, p.ext, p.sha
 
     hit = _index_get(sha)
     if hit is not None:
@@ -383,7 +407,7 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None,
         if obj is not None:
             return obj
 
-    pid = image_hash.pixel_identity(data, sha)
+    pid = _identity(p)
     image_id = pid.id
     with locks.image_ingest_gc_lock(), locks.image_object_lock(image_id):
         found = read(image_id)

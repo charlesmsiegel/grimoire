@@ -1446,6 +1446,22 @@ def _locks_if_free(locks: list[threading.RLock]):
             lk.release()
 
 
+def recover_promotions_in(d: Path) -> None:
+    """Finish or discard every promotion journal under `d` (`_recover_promotion`
+    for each ``image-refs/`` folder holding one), for a caller about to read
+    placements as a whole -- a world bundle export, whose walk would otherwise
+    pack a half-swapped pair and miss the picture only the journal still names.
+
+    Best-effort exactly as each recovery is: a slot busy with a promotion in
+    flight is left for that promotion. Symlinks are not followed."""
+    for dirpath, dirnames, filenames in os.walk(d, followlinks=False):
+        if Path(dirpath).name != image_refs.REFS_DIR:
+            continue
+        dirnames[:] = []
+        if image_refs.JOURNAL in filenames:
+            _recover_promotion(Path(dirpath).parent)
+
+
 def _recover_promotion(d: Path) -> None:
     """Finish or discard the promotion journal in `d`, if there is one.
 

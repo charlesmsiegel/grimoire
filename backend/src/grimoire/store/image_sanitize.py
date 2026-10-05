@@ -79,19 +79,29 @@ class _UnparsedError(Exception):
 def sanitize(data: bytes) -> bytes:
     """Return `data` with non-rendering metadata stripped, or `data` itself
     when the format is unknown or the container does not parse. Never raises."""
+    return sanitize_checked(data)[0]
+
+
+def sanitize_checked(data: bytes) -> tuple[bytes, bool]:
+    """`(bytes, sanitized)`: what `sanitize` returns, and whether it actually
+    rewrote the container. False means `data` came back as received -- a format
+    this module does not know, or one that did not parse -- so whatever
+    metadata it carried is still in it, and the caller must not treat it as
+    clean (the image store gives such bytes an identity of their own rather
+    than one a clean copy of the same picture would share). Never raises."""
     try:
         kind = fetch.sniff_ext(data)
         if kind == "png":
-            return _png(data)
+            return _png(data), True
         if kind == "jpg":
-            return _jpeg(data)
+            return _jpeg(data), True
         if kind == "webp":
-            return _webp(data)
+            return _webp(data), True
         if kind == "gif":
-            return _gif(data)
+            return _gif(data), True
     except Exception:  # noqa: BLE001 -- the contract is "never raises"
         pass
-    return data
+    return data, False
 
 
 # --- orientation -------------------------------------------------------------
@@ -376,15 +386,51 @@ def _gif_image_end(raw: bytes, pos: int) -> int:
     return _gif_sub_blocks(raw, after + 1)  # +1: LZW minimum code size
 
 
-def _gif(raw: bytes) -> bytes:
-    n = len(raw)
-    if n < 13:
+def _gif_start(raw: bytes) -> int:
+    """The offset of the first block, past the header and global colour table."""
+    if len(raw) < 13:
         raise _UnparsedError("too short")
     pos = 13
     if raw[10] & 0x80:
         pos += 3 * (1 << ((raw[10] & 7) + 1))
-    if pos > n:
+    if pos > len(raw):
         raise _UnparsedError("truncated colour table")
+    return pos
+
+
+def gif_loop_after_image(data: bytes) -> bool:
+    """Whether a GIF carries a loop extension (NETSCAPE2.0 or ANIMEXTS1.0)
+    after its first image descriptor.
+
+    Read-only, and here because this is the module that walks GIF blocks. It
+    exists for `image_hash`: Pillow reads a loop count only before frame 0,
+    while a browser honours one wherever it sits, so such a file cannot be
+    hashed by what Pillow reports. The walk goes as far as the blocks parse,
+    and answers False for anything that is not a GIF. Never raises."""
+    if not data.startswith(b"GIF8"):
+        return False
+    try:
+        pos, seen_image, n = _gif_start(data), False, len(data)
+        while pos < n:
+            block = data[pos]
+            if block == 0x2C:
+                seen_image = True
+                pos = _gif_image_end(data, pos)
+            elif block == 0x21:
+                if (seen_image and pos + 3 <= n and data[pos + 1] == 0xFF
+                        and data[pos + 3:pos + 3 + data[pos + 2]] in _GIF_KEEP_APPS):
+                    return True
+                pos = _gif_extension(data, pos)[1]
+            else:
+                return False            # the trailer, or a block that is not one
+    except _UnparsedError:
+        pass
+    return False
+
+
+def _gif(raw: bytes) -> bytes:
+    n = len(raw)
+    pos = _gif_start(raw)
     out = [raw[:pos]]
     while pos < n:
         block = raw[pos]
