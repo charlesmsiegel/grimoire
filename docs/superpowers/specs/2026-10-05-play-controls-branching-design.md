@@ -279,3 +279,21 @@ identity`, so the source gains no key and is never written (replaces the
 "written onto the source too" wording); roll lines from checks match by label
 plus the formatted result segment (the notation head is not in a check line);
 a branch point inside a multi-part response snaps forward to its last part.
+
+## Implementation notes (step-3 fix wave)
+
+- **JSON export:** `build_json`'s `scenes` keeps every scene, and a closed
+  branch's entry carries `closed_by` in its meta (as the scene GET does);
+  `contents` numbers exactly the scenes `export.collect` makes chapters of, so
+  its numbers match the book's chapters.
+- **LLM-spending work on a closed branch** answers 409 `branch_closed`
+  (`runs.require_scene_open`): a forced rolling summary, a forced scene-break
+  check, a tracker retry and a tracker re-run. The unforced summary and break
+  check (the automatic path, including a landed turn's follow-ups), the
+  dismiss, the tracker's hand edits and every read are not refused.
+- **A sibling's stored review from before the close** can be discarded
+  (`DELETE .../pending-review` is not a refused door) but not saved (the
+  chronicle commit answers `branch_closed`). Unchanged by this wave.
+- **`branch.discard` relies on its callers holding the campaign lock**
+  (`branch_scene`'s build hold and the replay door's hold); its docstring says
+  so.

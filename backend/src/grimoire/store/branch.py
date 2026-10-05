@@ -226,7 +226,12 @@ def discard(cid: str, sid: str) -> None:
     not then begin in (`routes.scenes.post_replay`). Each step is fail-soft
     and logged: the exception that brought the caller here is the one it needs
     to see. Bumps the revision, since what was written before the failure (an
-    appended roll entry cannot be taken back) is a write no 2xx will stamp."""
+    appended roll entry cannot be taken back) is a write no 2xx will stamp.
+
+    Takes no lock of its own: it relies on its callers holding
+    `locks.campaign_lock(cid)` -- `branch_scene`'s build hold and the replay
+    door's hold both do -- so the delete lands inside the hold that built the
+    sibling and nothing can read the half-built scene in between."""
     try:
         scenes_lifecycle.delete_scene(cid, sid)
     except Exception:
