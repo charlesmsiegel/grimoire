@@ -139,9 +139,8 @@ validates on save and refuses it (400 with the field named).
 | `keep` | `true` | Never shed for budget, like a pin but authored on the record. |
 | `recursion` | `both` (default) · `pulled_only` · `pulls_only` · `none` | `pulled_only`: other entries' bodies can activate it, its own body activates nothing. `pulls_only`: it activates only directly, its body can pull others in. `none`: neither. |
 | `known_by` | comma list of `characters:<id>` / `pcs:<id>` | Who knows it on per-character calls (§8). |
-| `provenance` | JSON (one scalar, like `st_extensions`) | Where an absorbed record came from (§9). Never rendered into a prompt. |
 
-Bounds are deliberate. `sticky + cooldown ≤ 100` bounds the replay horizon (§5.3).
+Bounds are deliberate. `sticky` and `cooldown` stay small so a carried entry cannot outlive a scene by accident.
 `scan_depth ≤ 100` bounds the window. A value outside its bound is a validation
 error, not clamped. Numbers are justified structurally, not measured, and can
 be tuned later.
@@ -161,7 +160,7 @@ present, which §7 supplies.
 ### Editor
 
 `EntityEditor`'s form gains a collapsed **Activation** disclosure holding the
-fields above (except `provenance`, which is read-only). The read-only detail
+fields above. The read-only detail
 sidebar gets one `.side-section` per set field, as `chip on` spans, with
 `known_by` refs as clickable chips that navigate (the list/detail rule in
 CLAUDE.md). This adds no new page and no new pattern.
@@ -285,8 +284,11 @@ recall:   semantic.recall(entries never activated and passing the owner gate
 
 Timed effects are a property of the transcript, not of a stored timer. For each
 candidate with `sticky` or `cooldown` set (and only those), the engine replays
-its **direct** key rule at each post boundary over the last
-`H = sticky + cooldown + 1` posts of the scene. It runs a three-state machine:
+its **direct** key rule at each post boundary **from the start of the scene**,
+and runs a three-state machine. A shorter replay window is not exact: an
+activation just before the window's start can still be sticky or cooling inside
+it, and a replay that started "ready" there would re-trigger where the real
+history would not. The states:
 
 - **ready** → **active** on a direct match.
 - **active** → stays active for `sticky` posts after the triggering post, with no
@@ -322,11 +324,16 @@ Consequences, all intended:
 
 ### 5.4 Cost
 
-Without timed effects or recursion the work equals today's, plus compiled-pattern
-reuse. With them, the replay is bounded by `H ≤ 101` boundaries × timed
-entries, and recursion by `R ≤ 3` levels over activated bodies. The plan
-includes a test on a synthetic large lorebook that asserts a call-count bound,
-not wall time.
+Matching runs **once per key per post**, giving a per-key bitmap. An entry's
+window match at any boundary is then "any set bit among the last `d` posts".
+This is exact, not an approximation, because a key is escaped and
+single-line: no key can match across the newline that joins two posts, so
+matching each post separately gives the same answer as matching their joined
+text, which is what today's code does. The cost of a turn is therefore one
+regex search per (key, post) plus bit lookups, whatever the timed-effect
+settings, and recursion adds at most `R ≤ 3` levels of searches over activated
+bodies. The plan includes a test on a synthetic large lorebook that asserts a
+call-count bound, not wall time.
 
 ---
 
@@ -478,28 +485,30 @@ does.
 
 ### 9.3 Provenance
 
-On apply, a created record gets a `provenance` frontmatter key:
-`{"source": "absorb", "campaign": <cid>, "scene": <sid>, "scene_title": ...,
-"quote": ..., "speaker": ..., "date": <in-fiction date if known>}`.
-It is one JSON scalar, the same way `st_extensions` is stored, and is **never**
-read by the context builder.
+**Reuse `store/provenance.py`; add no new frontmatter key.** The repo already
+keeps absorb citations. `provenance.json` is a campaign-local rolling map keyed
+`"<kind>/<id>#<field>"` holding the quote, speaker and certainty of the edit
+that set each field. `apply_edits` records a row for every applied edit.
+`GET /campaigns/{cid}/provenance` labels each row with its scene's current
+title at read time, and `RecordDrawer` already renders it. `repoint_scenes`
+and `forget_scene` keep it correct across a scene rename or delete.
 
-The detail sidebar shows it as text first: "From play: <quote> — <speaker>,
-<scene_title>". The title is captured at apply time precisely so the
-provenance still reads correctly when no link can be made. The scene title
-becomes a **link only when the reader is inside campaign `<cid>` and `<sid>`
-still resolves there.** A scene id is campaign-scoped and moves on rename, so:
+New records are absent from it today for one reason. Their staged edit carries
+`target: {kind, id: ""}`, because the id does not exist until apply. So
+`provenance.key(e)` returns None and the citation is dropped.
 
-- in the world editor, or in another campaign that inherits a published
-  record, there is no link;
-- after a rename or delete, the id no longer resolves and the text stands alone.
+The fix: when `_apply_one` creates a record (`new_lore` of any kind, and
+`new_location`), its outcome carries the created `{kind, id}`. The provenance
+step keys the citation `"<kind>/<new id>#body"` from that outcome rather than
+from the staged target. Nothing else changes, and the existing panel shows the
+citation wherever that campaign shows the record.
 
-Provenance is a citation, not a live reference. It deliberately does **not**
-join the `scene_refs.repoint` fan-out: a world file is not a campaign store
-that fan-out could reach, and a stale citation that degrades to its own
-captured text is the honest failure.
-A test asserts the quote string is absent from a prompt that activates the
-record.
+This also settles scoping. Provenance is campaign data, so a record published
+to the world shows its citation in the campaign it came from and nowhere else.
+The world editor and other campaigns that inherit the record show none, rather
+than a link that might resolve to an unrelated scene. Provenance is never read
+by the context builder. A test asserts the quote is absent from a prompt that
+activates the record.
 
 ### 9.4 Destination: world
 
@@ -527,21 +536,21 @@ own record in the world and report a collision. So:
 - A spent token replays the stored result, `published` lists included, as it
   already does for the rest of the save.
 
-Promote runs under the same locking the `POST .../promote` route takes. The plan
-must confirm that its lock order composes with the chronicle save's
-`campaign_lock` hold (`locks.hold_all` if it needs more than one campaign) and
-that the lock-order guard passes. A promote that fails never fails the save. The
+Promote takes `campaign_lock(cid)` itself, and that lock is a re-entrant RLock,
+so calling it inside the chronicle save's own hold on the same campaign
+acquires nothing new and adds no lock-order edge. A promote that fails never
+fails the save. The
 save response gains `published: [...]` and
 `publish_failed: [{kind, id, reason}]`. The review shows any failure ("kept in
 the campaign: the world already has a record named X — publish from the editor
 after resolving it"). That covers `promote`'s precondition that the world holds
 no record under that id.
 
-Undo: the campaign-side create stays journalled. Undoing it after a successful
-publish would leave the campaign *inheriting* the world copy, so the record
-would not disappear. That undo is refused for a published record, with the
-message pointing at demote on the world page. The review row states this
-before save, under the destination control.
+Undo needs nothing new. A created record is already in `undo.NOT_UNDOABLE`
+(`new_lore`, `new_location`): undoing a creation would mean deleting the record.
+So the Changes panel already declines it, publish or no publish. The review row
+says, under the destination control, that publishing to the library is undone
+from the world page (demote), not from Changes.
 
 ---
 
@@ -560,7 +569,7 @@ held_back: {ref, name, reason: {type: cooldown, remaining}}
 ```
 
 `ContextBreakdown.tsx` renders these under the expanded section: one line per
-entry with its name as a chip that opens the record, and its reason in words:
+entry with its name as a chip (not a link: `RecordDrawer` opens only actors and locations) and its reason in words:
 
 - "key 'Saltmarch' in post #41"
 - "pulled in by *Realm charter*"
@@ -623,14 +632,13 @@ field, which the byte-identity test of §1 holds them to.
   and recursion entries at equal priority; `keep` and pins never shed; a
   secret shed with its entry; a section without `shed` packing exactly as
   before; an unbounded budget untouched.
-- **Reasons out of the prompt.** Reason and provenance text absent from every
+- **Reasons out of the prompt.** Reason and citation text absent from every
   composed prompt.
-- **Absorb.** Kind clamped; provenance written with its campaign and title, and
-  not linked from the world editor; publish success and the precondition
+- **Absorb.** Kind clamped; a created record's citation recorded in
+  `provenance.json` under its new id (it is dropped today); publish success and the precondition
   failure; a lost-response retry after a successful publish replaying
   `published` rather than `publish_failed`; a crash between promote and its
-  journalled outcome resolved by the base-and-file check; undo refused after
-  publish.
+  journalled outcome resolved by the base-and-file check.
 - **Frontend.** Following the list/detail rule: the Activation disclosure in
   edit, the chips in view, the adopt banner, the inspector entry lines, and the
   review row's keys, kind and destination.
