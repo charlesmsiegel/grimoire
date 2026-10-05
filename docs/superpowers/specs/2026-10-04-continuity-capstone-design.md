@@ -720,8 +720,8 @@ Implement these before embeddings.
 Required signals:
 
 - **Title equality:** casefolded, NFKC-normalized title equality.
-- **Slug equality.** Ignored when either slug is the `untitled` fallback that `paths.slugify` produces for titles with no ASCII alphanumerics.
-- **Token Jaccard** over identity text, after casefold, NFKC and simple punctuation/whitespace normalization.
+- **Slug equality.** Ignored when either slug is the `untitled` fallback that `paths.slugify` produces for titles with no ASCII alphanumerics. It counts only when each slug spells its whole title: `slugify` drops what is not ASCII, so two different mixed-script or accented titles can share a slug that says nothing about either (Slice C implementation; see the plan's deviations appendix).
+- **Token Jaccard** over identity text, after casefold, NFKC and simple punctuation/whitespace normalization. Combining marks stay inside their word, and the commitment `due ` prefix every dated commitment shares is not counted (Slice C implementation; see the plan's deviations appendix).
 - **Character 3-gram Jaccard.** This carries the lexical score for text with no whitespace tokens. If `difflib.SequenceMatcher` is used anywhere, it is constructed with `autojunk=False`.
 - **Shared actors:** count and list (§8).
 - **Shared touched scenes:** count and list.
@@ -765,7 +765,7 @@ Exact numerical thresholds belong in the implementation plan, after test fixture
 `EmbeddingsClient.embed` is synchronous httpx. It returns all vectors or raises, works in batches of `embeddings.BATCH`, and gives every batch one shared `TIMEOUT` deadline. So:
 
 - **Threading:** every embedding call from async code goes through `run_in_threadpool`. Such a call cannot be cancelled, which is why every call is bounded.
-- **Inside absorb (§10):** embed only the proposed-new rows, plus at most `IDENTITY_WARM_LIMIT` uncached neighbours that the lexical pre-filter kept. Use `deadline = min(monotonic() + embeddings.TIMEOUT, absorb budget deadline)`.
+- **Inside absorb (§10):** embed only the proposed-new rows that have at least one same-type record to compare against (Slice C implementation; see the plan's deviations appendix), plus at most `IDENTITY_WARM_LIMIT` uncached neighbours that the lexical pre-filter kept. Use `deadline = min(monotonic() + embeddings.TIMEOUT, absorb budget deadline)`.
 - **In a sweep (§11):** embed misses with one `embed()` call per `embeddings.BATCH` chunk under one shared deadline, calling `vectors.save` after each chunk so a later failure keeps earlier work. Cap at `RECONCILE_WARM_LIMIT` per run, rotated with `embed_space.warm_window` seeded by `cid`, so that repeated runs cover the whole ledger.
 - **Width:** the reference width is that of vectors embedded in this run; if none were, it is the most common width among the loaded vectors. Vectors of any other width get `vectors.forget` and are treated as misses. Recall and search compare against a fresh query vector; a fully cached sweep has none, which is why this rule exists.
 - **Failure:** any `EmbeddingsError` or `OSError` leaves lexical/structural candidates intact and sets the run's embedding mode to `failure`.
@@ -888,7 +888,9 @@ Every row the identity step examined carries:
 
 Each has its own `before` staleness token, computed by `conflicts.plot_line` / `commitment_line`. So the reviewer can swap a row wholesale, and `check_conflicts` still verifies it, without the client computing a token. The client removes `alternatives` from the PUT body on save.
 
-The review panel shows a “Possible existing record” chip on the row, modelled on the existing contradiction badge. It offers “Use <title> instead” for each alternative. The field is named `identity_check`, not `identity`, to avoid confusion with a scene's identity.
+The review panel shows a “Possible existing record” chip on the row, modelled on the existing contradiction badge. It offers “Use <title> instead” for each alternative.
+
+Slice C implementation (see the plan's deviations appendix): `candidates` are re-resolved at staging through the current alias map, so a record merged away during the absorb is listed as its canonical; the chip follows the record the row writes now — “Matched an existing record” for an accepted retarget, “Switched to an existing record” for one the reviewer swapped; and the row shows the title the extraction proposed, with its `why_new`. The field is named `identity_check`, not `identity`, to avoid confusion with a scene's identity.
 
 ## 10.4 Placement, budget and failure behaviour
 
