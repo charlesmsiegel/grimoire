@@ -161,7 +161,11 @@ def test_effective_appends_replaces_in_place_and_hides(home):
     assert [(r["id"], r["label"]) for r in qr.effective(cid)] == [("a", "A"), ("b", "B2"), ("d", "D")]
 
 def test_campaign_with_no_world_has_only_its_own(home, monkeypatch): ...
-    # campaigns.create_campaign("Mara's road", "") (or blank the meta's world); effective == own replies
+    # create_campaign refuses a missing world, so blank the meta instead:
+    # write a world reply and a campaign reply, then
+    # monkeypatch.setattr(store.campaigns.read, "read_campaign", lambda c: {"meta": {"world": ""}})
+    # (patching the submodule attribute is what the import guard's binding rule makes interceptable);
+    # effective(cid) == the campaign's own replies only
 
 def test_garbled_file_reads_empty_and_one_bad_entry_costs_itself(home, caplog):
     wid, _ = home
