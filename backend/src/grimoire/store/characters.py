@@ -13,7 +13,10 @@ import json
 import os
 import shutil
 from collections.abc import Callable
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image
 
 from . import (
     assets,
@@ -22,6 +25,7 @@ from . import (
     chub,
     fetch,
     image_descriptions,
+    image_store,
     lorebook,
     statcache,
     taglines,
@@ -1092,7 +1096,8 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     if avatar is None and fmt == "png":
         avatar = (data, "png", "")  # the PNG file itself is the avatar
     if avatar:
-        assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1])
+        source = avatar[2] if avatar[2].startswith(("http://", "https://")) else None
+        assets.put_image(root, cid, vid, assets.AVATAR, avatar[0], avatar[1], source_url=source)
     return cid, vid
 
 
@@ -1259,23 +1264,44 @@ def download_chub_gallery_stream(root: Path, cid: str, vid: str, node: dict):
     downloaded gallery images first -- otherwise a gallery that shrank between
     downloads would leave orphaned gallery_N files past the new (smaller)
     count."""
-    for img in assets.list_images(root, cid, vid):
-        if img["name"].startswith("gallery_"):
-            assets.delete_image(root, cid, vid, img["name"])
-
     paths = chub.fetch_gallery_paths(node.get("id")) if node.get("hasGallery") else []
     total = len(paths)
     yield {"total": total}
 
-    stored = 0
+    # Download and ingest EVERYTHING before touching the existing gallery: a
+    # download that raises half way must not leave the character with no gallery
+    # at all. Ingest only adds objects to the store; no slot has changed yet.
+    fresh: list[tuple[int, str]] = []
     for i, path in enumerate(paths):
         got = fetch.download_url(path)
         if got:
-            assets.put_image(root, cid, vid, f"gallery_{i}", got[0], got[1])
-            stored += 1
+            fresh.append((i, image_store.ingest(got[0], got[1], source_url=path).id))
         yield {"done": i + 1, "total": total}
 
-    yield {"summary": {"attempted": total, "stored": stored}}
+    _replace_gallery(root, cid, vid, fresh)
+    yield {"summary": {"attempted": total, "stored": len(fresh)}}
+
+
+def _replace_gallery(root: Path, cid: str, vid: str, fresh: list[tuple[int, str]]) -> None:
+    """Make `gallery_<i>` -> id the version's whole gallery.
+
+    Slots not being replaced go (a gallery that shrank would otherwise leave
+    orphaned slots past the new count); a slot that now holds a different image
+    loses its caption, which described the old one -- a slot that holds the same
+    image keeps it. All of it under the slots' locks, so an upload cannot land
+    between the delete and the re-link."""
+    d = assets.version_dir(root, cid, vid)
+    wanted = {f"gallery_{i}": image_id for i, image_id in fresh}
+    existing = [img["name"] for img in assets.list_images(root, cid, vid)
+                if img["name"].startswith("gallery_")]
+    with assets._image_locks_held(d, *existing, *wanted):
+        for name in existing:
+            if name not in wanted:
+                assets.delete_image(root, cid, vid, name)
+        for name, image_id in wanted.items():
+            if assets.image_id(root, cid, vid, name) != image_id:
+                assets.link_in(d, name, image_id)
+                assets.drop_sidecar_entry(d, assets.DESCRIPTIONS_FILE, name)
 
 
 def _download_gallery(root: Path, cid: str, vid: str, node: dict) -> dict:
@@ -1363,6 +1389,24 @@ def _export_filename(root: Path, cid: str, vid: str, card: dict, fmt: str) -> st
     return f"{stem}.{fmt}"
 
 
+def _png_plane_of(avatar: tuple[bytes, str] | None) -> bytes | None:
+    """The avatar re-encoded as a PNG, for a PNG export's image plane -- None
+    for a missing avatar, an avatar that is already a PNG (it is used as is) or
+    one Pillow cannot decode (the exporter then falls back to its placeholder,
+    and the original still rides in the card)."""
+    if avatar is None or avatar[1] == "png":
+        return None
+    try:
+        with Image.open(BytesIO(avatar[0])) as im:
+            im.seek(0)  # an animation's first frame
+            has_alpha = "A" in im.getbands() or "transparency" in im.info
+            out = BytesIO()
+            im.convert("RGBA" if has_alpha else "RGB").save(out, "PNG")
+    except Exception:  # noqa: BLE001 -- an export must not fail over an image it cannot decode
+        return None
+    return out.getvalue()
+
+
 def export_card(root: Path, cid: str, vid: str, fmt: str) -> tuple[bytes, str]:
     """The card as `fmt` bytes, plus the filename to offer it under.
 
@@ -1371,5 +1415,7 @@ def export_card(root: Path, cid: str, vid: str, fmt: str) -> tuple[bytes, str]:
     (#25) so an export is the whole character rather than only its text.
     """
     card = read_card(root, cid, vid)
-    blob = cards.dumps(card, fmt, avatar=_stored_avatar(root, cid, vid))
+    avatar = _stored_avatar(root, cid, vid)
+    plane = _png_plane_of(avatar) if fmt == "png" else None
+    blob = cards.dumps(card, fmt, avatar=avatar, plane_png=plane)
     return blob, _export_filename(root, cid, vid, card, fmt)
