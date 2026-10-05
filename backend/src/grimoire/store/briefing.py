@@ -39,6 +39,7 @@ from __future__ import annotations
 
 from . import chronicle, commitments, locks, plot, relationships
 from .appearances import cast as appearances_cast
+from .continuity import involvement
 from .scenes import read as scenes_read
 
 
@@ -50,38 +51,6 @@ def _text(value, fallback: str = "") -> str:
     one odd row. No ``try`` around the read can catch that — the read succeeds.
     """
     return value.strip() if isinstance(value, str) else fallback
-
-
-def _touched_scenes(records) -> dict[str, set[str]]:
-    """Every scene id each record has touched, keyed by record id.
-
-    One function for plot.json and commitments.json because they are one shape:
-    ``commitments.py``'s own docstring says it "mirrors plot.py's shape", and
-    beats are the part the two share exactly. A ``beat_scenes`` in each store
-    would be this code twice, differing only in which file it read.
-
-    Read raw rather than taken from ``open_threads`` / ``open_commitments``,
-    which project only the LATEST beat: a thread the player opened and someone
-    else has since advanced is still hers, and ``last_scene`` alone says it is
-    not.
-
-    Wrong shapes are stepped over rather than trusted, for the reason
-    ``commitments.repoint_scenes`` gives — these files are hand-editable, and a
-    beat whose ``scene`` is a list is *unhashable*, so putting it in a set
-    raises rather than simply missing.
-    """
-    out: dict[str, set[str]] = {}
-    for rid, rec in (records.items() if isinstance(records, dict) else ()):
-        if not isinstance(rec, dict):
-            continue
-        beats = rec.get("beats")
-        scenes = {b["scene"] for b in (beats if isinstance(beats, list) else ())
-                  if isinstance(b, dict) and isinstance(b.get("scene"), str)}
-        last = rec.get("last_scene")
-        if isinstance(last, str):
-            scenes.add(last)
-        out[rid] = scenes - {""}
-    return out
 
 
 def _focus(present: list[dict], pcless: bool) -> list[dict]:
@@ -103,45 +72,6 @@ def _focus(present: list[dict], pcless: bool) -> list[dict]:
     meaning now holds still for as long as the scene does.
     """
     return present if pcless else [a for a in present if a.get("role") == "player"]
-
-
-def _stage_history(cid: str, refs: set[str]) -> dict[str, set[str]]:
-    """For each ref, every scene it has stood in — from both sources the module
-    docstring names, unioned.
-
-    Refs are ``"<kind>/<id>"``: the appearance record's own key form, and the
-    form ``chronicle.scene_facts`` writes into a record's ``cast``. Kept per-ref
-    rather than pooled so a row can name *which* of several players it belongs
-    to, which is the case the flag exists for.
-    """
-    seen: dict[str, set[str]] = {ref: set() for ref in refs}
-    for a in appearances_cast.roster(cid):
-        ref = f"{a['kind']}/{a['id']}"
-        if ref in seen:
-            seen[ref].update(s for s in a["scenes"] if isinstance(s, str))
-    try:
-        chron = chronicle.read_chronicle(cid)
-    except Exception:  # noqa: BLE001 — garbled chronicle.json: the appearance record still answers
-        return seen
-    # `read_chronicle` is a bare `json.loads`, so valid JSON of the wrong shape
-    # arrives without raising -- the same correction `get_ledger` needed. The
-    # KEY is the scene id and is guaranteed a string; the record's own `id`
-    # field repeats it and is not.
-    for sid, rec in (chron.items() if isinstance(chron, dict) else ()):
-        if not isinstance(sid, str) or not isinstance(rec, dict):
-            continue
-        cast = rec.get("cast")
-        for ref in (cast if isinstance(cast, list) else ()):
-            # `isinstance(ref, str)` BEFORE the membership test, the same rule
-            # `_touched_scenes` applies to beat scenes and for the same reason:
-            # `seen` is a dict, so a list-valued cast entry is unhashable and
-            # `in` RAISES rather than missing. That raise reaches this function's
-            # tolerant caller, which replaces the whole result -- throwing away
-            # the history already collected from appearances.json and unflagging
-            # every row, for one hand-edited record (Codex review).
-            if isinstance(ref, str) and ref in seen:
-                seen[ref].add(sid)
-    return seen
 
 
 def _flagged(rows: list[dict], touched: dict[str, set[str]],
@@ -227,7 +157,7 @@ def build(cid: str, sid: str) -> dict:
         # values cross, so it is where they are made text.
         names = {f"{a['kind']}/{a['id']}": _text(a.get("name")) or _text(a.get("id"))
                  for a in focus}
-        stage = _tolerant(lambda: _stage_history(cid, set(names)), {})
+        stage = _tolerant(lambda: involvement.stage_history(cid, set(names)), {})
         # Two reads of one file, both inside the hold: `open_threads` projects
         # the rows and `_touched_scenes` needs the beats it drops.
         #
@@ -238,9 +168,9 @@ def build(cid: str, sid: str) -> dict:
         # that cost every row in the section rather than every flag. Losing the
         # narrowing is this view degrading; losing the obligations is it lying.
         threads = _tolerant(lambda: plot.open_threads(cid), [])
-        thread_scenes = _tolerant(lambda: _touched_scenes(plot.read(cid)), {})
+        thread_scenes = _tolerant(lambda: involvement.touched_scenes(plot.read(cid)), {})
         owed = _tolerant(lambda: commitments.open_commitments(cid), [])
-        owed_scenes = _tolerant(lambda: _touched_scenes(commitments.read(cid)), {})
+        owed_scenes = _tolerant(lambda: involvement.touched_scenes(commitments.read(cid)), {})
         # The whole present cast, not just `focus`: a feeling between two NPCs
         # in the room is exactly the kind of thing a briefing is for, and
         # `context.story._relationship_lines` renders the same block from the

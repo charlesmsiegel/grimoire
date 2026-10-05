@@ -75,7 +75,7 @@ def _beats(threads, known: frozenset[str]) -> tuple[dict[str, list[dict]], list[
     chip that matches no card is worse than no chip.
 
     Wrong shapes are stepped over rather than trusted, the rule
-    ``briefing._touched_scenes`` records: a beat whose ``scene`` is a list is
+    ``continuity.involvement.touched_scenes`` records: a beat whose ``scene`` is a list is
     *unhashable*, so testing it against a set RAISES rather than missing, and
     this projection runs outside its caller's tolerant read.
     """
