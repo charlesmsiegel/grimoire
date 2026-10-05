@@ -72,6 +72,13 @@ export default function ReviewPanel({ review }: { review: SceneReview }) {
           reviewer weighing a short list deserves to know it is the short one. */}
       {absorb.identity?.matching === "basic" && checkedRows && (
         <p className="field-hint">Basic matching active — semantic matching not configured</p>)}
+      {/* Configured but not standing this run: the embeddings call failed or
+          the budget cut it. `reason` names one thing and a partial or failed
+          resolver outranks the embed there, so the fallback keeps its own
+          line -- unless the degraded notice above is already saying it. */}
+      {absorb.identity?.fallback && checkedRows
+        && absorb.identity.fallback !== absorb.identity.reason && (
+        <p className="field-hint">{absorb.identity.fallback}</p>)}
       {absorb.mechanics.status === "ok" && absorb.mechanics.warnings.length === 0 && (
         <p className="field-hint">mechanics audited clean</p>)}
       {absorb.mechanics.warnings.length > 0 && (
