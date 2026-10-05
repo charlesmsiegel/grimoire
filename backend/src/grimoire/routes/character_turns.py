@@ -499,11 +499,16 @@ def _save(cid, sid, run, token, record, watcher, status, round_record, continuat
                 )
         else:
             saved()
+        # Keyed by the part, as the transcript message it describes is: a
+        # resumed continuation is a second message under the same response,
+        # and its record must not replace the first part's.
+        key = store.regex.rewrites.key_for(
+            {"response_id": record["id"], "response_part": continuation or ""})
         if text and rewrite:
-            streaming._record_rewrite(cid, sid, record["id"], *rewrite, text,
+            streaming._record_rewrite(cid, sid, key, *rewrite, text,
                                       streaming._active_variant(cid, sid, record["id"]))
-        elif before:
-            streaming._carry_rewrite(cid, sid, record["id"], before)
+        if before:
+            streaming._carry_rewrite(cid, sid, record["id"], before, skip=key)
         streaming._turn_settled(cid)
         if text and tracked is not None:
             # Marked HERE, in the hold that wrote the variant, where the
