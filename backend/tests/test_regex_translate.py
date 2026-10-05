@@ -10,7 +10,7 @@ import re
 
 import pytest
 
-from grimoire.store.regex import translate
+from grimoire.store.regex import rules, translate
 
 GRIN = "\N{GRINNING FACE}"
 LS = "\N{LINE SEPARATOR}"
@@ -52,7 +52,19 @@ E, A, U = translate.EXACT, translate.APPROXIMATE, translate.UNTRANSLATABLE
     (E_ACUTE, "i", E_ACUTE, "ia", A),
     ("k", "iu", "k", "ia", A),
     (r"(a)?\1b", "", r"(a)?\1b", "a", A),
-    (r"\s*$", "g", JS_SPACE + r"*\Z", "ga", A),
+    # Can match empty under g: JavaScript and Python 3.7+ agree on where.
+    (r"\s*$", "g", JS_SPACE + r"*\Z", "ga", E),
+    # A repeated group whose capture one repetition can skip: JavaScript
+    # clears it each time round, Python keeps the old value.
+    ("(?:(a)|b)+", "g", "(?:(a)|b)+", "ga", A),
+    ("((a)|b)+", "", "((a)|b)+", "a", A),
+    ("(?:(a)?b)*", "", "(?:(a)?b)*", "a", A),
+    ("(?:(a)|b){2}", "", "(?:(a)|b){2}", "a", A),
+    ("(a)+", "g", "(a)+", "ga", E),
+    ("(a|b)+", "", "(a|b)+", "a", E),
+    ("(?:(a)b)+", "", "(?:(a)b)+", "a", E),
+    ("(?:(a)|b)?", "", "(?:(a)|b)?", "a", E),
+    ("\\" + GRIN, "", GRIN, "a", E),
     (r"\p{L}", "u", None, "", U),
     ("[]", "", None, "", U),
     (r"(?<=a+)b", "", None, "a", U),
@@ -67,6 +79,8 @@ E, A, U = translate.EXACT, translate.APPROXIMATE, translate.UNTRANSLATABLE
     (r"\1(a)", "", None, "", U),
     (GRIN + "+", "", None, "", U),
     ("[" + GRIN + "]", "", None, "", U),
+    ("\\" + GRIN + "+", "", None, "", U),
+    ("[\\" + GRIN + "]", "", None, "", U),
     ("\\u{1F600}", "", None, "", U),
     ("a)", "", None, "", U),
     ("(a", "", None, "", U),
@@ -137,3 +151,22 @@ def test_translate_exact_differential(body, flags, samples):
     compiled = re.compile(result["pattern"], bits)
     for text, js_matches in samples:
         assert [m.group(0) for m in compiled.finditer(text)] == js_matches, text
+
+
+# (JavaScript body, sample, replacement, what JavaScript's replace gives with g).
+CAPTURE_RESETS = [
+    ("(?:(a)|b)+", "ab", "[$1]", "[]"),
+    ("(a)+", "aa", "[$1]", "[a]"),
+    ("(a|b)+", "ab", "[$1]", "[b]"),
+    ("(?:(a)b)+", "aab", "[$1]", "a[a]"),
+]
+
+
+@pytest.mark.parametrize("body, text, replacement, js_result", CAPTURE_RESETS)
+def test_repeated_group_captures(body, text, replacement, js_result):
+    """Exact only where Python's replacement agrees with JavaScript's."""
+    result = translate.translate(body, "g")
+    rule = rules.normalise({"pattern": result["pattern"], "flags": result["flags"],
+                            "replacement": replacement})
+    ours = rules.compile_pattern(rule).sub(lambda m: rules.expand(replacement, m, []), text)
+    assert (result["verdict"] == E) == (ours == js_result)

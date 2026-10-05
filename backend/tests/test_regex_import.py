@@ -259,3 +259,11 @@ def test_import_commit_scope_errors(client):
     assert bad.status_code == 400
     empty = client.post("/api/regex/import", json={"scope": {"kind": "global"}, "rows": []})
     assert empty.status_code == 400
+
+
+def test_import_commit_to_a_campaign_moves_the_write_token(client, cid):
+    before = store.revision.current(cid)
+    res = client.post("/api/regex/import", json={"scope": {"kind": "campaign", "cid": cid},
+                                                 "rows": [{"name": "Fine", "pattern": "a"}]})
+    assert res.status_code == 200
+    assert store.revision.current(cid) != before
