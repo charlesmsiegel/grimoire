@@ -402,12 +402,19 @@ GM_ONLY_BODY = f"Referee note: {GM_ONLY}."
 HELD = "the harbourmaster took the Guild's coin"
 HELD_BODY = f"Unspoken on the docks: {HELD}."
 
+# The `known_by` variant (spec §8.1): owned by Seraphine, so it activates only
+# with her on stage, and known by Mara, so of the two only Mara's own call may
+# carry it. The narrator knows the world and gets it too.
+KNOWN = "Seraphine still carries the forged seal"
+KNOWN_BODY = f"Mara has seen it: {KNOWN}."
+
 
 def build_owned_lore() -> dict:
-    """Two scenes in one campaign: Seraphine on stage in one, absent from the
-    other. The owned lore entry is keyless, so with its owner present it is
-    always-on — which makes the absent scene a real containment test rather
-    than a keyword that simply never fired."""
+    """Three scenes in one campaign: Seraphine on stage in one, absent from the
+    second, and beside Mara in the third (the `known_by` variant). The owned
+    lore entry is keyless, so with its owner present it is always-on — which
+    makes the absent scene a real containment test rather than a keyword that
+    simply never fired."""
     wid, wroot, sera = _world_with_sera()
     mcard = characters.blank_card("Mara")
     mcard["data"].update({"description": "A fortune-teller who deals in secrets."})
@@ -416,6 +423,9 @@ def build_owned_lore() -> dict:
                            owners=f"characters:{sera}")
     entities.create_entity(wroot, "lore", "Referee note", GM_ONLY_BODY, secrecy="gm-only")
     entities.create_entity(wroot, "lore", "The harbourmaster", HELD_BODY, secrecy="secret")
+    entities.create_entity(wroot, "lore", "The forged seal", KNOWN_BODY,
+                           owners=f"characters:{sera}", secrecy="secret",
+                           fields={"known_by": f"characters:{mara}"})
     pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
                                   "Fog-slick planks stacked with unlogged crates.",
                                   keys="pier, dock")
@@ -438,16 +448,33 @@ def build_owned_lore() -> dict:
     scenes.append_message(cid, without, "user", "Ask her what she knows about Seraphine.",
                           speaker="Winifred")
 
-    return {"cid": cid, "sid": without, "with_owner": with_owner}
+    # Both on stage, for the `known_by` variant: per-character calls are
+    # composed for each of them in the grader.
+    together = scenes.create_scene(cid, "Seraphine and Mara")
+    appearances.appear(cid, together, "characters", sera, "default", "npc")
+    appearances.appear(cid, together, "characters", mara, "default", "npc")
+    appearances.appear(cid, together, "pcs", pid, "default", "player")
+    scenes.set_location(cid, together, pier)
+    scenes.append_message(cid, together, "user", "Which of you lies better?",
+                          speaker="Winifred")
+
+    return {"cid": cid, "sid": without, "with_owner": with_owner, "together": together,
+            "sera": f"characters:{sera}", "mara": f"characters:{mara}"}
 
 
 def _prompt_text(messages: list[dict]) -> str:
     return "\n".join(m["content"] for m in messages)
 
 
+def _actor_prompt(ctx: dict, sid: str, actor_ref: str) -> str:
+    return _prompt_text(context.compose_turn(ctx["cid"], sid, describe=False,
+                                             actor_ref=actor_ref)[0])
+
+
 def grade_owned_lore(ctx: dict, output: str) -> list[Check]:
     absent = _prompt_text(ctx["messages"])
     present = _prompt_text(context.build_messages(ctx["cid"], ctx["with_owner"]))
+    together = ctx["together"]
     return [
         # Positive control FIRST: if this fails, the containment check below is
         # passing for the wrong reason and the whole case is meaningless.
@@ -461,6 +488,15 @@ def grade_owned_lore(ctx: dict, output: str) -> list[Check]:
         # simply never fired.
         Check("secrecy.gm_only", GM_ONLY not in absent,
               "assembled prompt carried a gm-only entry"),
+        # `known_by`: the narrator half is the control -- the entry activated --
+        # so the owner's own call missing it is the rule, not a miss.
+        Check("known_by.narrator",
+              KNOWN in _prompt_text(context.build_messages(ctx["cid"], together)),
+              "known_by lore never reached the narrator with its owner on stage"),
+        Check("known_by.knower", KNOWN in _actor_prompt(ctx, together, ctx["mara"]),
+              "known_by lore missed the call of the actor it names"),
+        Check("known_by.owner", KNOWN not in _actor_prompt(ctx, together, ctx["sera"]),
+              "known_by lore reached its owner's call, who is not in known_by"),
         # Rendering the section itself, so a reworded or deleted heading fails
         # here rather than silently everywhere: with no public bodies the
         # template emits exactly the secret block the real prompt embeds.
@@ -959,8 +995,9 @@ CASES: tuple[Case, ...] = (
     Case(id="owned-lore",
          hypothesis="lore owned by an absent character stays out of both the "
                     "assembled prompt and the reply; a gm-only entry stays out "
-                    "of the prompt whoever is on stage, and a secret one "
-                    "arrives under its heading",
+                    "of the prompt whoever is on stage, a secret one "
+                    "arrives under its heading, and lore known_by one actor "
+                    "reaches that actor's call and the narrator but not its owner's",
          build=build_owned_lore, prompt=_scene_prompt, grade=grade_owned_lore,
          recordings=(
              Recording(BASELINE),
