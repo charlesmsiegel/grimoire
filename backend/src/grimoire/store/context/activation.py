@@ -9,9 +9,11 @@ turn's seed, and answers which entries the keys select and why.
 
 Today's rule (`world_state.keyword_hit`) searches the window's posts joined by
 newlines, plus the seed. This module searches each post once per key instead
-and keeps the answers as a per-key bitmap, so a window at any depth and any
-boundary is "any set bit in a range" -- which is what lets §5.3 replay every
-boundary of a scene for the cost of one search per (key, post).
+and keeps the answers per key and slot, so a window at any depth and any
+boundary is "any hit in a range". The searches are lazy (`KeyIndex`): an
+untimed entry pays for its window and no more, as it did under the joined
+text, and only a timed entry -- which §5.3 replays at every boundary of the
+scene -- has its keys searched in every post, once, for all the boundaries.
 
 The two agree on every (keys, window), not approximately: a key is escaped and
 single-line, so it cannot match across the newline that joins two posts, and
@@ -122,43 +124,88 @@ def controls(entry: dict) -> lore_fields.Controls:
 
 
 class KeyIndex:
-    """Per-key, per-slot match bitmaps over one turn's posts and seed."""
+    """Per-key, per-slot matches over one turn's posts and seed, searched
+    lazily: a `(key, slot)` is searched the first time anything reads it and
+    never again.
+
+    An untimed entry reads only its window, so it costs at most one search
+    per key per slot of that window -- a long scene costs what a short one
+    does. A timed entry replays every boundary of the scene (§5.3), so its
+    keys are searched in every slot once (`hits`), and each boundary's window
+    is then answered from per-key `last` tables rather than walked again."""
 
     def __init__(self, posts: Sequence[tuple[int, str]], seed: str) -> None:
         self._indices = [i for i, _ in posts]
         self._texts = [t for _, t in posts] + ([seed] if seed else [])
         self._posts = len(posts)
+        self._patterns: dict[str, re.Pattern[str]] = {}
+        self._slots: dict[str, list[bool | None]] = {}
         self._hits: dict[str, list[bool]] = {}
+        # `_last[key][e]` is the newest post slot before `e` the key hits, or -1.
+        self._last: dict[str, list[int]] = {}
 
     @property
     def n(self) -> int:
         return len(self._texts)
 
-    def hits(self, key: str) -> list[bool]:
-        found = self._hits.get(key)
+    def hit(self, key: str, slot: int) -> bool:
+        """Does `key` match the text in `slot`? Searched once, then memoised."""
+        memo = self._slots.get(key)
+        if memo is None:
+            memo = self._slots[key] = [None] * self.n
+        found = memo[slot]
         if found is None:
-            pattern = _compile(key)
-            found = [pattern.search(t) is not None for t in self._texts]
-            self._hits[key] = found
+            pattern = self._patterns.get(key)
+            if pattern is None:
+                pattern = self._patterns[key] = _compile(key)
+            found = memo[slot] = pattern.search(self._texts[slot]) is not None
         return found
 
-    def _window(self, upto: int, depth: int | None) -> list[int]:
-        """The slots an entry reads at boundary `upto`, newest first."""
+    def hits(self, key: str) -> list[bool]:
+        """The key's whole bitmap, every slot searched (once, shared by every
+        entry with the key), with its `last` table beside it."""
+        found = self._hits.get(key)
+        if found is None:
+            found = self._hits[key] = [self.hit(key, s) for s in range(self.n)]
+            last, newest = [-1], -1
+            for slot in range(self._posts):
+                if found[slot]:
+                    newest = slot
+                last.append(newest)
+            self._last[key] = last
+        return found
+
+    def _bounds(self, upto: int, depth: int | None) -> tuple[int, int, bool]:
+        """The window at boundary `upto`: post slots `[start, end)`, and
+        whether the seed slot is read too."""
         end = min(upto, self._posts)
         start = 0 if depth is None else max(0, end - depth)
-        slots = list(range(end - 1, start - 1, -1))
-        if upto == self.n and self.n > self._posts:
-            slots.insert(0, self._posts)
-        return slots
+        return start, end, upto == self.n and self.n > self._posts
 
-    def newest(self, keys: Iterable[str], upto: int,
-               depth: int | None) -> tuple[str, int] | None:
+    def newest(self, keys: Iterable[str], upto: int, depth: int | None, *,
+               full: bool = False) -> tuple[str, int] | None:
         """The newest `(key, slot)` hit in the window at boundary `upto`; on a
-        slot more than one key hits, the first key in `keys` order."""
+        slot more than one key hits, the first key in `keys` order.
+
+        By default this walks the window newest first, searching only what it
+        reads. `full` reads each key's whole bitmap instead, which a timed
+        entry has paid for anyway: then a window costs O(1) per key."""
         keys = list(keys)
-        for slot in self._window(upto, depth):
+        start, end, seeded = self._bounds(upto, depth)
+        if full:
+            best: tuple[str, int] | None = None
             for key in keys:
-                if self.hits(key)[slot]:
+                self.hits(key)
+                slot = self._posts if seeded and self.hit(key, self._posts) else -1
+                if slot < 0 and self._last[key][end] >= start:
+                    slot = self._last[key][end]
+                if slot >= 0 and (best is None or slot > best[1]):
+                    best = key, slot
+            return best
+        slots = range(end - 1, start - 1, -1)
+        for slot in ([self._posts, *slots] if seeded else slots):
+            for key in keys:
+                if self.hit(key, slot):
                     return key, slot
         return None
 
@@ -194,30 +241,33 @@ def _logic_ok(logic: str, found: int, total: int) -> bool:
 
 
 def _secondary(logic: str, keys: tuple[str, ...], idx: KeyIndex, upto: int,
-               depth: int) -> tuple[bool, str | None]:
+               depth: int, full: bool) -> tuple[bool, str | None]:
     """Does the secondary rule pass, and which secondary key does it cite?"""
-    found = [hit for k in keys if (hit := idx.newest([k], upto, depth))]
+    found = [hit for k in keys if (hit := idx.newest([k], upto, depth, full=full))]
     newest = max(found, key=lambda h: h[1])[0] if found else None
     cites = logic in ("and_any", "and_all")
     return _logic_ok(logic, len(found), len(keys)), newest if cites else None
 
 
-def direct_match(entry: dict, idx: KeyIndex, upto: int, depth: int) -> dict | None:
+def direct_match(entry: dict, idx: KeyIndex, upto: int, depth: int, *,
+                 full: bool = False) -> dict | None:
     """The entry's key rule against its window at boundary `upto`:
     `{"key", "secondary", "slot"}` for the newest primary hit, or None. A
     keyless entry is not a key match (it is always-on, which is the caller's
-    rule). `depth` is the global scan depth; the entry's own overrides it."""
+    rule). `depth` is the global scan depth; the entry's own overrides it.
+    `full` is `KeyIndex.newest`'s: the same answer, read from whole-scene
+    bitmaps -- what a replay over every boundary wants."""
     keys = entry.get("keys") or []
     if not keys:
         return None
     c = controls(entry)
     d = depth if c.scan_depth is None else c.scan_depth
-    primary = idx.newest(keys, upto, d)
+    primary = idx.newest(keys, upto, d, full=full)
     if primary is None:
         return None
     secondary = None
     if c.secondary_keys:
-        ok, secondary = _secondary(c.key_logic, c.secondary_keys, idx, upto, d)
+        ok, secondary = _secondary(c.key_logic, c.secondary_keys, idx, upto, d, full)
         if not ok:
             return None
     return {"key": primary[0], "secondary": secondary, "slot": primary[1]}
@@ -244,7 +294,7 @@ def timed_state(entry: dict, idx: KeyIndex, depth: int) -> dict:
             if cd <= 0:
                 state = "ready"
         if state == "ready":
-            hit = direct_match(entry, idx, b, depth)
+            hit = direct_match(entry, idx, b, depth, full=True)
             if hit is not None:
                 state, carry, from_slot, fresh = "active", c.sticky, hit["slot"], True
     remaining = carry + 1 if state == "active" else cd if state == "cooling" else 0
@@ -365,7 +415,7 @@ def _window_hit(entry: dict, idx: KeyIndex, depth: int) -> tuple[dict, int] | No
             slot = state["from_slot"]
             return ({"type": "sticky", "from_post": idx.post_index(slot),
                      "remaining": state["remaining"]}, idx.age(slot))
-    hit = direct_match(entry, idx, idx.n, depth)
+    hit = direct_match(entry, idx, idx.n, depth, full=controls(entry).timed())
     if hit is None:
         return None
     post = idx.post_index(hit["slot"])
