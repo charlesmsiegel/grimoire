@@ -105,6 +105,18 @@ def _mutable(cid: str) -> dict:
     return raw
 
 
+def readable(cid: str) -> bool:
+    """Would a writer accept this file? `read` cannot say: it answers a corrupt
+    file with an empty set, which a caller asking "does this event exist?" would
+    take for "no" -- the continuity view needs to tell "no such event" from
+    "the events cannot be read right now"."""
+    try:
+        _mutable(cid)
+    except EventError:
+        return False
+    return True
+
+
 def _write(cid: str, data: dict) -> None:
     atomic.write_text(_path(cid), json.dumps(data, indent=2, sort_keys=True) + "\n")
 

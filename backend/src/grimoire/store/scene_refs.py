@@ -2,7 +2,7 @@
 
 A scene's id is its filename stem, so file renames (title renames, first-date
 stamps, width re-pads, legacy migration) must be followed by every persisted
-reference. Twenty-two stores hold scene ids: appearances (per-actor scenes lists),
+reference. Twenty-one stores hold scene ids: appearances (per-actor scenes lists),
 audit (sheet baselines keyed by scene id), chronicle (record keys + id
 fields), changes (per-record scene field), relationship_history (the
 append-only relationship timeline's per-entry scene field), plot and
@@ -30,7 +30,7 @@ review is ordinary use rather than an exotic race — and left behind, the durab
 review sits orphaned under the old id while `GET .../{new_sid}/pending-review`
 answers 404 for a scene whose review demonstrably exists.
 
-A twenty-third, `usage`, joins the fan-out without rewriting anything: the cost
+A twenty-second, `usage`, joins the fan-out without rewriting anything: the cost
 ledger is append-only and its writes take no lock, so a rewrite would race
 them. It appends a row saying the rename happened and its readers follow the
 trail (`store.usage.KIND_RENAME`).

@@ -95,9 +95,18 @@ def _live_target(cid: str, prefix: str, rid: str, physical: bool) -> str:
     merge into something since deleted, or a hand-edited cross-type one, leaves
     the edit on the record it named instead of conjuring the missing target.
     ``physical`` asks for the record itself regardless.
+
+    A continuity.json whose aliases cannot be read is a refusal rather than "no
+    merges": guessing would write to a record that may be hidden, where the
+    edit would silently count for nothing (spec §3.9).
     """
     if physical:
         return rid
+    if set(continuity_doc.malformed(cid)) & {"file", "aliases"}:
+        raise HTTPException(status_code=409, detail={
+            "kind": "malformed",
+            "detail": "continuity.json cannot be read, so it is unclear which record "
+                      "this edit belongs to; repair it, or edit the record itself"})
     live = continuity_effective.live_canon(cid).get(f"{prefix}:{rid}")
     return live.partition(":")[2] if live else rid
 
@@ -176,7 +185,11 @@ def put_thread(cid: str, pid: str, body: ThreadSave, physical: bool = False):
             # `set_movement` reads a blank title or an unknown status as "keep
             # what is stored", which is the behaviour this route wants too: a
             # payload that only closes a thread must not blank its title.
-            store.plot.set_movement(cid, target, title, body.status or "",
+            # A redirected edit keeps the canonical's title: the editor sends the
+            # row's title with every save, and a status change made from the
+            # merged record must not rename the record it lands on.
+            store.plot.set_movement(cid, target, title if target == pid else "",
+                                    body.status or "",
                                     body.beat or "", body.scene if body.scene is not None
                                     else (store.plot.get(cid, target) or {}).get("last_scene", ""))
     return {"ok": True, "id": target}
@@ -200,7 +213,7 @@ def delete_thread(cid: str, pid: str, force: bool = False):
             store.plot.restore(cid, pid, None)
         # Under the same hold: the id is free the moment this returns, and a
         # thread recreated under it must not inherit this one's merges or links.
-        continuity_review.forget_ref(cid, f"thread:{pid}")
+        continuity_review.forget_ref(cid, f"thread:{pid}", name=title)
     return {"ok": True}
 
 
@@ -245,7 +258,8 @@ def put_commitment(cid: str, mid: str, body: CommitmentSave, physical: bool = Fa
                                    kind="commitment", ref={"kind": "commitment", "id": target},
                                    field="commitment", label=label):
             store.commitments.set_movement(
-                cid, target, title, body.kind or "", body.status or "", body.due,
+                cid, target, title if target == mid else "", body.kind or "",
+                body.status or "", body.due,
                 body.beat or "",
                 body.scene if body.scene is not None else record.get("last_scene", ""))
     return {"ok": True, "id": target}
@@ -265,7 +279,7 @@ def delete_commitment(cid: str, mid: str, force: bool = False):
                                    field="commitment",
                                    label=_label(title, "commitment deleted")):
             store.commitments.restore(cid, mid, None)
-        continuity_review.forget_ref(cid, f"commitment:{mid}")
+        continuity_review.forget_ref(cid, f"commitment:{mid}", name=title)
     return {"ok": True}
 
 

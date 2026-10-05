@@ -161,7 +161,14 @@ def create_alias(cid: str, ref: str, to: str, *, replace: bool = False,
         after = effective.live_canon(cid, effective.Ledgers.load(cid))
         affected = sorted(s for s in after
                           if s != ref and before.get(s, s) != after.get(s, s))
-        return {"alias": {"ref": ref, **record}, "affected": affected}
+        out = {"alias": {"ref": ref, **record}, "affected": affected}
+        # The canonical's due is authoritative, so a deadline only the merged
+        # record carried drops out of the effective view. It is never inherited
+        # silently (spec §5.1): the response says so, and copying it is the
+        # reader's explicit ledger edit.
+        if mine["due"] and not theirs["due"]:
+            out["dues"] = {"source": mine["due"], "canonical": theirs["due"]}
+        return out
 
 
 def remove_alias(cid: str, ref: str) -> dict:
@@ -250,14 +257,28 @@ def merged_sources(cid: str, ref: str) -> list[str]:
                   if isinstance(record, dict) and record.get("to") == ref)
 
 
-def forget_ref(cid: str, ref: str) -> list[str]:
+def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
     """Remove every alias and link that names `ref`, journalling each removal.
 
     Called inside a record's DELETE, under the same hold: thread, commitment and
     event ids are slugs that become free on delete, and a recreated record of
-    the same name would otherwise inherit the dead one's merges and links."""
+    the same name would otherwise inherit the dead one's merges and links.
+    `name` is the deleted record's display name, which `describe` can no longer
+    read once the record is gone.
+
+    Only the sections that can name `ref` must be readable: an event can be the
+    end of a link but never part of a merge, so a malformed ``aliases`` section
+    does not stop an event's links from being removed."""
+    def label_of(other: str) -> str:
+        return name if other == ref and name else describe(cid, other)
+
     with locks.campaign_lock(cid):
-        if set(doc.malformed(cid)) & {"file", "aliases", "links"}:
+        try:
+            prefix, _ = canon.split_ref(ref)
+        except ValueError:
+            prefix = ""
+        needed = {"file", "links"} | ({"aliases"} if prefix in effective.ALIASABLE else set())
+        if set(doc.malformed(cid)) & needed:
             raise doc.ContinuityError("continuity.json cannot be read")
         data = doc.read(cid)
         removed: list[str] = []
@@ -265,8 +286,8 @@ def forget_ref(cid: str, ref: str) -> list[str]:
             to = record.get("to") if isinstance(record, dict) else None
             if src != ref and to != ref:
                 continue
-            label = (f"{describe(cid, src)} → merged into "
-                     f"{describe(cid, to if isinstance(to, str) else '')}"
+            label = (f"{label_of(src)} → merged into "
+                     f"{label_of(to) if isinstance(to, str) and to else '?'}"
                      " — removed with deleted record")
             with _journal_alias(cid, src, label):
                 doc.drop_alias(cid, src)
@@ -274,8 +295,11 @@ def forget_ref(cid: str, ref: str) -> list[str]:
         for lid, record in sorted(data["links"].items()):
             if not isinstance(record, dict) or ref not in (record.get("a"), record.get("b")):
                 continue
+            parts = [label_of(record[k]) if isinstance(record.get(k), str) else "?"
+                     for k in ("a", "b")]
+            rel = record.get("relation") if isinstance(record.get("relation"), str) else "?"
             with _journal_link(cid, lid,
-                               f"{_link_label(cid, record)} — removed with deleted record"):
+                               f"{parts[0]} {rel} {parts[1]} — removed with deleted record"):
                 doc.drop_link(cid, lid)
             removed.append(lid)
         return removed

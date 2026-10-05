@@ -557,7 +557,7 @@ So `backend/src/grimoire/store/continuity/` is split:
 
 | Module | Role | May import |
 |---|---|---|
-| `doc` | continuity.json IO and mutators: aliases, links, suppressions, `repoint_scenes`, `forget_ref`, `restore_alias`, `restore_link`. A leaf. | `atomic`, `locks`, `paths`, `campaigns.paths`, stdlib |
+| `doc` | continuity.json IO and mutators: aliases, links, suppressions, `repoint_scenes`, `restore_alias`, `restore_link`. A leaf. | `atomic`, `locks`, `paths`, `campaigns.paths`, stdlib |
 | `candidates` | the candidate cache IO. A leaf. | as `doc` |
 | `canon` | `canonical_ref` / `canonical_refs`, fingerprint and candidate-id functions | `doc` |
 | `effective` | `threads`, `commitments`, `links`, the render helpers for prompt snippets | `canon`, `plot`, `commitments`, `prompts` |
@@ -567,7 +567,7 @@ So `backend/src/grimoire/store/continuity/` is split:
 | `similarity` | §9 | `effective`, `embed_space`, `vectors`, `embeddings` |
 | `identity` | §10 prompt build/parse and the deterministic pre-pass | `similarity`, `prompts`, `absorb.parse` |
 | `reconcile` | §11 discovery, prompt build/parse and persist | `similarity`, `pressure`, `candidates`, `doc` (for read and suppressions only; see the writer guard) |
-| `review` | §12 apply/dismiss orchestration | `undo`, `doc`, `candidates`, `plot`, `commitments` |
+| `review` | §12 apply/dismiss orchestration; journalled alias/link writes and `forget_ref` (§5.7) | `undo`, `doc`, `candidates`, `plot`, `commitments` |
 | `graph` | §19 | the readers above |
 
 `continuity/__init__.py` imports no submodule that reaches `scenes`, `undo` or `scene_refs`. `plot.render_open` and `commitments.render_open` stay physical. Context assembly, the absorb snapshot and the advance digest call the new `effective` render functions over the same snippets. `scripts/verify_templates.py`'s render_open checks are extended to cover the effective form.

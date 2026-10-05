@@ -347,3 +347,32 @@ def test_garbled_plot_existence_unknown(cid):
     assert diag["dangling_aliases"] == []
     assert diag["broken_links"] == []
     assert [lk["id"] for lk in effective.links(cid)] == ["l1"]
+
+
+def test_leading_unscened_alias_beat_follows_its_stored_predecessor(cid):
+    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "c1"), (S3, "c3")])
+    data = store.plot.read(cid)
+    data["missing-map"] = {"title": "The missing map", "status": "open", "last_scene": S2,
+                           "beats": [{"scene": "", "text": "m-unscened"},
+                                     {"scene": S2, "text": "m2"}]}
+    data["torn-map"] = {"title": "The torn map", "status": "open", "last_scene": "",
+                        "beats": [{"scene": "", "text": "t-unscened"}]}
+    _plot_raw(cid, data)
+    _alias(cid, "thread:missing-map", "thread:lost-chart")
+    _alias(cid, "thread:torn-map", "thread:lost-chart")
+    beats = effective.records(cid, "thread")["thread:lost-chart"]["beats"]
+    # In the concatenation the merge sorts, m-unscened follows c3 (the
+    # canonical's last beat) and t-unscened follows m2 (missing-map's last).
+    assert [b["text"] for b in beats] == ["c1", "m2", "t-unscened", "c3", "m-unscened"]
+    assert effective.threads(cid)[0]["latest_beat"] == "m-unscened"
+
+
+def test_garbled_events_is_unknown_not_missing(cid):
+    _commitment(cid, "x", "X", beats=[(S1, "x.")])
+    eid = store.events.create(cid, "The Tribunal", "2026-05-09", "")
+    _link(cid, "l1", "commitment:x", f"event:{eid}", "before")
+    store.events._path(cid).write_text("{ no", encoding="utf-8")
+    diag = effective.diagnostics(cid)
+    assert diag["unreadable"] == ["events"]
+    assert diag["broken_links"] == []
+    assert [lk["id"] for lk in effective.links(cid)] == ["l1"]

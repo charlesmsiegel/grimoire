@@ -111,3 +111,21 @@ def test_scene_actors_uses_colon_refs(cid):
     _appearances(cid, {"pcs/seraphine": [S1, S2]})
     assert involvement.scene_actors(cid) == {
         S1: {"characters:mara", "pcs:seraphine"}, S2: {"pcs:seraphine"}}
+
+
+def test_stage_history_is_the_shared_join(cid):
+    """Briefing's per-actor history is read off the same scene->actor index
+    `of` uses, so the two cannot drift (spec §8)."""
+    _chronicle(cid, {S1: ["characters/mara"], S2: ["pcs/seraphine"]})
+    _appearances(cid, {"pcs/seraphine": [S3]})
+    index = involvement.scene_actors(cid)
+    refs = {"characters/mara", "pcs/seraphine", "characters/nobody"}
+    assert involvement.stage_history(cid, refs) == {
+        ref: {sid for sid, actors in index.items() if ref.replace("/", ":", 1) in actors}
+        for ref in refs}
+
+
+def test_stage_history_keeps_chronicle_when_appearances_is_garbled(cid):
+    _chronicle(cid, {S1: ["characters/mara"]})
+    (_root(cid) / "appearances.json").write_text("{ no", encoding="utf-8")
+    assert involvement.stage_history(cid, {"characters/mara"}) == {"characters/mara": {S1}}
