@@ -191,6 +191,13 @@ function ImagesReachHint({ reach, on }: { reach?: string; on: boolean }) {
       </p>
     );
   }
+  if (reach === "none") {
+    return (
+      <p className="field-hint">
+        Images are not being sent: no connection is set up for your scenes yet.
+      </p>
+    );
+  }
   if (reach === "no") {
     return (
       <p className="field-hint">
@@ -956,7 +963,7 @@ export default function ConfigView() {
             </label>
             <div className="config-fields">
               <NumField id="cfg-send-images-limit" label="Images sent" placeholder="3"
-                        caption="the newest in the conversation; 0 sends none"
+                        caption="the newest in the conversation, at most 20; 0 sends none"
                         value={draft.send_images_limit}
                         disabled={draft.send_images !== "on"}
                         onChange={(v) => edit("send_images_limit", v)} />

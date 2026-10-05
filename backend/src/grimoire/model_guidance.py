@@ -94,6 +94,15 @@ class PreparedMessages(list):
                     _log.exception("Could not record model prompt variant")
         return deepcopy(messages)
 
+    def any_variant(self, test: Callable[[list[dict]], bool]) -> bool:
+        """Whether `test` holds for any variant this prompt could send, without
+        building or recording one: every frozen profile when there are some,
+        else the primary. A fallback's variant is packed for its own model, so
+        it can keep what the primary's packing gave up."""
+        if self._frozen_profiles is None:
+            return test(list(self))
+        return any(test(messages) for messages, _breakdown in self._frozen_profiles.values())
+
     def snapshot(self) -> dict:
         """Portable historical prompts; no templates or live state are consulted.
 

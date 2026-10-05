@@ -53,7 +53,11 @@ reported by `routes.config._public_config`, writable through `ConfigUpdate`:
   back is the same kind of imposition `backup_enabled` refuses to make.
 - `send_images_limit` — a non-negative integer, default `"3"`. `0` sends none
   (equivalent to off). Read fail-soft like `context_budget`: a malformed or
-  negative value reads as the default rather than raising. Three because one
+  negative value reads as the default rather than raising, and one past
+  `post_images.MAX_LIMIT = 20` reads as 20: every image is re-sent on every
+  turn and each can encode to `MAX_SEND_BYTES`, so the setting bounds a
+  request's payload and must not be a typo away from one no provider accepts.
+  Three because one
   image is rarely the whole scene (a map and the room it shows) and every extra
   one is paid on every turn until it ages out; it is configuration because the
   right trade depends on the reader's model price, and the default should be
@@ -64,7 +68,8 @@ connection the **global `chat` route** resolves to (what a turn in a campaign
 with no route of its own runs on, through `store/routing.py`; the active
 connection when chat is not routed): `"off"` (setting off or limit 0), `"yes"`,
 `"no"` (the
-connection or its catalog says text-only), or `"unknown"` (auto, and the
+connection or its catalog says text-only), `"none"` (no connection to ask —
+not "no", since nothing has said a model cannot read images), or `"unknown"` (auto, and the
 catalog does not say — no cached list, no matching row, or a row without the
 field). `ConfigView` shows a checkbox ("Send post images to models that can
 read them") and the limit (disabled while the checkbox is off) in the
@@ -280,7 +285,9 @@ would refuse is not given a slot — narrowed further to the formats this build'
 Pillow can decode (`post_images.decodable`): a WebP is only eligible where
 `PIL.features.check("webp")` holds, since Chaquopy's Android Pillow has no
 libwebp, and a slot given to a picture that cannot be decoded is a slot an
-older, sendable one was denied. A remote `https://` image is never sent:
+older, sendable one was denied. For the same reason a file past
+`image_drafts.MAX_BYTES`, or past `MAX_DECODE_PIXELS` (read from the header,
+after the JPEG draft), is not eligible: `load` would refuse it. A remote `https://` image is never sent:
 handing a third-party URL to a provider is a fetch the reader did not ask for.
 It stays alt text.
 
@@ -387,7 +394,9 @@ endpoints found that support image input" with one when no endpoint it may
 route to takes images; a 404 for a genuinely missing model costs one extra text
 attempt that fails the same way.
 
-When the messages carry refs (`has_refs`, a pure check — no resolver runs while
+When any variant of the messages carries refs (`has_refs` over every frozen
+profile through `PreparedMessages.any_variant` — a fallback is packed for its
+own window and can keep a picture the primary's packing gave up — a pure check — no resolver runs while
 routes are built, so nothing reads a sidecar on the event loop),
 `_usable_routes` follows **every** route with a **degrade sibling**: the same
 connection, marked to be sent the text lowering, with zero retries. `_resilient`
@@ -430,7 +439,10 @@ uses; two strings join exactly as today. System messages are always strings.
 1. `export.resolve_url(cid, part["url"])`; `None` → `None`.
 2. Read through one handle with the one-byte-past-the-cap read
    `image_drafts.data_uri` uses, capped at `image_drafts.MAX_BYTES`.
-3. Decode with Pillow (`draft` for JPEG), take the first frame, apply EXIF
+3. Refuse a picture past `MAX_DECODE_PIXELS = 24_000_000` before decoding
+   it, measured after the JPEG `draft`: a PNG cannot be decoded at reduced
+   size, and its full bitmap at Pillow's own bomb threshold is a third of a
+   gigabyte on a phone. Decode with Pillow (`draft` for JPEG), take the first frame, apply EXIF
    orientation, fit within `SEND_EDGE = 1024` px (never upscaled), and encode
    as **JPEG** (quality 85), or **PNG** when the image has alpha. Never WebP:
    `thumbs.thumbnail` writes WebP where it can, and not every OpenAI-compatible

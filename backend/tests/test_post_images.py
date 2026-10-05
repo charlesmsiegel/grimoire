@@ -73,7 +73,8 @@ def test_limit_is_zero_while_off_and_the_default_when_on(home):
     assert post_images.limit() == 3
 
 
-@pytest.mark.parametrize("raw, want", [("abc", 3), ("-2", 3), ("0", 0), ("5", 5)])
+@pytest.mark.parametrize("raw, want", [("abc", 3), ("-2", 3), ("0", 0), ("5", 5),
+                                       ("20", 20), ("500", post_images.MAX_LIMIT)])
 def test_limit_reads_fail_soft(home, raw, want):
     config.write_config(send_images="on", send_images_limit=raw)
     assert post_images.limit() == want
@@ -89,6 +90,13 @@ def test_images_for_needs_both_the_setting_and_the_capability(home):
     assert post_images.reach(yes) == "yes"
     config.write_config(send_images="off")
     assert post_images.reach(yes) == "off"
+
+
+def test_reach_with_no_connection_is_none_not_no(home):
+    assert post_images.reach(None) == "off"
+    config.write_config(send_images="on")
+    assert post_images.reach(None) == "none"
+    assert post_images.images_for(None) == 0
 
 
 # ---- routes ----
@@ -110,6 +118,12 @@ def test_reach_describes_the_chat_connection(client):
     assert client.get("/api/config").json()["send_images_reach"] == "unknown"
     client.put(f"/api/llm-connections/{cid}", json={"vision": "on"})
     assert client.get("/api/config").json()["send_images_reach"] == "yes"
+
+
+def test_reach_with_no_connection_reads_none(client):
+    client.get("/api/config")  # the first read migrates in a default connection
+    client.put("/api/config", json={"send_images": "on", "active_connection_id": ""})
+    assert client.get("/api/config").json()["send_images_reach"] == "none"
 
 
 def test_connection_vision_is_constrained_and_round_trips(client):
@@ -175,6 +189,39 @@ def test_eligible_needs_a_resolvable_sniffable_image(cid):
     path = export.resolve_url(cid, _url(cid, "coastline"))
     path.write_bytes(b"not an image at all")
     assert not post_images.eligible(cid, _url(cid, "coastline"))
+
+
+def test_eligible_refuses_what_load_would_refuse(cid, monkeypatch):
+    """A picture `load` cannot send must not take a slot from one it can."""
+    campaign_images.put_image(cid, "coastline", _image((64, 64)), "png")
+    assert post_images.eligible(cid, _url(cid, "coastline"))
+    cap = image_drafts.MAX_BYTES
+    monkeypatch.setattr(image_drafts, "MAX_BYTES", 10)
+    assert not post_images.eligible(cid, _url(cid, "coastline"))
+    monkeypatch.setattr(image_drafts, "MAX_BYTES", cap)
+    monkeypatch.setattr(post_images, "MAX_DECODE_PIXELS", 64 * 64 - 1)
+    assert not post_images.eligible(cid, _url(cid, "coastline"))
+    assert post_images.load(cid, {"url": _url(cid, "coastline")}) is None
+
+
+def test_a_png_past_the_pixel_cap_is_never_decoded(cid, monkeypatch):
+    campaign_images.put_image(cid, "vast", _image((64, 64)), "png")
+    monkeypatch.setattr(post_images, "MAX_DECODE_PIXELS", 100)
+    loaded = []
+    monkeypatch.setattr(post_images.Image.Image, "load",
+                        lambda self, *a, **k: loaded.append(1))
+    assert post_images.load(cid, {"url": _url(cid, "vast")}) is None
+    assert loaded == []
+
+
+def test_the_pixel_cap_is_measured_after_the_jpeg_draft(cid, monkeypatch):
+    """A camera photo decodes at a reduced scale, so it is not refused for
+    pixels it never holds."""
+    campaign_images.put_image(cid, "photo", _image((4096, 4096), fmt="JPEG"), "jpg")
+    monkeypatch.setattr(post_images, "MAX_DECODE_PIXELS", 2048 * 2048)
+    assert post_images.eligible(cid, _url(cid, "photo"))
+    _head, im = _decode(post_images.load(cid, {"url": _url(cid, "photo")}))
+    assert im.size == (1024, 1024)
 
 
 def test_decodable_gates_webp_on_the_build():

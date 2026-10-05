@@ -850,6 +850,14 @@ describe("sending post images (#377)", () => {
     expect(await screen.findByText(/cannot read images/i)).toBeInTheDocument();
   });
 
+  test("no connection yet says that, not that the model cannot read images", async () => {
+    (api.getConfig as any).mockResolvedValue(images("none"));
+    renderView();
+    await open(/^Context/);
+    expect(await screen.findByText(/no connection is set up/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cannot read images/i)).toBeNull();
+  });
+
   test("a model that reads images needs no hint", async () => {
     (api.getConfig as any).mockResolvedValue(images("yes"));
     renderView();

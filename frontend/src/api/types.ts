@@ -241,7 +241,7 @@ export type Config = {
    *  does not say). Read-only. */
   send_images_reach?: SendImagesReach;
 };
-export type SendImagesReach = "off" | "yes" | "no" | "unknown";
+export type SendImagesReach = "off" | "yes" | "no" | "unknown" | "none";
 /**
  * The subset of Config the Configuration page writes — the mirror of the
  * backend's `ConfigUpdate`. Named rather than inlined at each call site: it
