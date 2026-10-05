@@ -1376,3 +1376,106 @@ def test_a_journal_with_a_non_text_description_is_discarded(tmp_path):
     assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
     assert _descriptions(tmp_path) == {"avatar": "Seraphine at the gate",
                                        "gallery_1": "Seraphine on the stair"}
+
+
+def _unresolved_ref_beside_legacy(d, name, seed):
+    """`name` holds an image-bearing placement whose object has not arrived,
+    plus the legacy file `link_in` kept because of it (ruling 1)."""
+    (d / f"{name}.png").write_bytes(_png(seed))
+    obj = image_store.ingest(_png(seed + 1), "png")
+    image_store.object_path(obj.id).unlink()
+    assets.link_in(d, name, obj.id)
+    assert image_refs.read(d, name).image == obj.id and image_refs.resolve(d, name) is None
+    return obj.id
+
+
+def test_promote_refuses_a_slot_whose_image_has_not_arrived(tmp_path):
+    """Promoting an unresolved placement with no avatar used to journal a swap
+    that could never finish -- the legacy file beside it kept the source slot
+    occupied -- and that journal then refused every later promotion here."""
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    pending = _unresolved_ref_beside_legacy(d, "gallery_1", 100)
+    assets.put_image(tmp_path, "sera", "default", "gallery_2", _png(102), "png")
+    [g2] = _slot_ids(tmp_path, "gallery_2")
+
+    with pytest.raises(OSError, match="not yet available"):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    assert image_refs.read_journal(d) is None
+    assert image_refs.read(d, assets.AVATAR) is None                # nothing written
+    assert image_refs.read(d, "gallery_1").image == pending
+    assert (d / "gallery_1.png").exists()
+
+    assets.promote_image(tmp_path, "sera", "default", "gallery_2")
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_2") == (g2, None)
+    assert image_refs.read_journal(d) is None
+
+
+def test_promote_refuses_an_avatar_whose_image_has_not_arrived(tmp_path):
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    pending = _unresolved_ref_beside_legacy(d, assets.AVATAR, 103)
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(105), "png")
+    [g] = _slot_ids(tmp_path, "gallery_1")
+    with pytest.raises(OSError, match="not yet available"):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    assert image_refs.read_journal(d) is None
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (pending, g)
+
+
+def test_a_write_finishes_an_interrupted_promotion_first(tmp_path, monkeypatch):
+    """A write landing before any read must not turn a half-done swap into a
+    state recovery no longer recognises -- which discards the journal, and with
+    it the old avatar's last placement."""
+    a, g = _two_slots(tmp_path)
+    _crash_on_write(monkeypatch, 2)          # avatar written, gallery_1 not
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (g, g)
+
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(106), "png")
+    new = image_store.ingest(_png(106), "png").id
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (new, a)
+    assert image_refs.read_journal(_vdir(tmp_path)) is None
+
+
+@pytest.mark.parametrize("writer", ["link_in", "delete_in", "delete_image", "write_focus"])
+def test_every_writer_finishes_an_interrupted_promotion_first(tmp_path, monkeypatch, writer):
+    a, _g = _two_slots(tmp_path)
+    _crash_on_write(monkeypatch, 2)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    d = _vdir(tmp_path)
+    other = image_store.ingest(_png(107), "png").id
+    {"link_in": lambda: assets.link_in(d, assets.AVATAR, other),
+     "delete_in": lambda: assets.delete_in(d, assets.AVATAR),
+     "delete_image": lambda: assets.delete_image(tmp_path, "sera", "default", assets.AVATAR),
+     "write_focus": lambda: assets.write_focus(tmp_path, "sera", "default", 70)}[writer]()
+    assert _slot_ids(tmp_path, "gallery_1") == (a,)          # rolled forward first
+    assert image_refs.read_journal(d) is None
+
+
+def test_a_journal_whose_post_is_not_the_swap_of_its_pre_is_discarded(tmp_path):
+    a, g = _two_slots(tmp_path)
+    x = image_store.ingest(_png(108), "png").id
+    d = _vdir(tmp_path)
+    for post in ({"avatar": x, "gallery_1": a},       # not the swap
+                 {"avatar": g, "gallery_1": g}):
+        image_refs.write_journal(d, {"name": "gallery_1",
+                                     "pre": {"avatar": a, "gallery_1": g},
+                                     "post": post,
+                                     "desc": {"avatar": None, "gallery_1": None}})
+        assets.list_images(tmp_path, "sera", "default")
+        assert image_refs.read_journal(d) is None
+        assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
+    image_refs.write_journal(d, {"name": "gallery_1",                # no source
+                                 "pre": {"avatar": a, "gallery_1": None},
+                                 "post": {"avatar": None, "gallery_1": a},
+                                 "desc": {}})
+    assets.list_images(tmp_path, "sera", "default")
+    assert image_refs.read_journal(d) is None
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
+    assert _descriptions(tmp_path) == {"avatar": "Seraphine at the gate",
+                                       "gallery_1": "Seraphine on the stair"}

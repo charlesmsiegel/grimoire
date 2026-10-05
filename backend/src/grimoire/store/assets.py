@@ -444,6 +444,7 @@ def put_in(d: Path, name: str, data: bytes, ext: str, *,
     # decode is the slow part of a write.
     obj = image_store.ingest(data, ext, source_url=source_url)
     with _image_lock(d, name):
+        _recover_promotion(d)
         _place(d, name, obj.id, keep_focus=False, supported_only=supported_only)
     return obj.ext
 
@@ -460,6 +461,7 @@ def link_in(d: Path, name: str, image_id: str, *, keep_focus: bool = False) -> N
     if not _safe_name(name):
         raise ValueError("unsafe image id")
     with _image_lock(d, name):
+        _recover_promotion(d)
         _place(d, name, image_id, keep_focus=keep_focus, supported_only=False)
 
 
@@ -513,6 +515,7 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
     # the upload just published and leave the caller thinking it wrote one, nor
     # half-remove a set the upload is mid-way through replacing.
     with _image_lock(d, name):
+        _recover_promotion(d)
         image_refs.delete(d, name)
         for p in _siblings(d, name, supported_only):
             try:
@@ -923,6 +926,7 @@ def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "charact
     value = max(0, min(100, int(focus)))
     d.mkdir(parents=True, exist_ok=True)
     with _image_lock(d, AVATAR):
+        _recover_promotion(d)
         ref = image_refs.read(d, AVATAR)
         if ref is None and _siblings(d, AVATAR, False):
             atomic.write_text(d / FOCUS_FILE, json.dumps({AVATAR: value}))
@@ -1076,6 +1080,7 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     # leaves the removed picture's sentence captioning the new one. Reentrant,
     # so `delete_in` taking it again inside costs nothing.
     with _image_locks_held(d, name):
+        _recover_promotion(d)
         delete_in(d, name)
         if image_path(root, cid, vid, name, base) is None:
             drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
@@ -1149,8 +1154,10 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
 
     `FileNotFoundError` when `name` holds no image, `ValueError` when either
     side is an externally placed file of an extension never accepted -- both
-    before anything is written. `OSError` when an earlier promotion's journal
-    could not be finished first (it is never overwritten), or a write fails.
+    before anything is written (`_check_promotable`). `OSError` when either
+    side's image has not arrived yet (also before anything is written), when
+    an earlier promotion's journal could not be finished first (it is never
+    overwritten), or when a write fails.
     """
     if name == AVATAR:
         return
@@ -1173,15 +1180,7 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
         _recover_promotion(d)
         if image_refs.read_journal(d) is not None:
             raise OSError("an earlier promotion is still unfinished; retry")
-        src = path_in(d, name)
-        if src is None:
-            raise FileNotFoundError(name)
-        # Both extensions are checked before anything is written, adoption
-        # included: only an externally-placed file can have a foreign one, and
-        # discovering it halfway through would leave a half-swap.
-        for p in (src, path_in(d, AVATAR)):
-            if p is not None and not _norm_ext(p.suffix):
-                raise ValueError(f"unsupported image type: {p.name}")
+        _check_promotable(d, name)
         name_id = adopt_legacy(d, name)
         if name_id is None:
             raise FileNotFoundError(name)
@@ -1195,6 +1194,32 @@ def promote_image(root: Path, cid: str, vid: str, name: str, base: str = "charac
         }
         image_refs.write_journal(d, journal)
         _finish_promotion(d, name, journal)
+
+
+def _check_promotable(d: Path, name: str) -> None:
+    """Everything that refuses a promotion, checked before anything is
+    written -- adoption included -- since finding it halfway through would
+    leave a half-swap. Caller holds both image locks.
+
+    - `FileNotFoundError`: `name` holds no image.
+    - `ValueError`: either side is an externally placed file of an extension
+      never accepted.
+    - `OSError`: either side is an image-bearing placement whose object or
+      blob has not arrived (mid-sync, or a `link_in` ahead of its object). The
+      swap would move an id no reader can show yet, and the legacy file
+      `_drop_if_placed` kept beside it would keep a cleared source slot
+      occupied -- a journal that could never finish.
+    """
+    src = path_in(d, name)
+    if src is None:
+        raise FileNotFoundError(name)
+    for p in (src, path_in(d, AVATAR)):
+        if p is not None and not _norm_ext(p.suffix):
+            raise ValueError(f"unsupported image type: {p.name}")
+    for slot in (name, AVATAR):
+        ref = image_refs.read(d, slot)
+        if ref is not None and ref.image is not None and image_refs.resolve(d, slot) is None:
+            raise OSError(f"image not yet available (still syncing?): {slot}")
 
 
 def _finish_promotion(d: Path, name: str, journal: dict) -> None:
@@ -1232,10 +1257,12 @@ def _journal_ok(journal: dict) -> str | None:
     """The slot name a well-formed promotion journal names, or None.
 
     Well-formed: a promotable `name`; `pre` and `post` each naming exactly
-    the avatar and that slot, with image ids or null -- `post`'s avatar never
-    null, a promotion always places one; and a `desc` object whose two slots'
-    sentences are strings or null, since recovery writes them into the
-    sidecar as they stand."""
+    the avatar and that slot, with image ids or null; `pre`'s slot never null
+    (a promotion always has a source) and `post` exactly `pre` swapped -- a
+    roll-forward writes `post`, so any other one would place what no
+    promotion asked for; and a `desc` object whose two slots' sentences are
+    strings or null, since recovery writes them into the sidecar as they
+    stand."""
     name = journal.get("name")
     if not isinstance(name, str) or name == AVATAR or not _safe_name(name):
         return None
@@ -1246,8 +1273,11 @@ def _journal_ok(journal: dict) -> str | None:
         if not all(v is None or (isinstance(v, str) and image_hash.is_image_id(v))
                    for v in sides.values()):
             return None
+    pre, post = journal["pre"], journal["post"]
+    if pre[name] is None or post != {AVATAR: pre[name], name: pre[AVATAR]}:
+        return None   # a promotion always has a source, and `post` is `pre` swapped
     desc = journal.get("desc")
-    if journal["post"][AVATAR] is None or not isinstance(desc, dict):
+    if not isinstance(desc, dict):
         return None
     if not all(desc.get(n) is None or isinstance(desc.get(n), str) for n in (AVATAR, name)):
         return None
@@ -1284,6 +1314,12 @@ def _recover_promotion(d: Path) -> None:
     Runs from reads (`image_path`, `list_images`, `version_art`), so it never
     raises and never waits: when the slots are busy -- a promotion in flight --
     or a write fails, the journal stays for the next read to finish.
+
+    And from the writers (`put_in`, `link_in`, `delete_in`, `delete_image`,
+    `write_focus`), under their own name lock, before they write: a write
+    landing first would move a slot out of its `pre`/`post` states, and
+    recovery would then discard the journal as stale -- and, mid-swap, with
+    it the only record of the old avatar's picture.
     """
     journal = image_refs.read_journal(d)
     if journal is None:
