@@ -145,7 +145,7 @@ def _beat_texts(rec: dict) -> list[str]:
     return [fieldtext.text(b.get("text")) for b in beats if isinstance(b, dict)]
 
 
-def _beat_lines(rec: dict) -> tuple[str, list[str]]:
+def beat_lines(rec: dict) -> tuple[str, list[str]]:
     """The latest beat, and up to `PREVIOUS_BEATS` earlier non-blank beats
     newest first, none equal to a beat already included."""
     texts = _beat_texts(rec)
@@ -168,14 +168,14 @@ def _join(lines: Iterable[str]) -> str:
 
 def thread_identity_text(rec: dict) -> str:
     """The thread's identity text: label, title, latest beat, earlier beats."""
-    latest, previous = _beat_lines(rec)
+    latest, previous = beat_lines(rec)
     return _join(["plot thread", fieldtext.text(rec.get("title")), latest, *previous])
 
 
 def commitment_identity_text(rec: dict) -> str:
     """The commitment's identity text: kind label, title, latest beat, due,
     earlier beats. A blank kind is the default `promise`."""
-    latest, previous = _beat_lines(rec)
+    latest, previous = beat_lines(rec)
     kind = fieldtext.text(rec.get("kind")) or "promise"
     due = fieldtext.text(rec.get("due"))
     return _join([f"{kind} commitment", fieldtext.text(rec.get("title")), latest,

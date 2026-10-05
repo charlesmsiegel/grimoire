@@ -34,5 +34,9 @@ and disk writes on the streaming path; arrival timings include that observer
 overhead and are not the proposed per-operation latency instrumentation.
 
 Full response bodies can contain private campaign prose and reasoning. Inspect
-the log before sharing it. No model settings or reasoning requests are changed:
-capture records only what the provider or SDK actually sends.
+the log before sharing it. The absorb duplicate check (the `continuity-identity`
+task) is no exception: its replies, including each row's `reason`, are captured
+at Debug level like every other LLM response, under the existing Settings
+disclosure, while its info-level log row carries counts and modes only. No
+model settings or reasoning requests are changed: capture records only what the
+provider or SDK actually sends.

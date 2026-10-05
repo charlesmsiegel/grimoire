@@ -440,3 +440,164 @@ def test_proposed_subject_carries_the_scene_cast(cid, s0, sid):
     assert cand.ref == "thread:maras-map"
     assert signals["actors"] == ["characters:mara"]
     assert signals["via"] == "structural"
+
+
+# ------------------------------------------------------------ resolver parse
+
+
+def test_parse_undecodable_is_none():
+    assert identity.parse_output("I think so.") is None
+
+
+def test_parse_decodable_empty_is_empty_list():
+    assert identity.parse_output("{}") == []
+    assert identity.parse_output('{"decisions": 3}') == []
+
+
+def test_parse_accepts_row_labels_as_printed():
+    for label in ("Row r1", " R1 ", "r1", "ROW R1"):
+        [decision] = identity.parse_output(json.dumps(
+            {"decisions": [{"row": label, "decision": "new"}]}))
+        assert decision["row"] == "r1", label
+
+
+def test_parse_normalizes_and_never_raises():
+    reply = "Here you go:\n```json\n" + json.dumps({"decisions": [
+        "not a row",
+        {"decision": "new", "id": "", "reason": "no row key"},
+        {"row": "   ", "decision": "new"},
+        {"row": 3, "decision": "new"},
+        {"row": "Row r1", "decision": "EXISTING", "id": " find-the-ledger ",
+         "reason": " Same ledger. "},
+        {"row": "r2", "decision": "maybe", "id": 7, "reason": "x" * 400},
+        {"row": "r1", "decision": "new", "id": "", "reason": "a second answer for r1"},
+        {"row": "r3", "decision": None, "reason": ["not", "text"]},
+    ]}) + "\n```"
+    assert identity.parse_output(reply) == [
+        {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "Same ledger."},
+        {"row": "r2", "decision": "uncertain", "id": "", "reason": "x" * identity.REASON_CHARS},
+        {"row": "r3", "decision": "uncertain", "id": "", "reason": ""},
+    ]
+    assert len(identity.parse_output(reply)[1]["reason"]) == identity.REASON_CHARS
+    assert identity.DECISIONS == ("existing", "new", "uncertain")
+    assert identity.CHECK_DECISIONS == ("existing", "new", "uncertain", "unchecked")
+    assert identity.STATUSES == ("accepted", "downgraded", "hint_only")
+
+
+# ------------------------------------------------------------ resolver prompt
+
+#: A proposed thread re-opening `LEDGER_THREAD` under its exact title, after the
+#: stored one was closed -- so it is proposed, and titled the same.
+REOPENED_LEDGER = {"title": "Find the ledger", "beat": "Winifred went looking again.",
+                   "status": "open", "quote": "I want that ledger back.",
+                   "speaker": "Winifred", "certainty": 0.8,
+                   "why_new": "The old search ended; this is a new one.",
+                   "distinguished_from": ["find-the-ledger"]}
+
+#: A proposed commitment rewording a stored `the-midnight-deadline`.
+SERAPHINES_DEADLINE = {"title": "Seraphine's midnight deadline",
+                       "beat": "Seraphine must pay the midnight deadline.",
+                       "kind": "threat", "status": "open", "due": "midnight"}
+
+
+def _seed_prompt_fixture(cid, s0):
+    pid, title, beat = LEDGER_THREAD
+    store.plot.set_movement(cid, pid, title, "open", beat, s0)
+    store.plot.set_movement(cid, pid, "", "advanced", "Winifred found the first page.", s0)
+    store.plot.set_movement(cid, pid, "", "closed", "Winifred burned the ledger.", s0)
+    store.commitments.set_movement(cid, "the-midnight-deadline", "The midnight deadline",
+                                   "threat", "open", "midnight",
+                                   "Seraphine must pay by midnight.", s0)
+
+
+def test_prompt_rows_carry_the_row_and_its_neighbours(cid, s0, sid):
+    _seed_prompt_fixture(cid, s0)
+    sig = similarity.lexical(_proposed("commitment", SERAPHINES_DEADLINE, sid),
+                             _pooled(cid, "commitment:the-midnight-deadline"))
+    assert sig["tokens"] >= similarity.TOKEN_FLOOR
+    exam = _examine(cid, sid, plot=[REOPENED_LEDGER], owed=[SERAPHINES_DEADLINE])
+    thread, owed = exam.prompt_rows()
+    assert {k: thread[k] for k in ("key", "kind", "title", "beat", "status", "commitment_kind",
+                                   "due", "quote", "speaker", "certainty", "why_new",
+                                   "distinguished_from")} == {
+        "key": "r1", "kind": "thread", "title": "Find the ledger",
+        "beat": "Winifred went looking again.", "status": "open", "commitment_kind": "",
+        "due": "", "quote": "I want that ledger back.", "speaker": "Winifred",
+        "certainty": 0.8, "why_new": "The old search ended; this is a new one.",
+        "distinguished_from": ["find-the-ledger"]}
+    [cand] = thread["candidates"]
+    assert {k: cand[k] for k in ("id", "title", "status", "kind", "due", "latest_beat",
+                                 "earlier")} == {
+        "id": "find-the-ledger", "title": "Find the ledger", "status": "closed", "kind": "",
+        "due": "", "latest_beat": "Winifred burned the ledger.",
+        "earlier": ["Winifred found the first page.",
+                    "Winifred learned the harbour ledger exists."]}
+    assert cand["signals"]["title_equal"] is True
+    assert (owed["key"], owed["kind"], owed["commitment_kind"], owed["due"],
+            owed["certainty"], owed["why_new"], owed["distinguished_from"]) == (
+        "r2", "commitment", "threat", "midnight", None, "", [])
+    [ocand] = owed["candidates"]
+    assert (ocand["id"], ocand["kind"], ocand["due"], ocand["earlier"]) == (
+        "the-midnight-deadline", "threat", "midnight", [])
+
+
+def test_build_prompt_shows_rows_candidates_and_signals(cid, s0, sid):
+    _seed_prompt_fixture(cid, s0)
+    exam = _examine(cid, sid, plot=[REOPENED_LEDGER], owed=[SERAPHINES_DEADLINE])
+    system, user = identity.build_prompt(exam.prompt_rows())
+    assert (system["role"], user["role"]) == ("system", "user")
+    assert system["content"].startswith("You are checking whether newly proposed story records")
+    for word in ('"existing"', '"new"', '"uncertain"'):
+        assert word in system["content"]
+    text = user["content"]
+    assert "Row r1 — proposed plot thread: Find the ledger" in text
+    assert "Row r2 — proposed commitment: Seraphine's midnight deadline" in text
+    assert "find-the-ledger: Find the ledger (closed) — Winifred burned the ledger." in text
+    assert ("the-midnight-deadline: The midnight deadline (threat, open), due midnight"
+            " — Seraphine must pay by midnight.") in text
+    assert "Winifred found the first page." in text
+    assert "signals: same title; same slug; word overlap" in text
+    assert '"I want that ledger back." — Winifred, certainty 0.8' in text
+    assert "The old search ended; this is a new one." in text
+    assert "Distinguished from: find-the-ledger" in text
+
+
+def test_template_rows_signal_text_order():
+    signals = {"title_equal": True, "slug_equal": True, "tokens": 0.5, "chars": 0.4567,
+               "cosine": 0.91, "actors": ["characters:mara", "characters:winifred"],
+               "scenes": ["s1", "s2"], "anchors": ["event:e1"], "via": "lexical"}
+    row = {"key": "r1", "kind": "thread", "title": "t", "beat": "b", "status": "open",
+           "commitment_kind": "", "due": "", "quote": "", "speaker": "", "certainty": None,
+           "why_new": "", "distinguished_from": [],
+           "candidates": [{"id": "x", "title": "X", "status": "open", "kind": "", "due": "",
+                           "latest_beat": "", "earlier": [], "signals": signals}]}
+    [out] = identity.template_rows([row])
+    [cand] = out["candidates"]
+    assert cand["signal_text"] == ("same title; same slug; word overlap 0.50; text overlap 0.46;"
+                                   " meaning 0.91; shared characters: characters:mara,"
+                                   " characters:winifred; shared scenes: 2;"
+                                   " shared dates: event:e1")
+    assert cand["line"] == "x: X (open)"
+    assert "line" not in row["candidates"][0]   # the input is not mutated
+
+
+def test_build_prompt_with_no_optional_fields_renders():
+    signals = {"title_equal": False, "slug_equal": False, "tokens": 0.3, "chars": 0.0,
+               "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical"}
+    row = {"key": "r1", "kind": "commitment", "title": "The Saltmarch tithe",
+           "beat": "Mara owes the tithe.", "status": "", "commitment_kind": "", "due": "",
+           "quote": "", "speaker": "", "certainty": None, "why_new": "",
+           "distinguished_from": [],
+           "candidates": [{"id": "salt-owed", "title": "Salt owed", "status": "open",
+                           "kind": "", "due": "", "latest_beat": "", "earlier": [],
+                           "signals": signals}]}
+    _, user = identity.build_prompt([row])
+    text = user["content"]
+    assert "Row r1 — proposed commitment: The Saltmarch tithe" in text
+    # A blank commitment kind is shown as the default it means.
+    assert "salt-owed: Salt owed (promise, open)" in text
+    assert "signals: word overlap 0.30" in text
+    for label in ("Status:", "Kind:", "Due:", "Cited:", "certainty", "Why new:",
+                  "Distinguished from:", "Earlier:"):
+        assert label not in text, label
+    assert not text.endswith("\n")

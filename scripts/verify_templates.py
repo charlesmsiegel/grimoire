@@ -399,6 +399,87 @@ assert 'prompts.render(\n        "scene/roll_result.j2"' in routes_src \
 assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
     "the routes package no longer renders the roll-declined continuation template (#162)"
 
+# The continuity identity resolver (capstone spec §10.2). Rows are
+# `Examination.prompt_rows()`-shaped; three inputs so every optional branch of
+# `user.j2` is taken both ways: every optional field, none, and a closed
+# neighbour carrying earlier beats and every signal.
+from grimoire.store.continuity import identity  # noqa: E402
+
+
+def _identity_signals(**over):
+    return {"title_equal": False, "slug_equal": False, "tokens": 0.0, "chars": 0.0,
+            "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical",
+            **over}
+
+
+def _identity_row(key, kind, title, candidates, **over):
+    return {"key": key, "kind": kind, "title": title, "beat": "Winifred went looking.",
+            "status": "", "commitment_kind": "", "due": "", "quote": "", "speaker": "",
+            "certainty": None, "why_new": "", "distinguished_from": [],
+            "candidates": candidates, **over}
+
+
+def _identity_candidate(cid_, title, **over):
+    return {"id": cid_, "title": title, "status": "open", "kind": "", "due": "",
+            "latest_beat": "", "earlier": [], "signals": _identity_signals(), **over}
+
+
+IDENTITY_INPUTS = {
+    "thread+commitment": [
+        _identity_row("r1", "thread", "Recover the harbour ledger", [
+            _identity_candidate("find-the-ledger", "Find the ledger", status="advanced",
+                                latest_beat="Winifred learned the harbour ledger exists.",
+                                signals=_identity_signals(tokens=0.4, chars=0.52))],
+            status="open", quote="I want that ledger.", speaker="Winifred", certainty=0.8,
+            why_new="The search is for a different ledger.",
+            distinguished_from=["find-the-ledger"]),
+        _identity_row("r2", "commitment", "Seraphine's midnight deadline", [
+            _identity_candidate("the-midnight-deadline", "The midnight deadline",
+                                due="midnight",
+                                latest_beat="Seraphine must pay by midnight.",
+                                signals=_identity_signals(tokens=0.5, cosine=0.81,
+                                                          actors=["characters:seraphine"]))],
+            status="open", commitment_kind="threat", due="midnight",
+            speaker="Seraphine", why_new="A second deadline.")],
+    "bare": [
+        _identity_row("r1", "commitment", "The midnight deadline", [
+            _identity_candidate("the-midnight-deadline", "The midnight deadline",
+                                signals=_identity_signals(title_equal=True,
+                                                          slug_equal=True))])],
+    "closed-neighbour": [
+        _identity_row("r1", "thread", "Find the ledger", [
+            _identity_candidate("find-the-ledger", "Find the ledger", status="closed",
+                                latest_beat="Winifred burned the ledger.",
+                                earlier=["Winifred found the first page.",
+                                         "Winifred learned the harbour ledger exists."],
+                                signals=_identity_signals(
+                                    title_equal=True, slug_equal=True, tokens=0.6,
+                                    chars=0.7, cosine=0.9, actors=["characters:winifred"],
+                                    scenes=["saltmarch-docks"], anchors=["event:e1"]))],
+            status="open", certainty=0.5)],
+}
+for label, rows in IDENTITY_INPUTS.items():
+    exp = identity.build_prompt(rows)
+    check(f"continuity identity system ({label})", exp[0]["content"],
+          render("continuity_identity/system.j2"))
+    shown = identity.template_rows(rows)
+    check(f"continuity identity user ({label})", exp[1]["content"],
+          render("continuity_identity/user.j2", rows=shown))
+    for row in shown:
+        for cand in row["candidates"]:
+            if row["kind"] == "thread":
+                want = render("snippets/plot_thread_line/absorb.j2",
+                              t={"id": cand["id"], "title": cand["title"],
+                                 "status": cand["status"], "latest_beat": cand["latest_beat"]})
+            else:
+                want = render("snippets/commitment_line/absorb.j2",
+                              c={"id": cand["id"], "title": cand["title"],
+                                 "kind": cand["kind"] or "promise", "status": cand["status"],
+                                 "due": cand["due"], "latest_beat": cand["latest_beat"]})
+            check(f"continuity identity line ({label}, {cand['id']})", want, cand["line"])
+            assert cand["line"] in exp[1]["content"], \
+                f"continuity identity user ({label}) does not show {cand['id']}'s line"
+
 # ------------------------------------------------------------- store fixture
 
 from grimoire.store import appearances as ap  # noqa: E402
