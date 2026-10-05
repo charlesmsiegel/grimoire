@@ -238,7 +238,8 @@ def _plan_round(settings, cast, *, trigger, history, lead, author=None):
 
 def _follow_on(cid, sid, run, token, round_record, lead):
     """The next automatic round of a player post's chain, or None when the
-    scene's order is Manual now (which never auto-continues).
+    scene's order is Manual now (which never auto-continues) or its
+    `auto_rounds` has been lowered below the rounds already started.
 
     Planned by the scene's current order with the most recent contribution as
     its trigger -- its writer never counted as naming themselves -- and with
@@ -252,6 +253,15 @@ def _follow_on(cid, sid, run, token, round_record, lead):
         settings = store.group_play.settings_of(scene["meta"])
         if settings["order"] == "manual":
             return None
+        # `auto_rounds` is re-read here, so lowering it mid-chain takes
+        # effect: this is follow-on number `index`, and it starts only while
+        # the setting still allows that many. Raising it never extends a
+        # chain past what the post started with.
+        index = round_record.get("round_index", 1)
+        allowed = settings["auto_rounds"]
+        if allowed < index:
+            return None
+        remaining = min(round_record.get("auto_remaining", 0) - 1, allowed - index)
         history = scene["messages"]
         last = _last_contribution(cid, sid, history) or {"ref": None, "text": ""}
         planned = _plan_round(settings, roster(cid, sid), trigger=last["text"],
@@ -264,9 +274,9 @@ def _follow_on(cid, sid, run, token, round_record, lead):
             run_id=run.id,
             note=prompts.render("scene/director_note.j2"),
             turn=round_record.get("turn"),
-            auto_remaining=round_record.get("auto_remaining", 0) - 1,
-            round_index=round_record.get("round_index", 1) + 1,
-            auto_total=round_record.get("auto_total", 0),
+            auto_remaining=remaining,
+            round_index=index + 1,
+            auto_total=min(round_record.get("auto_total", 0), allowed),
             **planned,
         )
         # A detached write -- the round, and the presence it anchors -- that
@@ -1157,7 +1167,9 @@ def get_group(cid: str, sid: str):
 @router.put("/campaigns/{cid}/scenes/{sid}/group")
 def put_group(cid: str, sid: str, body: GroupSettings):
     # Not `scene_held_free`: these settings change who speaks next, never the
-    # transcript's shape, and a running round reads them once at its start.
+    # transcript's shape. A running chain re-reads them at each successor
+    # choice (who sits out) and at each follow-on round (order, plan and the
+    # `auto_rounds` cap), so a change lands on its next decision.
     _require_scene(cid, sid)
     try:
         settings = store.group_play.validate(_dump(body))

@@ -721,3 +721,39 @@ def test_natural_follow_on_never_repeats_the_last_speaker(client, monkeypatch):
         said = speakers(cid, sid)
         assert len(said) == 4
         assert all(a != b for a, b in zip(said, said[1:])), (n, said)
+
+
+def _chain_with_rounds_changed_to(client, rounds):
+    """A List chain started with two follow-on rounds whose `auto_rounds` is
+    set to `rounds` as round 1's first contribution ends."""
+    cid, sid, _base = seed(client)
+    settings = {**group_play.parse(""), "order": "list", "order_list": [MARA, WINIFRED],
+                "auto_rounds": 2}
+    store.scenes.set_group(cid, sid, group_play.dump(settings))
+    round_record = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
+        run_id="test", actor_ref=MARA, mode="list", plan=[WINIFRED], auto_remaining=2,
+        round_index=1, auto_total=2)
+    fake = FakeLLM([reply(f"Line {n}.", None) for n in range(6)])
+    frames = []
+
+    def on_frame(frame):
+        frames.append(frame)
+        if "response_end" in frame and len(frames) < 4:
+            store.scenes.set_group(
+                cid, sid, group_play.dump({**settings, "auto_rounds": rounds}))
+
+    _drive(cid, sid, fake, _run(cid, sid), round_record, on_frame)
+    return fake, [f["round_start"] for f in frames if "round_start" in f]
+
+
+def test_auto_rounds_lowered_to_zero_mid_chain_starts_no_follow_on(client):
+    fake, starts = _chain_with_rounds_changed_to(client, 0)
+    assert fake.calls == 2
+    assert starts == []
+
+
+def test_auto_rounds_lowered_mid_chain_clamps_the_remaining_rounds(client):
+    fake, starts = _chain_with_rounds_changed_to(client, 1)
+    assert fake.calls == 4
+    assert starts == [{"index": 2, "of": 2}]
