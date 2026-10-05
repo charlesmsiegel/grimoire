@@ -20,6 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from grimoire.store import absorb, fence, length_drift, scenes
+from grimoire.store.continuity import identity
 
 from . import slop
 
@@ -293,6 +294,104 @@ def grade_absorb(text: str) -> tuple[list[Check], dict]:
         return out + [Check("absorb.parses", False,
                             f"{type(exc).__name__}: {exc}")], {}
     return out + [Check("absorb.parses", True)], parsed
+
+
+# -------------------------------------------------------------------- identity
+
+#: What the identity resolver may answer for a row, borrowed rather than
+#: restated, so a decision word added to the app is graded the day it lands.
+IDENTITY_DECISIONS = identity.DECISIONS
+
+#: The prefix an id may carry in a reply, which `identity.Examination.decide`
+#: strips before it looks the id up -- a row's candidates are all its own type.
+_IDENTITY_REF_PREFIXES = ("thread:", "commitment:")
+
+
+def _identity_word(value) -> str | None:
+    """A decision word as the app compares it (case and padding ignored), or
+    None for anything that is not a string."""
+    return value.strip().lower() if isinstance(value, str) else None
+
+
+def _identity_id(item: dict) -> str:
+    rid = item.get("id")
+    if not isinstance(rid, str):
+        return ""
+    rid = rid.strip()
+    for prefix in _IDENTITY_REF_PREFIXES:
+        if rid.startswith(prefix):
+            return rid[len(prefix):]
+    return rid
+
+
+def _identity_rows(raw: dict) -> tuple[Check, dict[str, dict]]:
+    """The shape check, and the well-shaped decisions keyed by row as the app
+    keys them: through `identity._row_key` (a ``Row`` label stripped), the
+    first answer kept when a key repeats."""
+    items = raw.get("decisions")
+    if not isinstance(items, list):
+        return (Check("identity.shape", False,
+                      f"decisions was {type(items).__name__}, wanted a list"), {})
+    by_row: dict[str, dict] = {}
+    bad = 0
+    for item in items:
+        key = identity._row_key(item.get("row")) if isinstance(item, dict) else ""
+        if not key:
+            bad += 1
+            continue
+        by_row.setdefault(key, item)
+    return (Check("identity.shape", not bad,
+                  f"{bad} decision(s) were not an object with a string row"), by_row)
+
+
+def _identity_verdict(key: str, got: dict, want: dict) -> Check:
+    word = _identity_word(got.get("decision"))
+    ok = word == want["decision"] and (
+        want["decision"] != "existing" or _identity_id(got) == want["id"])
+    wanted = want["decision"] + (f" {want['id']}" if want["decision"] == "existing" else "")
+    return Check(f"identity.{want['check']}", ok,
+                 f"row {key} was {got.get('decision')!r} {_identity_id(got)!r}, "
+                 f"wanted {wanted}")
+
+
+def grade_identity(text: str, expected: dict[str, dict],
+                   offered: dict[str, set[str]]) -> list[Check]:
+    """Does the resolver answer every row, in the contract's words, naming only
+    ids it was offered -- and the right verdict on each scored row?
+
+    Scored on the RAW extracted object, as grade_absorb is and for its reason:
+    `identity.parse_output` rewrites an unknown decision word as ``uncertain``,
+    so an enum check over its output could never fail. Row keys are the one
+    thing read the app's way (`identity._row_key`), since a ``Row r1`` key is
+    one the app accepts.
+
+    `expected` maps a row key to ``{"decision", "id", "check"}``: the verdict
+    that row should get, and the name of the check that reports it. A row with
+    no decision at all is reported by ``identity.covers_rows`` alone -- its own
+    verdict check is left out rather than failed beside it, so "the row was
+    skipped" and "the row was misjudged" stay separable. `offered` maps a row
+    key to the candidate ids its prompt listed.
+    """
+    raw = absorb.extract_object(text)
+    if raw is None:
+        return [Check("identity.json", False, "no JSON object recoverable from the reply")]
+    shape, by_row = _identity_rows(raw)
+    unknown = sorted(str(d.get("decision")) for d in by_row.values()
+                     if _identity_word(d.get("decision")) not in IDENTITY_DECISIONS)
+    unoffered = sorted(f"{key}: {_identity_id(d)!r}" for key, d in by_row.items()
+                       if _identity_word(d.get("decision")) == "existing"
+                       and _identity_id(d) not in offered.get(key, set()))
+    missing = [key for key in expected if key not in by_row]
+    return [
+        Check("identity.json", True),
+        shape,
+        Check("identity.enum", not unknown,
+              f"decisions outside {list(IDENTITY_DECISIONS)}: {unknown}"),
+        Check("identity.known_ids", not unoffered,
+              f"existing named an id that row was not offered: {unoffered}"),
+        Check("identity.covers_rows", not missing, f"no decision for {missing}"),
+    ] + [_identity_verdict(key, by_row[key], want)
+         for key, want in expected.items() if key in by_row]
 
 
 # ------------------------------------------------------------ prompt contract

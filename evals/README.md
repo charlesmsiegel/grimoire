@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is six pass/fail
+This suite closes that. It is not an eval framework; it is seven pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -20,6 +20,7 @@ stake in:
 | `owned-lore` | lore owned by an absent character stays out of both the prompt and the reply |
 | `turn-taking` | with four NPCs cast and `speaker_turn_taking` on, the reply is carried by the nominated speaker rather than by whoever has been monologuing |
 | `natural-prose` | a reply contains none of the stock names or literal banned phrases the selected Natural Prose (Legacy) guide lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
+| `continuity-identity` | the identity resolver maps a reworded duplicate to the existing record and keeps a same-topic question and a concrete continuation new; a row is only ever offered records of its own type |
 
 ## Running it
 
@@ -140,6 +141,13 @@ missing or wrong-typed section and turns a JSON `null` into the string
 yes regardless of what the model sent. The contract itself *is* derived from
 `parse_output` (its key set, with defaults telling text from list), so a
 section added to absorb is graded from the day it lands.
+`continuity-identity` scores the resolver's reply the same way: the identity
+parser reads an unknown decision word as `uncertain`, so only the raw object
+can fail `identity.enum`. Its row keys are the one thing read the app's way
+(a `Row r1` key is one the app accepts). Its `build` pins which records
+`identity.examine` offers each row, and through which clause, so a change to
+the similarity floors fails there rather than leaving the case asking about
+nothing.
 
 ## Recordings
 
@@ -151,7 +159,8 @@ section added to absorb is graded from the day it lands.
 - Every other variant is a permanent hand-authored counterexample
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
-  `chorus`, `slop`, `flat`, `terse`) and is never touched by a live run.
+  `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`)
+  and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —
 renaming a case without deleting its old files would otherwise leave dead
