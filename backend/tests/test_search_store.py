@@ -473,7 +473,6 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     quadratic, and both halves run under whatever load the machine is already
     under, so the comparison holds where an absolute bound does not.
     """
-    import gc
     import time
 
     # CPU time, not wall time: `process_time` stops while the process is
@@ -483,7 +482,9 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     # is the size of the WHOLE heap, and late in a full-suite run that heap
     # dwarfs the parse, so the larger sample paid for the session's garbage.
     # Both are noise in the measure, not the parser, and both reddened CI at
-    # a 3.9x "scaling" with the parser unchanged.
+    # a 3.9x "scaling" with the parser unchanged. The collector is off around
+    # each timed sample rather than the whole measure: `_parse` re-enables it on
+    # the way out, so an outer disable would only cover the first sample.
     def _parse(n):
         q = " ".join(f"w{i}" for i in range(n))
         gc.collect()
@@ -502,18 +503,9 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     def _best(n, rounds=5):
         return min(_parse(n) for _ in range(rounds))
 
-    # The cyclic collector off for the measure. It triggers on allocation
-    # counts and each pass walks every live object, so the 40k run pays for
-    # more and costlier collections than the 20k run -- a superlinear term the
-    # parser does not have, which alone pushed the ratio past 3 on CI.
-    gc.collect()
-    gc.disable()
-    try:
-        _best(20000)                       # warm the interpreter, not the measure
-        small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
-        large = _best(40000)
-    finally:
-        gc.enable()
+    _best(20000)                       # warm the interpreter, not the measure
+    small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
+    large = _best(40000)
     assert large / small < 3, (
         f"parsing scaled {large / small:.1f}x for 2x the words -- linear is ~2, "
         f"quadratic is ~4")
