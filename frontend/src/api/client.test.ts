@@ -2432,3 +2432,15 @@ test("a scene datetime write announces only when it moved the clock", async () =
   expect(heard).toHaveBeenCalledTimes(1);
   off();
 });
+
+test("editMessage sends restore only when asked, so every plain edit is unchanged", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
+  await api.editMessage("run", "s1", 2, "plain");
+  await api.editMessage("run", "s1", 2, "the original", { restore: true });
+  expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/campaigns/run/scenes/s1/messages/2",
+    expect.objectContaining({ method: "PUT", body: JSON.stringify({ content: "plain" }) }));
+  expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/campaigns/run/scenes/s1/messages/2",
+    expect.objectContaining({ method: "PUT",
+                              body: JSON.stringify({ content: "the original", restore: true }) }));
+});

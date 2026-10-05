@@ -31,6 +31,8 @@ vi.mock("../api/client", async () => {
       // so it renders its quiet state: these suites assert on the rest of
       // the inspector, not on the bill.
       getSceneUsage: vi.fn(), getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(),
+      // Turn history's stored rewrites (regex output processing, spec 6.3).
+      getSceneRewrites: vi.fn(), getRegex: vi.fn(), editMessage: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
                       o?: { w?: number; v?: string | null }) =>
         `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
@@ -2266,4 +2268,78 @@ test("a comparison whose turn ages out keeps its option in the picker", async ()
   await screen.findByText(/aged out of the log/);
   expect(screen.getByLabelText<HTMLSelectElement>("Compare with").value).toBe("000002");
   await screen.findByText("the pact was signed at dusk");   // still on screen
+});
+
+
+// ---- Turn history: stored rewrites (regex output processing, spec 6.3) ----
+
+const REWRITTEN_REPLY = {
+  index: 3,
+  message: { role: "assistant" as const, content: "Mara nods.", response_id: "resp-1",
+             rewritten: true, speaker: "Mara" },
+};
+
+function renderRewrites(handlers: { onSceneChanged?: () => void; onTranscriptEdited?: () => void } = {}) {
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+                                       onSceneChanged={handlers.onSceneChanged ?? (() => {})}
+                                       onTranscriptEdited={handlers.onTranscriptEdited}
+                                       rewritten={[REWRITTEN_REPLY]} /></MemoryRouter>);
+}
+
+function mockRewriteRecord() {
+  (api.getSceneRewrites as any).mockResolvedValue({
+    "resp-1": { original: "Mara nods. (OOC: she is lying)", rules: ["r-strip", "r-gone"],
+                at: "2026-10-05T12:00:00Z" } });
+  (api.getRegex as any).mockResolvedValue({
+    layer: { rules: [{ id: "r-strip", name: "Strip asides" }], off: [] },
+    inherited: [], warnings: {} });
+}
+
+test("a rewritten turn shows the original and Restore calls editMessage with restore", async () => {
+  mockRewriteRecord();
+  (api.editMessage as any).mockResolvedValue({ ok: true });
+  const onSceneChanged = vi.fn();
+  const onTranscriptEdited = vi.fn();
+  renderRewrites({ onSceneChanged, onTranscriptEdited });
+  const row = await screen.findByRole("button", { name: /Rewritten/ });
+  expect(api.getSceneRewrites).not.toHaveBeenCalled();   // read on opening, not on mount
+  fireEvent.click(row);
+  const detail = await screen.findByRole("region", { name: "Rewrite of post 4" });
+  expect(api.getSceneRewrites).toHaveBeenCalledWith("c", "s");
+  expect(within(detail).getByText("Mara nods. (OOC: she is lying)")).toBeInTheDocument();
+  expect(within(detail).getByText("Mara nods.")).toBeInTheDocument();
+  // Named where a rule is still there to name, its id where it is not.
+  expect(within(detail).getByText("Strip asides")).toBeInTheDocument();
+  expect(within(detail).getByText("r-gone")).toBeInTheDocument();
+  fireEvent.click(within(detail).getByRole("button", { name: "Restore original" }));
+  await waitFor(() => expect(api.editMessage).toHaveBeenCalledWith(
+    "c", "s", 3, "Mara nods. (OOC: she is lying)", { restore: true }));
+  await waitFor(() => expect(onTranscriptEdited).toHaveBeenCalledOnce());
+  expect(onSceneChanged).not.toHaveBeenCalled();
+});
+
+test("a stale restore says so and reloads the scene rather than writing anything", async () => {
+  mockRewriteRecord();
+  (api.editMessage as any).mockRejectedValue(Object.assign(new Error("stale"), {
+    status: 409, kind: "rewrite_stale",
+    detail: "This message no longer matches its recorded rewrite; reload the scene." }));
+  const onSceneChanged = vi.fn();
+  const onTranscriptEdited = vi.fn();
+  renderRewrites({ onSceneChanged, onTranscriptEdited });
+  fireEvent.click(await screen.findByRole("button", { name: /Rewritten/ }));
+  const detail = await screen.findByRole("region", { name: "Rewrite of post 4" });
+  fireEvent.click(within(detail).getByRole("button", { name: "Restore original" }));
+  expect(await screen.findByText(/changed since it was rewritten/)).toBeInTheDocument();
+  expect(onSceneChanged).toHaveBeenCalledOnce();
+  expect(onTranscriptEdited).not.toHaveBeenCalled();
+  expect(api.editMessage).toHaveBeenCalledOnce();
+});
+
+test("a rewritten post whose record is gone offers nothing to restore", async () => {
+  (api.getSceneRewrites as any).mockResolvedValue({});
+  (api.getRegex as any).mockResolvedValue({ layer: { rules: [], off: [] }, inherited: [], warnings: {} });
+  renderRewrites();
+  fireEvent.click(await screen.findByRole("button", { name: /Rewritten/ }));
+  expect(await screen.findByText(/no longer has a recorded original/)).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Restore original" })).not.toBeInTheDocument();
 });
