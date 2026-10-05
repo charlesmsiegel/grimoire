@@ -51,8 +51,11 @@ project`): global fields plus this world's own associations and reviews, never
 ``sources``.
 
 Nothing a bundle says about an image is trusted. Every blob is re-hashed
-against its name, every object's id is recomputed *here* from its blob
-(``ingest(..., sanitize=False)`` -- the blobs are already stored bytes), and a
+against its name *as received*, then ingested exactly as an upload is --
+sanitized, which is idempotent on bytes a store already sanitized, so a
+grimoire export re-imports unchanged, while a hand-built blob carrying text
+chunks or trailing bytes cannot become the blob a later local upload of the
+same pixels dedupes onto. Every object's id is recomputed *here*, and a
 staged ref naming a bundle id that differs from the local one is rewritten
 before the world is published: a bundle can never claim an id for pixels it
 does not contain. Descriptions, associations and reviews are merged only after
@@ -97,9 +100,14 @@ _BLOB_MEMBER = re.compile(
     r"image-store/blobs/([0-9a-f]{2})/([0-9a-f]{64})\.(png|jpg|gif|webp)")
 _OBJECT_MEMBER = re.compile(
     r"image-store/objects/([0-9a-f]{2})/(px1-([0-9a-f]{64}))\.json")
-# A projected sidecar is a few hundred bytes; this is a guard against a
-# hand-built bundle making the import parse something enormous.
-_MAX_OBJECT_BYTES = 1024 * 1024
+# A projected sidecar is a few hundred bytes. This caps the *sum* over every
+# object member, checked from the headers before any is read: a per-object cap
+# alone let a small archive of many objects naming one tiny blob expand into
+# gigabytes of parsed metadata (review).
+MAX_OBJECT_BYTES = 64 * 1024 * 1024
+# The longest bundle description merged. Longer is not a description of a
+# picture; it is dropped (and logged) and the image imports undescribed.
+MAX_IMPORTED_DESCRIPTION = 4000
 
 # Sized for a real library rather than a module pack: worlds here run to
 # thousands of files and a gigabyte of character art, so these are a guard
@@ -184,7 +192,8 @@ def write_bundle(wid: str, dest: Path) -> None:
                    compress_type=zipfile.ZIP_DEFLATED)
         for p in sorted(root.rglob("*")):
             try:
-                if atomic.is_write_temp(p) or p.is_symlink() or not p.is_file():
+                if (atomic.is_write_temp(p) or image_refs.is_transient(p)
+                        or p.is_symlink() or not p.is_file()):
                     continue
             except OSError:
                 continue                                    # vanished mid-walk
@@ -318,34 +327,82 @@ def _read_member(z: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes:
         raise BundleError(f"unreadable bundle member {info.filename}: {e}") from e
 
 
-def _read_objects(z: zipfile.ZipFile, members: _Members) -> dict[str, dict]:
-    """Each bundled object's projection, keyed by the id the bundle claims.
+@dataclass(frozen=True)
+class _ObjectMeta:
+    """What the post-publish merge needs from one bundled object, and nothing
+    else: the parsed sidecar is dropped as soon as this is taken from it."""
+    blob_sha: str
+    description: str | None
+    #: The bundle's own-scope associations, scope still the source world's.
+    associations: tuple[dict, ...]
+    #: Whether the source world's scope is among the reviewed subjects.
+    reviewed: bool
+
+
+def _meta_of(raw: dict, sha: str, source_scope: str, filename: str) -> _ObjectMeta:
+    desc = raw.get("description")
+    if isinstance(desc, str) and len(desc) > MAX_IMPORTED_DESCRIPTION:
+        logs.record("warning", __name__,
+                    "bundled image description too long; not imported",
+                    kind="bundle_description_dropped", member=filename,
+                    length=len(desc))
+        desc = None
+    assoc = raw.get("associations")
+    kept = tuple(a for a in assoc if isinstance(a, dict)
+                 and a.get("scope") == source_scope
+                 and all(isinstance(v, str) for v in a.values())
+                 ) if isinstance(assoc, list) else ()
+    reviews = raw.get("reviews")
+    subjects = reviews.get("subjects") if isinstance(reviews, dict) else None
+    reviewed = isinstance(subjects, list) and source_scope in subjects
+    return _ObjectMeta(sha, desc if isinstance(desc, str) else None, kept, reviewed)
+
+
+def _read_objects(z: zipfile.ZipFile, members: _Members,
+                  source_wid: str) -> dict[str, _ObjectMeta]:
+    """Each bundled object's mergeable metadata, keyed by the id the bundle
+    claims.
 
     Checked before any blob is ingested, so a malformed object refuses the
     import without leaving pictures behind. The claimed id is only a key: what
-    the object is called *here* is recomputed from its blob.
+    the object is called *here* is recomputed from its blob. Bounded from the
+    headers before anything is parsed -- the total object bytes, and no more
+    objects than blobs -- and then at most one object per blob: one blob
+    determines one object, so a second naming it can only be padding.
     """
-    out: dict[str, dict] = {}
+    total = sum(i.file_size for i in members.objects.values())
+    if total > MAX_OBJECT_BYTES:
+        raise BundleError(f"bundle image metadata too large ({total} bytes)")
+    if len(members.objects) > len(members.blobs):
+        raise BundleError("bundle has more image objects than image blobs")
+    source_scope = f"world:{source_wid}"
+    out: dict[str, _ObjectMeta] = {}
+    claimed: set[str] = set()
     for bundle_id, info in members.objects.items():
         try:
-            raw = json.loads(_read_member(z, info, _MAX_OBJECT_BYTES))
+            raw = json.loads(_read_member(z, info, MAX_OBJECT_BYTES))
         except (ValueError, RecursionError) as e:
             raise BundleError(f"unreadable image object {info.filename}: {e}") from e
         blob = raw.get("blob") if isinstance(raw, dict) else None
         sha = blob.get("sha256") if isinstance(blob, dict) else None
         if not isinstance(sha, str) or sha not in members.blobs:
             raise BundleError(f"image object names no bundled blob: {info.filename}")
-        out[bundle_id] = raw
+        if sha in claimed:
+            raise BundleError(f"two image objects name one blob: {info.filename}")
+        claimed.add(sha)
+        out[bundle_id] = _meta_of(raw, sha, source_scope, info.filename)
     return out
 
 
 def _ingest_blobs(z: zipfile.ZipFile, members: _Members) -> dict[str, str]:
     """Re-hash and ingest every bundled blob; returns blob sha -> local id.
 
-    ``sanitize=False``: these are bytes a store already sanitized, and
-    re-sanitizing could change them -- and so their name. Ingest is
-    find-or-create, so a blob the library already holds is reused, and a
-    picture it holds under another encoding keeps its own (first wins).
+    The name is checked against the bytes *as received*; ingest then
+    sanitizes them like any upload (see the module docstring), so the local
+    blob can differ from the bundled one only when the bundle's was not one a
+    store would keep. Ingest is find-or-create, so a blob the library already
+    holds is reused, and a picture it holds under another encoding keeps its
+    own (first wins).
     """
     local: dict[str, str] = {}
     for sha, info in members.blobs.items():
@@ -354,7 +411,7 @@ def _ingest_blobs(z: zipfile.ZipFile, members: _Members) -> dict[str, str]:
             raise BundleError(f"image blob does not match its name: {info.filename}")
         ext = info.filename.rsplit(".", 1)[1]
         try:
-            local[sha] = image_store.ingest(data, ext, sanitize=False).id
+            local[sha] = image_store.ingest(data, ext, sanitize=True).id
         except ValueError as e:
             raise BundleError(f"unusable image blob {info.filename}: {e}") from e
     return local
@@ -380,34 +437,30 @@ def _rewrite_refs(staging: Path, id_map: dict[str, str]) -> None:
             image_refs.write(owner, name, id_map[ref.image], focus=ref.focus)
 
 
-def _rescoped(projected: dict, old: str, new: str) -> dict:
-    """`projected` with its own scope `old` renamed to `new`. Anything scoped
-    elsewhere is left as it came, and `merge_projection` then ignores it."""
-    out = dict(projected)
-    assoc = out.get("associations")
-    if isinstance(assoc, list):
-        out["associations"] = [
-            {**a, "scope": new} if isinstance(a, dict) and a.get("scope") == old else a
-            for a in assoc]
-    reviews = out.get("reviews")
-    if isinstance(reviews, dict) and isinstance(reviews.get("subjects"), list):
-        out["reviews"] = {**reviews, "subjects": [new if s == old else s
-                                                  for s in reviews["subjects"]]}
+def _projection(meta: _ObjectMeta, scope: str) -> dict:
+    """`meta` as a projection in the final `scope` -- the bundle's own scope
+    renamed, which is the only one `_meta_of` kept."""
+    out: dict = {}
+    if meta.description is not None:
+        out["description"] = meta.description
+    if meta.associations:
+        out["associations"] = [{**a, "scope": scope} for a in meta.associations]
+    if meta.reviewed:
+        out["reviews"] = {"subjects": [scope]}
     return out
 
 
-def _merge_metadata(projections: list[tuple[str, dict]], source_wid: str,
-                    wid: str) -> None:
+def _merge_metadata(metas: list[tuple[str, _ObjectMeta]], wid: str) -> None:
     """Fill local objects from the bundle's projections, under the final id.
 
     Never raises: the world is published by now, and a failure here costs its
     descriptions and tags, not the world -- so it is reported, not returned as
     a failed import the caller would retry into a duplicate.
     """
-    old, new = f"world:{source_wid}", f"world:{wid}"
-    for local_id, projected in projections:
+    scope = f"world:{wid}"
+    for local_id, meta in metas:
         try:
-            image_store.merge_projection(local_id, _rescoped(projected, old, new), new)
+            image_store.merge_projection(local_id, _projection(meta, scope), scope)
         except Exception as e:  # noqa: BLE001 -- the world exists; see above
             logs.record("warning", __name__,
                         "imported world's image metadata could not be merged",
@@ -445,7 +498,7 @@ def import_bundle(path: Path) -> str:
                              max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)
         manifest = _read_manifest(z, infos)
         members = _world_members(infos, manifest["format"])
-        projected = _read_objects(z, members)
+        metas = _read_objects(z, members, manifest["world_id"])
         # The work directory is the context manager's to name and to remove.
         # It used to be this function's, held in the same name as the world's
         # slug -- which the slug then overwrote, so the cleanup `rmtree`'d a
@@ -457,7 +510,7 @@ def import_bundle(path: Path) -> str:
             local = _ingest_blobs(z, members)
             # bundle id -> local id, for every object; only the ones that
             # differ need a ref rewritten.
-            id_map = {bid: local[raw["blob"]["sha256"]] for bid, raw in projected.items()}
+            id_map = {bid: local[m.blob_sha] for bid, m in metas.items()}
             _rewrite_refs(staging, {bid: lid for bid, lid in id_map.items() if bid != lid})
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:
@@ -469,6 +522,5 @@ def import_bundle(path: Path) -> str:
                 # keep one exception family to catch, and the route keeps
                 # answering 409 for it.
                 raise BundleConflict(str(e)) from e
-    _merge_metadata([(id_map[bid], raw) for bid, raw in projected.items()],
-                    manifest["world_id"], wid)
+    _merge_metadata([(id_map[bid], m) for bid, m in metas.items()], wid)
     return wid
