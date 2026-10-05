@@ -184,6 +184,13 @@ def test_invalid_plan_writes_nothing(home):
     ({"greetings": [{"name": "A", "present": 5}]}, "present must be a list of names"),
     ({"pcs": [{"name": "Old Bram", "tags": 5}]}, "tags must be a list of names"),
     ({"items": [{"name": "X", "fields": {"holder": 5}}]}, "must be a reference"),
+    ({"pcs": [{"name": "Old Bram", "summary": "one\nbirthdate: 1"}]}, "summary must be one line"),
+    ({"locations": [{"name": "X", "fields": {"weather_zone": "a\nb"}}]},
+     "weather_zone must be one line"),
+    ({"lore": [{"name": "X", "keys": ["a\nb"]}]}, "must be one line"),
+    ({"greetings": [{"name": "A", "phase": "a\nb"}]}, "phase must be one line"),
+    ({"greetings": [{"name": "A", "character": 0}]}, "character must be a string"),
+    ({"greetings": [{"name": "A", "location": {"x": 1}}]}, "location must be a string"),
     ({"lore": [{"name": "X", "secrecy": "sercet"}]}, "secrecy must be one of"),
     ({"lore": [{"name": "X", "fields": {"climate": "x"}}]}, "lore has no fields ['climate']"),
     ({"locations": [{"name": "X", "fields": {"persistence": "2"}}]}, "invalid value"),
@@ -261,7 +268,7 @@ def test_check_warns_when_only_tagged_pcs_can_start(home):
     wid = _apply(plan)["world"]
     result = create_world.check_world(wid)
     assert result["ok"], result["errors"]
-    assert any("no greeting is startable without tags" in w for w in result["warnings"])
+    assert any("no onscreen greeting is startable without tags" in w for w in result["warnings"])
 
 
 def test_check_reports_activation_choices(home):
@@ -380,3 +387,22 @@ def test_check_warns_about_an_owner_that_is_never_present(home):
     entities.update_entity(root, "lore", "the-salt-pact", owners="groups:salt-circle")
     warnings = "\n".join(create_world.check_world(wid)["warnings"])
     assert "owner groups:salt-circle can never be present" in warnings
+
+
+def test_an_invalid_user_module_is_refused_before_any_write(home):
+    from grimoire.store import modules
+    mid = modules.create_module("Broken Pack")
+    (home / "modules" / mid / "sheets.json").write_text("{not json", encoding="utf-8")
+    assert modules.load_pack(mid)["errors"]
+    problems = create_world.validate_plan(_plan(module=mid), None, None)
+    assert any(p.startswith(f"module {mid}:") for p in problems), problems
+
+
+def test_an_offscreen_opener_is_no_opening_for_a_pc(home):
+    plan = _plan(greetings=[{"name": "Saltmarch Eve", "character": "Mara", "pcless": True}])
+    wid = _apply(plan)["world"]
+    result = create_world.check_world(wid)
+    assert result["ok"], result["errors"]
+    warnings = "\n".join(result["warnings"])
+    assert "pcs/winifred: can start no onscreen greeting" in warnings
+    assert "no onscreen greeting is startable: every opening" in warnings
