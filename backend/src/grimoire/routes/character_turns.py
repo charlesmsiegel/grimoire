@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import random
+from collections.abc import Callable
 from contextlib import aclosing
 
 import anyio
@@ -28,6 +30,11 @@ from .common import (
 from .models import GroupSettings, RegenerateBody
 
 router = APIRouter()
+
+#: Where a round's planning draws its randomness (talkativeness rolls, the
+#: Natural shuffle). A seam for tests, which patch it to prove a retry or a
+#: recovery continues the stored plan rather than rolling a new one.
+_rng: Callable[[], random.Random] = random.Random
 
 
 def enabled():
@@ -56,14 +63,28 @@ def _fence(cid, sid, run, token):
         )
 
 
+def _settings(cid, sid):
+    return store.group_play.settings_of(store.scenes.read_scene(cid, sid)["meta"])
+
+
+def _handoff_pool(cid, sid, round_record):
+    """The round's eligible actors a Directed handoff may still name: whoever
+    has started sitting out since the round opened is no longer one of them."""
+    out = set(_settings(cid, sid)["sitting_out"])
+    return [entry for entry in round_record["eligible"] if entry["ref"] not in out]
+
+
 def _compose(cid, sid, round_record, actor, conn, appended=()):
     # The prompt must offer the same remaining slots that the engine accepts.
     # Offering the current/used actors teaches an invalid handoff; omitting the
-    # narrator hides a valid slot. Explicit one-response requests have no next.
+    # narrator hides a valid slot. Explicit one-response requests have no next,
+    # and neither does a List/Natural/Manual round: its plan decides, and any
+    # handoff block it writes is ignored.
     used = {*round_record["used"], actor}
-    candidates = [entry for entry in [*round_record["eligible"],
-                                     {"ref": "grimoire", "name": "Grimoire"}]
-                  if round_record["automatic"] and entry["ref"] not in used]
+    offer = round_record["automatic"] and round_record.get("mode", "directed") == "directed"
+    pool = _handoff_pool(cid, sid, round_record) if offer else []
+    candidates = [entry for entry in [*pool, {"ref": "grimoire", "name": "Grimoire"}]
+                  if offer and entry["ref"] not in used]
     kwargs = {
         "turn": round_record.get("turn"),
         "actor_ref": actor,
@@ -96,21 +117,37 @@ def start(
     round_record=None,
     appended=(),
     continuation=None,
+    kind="note",
+    trigger="",
 ):
+    """Open (or resume) a round and hand its frames to a detached run.
+
+    `kind` is what asked for a fresh round -- `post` (a player post),
+    `continue` (an empty send) or `note` (a director note, a replay) -- and
+    `trigger` the text it answers. Together with the scene's group-play order
+    they plan the round's speakers (`_plan`). A resumed round (`round_record`
+    given: a retry, a roll resume) is never re-planned.
+
+    An empty `conn` is the caller saying no connection was needed
+    (`answers_nothing`). If the plan made here says otherwise after all -- the
+    order changed in between -- the connection is required now."""
     with store.locks.campaign_lock(cid):
         token = streaming._claim_turn(cid, sid)
         _fence(cid, sid, run, token)
         if round_record is None:
+            planned = _plan(cid, sid, kind, trigger, actor_ref)
+            if not conn and (planned["actor_ref"]
+                             or not (automatic and planned["mode"] == "manual")):
+                conn = _require_connection("chat", cid)
             round_record = store.responses.new_round(
                 cid,
                 sid,
-                eligible=roster(cid, sid),
                 automatic=automatic,
                 post=post,
                 run_id=run.id,
-                actor_ref=actor_ref,
                 note=note,
                 turn=turn,
+                **planned,
             )
     outcome = streaming.StreamOutcome()
     frames = _frames(
@@ -129,6 +166,96 @@ def start(
     )
     runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
+def _plan(cid, sid, kind, trigger, actor_ref):
+    """The round's `eligible`, lead `actor_ref`, `mode` and remaining `plan`.
+
+    A scene that never stored group-play settings is planned exactly as before
+    they existed: the whole cast eligible, the lead as asked, the selector and
+    handoffs deciding the rest. (Directed's talkativeness filter would
+    otherwise drop each unnamed character half the time at the default 50.)
+
+    An explicit lead (Respond as, a reply-as chip, a replay) is never planned
+    away, sitting out or not. With a post it still opens a round by mode, and
+    in List/Natural the planner's sequence -- the forced lead removed -- is
+    what follows it."""
+    cast = roster(cid, sid)
+    scene = store.scenes.read_scene(cid, sid)
+    if not scene["meta"].get("group_play"):
+        return {"eligible": cast, "actor_ref": actor_ref, "mode": "directed", "plan": []}
+    settings = store.group_play.settings_of(scene["meta"])
+    mode = settings["order"]
+    history = scene["messages"]
+    if kind == "post":
+        planned = store.group_play.plan_post(
+            settings, cast, trigger=trigger, history=history, rng=_rng(),
+            force=(actor_ref,) if actor_ref else ())
+        lead, plan = planned["actor_ref"], planned["plan"]
+        if actor_ref:
+            # The forced ref leads; the planner's own lead, if any, is next.
+            plan = ([lead] if lead else []) + plan
+            lead = actor_ref
+        if mode not in ("list", "natural"):
+            lead, plan = actor_ref, []
+        return {"eligible": planned["eligible"], "actor_ref": lead, "mode": mode, "plan": plan}
+    if actor_ref:
+        return {"eligible": cast, "actor_ref": actor_ref, "mode": mode, "plan": []}
+    lead = None
+    if kind == "continue":
+        lead = store.group_play.plan_continue(
+            settings, cast, last=_last_contribution(cid, sid, history), history=history,
+            rng=_rng())
+    # Sitting-out characters never reach the selector.
+    return {"eligible": store.group_play.available(settings, cast), "actor_ref": lead,
+            "mode": mode, "plan": []}
+
+
+def _last_contribution(cid, sid, history):
+    """The newest contribution an empty send continues from, as the planner
+    takes it: `{"ref", "text"}`, `ref` None for a post the ledger never saw."""
+    last = next((m for m in reversed(history) if m["role"] == "assistant"
+                 and m.get("speaker") not in store.scenes.SYNTHETIC_SPEAKERS), None)
+    if last is None:
+        return None
+    ref = store.responses.actor_refs(cid, sid).get(last.get("response_id") or "")
+    return {"ref": ref, "text": last["content"]}
+
+
+def answers_nothing(cid, sid, *, director, content, speaker_ref):
+    """Whether a send will generate nothing, so needs no connection: a player
+    post naming no speaker in a Manual scene appends the post and completes its
+    round empty -- the player picks who answers with the reply-as chips."""
+    return (not director and bool(content.strip()) and not speaker_ref
+            and not store.scenes.is_pcless(cid, sid)
+            and _settings(cid, sid)["order"] == "manual")
+
+
+def _successor(cid, sid, round_record, handoff, cancelled):
+    """Who speaks after the contribution that just landed.
+
+    `round_record["used"]` must already include that contribution's actor.
+    Directed: the contribution's handoff, validated against the round's
+    eligible minus whoever now sits out; `handed_back` is an explicit
+    `next: null`. List, Natural and Manual: the stored plan alone decides
+    (`next_planned`, which skips whoever has left or started sitting out) and
+    the handoff is ignored. Either way nobody follows a non-automatic round or
+    a Stop, and the plan is cleared with it.
+
+    `{"next", "issue", "plan", "handed_back"}`."""
+    plan = list(round_record.get("plan") or [])
+    issue = None
+    handed_back = False
+    if round_record.get("mode", "directed") == "directed":
+        refs = [entry["ref"] for entry in _handoff_pool(cid, sid, round_record)]
+        nxt, issue = store.response_protocol.validate_handoff(
+            handoff, [*refs, "grimoire"], round_record["used"])
+        handed_back = nxt is None and issue is None
+    else:
+        nxt, plan = store.group_play.next_planned(_settings(cid, sid), roster(cid, sid), plan)
+    if not round_record["automatic"] or cancelled:
+        nxt, plan = None, []
+    return {"next": nxt, "issue": issue, "plan": plan, "handed_back": handed_back}
 
 
 def _selector_messages(cid, sid, round_record):
@@ -174,8 +301,12 @@ def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
                 )
                 return record, messages
         messages, _breakdown = _compose(cid, sid, round_record, actor, conn, appended)
+        # The round's eligible first, then the whole present cast: an explicit
+        # pick a talkativeness roll filtered out is still who they are.
         speaker = next(
-            (r["name"] for r in round_record["eligible"] if r["ref"] == actor), "Grimoire"
+            (r["name"] for r in [*round_record["eligible"], *roster(cid, sid)]
+             if r["ref"] == actor),
+            "Grimoire",
         )
         if pending and appended:
             record = store.responses.get(cid, sid, pending, private=True)
@@ -429,6 +560,11 @@ def _pause(cid, sid, run, token, record, watcher, round_record, continuation, ou
 
 async def _first_actor(cid, sid, client, round_record):
     actor = round_record.get("actor_ref")
+    if actor is None and round_record["automatic"] and round_record.get("mode") == "manual":
+        # A Manual post: nobody answers until the player picks who.
+        round_record = await run_in_threadpool(
+            _round_state, cid, sid, round_record, status="complete")
+        return None, round_record
     if actor is None:
         actor, issue = await _select(cid, sid, client, round_record)
         round_record = await run_in_threadpool(
@@ -548,12 +684,14 @@ async def _frames(
                 return
             used = [*round_record["used"], actor]
             # Persistence is complete before metadata may authorize a successor.
-            next_actor, issue = store.response_protocol.validate_handoff(
-                watcher.handoff, [r["ref"] for r in round_record["eligible"]] + ["grimoire"], used
+            # The end frame goes out first, so a Stop or a sit-out the player
+            # gives on seeing it is what the successor choice reads.
+            yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
+            after = await run_in_threadpool(
+                _successor, cid, sid, {**round_record, "used": used}, watcher.handoff,
+                run.cancel_requested,
             )
-            next_actor = (
-                next_actor if round_record["automatic"] and not run.cancel_requested else None
-            )
+            next_actor, issue = after["next"], after["issue"]
             round_record = await run_in_threadpool(
                 _round_state,
                 cid,
@@ -562,13 +700,13 @@ async def _frames(
                 used=used,
                 pending_response=None,
                 actor_ref=next_actor,
+                plan=after["plan"],
                 status="pending" if next_actor else "complete",
                 issue=issue,
                 continuation=None,
                 completed_response=record["id"],
                 control_issue=issue,
             )
-            yield streaming._sse({"response_end": {"id": record["id"], "status": status}})
             actor = next_actor
             record = None
             watcher = None
@@ -777,22 +915,18 @@ def _recover_completed(cid, sid, run, token, round_record):
             store.responses.publish_saved(cid, sid, pending)
         variant = next(v for v in record["variants"] if v["id"] == record["active_variant"])
         used = list(dict.fromkeys([*round_record["used"], record["actor_ref"]]))
-        actor, issue = store.response_protocol.validate_handoff(
-            variant.get("handoff"),
-            [r["ref"] for r in round_record["eligible"]] + ["grimoire"],
-            used,
-        )
-        if not round_record["automatic"] or run.cancel_requested:
-            actor = None
+        after = _successor(cid, sid, {**round_record, "used": used}, variant.get("handoff"),
+                           run.cancel_requested)
         return _round_state(
             cid,
             sid,
             round_record,
             used=used,
             pending_response=None,
-            actor_ref=actor,
-            status="pending" if actor else "complete",
-            issue=issue,
+            actor_ref=after["next"],
+            plan=after["plan"],
+            status="pending" if after["next"] else "complete",
+            issue=after["issue"],
             continuation=None,
         )
 

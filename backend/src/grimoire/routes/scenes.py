@@ -612,7 +612,18 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     _require_scene(cid, sid)
     if character_turns.enabled() or turn.speaker_ref:
         character_turns.validate_actor(cid, sid, turn.speaker_ref)
-    conn = _require_connection("chat", cid)
+    try:
+        conn = _require_connection("chat", cid)
+    except HTTPException as exc:
+        # A Manual-mode post naming no speaker generates nothing, so a missing
+        # connection is no reason to refuse it. `{}` tells the engine none was
+        # resolved; it requires one after all if its plan turns out to speak.
+        if not (isinstance(exc.detail, dict) and exc.detail.get("kind") == "missing_key"
+                and character_turns.answers_nothing(
+                    cid, sid, director=turn.director, content=turn.content,
+                    speaker_ref=turn.speaker_ref)):
+            raise
+        conn = {}
     # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
     # sidecar block can retire a proposal, so a 409 raised after them would
     # tell the player nothing happened when something already had. The
@@ -796,7 +807,9 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             cid,sid,request,client,conn,run,post=posted_at,
             note=(content or prompts.render("scene/director_note.j2")) if ephemeral else "",
             turn=_turn_override(turn),automatic=not ephemeral,
-            actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client))
+            actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client),
+            kind="post" if not ephemeral else ("note" if content else "continue"),
+            trigger=content)
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default
