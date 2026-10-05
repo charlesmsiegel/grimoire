@@ -236,10 +236,17 @@ def roll_label(resolution: dict) -> str:
     return f"{resolution['actor_label']} — {resolution['check_label']}"
 
 
+def dice_segment(result: dict) -> str:
+    """`dice.format_roll`'s line without its `` `notation` → `` head -- the part
+    a check line carries. Shared with `store/branch.py`, which matches a check
+    line back to its roll-log entry by it."""
+    return _DICE_HEAD_RE.sub("", dice.format_roll(result), count=1)
+
+
 def format_check_roll(resolution: dict) -> str:
     """The 🎲 transcript line for a resolved check; delegates the dice
     segment to `dice.format_roll` rather than reimplementing it."""
-    segment = _DICE_HEAD_RE.sub("", dice.format_roll(resolution["result"]), count=1)
+    segment = dice_segment(resolution["result"])
     head = f"\U0001F3B2 **{roll_label(resolution)}"
     if resolution.get("difficulty") is not None:
         head += f" (diff {resolution['difficulty']})"

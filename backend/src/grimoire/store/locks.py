@@ -325,6 +325,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # finishing. New module (#72), so it starts inside the exclusion rather
     # than joining the frozen `UNREVIEWED` backlog.
     "store.fork",
+    # Branching a scene builds a sibling out of a transcript copy and one copy
+    # helper per record module, then cuts it -- all inside one campaign-lock
+    # hold, so a turn cannot append to the source mid-copy and nobody sees the
+    # sibling between its file landing and its records following. New module
+    # (play controls III), so it starts inside the exclusion.
+    "store.branch",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",

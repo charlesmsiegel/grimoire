@@ -7,9 +7,14 @@ absorbed member reopens the rest with no bookkeeping — which is what most of
 the store tests below pin.
 """
 
+import json
+import uuid
+
 import pytest
 
-from grimoire.store import campaigns, scenes, worlds
+from grimoire import routes, store
+from grimoire.store import branch, campaigns, checks, dice, entities, scene_ids, scenes, worlds
+from tests.llm_fakes import FakeLLM
 
 
 @pytest.fixture
@@ -97,3 +102,276 @@ def test_setting_branch_keys_does_not_touch_updated(cid):
 def test_setting_branch_keys_on_a_missing_scene_raises(cid):
     with pytest.raises(scenes.SceneNotFound):
         scenes.write.set_branch_keys(cid, "999--nobody", "a" * 32)
+
+
+# --- the primitive: store/branch.py -----------------------------------------
+
+
+def seed(client, module=None):
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid, module=module)
+    sid = store.scenes.create_scene(cid, "Mara")
+    for name in ("Mara", "Winifred"):
+        response = client.post(f"/api/campaigns/{cid}/characters", json={"name": name})
+        assert response.status_code == 200, response.text
+        actor = response.json()["character"]
+        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast", json={"id": actor})
+        assert response.status_code == 200, response.text
+    return cid, sid
+
+
+def _turn(client, cid, sid, content):
+    fake = FakeLLM([['Mara answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                    json={"content": content, "speaker_ref": "characters:mara"})
+    assert r.status_code == 200, r.text
+
+
+def _two_turns(client):
+    cid, sid = seed(client)
+    _turn(client, cid, sid, "Hello")
+    _turn(client, cid, sid, "Onward")
+    assert [m["role"] for m in store.scenes.read_scene(cid, sid)["messages"]] == \
+        ["user", "assistant", "user", "assistant"]
+    return cid, sid
+
+
+def _shape(messages):
+    return [(m["role"], m.get("speaker"), m["content"]) for m in messages]
+
+
+def test_branch_keeps_exactly_the_posts_through_the_branch_point(client):
+    cid, sid = _two_turns(client)
+    new = store.branch.branch_scene(cid, sid, 1)
+    src, out = (store.scenes.read_scene(cid, s)["messages"] for s in (sid, new))
+    assert _shape(out) == _shape(src[:2])
+    assert sum(store.scenes.get_turn_sizes(cid, new)) <= 1
+    assert len(store.scenes.read_scene(cid, sid)["messages"]) == 4   # source untouched
+
+
+def test_the_source_file_is_never_written(client):
+    cid, sid = _two_turns(client)
+    path = store.scenes._scene_path(cid, sid)
+    before = path.read_bytes()
+    store.branch.branch_scene(cid, sid, 1)
+    assert path.read_bytes() == before
+
+
+def test_branch_rewinds_location_history(cid):
+    root = campaigns.campaign_root(cid)
+    entities.create_entity(root, "locations", "The Wharf", body="")
+    entities.create_entity(root, "locations", "The Chapel", body="")
+    sid = scenes.create_scene(cid, "Moving")
+    scenes.set_location(cid, sid, "the-wharf")          # first is silent
+    scenes.append_message(cid, sid, "user", "we go inland")
+    scenes.set_location(cid, sid, "the-chapel")         # appends a transition line
+    scenes.append_message(cid, sid, "user", "at the chapel")
+    new = branch.branch_scene(cid, sid, 0)
+    assert scenes.get_location_history(cid, new) == ["the-wharf"]
+    assert scenes.get_location_history(cid, sid) == ["the-wharf", "the-chapel"]
+
+
+def test_the_sibling_sorts_directly_after_its_source(cid):
+    first, second, third = (_played(cid, t) for t in ("Mara", "Winifred", "Seraphine"))
+    new = branch.branch_scene(cid, first, 0)
+    assert sorted(s["id"] for s in scenes.list_scenes(cid)) == [first, new, second, third]
+    assert scene_ids.parse_sid(new)["number"] == scene_ids.parse_sid(first)["number"]
+    assert scenes.read_scene_meta(cid, new)["title"] == "Mara (branch)"
+
+
+def test_a_second_branch_is_titled_with_a_number(cid):
+    sid = _played(cid, "Mara")
+    branch.branch_scene(cid, sid, 0)
+    new = branch.branch_scene(cid, sid, 1)
+    assert scenes.read_scene_meta(cid, new)["title"] == "Mara (branch) 2"
+
+
+def test_a_caller_title_is_used(cid):
+    sid = _played(cid, "Mara")
+    new = branch.branch_scene(cid, sid, 0, title="  Winifred  ")
+    assert scenes.read_scene_meta(cid, new)["title"] == "Winifred"
+
+
+def test_siblings_share_a_group_and_name_their_source(cid):
+    sid = _played(cid, "Mara")
+    ident = scenes.scene_identity(cid, sid)
+    one = branch.branch_scene(cid, sid, 0)
+    assert scenes.scene_identity(cid, one) != ident
+    meta = scenes.read_scene_meta(cid, one)
+    assert meta["branch_of"] == ident and meta["branch_group"] == ident
+    assert "branch_group" not in scenes.read_scene_meta(cid, sid)   # source never written
+    two = branch.branch_scene(cid, sid, 1)
+    deep = branch.branch_scene(cid, one, 0)
+    assert scenes.read_scene_meta(cid, two)["branch_group"] == ident
+    assert scenes.read_scene_meta(cid, deep)["branch_group"] == ident
+    assert scenes.read_scene_meta(cid, deep)["branch_of"] == scenes.scene_identity(cid, one)
+    rows = {r["id"]: r for r in scenes.list_scenes(cid)}
+    assert {rows[s]["branch_group"] for s in (sid, one, two, deep)} == {ident}
+
+
+def test_the_sibling_never_copies_absorb_or_summary_state(cid):
+    sid = _played(cid, "Mara")
+    scenes.set_rolling_summary(cid, sid, "So far.", 1, "d", "f")
+    scenes.stamp_greeting(cid, sid, "g1")
+    scenes.set_response(cid, sid, {"length_reply_words": "120"})
+    scenes.add_dismissed(cid, sid, "characters/winifred")
+    new = branch.branch_scene(cid, sid, 1)
+    meta = scenes.read_scene_meta(cid, new)
+    assert not {"done", "one_line", "summary", "greeting", "rolling_summary"} & set(meta)
+    assert meta["length_reply_words"] == "120"
+    assert meta["dismissed"] == "characters/winifred"
+
+
+def test_through_the_last_post_does_not_cut(cid, monkeypatch):
+    sid = _played(cid, "Mara", posts=3)
+
+    def refuse(*a, **k):
+        raise AssertionError("no cut expected")
+
+    monkeypatch.setattr(scenes.write, "delete_from", refuse)
+    new = branch.branch_scene(cid, sid, 2)
+    assert len(scenes.read_scene(cid, new)["messages"]) == 3
+
+
+def test_a_point_inside_a_multi_part_response_snaps_to_its_last_part(cid):
+    sid = _played(cid, "Mara", posts=1)
+    rid = uuid.uuid4().hex
+    scenes.append_reply(cid, sid, [
+        {"role": "assistant", "speaker": "Mara", "content": "One.", "response_id": rid,
+         "response_part": "", "response_status": "complete"},
+        {"role": "assistant", "speaker": "Mara", "content": "Two.", "response_id": rid,
+         "response_part": "1", "response_status": "complete"}])
+    scenes.append_message(cid, sid, "user", "After.")
+    new = branch.branch_scene(cid, sid, 1)
+    assert [m["content"] for m in scenes.read_scene(cid, new)["messages"]] == \
+        ["Mara post 0", "One.", "Two."]
+
+
+def test_deleting_the_source_leaves_the_siblings_responses(client):
+    cid, sid = _two_turns(client)
+    new = store.branch.branch_scene(cid, sid, 3)
+    rid = store.scenes.read_scene(cid, new)["messages"][-1]["response_id"]
+    assert rid not in {m.get("response_id") for m in store.scenes.read_scene(cid, sid)["messages"]}
+    store.scenes.delete_scene(cid, sid)
+    rec = store.responses.get(cid, new, rid, private=True)
+    assert rec["snapshot"]                         # snapshot file survived
+
+
+def test_rerolling_a_response_in_the_sibling_works(client):
+    cid, sid = _two_turns(client)
+    new = store.branch.branch_scene(cid, sid, 1)
+    rid = store.scenes.read_scene(cid, new)["messages"][-1]["response_id"]
+    before = len(store.responses.get(cid, new, rid)["variants"])
+    fake = FakeLLM([['Mara answers again.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = client.post(f"/api/campaigns/{cid}/scenes/{new}/responses/{rid}/regenerate", json={})
+    assert r.status_code == 200, r.text
+    assert "error" not in r.text, r.text
+    assert len(store.responses.get(cid, new, rid)["variants"]) == before + 1
+    assert store.scenes.read_scene(cid, new)["messages"][-1]["content"] == "Mara answers again."
+    assert store.scenes.read_scene(cid, sid)["messages"][1]["content"] == "Mara answers."
+
+
+def test_the_sibling_has_cast_and_presence(client):
+    cid, sid = _two_turns(client)
+    new = store.branch.branch_scene(cid, sid, 1)
+    data = store.appearances.paths.record(cid)
+    seated = {ref for ref, rec in data.items() if new in rec.get("scenes", [])}
+    assert seated == {ref for ref, rec in data.items() if sid in rec.get("scenes", [])}
+    for ref in seated:
+        if sid in data[ref].get("presence", {}):
+            assert new in data[ref]["presence"]
+
+
+def test_kept_roll_lines_carry_their_entries(client):
+    cid, sid = seed(client)
+    _turn(client, cid, sid, "Hello")
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/roll", json={"notation": "1d20"})
+    assert r.status_code == 200, r.text
+    _turn(client, cid, sid, "Onward")
+    rid = store.scenes.read_scene(cid, sid)["messages"][1]["response_id"]
+    past = store.branch.branch_scene(cid, sid, 3)
+    assert store.audit.prompt.roll_lines(cid, past) == store.audit.prompt.roll_lines(cid, sid)
+    assert len(store.audit.prompt.roll_lines(cid, past)) == 1
+    clone = store.scenes.read_scene(cid, past)["messages"][1]["response_id"]
+    assert store.responses.get(cid, past, clone)["mechanically_locked"] is True
+    before = store.branch.branch_scene(cid, sid, 1)
+    assert store.audit.prompt.roll_lines(cid, before) == []
+    clone = store.scenes.read_scene(cid, before)["messages"][1]["response_id"]
+    assert "mechanically_locked" not in store.responses.get(cid, before, clone)
+    assert store.responses.get(cid, sid, rid)["mechanically_locked"] is True
+
+
+def test_identical_roll_lines_consume_entries_in_order(cid):
+    r = dice.roll("1d20", 3)
+    line = dice.format_roll(r)
+    entries = [{"id": "r1", "scene": "s", "label": None, "result": r},
+               {"id": "r2", "scene": "s", "label": None, "result": r}]
+    assert branch.match_rolls(entries, [line, line]) == ["r1", "r2"]
+    assert branch.match_rolls(entries, [line]) == ["r1"]
+
+
+def test_a_check_line_matches_by_label_and_result(cid):
+    r = dice.roll("1d20+2", 5)
+    resolution = {"actor_label": "Mara", "check_label": "Brawl", "result": r,
+                  "difficulty": 12, "tier": "success"}
+    entry = {"id": "r1", "scene": "s", "label": checks.roll_label(resolution),
+             "result": r, "tier": "success"}
+    assert branch.match_rolls([entry], [checks.format_check_roll(resolution)]) == ["r1"]
+
+
+def test_an_unmatched_line_copies_nothing(cid):
+    r = dice.roll("1d20", 3)
+    entries = [{"id": "r1", "scene": "s", "label": None, "result": r},
+               {"id": "r2", "scene": "s", "label": None, "result": {"bad": True}}]
+    assert branch.match_rolls(entries, ["🎲 `2d6` → [1, 1] = **2**"]) == []
+
+
+def test_branching_an_absorbed_scene_is_refused(cid):
+    sid = _played(cid, "Mara")
+    scenes.mark_absorbed(cid, sid, "x", "y")
+    with pytest.raises(branch.BranchRefused) as exc:
+        branch.branch_scene(cid, sid, 0)
+    assert exc.value.kind == "absorbed_use_fork"
+
+
+def test_branching_a_closed_scene_is_refused(cid):
+    sid = _played(cid, "Mara")
+    sibling = branch.branch_scene(cid, sid, 0)
+    scenes.mark_absorbed(cid, sibling, "x", "y")
+    with pytest.raises(branch.BranchRefused) as exc:
+        branch.branch_scene(cid, sid, 0)
+    assert exc.value.kind == "branch_closed"
+
+
+def test_an_out_of_range_point_is_an_index_error(cid):
+    sid = _played(cid, "Mara")
+    before = {s["id"] for s in scenes.list_scenes(cid)}
+    for through in (-1, 2):
+        with pytest.raises(IndexError):
+            branch.branch_scene(cid, sid, through)
+    assert {s["id"] for s in scenes.list_scenes(cid)} == before
+
+
+def test_a_failure_part_way_leaves_no_sibling(client, monkeypatch):
+    cid, sid = _two_turns(client)
+    before = {s["id"] for s in store.scenes.list_scenes(cid)}
+    baselines_before = store.audit.baselines.read_baselines(cid)
+    revision = store.revision.current(cid)
+
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(store.audit.baselines, "copy_baseline", boom)
+    with pytest.raises(RuntimeError):
+        store.branch.branch_scene(cid, sid, 1)
+    assert {s["id"] for s in store.scenes.list_scenes(cid)} == before
+    data = json.loads((store.campaigns.campaign_root(cid) / "responses.json").read_text())
+    assert set(data["scenes"]) == {store.scenes.scene_identity(cid, sid)}
+    assert store.audit.baselines.read_baselines(cid) == baselines_before
+    for rec in store.appearances.paths.record(cid).values():
+        assert set(rec.get("scenes", [])) <= before
+        assert set(rec.get("presence", {})) <= before
+    assert store.revision.current(cid) != revision
