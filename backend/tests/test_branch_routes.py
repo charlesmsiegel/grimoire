@@ -88,6 +88,7 @@ def test_every_transcript_door_refuses_a_closed_scene(closed, client):
                                       "timeline_events": [], "edits": [], "commit_token": "t"}),
         ("post", f"{base}/first-post", {"text": "The lamps are lit."}),
         ("post", f"{base}/start-from-greeting", {"greeting": "g1"}),
+        ("post", f"{base}/branch", {"through": 0}),
     ]
     before = store.scenes._scene_path(cid, sid).read_bytes()
     for method, path, body in calls:
@@ -178,3 +179,59 @@ def test_an_open_member_is_not_refused(client):
         r = client.put(f"/api/campaigns/{cid}/scenes/{s}/messages/0", json={"content": "edited"})
         assert r.status_code == 200, r.text
 
+
+# --- POST .../branch and closed_by on the payload ------------------------------
+
+
+def test_branch_route_answers_the_sibling(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "Mara waits.")
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/branch", json={"through": 0})
+    assert r.status_code == 200, r.text
+    assert r.json()["scene"]["meta"]["title"] == "Mara (branch)"
+    assert r.json()["id"] in {s["id"] for s in store.scenes.list_scenes(cid)}
+    assert [m["content"] for m in r.json()["scene"]["messages"]] == ["Mara waits."]
+
+
+def test_branch_route_refusals(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "Mara waits.")
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    r = client.post(f"{base}/branch", json={"through": 9})
+    assert r.status_code == 400, r.text
+    b = client.post(f"{base}/branch", json={"through": 0}).json()["id"]
+    store.scenes.mark_absorbed(cid, sid, "x", "y")
+    r = client.post(f"{base}/branch", json={"through": 0})
+    assert r.status_code == 409 and r.json().get("kind") == "absorbed_use_fork", r.text
+    r = client.post(f"/api/campaigns/{cid}/scenes/{b}/branch", json={"through": 0})
+    assert r.status_code == 409 and r.json().get("kind") == "branch_closed", r.text
+    assert r.json()["closed_by"]["sid"] == sid
+    r = client.post(f"/api/campaigns/{cid}/scenes/999--nobody/branch", json={"through": 0})
+    assert r.status_code == 404, r.text
+
+
+def test_branch_route_takes_a_title(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "Mara waits.")
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/branch",
+                    json={"through": 0, "title": "Winifred"})
+    assert r.status_code == 200, r.text
+    assert r.json()["scene"]["meta"]["title"] == "Winifred"
+
+
+def test_branch_route_stamps_the_campaign_revision(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "Mara waits.")
+    before = store.revision.current(cid)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/branch", json={"through": 0})
+    assert r.status_code == 200, r.text
+    assert store.revision.current(cid) != before
+
+
+def test_the_scene_payload_names_who_closed_it(closed, client):
+    cid, absorbed, sid = closed
+    for params in ({}, {"limit": 1}):
+        meta = client.get(f"/api/campaigns/{cid}/scenes/{sid}", params=params).json()["meta"]
+        assert meta["closed_by"] == {"sid": absorbed, "title": "Mara"}
+    meta = client.get(f"/api/campaigns/{cid}/scenes/{absorbed}").json()["meta"]
+    assert "closed_by" not in meta

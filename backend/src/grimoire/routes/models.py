@@ -703,6 +703,13 @@ class RenameScene(BaseModel):
     title: str
 
 
+class BranchScene(BaseModel):
+    """Branch a scene from a post: the sibling keeps `messages[: through + 1]`.
+    An empty `title` takes "<source title> (branch)"."""
+    through: int
+    title: str = ""
+
+
 class ChronicleSave(BaseModel):
     one_line: str = ""
     summary: str = ""

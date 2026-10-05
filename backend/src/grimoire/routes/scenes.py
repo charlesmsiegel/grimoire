@@ -54,6 +54,7 @@ from .common import (
 from .models import (
     Appear,
     AppearBatch,
+    BranchScene,
     ChatTurn,
     ChronicleSave,
     Dismiss,
@@ -547,6 +548,11 @@ def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
         if found is not None:
             message["rewritten"] = True
             message["rewrite_key"] = found[0]
+    # Which absorbed sibling makes this branch read-only, resolved here so the
+    # play view's banner can name and link it. Only when set.
+    closed = store.scenes.read.closed_by(cid, sid)
+    if closed:
+        scene["meta"]["closed_by"] = closed
     return scene
 
 
@@ -636,6 +642,31 @@ def get_scene_rewrites(cid: str, sid: str):
     return {key: {"original": rec["original"], "rules": rec.get("rules", []),
                   "at": rec.get("at", "")}
             for key, rec in store.regex.rewrites.read_all(cid, sid).items()}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/branch")
+def post_branch(cid: str, sid: str, body: BranchScene, request: Request) -> dict:
+    """Branch a scene from a post into a sibling scene (play controls III).
+
+    The sibling keeps the transcript through `through` and the records that go
+    with it (`store/branch.py`). An absorbed scene is refused
+    `absorbed_use_fork` -- its past lives in campaign files, so it branches by
+    forking the campaign (`POST /fork` with `from_index`) -- and a closed one
+    `branch_closed`. Held like any shape change: a live turn would append to
+    the transcript mid-copy. The activity middleware stamps the revision.
+    """
+    _require_scene(cid, sid)
+    try:
+        with runs.scene_held_open(request.app, cid, sid):
+            new = store.branch.branch_scene(cid, sid, body.through, title=body.title.strip())
+        return {"id": new, "scene": store.scenes.read_scene(cid, new)}
+    except store.branch.BranchRefused as exc:
+        raise HTTPException(status_code=409,
+                            detail={"kind": exc.kind, "detail": exc.detail}) from exc
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}")
