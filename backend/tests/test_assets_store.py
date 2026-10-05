@@ -1,5 +1,6 @@
 import errno
 import io
+import json
 import os
 import re
 
@@ -1086,3 +1087,292 @@ def test_campaign_focus_override_list_and_detail_agree(tmp_path):
     # a later world crop does not reach past the campaign's override
     assets.write_focus(wroot, chid, vid, 90)
     assert overlay.read_focus(cid, chid, vid) == 40 == row()["avatar_focus"]
+
+
+def test_link_in_keeps_legacy_files_when_the_new_ref_does_not_resolve(tmp_path):
+    """Redundant data beats lost data (spec section 6): a placement whose
+    object has not arrived must not cost the name the bytes it still has."""
+    d = tmp_path / "lib"
+    d.mkdir()
+    legacy = d / "gallery_1.png"
+    legacy.write_bytes(b"LEGACY")
+    obj = image_store.ingest(_png(95), "png")
+    image_store.object_path(obj.id).unlink()           # the object has not synced in yet
+    assets.link_in(d, "gallery_1", obj.id)
+    assert image_refs.read(d, "gallery_1").image == obj.id
+    assert legacy.read_bytes() == b"LEGACY"
+    assert assets.path_in(d, "gallery_1") == legacy
+
+
+def test_heal_treats_an_unresolved_avatar_ref_as_present(tmp_path):
+    """An avatar placement whose object has not synced in is still the avatar:
+    a healed stray must not take the slot it will resolve into."""
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    obj = image_store.ingest(_png(96), "png")
+    image_store.object_path(obj.id).unlink()
+    image_refs.write(d, assets.AVATAR, obj.id)
+    (d / "promote-tmp.png").write_bytes(b"STRANDED")
+
+    assert assets.image_path(tmp_path, "sera", "default", assets.AVATAR) is None
+    assert (d / "gallery_1.png").read_bytes() == b"STRANDED"
+    assert not (d / "avatar.png").exists()
+    assert image_refs.read(d, assets.AVATAR).image == obj.id
+
+
+# ---- promotion: a journalled ref swap ---------------------------------------
+
+def _blobs():
+    root = image_store.store_root() / "blobs"
+    return sorted(p for p in root.rglob("*") if p.is_file()) if root.exists() else []
+
+
+def _slot_ids(tmp_path, *names):
+    d = _vdir(tmp_path)
+    return tuple(getattr(image_refs.read(d, n), "image", None) for n in names)
+
+
+def _write_descriptions(tmp_path, mapping):
+    (_vdir(tmp_path) / assets.DESCRIPTIONS_FILE).write_text(json.dumps(mapping), encoding="utf-8")
+
+
+def _descriptions(tmp_path):
+    p = _vdir(tmp_path) / assets.DESCRIPTIONS_FILE
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+
+
+def _two_slots(tmp_path):
+    """An avatar and gallery_1, each described, the avatar cropped; their ids."""
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(80), "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(81), "png")
+    assets.write_focus(tmp_path, "sera", "default", 30)
+    _write_descriptions(tmp_path, {"avatar": "Seraphine at the gate",
+                                   "gallery_1": "Seraphine on the stair"})
+    return _slot_ids(tmp_path, assets.AVATAR, "gallery_1")
+
+
+def _assert_swapped(tmp_path, a, g):
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (g, a)
+    assert _descriptions(tmp_path) == {"avatar": "Seraphine on the stair",
+                                       "gallery_1": "Seraphine at the gate"}
+    assert image_refs.read_journal(_vdir(tmp_path)) is None
+
+
+def _no_ingest(monkeypatch):
+    """A reference operation never reads bytes back into the store."""
+    def ingest(*args, **kwargs):
+        raise AssertionError("bytes were re-ingested")
+    monkeypatch.setattr(image_store, "ingest", ingest)
+
+
+def test_promote_swaps_refs_without_new_blobs(tmp_path, monkeypatch):
+    a, g = _two_slots(tmp_path)
+    before = _blobs()
+    _no_ingest(monkeypatch)
+    assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assert _blobs() == before
+    _assert_swapped(tmp_path, a, g)
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+    assert image_refs.read(_vdir(tmp_path), assets.AVATAR).focus is None
+
+
+def test_promote_without_avatar_deletes_source_slot(tmp_path, monkeypatch):
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(82), "png")
+    _write_descriptions(tmp_path, {"gallery_1": "Mara by the window"})
+    [g] = _slot_ids(tmp_path, "gallery_1")
+    _no_ingest(monkeypatch)
+    assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    d = _vdir(tmp_path)
+    assert _slot_ids(tmp_path, assets.AVATAR) == (g,)
+    assert image_refs.read(d, "gallery_1") is None
+    assert assets.path_in(d, "gallery_1") is None
+    assert _descriptions(tmp_path) == {"avatar": "Mara by the window"}
+    assert [r["name"] for r in assets.list_images(tmp_path, "sera", "default")] == ["avatar"]
+    assert image_refs.read_journal(d) is None
+
+
+def test_promote_legacy_slots_adopted(tmp_path):
+    d = _vdir(tmp_path)
+    d.mkdir(parents=True)
+    (d / "avatar.png").write_bytes(_png(83))
+    (d / "gallery_1.png").write_bytes(_png(84))
+    assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    assert not [p for p in d.iterdir() if p.is_file() and p.suffix == ".png"]
+    # ingesting the same pictures again names the objects the swap placed
+    old, new = image_store.ingest(_png(83), "png").id, image_store.ingest(_png(84), "png").id
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (new, old)
+
+
+def _crash_on_write(monkeypatch, nth):
+    """Make the `nth` placement write after the journal lands raise."""
+    real_write, real_journal = image_refs.write, image_refs.write_journal
+    seen = [None]
+
+    def write_journal(d, journal):
+        real_journal(d, journal)
+        seen[0] = 0
+
+    def write(*args, **kwargs):
+        if seen[0] is not None:
+            seen[0] += 1
+            if seen[0] == nth:
+                raise OSError("crash")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(image_refs, "write_journal", write_journal)
+    monkeypatch.setattr(image_refs, "write", write)
+
+
+def test_promote_crash_after_journal_rolls_forward(tmp_path, monkeypatch):
+    a, g = _two_slots(tmp_path)
+    _crash_on_write(monkeypatch, 1)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)   # nothing moved yet
+    assert image_refs.read_journal(_vdir(tmp_path)) is not None
+
+    assets.list_images(tmp_path, "sera", "default")
+    _assert_swapped(tmp_path, a, g)
+    assert assets.read_focus(tmp_path, "sera", "default") is None
+
+
+def test_promote_crash_after_avatar_write_rolls_forward(tmp_path, monkeypatch):
+    a, g = _two_slots(tmp_path)
+    _crash_on_write(monkeypatch, 2)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (g, g)   # mid-swap
+
+    p = assets.image_path(tmp_path, "sera", "default", "gallery_1")
+    assert p == image_refs.resolve(_vdir(tmp_path), "gallery_1").blob_path
+    _assert_swapped(tmp_path, a, g)
+
+
+def test_crash_after_description_write_does_not_double_swap(tmp_path, monkeypatch):
+    a, g = _two_slots(tmp_path)
+
+    def clear_journal(d):
+        raise OSError("crash")
+
+    monkeypatch.setattr(image_refs, "clear_journal", clear_journal)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    assert image_refs.read_journal(_vdir(tmp_path)) is not None
+
+    images, _focus, stamps = assets.version_art(tmp_path, "sera", "default")
+    _assert_swapped(tmp_path, a, g)        # each picture keeps its own description
+    assert stamps is not None
+    assert {i["name"]: i["image_id"] for i in images} == {"avatar": g, "gallery_1": a}
+
+
+def test_stale_journal_discarded(tmp_path):
+    a, g = _two_slots(tmp_path)
+    x, y = image_store.ingest(_png(90), "png").id, image_store.ingest(_png(91), "png").id
+    d = _vdir(tmp_path)
+    image_refs.write_journal(d, {"name": "gallery_1",
+                                 "pre": {"avatar": x, "gallery_1": y},
+                                 "post": {"avatar": y, "gallery_1": x},
+                                 "desc": {"avatar": "wrong", "gallery_1": "wrong"}})
+    assets.list_images(tmp_path, "sera", "default")
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
+    assert _descriptions(tmp_path) == {"avatar": "Seraphine at the gate",
+                                       "gallery_1": "Seraphine on the stair"}
+    assert image_refs.read_journal(d) is None
+    assert assets.read_focus(tmp_path, "sera", "default") == 30
+
+    image_refs.write_journal(d, {"name": "../avatar", "pre": [], "post": None})
+    assert assets.image_path(tmp_path, "sera", "default", "gallery_1") is not None
+    assert image_refs.read_journal(d) is None          # a malformed journal goes too
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
+
+
+def test_recovery_never_waits_on_a_busy_slot(tmp_path, monkeypatch):
+    """A read that finds a journal while the slots are held (a promotion in
+    flight, or a caller holding one slot's lock as `delete_image` does while it
+    looks) leaves the journal for the next read rather than waiting."""
+    import threading
+
+    a, g = _two_slots(tmp_path)
+    _crash_on_write(monkeypatch, 1)
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+
+    d = _vdir(tmp_path)
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with assets._image_lock(d, assets.AVATAR):
+            held.set()
+            release.wait(timeout=10)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    try:
+        assert held.wait(timeout=5)
+        assets.list_images(tmp_path, "sera", "default")          # returns, does not wait
+        assert image_refs.read_journal(d) is not None
+        assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
+    finally:
+        release.set()
+        t.join(timeout=10)
+    assets.list_images(tmp_path, "sera", "default")
+    _assert_swapped(tmp_path, a, g)
+
+
+def test_promote_never_overwrites_a_journal_it_could_not_finish(tmp_path, monkeypatch):
+    """A half-done swap's journal is the only record of the picture it moved
+    out of the avatar slot. A promotion of ANOTHER slot that cannot finish it
+    first (its slot busy) must refuse rather than write its own over it."""
+    import threading
+
+    a, g = _two_slots(tmp_path)
+    assets.put_image(tmp_path, "sera", "default", "gallery_2", _png(85), "png")
+    _crash_on_write(monkeypatch, 2)          # avatar written, gallery_1 not
+    with pytest.raises(OSError):
+        assets.promote_image(tmp_path, "sera", "default", "gallery_1")
+    monkeypatch.undo()
+    d = _vdir(tmp_path)
+    journal = image_refs.read_journal(d)
+    assert journal is not None and journal["pre"]["avatar"] == a
+
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with assets._image_lock(d, "gallery_1"):
+            held.set()
+            release.wait(timeout=10)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    try:
+        assert held.wait(timeout=5)
+        with pytest.raises(OSError):
+            assets.promote_image(tmp_path, "sera", "default", "gallery_2")
+        assert image_refs.read_journal(d) == journal
+    finally:
+        release.set()
+        t.join(timeout=10)
+    assets.list_images(tmp_path, "sera", "default")
+    _assert_swapped(tmp_path, a, g)
+
+
+def test_a_journal_with_a_non_text_description_is_discarded(tmp_path):
+    """Recovery writes the journal's sentences into the sidecar as they stand,
+    so one that is not text marks the journal malformed rather than replayed."""
+    a, g = _two_slots(tmp_path)
+    d = _vdir(tmp_path)
+    image_refs.write_journal(d, {"name": "gallery_1",
+                                 "pre": {"avatar": a, "gallery_1": g},
+                                 "post": {"avatar": g, "gallery_1": a},
+                                 "desc": {"avatar": ["not", "text"], "gallery_1": None}})
+    assets.list_images(tmp_path, "sera", "default")
+    assert image_refs.read_journal(d) is None
+    assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
+    assert _descriptions(tmp_path) == {"avatar": "Seraphine at the gate",
+                                       "gallery_1": "Seraphine on the stair"}

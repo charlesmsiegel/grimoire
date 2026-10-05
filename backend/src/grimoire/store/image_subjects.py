@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import assets, atomic, characters, greeting_images
+from . import assets, atomic, characters, greeting_images, image_store
 
 SUBJECTS_FILE = "subjects.json"
 _BASE = "greetings"
@@ -147,8 +147,13 @@ def appearances(root: Path, cid: str) -> list[dict]:
 
 def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot: str,
                       src_root: Path | None = None, taken_names: set[str] | None = None) -> str:
-    """Copy a greeting image's bytes into a character version's assets.
-    slot 'avatar' overwrites the avatar (focus resets, per put_image);
+    """Place a greeting image in a character version's assets -- by reference.
+
+    The character's slot names the very image the source holds (spec section
+    8), so no bytes are written: a ref-backed source is linked as it stands,
+    and a legacy source file is ingested once (the store keeps its blob) and
+    then linked; the source itself is left as it was.
+    slot 'avatar' overwrites the avatar (focus resets, as a new avatar's does);
     slot 'gallery' takes the next free gallery_N. Returns the stored name.
     `src_root` defaults to `root`; a campaign caller passes the overlay-resolved
     root so an inherited (unmaterialized) greeting image can still be copied,
@@ -163,18 +168,25 @@ def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot:
         if name not in greeting_images.catalog(source, gid):
             raise FileNotFoundError(name)
         src = greeting_images.local_path(source, name)
+        held = greeting_images.local_slot(source, name) if src is not None else None
     else:
         src = assets.image_path(source, gid, _VID, name, base=_BASE)
-    if src is None:
+        # `image_path` answering at all proves both ids safe
+        held = (assets.version_dir(source, gid, _VID, base=_BASE), name) if src is not None else None
+    if src is None or held is None:
         raise FileNotFoundError(name)
-    raw, ext = src.read_bytes(), src.suffix.lstrip(".")
+    placed = assets.resolve(*held)
+    image_id = (placed.image_id if placed is not None
+                else image_store.ingest(src.read_bytes(), src.suffix[1:]).id)
+    dst = assets.version_dir(root, cid, vid)
     if slot == "avatar":
-        assets.put_image(root, cid, vid, assets.AVATAR, raw, ext)
+        assets.link_in(dst, assets.AVATAR, image_id)
+        assets.clear_focus(root, cid, vid)
         return assets.AVATAR
     taken = ({i["name"] for i in assets.list_images(root, cid, vid)}
              if taken_names is None else taken_names)
     n = 1
     while f"gallery_{n}" in taken:
         n += 1
-    assets.put_image(root, cid, vid, f"gallery_{n}", raw, ext)
+    assets.link_in(dst, f"gallery_{n}", image_id)
     return f"gallery_{n}"
