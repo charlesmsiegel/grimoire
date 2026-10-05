@@ -76,6 +76,21 @@ def set_response(cid: str, sid: str, fields: dict) -> None:
 
 
 @locking._serialized
+def set_group(cid: str, sid: str, raw: str) -> None:
+    """Store a scene's group-play settings as the already-dumped string `raw`.
+
+    The caller validates and dumps (`store.group_play`); this module may not
+    import it, so what lands here is opaque text and is read back leniently.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["group_play"] = raw
+    atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
 def append_message(cid: str, sid: str, role: str, content: str,
                    speaker: str | None = None,
                    post_id: str | None = None) -> int:

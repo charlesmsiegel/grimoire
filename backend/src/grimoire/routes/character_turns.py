@@ -16,6 +16,7 @@ from ..model_guidance import PreparedMessages
 from . import runs, streaming
 from . import tracker as tracker_routes
 from .common import (
+    _dump,
     _fallback_connection,
     _override_connection,
     _record_prompt,
@@ -24,7 +25,7 @@ from .common import (
     _turn_override,
     get_llm,
 )
-from .models import RegenerateBody
+from .models import GroupSettings, RegenerateBody
 
 router = APIRouter()
 
@@ -794,6 +795,27 @@ def _public_error(exc):
     if isinstance(exc, store.responses.ResponseNotFound):
         return HTTPException(404, detail="response not found")
     return HTTPException(409, detail={"kind": exc.kind, "detail": exc.detail})
+
+
+@router.get("/campaigns/{cid}/scenes/{sid}/group")
+def get_group(cid: str, sid: str):
+    return store.group_play.settings_of(_require_scene(cid, sid)["meta"])
+
+
+@router.put("/campaigns/{cid}/scenes/{sid}/group")
+def put_group(cid: str, sid: str, body: GroupSettings):
+    # Not `scene_held_free`: these settings change who speaks next, never the
+    # transcript's shape, and a running round reads them once at its start.
+    _require_scene(cid, sid)
+    try:
+        settings = store.group_play.validate(_dump(body))
+    except ValueError as exc:
+        raise HTTPException(400, detail={"kind": "invalid_group", "detail": str(exc)}) from exc
+    try:
+        store.scenes.set_group(cid, sid, store.group_play.dump(settings))
+    except store.scenes.SceneNotFound as exc:
+        raise HTTPException(404, detail="scene not found") from exc
+    return {"ok": True, "settings": settings}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/responses/{rid}")
