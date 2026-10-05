@@ -341,8 +341,12 @@ def _check_entity(kind: str, row: dict, idx: Index) -> Iterator[str]:
                     for k in row["keys"] if isinstance(k, str) and "," in k)
     if "secrecy" in row and str(row["secrecy"]).strip().lower() not in entities.SECRECY_LEVELS:
         yield f"{where}: secrecy must be one of {', '.join(entities.SECRECY_LEVELS)}"
-    fields = row.get("fields") or {}
+    fields = row.get("fields")
+    if fields is None:
+        return
     if not isinstance(fields, dict):
+        # the raw value, before any default: `"fields": []` is a malformed
+        # plan, not an empty block
         yield f"{where}: fields must be an object"
     else:
         yield from _check_fields(kind, fields, idx, where)
@@ -434,30 +438,47 @@ CALENDAR_KEYS = {"primary", "secondary", "confirmed", "stale_after_days", "warn_
 CALENDAR_BLOCK_KEYS = {"provider", "region", "custom_holidays", "anchor"}
 
 
+def _calendar_settings(cal: dict) -> Iterator[str]:
+    """The full form's scalars, typed because `write_calendar` coerces rather
+    than refuses: the string "false" is truthy and would save as confirmed."""
+    if "confirmed" in cal and not isinstance(cal["confirmed"], bool):
+        yield "calendar: confirmed must be true or false"
+    for k in ("stale_after_days", "warn_days"):
+        v = cal.get(k)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, int) or v < 0):
+            yield f"calendar: {k} must be a whole number of days"
+
+
+def _calendar_block(label: str, block) -> Iterator[str]:
+    if not isinstance(block, dict):
+        yield f"{label}: must be a calendar block (provider, region, ...)"
+        return
+    unknown = sorted(set(block) - CALENDAR_BLOCK_KEYS)
+    if unknown:
+        yield f"{label}: unknown keys {unknown} (allowed: {sorted(CALENDAR_BLOCK_KEYS)})"
+    yield from (f"{label}: {k} must be a string"
+                for k in ("provider", "region") if k in block and not isinstance(block[k], str))
+    if "custom_holidays" in block and not isinstance(block["custom_holidays"], list):
+        yield f"{label}: custom_holidays must be a list"
+
+
 def _calendar_shape(cal) -> Iterator[str]:
-    """Unknown keys, refused rather than dropped: `write_calendar` normalizes
-    a block to its known keys, so a typo'd `regoin` would save as the default
-    region and report success."""
+    """Unknown keys and wrong types, refused rather than normalized away:
+    `write_calendar` keeps only the keys it knows, so a typo'd `regoin` would
+    save as the default region and report success."""
     if not isinstance(cal, dict):
         yield "calendar: must be an object"
         return
-    if "primary" in cal:
-        unknown = sorted(set(cal) - CALENDAR_KEYS)
-        if unknown:
-            yield f"calendar: unknown keys {unknown} (allowed: {sorted(CALENDAR_KEYS)})"
-        blocks = [("primary", cal.get("primary")), ("secondary", cal.get("secondary"))]
-    else:
-        blocks = [("calendar", cal)]
-    for label, block in blocks:
-        if block is None and label == "secondary":
-            continue
-        if not isinstance(block, dict):
-            yield f"{label}: must be a calendar block (provider, region, ...)"
-            continue
-        unknown = sorted(set(block) - CALENDAR_BLOCK_KEYS)
-        if unknown:
-            yield (f"{label}: unknown keys {unknown} "
-                   f"(allowed: {sorted(CALENDAR_BLOCK_KEYS)})")
+    if "primary" not in cal:
+        yield from _calendar_block("calendar", cal)
+        return
+    unknown = sorted(set(cal) - CALENDAR_KEYS)
+    if unknown:
+        yield f"calendar: unknown keys {unknown} (allowed: {sorted(CALENDAR_KEYS)})"
+    yield from _calendar_settings(cal)
+    yield from _calendar_block("primary", cal["primary"])
+    if cal.get("secondary") is not None:
+        yield from _calendar_block("secondary", cal["secondary"])
 
 
 def _check_world_settings(plan: dict, root: Path | None, wid: str | None) -> Iterator[str]:
@@ -551,6 +572,12 @@ def validate_plan(plan: dict, root: Path | None, wid: str | None) -> list[str]:
             problems.extend(_check_entity(kind, row, idx))
     for row in rows["greetings"]:
         problems.extend(_check_greeting(row, idx))
+    if any("leads_to" in g or "excludes" in g for g in rows["greetings"]):
+        # `set_edges` reads the raw file, so edges cannot be written into a
+        # plot map the sanitizing reader had to drop entries from -- refused
+        # here, before phase A, rather than raised after the records landed
+        problems.extend(f"{msg}; fix plotmap.json before writing edges"
+                        for msg in _read_plotmap(root)[1])
     problems.extend(f"greetings: leads_to would form a cycle through {' -> '.join(c)}"
                     for c in _cycles(_merged_plotmap(rows["greetings"], idx, root)))
     problems.extend(_check_world_settings(plan, root, wid))
@@ -578,7 +605,13 @@ def _world_module(wid: str) -> str:
 
 
 def _world_campaigns(wid: str) -> list[str]:
-    return [c["id"] for c in campaigns.list_campaigns() if c.get("world") == wid]
+    """Campaigns played in this world, matched by `references_world` -- a
+    store written before campaign creation canonicalized its reference can
+    spell the world in another case (#259), and a string compare would miss
+    exactly the campaigns the module guard exists to protect."""
+    root = worlds.world_root(wid)
+    return [c["id"] for c in campaigns.list_campaigns()
+            if worlds.references_world(c.get("world") or "", root)]
 
 
 # ---------------------------------------------------------------------------
@@ -743,12 +776,13 @@ def _write_character(root: Path, cid: str, row: dict) -> bool:
     vid = characters.default_version(root, cid)
     card_path = root / "characters" / cid / f"{vid}.json"
     before = _snapshot(card_path)
-    card = characters.read_card(root, cid, vid)
-    data = card.setdefault("data", {})
-    for f in CARD_FIELDS:
-        if f in row:
-            data[f] = list(row[f]) if f in CARD_LIST_FIELDS else row[f]
-    characters.update_version(root, cid, vid, card)
+    given = [f for f in CARD_FIELDS if f in row]
+    if given:
+        # the same rule as a PC's persona: an anchor-only patch leaves the card
+        card = characters.read_card(root, cid, vid)
+        data = card.setdefault("data", {})
+        data.update({f: list(row[f]) if f in CARD_LIST_FIELDS else row[f] for f in given})
+        characters.update_version(root, cid, vid, card)
     changed = _changed(before, card_path)
     if "voice_anchor" in row:
         anchor = voice_anchors.anchor_path(root, cid)
@@ -761,11 +795,14 @@ def _write_character(root: Path, cid: str, row: dict) -> bool:
 def _write_pc(root: Path, pid: str, row: dict, idx: Index) -> bool:
     vid = pcs.read_pc(root, pid)["meta"]["default_version"]
     before = _dir_snapshot(root / "pcs" / pid)
-    persona = pcs.read_persona(root, pid, vid)
-    for f in ("pronouns", "summary", "birthdate", "description"):
-        if f in row:
-            persona[f] = row[f]
-    pcs.update_version(root, pid, vid, persona)
+    given = [f for f in ("pronouns", "summary", "birthdate", "description") if f in row]
+    if given:
+        # only when the plan names a persona field: re-serializing an untouched
+        # persona strips its body and drops frontmatter keys the writer does
+        # not know, which a tags-only patch has no business doing
+        persona = pcs.read_persona(root, pid, vid)
+        persona.update({f: row[f] for f in given})
+        pcs.update_version(root, pid, vid, persona)
     if "tags" in row:
         pcs.set_tags(root, pid, _unique([idx.lookup("tags", t) for t in _as_list(row["tags"])]))
     return before != _dir_snapshot(root / "pcs" / pid)
@@ -977,11 +1014,30 @@ def _character_warnings(w: _World) -> Iterator[str]:
             yield f"characters/{c['id']}: empty description"
 
 
-def _settings_errors(w: _World) -> Iterator[str]:
+def _calendar_file_errors(root: Path) -> Iterator[str]:
+    """The raw calendar.json. `read_calendar` substitutes the default for a
+    file it cannot parse -- right for a turn, wrong for an integrity check,
+    which has to say the world's calendar is not the one on disk."""
+    path = root / "calendar.json"
+    if not path.exists():
+        return
     try:
-        calendars.validate_calendar(calendars.read_calendar(w.root))
-    except calendars.CalendarError as exc:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        yield f"calendar: calendar.json is not valid JSON ({exc}); the default calendar is used"
+        return
+    if not isinstance(raw, dict):
+        yield "calendar: calendar.json must be an object"
+        return
+    yield from _calendar_shape(raw if "primary" in raw else {"primary": raw})
+    try:
+        calendars.validate_calendar(calendars.read_calendar(root))
+    except (calendars.CalendarError, TypeError, AttributeError) as exc:
         yield f"calendar: {exc}"
+
+
+def _settings_errors(w: _World) -> Iterator[str]:
+    yield from _calendar_file_errors(w.root)
     mid = _world_module(w.wid)
     if mid:
         try:
@@ -1028,7 +1084,11 @@ def _print(data) -> None:
 
 
 def cmd_apply(args: argparse.Namespace) -> int:
-    plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    try:
+        plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        _print({"ok": False, "problems": [f"plan: cannot read {args.plan} as JSON ({exc})"]})
+        return 1
     try:
         if args.dry_run:
             if not isinstance(plan, dict):
