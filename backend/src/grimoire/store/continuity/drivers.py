@@ -124,8 +124,8 @@ def _record_drivers(cid: str, now: dict, offscreen: bool,
                     players: Players) -> list[dict]:
     """A driver per live canonical thread and commitment."""
     rows: list[tuple[str, dict]] = []
-    for kind, read in zip(_RECORD_KINDS, (effective.threads, effective.commitments),
-                          strict=True):
+    for kind, read in zip(_RECORD_KINDS, (effective.threads_or_physical,
+                                          effective.commitments_or_physical), strict=True):
         live: list[dict] = _soft(read, [], cid)
         rows.extend((kind, row) for row in live)
     refs = [f"{kind}:{row['id']}" for kind, row in rows]

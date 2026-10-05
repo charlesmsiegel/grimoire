@@ -409,6 +409,27 @@ def commitments(cid: str, include_resolved: bool = False) -> list[dict]:
     return _rows(cid, "commitment", include_resolved)
 
 
+def _or_physical(canonical, physical, cid: str) -> list[dict]:
+    """The live effective rows, or the physical projection's (each with an
+    empty ``aliases``) when the continuity side fails -- the render helpers'
+    fallback, for a reader that wants rows. A garbled ledger still raises out
+    of ``physical``, for the caller's own tolerance to answer."""
+    try:
+        return canonical(cid)
+    except Exception:  # noqa: BLE001 -- a continuity-side failure degrades to the physical rows, never drops them (spec §3.9)
+        return [{**row, "aliases": []} for row in physical(cid)]
+
+
+def threads_or_physical(cid: str) -> list[dict]:
+    """`threads(cid)`, degrading to `plot.open_threads` (spec §3.9)."""
+    return _or_physical(threads, plot.open_threads, cid)
+
+
+def commitments_or_physical(cid: str) -> list[dict]:
+    """`commitments(cid)`, degrading to `commitments.open_commitments` (spec §3.9)."""
+    return _or_physical(commitments, commitments_store.open_commitments, cid)
+
+
 # ------------------------------------------------------------------ renders
 
 

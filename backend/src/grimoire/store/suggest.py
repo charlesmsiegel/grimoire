@@ -107,7 +107,7 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     roster = appearances_cast.roster(cid)
 
     try:
-        open_threads = effective.threads(cid)
+        open_threads = effective.threads_or_physical(cid)
     except Exception:  # noqa: BLE001 — garbled plot.json
         open_threads = []
 
