@@ -169,6 +169,10 @@ export type Config = {
    *  window. "0" empties it; a scene opener's prompt and a director's note seed
    *  activation themselves either way. */
   context_scan_depth: string;
+  /** Levels of world-info recursion a turn runs: entries pulled in by the text
+   *  of entries already activated. "0" (the default) is off; at most "3". The
+   *  server reports the effective value, so a hand-edited "9" reads as "3". */
+  lore_recursion_depth: string;
   archive_depth: string;
   /** "on" once the setup wizard has been finished or dismissed (#194). */
   setup_done: string;
@@ -256,7 +260,7 @@ export type ConfigUpdate = Partial<Pick<Config,
   "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
   "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
   "llm_retries" | "fallback_connection_id" |
-  "context_budget" | "context_scan_depth" | "archive_depth" |
+  "context_budget" | "context_scan_depth" | "lore_recursion_depth" | "archive_depth" |
   "setup_done" | "prompt_log_depth" |
   "rolling_summary_every" |
   "scene_break_every" |

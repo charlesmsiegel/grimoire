@@ -65,12 +65,18 @@ keys against its window, through the timed machine when it has one, so the
 current state is a key match, a sticky carry, a cooldown (held back, and then
 unreachable by any path but a pin -- once its owner gate is open, since an
 absent owner's lore is not even listed) or nothing. Each later level first makes
-the items, groups and creatures the level before activated present (§7.2),
-then re-checks what has not activated: an entry whose owner just arrived is
-decided on its window, and up to `recursion_depth` levels an entry may also be
-pulled by the bodies of the level before. There are at most
+the items, groups and creatures the level before activated present (§7.2) and
+re-closes the structural fixed point over the grown set -- an activated group
+makes the item it holds present too -- then re-checks what has not activated:
+an entry whose owner just arrived is decided on its window, and up to
+`recursion_depth` levels an entry may also be pulled by the bodies of the level
+before. There are at most
 `recursion_depth + 1` such levels, so the extra one that lets an activated
 group unlock its owned lore runs even with recursion off.
+
+A gm-only or excluded record confers no presence, structural or activated:
+it is not in the prompt by any path, so it may not open a gate for one either.
+A negative `recursion_depth` reads as 0.
 
 Recall comes last, over the keyed entries nothing activated or held back whose
 owner gate the final present set passes. Its hits are terminal: no presence,
@@ -403,11 +409,14 @@ class _Turn:
     set, and each entry's window decision, made at most once."""
 
     def __init__(self, entries: list[dict], idx: KeyIndex, depth: int,
-                 present: dict[str, dict]) -> None:
+                 present: dict[str, dict], visible: list[dict],
+                 current_location: str | None) -> None:
         self.entries = entries
         self.idx = idx
         self.depth = depth
         self.present = present
+        self.visible = visible
+        self.here = current_location
         self.bodies = _Bodies()
         self.hits: dict[int, Hit] = {}
         self.held: dict[int, Held] = {}
@@ -427,9 +436,17 @@ class _Turn:
         return True
 
     def make_present(self, positions: Iterable[int]) -> None:
+        """Activated items, groups and creatures are present (§7.2), and so is
+        whatever they structurally imply: the fixed point is re-closed over the
+        grown set, so an activated group makes the item it holds present too."""
+        grew = False
         for pos in positions:
-            if str(self.entries[pos].get("kind")) in _STRUCTURAL:
-                self.present.setdefault(self.hits[pos].ref, dict(_ACTIVATED))
+            ref = self.hits[pos].ref
+            if str(self.entries[pos].get("kind")) in _STRUCTURAL and ref not in self.present:
+                self.present[ref] = dict(_ACTIVATED)
+                grew = True
+        if grew:
+            self.present = structural_presence(self.visible, self.present, self.here)
 
     def decide(self, pos: int, level: int, pullers: list[int]) -> bool:
         """Activate the entry at `level` if it may; True when it did."""
@@ -504,20 +521,25 @@ def run(entries: list[dict], posts: Sequence[tuple[int, str]], seed: str,
     bytes never depend on discovery order; `recalled` is in the order `recall`
     answered. See the module docstring for the levels.
     """
+    # gm-only and excluded records are not in the prompt by any path, so they
+    # confer no presence either: they are left out of the structural fixed
+    # point here, and never activate, so never become present by activating.
+    visible = [pos for pos, entry in enumerate(entries)
+               if entities.normalize_secrecy(entry.get("secrecy")) != entities.GM_ONLY
+               and _ref(entry) not in excluded_refs]
+    shown = [entries[pos] for pos in visible]
     turn = _Turn(entries, KeyIndex(posts, seed), scan_depth,
-                 structural_presence(entries, base_present, current_location))
+                 structural_presence(shown, base_present, current_location),
+                 shown, current_location)
     pending: list[int] = []
-    for pos, entry in enumerate(entries):
-        if entities.normalize_secrecy(entry.get("secrecy")) == entities.GM_ONLY:
-            continue  # never enters the prompt, by any path, pin included
+    for pos in visible:
+        entry = entries[pos]
         ref = _ref(entry)
-        if ref in excluded_refs:
-            continue  # not here, and not through recall either
         if ref in pinned_refs:
             turn.hits[pos] = Hit(ref, entry, 0, {"type": "pinned"}, True, -1)
         else:
             pending.append(pos)
-    pending = turn.levels(pending, recursion_depth)
+    pending = turn.levels(pending, max(0, recursion_depth))
     recalled = turn.recall(pending, recall, recall_text)
     return Result(keyword=[turn.hits[p] for p in sorted(turn.hits)], recalled=recalled,
                   held_back=[turn.held[p] for p in sorted(turn.held)],

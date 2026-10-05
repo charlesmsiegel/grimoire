@@ -583,6 +583,59 @@ def test_structural_rules_are_per_kind():
     assert activation.structural_presence(entries, base, "saltmarch") == base
 
 
+def test_activated_presence_recloses_structural_presence():
+    """An activated group is present from the next level, and so is what it
+    structurally implies: the item it holds, and from there the item's lore."""
+    entries = [_e("groups", "guild", keys=["guild"]),
+               _e("items", "lantern", keys=["unsaid"], refs={"holder": ["groups:guild"]}),
+               _e("lore", "oil", owners=["items:lantern"])]
+    got = _run(entries, ["the guild"], rec=0)
+    assert _refs(got.keyword) == ["groups:guild", "lore:oil"]
+    oil = _by_ref(got.keyword)["lore:oil"]
+    assert oil.level == 1
+    assert oil.reason["owner_presence"] == {"type": "held_by", "via": "groups:guild"}
+    assert got.present["items:lantern"] == {"type": "held_by", "via": "groups:guild"}
+    # Nothing named the guild: nothing it holds is present.
+    quiet = _run(entries, ["calm"], rec=0)
+    assert quiet.keyword == [] and "items:lantern" not in quiet.present
+
+
+def test_the_reclose_after_the_last_level_reaches_the_present_set():
+    # A chain one level longer than the run: the lantern's presence is still
+    # reported even though no level is left to unlock anything by it.
+    entries = [_e("groups", "guild", keys=["guild"]),
+               _e("items", "lantern", keys=["unsaid"], refs={"holder": ["groups:guild"]})]
+    got = _run(entries, ["the guild"], rec=0)
+    assert got.present["items:lantern"] == {"type": "held_by", "via": "groups:guild"}
+
+
+@pytest.mark.parametrize("hidden", ["gm-only", "excluded"])
+def test_hidden_entries_confer_no_presence(hidden):
+    """A gm-only or excluded record is not in the prompt by any path, so it
+    must not open a gate either: not by structure, not by activating."""
+    mara = {"characters:mara": {"type": "cast"}}
+    secrecy = "gm-only" if hidden == "gm-only" else ""
+    excluded = (frozenset({"groups:guild", "items:lantern"}) if hidden == "excluded"
+                else frozenset())
+    entries = [_e("groups", "guild", keys=["guild"], secrecy=secrecy,
+                  refs={"leader": ["characters:mara"]}),
+               _e("items", "lantern", keys=["lantern"], secrecy=secrecy,
+                  refs={"holder": ["characters:mara"]}),
+               _e("lore", "vault", owners=["groups:guild"]),
+               _e("lore", "oil", owners=["items:lantern"])]
+    got = _run(entries, ["the guild and the lantern"], present=mara, rec=1,
+               excluded_refs=excluded)
+    assert got.keyword == []
+    assert set(got.present) == {"characters:mara"}
+
+
+def test_negative_recursion_depth_reads_as_zero():
+    entries = [_e("groups", "guild", keys=["guild"]),
+               _e("lore", "vault", keys=["vault"], owners=["groups:guild"])]
+    got = _run(entries, ["the guild vault"], rec=-2)
+    assert _refs(got.keyword) == _refs(_run(entries, ["the guild vault"], rec=0).keyword)
+    assert "lore:vault" in _refs(got.keyword)
+
 def test_absent_owner_beats_sticky():
     entries = [_e("lore", "x", keys=["lantern"], owners=["characters:mara"], sticky=3)]
     texts = ["the lantern", "calm"]
@@ -769,7 +822,7 @@ def test_one_search_per_key_per_post(monkeypatch):
     body = [t for t in log if t in bodies]
     distinct_keys = len({k for e in entries for k in e["keys"]})
     slots = n_posts + 1  # posts and the seed
-    assert len(window) <= distinct_keys * slots
+    assert 0 < len(window) <= distinct_keys * slots
     activated = len(got.keyword)
     candidate_keys = sum(len(e["keys"]) for e in entries)
     assert any(h.reason["type"] == "recursion" for h in got.keyword)
