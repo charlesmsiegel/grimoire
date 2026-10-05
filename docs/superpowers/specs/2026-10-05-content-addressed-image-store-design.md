@@ -238,6 +238,11 @@ them would collapse pictures that display differently.
 - otherwise empty, in every format, so identical pixels in PNG and JPEG share
   an id.
 
+A non-empty descriptor is **tagged with its source**: `png\0` before a PNG's
+raw colour chunks, `icc\0` before any other format's profile. Untagged, an ICC
+profile crafted to equal a PNG's chunk bytes would merge two pictures read
+under different colour rules. The empty descriptor stays untagged.
+
 The PNG form can only split an id that a decoded-profile comparison would
 merge, never merge one it would split.
 
@@ -788,8 +793,10 @@ from the blob.
 
 - The full backup already covers `assets/image-store/`. `.cache` and staging
   stay excluded.
-- The image-only backup includes `assets/image-store/` plus every
-  `image-refs/*.json`.
+- The image-only backup includes `assets/image-store/` (at the store root
+  only) plus every `image-refs/*.json` that sits under an `assets/` path
+  segment, which is where every writer puts one; a user's own folder named
+  `image-refs` elsewhere is not image data.
 - Tests pin both.
 
 ### 11. Migration (stage 4)
@@ -832,6 +839,16 @@ The roster test discovers surfaces from the code's own path builders and
 this also strips card JSON from legacy avatars), then hashed. The work map lives
 in `.cache/image-store/migration/`. It is restartable, and losing it costs only
 time.
+
+**Case-insensitive aliasing.** Two names that differ only by case
+(`gallery_1`, `Gallery_1`) are one file on a case-insensitive filesystem
+behind two per-name locks, and two files on a case-sensitive one that alias as
+soon as the library syncs to a device that is not. This predates the image
+store (legacy files alias the same way), but migration must not make it
+worse: it **must not create two placements whose names alias** in one
+directory. Where the inventory finds such names, migration places the one
+whose exact spelling sorts first, leaves the other legacy file untouched, and
+reports it with its path.
 
 **C. Pixel-group.** Decode each distinct sanitized byte stream once. Files that
 do not sniff, or that sniff but fail to decode, are **left untouched and
@@ -880,6 +897,13 @@ Only then is the legacy file deleted, together with the migrated sidecar key
 deleted. Format-1 manifests are rewritten to format 2 once all their members
 verify.
 
+**Thumbnails keyed by a legacy path.** A current-generation thumbnail of a
+legacy file is keyed by that file's path, mtime and size; once the file
+migrates to a blob, its thumbnail is keyed by the blob's sha and the old entry
+is never asked for again. The cleanup step (or the GC sweep, §12) **removes
+those entries**: the thumbnail generation sweep retires only older
+generations, so nothing else ever would.
+
 A crash leaves one of three states, never a fourth:
 
 - legacy only;
@@ -923,6 +947,18 @@ URLs in prose (transcripts, cards, `[[art:…]]` handles) name logical
 placements, never objects. They are not roots: a placement they name is a root
 already, and one that is gone was gone before this change too.
 
+**The grace period covers ingested-but-not-yet-placed objects.** Ingest
+touches the sidecar's mtime (§5), and that mtime is what the grace period is
+measured by, so an object somebody has ingested and not yet placed is never
+collectable until the grace period runs out. This is a **requirement**, not an
+incidental property: three writers ingest first and place later, or never --
+
+- a Chub gallery download, which ingests every image before it replaces the
+  gallery's refs (§5);
+- a collection member upload refused by its guard after ingest, which leaves
+  an orphan object (stage 1 keeps ingest-then-guard);
+- world-bundle import, which ingests blobs while its tree is still staged.
+
 **Candidates** must meet all of these:
 
 - unreachable;
@@ -937,7 +973,12 @@ already, and one that is gone was gone before this change too.
 - a staging directory exists;
 - the store root changed mid-scan.
 
-**Deletion** runs under the **ingest/GC lock**, process-scoped and store-wide.
+**Deletion** runs under the **ingest/GC lock**, process-scoped and store-wide,
+**and then, per object, that object's stripe lock** (§3) -- in that order,
+which is ingest's. `image_store.update` holds only the stripe, so a GC that
+deleted a sidecar without the stripe could interleave with an update that had
+already read it, and the update's write would resurrect the sidecar GC just
+deleted.
 Ingest holds the same lock across its find-or-create, including the mtime touch
 (§5), so the two cannot interleave:
 
@@ -947,6 +988,17 @@ Ingest holds the same lock across its find-or-create, including the mtime touch
 
 An ingest that arrives after deletion misses the validated index (§5) and
 recreates the object.
+
+**Known cost: byte-different copies of a retained picture always decode.** The
+blob index has an entry only for a blob some object retains. A second encoding
+of a picture already stored -- the same pixels, other bytes -- misses the
+index every time it is ingested, is decoded, and only then finds the object.
+That is a decode per re-upload of such a copy, never a wrong answer. If it
+ever matters, the remedy is a **negative index entry**: index the discarded
+encoding's sha to the object too, validated like any other hit (an entry
+whose object no longer exists or whose pixels differ falls through). GC
+would then have to treat those entries as derived and prune them with the
+object.
 
 A delete requires the token of a dry-run report from the same day. The report
 gives:
@@ -1158,3 +1210,67 @@ changes. They were made before `px1` shipped, so the version stays `px1`.
   is not among the bundle's own objects loses its image on import (§10).
 - **Bundle collection manifests:** a manifest whose format is not 1 is refused
   until stage 3 moves bundles to a new format.
+
+### Follow-up amendments (stage 1)
+
+The follow-up wave on the stage-1 review ledger made these changes, still
+before `px1` shipped, so the version stays `px1`:
+
+- **The colour descriptor is tagged with its source** (`png\0` / `icc\0`,
+  §1.3). Only the fixtures carrying colour data moved their pinned ids.
+- **Pillow's decompression-bomb warning is silenced** inside pixel identity;
+  the static budget decides what is too large.
+- **A JPEG's first Exif APP1 with any bytes after its signature is the one
+  read** for orientation, matching Chromium's reader (Skia's
+  `read_metadata`); an empty one is dropped uncounted, and every later one is
+  dropped unread (§1.1).
+- **Recorded sources drop userinfo and lower-case the host** (§3).
+- **An image-bearing placement that has not arrived refuses promotion the same
+  way whether or not a legacy file sits beside it** -- `ImageNotYetAvailableError`,
+  an `OSError` -- and every promote route answers it with the 404 an absent
+  image gets, carrying the reason.
+- **`image_id` is absent, never null,** wherever a picture has no placement:
+  listings, upload answers, shadowed world copies and greeting rows alike.
+- **Image-only backups take `image-refs/*.json` only under an `assets/`
+  segment** (§10).
+- **Slimming never tombstones a name held by an image-less placement**: that
+  placement is a crop over the world's picture, which the campaign was
+  showing.
+- **`update()` callbacks may not call back into the store** (§9); a
+  thread-local latch enforces it.
+
+**Accepted as they stand**, each with its reason:
+
+- `int(duration)` truncates fractional APNG frame delays. A merge needs
+  sub-millisecond timing differences, which no browser renders
+  distinguishably.
+- `_free_gallery` ignores non-allowlisted foreign files, and `sync._copy_tree`
+  can write an unsupported-extension sibling. Only hand-placed files reach
+  either.
+- A descriptions sidecar beside only a promote temp file is pruned. Nothing
+  owns a temp file's description.
+- Roll-forward overwrites a description or crop saved between a crash and
+  recovery, and writer-side recovery is best-effort. Both were accepted when
+  the promote journal was designed (§8).
+- `overwrite=True` with a focus-only source changes only the destination's
+  focus. An occurrence override carries a crop and no image, so a crop is all
+  it can replace.
+- Slimming prunes an identical avatar placement beside a hand-made divergent
+  `focus.json`. The app cannot reach this state.
+- A legacy collection member refuses a re-upload with the same pixels but
+  different metadata. Fail-safe: a refusal never loses a member.
+- A `None` re-download deletes that gallery slot. Same behaviour as before the
+  image store.
+- A bundle can create `identity: "bytes"` objects from non-image bytes.
+  Format-1 bundles already could, and such objects are opaque, so they never
+  merge with anything.
+- Retained own-scope associations per object are bounded only by the total
+  metadata cap (§10).
+- The surface roster test reaches into FastAPI's route internals. It is a
+  test, and a FastAPI upgrade that moves them fails it loudly.
+- `ImageObject` is frozen with a dict field, so it cannot be hashed. Nothing
+  hashes it; `__hash__` is set to `None` so it does not advertise a hash it
+  cannot give.
+- **Release note:** re-uploading the same picture in another format keeps the
+  first-ingested format (§5). `docs/store-guarantees.md` states it in its image
+  section.

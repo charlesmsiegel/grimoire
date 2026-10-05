@@ -417,7 +417,9 @@ An image object keeps exactly one blob. A later upload of the same pixels in a
 different encoding finds the object and discards the newcomer, so the slot goes
 on serving the format that was ingested first: re-uploading a PNG avatar as a
 lossless WebP does not turn it into a WebP
-(`test_the_same_picture_in_another_format_keeps_the_first_format`).
+(`test_the_same_picture_in_another_format_keeps_the_first_format`). That is
+the release note for anyone used to the old behaviour: **re-uploading the same
+picture in another format keeps the first-ingested format.**
 
 ### Two leaf locks
 
@@ -431,7 +433,10 @@ root (`test_image_locks_are_keyed_per_store`). The order is the ingest lock and
 then a stripe, never the reverse, and **both are leaves**: either may be taken
 while a campaign lock is held, and nothing acquires a campaign lock while
 holding one. No AST guard holds that rule; `store/locks.py` states it beside
-the code and `image_store` is the only module that takes them. Contention
+the code and `image_store` is the only module that takes them. The one place
+a caller's code runs under a stripe is an `image_store.update` callback, and
+it may not call back into the store: `ingest`, `update` and `identify` raise
+`RuntimeError` from inside one (`test_update_callback_may_not_reenter_the_store`). Contention
 raises the base `StoreBusy`, which the same handler turns into a 409. No
 collector exists yet, so for now the second lock only serializes ingests.
 
