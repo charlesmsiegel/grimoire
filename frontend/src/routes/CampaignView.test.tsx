@@ -29,6 +29,7 @@ function ShowState() {
 }
 
 import { api, ApiError } from "../api/client";
+import type { GroupSettings } from "../api/client";
 import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
 import {
@@ -8350,6 +8351,106 @@ test("a sitting-out NPC's chip is dimmed", async () => {
   await screen.findByRole("heading", { name: /^Old$/ });
   const chips = await screen.findByRole("group", { name: "Reply as" });
   await waitFor(() => expect(within(chips).getByRole("button", { name: "Mara" })).toHaveClass("sitting-out"));
+});
+
+const MARA_NPC = { kind: "characters" as const, id: "mara", name: "Mara", role: "npc" as const };
+
+test("group toggle opens the panel with the scene's settings", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([MARA_NPC]);
+  vi.mocked(api.getSceneGroup).mockResolvedValue(
+    { ...DEFAULT_GROUP, order: "natural", sitting_out: ["characters:mara"] });
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  const toggle = await screen.findByRole("button", { name: "Order: Natural" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByLabelText("Speaker order")).not.toBeInTheDocument();
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  expect(screen.getByLabelText("Speaker order")).toHaveValue("natural");
+  expect(screen.getByLabelText("Mara sits out")).toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "Close" }));
+  expect(screen.queryByLabelText("Speaker order")).not.toBeInTheDocument();
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+});
+
+test("a panel save updates the toggle label and dims the sitting-out chip", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.getCast).mockResolvedValue([MARA_NPC]);
+  vi.mocked(api.setSceneGroup).mockImplementation(async (_c, _s, settings) => ({ ok: true, settings }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(await screen.findByRole("button", { name: "Order: Directed" }));
+  fireEvent.click(screen.getByLabelText("Mara sits out"));
+  const chips = await screen.findByRole("group", { name: "Reply as" });
+  await waitFor(() => expect(within(chips).getByRole("button", { name: "Mara" })).toHaveClass("sitting-out"));
+  fireEvent.change(screen.getByLabelText("Speaker order"), { target: { value: "list" } });
+  await screen.findByRole("button", { name: "Order: List" });
+});
+
+test("the group toggle stays enabled while a run is live", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.chat).mockImplementation((_c, _s, _t, _e, _r, signal) => new Promise((resolve) => {
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  const toggle = await screen.findByRole("button", { name: "Order: Directed" });
+  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  expect(toggle).toBeEnabled();
+  fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
+});
+
+test("a slow group read for the previous scene cannot overwrite the current scene's", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(TWO_SCENES.map((scene) => ({ ...scene, date: "" })));
+  let releaseS1: (g: GroupSettings) => void = () => {};
+  vi.mocked(api.getSceneGroup).mockImplementation((_c: string, sid: string) =>
+    sid === "s1"
+      ? new Promise((resolve) => { releaseS1 = resolve; })
+      : Promise.resolve({ ...DEFAULT_GROUP, order: "list" as const }));
+  renderCampaign();
+  await openScene(/The Saltmarch Gate/);
+  await screen.findByRole("button", { name: "Order: List" });
+  await act(async () => releaseS1({ ...DEFAULT_GROUP, order: "natural" }));
+  expect(screen.getByRole("button", { name: "Order: List" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Order: Natural" })).not.toBeInTheDocument();
+});
+
+test("round_start frames show Round n/total while responding", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  let emit: Parameters<typeof api.chat>[3] = () => {};
+  let finish: () => void = () => {};
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent) => new Promise((resolve) => {
+    emit = onEvent;
+    finish = () => { onEvent({ done: true }); resolve(); };
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  await waitFor(() => expect(api.chat).toHaveBeenCalledOnce());
+  act(() => {
+    emit({ round_start: { index: 2, of: 3 } });
+    emit({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+  });
+  const status = await screen.findByRole("status", { name: /Mara is responding/ });
+  expect(status).toHaveTextContent("Round 2/3 · Mara is responding…");
+  await act(async () => finish());
+  await waitFor(() => expect(screen.queryByText(/Round 2\/3/)).not.toBeInTheDocument());
+});
+
+test("a first-round response shows no round prefix", async () => {
+  vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
+  vi.mocked(api.chat).mockImplementation((_cid, _sid, _text, onEvent, _r, signal) => new Promise((resolve) => {
+    onEvent({ response_start: { id: "a", speaker: "Mara", actor_ref: "characters:mara" } });
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+  }));
+  renderCampaign();
+  await screen.findByRole("heading", { name: /^Old$/ });
+  fireEvent.click(screen.getByRole("button", { name: /Continue ▶/ }));
+  const status = await screen.findByRole("status", { name: "Mara is responding" });
+  expect(status).not.toHaveTextContent("Round");
+  fireEvent.click(screen.getByRole("button", { name: /Stop/ }));
 });
 
 test("individual response deletion uses its stable id and keeps cut-from-here separate", async () => {

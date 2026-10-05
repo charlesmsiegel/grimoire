@@ -55,6 +55,7 @@ import ReviewTranscript from "../components/review/ReviewTranscript";
 import { useSceneReview } from "../components/review/useSceneReview";
 import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
+import GroupPanel from "../components/play/GroupPanel";
 import ReplyChips from "../components/play/ReplyChips";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
@@ -106,6 +107,9 @@ const NO_ALTERNATES: ScopedAlternates = {
 // visible pause on every scene switch; the reader almost always wants the
 // recent end. Older posts arrive by scrolling up (or the button that scroll
 // falls back to), which prepends the next page and holds the viewport still.
+const GROUP_ORDER_LABEL: Record<GroupSettings["order"], string> = {
+  directed: "Directed", manual: "Manual", list: "List", natural: "Natural",
+};
 const PAGE_SIZE = 60;
 
 /** The cast column's moods while there are none to show. A module-level object
@@ -614,6 +618,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const [cast, setCast] = useState<Actor[]>([]);
   // Group-play settings of the active scene; null until read, and after a failed read.
   const [group, setGroup] = useState<GroupSettings | null>(null);
+  const [showGroup, setShowGroup] = useState(false);
+  // Which scene `group` was read for, and which read is the newest. A read that
+  // resolves after the scene changed, or after the panel saved, is stale.
+  const groupScopeRef = useRef<{ cid: string; sid: string | null }>({ cid: "", sid: null });
+  const groupReadRef = useRef(0);
+  // "Round n/of" of an automatic chain, from the `round_start` frames; cleared
+  // whenever the view stops being busy.
+  const [roundProgress, setRoundProgress] = useState<{ index: number; of: number } | null>(null);
+  useEffect(() => { if (!busy) setRoundProgress(null); }, [busy]);
   const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
@@ -951,6 +964,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setLandedScene(null);
     setFirstIndex(0);
     setHasUserPost(null);
+    forgetGroup(null);
+  }
+
+  /** Drop the group settings read for another scene (or campaign). Called
+   *  wherever the active scene changes, so the chips and the panel never show
+   *  the previous scene's settings while this one's read is out. */
+  function forgetGroup(sid: string | null) {
+    groupScopeRef.current = { cid, sid };
+    groupReadRef.current += 1;
+    setGroup(null);
   }
 
   // THE RESOLVER (#87). The URL names the scene; the rail's list says whether
@@ -1448,9 +1471,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       .then((r) => setSceneResponse(r ?? null))
       .catch(() => setSceneResponse(null));
     // Failed read: nobody is treated as sitting out, and the chips still work.
+    //
+    // Reset on a switch of scene or campaign (a rename keeps the scene, so it
+    // keeps its settings), and a response is applied only while it is still the
+    // newest read for the scene on screen.
+    const groupScope = groupScopeRef.current;
+    if (groupScope.cid !== cid || (groupScope.sid !== id && !renamed)) forgetGroup(id);
+    else groupScopeRef.current = { cid, sid: id };
+    const groupRead = ++groupReadRef.current;
+    const groupCurrent = () => groupReadRef.current === groupRead
+      && cidRef.current === cid && activeIdRef.current === id;
     Promise.resolve(api.getSceneGroup?.(cid, id))
-      .then((g) => setGroup(g ?? null))
-      .catch(() => setGroup(null));
+      .then((g) => { if (groupCurrent()) setGroup(g ?? null); })
+      // A failed read of the scene already on screen keeps what it has; a
+      // scene just switched to has nothing yet, which is the same as no settings.
+      .catch(() => {});
     const scene = await api.getScene(cid, id, { limit: windowSizeRef.current });
     if (windowTokenRef.current !== token) return -1; // a later select already landed
     // Asked again here, not only on entry: this fetch is an await, and a turn
@@ -2435,10 +2470,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setStreamingId(sid);
     let acc = "";
     setStreamingSpeakers([]);
+    setRoundProgress(null);
     let finished = false;
     try {
       await api.attachRun(cid, sid, runId, registry.resumeFrom(runId), (e) => {
-        if (e.response_start) {
+        if (e.round_start) {
+          setRoundProgress(e.round_start);
+        } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
             actor_ref: e.response_start.actor_ref, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
@@ -2778,6 +2816,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         ]);
     let acc = "";
     setStreamingSpeakers([]);
+    setRoundProgress(null);
     // Three separate questions, and none of them is "did the promise resolve".
     // `finished`: a `done` frame arrived, which the backend sends only after
     // finalize has persisted. `errored`: an error frame arrived, so the backend
@@ -2801,7 +2840,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     let refused = false;
     try {
       await start((e) => {
-        if (e.response_start) {
+        if (e.round_start) {
+          setRoundProgress(e.round_start);
+        } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
             actor_ref: e.response_start.actor_ref, offset: acc.length };
           setStreamingSpeakers((prior) => [...prior, boundary]);
@@ -4958,7 +4999,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                         <StreamingMarkdown text={streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
                         {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
                           <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>
-                            <span className="cursor" aria-hidden="true" /> {part.speaker} is responding…
+                            <span className="cursor" aria-hidden="true" /> {roundProgress
+                              ? `Round ${roundProgress.index}/${roundProgress.of} · ` : ""}{part.speaker} is responding…
                           </div>
                         )}
                       </div>)}
@@ -5088,6 +5130,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 aria-label="Cancel the one-shot response targets"
                 onClick={clearResponseOverride}>?</button>
             )}
+            {/* Who replies next, and in what order. Not disabled by a live run:
+                the settings are read at the next round, and the PUT is not a
+                transcript write. */}
+            {activeId && group && (
+              <button type="button" className="composer-link" aria-expanded={showGroup}
+                title="Who replies next, and in what order"
+                onClick={() => setShowGroup((v) => !v)}>
+                Order: {GROUP_ORDER_LABEL[group.order]}
+              </button>
+            )}
             <span className="header-spacer" />
             {/* Opening a dossier does not take the turn away from you, and this
                 is where the app says so — beside the control you were about to
@@ -5102,6 +5154,18 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               {showInspector ? "Hide what the model saw" : "What the model saw →"}
             </button>
           </div>
+          {showGroup && activeId && group && (
+            <GroupPanel key={`${cid}/${activeId}`} cid={cid} sid={activeId} cast={cast}
+              settings={group}
+              onChange={(next) => {
+                // A save that lands after the reader moved on belongs to the
+                // scene it was made in, and the read it supersedes is stale.
+                if (cidRef.current !== cid || activeIdRef.current !== activeId) return;
+                groupReadRef.current += 1;
+                setGroup(next);
+              }}
+              onClose={() => setShowGroup(false)} />
+          )}
           <div className="inputbar">
             {/* Dice are a mechanics affordance: both the popover's tabs lead to
                 routes that only mean something with a pack bound (Check needs one
