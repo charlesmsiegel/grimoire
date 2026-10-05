@@ -559,3 +559,100 @@ def test_stop_in_directed_retry_ignores_the_interrupted_handoff(client):
     assert "error" not in response.text, response.text
     assert retry.calls == 1
     assert speakers(cid, sid) == ["Mara"]
+
+
+def _assert_nothing_to_retry(client, base):
+    retry = FakeLLM([reply("Must not run.", None)])
+    use(client, retry)
+    response = client.post(base + "/retry")
+    assert response.status_code == 409, response.text
+    assert response.json()["kind"] == "nothing_to_retry"
+    assert retry.calls == 0
+
+
+def test_stop_at_round_start_of_a_selector_round_leaves_nothing_to_retry(client):
+    cid, sid, base = seed(client)
+    group(client, base, order="directed", auto_rounds=1)
+    # A List round that ran out of plan continues the chain, and the follow-on
+    # plans by the scene's order now: Directed, with no lead, so its first
+    # speaker would come from the selector.
+    round_record = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
+        run_id="test", actor_ref=MARA, mode="list", plan=[], auto_remaining=1,
+        round_index=1, auto_total=1)
+    run = _run(cid, sid)
+    fake = FakeLLM([reply("Mara one.", None), ['{"next":"characters:winifred"}'],
+                    reply("Winifred one.", None)])
+
+    def on_frame(data):
+        if "round_start" in data:
+            run.cancel_requested = True
+
+    _drive(cid, sid, fake, run, round_record, on_frame)
+    assert fake.calls == 1
+    assert latest_round(cid, sid)["round_index"] == 2
+    assert latest_round(cid, sid)["status"] == "complete"
+    _assert_nothing_to_retry(client, base)
+    assert speakers(cid, sid) == ["Mara"]
+
+
+def test_stop_at_round_start_of_a_planned_round_leaves_nothing_to_retry(client):
+    from contextlib import aclosing
+
+    cid, sid, base = seed(client)
+    group(client, base, order="list", order_list=[MARA, WINIFRED], auto_rounds=1)
+    round_record = store.responses.new_round(
+        cid, sid, eligible=character_turns.roster(cid, sid), automatic=True, post=None,
+        run_id="test", actor_ref=MARA, mode="list", plan=[WINIFRED], auto_remaining=1,
+        round_index=1, auto_total=1)
+    run = _run(cid, sid)
+    fake = FakeLLM([reply("Mara one.", None), reply("Winifred one.", None),
+                    reply("Mara two.", None)])
+    token = streaming._claim_turn(cid, sid)
+
+    async def collect():
+        frames = character_turns._frames(
+            cid, sid, fake, {"kind": "openrouter", "model": "test"}, run, token,
+            round_record, streaming.StreamOutcome())
+        # Stop lands while the announcement is being delivered: the run is
+        # closed at that yield, so the rescue path is what ends the round.
+        async with aclosing(frames) as stream:
+            async for frame in stream:
+                if "round_start" in json.loads(frame.removeprefix("data: ")):
+                    run.cancel_requested = True
+                    break
+
+    asyncio.run(collect())
+    assert fake.calls == 2
+    following = latest_round(cid, sid)
+    assert following["round_index"] == 2 and following["actor_ref"] is None
+    assert following["status"] == "complete" and following["stopped"] is True
+    _assert_nothing_to_retry(client, base)
+    assert speakers(cid, sid) == ["Mara", "Winifred"]
+
+
+def test_handoff_text_says_a_repeat_starts_a_new_round(client):
+    _cid, _sid, base = seed(client)
+    group(client, base, order="directed", auto_rounds=1)
+    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
+    assert "error" not in response.text, response.text
+    first, second = ("\n".join(m["content"] for m in r["messages"]) for r in fake.requests)
+    # Mara speaks first: nobody has responded yet, so today's sentence stands.
+    assert "The current actor and everyone who has already responded are excluded." in first
+    assert "begins another round" not in first
+    # Winifred is offered Mara, who already spoke.
+    assert "begins another round of the conversation" in second
+    assert "everyone who has already responded are excluded" not in second
+
+
+def test_handoff_text_is_unchanged_without_rounds(client):
+    _cid, _sid, base = seed(client)
+    fake = FakeLLM([reply("Mara answers.", WINIFRED), reply("Winifred answers.", None)])
+    use(client, fake)
+    response = client.post(base + "/chat", json={"content": "Hello", "speaker_ref": MARA})
+    assert "error" not in response.text, response.text
+    second = "\n".join(m["content"] for m in fake.requests[1]["messages"])
+    assert "The current actor and everyone who has already responded are excluded." in second
+    assert "begins another round" not in second

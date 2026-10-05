@@ -89,7 +89,10 @@ def _compose(cid, sid, round_record, actor, conn, appended=()):
     else:
         used = {*round_record["used"], actor}
     pool = _handoff_pool(cid, sid, round_record) if offer else []
-    candidates = [entry for entry in [*pool, {"ref": "grimoire", "name": "Grimoire"}]
+    # Whoever already spoke is marked, so the handoff text can say what
+    # naming them does instead of claiming they are excluded.
+    candidates = [{**entry, "responded": entry["ref"] in round_record["used"]}
+                  for entry in [*pool, {"ref": "grimoire", "name": "Grimoire"}]
                   if offer and entry["ref"] not in used]
     kwargs = {
         "turn": round_record.get("turn"),
@@ -293,9 +296,19 @@ def _chain_continues(round_record, ending, cancelled):
 def _stop(cid, sid, round_record):
     """Stop ends the whole chain: no rounds remain, the plan is gone, and the
     round is `stopped`, so a Retry finishes the interrupted contribution and
-    `_successor` names nobody after it, in any mode."""
-    return store.responses.update_round(
-        cid, sid, round_record["id"], auto_remaining=0, plan=[], stopped=True)
+    `_successor` names nobody after it, in any mode.
+
+    A round with no contribution in flight (`pending_response`) had nothing
+    interrupted -- a follow-on stopped before its first speaker, a successor
+    chosen but not yet started -- so it ends `complete` with nobody next, and
+    a Retry has nothing to answer."""
+    with store.locks.campaign_lock(cid):
+        stopped = store.responses.update_round(
+            cid, sid, round_record["id"], auto_remaining=0, plan=[], stopped=True)
+        if stopped["status"] in ("pending", "incomplete") and not stopped["pending_response"]:
+            stopped = store.responses.update_round(
+                cid, sid, round_record["id"], status="complete", actor_ref=None)
+        return stopped
 
 
 def _last_contribution(cid, sid, history):
@@ -741,6 +754,11 @@ async def _frames(
                     }
                 }
             )
+            if run.cancel_requested:
+                # Stopped on the announcement: no selector call, and the
+                # round ends below with nobody asked to speak (`_stop`).
+                actor = None
+                continue
             actor, turn.round_record = await _first_actor(cid, sid, client, following)
         outcome.land()
         yield streaming._sse({"done": True})
@@ -956,8 +974,12 @@ async def _rescue(
                         tracked,
                     )
                     outcome.persisted(at)
+            # Only this run's own round, and only while it is unfinished: a
+            # Stop may already have completed it (`_stop`), and marking it
+            # `incomplete` again would hand Retry a round nobody interrupted.
             current_round = store.responses.unfinished(cid, sid)
-            if current_round and current_round["status"] != "paused":
+            if (current_round and current_round["id"] == round_record["id"]
+                    and current_round["status"] != "paused"):
                 _round_state(cid, sid, round_record, status="incomplete")
 
     await run_in_threadpool(save)
