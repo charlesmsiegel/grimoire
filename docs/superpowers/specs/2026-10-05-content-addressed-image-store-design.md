@@ -452,7 +452,7 @@ image_store.ingest(data, *, source_url=None) -> ImageObject
 2. **Sanitize** (§1.1).
 3. **Byte hash, then the exact-byte shortcut.**
    - Look up `byte_sha256` in the **rebuildable** blob→object index at
-     `.cache/image-store/blob-index.json` (D3). It is derived from sidecars:
+     `.cache/image-store/blob-index/` (one tiny file per blob, named by its hash and holding the image id, so concurrent ingests never rewrite a shared file) (D3). It is derived from sidecars:
      each names its retained blob.
    - A hit is used only after validation: the sidecar exists and names this
      blob, and the blob file exists. A missing blob is restored from the
