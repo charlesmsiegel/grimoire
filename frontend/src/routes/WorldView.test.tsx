@@ -35,8 +35,9 @@ vi.mock("../api/client", () => ({
   SECRECY_LEVELS: ["public", "secret", "gm-only"],
   SECRECY_LABELS: { public: "Public", secret: "Secret", "gm-only": "GM-only" },
   ENTITY_KINDS: ["locations", "lore", "items", "groups", "creatures"],
-  // The editors' Activation disclosure reads the catalog; no test here opens it.
-  ACTIVATION_FIELDS: [],
+  // The editors' Activation disclosure reads the catalog; only the sidebar's
+  // Known-by chips are exercised here, which need the one entry.
+  ACTIVATION_FIELDS: [{ key: "known_by", label: "Known by", widget: "refs" }],
   ENTITY_FIELDS: {
     locations: [], lore: [],
     items: [{ key: "item_type", label: "Type", widget: "text" },
@@ -962,6 +963,29 @@ test("a ref chip naming a PC opens that PC, and picking PCs from the index clear
   fireEvent.click(indexRow("PCs"));
   await waitFor(() => expect(api.listPCs).toHaveBeenCalled());
   expect(api.readPC).not.toHaveBeenCalled();
+});
+
+test("a Known-by actor chip on a location opens that actor", async () => {
+  // Locations once mounted their editor without the owner callback, so the chip
+  // drew as a button and did nothing when pressed.
+  (api.listPCs as any).mockResolvedValue([
+    { id: "winifred", name: "Winifred", tags: [], default_version: "main", versions: [] }]);
+  (api.readPC as any).mockResolvedValue({
+    meta: { id: "winifred", name: "Winifred", tags: [], default_version: "main" },
+    versions: [{ id: "main", name: "main",
+                 persona: { name: "Winifred", pronouns: "", summary: "",
+                            birthdate: "", description: "a quiet sort" } }] });
+  (api.listPCImages as any).mockResolvedValue([]);
+  (api.listTags as any).mockResolvedValue({});
+  (api.getCalendarMonths as any).mockResolvedValue({ months: [] });
+  (api.getSheet as any).mockResolvedValue({ sheet: null });
+  (api.listEntities as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  (api.readEntity as any).mockResolvedValue({
+    meta: { id: "saltmarch", name: "Saltmarch", known_by: "pcs:winifred" }, body: "x", rev: "r1" });
+  renderAtUrl("/worlds/w?section=locations&id=saltmarch");
+  fireEvent.click(await screen.findByRole("button", { name: /Winifred/ }));
+  await waitFor(() =>
+    expect(api.readPC).toHaveBeenCalledWith({ kind: "world", id: "w" }, "winifred"));
 });
 
 test("a focused PC is not carried into another scope's render", async () => {

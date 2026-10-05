@@ -1236,8 +1236,8 @@ test("actors are listed only once something draws them", async () => {
   // Closed Activation, no known_by on the record: no listing. Opening the
   // disclosure is what asks.
   (api.readEntity as any).mockResolvedValue({
-    meta: { id: "eel", name: "Eel" }, body: "b", rev: "r1" });
-  render(<Wrap wid="w" kind="creatures" selected="eel" />);
+    meta: { id: "seraphine", name: "Seraphine" }, body: "b", rev: "r1" });
+  render(<Wrap wid="w" kind="creatures" selected="seraphine" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   expect(api.listCharacters).not.toHaveBeenCalled();
   fireEvent.click(screen.getByText("Activation"));
@@ -1326,8 +1326,9 @@ test("changing one field sends only that field", async () => {
  *  scope's listing open while another lands. */
 function deferred<T>() {
   let resolve!: (v: T) => void;
-  const promise = new Promise<T>((r) => { resolve = r; });
-  return { promise, resolve };
+  let reject!: (e: unknown) => void;
+  const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+  return { promise, resolve, reject };
 }
 
 test("a scope change clears the ref candidates before the new ones arrive", async () => {
@@ -1797,8 +1798,8 @@ test("a save the server refuses as an invalid activation value shows the reason"
 
 test("every kind carries the Activation disclosure", async () => {
   (api.readEntity as any).mockResolvedValue({
-    meta: { id: "rig", name: "Rig", sticky: "1" }, body: "b", rev: "r1" });
-  const { container } = render(<Wrap wid="w" kind="items" selected="rig" />);
+    meta: { id: "saltmarch-key", name: "Saltmarch Key", sticky: "1" }, body: "b", rev: "r1" });
+  const { container } = render(<Wrap wid="w" kind="items" selected="saltmarch-key" />);
   await screen.findByText("Sticky: 1 post");
   fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
   expect(container.querySelector("details.activation-settings")).not.toBeNull();
@@ -1824,8 +1825,8 @@ test("the Known by picker offers characters and PCs and stores refs", async () =
   (api.listPCs as any).mockResolvedValue([{ id: "winifred", name: "Winifred" }]);
   // A kind with no actor picker of its own, so "Mara" can only be this one.
   (api.readEntity as any).mockResolvedValue({
-    meta: { id: "eel", name: "Eel" }, body: "b", rev: "r1" });
-  render(<Wrap wid="w" kind="creatures" selected="eel" />);
+    meta: { id: "seraphine", name: "Seraphine" }, body: "b", rev: "r1" });
+  render(<Wrap wid="w" kind="creatures" selected="seraphine" />);
   fireEvent.click(await screen.findByRole("button", { name: /^edit$/i }));
   // Closed, and not drawn: a record that sets nothing here opens it shut.
   expect(screen.queryByLabelText("Mara")).toBeNull();
@@ -1834,7 +1835,7 @@ test("the Known by picker offers characters and PCs and stores refs", async () =
   fireEvent.click(screen.getByLabelText("Winifred"));
   fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
   await waitFor(() => expect(api.updateEntity).toHaveBeenCalledWith(
-    { kind: "world", id: "w" }, "creatures", "eel",
+    { kind: "world", id: "w" }, "creatures", "seraphine",
     expect.objectContaining({ fields: { known_by: "characters:mara, pcs:winifred" } })));
 });
 
@@ -1962,15 +1963,15 @@ test("the per-entry Apply waits on its request too", async () => {
 
 test("the adopt-all status line goes when another record is opened", async () => {
   (api.listEntities as any).mockResolvedValue([
-    { id: "salt", name: "Salt" }, { id: "brine", name: "Brine" }]);
+    { id: "salt", name: "Salt" }, { id: "seraphine", name: "Seraphine" }]);
   (api.readEntity as any).mockImplementation((_s: unknown, _k: unknown, id: string) =>
     Promise.resolve({ meta: { id, name: id }, body: `body of ${id}`, rev: "r1" }));
   const { rerender } = render(<Wrap wid="w" kind="lore" selected="salt" />);
   await screen.findByText("body of salt");
   fireEvent.click(screen.getByRole("button", { name: "Apply imported settings to all" }));
   await screen.findByText("Applied to 0 entries; 0 skipped");
-  rerender(<Wrap wid="w" kind="lore" selected="brine" />);
-  await screen.findByText("body of brine");
+  rerender(<Wrap wid="w" kind="lore" selected="seraphine" />);
+  await screen.findByText("body of seraphine");
   expect(screen.queryByText("Applied to 0 entries; 0 skipped")).toBeNull();
 });
 
@@ -1980,4 +1981,106 @@ test("the adopt-all status line goes when the scope changes", async () => {
   await screen.findByText("Applied to 0 entries; 0 skipped");
   rerender(<Wrap wid="other" kind="lore" scope={{ kind: "world", id: "other" }} />);
   await waitFor(() => expect(screen.queryByText("Applied to 0 entries; 0 skipped")).toBeNull());
+});
+
+
+test("a record the campaign only inherits points at the world instead of offering Apply", async () => {
+  (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+  (api.previewAdoptSt as any).mockResolvedValue(
+    { fields: { sticky: "2" }, unmapped: [], inherited: true });
+  render(<Wrap wid="w" scope={{ kind: "campaign", id: "c1" }} kind="lore" selected="salt" />);
+  const banner = await screen.findByRole("status", { name: /imported settings/i });
+  expect(within(banner).getByText(
+    "Imported SillyTavern settings are available on the world's copy of this entry.")).toBeInTheDocument();
+  expect(within(banner).queryByRole("button")).toBeNull();
+  expect(screen.queryByRole("button", { name: /^apply$/i })).toBeNull();
+});
+
+test("a Known-by chip is a label, not an inert button, when nothing can open the actor", async () => {
+  (api.listCharacters as any).mockResolvedValue([{ id: "mara", name: "Mara" }]);
+  (api.readEntity as any).mockResolvedValue(salt({ known_by: "characters:mara" }));
+  const { container } = render(<Wrap wid="w" kind="lore" selected="salt" />);
+  await screen.findByText("Binds");
+  const side = container.querySelector(".detail-sidebar") as HTMLElement;
+  const chip = await within(side).findByText("Mara");
+  expect(chip.closest(".chip")?.tagName).toBe("SPAN");
+  expect(chip.closest(".chip")).toHaveClass("chip", "on");
+  expect(within(side).queryByRole("button", { name: "Mara" })).toBeNull();
+});
+
+describe("an adopt that completes after the scope has changed", () => {
+  // The rail row, not the owner picker that lists the same lore.
+  const ROW = { selector: ".row-name" };
+  const listings = (s: { id: string }) => Promise.resolve(
+    s.id === "w1" ? [{ id: "salt", name: "Salt" }] : [{ id: "hall", name: "Realm Hall" }]);
+
+  test("per-entry Apply leaves the new scope's rail and screen alone", async () => {
+    (api.listEntities as any).mockImplementation(listings);
+    (api.readEntity as any).mockImplementation((s: { id: string }, _k: string, id: string) =>
+      Promise.resolve(s.id === "w1"
+        ? salt({ st_extensions: '{"sticky":2}' })
+        : { meta: { id, name: "Realm Hall" }, body: "A hall.", rev: "r2" }));
+    (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+    const landed = deferred<{ applied: Record<string, string> }>();
+    (api.adoptSt as any).mockReturnValue(landed.promise);
+    const { rerender } = render(
+      <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" selected="salt" />);
+    const banner = await screen.findByRole("status", { name: /imported settings/i });
+    fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
+    await waitFor(() => expect(api.adoptSt).toHaveBeenCalled());
+
+    rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    await screen.findByText("Realm Hall", ROW);
+    const reads = (api.readEntity as any).mock.calls.length;
+    landed.resolve({ applied: { sticky: "2" } });
+    await new Promise((r) => setTimeout(r, 0));
+
+    // The old scope's listing did not replace the rail, and its record was
+    // neither re-read nor drawn over the new screen.
+    expect(screen.getByText("Realm Hall", ROW)).toBeInTheDocument();
+    expect(screen.queryByText("Salt", ROW)).toBeNull();
+    expect((api.readEntity as any).mock.calls.length).toBe(reads);
+    expect(screen.queryByText("Binds")).toBeNull();
+    expect(screen.queryByRole("status", { name: /imported settings/i })).toBeNull();
+  });
+
+  test("a per-entry failure from the old scope is not shown in the new one", async () => {
+    (api.listEntities as any).mockImplementation(listings);
+    (api.readEntity as any).mockResolvedValue(salt({ st_extensions: '{"sticky":2}' }));
+    (api.previewAdoptSt as any).mockResolvedValue({ fields: { sticky: "2" }, unmapped: [] });
+    const landed = deferred<never>();
+    (api.adoptSt as any).mockReturnValue(landed.promise);
+    const { rerender } = render(
+      <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" selected="salt" />);
+    const banner = await screen.findByRole("status", { name: /imported settings/i });
+    fireEvent.click(within(banner).getByRole("button", { name: /^apply$/i }));
+    await waitFor(() => expect(api.adoptSt).toHaveBeenCalled());
+    rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    await screen.findByText("Realm Hall", ROW);
+    landed.reject(new Error("boom"));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(screen.queryByText(/boom/)).toBeNull();
+  });
+
+  test("adopt-all leaves the new scope's rail, note and busy state alone", async () => {
+    (api.listEntities as any).mockImplementation(listings);
+    const landed = deferred<{ applied: never[]; skipped: never[] }>();
+    (api.adoptStAll as any).mockReturnValue(landed.promise);
+    const { rerender } = render(
+      <Wrap wid="w1" scope={{ kind: "world", id: "w1" }} kind="lore" />);
+    fireEvent.click(await screen.findByRole("button", { name: "Apply imported settings to all" }));
+    await waitFor(() => expect(api.adoptStAll).toHaveBeenCalled());
+
+    rerender(<Wrap wid="w2" scope={{ kind: "world", id: "w2" }} kind="lore" />);
+    await screen.findByText("Realm Hall", ROW);
+    // The old request no longer holds the new scope's button.
+    await waitFor(() => expect(
+      screen.getByRole("button", { name: "Apply imported settings to all" })).not.toBeDisabled());
+    landed.resolve({ applied: [], skipped: [] });
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(screen.getByText("Realm Hall", ROW)).toBeInTheDocument();
+    expect(screen.queryByText("Salt", ROW)).toBeNull();
+    expect(screen.queryByText(/^Applied to/)).toBeNull();
+  });
 });

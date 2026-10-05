@@ -745,7 +745,8 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "locations" })}
                                           recordHref={(r) => sectionHref(scopeForPaths,
                                                                          { kind: "record", at: "locations", rid: r })}
-                                          onReclassified={openEntity} module={moduleCtx} />}
+                                          onReclassified={openEntity} onOpenOwner={openOwner}
+                                          module={moduleCtx} />}
         {section === "lore" && (
           <>
             {/* Controlled so the column's pinned import row can open it: the
