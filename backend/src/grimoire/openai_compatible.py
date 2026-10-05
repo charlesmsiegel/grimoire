@@ -190,7 +190,9 @@ class OpenAICompatibleClient:
                                                retry_after_seconds(resp.headers),
                                                status=resp.status_code)
                 async for line in resp.aiter_lines():
-                    llm_capture.emit(usage, "sse_line", line)
+                    # Scrubbed for the capture only; the line itself is parsed
+                    # as sent. A 200 stream can quote the request back too.
+                    llm_capture.emit(usage, "sse_line", content_parts.scrub_line(line))
                     # Proof of life for the facade's idle bound, including the
                     # frames dropped below (keep-alives, and deltas carrying
                     # only reasoning_content) — see openrouter.stream (#243).

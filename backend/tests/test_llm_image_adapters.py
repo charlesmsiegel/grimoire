@@ -88,3 +88,27 @@ def test_strict_string_folding_is_unchanged():
     assert out == [{"role": "user", "content": "S\n\nu\n\nv"},
                    {"role": "assistant", "content": "a"},
                    {"role": "user", "content": "P"}]
+
+
+ECHOED = ('data: {"choices":[{"delta":{"content":"ok"}}],'
+          '"echo":"data:image/png;base64,QUJDREVGR0g="}\n\ndata: [DONE]\n\n')
+
+
+@pytest.mark.parametrize("which", ["openrouter", "openai_compatible"])
+async def test_a_success_stream_capture_holds_no_image_bytes(which):
+    """A 200 stream can quote the request back too (a validating proxy); the
+    capture is scrubbed while the line is still parsed as sent."""
+    http = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, text=ECHOED)))
+    events: list = []
+    usage = _capture(events)
+    msgs = [{"role": "user", "content": "hi"}]
+    if which == "openrouter":
+        agen = OpenRouterClient(http=http).stream(msgs, "m", "k", usage=usage)
+    else:
+        agen = OpenAICompatibleClient(http=http).stream(
+            msgs, "m", "", "https://x.example/v1", usage=usage)
+    assert "".join(await _drain(agen)) == "ok"
+    lines = [e["payload"] for e in events if e["event"] == "sse_line"]
+    assert lines and all("QUJD" not in line for line in lines)
+    assert any("[elided]" in line for line in lines)

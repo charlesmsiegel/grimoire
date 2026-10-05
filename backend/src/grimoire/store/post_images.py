@@ -50,12 +50,13 @@ import base64
 import io
 import logging
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 
 from PIL import Image, ImageOps, features
 
-from . import config, export, image_drafts, llm_connections
+from . import config, export, image_drafts, llm_connections, statcache
 
 log = logging.getLogger(__name__)
 
@@ -129,11 +130,15 @@ MAX_SEND_BYTES = 3_750_000
 #: alpha can be close to `MAX_SEND_BYTES`, and this also runs on Android.
 CACHE_BYTES = 16 * 1024 * 1024
 
-#: `(path, mtime_ns, size)` -> `(media type, encoded bytes)`, least recently
-#: used first. A picture stays in the window for many turns, and decoding it
-#: again on every one is pointless. Filled from `asyncio.to_thread` workers,
-#: hence the lock.
-_CACHE: OrderedDict[tuple[str, int, int], tuple[str, bytes]] = OrderedDict()
+#: `(path, mtime_ns, size, inode)` -> `(media type, encoded bytes)`, least
+#: recently used first. A picture stays in the window for many turns, and
+#: decoding it again on every one is pointless. Filled from `asyncio.to_thread`
+#: workers, hence the lock. The key is `statcache`'s signature and the racy
+#: window is too: the inode catches a rename-replace that kept the old mtime
+#: (a sync client), and a file modified within `RACY_WINDOW_NS` is never cached,
+#: since a same-size rewrite inside the filesystem's timestamp granularity
+#: leaves the rest of the key unchanged.
+_CACHE: OrderedDict[tuple[str, int, int, int], tuple[str, bytes]] = OrderedDict()
 _LOCK = threading.Lock()
 
 
@@ -192,7 +197,7 @@ def _encode(data: bytes) -> tuple[str, bytes]:
         return "image/jpeg", out.getvalue()
 
 
-def _cached(key: tuple[str, int, int]) -> tuple[str, bytes] | None:
+def _cached(key: tuple[str, int, int, int]) -> tuple[str, bytes] | None:
     with _LOCK:
         hit = _CACHE.get(key)
         if hit is not None:
@@ -200,8 +205,8 @@ def _cached(key: tuple[str, int, int]) -> tuple[str, bytes] | None:
         return hit
 
 
-def _remember(key: tuple[str, int, int], value: tuple[str, bytes]) -> None:
-    if len(value[1]) > CACHE_BYTES:
+def _remember(key: tuple[str, int, int, int], value: tuple[str, bytes]) -> None:
+    if len(value[1]) > CACHE_BYTES or time.time_ns() - key[1] < statcache.RACY_WINDOW_NS:
         return
     with _LOCK:
         _CACHE[key] = value
@@ -211,7 +216,7 @@ def _remember(key: tuple[str, int, int], value: tuple[str, bytes]) -> None:
 
 def _encoded(path: Path) -> tuple[str, bytes] | None:
     st = path.stat()
-    key = (str(path), st.st_mtime_ns, st.st_size)
+    key = (str(path), st.st_mtime_ns, st.st_size, st.st_ino)
     hit = _cached(key)
     if hit is not None:
         return hit
