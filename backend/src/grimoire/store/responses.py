@@ -116,7 +116,11 @@ def variants_by_response(
 
 
 def transcript_hash(messages):
-    public = [{k: m[k] for k in ("role", "speaker", "content") if k in m} for m in messages]
+    # A hidden post changes what the round's next prompt holds, so the flag is
+    # hashed -- but only when present, so an unflagged transcript hashes exactly
+    # as it did before the flag existed and no open round is stranded on upgrade.
+    public = [{**{k: m[k] for k in ("role", "speaker", "content") if k in m},
+               **({"excluded": True} if m.get("excluded") else {})} for m in messages]
     return hashlib.sha256(
         json.dumps(public, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()

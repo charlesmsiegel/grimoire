@@ -1,5 +1,8 @@
 """Hiding a post from context: the flag, the mutator, the route and every reader."""
 
+import hashlib
+import json
+
 import pytest
 
 from grimoire import routes, store
@@ -170,3 +173,32 @@ def test_a_later_response_is_flagged_context_changed(client):
     assert _messages(cid, sid)[1].get("context_changed") is False
     store.scenes.set_excluded(cid, sid, 0, True)
     assert _messages(cid, sid)[1]["context_changed"] is True
+
+
+# --- the three staleness digests ---------------------------------------------
+
+MSGS = [{"role": "user", "speaker": "You", "content": "hi"},
+        {"role": "assistant", "speaker": "Mara", "content": "Hm."}]
+
+
+def test_unflagged_digests_match_the_previous_formula():
+    old_hash = hashlib.sha256(json.dumps(
+        [{k: m[k] for k in ("role", "speaker", "content")} for m in MSGS],
+        sort_keys=True, ensure_ascii=False).encode()).hexdigest()
+    assert store.responses.transcript_hash(MSGS) == old_hash
+    old_cov = hashlib.sha256(json.dumps(
+        [[[m["role"], m["speaker"], m["content"]] for m in MSGS], "Mara"],
+        ensure_ascii=False).encode("utf-8")).hexdigest()
+    assert store.rolling_summary.covered_digest(MSGS, "Mara") == old_cov
+    h = hashlib.sha256()
+    for m in MSGS:
+        h.update(json.dumps([m["role"], m["speaker"], m["content"]], ensure_ascii=False).encode("utf-8"))
+        h.update(b"\x1e")
+    assert store.pending_reviews.watermark(MSGS) == {"count": 2, "digest": h.hexdigest()}
+
+
+def test_excluding_a_post_moves_every_digest():
+    flagged = [MSGS[0], {**MSGS[1], "excluded": STAMP}]
+    assert store.responses.transcript_hash(flagged) != store.responses.transcript_hash(MSGS)
+    assert store.rolling_summary.covered_digest(flagged) != store.rolling_summary.covered_digest(MSGS)
+    assert store.pending_reviews.watermark(flagged)["digest"] != store.pending_reviews.watermark(MSGS)["digest"]

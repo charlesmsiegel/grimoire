@@ -137,11 +137,18 @@ def watermark(messages: list[dict]) -> dict:
     The count rides along beside the digest because a digest can only say
     "different". The count is what lets the refusal say *how* -- "three posts
     were added since" is actionable where "the scene changed" is a shrug.
+
+    A post hidden from context is out of what the review read, so its flag is
+    digested too -- appended only when present, so an unflagged transcript
+    digests exactly as before and no stored review is invalidated on upgrade.
+    The flag is tested inline, like the three fields beside it: the digest is
+    defined over the stored message dict, and one key needs no helper.
     """
     h = hashlib.sha256()
     for m in messages:
         h.update(json.dumps(
-            [m.get("role", ""), m.get("speaker") or "", m.get("content", "")],
+            [m.get("role", ""), m.get("speaker") or "", m.get("content", ""),
+             *([True] if m.get("excluded") else [])],
             ensure_ascii=False).encode("utf-8"))
         h.update(b"\x1e")
     return {"count": len(messages), "digest": h.hexdigest()}
