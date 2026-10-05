@@ -185,6 +185,29 @@ def _served(meter, conn: dict) -> str:
     return (attempted or conn).get("id", "")
 
 
+def _display_stream(cid: str | None, conn: dict):
+    """The display-phase stream for a turn that asked for `conn`.
+
+    Built from the requested connection, not the one that ends up answering: a
+    fallback is only known once the attempt has run. `cid=None` is a caller with
+    no campaign to read rules for, and gets an inactive stream.
+    """
+    entries = (store.regex.layers.effective(cid=cid, connection=conn.get("id", ""))
+               if cid else [])
+    return store.regex.stream.DisplayStream(entries)
+
+
+def _visible_frames(display, text: str, *, last: bool = False) -> list[str]:
+    """The frames for `text`, the visible words that would have gone out as one
+    `delta`: that `delta`, or when `display` is active the `display` frame the
+    throttle allows. `last` closes the stream, which sends whatever the throttle
+    held back."""
+    if not display.active:
+        return [_sse({"delta": text})] if text else []
+    frames = [display.feed(text) if text else None, display.finish() if last else None]
+    return [_sse({"display": f}) for f in frames if f]
+
+
 def _persist_reply(cid: str, sid: str, text: str, connection: str = "") -> int:
     """Split one model reply into per-speaker posts and append them (#744),
     returning how many actually landed.
@@ -674,6 +697,10 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
         redactor = store.state_fence.StreamRedactor()
         liveness = _Liveness()
         try:
+            # Display rules ride the same text, so the redaction and the fence
+            # hiding above are unchanged: a `display` frame stands where the
+            # `delta` would have, and counts from 0 on this path.
+            display = await run_in_threadpool(_display_stream, cid, conn)
             async for delta in client.stream(messages, conn, meter.usage):
                 if not delta:
                     if liveness.due():
@@ -682,12 +709,13 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
                 out = redactor.feed(watcher.feed(delta))
                 if out:
                     liveness.sent()
-                    yield _sse({"delta": out})
+                    for frame in _visible_frames(display, out):
+                        yield frame
                 if watcher.complete:
                     break  # stop-after-fence: ignore anything past the close
             tail = redactor.feed(watcher.finish()) + redactor.finish()
-            if tail:
-                yield _sse({"delta": tail})
+            for frame in _visible_frames(display, tail, last=True):
+                yield frame
             # Before `finalize`, and deliberately: the accounting is complete the
             # moment the provider stops, and the persist below can raise
             # StoreBusy and return early. A stop-after-fence `break` above skips
@@ -705,8 +733,8 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # while the redactor was still withholding all of it. Without this
             # the client would be missing text that a refresh then reveals.
             flushed = redactor.feed(watcher.finish()) + redactor.finish()
-            if flushed:
-                yield _sse({"delta": flushed})
+            for frame in _visible_frames(display, flushed, last=True):
+                yield frame
             watcher.connection = _served(meter, conn)
             meter.done("error", exc.kind, detail=exc.detail)
             note: dict = {}

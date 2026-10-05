@@ -629,36 +629,50 @@ async def _select(cid, sid, client, round_record):
     )
 
 
-async def _stream_contribution(client, messages, conn, meter, watcher, run):
+def _reasoning_frame(event, watcher, liveness):
+    """The frame for a reasoning event, recording it on the watcher; None for an
+    event that carries reply text."""
+    if event.get("thinking_reset"):
+        watcher.reasoning = ""
+    elif "thinking_delta" in event:
+        watcher.reasoning += event["thinking_delta"]
+    else:
+        return None
+    liveness.sent()
+    return streaming._sse(event)
+
+
+async def _stream_contribution(client, messages, conn, meter, watcher, run, cid=None):
     # Heartbeats are throttled here, at the producer, for `streaming._Liveness`'s
     # reason: every SSE line arrives as an empty delta.
     liveness = streaming._Liveness()
+    # Display rules for the connection the turn asked for: the one that answers
+    # is only known once the attempt has run, and a fallback mid-stream is rare
+    # enough that its own rules apply from the save on, not while it streams.
+    # Frames replace `delta` frames one for one, so `keep` counts from this
+    # contribution's `response_start`.
+    display = await run_in_threadpool(streaming._display_stream, cid, conn)
     async with aclosing(llm_reasoning.stream(client, messages, conn, meter.usage)) as source:
         async for event in source:
             if run.cancel_requested:
                 raise anyio.get_cancelled_exc_class()()
-            if event.get("thinking_reset"):
-                watcher.reasoning = ""
-                liveness.sent()
-                yield streaming._sse(event)
-                continue
-            if "thinking_delta" in event:
-                watcher.reasoning += event["thinking_delta"]
-                liveness.sent()
-                yield streaming._sse(event)
+            reasoning = _reasoning_frame(event, watcher, liveness)
+            if reasoning:
+                yield reasoning
                 continue
             delta = event["delta"]
             visible = watcher.feed(delta)
             if visible:
                 liveness.sent()
-                yield streaming._sse({"delta": visible})
+                for frame in streaming._visible_frames(display, visible):
+                    yield frame
             elif not delta and liveness.due():
                 yield streaming._HEARTBEAT
             if watcher.roll.complete:
                 break
     visible = watcher.finish()
-    if visible:
-        yield streaming._sse({"delta": visible})
+    for frame in streaming._visible_frames(display, visible, last=True):
+        yield frame
     if run.cancel_requested:
         # Stop can arrive while the final visible delta is being delivered.
         # Rescue must retain this pending slot just as for midstream Stop.
@@ -875,7 +889,8 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
             round_id=turn.round_record["id"],
             response_id=record["id"],
         )
-        async for frame in _stream_contribution(client, messages, conn, turn.meter, watcher, run):
+        async for frame in _stream_contribution(
+                client, messages, conn, turn.meter, watcher, run, cid):
             yield frame
         # Read before the meter is dropped: the facade stamps the attempt
         # that ran on `meter.usage`, which a fallback makes someone other
@@ -1324,7 +1339,8 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
                 }
             }
         )
-        async for frame in _stream_contribution(client, messages, conn, meter, watcher, run):
+        async for frame in _stream_contribution(
+                client, messages, conn, meter, watcher, run, cid):
             yield frame
         served = streaming._served(meter, conn)
         meter.done()
