@@ -48,9 +48,11 @@ log = logging.getLogger(__name__)
 
 #: Frontmatter a sibling inherits. Never `done`, `one_line`, `summary`,
 #: `greeting`, or the rolling-summary and scene-break keys: those describe a
-#: transcript the sibling does not have, and are recomputed.
+#: transcript the sibling does not have, and are recomputed. `group_play` (the
+#: scene's speaker order, who sits out, its auto-round cap) is the player's
+#: setting for the scene, as the reply settings are, so it travels with them.
 COPIED_KEYS = ("model", "location_history", "time_history", "suggested_date", "pcless",
-               "turn_sizes", "dismissed", *scenes_write.RESPONSE_FIELDS)
+               "turn_sizes", "dismissed", "group_play", *scenes_write.RESPONSE_FIELDS)
 
 
 class BranchRefused(Exception):  # noqa: N818 - a refusal, named like ResponseConflict

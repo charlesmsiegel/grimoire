@@ -224,6 +224,26 @@ def test_the_sibling_never_copies_absorb_or_summary_state(cid):
     assert meta["dismissed"] == "characters/winifred"
 
 
+def test_the_sibling_keeps_the_scenes_group_play_settings(cid):
+    """A scene's speaker order is the player's choice for that scene, like its
+    reply settings: a branch of a List-order scene still plays in List order."""
+    sid = _played(cid, "Mara")
+    settings = store.group_play.validate(
+        {"order": "list", "order_list": ["characters:mara"], "auto_rounds": 2})
+    scenes.set_group(cid, sid, store.group_play.dump(settings))
+    new = branch.branch_scene(cid, sid, 0)
+    meta = scenes.read_scene_meta(cid, new)
+    assert store.group_play.settings_of(meta) == settings
+
+
+def test_a_post_hidden_from_context_stays_hidden_in_the_sibling(cid):
+    sid = _played(cid, "Mara", posts=3)
+    assert scenes.set_excluded(cid, sid, 1, True)
+    new = branch.branch_scene(cid, sid, 2)
+    flags = [scenes.serialize.is_excluded(m) for m in scenes.read_scene(cid, new)["messages"]]
+    assert flags == [False, True, False]
+
+
 def test_through_the_last_post_does_not_cut(cid, monkeypatch):
     sid = _played(cid, "Mara", posts=3)
 
