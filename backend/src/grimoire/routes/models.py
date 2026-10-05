@@ -172,6 +172,25 @@ class GroupSettings(BaseModel):
     auto_rounds: int = 0
 
 
+class RegexLayer(BaseModel):
+    """One level's regex rule file (global, world, campaign or connection)."""
+
+    rules: list[dict] = []
+    off: list[str] = []
+
+
+class RegexTest(BaseModel):
+    """The rule editor's test pane: text run through a scope's rules."""
+
+    scope: dict
+    text: str
+    role: str = "model"
+    phase: str = "display"
+    depth: int = 0
+    draft: dict | None = None
+    connection: str = ""
+
+
 class TrackerLayer(BaseModel):
     """One layer of tracker field definitions (world, campaign or scene)."""
 
