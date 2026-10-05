@@ -376,3 +376,79 @@ def test_a_cancel_survives_a_transcript_somebody_else_shortened(cid, sid):
     report = replay.cancel(cid)
     assert report["restored"] == 2            # the unreplayed originals, appended
     assert _contents(cid, sid) == ["player one", "player two", "reply two"]
+
+
+# --- a model turn hidden from context is kept, not regenerated ----------------
+
+
+@pytest.fixture
+def hidden(cid, sid):
+    """Three exchanges, with the FIRST reply hidden from context."""
+    scenes.append_message(cid, sid, "user", "player three")
+    scenes.append_reply(cid, sid, [{"speaker": None, "content": "reply three"}])
+    assert scenes.set_excluded(cid, sid, 1, True)
+    return sid
+
+
+def _fits(cid, sid):
+    messages = scenes.read_scene(cid, sid)["messages"]
+    sizes = scenes_turns.get_turn_sizes(cid, sid)
+    return not sizes or scenes_turns._tracked_suffix_fits(messages, sizes)
+
+
+def test_an_excluded_generation_is_a_kept_step(cid, hidden):
+    scene = scenes.read_scene(cid, hidden)
+    sizes = scenes_turns._parse_turn_sizes(scene["meta"].get("turn_sizes", ""))
+    steps = replay._segment(scene["messages"], 0, sizes)
+    assert [s["kind"] for s in steps] == [
+        "verbatim", "kept", "verbatim", "generation", "verbatim", "generation"]
+    assert steps[1]["messages"][0]["excluded"]
+    # Not counted as a turn to redo, anywhere.
+    assert replay.preview(cid, hidden, 0)["turns"] == 2
+
+
+def test_a_scene_whose_only_later_turn_is_hidden_has_nothing_to_replay(cid, sid):
+    assert scenes.set_excluded(cid, sid, 3, True)
+    with pytest.raises(replay.ReplayError):
+        replay.begin(cid, sid, 2)
+    assert _contents(cid, sid) == ["player one", "reply one", "player two", "reply two"]
+
+
+def test_kept_step_lands_with_its_turn_boundary(cid, hidden):
+    session = replay.begin(cid, hidden, 0)
+    assert session["turns_left"] == 2
+    assert session["next"] == "verbatim"         # a pending kept step reads as verbatim
+    replay.stage(cid)
+    # Every leading step that is not a generation: the player's post, the kept
+    # reply (still hidden) and the next player post.
+    messages = scenes.read_scene(cid, hidden)["messages"]
+    assert [m["content"] for m in messages] == ["player one", "reply one", "player two"]
+    assert messages[1].get("excluded")
+    assert scenes_turns.get_turn_sizes(cid, hidden) == [1]     # the kept reply's boundary
+    state = replay.state(cid)
+    assert state["next"] == "generation" and state["staged"] and not state["pending"]
+    # Staging is idempotent.
+    replay.stage(cid)
+    assert _contents(cid, hidden) == ["player one", "reply one", "player two"]
+    # The replayed turn lands; accepting steps past all four steps at once.
+    scenes.append_reply(cid, hidden, [{"speaker": None, "content": "reply two, replayed"}])
+    assert scenes_turns.get_turn_sizes(cid, hidden) == [1, 1]
+    assert _fits(cid, hidden)          # a reroll of the replayed turn would not desync
+    session = replay.accept(cid)
+    assert session["done"] == 4 and session["staged"] == 0 and session["staged_steps"] == 0
+    assert replay.state(cid)["next"] == "verbatim"
+    replay.stage(cid)
+    assert _contents(cid, hidden)[-1] == "player three"
+    assert replay.state(cid)["next"] == "generation"
+
+
+def test_cancel_restores_a_kept_step_through_append_reply(cid, hidden):
+    before = _contents(cid, hidden)
+    sizes = scenes_turns.get_turn_sizes(cid, hidden)
+    replay.begin(cid, hidden, 0)
+    replay.cancel(cid, restore=True)
+    messages = scenes.read_scene(cid, hidden)["messages"]
+    assert [m["content"] for m in messages] == before
+    assert messages[1].get("excluded")
+    assert scenes_turns.get_turn_sizes(cid, hidden) == sizes
+    assert _fits(cid, hidden)
