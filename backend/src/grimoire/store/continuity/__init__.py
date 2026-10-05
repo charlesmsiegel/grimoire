@@ -24,4 +24,6 @@ guard forbids. Importers name the submodule they want:
   birthdays and deadlines; read-only, and never imported by ``clock``.
 - ``drivers`` -- scene drivers and date anchors composed from ``pressure``,
   ``effective`` and ``involvement``; read-only.
+- ``similarity`` -- identity texts and the lexical, structural and embedding
+  signals that rank possible duplicates; scores rank, they never write.
 """
