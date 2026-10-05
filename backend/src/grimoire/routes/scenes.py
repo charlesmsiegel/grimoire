@@ -43,6 +43,7 @@ from .common import (
     _require_connection,
     _require_scene,
     _response_body,
+    _soft_connection,
     _standing_connection,
     _turn_override,
     _write_response,
@@ -2081,28 +2082,6 @@ async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClien
     text = await extraction
     return await _identify(cid, sid, client, ident_conn, ident_why,
                            store.absorb.parse_output(text), prepared, budget)
-
-
-def _soft_connection(resolve) -> tuple[dict | None, str]:
-    """A SECONDARY absorb phase's connection, or why it has none (#142).
-
-    `(None, reason)` rather than a raised 409, because the three phases below
-    each promise never to fail an absorb: a dossier refresh routed at a
-    connection with no key is that phase reporting `failed` with a reason the
-    inspector shows, not the extraction losing its result over a setting it does
-    not use. The extraction itself keeps the 409 -- it is the phase whose failure
-    is fatal anyway.
-
-    Takes a THUNK rather than a task name, so the task stays a literal at the
-    call site. `test_routing_guard.py` reads those literals, and a helper that
-    forwarded `task` would hide all three calls from it behind one unroutable
-    one -- which is how a routing map goes stale without anything failing.
-    """
-    try:
-        return resolve(), ""
-    except HTTPException as exc:
-        detail = exc.detail
-        return None, str(detail.get("detail") if isinstance(detail, dict) else detail)
 
 
 async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,

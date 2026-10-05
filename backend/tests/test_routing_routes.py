@@ -291,6 +291,29 @@ def test_absorbs_phases_each_follow_their_own_route(client):
     assert dossiers in used, "the dossier loop did not use the dossier route"
 
 
+def test_the_reconcile_sweep_runs_on_the_continuity_route(client):
+    """The reconciliation sweep is the continuity route's second task (§29), so
+    pointing the route at a connection moves the sweep's one call there too."""
+    _wid, cid, sid = _seed(client)
+    routed = _connection(client, "for-continuity")
+    client.put("/api/routing", json={"routes": {"continuity": routed}})
+    fake = _fake(client)
+    pid, title, beat = review_runs.LEDGER_THREAD
+    store.plot.set_movement(cid, pid, title, "open", beat, sid)
+    store.plot.set_movement(cid, "recover-the-harbour-ledger",
+                            review_runs.RECOVER_THE_LEDGER["title"], "open",
+                            review_runs.RECOVER_THE_LEDGER["beat"], sid)
+
+    r = drafts.post(client, f"/api/campaigns/{cid}/continuity/reconcile")
+
+    assert r.status_code == 200, r.json()
+    assert r.json()["llm"] == "ok"
+    sweeps = [req for req in fake.requests
+              if "You are reviewing a campaign's story ledger" in req["messages"][0]["content"]]
+    assert sweeps, "the sweep made no reconcile call"
+    assert {req["conn"]["id"] for req in sweeps} == {routed}
+
+
 def test_a_misrouted_secondary_phase_reports_itself_and_leaves_absorb_standing(client):
     """The three phases beside the extraction promise never to fail an absorb.
 

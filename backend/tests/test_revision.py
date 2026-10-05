@@ -30,6 +30,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.routes import campaigns as campaign_routes
+from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import scenes as scene_routes
 from grimoire.store import atomic, campaigns, clock, fork, plot, revision, scenes, worlds
 from grimoire.store.continuity import candidates, reconcile
@@ -332,6 +333,9 @@ def test_every_preview_only_campaign_route_is_marked_as_one():
     # it would be testing the wrapper.
     assert campaign_routes.post_campaign_library_description_draft.grimoire_computes_only
     assert scene_routes.post_scene_import_parse.grimoire_computes_only
+    # The explicit reconciliation refresh answers 202 having written nothing;
+    # its run's persists stamp for themselves (`reconcile._commit`).
+    assert continuity_routes.post_reconcile.grimoire_computes_only
 
 
 def test_a_turn_that_persists_no_post_still_records_its_terminal_write(client, monkeypatch):
