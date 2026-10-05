@@ -1116,6 +1116,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     () => scenes.find((s) => s.id === activeId)?.done ?? false,
     [scenes, activeId]);
 
+  // A closed branch (play controls III): a sibling in its branch group was
+  // absorbed, so the campaign's files now hold THAT past and this one is
+  // read-only. Rendered like an absorbed scene and further still -- no
+  // composer, no gutter actions, no swipes, no reroll keys -- because every
+  // write here is refused `branch_closed` anyway. The server resolves which
+  // sibling, so the banner can link it.
+  const activeClosed = useMemo(
+    () => scenes.find((s) => s.id === activeId)?.closed_by ?? null,
+    [scenes, activeId]);
+  // Whether the active scene has a sibling: its group has another row.
+  const activeBranched = useMemo(() => {
+    const group = scenes.find((s) => s.id === activeId)?.branch_group;
+    return !!group && scenes.filter((s) => s.branch_group === group).length > 1;
+  }, [scenes, activeId]);
+
   // The response-length chip. A pending one-shot pick beats the scene's own
   // saved preset; with neither, the label comes from what the SERVER resolved
   // (api.getSceneResponse), because a preset set at campaign or global scope
@@ -2218,10 +2233,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  `what the fork could not put back is reported, and outlives the
    *  navigation` pins.
    */
-  async function forkAtScene(sid: string) {
-    const later = scenes.filter((x) => x.id > sid).length;
+  async function forkAtScene(sid: string, fromIndex?: number) {
+    // By NUMBER, as the server cuts (gate 9): every later scene goes, and so
+    // does every other scene sharing this one's number -- its branches. An id
+    // with no number falls back to the order ids sort in.
+    const mine = numberOf(sid);
+    const later = scenes.filter((x) => {
+      if (x.id === sid) return false;
+      const theirs = numberOf(x.id);
+      return mine === null || theirs === null ? x.id > sid : theirs >= mine;
+    }).length;
     const title = scenes.find((x) => x.id === sid)?.title ?? sid;
     const ask = [
+      ...(fromIndex === undefined ? [] : [
+        "This scene is absorbed, so branching it from this post makes a copy of the " +
+        "campaign cut at that post."]),
       `Fork this campaign at '${title}'?`,
       later === 0
         ? "It is the newest scene, so the fork is a copy of this campaign as it stands."
@@ -2236,7 +2262,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!forkName) return;
     let report;
     try {
-      report = await api.forkCampaign(cid, forkName, sid);
+      report = fromIndex === undefined
+        ? await api.forkCampaign(cid, forkName, sid)
+        : await api.forkCampaign(cid, forkName, sid, {}, fromIndex);
     } catch (err: any) {
       // Not retryable: the banner's Retry generates, and there is nothing here
       // to generate — the same call `deleteMessagesFrom` makes for the same
@@ -2259,6 +2287,30 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     }
     // A clean fork takes the reader with it, to the scene it was cut at.
     navigate(`/campaigns/${report.id}/scenes`);
+  }
+
+  /** "Branch from here" (⑂ in the gutter, play controls III). An unabsorbed
+   *  scene branches into a sibling keeping everything through this post, and
+   *  the reader is taken there. An absorbed scene's past lives in the
+   *  campaign's files, which only a copy of the campaign can hold twice -- so
+   *  there it is the fork dialog, cut at this post. */
+  async function branchFrom(index: number) {
+    if (!activeId) return;
+    if (activeDone) {
+      await forkAtScene(activeId, index);
+      return;
+    }
+    let made;
+    try {
+      made = await api.branchScene(cid, activeId, index);
+    } catch (err) {
+      // Not retryable: the banner's Retry generates, and a branch is not a
+      // generation -- `forkAtScene`'s reason.
+      fail(err, false);
+      return;
+    }
+    await loadScenes().catch(() => {});
+    navigate(sceneUrl(cid, made.id));
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -4049,7 +4101,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     while (i >= 0 && messages[i].speaker === TRANSITION_SPEAKER) i--;
     return i;
   })();
-  const canReroll = transcriptIsActive &&
+  const canReroll = transcriptIsActive && !activeClosed &&
     rerollIndex >= 0 &&
     messages[rerollIndex].role === "assistant" &&
     messages[rerollIndex].speaker !== ROLL_SPEAKER &&
@@ -4090,7 +4142,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     && loaded?.cid === cid && loaded?.sid === alternates.sid
     && loaded.token === alternates.window
       ? alternates.alternates.length : 0;
-  const canSwipe = rerollIndex >= 0 && (altCount > 1 || (altCount > 0 && alternates.active === null));
+  const canSwipe = !activeClosed && rerollIndex >= 0 && (altCount > 1 || (altCount > 0 && alternates.active === null));
   // Wraps, so ‹/› tour the set. With the slot empty, ‹ reaches for the newest
   // variant and › for the oldest, which is what "one step off nothing" means.
   const stepAlternate = (delta: number) =>
@@ -4305,6 +4357,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setPicking({ index, target: pickerTarget(actor, speaker) }),
     cutFrom: (index) => void deleteMessagesFrom(index),
     replayFrom: (index) => setReplayAt(index),
+    branchFrom: (index) => void branchFrom(index),
     setRerollPrompt,
     setRerollRoute,
     reroll: () => void reroll(),
@@ -4338,7 +4391,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const { swipe: ledgerSwipe, complete: swipeComplete, position: swipePosition,
           pending: swipePending } = responseSwipe;
   const swipeCount = swipeComplete.length;
-  const swipeShown = !!ledgerSwipe && swipePosition !== null
+  const swipeShown = !activeClosed && !!ledgerSwipe && swipePosition !== null
     && (swipeCount >= 2 || (swipeCount === 1 && ledgerSwipe.can_reroll && canReroll));
   const swipeBlocked = responseDisabled || !!absorb || proposal !== null || swipePending
     || !ledgerSwipe?.editable || !!ledgerSwipe.round_open;
@@ -4386,13 +4439,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const transcriptCtx = useMemo<TranscriptContext>(() => ({
     cid, sid: activeId ?? "",
     loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
-    busy, rolling, active: transcriptIsActive, absorbed: activeDone,
+    // A closed branch is read-only: no gutter actions, no response controls.
+    busy, rolling, active: transcriptIsActive && !activeClosed, absorbed: activeDone,
     responseDisabled,
     lastIndex: firstIndex + messages.length - 1,
     rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
     trackerRerun,
   }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, activeDone,
-       responseDisabled,
+       activeClosed, responseDisabled,
        firstIndex, messages.length, rerollAt, canReroll,
        postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 
@@ -4525,7 +4579,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // of it. A chord that ignored that would put one there -- the transcript
       // and the chronicle disagreeing, with nothing to say which is right
       // (PR #400 review).
-      enabled: !absorb && !activeDone && !busy && !rolling && !renamesInFlight,
+      // A closed branch's composer is replaced the same way, for the same reason.
+      enabled: !absorb && !activeDone && !activeClosed && !busy && !rolling && !renamesInFlight,
       run: () => void send(),
     },
     {
@@ -4540,7 +4595,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // was just generated. The ↻ button is hidden while its own post is being
       // edited, so a key that fired anyway would reach past it (PR #400
       // review).
-      enabled: !absorb && !busy && !rolling && !editing && canReroll,
+      enabled: !absorb && !activeClosed && !busy && !rolling && !editing && canReroll,
       run: () => setRerollPrompt(""),
     },
     // The last response's ‹ and ›, carrying their buttons' disabled flags. →
@@ -4551,12 +4606,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // ledger reroll rather than fall through to Replay.
     {
       keys: "arrowleft", label: "Previous reply variant", group: "IN THIS SCENE",
-      enabled: !!variantSwipe && !variantSwipe.previousDisabled,
+      enabled: !activeClosed && !!variantSwipe && !variantSwipe.previousDisabled,
       run: () => stepVariant(-1),
     },
     {
       keys: "arrowright", label: "Next reply variant", group: "IN THIS SCENE",
-      enabled: !!variantSwipe && !variantSwipe.nextDisabled,
+      enabled: !activeClosed && !!variantSwipe && !variantSwipe.nextDisabled,
       run: () => {
         if (!variantSwipe?.generates) return stepVariant(1);
         setRerollPrompt("");
@@ -4815,12 +4870,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               shielded-abort window above, which it is not and which End scene
               must never be pressed inside. Folded together, a Discard settling
               here would open the #95 door. */}
-          <button className="scene-action end" onClick={review.endScene}
-                  disabled={!activeId || review.absorbing || busy || rolling
-                            || activeId === streamingId
-                            || (sceneLocked && !review.settlesScene(activeId))}>
-            {review.absorbing ? "Ending…" : "End scene"}
-          </button>
+          {/* Not on a closed branch: a sibling's absorb closed it, and the
+              server refuses to absorb it (`branch_closed`). */}
+          {!activeClosed && (
+            <button className="scene-action end" onClick={review.endScene}
+                    disabled={!activeId || review.absorbing || busy || rolling
+                              || activeId === streamingId
+                              || (sceneLocked && !review.settlesScene(activeId))}>
+              {review.absorbing ? "Ending…" : "End scene"}
+            </button>
+          )}
           {/* The way out of an absorb that is still running (#396). A review
               holds the scene against play for as long as it runs and
               `absorb_budget = 0` means nothing bounds that, so without this a
@@ -5103,6 +5162,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 <h2 className="scene-title">
                   {sceneTitle}
                   {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
+                  {activeBranched && <span className="chip">branch</span>}
+                  {activeClosed && (
+                    <span className="chip" title="A sibling branch was absorbed">closed</span>
+                  )}
                 </h2>
               )}
               {/* Rename and delete belong to the scene you are reading, and to
@@ -5230,6 +5293,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          // itself over that run and the view taking it back.
                          onUnanswered={() => { void adoptPendingRun(cid, activeId); }}
                          onStartHandled={() => setReplayAt(null)}
+                         // Only an unabsorbed scene branches; an absorbed one's
+                         // branch is a campaign fork, which "Fork first" is.
+                         branchable={!activeDone}
+                         // The replay runs in the sibling; this scene was not
+                         // touched, so the reader goes where the walk is.
+                         onBranched={(branched) => {
+                           void loadScenes();
+                           navigate(sceneUrl(cid, branched));
+                         }}
                          // Into the SAME scene in the copy, not the campaign's
                          // front door: a fork copies the scenes wholesale, so
                          // this id is there, and the reader asked to replay one
@@ -5258,7 +5330,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                            if (!asked) askAfterPost(activeId, seen);
                          }} />
           )}
-          {activeDone ? (
+          {activeClosed && !activeDone ? (
+            /* A closed branch: replaced like an absorbed scene's composer, and
+               with no editing either -- the sibling's absorb is the past the
+               campaign holds, and every write here is refused. */
+            <div className="scene-complete scene-closed">
+              A sibling branch was absorbed:{" "}
+              <Link to={sceneUrl(cid, activeClosed.sid)}>{activeClosed.title}</Link>.
+              {" "}This branch is read-only — delete it to discard it.
+            </div>
+          ) : activeDone ? (
             /* The whole composer, not a disabled entry box. This scene's summary
                is written and its changes are applied, so a post added now would
                sit outside the record taken of it -- and a greyed-out textarea

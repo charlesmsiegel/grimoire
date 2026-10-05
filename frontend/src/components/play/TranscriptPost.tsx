@@ -67,6 +67,9 @@ export type TranscriptActions = {
   pickImage: (index: number, actor: Actor | undefined, speaker: string) => void;
   cutFrom: (index: number) => void;
   replayFrom: (index: number) => void;
+  /** Branch the scene from this post: a sibling keeping everything through it
+   *  (or, for an absorbed scene, a copy of the campaign cut at it). */
+  branchFrom: (index: number) => void;
   setRerollPrompt: (text: string | null) => void;
   setRerollRoute: (route: RerollRoute) => void;
   reroll: () => void;
@@ -388,6 +391,15 @@ export const TranscriptPost = memo(function TranscriptPost({
                       aria-label={`Replay the turns after message ${index + 1}`}
                       disabled={rolling}
                       onClick={() => actions.replayFrom(index + 1)}>⏩</button>
+            )}
+            {/* Branch from here (play controls III): on every post of an
+                active scene, roll lines included -- the branch keeps this post
+                as its last. */}
+            {active && (
+              <button className="msg-edit" title="Branch from here"
+                      aria-label={`Branch from message ${index + 1}`}
+                      disabled={rolling}
+                      onClick={() => actions.branchFrom(index)}>⑂</button>
             )}
           </span>
         )}

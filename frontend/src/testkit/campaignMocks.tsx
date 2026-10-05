@@ -163,8 +163,11 @@ export const componentStubs = {
   // of its own that drives the real thing. What CampaignView owns is which post
   // the gutter hands it, so that is all the stub reports.
   ReplayPanel: () => ({
-    ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch }: any) => (
-      <div data-testid="replay-panel" data-start-at={startAt ?? ""}>
+    ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch, branchable,
+                    onBranched }: any) => (
+      <div data-testid="replay-panel" data-start-at={startAt ?? ""}
+           data-branchable={branchable ? "true" : "false"}>
+        <button onClick={() => onBranched?.("s1-b")}>stub-replay-branched</button>
         <button onClick={() => onStartHandled()}>stub-replay-close</button>
         <button onClick={() => onForked("forked")}>stub-replay-forked</button>
         <button onClick={() => onChanged()}>stub-replay-changed</button>
