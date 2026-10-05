@@ -36,6 +36,9 @@ test("collects characters, pcs, locations, items, groups and creatures as owner 
     { ref: "groups:dock-union", label: "Dock Union", kind: "groups" },
     { ref: "creatures:gull", label: "Gull", kind: "creatures" },
   ]);
+  for (const kind of ["locations", "items", "groups", "creatures"]) {
+    expect(api.listEntities).toHaveBeenCalledWith({ kind: "world", id: "w" }, kind);
+  }
   expect(api.listEntities).not.toHaveBeenCalledWith({ kind: "world", id: "w" }, "lore");
 });
 
