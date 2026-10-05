@@ -8,13 +8,14 @@ import logging
 import random
 from collections.abc import Callable
 from contextlib import aclosing
+from dataclasses import dataclass
 
 import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import content_parts, llm_reasoning, prompts, store
-from ..llm import ATTEMPTED, LLMClient, effective_model, fallback_sampling
+from ..llm import ATTEMPTED, LLMClient, effective_model, fallback_sampling, prefill_capable
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from . import runs, streaming
@@ -609,9 +610,12 @@ def _capture(cid, sid, task, messages, conn):
     if isinstance(messages, PreparedMessages):
         # Steered frozen variants have no historical section accounting. Capture
         # their exact rendered messages at actual fallback dispatch instead.
-        messages.on_variant = lambda model, _: _capture(
-            cid, sid, task, messages.for_model(model), _variant_conn(conn, model)
-        )
+        # `for_connection`: a tailed prompt (Keep writing) ends the way the
+        # fallback's own connection was sent; for any other it is `for_model`.
+        def capture_variant(model, _breakdown):
+            variant = _variant_conn(conn, model)
+            _capture(cid, sid, task, messages.for_connection(variant, model), variant)
+        messages.on_variant = capture_variant
 
 
 def _variant_conn(conn: dict, model: str) -> dict:
@@ -1066,7 +1070,7 @@ async def _round_frames(cid, sid, client, conn, run, token, turn, actor, outcome
 
 def _made_by(
     meter, task: str, composed: str, note: str, guidance: str = "", *,
-    settings: dict | None = None,
+    settings: dict | None = None, extra: dict | None = None,
 ) -> dict | None:
     """What wrote a variant, for its `made_by`: the route the meter's holder
     says served the call, read after `meter.done()`.
@@ -1083,7 +1087,9 @@ def _made_by(
     `resume_settings`, which a later roll fence's recomposition overwrites, so
     a variant written from an earlier resume carries a copy of what its prompt
     rendered. A primary-composed variant reads the record's `settings`, which
-    nothing overwrites, so it carries no copy."""
+    nothing overwrites, so it carries no copy.
+
+    `extra` is merged last: a Keep writing variant's `extends` and `mode`."""
     if meter is None:
         return None
     try:
@@ -1101,6 +1107,7 @@ def _made_by(
             "guidance": (guidance or "")[: store.alternates.MAX_GUIDANCE_CHARS],
             "note": (note or "")[: store.alternates.MAX_GUIDANCE_CHARS],
             **({"settings": copy.deepcopy(settings)} if settings is not None else {}),
+            **copy.deepcopy(extra or {}),
         }
     except Exception:  # noqa: BLE001 - provenance must never fail a turn
         _log.exception("could not record what made a %s response", task)
@@ -1469,17 +1476,70 @@ def regenerate_response(
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
             request.app, cid, sid, rid, client, conn, run, token, record, messages, outcome,
-            note=note, guidance=(body.guidance if body else None) or "",
+            note=note, guidance=(body.guidance if body else None) or "", task="regenerate",
+        )
+        runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/responses/{rid}/extend")
+def extend_response(
+    cid: str,
+    sid: str,
+    rid: str,
+    request: Request,
+    body: RegenerateBody | None = None,
+    client: LLMClient = Depends(get_llm),
+    x_grimoire_attempt: str | None = Header(default=None),
+):
+    """Keep writing: continue the trailing response, saved as a new variant
+    `old + joiner + continuation` and activated, so the unextended take stays
+    one swipe back. A detached `turn` run of kind `extend`, streamed and
+    re-attachable exactly like `regenerate_response`."""
+    replay = runs.replay_attempt(request.app, cid, sid, x_grimoire_attempt)
+    if replay is not None:
+        return replay
+    _turn_override(body)
+    _require_scene(cid, sid)
+    conn, _ = _override_connection(body, "extend", cid)
+    run, fresh = runs.reserve_turn(request.app, cid, sid, "extend", x_grimoire_attempt)
+    if not fresh:
+        return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+    guidance = (body.guidance if body else None) or ""
+    with runs.reservation(request.app, run):
+        with store.locks.campaign_lock(cid):
+            plan = _extend_target(cid, sid, rid)
+            token = streaming._claim_turn(cid, sid)
+            note = store.responses.round_typed_note(cid, sid, plan.record["round_id"])
+            messages = _extend_messages(plan.snapshot, conn, plan.partial, guidance, plan.words,
+                                        campaign=cid)
+            if guidance:
+                # Last in the hold, after every refusal, as a reroll's steer.
+                store.steering.record(cid, sid, guidance)
+        outcome = streaming.StreamOutcome()
+        frames = _reroll_frames(
+            request.app, cid, sid, rid, client, conn, run, token, plan.record, messages, outcome,
+            note=note, guidance=guidance, task="extend", extend=plan,
         )
         runs.start_detached(request.app, run, lambda: frames, outcome=outcome.result)
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
 
 
 async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, messages, outcome,
-                         *, note="", guidance=""):
-    watcher = store.response_protocol.ResponseWatcher(perception=record["actor_ref"] != "grimoire")
+                         *, note="", guidance="", task: str = "regenerate",
+                         extend: ExtendPlan | None = None):
+    """A reroll's stream -- or, with `extend`, a Keep writing continuation's.
+
+    The two differ only at the edges: what the meter and prompt log call the
+    call (`task`), whether the perception fence is expected (not in a prefill,
+    where the model is mid-reply), the `extend.seed` the live bubble grows from,
+    and how the result lands (`_accept_extend` joins it onto the reply)."""
+    perception = record["actor_ref"] != "grimoire"
+    if extend is not None:
+        perception = perception and not prefill_capable(conn)
+    watcher = store.response_protocol.ResponseWatcher(perception=perception)
     meter = store.usage.meter(
-        "regenerate",
+        task,
         campaign=cid,
         scene=sid,
         post=record.get("post"),
@@ -1491,13 +1551,16 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
     # variant's record is kept, so swiping back to it is free.
     tracked: list[tracker_routes.Mark] = []
     try:
-        await run_in_threadpool(_capture, cid, sid, "regenerate", messages, conn)
+        await run_in_threadpool(_capture, cid, sid, task, messages, conn)
         yield streaming._sse(
             {
                 "response_start": {
                     "id": rid,
                     "speaker": record["speaker"],
                     "actor_ref": record["actor_ref"],
+                    # The reply as shown, which the live bubble grows from and a
+                    # re-attached client rebuilds the same view with.
+                    **({"extend": {"seed": extend.old}} if extend is not None else {}),
                 }
             }
         )
@@ -1506,26 +1569,34 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
             yield frame
         served = streaming._served(meter, conn)
         meter.done()
-        made_by = _made_by(meter, "regenerate", "primary", note, guidance)
-
-        accepted = await run_in_threadpool(
-            _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked, served,
-            made_by=made_by,
-        )
-        if accepted:
+        refusal: tuple[str, str] | None
+        if extend is None:
+            made_by = _made_by(meter, task, "primary", note, guidance)
+            accepted = await run_in_threadpool(
+                _accept_reroll, cid, sid, rid, run, token, record, watcher, tracked, served,
+                made_by=made_by,
+            )
+            refusal = None if accepted else (
+                "replacement_incomplete", "The previous response was retained.")
+        else:
+            mode = _served_mode(messages, meter, conn)
+            made_by = _made_by(
+                meter, task, extend.composed, note, guidance,
+                settings=extend.settings if extend.composed == "resume" else None,
+                extra={"extends": extend.extends, "mode": mode},
+            )
+            refusal = await run_in_threadpool(
+                _accept_extend, cid, sid, rid, run, token, watcher, extend, mode,
+                tracked, made_by, served,
+            )
+        if refusal is None:
             outcome.land()
             yield streaming._sse({"response_end": {"id": rid, "status": "complete"}})
             yield streaming._sse({"done": True})
         else:
-            outcome.fail("replacement_incomplete", "The previous response was retained.")
-            yield streaming._sse(
-                {
-                    "error": {
-                        "kind": "replacement_incomplete",
-                        "detail": "The previous response was retained.",
-                    }
-                }
-            )
+            kind, detail = refusal
+            outcome.fail(kind, detail)
+            yield streaming._sse({"error": {"kind": kind, "detail": detail}})
     except LLMError as exc:
         meter.done("error", exc.kind, detail=exc.detail)
         outcome.fail(exc.kind, exc.detail)
@@ -1550,35 +1621,188 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
             watcher.issue = issue
         if not text.strip():
             return False
-        variant = store.responses.save_variant(
-            cid,
-            sid,
-            rid,
-            text.strip(),
-            "complete",
-            handoff=watcher.handoff,
-            issue=watcher.issue,
-            activate=False,
-            reasoning=watcher.reasoning + watcher.preparation_note,
-            connection=connection,
-            made_by=made_by,
-        )
-        store.responses.activate(cid, sid, rid, variant["id"])
-        if rewrite:
-            streaming._record_rewrite(cid, sid, rid, *rewrite, text.strip(), variant["id"])
-        streaming._prune_rewrites(cid, sid)
-        # A reroll is a swipe to a new variant: every later tracker record was
-        # built on the one it replaced. In this hold, with the swap; fail-soft.
-        tracker_routes.after_swipe(cid, sid, rid)
-        streaming._turn_settled(cid)
-        if tracked is not None:
-            # In this hold, for `_save`'s reason: reentrant here, a fresh wait
-            # in front of the frames anywhere after it.
-            marked = tracker_routes.mark(
-                cid, sid, store.tracker.paths.response_key(rid, variant["id"]))
-            if marked:
-                tracked.append(marked)
+        _land_variant(cid, sid, rid, text.strip(), handoff=watcher.handoff, issue=watcher.issue,
+                      reasoning=watcher.reasoning + watcher.preparation_note,
+                      tracked=tracked, made_by=made_by, connection=connection,
+                      rewrite=rewrite)
         return True
+
+
+def _land_variant(cid, sid, rid, text, *, handoff, issue, reasoning, tracked=None,
+                  made_by=None, connection="", rewrite=None) -> None:
+    """Save `text` as a new complete variant of `rid` and make it the one shown.
+
+    The tail a reroll and a Keep writing continuation share. Called inside the
+    caller's campaign-lock hold, after its fence. `connection` is the one that
+    served the call; `rewrite` is `(original, fired rule ids)` when the store
+    phase rewrote `text`, recorded under the response for the new variant --
+    activating folds the response into one message, keyed by its bare id."""
+    variant = store.responses.save_variant(
+        cid,
+        sid,
+        rid,
+        text,
+        "complete",
+        handoff=handoff,
+        issue=issue,
+        activate=False,
+        reasoning=reasoning,
+        connection=connection,
+        made_by=made_by,
+    )
+    store.responses.activate(cid, sid, rid, variant["id"])
+    if rewrite:
+        streaming._record_rewrite(cid, sid, rid, *rewrite, text, variant["id"])
+    streaming._prune_rewrites(cid, sid)
+    # A reroll is a swipe to a new variant: every later tracker record was
+    # built on the one it replaced. In this hold, with the swap; fail-soft.
+    tracker_routes.after_swipe(cid, sid, rid)
+    streaming._turn_settled(cid)
+    if tracked is not None:
+        # In this hold, for `_save`'s reason: reentrant here, a fresh wait
+        # in front of the frames anywhere after it.
+        marked = tracker_routes.mark(
+            cid, sid, store.tracker.paths.response_key(rid, variant["id"]))
+        if marked:
+            tracked.append(marked)
+
+
+@dataclass(frozen=True)
+class ExtendPlan:
+    """What a Keep writing run continues, resolved inside the route's hold.
+
+    `old` is the reply as the transcript shows it (`responses.get`'s join), so a
+    hand-trimmed reply is continued from the trim and the saved variant is
+    `old + joiner + continuation`. `partial` is what the model is shown as its
+    own turn: `old`, except while the reply is still split into parts by a
+    declined roll, when the prompt is the latest resume snapshot -- which
+    already holds the earlier parts as history -- and `partial` is the last
+    part alone (plan-gate ruling 1)."""
+
+    record: dict
+    old: str
+    partial: str
+    snapshot: dict
+    composed: str
+    settings: dict | None
+    extends: str
+    words: int | None
+
+
+_EXTEND_RETAINED = "The previous response was retained."
+_EXTEND_ROLL = "A continuation cannot propose a roll \u2014 reroll the reply instead"
+
+
+def _extend_target(cid: str, sid: str, rid: str) -> ExtendPlan:
+    """The plan for continuing `rid`. Called inside the route's campaign-lock
+    hold, before anything is spent."""
+    try:
+        store.responses.editable(cid, sid, rid)
+        record = store.responses.get(cid, sid, rid, private=True)
+    except (store.responses.ResponseNotFound, store.responses.ResponseConflict) as exc:
+        raise _public_error(exc) from exc
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    parts = [m for m in messages if m.get("response_id") == rid and m.get("response_part")]
+    if parts and record.get("resume_snapshot"):
+        snapshot, composed = record["resume_snapshot"], "resume"
+        settings, partial = record.get("resume_settings"), parts[-1]["content"]
+    else:
+        snapshot, composed = record["snapshot"], "primary"
+        settings, partial = record.get("settings"), record["content"]
+    return ExtendPlan(record=record, old=record["content"], partial=partial,
+                      snapshot=snapshot, composed=composed, settings=settings,
+                      extends=record["active_variant"],
+                      words=(settings or {}).get("words"))
+
+
+def _served_mode(messages, meter, conn) -> str:
+    """The tail the attempt that ANSWERED was sent -- a fallback picks its own,
+    so the primary's mode is not evidence of what the model continued."""
+    attempted = (meter.usage.get(ATTEMPTED) if meter is not None else None) or conn
+    return messages.mode_for(attempted) or _extend_mode(attempted)
+
+
+def _accept_extend(cid, sid, rid, run, token, watcher, plan: ExtendPlan, mode: str,
+                   tracked=None, made_by=None, connection="") -> tuple[str, str] | None:
+    """Join the continuation onto the reply as a new active variant, or say why
+    not -- in which case nothing is written and the active variant stays."""
+    with store.locks.campaign_lock(cid):
+        _fence(cid, sid, run, token)
+        if run.cancel_requested:
+            return "replacement_incomplete", _EXTEND_RETAINED
+        if watcher.roll.complete or watcher.roll.truncated:
+            return "extend_roll_refused", _EXTEND_ROLL
+        raw = watcher.narration
+        if mode == "instruction":
+            # A watcher started for a prefill expected no fence; the fallback
+            # that answered was asked for a reply, and may have written one.
+            raw = store.response_protocol.strip_preparation(raw)
+        lead = raw[: len(raw) - len(raw.lstrip())]
+        text, issue, _rewrite = _normalise(cid, sid, plan.record, raw, connection)
+        if not text:
+            return "replacement_incomplete", _EXTEND_RETAINED
+        previous: dict = next(
+            (v for v in plan.record["variants"] if v["id"] == plan.extends), {})
+        _land_variant(cid, sid, rid, plan.old + _extend_joiner(lead, text, mode) + text,
+                      # The reply's handoff was decided when it was written; a
+                      # continuation's own fence (if any) is not a second one.
+                      handoff=previous.get("handoff"), issue=issue,
+                      reasoning=watcher.reasoning + watcher.preparation_note,
+                      tracked=tracked, made_by=made_by, connection=connection)
+        return None
+
+
+#: What may open a continuation that joins its reply with a space rather than a
+#: new paragraph, in instruction mode (gate resolution 5): closing punctuation,
+#: a closing quote or bracket, an ellipsis or a dash -- the reply's sentence
+#: going on rather than a new one starting.
+_EXTEND_CLOSERS = frozenset(".,;:!?)]\u201d\u2019'*\u2026\u2014")
+
+
+def _extend_mode(conn: dict) -> str:
+    """The tail a "Keep writing" attempt on `conn` is sent."""
+    return "prefill" if prefill_capable(conn) else "instruction"
+
+
+def _extend_messages(snapshot: dict, conn: dict, partial: str, guidance: str,
+                     words: int | None, campaign: str = "") -> PreparedMessages:
+    """The extend prompt: the frozen snapshot, then the partial reply as the
+    model's own turn, ending one of two ways per attempt (`with_tails`).
+
+    The partial is projected the way history is (images down to their alt
+    text) and carries no speaker label -- the model is continuing its own turn.
+    Prefill: the partial is last, and a steer rides as the reroll's steer
+    message before it. Instruction: a user message after it asks for the rest,
+    carrying the steer."""
+    partial_message = {"role": "assistant", "content": store.export.drop_images(partial)}
+    steer = ([{"role": "system",
+               "content": prompts.render("scene/response_steer.j2", guidance=guidance,
+                                         continuation=True)}]
+             if guidance else [])
+    tails = {
+        "prefill": [*steer, partial_message],
+        "instruction": [partial_message, {
+            "role": "user",
+            "content": prompts.render("scene/extend_instruction.j2", words=words,
+                                      guidance=guidance or ""),
+        }],
+    }
+    return PreparedMessages.from_snapshot(snapshot, effective_model(conn), campaign=campaign) \
+        .with_tails(tails, _extend_mode, conn)
+
+
+def _extend_joiner(lead: str, text: str, mode: str) -> str:
+    """What goes between the reply and its continuation.
+
+    Prefill: the model's own leading whitespace decides -- it was writing the
+    same message, so no whitespace at all is its choice (finishing a word).
+    Instruction: a new paragraph, unless the continuation plainly carries on the
+    sentence (lowercase, or closing punctuation first), then a space."""
+    if mode == "prefill":
+        newlines = lead.count("\n")
+        return "\n\n" if newlines >= 2 else "\n" if newlines == 1 else " " if lead else ""
+    first = text[:1]
+    return " " if first.islower() or first in _EXTEND_CLOSERS else "\n\n"
 
 
 def replay_actor(cid, sid):

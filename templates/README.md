@@ -470,6 +470,16 @@ for the POST …/roll-proposal accept/decline call; never persisted.
   `check_docs` (`list[str]`, the check's linked rules docs).
 - `roll_declined.j2` (decline): no vars.
 
+### Reroll steer and Keep writing — `scene/response_steer.j2` / `scene/extend_instruction.j2`
+Ephemeral messages `routes.character_turns` appends to a response's frozen
+snapshot for POST …/responses/{rid}/regenerate and …/responses/{rid}/extend;
+never persisted (the steer's text is recorded in the steering log).
+- `response_steer.j2` (system): vars `guidance`, and optional `continuation`
+  (true for a Keep writing prefill, whose reply is continued, not replaced).
+- `extend_instruction.j2` (user, after the partial reply in instruction mode):
+  vars `words` (the response's word target, or none) and `guidance` (`""`
+  when no steer). A prefill-mode extend sends no instruction at all.
+
 ## Keeping templates honest
 
 The verification harness checks the WIRING (each builder passes the documented

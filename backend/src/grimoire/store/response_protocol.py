@@ -91,6 +91,18 @@ class _PreparationPrefix:
         return out
 
 
+def strip_preparation(text: str) -> str:
+    """`text` without one leading perception fence, as a watcher with
+    perception on would have streamed it; a no-op for text that has none.
+
+    For a reply whose watcher ran with perception OFF but whose model wrote a
+    fence anyway -- a "Keep writing" prefill that failed over to an instruction
+    route. The prose keeps its leading whitespace, which is what says how a
+    continuation joins the reply before it."""
+    parser = _PreparationPrefix(True)
+    return parser.feed(text) + parser.finish()
+
+
 class ResponseWatcher:
     """Rolls interrupt first; state precedes the final handoff and stays hidden."""
 

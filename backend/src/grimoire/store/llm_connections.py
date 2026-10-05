@@ -72,7 +72,7 @@ def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     the sidecar clear on which field changed, and no less correct: the rev
     bump alone already makes any stale sidecar invisible on read (see
     cached_models below), so clearing it here is pure hygiene either way."""
-    meta = {k: fields.get(k, "") for k in _FIELDS}
+    meta = {k: str(fields.get(k, "")) for k in _FIELDS}
     meta["prefill"] = "true" if fields.get("prefill") in (True, "true") else ""
     # `keep_rev` is the one exception, for an edit nothing the rev guards has
     # seen: the sidecar and the rev both survive it (see `REV_NEUTRAL_FIELDS`).

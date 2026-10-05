@@ -1,0 +1,10 @@
+{#- "Keep writing" (play controls IV), instruction mode: a USER message sent
+    right after the partial reply, which rides as the model's own assistant
+    turn. User-role rather than system because the Claude agent path hoists
+    system messages into its system prompt, and the model would then write a
+    new reply. Vars: words (int or none: the response's continuation word
+    target), guidance (str, "" when the player typed no steer). -#}
+Your last message stopped short. Continue exactly where your last message stops: do not repeat, restate or summarise any of it, and do not start a new reply. Keep the same voice and the same speaker, and write only the rest of the beat{% if words %}, at most {{ words }} words{% endif %}.
+{%- if guidance %}
+Direction for this continuation: {{ guidance }}
+{%- endif %}

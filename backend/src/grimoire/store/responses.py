@@ -504,6 +504,19 @@ def _response_index(messages: list[dict], rid: str) -> int | None:
     return next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
 
 
+def is_trailing(messages: list[dict], rid: str) -> bool:
+    """Whether response `rid` is the transcript's last reply -- the one "Keep
+    writing" may continue.
+
+    Among the messages that are not synthetic lines (a roll, a scene transition,
+    a director note), the ones carrying `rid` must be a non-empty suffix: a
+    transition line appended after the reply does not make it "not last", a
+    player post or another actor's reply does. Pure: no reads, no lock."""
+    story = [m for m in messages if m.get("speaker") not in serialize.SYNTHETIC_SPEAKERS]
+    ours = [i for i, m in enumerate(story) if m.get("response_id") == rid]
+    return bool(ours) and ours == list(range(len(story) - len(ours), len(story)))
+
+
 def require_context_included(messages: list[dict], record: dict) -> None:
     """Refuse to replay a frozen prompt that still holds a now-hidden post.
 
