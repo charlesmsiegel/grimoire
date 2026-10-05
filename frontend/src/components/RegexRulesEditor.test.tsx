@@ -251,3 +251,79 @@ test("a read that fails offers to try again", async () => {
   fireEvent.click(again);
   expect(await screen.findByRole("button", { name: /^Strip asides/ })).toBeInTheDocument();
 });
+
+test.each([
+  ["global", GLOBAL],
+  ["connection", { kind: "connection" as const, id: "conn-a" }],
+])("a %s PUT carries no off even when the file it read had stale ids", async (_name, scope) => {
+  serve({ rules: [STRIP, QUOTES], off: ["r-gone"] });
+  render(<RegexRulesEditor scope={scope} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Move Curly quotes up" }));
+  await waitFor(() => expect(api.putRegex).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(api.putRegex).mock.calls[0][1].off).toEqual([]);
+  fireEvent.click(await screen.findByLabelText("Enable Strip asides"));
+  await waitFor(() => expect(api.putRegex).toHaveBeenCalledTimes(2));
+  expect(vi.mocked(api.putRegex).mock.calls[1][1].off).toEqual([]);
+});
+
+test("a world PUT keeps the off ids it read", async () => {
+  serve({ rules: [STRIP, QUOTES], off: ["r-glob"] }, inherited());
+  render(<RegexRulesEditor scope={WORLD} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Move Curly quotes up" }));
+  await waitFor(() => expect(api.putRegex).toHaveBeenCalledTimes(1));
+  expect(vi.mocked(api.putRegex).mock.calls[0][1].off).toEqual(["r-glob"]);
+});
+
+test("a refusal naming a field the form does not draw is a banner", async () => {
+  serve({ rules: [STRIP], off: [] });
+  const message = "id: 'r-strip' is already used by an inherited rule";
+  vi.mocked(api.putRegex).mockRejectedValueOnce(
+    Object.assign(new Error(message), {
+      status: 400, detail: message, kind: "invalid_rule",
+      body: { kind: "invalid_rule", index: 0, field: "id", detail: message },
+    }));
+  await open("Strip asides");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(await screen.findByLabelText("Name"), { target: { value: "Renamed" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent(message);
+});
+
+test("a field note goes away once that field is edited", async () => {
+  serve({ rules: [STRIP], off: [] });
+  const message = "pattern: does not compile: bad";
+  vi.mocked(api.putRegex).mockRejectedValueOnce(
+    Object.assign(new Error(message), {
+      status: 400, detail: message, kind: "invalid_rule",
+      body: { kind: "invalid_rule", index: 0, field: "pattern", detail: message },
+    }));
+  await open("Strip asides");
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.change(await screen.findByLabelText("Pattern"), { target: { value: "(" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await screen.findByText(message);
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Other" } });
+  expect(screen.getByText(message)).toBeInTheDocument();
+  fireEvent.change(screen.getByLabelText("Pattern"), { target: { value: "(a)" } });
+  expect(screen.queryByText(message)).toBeNull();
+});
+
+test("a write in flight at a scope change neither disables nor paints the new scope", async () => {
+  vi.mocked(api.getRegex).mockImplementation(async (s) =>
+    bundle(s.kind === "global"
+      ? { rules: [STRIP, QUOTES], off: [] } : { rules: [GLOBAL_RULE], off: [] }));
+  let release!: (b: RegexBundle) => void;
+  vi.mocked(api.putRegex).mockImplementationOnce(
+    () => new Promise<RegexBundle>((r) => { release = r; }));
+  const { rerender } = render(<RegexRulesEditor scope={GLOBAL} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Move Curly quotes up" }));
+  await waitFor(() => expect(api.putRegex).toHaveBeenCalledTimes(1));
+  rerender(<RegexRulesEditor scope={WORLD} />);
+  expect(await screen.findByRole("button", { name: /^Fix dashes/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "+ New rule" })).toBeEnabled();
+  expect(screen.getByLabelText("Enable Fix dashes")).toBeEnabled();
+  release(bundle({ rules: [QUOTES, STRIP], off: [] }));
+  await new Promise((r) => setTimeout(r, 20));
+  expect(screen.queryByRole("button", { name: /^Curly quotes/ })).toBeNull();
+  expect(screen.getByLabelText("Enable Fix dashes")).toBeEnabled();
+});
