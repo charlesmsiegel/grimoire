@@ -224,6 +224,28 @@ test("one complete variant that can be rerolled shows 1/1, with › generating",
   expect(screen.getByRole("button", { name: "Generate a new reply variant" })).toBeEnabled();
 });
 
+// `canReroll` is false where the transcript holds no player post to answer
+// (an offscreen or all-assistant scene), so › would have nothing to generate.
+test("one complete variant in a scene with no player post shows no arrows, even if the ledger can reroll", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue(scene([EARLIER, LAST]));
+  reads({ active: 0, variants: [v("v1")], can_reroll: true });
+  renderCampaign();
+  await screen.findByText("The second answer.");
+  await waitFor(() => expect(api.getResponseSwipe).toHaveBeenCalledWith("run", "s1", "rB"));
+  expect(screen.queryAllByRole("button", { name: /Previous reply variant|Generate a new reply variant/ })).toHaveLength(0);
+  expect(screen.queryByText("1/1")).toBeNull();
+});
+
+test("the counter's title carries the active variant's provenance", async () => {
+  playing();
+  reads({
+    variants: [v("v1"), { ...v("v2"), made_by: { model: "realm/mara-70b", composed: "primary" } }, v("v3")] });
+  renderCampaign();
+  const counter = await screen.findByText("2/3");
+  expect(counter.getAttribute("title")).toContain("Model: realm/mara-70b");
+});
+
 describe("the keys", () => {
   test("← steps to the previous variant", async () => {
     playing();

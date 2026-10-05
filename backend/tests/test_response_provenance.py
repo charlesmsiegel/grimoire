@@ -18,16 +18,17 @@ def _record(client, cid, sid):
 
 def test_first_take_records_the_settings_the_prompt_rendered(client):
     cid, sid = seed(client)
-    store.scenes.set_response(cid, sid, {"response_continuation_words": "300"})
+    store.scenes.set_response(cid, sid, {
+        "response_continuation_words": "300", "response_continuation_paragraphs": "4"})
     fake = FakeLLM([[HANDOFF]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     base = f"/api/campaigns/{cid}/scenes/{sid}"
     client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
     _base, _rid, record = _record(client, cid, sid)
-    assert record["settings"]["phase"] == "continuation"
-    assert record["settings"]["words"] == 300
-    assert "style_id" in record["settings"]
-    assert "provenance" not in record["settings"]
+    # The whole record, so a key added to (or leaked into) it is seen: the
+    # style is the one the scene resolves, no style being "".
+    assert record["settings"] == {
+        "style_id": "", "phase": "continuation", "words": 300, "paragraphs": 4}
 
 
 def test_one_shot_override_is_in_the_recorded_settings(client):
@@ -120,6 +121,17 @@ def test_director_turn_and_its_reroll_carry_the_typed_note(client):
     record, made_by = _made_by(client, cid, sid, record["id"])
     assert len(record["variants"]) == 2
     assert made_by["note"] == "Make it rain." and made_by["task"] == "regenerate"
+
+
+def test_typed_note_is_clipped_like_guidance(client):
+    cid, sid = seed(client)
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[HANDOFF]])
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    response = client.post(base + "/chat", json={
+        "content": "y" * 600, "director": True, "speaker_ref": "characters:mara"})
+    assert "error" not in response.text, response.text
+    _record, made_by = _made_by(client, cid, sid)
+    assert made_by["note"] == "y" * 500
 
 
 def test_empty_send_records_no_note(client):

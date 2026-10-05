@@ -99,7 +99,7 @@ describe("individual response controls", () => {
     expect(screen.getAllByText("Guided: Colder.")).toHaveLength(1);
     // Each variant reads the settings it was composed under.
     expect(screen.getByText("Length: ~120 words, 3 paragraphs")).toBeInTheDocument();
-    expect(screen.getByText("Length: ~60 words, 1 paragraphs")).toBeInTheDocument();
+    expect(screen.getByText("Length: ~60 words, 1 paragraph")).toBeInTheDocument();
     expect(screen.getByText("Style: noir")).toBeInTheDocument();
     // The variant with no `made_by` renders no provenance beside its text.
     const first = screen.getByText("First").parentElement as HTMLElement;

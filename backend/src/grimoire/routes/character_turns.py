@@ -1056,8 +1056,9 @@ def _made_by(meter, task: str, composed: str, note: str, guidance: str = "") -> 
     append failed while the holder still has the values; and the holder rather
     than the connection the route resolved, because `llm._stamp` resets it per
     attempt, so it names a fallback that answered. A key the holder lacks is
-    left out, never guessed (`effective_model` would be a guess). Pure -- it
-    runs on the event loop -- and fail-soft: provenance never fails a turn."""
+    left out, never guessed (`effective_model` would be a guess). No reads -- it
+    runs on the event loop -- and fail-soft (it logs): provenance never fails a
+    turn."""
     if meter is None:
         return None
     try:
@@ -1073,7 +1074,7 @@ def _made_by(meter, task: str, composed: str, note: str, guidance: str = "") -> 
             **{key: value for key, value in served.items() if value},
             "composed": composed,
             "guidance": (guidance or "")[: store.alternates.MAX_GUIDANCE_CHARS],
-            "note": note or "",
+            "note": (note or "")[: store.alternates.MAX_GUIDANCE_CHARS],
         }
     except Exception:  # noqa: BLE001 - provenance must never fail a turn
         _log.exception("could not record what made a %s response", task)
@@ -1411,11 +1412,6 @@ def regenerate_response(
                         "detail": "This legacy response has no frozen prompt. Explicitly replay from here instead.",
                     },
                 )
-            # The durable half of the steer (store/steering.py), which the
-            # end-of-scene absorb reads. After the refusals above, so a reroll
-            # that never runs does not say a correction it never made.
-            if body and body.guidance:
-                store.steering.record(cid, sid, body.guidance)
             token = streaming._claim_turn(cid, sid)
             # Lock-free and non-minting, inside this hold: the round's typed
             # note, which a reroll of a director turn replays with its snapshot.
@@ -1431,6 +1427,11 @@ def regenerate_response(
                         ),
                     }
                 )
+                # The durable half of the steer (store/steering.py), which the
+                # end-of-scene absorb reads. Last in the hold, after every
+                # refusal and every read that can raise, so a reroll that never
+                # runs does not say a correction it never made.
+                store.steering.record(cid, sid, body.guidance)
         outcome = streaming.StreamOutcome()
         frames = _reroll_frames(
             request.app, cid, sid, rid, client, conn, run, token, record, messages, outcome,

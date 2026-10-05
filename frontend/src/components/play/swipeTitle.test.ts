@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResponseSettingsRecord, ResponseSwipe } from "../../api/types";
-import { madeByLines, swipeTitle } from "./swipeTitle";
+import { madeByLines, settingsFor, swipeTitle } from "./swipeTitle";
 
 const SETTINGS: ResponseSettingsRecord = { style_id: "terse", phase: "primary", words: 180, paragraphs: 3 };
 const RESUME: ResponseSettingsRecord = { style_id: "lush", phase: "resume", words: 90, paragraphs: 2 };
@@ -50,6 +50,13 @@ describe("madeByLines", () => {
     expect(madeByLines(FULL, undefined)).toHaveLength(4);
   });
 
+  it("says 1 paragraph and 1 word in the singular", () => {
+    expect(madeByLines(FULL, { ...SETTINGS, words: 1, paragraphs: 1 }))
+      .toContain("Length: ~1 word, 1 paragraph");
+    expect(madeByLines(FULL, { ...SETTINGS, words: 1, paragraphs: 2 }))
+      .toContain("Length: ~1 word, 2 paragraphs");
+  });
+
   it("gives nothing for no made_by", () => {
     expect(madeByLines(undefined, SETTINGS)).toEqual([]);
   });
@@ -86,5 +93,14 @@ describe("swipeTitle", () => {
     expect(swipeTitle(swipe({
       variants: [{ id: "v1", status: "complete", made_by: {} }], settings: null,
     }))).toBeUndefined();
+  });
+});
+
+describe("settingsFor", () => {
+  it("picks resume_settings for a resume-composed variant and settings for any other", () => {
+    const record = { settings: SETTINGS, resume_settings: RESUME };
+    expect(settingsFor({ ...FULL, composed: "resume" }, record)).toBe(RESUME);
+    expect(settingsFor(FULL, record)).toBe(SETTINGS);
+    expect(settingsFor(undefined, record)).toBe(SETTINGS);
   });
 });

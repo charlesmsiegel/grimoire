@@ -4303,8 +4303,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const responseDisabled = busy || rolling || sceneLocked || editingAny || renamesInFlight > 0;
 
   // The ledger's arrows, worked out once for the row, the keys and the gesture.
-  // Shown with two complete variants to tour, or one that can be rerolled (so
-  // › has somewhere to go). An active variant that is not complete has no
+  // Shown with two complete variants to tour, or one that can be generated from
+  // (the ledger's `can_reroll` and this
+  // view's `canReroll`, so › has somewhere to go). An active variant that is not complete has no
   // place among the complete ones to count from, so it shows none — the
   // Response variants disclosure still lists it.
   //
@@ -4318,7 +4319,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           pending: swipePending } = responseSwipe;
   const swipeCount = swipeComplete.length;
   const swipeShown = !!ledgerSwipe && swipePosition !== null
-    && (swipeCount >= 2 || (swipeCount === 1 && ledgerSwipe.can_reroll));
+    && (swipeCount >= 2 || (swipeCount === 1 && ledgerSwipe.can_reroll && canReroll));
   const swipeBlocked = responseDisabled || !!absorb || proposal !== null || swipePending
     || !ledgerSwipe?.editable || !!ledgerSwipe.round_open;
   const swipeGenerates = swipeShown && swipePosition === swipeCount - 1;
