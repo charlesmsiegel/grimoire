@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 from types import SimpleNamespace
 
 from grimoire import routes, store
@@ -697,3 +698,26 @@ def test_list_chain_stops_on_authority_violation(client):
     assert "error" not in response.text, response.text
     assert fake.calls == 2
     assert speakers(cid, sid) == ["Mara", "Winifred"]
+
+
+def test_natural_follow_on_never_repeats_the_last_speaker(client, monkeypatch):
+    # Round 2 answers round 1's last contribution; its writer must not open it.
+    cid, _sid, _base = seed(client)
+    for n in range(8):
+        # A fresh seed per planning call, so the two rounds shuffle apart.
+        seeds = iter(range(n * 10, n * 10 + 10))
+        monkeypatch.setattr(character_turns, "_rng", lambda seeds=seeds: random.Random(next(seeds)))
+        sid = store.scenes.create_scene(cid, f"Round {n}")
+        base = f"/api/campaigns/{cid}/scenes/{sid}"
+        for actor in ("mara", "winifred"):
+            cast = client.post(base + "/cast", json={"id": actor})
+            assert cast.status_code == 200, cast.text
+        group(client, base, order="natural", talkativeness={MARA: 100, WINIFRED: 100},
+              auto_rounds=1)
+        fake = FakeLLM([["One."], ["Two."], ["Three."], ["Four."]])
+        use(client, fake)
+        response = client.post(base + "/chat", json={"content": "Hello"})
+        assert "error" not in response.text, response.text
+        said = speakers(cid, sid)
+        assert len(said) == 4
+        assert all(a != b for a, b in zip(said, said[1:])), (n, said)

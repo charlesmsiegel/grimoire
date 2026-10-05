@@ -272,3 +272,24 @@ def test_natural_unset_talkativeness_is_still_fifty():
     joined = {len(group_play.plan_post(s, R, trigger="", history=[], rng=random.Random(n))["plan"])
               for n in range(30)}
     assert len(joined) > 1  # a coin flip per character, not everyone every time
+
+
+def test_natural_follow_on_never_opens_with_its_author():
+    # The author spoke last; opening the next round with them would be the
+    # same character twice in a row. They stay in the round, just not first.
+    author = "characters:mara"
+    loud = {**group_play.parse(""), "order": "natural",
+            "talkativeness": {r["ref"]: 100 for r in R}}
+    for seed in range(200):
+        p = group_play.plan_post(loud, R, trigger="", history=[], rng=random.Random(seed),
+                                 author=author)
+        order = [p["actor_ref"], *p["plan"]]
+        assert order[0] != author
+        assert author in order
+    half = {**group_play.parse(""), "order": "natural"}
+    for seed in range(200):
+        p = group_play.plan_post(half, R, trigger="", history=[], rng=random.Random(seed),
+                                 author=author)
+        order = [p["actor_ref"], *p["plan"]]
+        if any(r != author for r in order):
+            assert order[0] != author

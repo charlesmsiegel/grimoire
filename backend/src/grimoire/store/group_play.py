@@ -183,6 +183,10 @@ def _natural_sequence(settings: dict, avail: list[dict], text: str, history: lis
     rest = [e["ref"] for e in avail if e["ref"] not in named]
     rng.shuffle(rest)
     order = named + [r for r in rest if rng.random() * 100 < _talk(settings, r)]
+    if order and order[0] == author and len(order) > 1:
+        # The author spoke last: opening with them would be the same speaker
+        # twice in a row. They still speak, after the first other entry.
+        order = [order[1], author, *order[2:]]
     if order:
         return order
     others = [e for e in avail if e["ref"] != author] or avail
