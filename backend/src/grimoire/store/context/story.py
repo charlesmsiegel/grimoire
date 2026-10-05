@@ -56,6 +56,10 @@ def _project_history(messages: list[dict], reduce=None) -> list[dict]:
         # dialogue -- and the model would learn to write them back.
         if scenes_serialize.is_director_note(message):
             continue
+        # A post the player hid from context stays in the transcript and
+        # reaches no prompt -- this is the turn's half of that promise.
+        if scenes_serialize.is_excluded(message):
+            continue
         content = (export.drop_images(message["content"]) if reduce is None
                    else reduce(index, message))
         m = {**message, "content": content}

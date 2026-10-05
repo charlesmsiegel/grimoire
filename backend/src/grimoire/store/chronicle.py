@@ -218,7 +218,8 @@ def _relabelled(m: dict, player_label: str | None) -> dict:
     return m
 
 
-def transcript_text(messages: list[dict], player_label: str | None = None) -> str:
+def transcript_text(messages: list[dict], player_label: str | None = None, *,
+                    include_excluded: bool = False) -> str:
     """Render messages via transcript.j2. The transition tag is internal drift
     metadata (`scenes_serialize.TRANSITION_SPEAKER`), never a speaker a prompt should see —
     strip it here so every caller (app transcript, exports, and the mechanics
@@ -231,6 +232,11 @@ def transcript_text(messages: list[dict], player_label: str | None = None) -> st
     that character rather than as the reserved word the file stores. Optional
     because some callers have nobody to name -- a scene with no player seated --
     and because it must default to what every existing caller already had.
+
+    A post hidden from context is dropped too, BY DEFAULT: every caller but two
+    is building a prompt, so a future one that forgets the parameter leaks
+    nothing. Only the markdown and plain-text exports -- a reader's copy of
+    what happened, which keeps everything, marked -- pass `include_excluded`.
     """
     normalized = [
         _relabelled(m, player_label)
@@ -242,5 +248,6 @@ def transcript_text(messages: list[dict], player_label: str | None = None) -> st
         # chronicle, and cited as evidence for a proposal it would be the
         # reviewer's own words coming back as a finding.
         if not scenes_serialize.is_director_note(m)
+        and (include_excluded or not scenes_serialize.is_excluded(m))
     ]
     return prompts.render("snippets/transcript.j2", messages=normalized)

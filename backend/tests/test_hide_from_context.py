@@ -6,6 +6,9 @@ import json
 import pytest
 
 from grimoire import routes, store
+from grimoire.routes import character_turns
+from grimoire.store import campaigns, chronicle, entities
+from grimoire.store.absorb import routing as absorb_routing
 from grimoire.store.scenes import serialize
 from tests.llm_fakes import FakeLLM
 from tests.test_character_turns import seed
@@ -288,3 +291,74 @@ def test_a_reply_composed_after_the_exclusion_rerolls(client, monkeypatch):
     r = client.post(base + f"/responses/{rid}/regenerate")
     assert r.status_code == 200 and "error" not in r.text, r.text
     assert len(store.responses.get(cid, sid, rid)["variants"]) == before + 1
+
+
+# --- every prompt input skips excluded posts --------------------------------
+
+def test_composed_turn_and_inspector_omit_an_excluded_post(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "ooc: the heliotrope is my cat")
+    store.scenes.append_message(cid, sid, "user", "Mara, the tide is turning.")
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Heliotrope",
+                           "The flower of oaths.", keys="heliotrope")
+    text = "\n".join(m["content"] for m in store.context.build_messages(cid, sid))
+    assert "heliotrope is my cat" in text and "The flower of oaths." in text   # the control
+    store.scenes.set_excluded(cid, sid, 0, True)
+    text = "\n".join(m["content"] for m in store.context.build_messages(cid, sid))
+    assert "heliotrope is my cat" not in text and "The flower of oaths." not in text
+    assert "the tide is turning" in text
+    rows = store.context.context_breakdown(cid, sid)["sections"]
+    assert all("heliotrope is my cat" not in r.get("text", "") for r in rows)
+    assert any("the tide is turning" in r.get("text", "") for r in rows)
+
+
+def test_selector_conversation_omits_an_excluded_post(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "ooc: brb, kettle")
+    store.scenes.append_message(cid, sid, "user", "Winifred, the lamps.")
+    store.scenes.set_excluded(cid, sid, 0, True)
+    prompt = character_turns._selector_messages(cid, sid, {"eligible": [], "note": ""})[0]["content"]
+    assert "brb, kettle" not in prompt and "Winifred, the lamps." in prompt
+
+
+def test_transcript_text_filters_by_default():
+    ms = [{"role": "user", "content": "ooc: brb", "excluded": STAMP},
+          {"role": "assistant", "speaker": "Mara", "content": "The tide turns."}]
+    assert "ooc: brb" not in chronicle.transcript_text(ms)
+    assert "The tide turns." in chronicle.transcript_text(ms)
+    assert "ooc: brb" in chronicle.transcript_text(ms, include_excluded=True)
+
+
+def test_absorb_evidence_ignores_a_quote_only_in_an_excluded_post(monkeypatch, tmp_path):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "The Pier")
+    store.scenes.append_message(cid, sid, "assistant", "I hid the key.", speaker="Mara")
+    store.scenes.append_message(cid, sid, "assistant", "The fog lifts.", speaker="Mara")
+    shown = store.scenes.read_scene(cid, sid)["messages"]
+    assert "i hid the key" in absorb_routing.speaker_index(cid, sid, shown, player_label="")["texts"]["Mara"]
+    store.scenes.set_excluded(cid, sid, 0, True)
+    shown = store.scenes.read_scene(cid, sid)["messages"]
+    for messages in (shown, None):    # the snapshot and the fallback read alike
+        index = absorb_routing.speaker_index(cid, sid, messages, player_label="")
+        assert "i hid the key" not in index["texts"].get("Mara", "")
+        assert "the fog lifts" in index["texts"]["Mara"]
+
+
+def test_an_all_excluded_scene_is_empty_to_absorb_dossiers_and_the_fold(client):
+    cid, sid = seed(client)
+    store.scenes.append_message(cid, sid, "user", "ooc: testing")
+    store.scenes.append_message(cid, sid, "assistant", "ooc: ok", speaker="Mara")
+    store.scenes.set_excluded(cid, sid, 0, True)
+    store.scenes.set_excluded(cid, sid, 1, True)
+    fake = FakeLLM([["must not run"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    r = client.post(base + "/absorb")
+    assert r.status_code == 400 and r.json()["detail"] == "nothing to absorb"
+    r = client.post(base + "/dossiers")
+    assert r.status_code == 400 and r.json()["detail"] == "nothing to build dossiers from"
+    body = client.post(base + "/rolling-summary?force=true").json()
+    assert body["refreshed"] is False
+    assert fake.calls == 0

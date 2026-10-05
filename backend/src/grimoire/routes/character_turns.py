@@ -403,10 +403,14 @@ def _successor(cid, sid, round_record, handoff, cancelled, actor=None):
 
 def _selector_messages(cid, sid, round_record):
     messages = store.scenes.read_scene(cid, sid)["messages"]
-    tail = messages[-12:]
+    # The last twelve posts IN CONTEXT: a hidden post neither shows nor takes
+    # one of the twelve slots.
+    kept = [i for i, m in enumerate(messages) if not store.scenes.is_excluded(m)][-12:]
+    lo = kept[0] if kept else len(messages)
     # The prompt view of the posts it reads, depth counted over the whole scene.
-    shown = store.regex.view.view(tail, cid=cid, phase="prompt",
-                                  offset=len(messages) - len(tail), total=len(messages))
+    window = store.regex.view.view(messages[lo:], cid=cid, phase="prompt",
+                                   offset=lo, total=len(messages))
+    shown = [window[i - lo] for i in kept]
     public = [
         {
             "speaker": m.get("speaker") or ("You" if m["role"] == "user" else "Grimoire"),

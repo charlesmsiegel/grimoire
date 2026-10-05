@@ -49,6 +49,7 @@ from ..campaigns import read as campaigns_read
 from ..continuity import effective
 from ..regex import view as regex_view
 from ..scenes import read as scenes_read
+from ..scenes import serialize as scenes_serialize
 from ..tracker import fields as tracker_fields
 from ..tracker import settings as tracker_settings
 from ..tracker import view as tracker_view
@@ -214,6 +215,10 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             history = actor.observed_history(cid, sid, actor_ref, history)
             cast = selected
     actor_scoped = actor_ref is not None and actor_ref != "grimoire"
+    # The CONTENT inputs read only posts in context; a hidden post stays in
+    # `history` because the index-based steps above (`pins.active`,
+    # `actor.observed_history`) count it, and `_project_history` drops it itself.
+    visible = scenes_serialize.without_excluded(history)
 
     npc_cards: list[dict] = []
     npc_ids: list[str] = []
@@ -315,7 +320,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
             "anchor": voice_anchors.effective(_expanded(anchor)),
             "example": actor.select_examples(_expanded(_str(card, "mes_example")),
                                               voice_anchors.VOICE_EXAMPLE_CAP,
-                                              "\n".join(m["content"] for m in history[-4:])),
+                                              "\n".join(m["content"] for m in visible[-4:])),
         })
     # A COUNT, not a length: reading `len(cast_blocks)` at render time would let
     # a per-block filter move the policy's render condition.
@@ -327,7 +332,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
 
     depth = config.scan_depth()
     # depth 0 => no scan window (history[-0:] would be the WHOLE list, so guard it)
-    recent_text = "\n".join(m["content"] for m in history[-depth:]) if depth else ""
+    recent_text = "\n".join(m["content"] for m in visible[-depth:]) if depth else ""
     if wi_seed:  # opener: the prompt stands in for the (absent) recent history
         recent_text = (recent_text + "\n" + wi_seed).strip()
     # World info reads the same messages per post rather than joined, each at
@@ -341,7 +346,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # Birthday names belong to the current question. World-info activation
     # deliberately scans several turns, but an earlier name must not widen a
     # direct question about somebody else.
-    birthday_text = wi_seed or next((m["content"] for m in reversed(history)
+    birthday_text = wi_seed or next((m["content"] for m in reversed(visible)
                                      if m["role"] == "user"), "")
 
     history_ids = scenes_read.get_location_history(cid, sid)
@@ -467,7 +472,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         #
         # One NPC at most when actor-scoped, so `nominate` would answer None
         # anyway -- and the blanking below says so regardless.
-        "speaker": (speaker.nominate(npc_names, history, pending=wi_seed)
+        "speaker": (speaker.nominate(npc_names, visible, pending=wi_seed)
                     if not actor_scoped and config.speaker_turn_taking() else None),
         "players": players, "ref_names": ref_names, "refs": refs,
         # The recap, archive, ledgers, calendar, relationship graph, group
@@ -512,7 +517,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # One assigned speaker per call makes whole-turn block limits irrelevant.
     # Measure only that speaker's recent prose.
     drift = (length_drift.measure_contributions(
-        history, response_actor["name"], targets["continuation"])
+        visible, response_actor["name"], targets["continuation"])
         if response_actor else None)
     length_correction = (prompts.render("scene/length_correction.j2",
                                         drift=drift,

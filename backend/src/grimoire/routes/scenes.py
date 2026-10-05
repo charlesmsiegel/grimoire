@@ -2858,7 +2858,8 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     review on the scene.
     """
     epoch, scene, tracked = _absorb_snapshot(cid, sid, run.scene_identity)
-    if not scene["messages"]:
+    # Counted in context: an all-hidden scene has nothing a review could read.
+    if not store.scenes.without_excluded(scene["messages"]):
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
     # so a second pass over the same scene duplicates both. Refuse by default
@@ -3431,7 +3432,10 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
             "at": stored["at"] if has_summary else 0, "total": total,
             "stale": has_summary and not intact,
             "prior": stored["summary"] if intact else "",
-            "base": stored["at"] if intact else 0}
+            "base": stored["at"] if intact else 0,
+            # Pending posts a fold would actually SEE: one over hidden posts only
+            # would pay a provider to restate the summary.
+            "fresh": len(store.scenes.without_excluded(messages[stored["at"] if intact else 0:]))}
 
 
 def _rolling_digest(cid: str, sid: str, covered: list[dict], total: int) -> str:
@@ -3467,6 +3471,8 @@ def _rolling_due(view: dict, every: int, force: bool) -> bool:
     already-current scene -- and folding an empty list of posts onto a summary
     would pay a provider to restate it.
     """
+    if view["fresh"] <= 0:
+        return False   # nothing pending is in context: an all-hidden span folds nothing
     pending = view["total"] - view["base"]
     if pending <= 0:
         return False
@@ -4246,11 +4252,12 @@ def post_dossiers(cid: str, sid: str, request: Request,
     """
     scene = _require_scene(cid, sid)
     conn = _require_connection("dossier", cid)
-    if not scene["messages"]:
+    if not store.scenes.without_excluded(scene["messages"]):
         # A dossier is a paragraph the model rewrites FROM the transcript, so an
         # empty one can only produce invention. The audit needs no equivalent
         # guard: with nothing to audit it simply finds nothing, where this would
-        # stage a proposal to overwrite a real dossier with fiction.
+        # stage a proposal to overwrite a real dossier with fiction. Hidden
+        # posts do not count: the transcript below drops them.
         raise HTTPException(status_code=400, detail="nothing to build dossiers from")
     shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
     transcript = store.chronicle.transcript_text(

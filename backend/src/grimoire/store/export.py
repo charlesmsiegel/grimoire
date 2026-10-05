@@ -568,7 +568,7 @@ def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
             # the chapter marker a markdown reader sees, and numbering it is what
             # lets a reader landing in one file know where in the run they are.
             lines = [f"# {toc_label(c)}", *_header_lines(c),
-                     chronicle.transcript_text(c["messages"])]
+                     chronicle.transcript_text(c["messages"], include_excluded=True)]
             z.writestr(chapter_filename(c, "md"), "\n\n".join(lines) + "\n")
         for e in data["appendix"]:
             lines = [f"# {e['name']}"]
@@ -744,7 +744,7 @@ def build_text(cid: str) -> tuple[bytes, str]:
         if ch["epigraph"]:
             lines.append(ch["epigraph"])
         messages = [{**m, "content": drop_images(m["content"])} for m in ch["messages"]]
-        lines.append(chronicle.transcript_text(messages))
+        lines.append(chronicle.transcript_text(messages, include_excluded=True))
         chapters.append("\n\n".join(lines))
 
     sep = "\n\n\f\n"
