@@ -163,3 +163,33 @@ def test_removing_a_null_link_is_journalled_and_undo_restores_it(cid):
     review.remove_link(cid, "l1")
     store.undo.undo(cid, store.journal.read(cid)[-1]["id"])
     assert doc.read(cid)["links"] == {"l1": None}
+
+
+@pytest.mark.parametrize("section", ["aliases", "links"])
+def test_removing_a_malformed_object_record_undo_restores_it_verbatim(cid, section):
+    key = "thread:a" if section == "aliases" else "l1"
+    _raw(cid, {section: {key: {"note": "broken"}}})
+    (review.remove_alias if section == "aliases" else review.remove_link)(cid, key)
+    store.undo.undo(cid, store.journal.read(cid)[-1]["id"])
+    assert doc.read(cid)[section] == {key: {"note": "broken"}}
+
+
+@pytest.mark.parametrize("section", ["aliases", "links"])
+def test_redoing_the_removal_of_a_null_record_removes_it(cid, section):
+    key = "thread:a" if section == "aliases" else "l1"
+    _raw(cid, {section: {key: None}})
+    (review.remove_alias if section == "aliases" else review.remove_link)(cid, key)
+    reversal = store.undo.undo(cid, store.journal.read(cid)[-1]["id"])
+    assert doc.read(cid)[section] == {key: None}
+    store.undo.undo(cid, reversal["id"])
+    assert doc.read(cid)[section] == {}
+
+
+def test_undo_link_restore_refuses_self_collapsing(cid):
+    doc.put_link(cid, "l1", _link("thread:a", "thread:b", "continues"))
+    jid = _journalled_link(cid, "l1", lambda: doc.drop_link(cid, "l1"))
+    doc.put_alias(cid, "thread:a", {"to": "thread:b"})
+    with pytest.raises(store.undo.UndoConflict) as refused:
+        store.undo.undo(cid, jid)
+    assert str(refused.value) != store.undo.CONFLICT
+    assert doc.get_link(cid, "l1") is None

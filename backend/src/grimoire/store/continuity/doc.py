@@ -285,7 +285,10 @@ def restore_alias(cid: str, ref: str, value) -> None:
     with locks.campaign_lock(cid):
         data = _mutable(cid, "aliases")
         if value is None:
-            if data["aliases"].pop(ref, None) is not None:
+            # Membership, not the popped value: a stored null is a record, and
+            # removing it has to reach the disk like any other.
+            if ref in data["aliases"]:
+                del data["aliases"][ref]
                 _write(cid, data)
             return
         to = _target(value)
@@ -308,7 +311,8 @@ def restore_link(cid: str, lid: str, value) -> None:
     with locks.campaign_lock(cid):
         data = _mutable(cid, "links")
         if value is None:
-            if data["links"].pop(lid, None) is not None:
+            if lid in data["links"]:
+                del data["links"][lid]
                 _write(cid, data)
             return
         stored = data.get("aliases")
@@ -319,6 +323,10 @@ def restore_link(cid: str, lid: str, value) -> None:
         rule = _RELATIONS.get(key[0])
         if rule is None or _prefix(value["a"]) not in rule[0] or _prefix(value["b"]) not in rule[1]:
             raise ContinuityError("that relation cannot join those two records")
+        if key[1] == key[2]:
+            raise ContinuityError(
+                "both ends of this link have since been merged into one record, so "
+                "putting it back would link a record to itself")
         for other, record in data["links"].items():
             if other != lid and _link_key(aliases, record) == key:
                 raise ContinuityError(
@@ -350,25 +358,38 @@ def link_snapshot(cid: str, lid: str) -> dict:
     return _snapshot("links", cid, lid)
 
 
-def _restore_snapshot(cid: str, section: str, key: str, snap, validated) -> None:
+def _alias_shaped(value) -> bool:
+    return _target(value) is not None
+
+
+def _link_shaped(value) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(value.get(k), str) for k in ("a", "b", "relation"))
+
+
+def _restore_snapshot(cid: str, section: str, key: str, snap, validated,
+                      well_formed) -> None:
     if not isinstance(snap, dict):
         raise ContinuityError("this change's record of what was there cannot be read")
     if not snap.get("present"):
         validated(cid, key, None)
-    elif isinstance(snap.get("value"), dict):
+    elif well_formed(snap.get("value")):
         validated(cid, key, snap["value"])
     else:
-        # A malformed record put back exactly as it was: validating it would
-        # refuse to restore what the file held, which is the whole job.
+        # A malformed record -- null, a string, an object without the fields a
+        # record needs -- put back exactly as it was: validating it would refuse
+        # to restore what the file held, which is the whole job. A well-shaped
+        # record is validated, because that is where a cycle or a duplicate made
+        # since would be caught.
         with locks.campaign_lock(cid):
             _put(cid, section, key, snap.get("value"))
 
 
 def restore_alias_snapshot(cid: str, ref: str, snap) -> None:
     with locks.campaign_lock(cid):
-        _restore_snapshot(cid, "aliases", ref, snap, restore_alias)
+        _restore_snapshot(cid, "aliases", ref, snap, restore_alias, _alias_shaped)
 
 
 def restore_link_snapshot(cid: str, lid: str, snap) -> None:
     with locks.campaign_lock(cid):
-        _restore_snapshot(cid, "links", lid, snap, restore_link)
+        _restore_snapshot(cid, "links", lid, snap, restore_link, _link_shaped)
