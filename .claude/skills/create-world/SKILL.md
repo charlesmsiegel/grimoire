@@ -170,7 +170,7 @@ is refused as ambiguous rather than guessed.
 | kind | keys a plan may set |
 |---|---|
 | `characters` | `description`, `personality`, `scenario`, `first_mes`, `mes_example`, `alternate_greetings`, `tags`, `creator_notes`, `system_prompt`, `post_history_instructions`, `nickname` (the V3 card's `data`), plus `voice_anchor` |
-| `pcs` | `tags`, `pronouns`, `summary`, `birthdate`, `description` |
+| `pcs` | `tags`, `pronouns`, `summary`, `birthdate`, `goals`, `player_notes`, `description` |
 | `locations` `lore` `items` `groups` `creatures` | `body`, `keys` (list), `owners` (list), `secrecy` (`public`/`secret`/`gm-only`), `fields` |
 | `greetings` | `body`, `character`, `present`, `location`, `requires_tags`, `predecessor_join` (`all`/`any`), `pcless`, `phase`, `sequence`, `optional`, `leads_to`, `excludes` |
 

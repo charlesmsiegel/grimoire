@@ -532,3 +532,17 @@ def test_an_anchor_only_character_patch_leaves_the_card_untouched(home):
     _apply({"characters": [{"name": "Mara", "voice_anchor": "Measured."}]}, world_id=wid)
     assert card.read_bytes() == before
     assert voice_anchors.read(root, "mara") == "Measured."
+
+
+def test_pc_profile_fields_are_written(home):
+    wid = _apply(_plan(pcs=[{"name": "Winifred", "tags": ["Outsider"],
+                             "goals": "Find who sent the letter.",
+                             "player_notes": "Plays it close to the chest."}]))["world"]
+    root = worlds.world_root(wid)
+    vid = pcs.read_pc(root, "winifred")["meta"]["default_version"]
+    persona = pcs.read_persona(root, "winifred", vid)
+    assert persona["goals"] == "Find who sent the letter."
+    assert persona["player_notes"] == "Plays it close to the chest."
+    problems = create_world.validate_plan(
+        {"pcs": [{"name": "Winifred", "goals": "a\nb"}]}, root, wid)
+    assert any("goals must be one line" in p for p in problems), problems

@@ -63,7 +63,9 @@ PLAN_KEYS = {"world", "module", "calendar", "tags", "characters", "pcs", "greeti
              *ENTITY_KINDS}
 ENTITY_KEYS = {"name", "body", "keys", "owners", "secrecy", "fields"}
 CHARACTER_KEYS = {"name", "voice_anchor", *CARD_FIELDS}
-PC_KEYS = {"name", "tags", "pronouns", "summary", "birthdate", "description"}
+#: The persona fields a plan may set (`pcs.PERSONA_FIELDS` plus the body).
+PERSONA_KEYS = ("pronouns", "summary", "birthdate", "goals", "player_notes", "description")
+PC_KEYS = {"name", "tags", *PERSONA_KEYS}
 GREETING_KEYS = {"name", "body", "character", "present", "location", "requires_tags",
                  "predecessor_join", "pcless", "phase", "sequence", "optional",
                  "leads_to", "excludes"}
@@ -306,10 +308,9 @@ def _single_lines(row: dict, where: str, keys) -> Iterator[str]:
 def _check_pc(row: dict, idx: Index) -> Iterator[str]:
     where = f"pcs {row['name']!r}"
     yield from _refs(idx, "tags", row.get("tags"), f"{where} tags")
-    yield from _typed(row, where, ("pronouns", "summary", "birthdate", "description"),
-                      str, "a string")
+    yield from _typed(row, where, PERSONA_KEYS, str, "a string")
     # `description` is the persona's body; the rest are frontmatter scalars
-    yield from _single_lines(row, where, ("pronouns", "summary", "birthdate"))
+    yield from _single_lines(row, where, [k for k in PERSONA_KEYS if k != "description"])
 
 
 def _check_fields(kind: str, fields: dict, idx: Index, where: str) -> Iterator[str]:
@@ -795,7 +796,7 @@ def _write_character(root: Path, cid: str, row: dict) -> bool:
 def _write_pc(root: Path, pid: str, row: dict, idx: Index) -> bool:
     vid = pcs.read_pc(root, pid)["meta"]["default_version"]
     before = _dir_snapshot(root / "pcs" / pid)
-    given = [f for f in ("pronouns", "summary", "birthdate", "description") if f in row]
+    given = [f for f in PERSONA_KEYS if f in row]
     if given:
         # only when the plan names a persona field: re-serializing an untouched
         # persona strips its body and drops frontmatter keys the writer does
