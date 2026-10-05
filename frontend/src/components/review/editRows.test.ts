@@ -208,3 +208,11 @@ test("isCandidateAlternative compares prefixed refs", () => {
     { ...ledgerCandidate(), ref: "commitment:the-debt", title: "Mara's debt to the Saltmarch guild" }] })))
     .toBe(true);
 });
+
+test("an alternative that writes a stored record is never the as-new variant", () => {
+  // Its target may be missing from the candidates (a merge that landed while
+  // the review was prepared, in a review stored before candidates followed
+  // it); a non-empty `before` still says it writes a record that exists.
+  expect(isCandidateAlternative(ontoLedger, check({ candidates: [] }))).toBe(true);
+  expect(isCandidateAlternative(asNew, check({ candidates: [] }))).toBe(false);
+});
