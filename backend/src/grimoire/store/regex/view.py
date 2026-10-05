@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 
+from ..scenes import serialize as scenes_serialize
 from . import apply, layers
 
 log = logging.getLogger(__name__)
@@ -79,6 +80,14 @@ def annotate_shown(messages: list[dict], *, cid: str | None, offset: int = 0,
     return out
 
 
+def _posts_started(text: str) -> int:
+    """How many new posts `text` would start once stored: a speaker marker
+    after a blank line is where the transcript reader begins the next message.
+    One at the very start of the (stripped) text sits behind the post's own
+    marker on the same line, so it starts nothing."""
+    return sum(1 for m in scenes_serialize._markers(text.strip()) if m.start() > 0)
+
+
 def store_phase(text: str, *, cid: str, role: str,
                 connection: str = "") -> tuple[str, list[str]]:
     """`text` through the rules that rewrite stored text, and the ids of the
@@ -88,7 +97,10 @@ def store_phase(text: str, *, cid: str, role: str,
     A rewrite that would leave nothing (empty or whitespace only) is not
     applied: the text comes back exactly as it arrived, with no rule fired, so
     no seam stores an empty post or loses the only copy of what was written.
-    Logged by rule id only -- the text is private prose."""
+    Nor is one that would start a post of its own -- a speaker marker after a
+    blank line, which the next read splits off as another message, breaking
+    turn counts, ids and Restore. Logged by rule id only -- the text is
+    private prose."""
     entries = _live(layers.effective(cid=cid, connection=connection), "store")
     if not entries:
         return text, []
@@ -100,6 +112,10 @@ def store_phase(text: str, *, cid: str, role: str,
         text = step["text_after"]
     if fired and not text.strip():
         log.warning("store phase: not applying a rewrite that empties the text (rules %s)",
+                    ", ".join(fired))
+        return before, []
+    if fired and _posts_started(text) > _posts_started(before):
+        log.warning("store phase: not applying a rewrite that starts a new post (rules %s)",
                     ", ".join(fired))
         return before, []
     return text, fired

@@ -16,10 +16,14 @@ rule off is the only way to change it -- the tracker layer's rule
 (`store/tracker/fields.py`), which this reader follows: it never raises, and an
 entry it cannot trust costs only itself, logged.
 
-A layer is validated against what it sits on: its ids may not collide with an
-inherited one (an `off` entry would name two rules), and its `off` may name only
-inherited ids. Reading does not re-check `off` -- the lower level can lose a
-rule the upper one had switched off, and that must not make the file unreadable.
+A layer is validated against what it sits on: an id of its own that collides
+with an inherited one (an `off` entry would name two rules) is re-minted on
+write, and its `off` may name only inherited ids. Re-minted rather than refused,
+because the collision can arrive from above -- a global rule written after a
+campaign rule, under the same id -- and refusing would leave the lower level
+unsaveable for a reason nobody editing it can see. Reading does not re-check
+`off` -- the lower level can lose a rule the upper one had switched off, and
+that must not make the file unreadable.
 
 Writers: world, global and connection take no campaign lock (they are not
 campaign-scoped; `atomic.write_text` keeps the file whole). The campaign file is
@@ -30,6 +34,7 @@ hold, so a concurrent campaign write cannot land between the two.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -49,13 +54,16 @@ Entry = apply.Entry
 
 _EMPTY: dict = {"rules": [], "off": []}
 
-# Parsed and normalised files, keyed by what identifies a version of one. Run
-# order is hot (a display frame asks for the whole stack), and a rule list
-# should not be re-read and re-validated each time. Cleared when full rather
-# than evicted: a library has a handful of these files, and the cap is only a
-# bound on a long-lived process that has visited many campaigns.
+# Parsed and normalised files, keyed by path and a hash of the bytes. Run order
+# is hot (a display frame asks for the whole stack), and a rule list should not
+# be re-parsed, re-validated and re-compiled each time -- but a stat key misses
+# a same-size replace that lands within the clock's granularity, or one a sync
+# client hands its old mtime, so the bytes are read on every call and only the
+# work after that is saved. Cleared when full rather than evicted: a library
+# has a handful of these files, and the cap is only a bound on a long-lived
+# process that has visited many campaigns.
 _CACHE_MAX = 256
-_cache: dict[tuple[str, int, int], dict] = {}
+_cache: dict[tuple[str, bytes], dict] = {}
 
 
 # --- where the files live -----------------------------------------------------
@@ -131,10 +139,10 @@ def _salvaged(raw, file: Path) -> dict:
             "off": list(dict.fromkeys(o for o in off if isinstance(o, str)))}
 
 
-def _parse(file: Path) -> dict:
+def _parse(file: Path, data: bytes) -> dict:
     try:
-        return _salvaged(json.loads(file.read_text(encoding="utf-8")), file)
-    except (OSError, ValueError) as exc:  # JSONDecodeError and UnicodeDecodeError too
+        return _salvaged(json.loads(data.decode("utf-8")), file)
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError too
         log.error("regex: ignoring the rule file at %s -- %s", file, exc)
         return {"rules": [], "off": []}
 
@@ -144,14 +152,14 @@ def _load(level: str, key: str) -> dict:
     Never raises; a level whose key names nothing reads empty."""
     try:
         file = path(level, key)
-        st = file.stat()
+        data = file.read_bytes()
     except (worlds_paths.WorldNotFound, campaigns_paths.CampaignNotFound,
             llm_connections.ConnectionNotFound, OSError):
         return _EMPTY
-    ident = (str(file), st.st_mtime_ns, st.st_size)
+    ident = (str(file), hashlib.sha256(data).digest())
     doc = _cache.get(ident)
     if doc is None:
-        doc = _parse(file)
+        doc = _parse(file, data)
         if len(_cache) >= _CACHE_MAX:
             _cache.clear()
         _cache[ident] = doc
@@ -172,7 +180,9 @@ def read_level(level: str, key: str = "") -> dict:
 
 def validate_doc(doc: dict, *, level: str, inherited_ids: set[str]) -> dict:
     """`doc` normalised, or `rules.RuleError` (`.index` is the rule's place,
-    `.field` the key at fault). `inherited_ids` is every id the level sits on."""
+    `.field` the key at fault). `inherited_ids` is every id the level sits on;
+    a rule of this level's own that uses one is given a fresh id (see the
+    module docstring), while two rules of the same file sharing one is refused."""
     _check_level(level)
     if not isinstance(doc, dict):
         raise rules.RuleError("a rule file must be an object")
@@ -181,13 +191,16 @@ def validate_doc(doc: dict, *, level: str, inherited_ids: set[str]) -> dict:
         raise rules.RuleError("rules: must be a list", field="rules")
     clean: list[dict] = []
     seen: set[str] = set()
+    # A fresh id must not land on one a later rule of this file still carries.
+    taken = {r.get("id") for r in raw_rules if isinstance(r, dict)}
     for i, raw in enumerate(raw_rules):
         rule = rules.normalise(raw, index=i)
         if rule["id"] in seen:
             raise rules.RuleError(f"id: {rule['id']!r} is used twice", index=i, field="id")
         if rule["id"] in inherited_ids:
-            raise rules.RuleError(f"id: {rule['id']!r} is already used by an inherited rule",
-                                  index=i, field="id")
+            rule["id"] = rules.mint_id()
+            while rule["id"] in inherited_ids or rule["id"] in taken or rule["id"] in seen:
+                rule["id"] = rules.mint_id()
         seen.add(rule["id"])
         clean.append(rule)
     raw_off = doc.get("off", [])
@@ -207,10 +220,6 @@ def _store(level: str, key: str, clean: dict) -> dict:
     file = path(level, key)
     file.parent.mkdir(parents=True, exist_ok=True)
     atomic.write_text(file, json.dumps(clean, indent=2, ensure_ascii=False) + "\n")
-    # The stat key would catch the change anyway; this is for a filesystem whose
-    # clock is too coarse to tell two writes of one size apart.
-    for ident in [i for i in list(_cache) if i[0] == str(file)]:
-        _cache.pop(ident, None)
     return clean
 
 

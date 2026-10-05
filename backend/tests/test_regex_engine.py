@@ -47,6 +47,33 @@ def test_unknown_group_left_literal():
     assert rules.warnings(r)
 
 
+def test_a_missing_name_is_literal_only_when_the_pattern_has_no_names():
+    """JavaScript's rule: `$<name>` is literal while the pattern has no named
+    groups at all, and replaced with nothing once it has some."""
+    plain = _rule(pattern="(a)", replacement="[$<y>]", flags="")
+    assert _run("ab", _entry(plain)) == "[$<y>]b"
+    named = _rule(pattern="(?P<x>a)", replacement="[$<y>]", flags="")
+    assert _run("ab", _entry(named)) == "[]b"
+    lead = "The replacement refers to $<y>, which the pattern has no group for; "
+    assert rules.warnings(named) == [lead + "it is replaced with nothing."]
+    assert rules.warnings(plain) == [lead + "it is left as written."]
+
+
+def test_imported_is_normalised_to_its_shape():
+    """`imported` is provenance the editor renders: a malformed one is either
+    put in shape or dropped, never handed on to crash the page."""
+    shaped = {"from": "sillytavern", "pattern": "/a/g", "notes": ["One.", 5, "Two."],
+              "extra": True}
+    assert _rule(imported=shaped)["imported"] == {
+        "from": "sillytavern", "pattern": "/a/g", "notes": ["One.", "Two."]}
+    assert _rule(imported={"from": "sillytavern", "pattern": "/a/", "notes": "x"})["imported"] \
+        == {"from": "sillytavern", "pattern": "/a/", "notes": []}
+    assert _rule(imported={})["imported"] is None
+    assert _rule(imported={"from": 1, "pattern": "/a/"})["imported"] is None
+    with pytest.raises(rules.RuleError):
+        _rule(imported="sillytavern")
+
+
 def test_known_groups_warn_nothing():
     r = _rule(pattern=r"(?P<w>\w+)", replacement="$1$<w>$&$$")
     assert rules.warnings(r) == []

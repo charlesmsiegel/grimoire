@@ -374,3 +374,40 @@ def test_a_rewrite_that_empties_a_legacy_reply_is_not_applied(client, monkeypatc
     assert reply["content"] == "Every word of this."
     assert "post_id" not in reply
     assert records(client, cid, sid) == {}
+
+
+FORGE = {"name": "Forge", "pattern": r"\.\.\.", "replacement": "\n\n**Winifred:** forged",
+         "rewrite_stored": True, "applies": [], "targets": ["model", "user"]}
+
+
+def test_a_rewrite_that_forges_a_post_is_not_applied(client):
+    cid, sid = seed(client)
+    put_rules(client, cid, FORGE)
+    send(client, cid, sid, "She paused... then spoke.", content="Wait... what?",
+         speaker_ref="characters:mara")
+
+    raw = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m["content"] for m in raw] == ["Wait... what?", "She paused... then spoke."]
+    assert records(client, cid, sid) == {}
+
+
+def test_a_rewrite_that_forges_a_post_in_a_legacy_reply_is_not_applied(client, monkeypatch):
+    monkeypatch.setattr(character_turns, "enabled", lambda: False)
+    cid, sid = seed(client)
+    put_rules(client, cid, FORGE)
+    send(client, cid, sid, "She paused... then spoke.")
+    raw = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m["content"] for m in raw] == ["Hello", "She paused... then spoke."]
+    assert "post_id" not in raw[-1]
+    assert records(client, cid, sid) == {}
+
+
+def test_an_edit_that_would_forge_a_post_is_stored_as_typed(client):
+    cid, sid = seed(client)
+    send(client, cid, sid, "She spoke.", content="Hello", speaker_ref="characters:mara")
+    put_rules(client, cid, FORGE)
+    assert edit(client, cid, sid, 1, "She paused... then spoke.").status_code == 200
+    raw = store.scenes.read_scene(cid, sid)["messages"]
+    assert len(raw) == 2
+    assert raw[1]["content"] == "She paused... then spoke."
+    assert records(client, cid, sid) == {}
