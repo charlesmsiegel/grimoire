@@ -24,7 +24,8 @@ blob. One file per blob, so concurrent ingests never rewrite a shared file.
 **Locks** (`store.locks`): ingest takes `image_ingest_gc_lock` and then the
 object's `image_object_lock` stripe across its find-or-create, including the
 sidecar mtime touch that keeps GC off an object somebody is placing right now.
-`update` takes only the stripe. Both are leaves.
+`update` takes only the stripe. Both are leaves, and an `update` callback may
+not call back into this module (`update`'s docstring says why).
 
 This module must not import `assets`, `image_descriptions`, `overlay` or any
 route: it sits below all of them.
@@ -38,6 +39,7 @@ import io
 import json
 import os
 import re
+import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -67,6 +69,10 @@ _HASH_CHUNK = 1 << 20
 
 @dataclass(frozen=True)
 class ImageObject:
+    #: Frozen, but `raw` is a dict, so a generated hash could only raise.
+    #: Nothing hashes an object; say so rather than advertise a hash it lacks.
+    __hash__ = None  # type: ignore[assignment]
+
     id: str
     #: "pixels" or "bytes" (opaque), as `image_hash.PixelIdentity.identity`.
     identity: str
@@ -107,16 +113,26 @@ def object_path(image_id: str) -> Path:
 def blob_sha_of(path: Path) -> str | None:
     """The blob sha when `path` is ``store_root()/blobs/<xx>/<sha>.<ext>``.
 
-    Pure string work on the path -- nothing is statted -- so a hot serving or
-    thumbnail path can ask it of every file it touches.
+    String work on the path -- the file itself is never statted -- so a hot
+    serving or thumbnail path can ask it of every file it touches. `path` may
+    be spelled through the store root as configured or `.resolve()`d (a home
+    reached through a symlink): a name that is a blob's under the configured
+    root is compared against the resolved root too, which costs one
+    `resolve()` of the root and only on that miss. Never raises.
     """
     p = Path(path)
     sha, dot, ext = p.name.partition(".")
     if not dot or ext not in MIME or not _is_sha(sha) or p.parent.name != sha[:2]:
         return None
-    if p.parent.parent != store_root() / "blobs":
-        return None
-    return sha
+    blobs = store_root() / "blobs"
+    if p.parent.parent == blobs:
+        return sha
+    try:
+        if p.parent.parent == blobs.resolve():
+            return sha
+    except (OSError, RuntimeError):     # a root that cannot resolve names nothing
+        pass
+    return None
 
 
 def _index_root() -> Path:
@@ -219,15 +235,26 @@ def _blob_present(obj: ImageObject) -> bool:
 
 
 def _norm_source(url: str | None) -> str | None:
+    """`url` as a sidecar records it, or None for anything that is not an
+    http(s) URL naming a host.
+
+    A recorded source is kept in the sidecar and travels in bundles, so
+    whatever credentials it carried (``user:pass@``) are dropped; the host is
+    lower-cased (it is case-insensitive, so two spellings are one source) and
+    the port kept. The fragment never reaches the server, so it goes too."""
     if not isinstance(url, str) or not url:
         return None
     try:
         parts = urlsplit(url.strip())
+        host, port = parts.hostname, parts.port      # port: ValueError if malformed
     except ValueError:
         return None
-    if parts.scheme.lower() not in ("http", "https") or not parts.netloc:
+    if parts.scheme.lower() not in ("http", "https") or not host:
         return None
-    return urlunsplit(parts._replace(fragment=""))
+    netloc = f"[{host}]" if ":" in host else host
+    if port is not None:
+        netloc += f":{port}"
+    return urlunsplit(parts._replace(netloc=netloc, fragment=""))
 
 
 def _sources(raw: dict) -> list[dict]:
@@ -389,6 +416,22 @@ def _identity(p: _Prepared) -> image_hash.PixelIdentity:
     return image_hash.pixel_identity(p.data, p.sha)
 
 
+#: Set while an `update` callback runs on this thread (`_no_reentry`).
+_IN_UPDATE = threading.local()
+
+
+def _no_reentry(what: str) -> None:
+    """Refuse a store call from inside an `update` callback.
+
+    The callback holds the object's stripe. `ingest` takes the ingest/GC lock
+    and then a stripe -- GC's order is that lock, then the stripe -- so an
+    ingest under a stripe is the reverse order and can deadlock with GC; a
+    nested `update` takes a second stripe, which may be the same
+    non-reentrant one. Refused up front rather than left to deadlock."""
+    if getattr(_IN_UPDATE, "active", False):
+        raise RuntimeError(f"image_store.{what} called from inside an update() callback")
+
+
 def identify(data: bytes, ext: str) -> str:
     """The image id ``ingest(data, ext)`` would return, with nothing written.
 
@@ -399,6 +442,7 @@ def identify(data: bytes, ext: str) -> str:
     only when it exists, and a hit is validated exactly as ingest validates it,
     without restoring a missing blob.
     """
+    _no_reentry("identify")
     p = _prepared(data, ext)
     hit = _index_lookup(p.sha)
     if hit is not None:
@@ -417,6 +461,7 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
     opaque identity, as is a container that sniffs but does not parse
     (`_identity`).
     """
+    _no_reentry("ingest")
     p = _prepared(data, ext)
     data, ext, sha = p.data, p.ext, p.sha
 
@@ -458,13 +503,26 @@ def update(image_id: str, change: Callable[[dict], dict | None]) -> None:
     None to write nothing. An absent or unreadable object is left alone and
     `change` is not called. Raises ValueError on a malformed id, or when
     `change` returns something that would not read back as this object.
+
+    **The callback contract.** `change` runs under this object's stripe lock,
+    so it must be a pure edit of the dict it is given. It must not call
+    `ingest`, `update` or `identify` -- refused with RuntimeError (a thread
+    latch) -- and must not take a campaign lock or the ingest/GC lock: GC
+    takes the ingest/GC lock and THEN a stripe, so taking either under a
+    stripe is the reverse order and can deadlock with it (spec section 9). Do
+    any such work before calling `update`, and hand the callback its result.
     """
+    _no_reentry("update")
     object_path(image_id)               # validates the id before it picks a stripe
     with locks.image_object_lock(image_id):
         obj = read(image_id)
         if obj is None:
             return
-        new = change(copy.deepcopy(obj.raw))
+        _IN_UPDATE.active = True
+        try:
+            new = change(copy.deepcopy(obj.raw))
+        finally:
+            _IN_UPDATE.active = False
         if new is None:
             return
         if _parse(new, image_id) is None:

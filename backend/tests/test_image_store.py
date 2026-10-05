@@ -609,3 +609,78 @@ def test_decodable_but_unsniffable_bytes_are_opaque(fmt, kw):
     blob = image_store.blob_path(later.blob_sha256, later.ext).read_bytes()
     assert blob.startswith(b"\x89PNG\r\n\x1a\n")
     assert b"private note" not in blob
+
+
+def test_blob_sha_of_recognises_a_resolved_path_under_a_symlinked_home(tmp_path, monkeypatch):
+    # The store root reached through a symlink: a `.resolve()`d blob path no
+    # longer starts with store_root(), and must still be recognised.
+    real = tmp_path / "real-home"
+    real.mkdir()
+    link = tmp_path / "link-home"
+    link.symlink_to(real, target_is_directory=True)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(link))
+    obj = image_store.ingest(_png(_img()), "png")
+    p = image_store.blob_path(obj.blob_sha256, "png")
+    assert p.resolve() != p
+    assert image_store.blob_sha_of(p) == obj.blob_sha256
+    assert image_store.blob_sha_of(p.resolve()) == obj.blob_sha256
+    # Still pure on a miss: a path elsewhere is None, and nothing raises.
+    assert image_store.blob_sha_of(real / "blobs" / p.parent.name / p.name) is None
+
+
+def test_blob_sha_of_never_raises_when_the_root_cannot_resolve(monkeypatch, tmp_path):
+    sha = "cd" * 32
+    p = tmp_path / "x" / "blobs" / sha[:2] / f"{sha}.png"
+
+    def boom(self, *a, **kw):
+        raise OSError("loop")
+
+    monkeypatch.setattr(type(p), "resolve", boom)
+    assert image_store.blob_sha_of(p) is None
+
+
+@pytest.mark.parametrize("url, want", [
+    ("https://u:p@Example.COM:8443/a?b#c", "https://example.com:8443/a?b"),
+    ("https://user@Example.com/a", "https://example.com/a"),
+    ("HTTP://Example.com/A/B?Q", "http://example.com/A/B?Q"),
+    ("https://[2001:DB8::1]:8080/x", "https://[2001:db8::1]:8080/x"),
+    ("https://u:p@/a", None),
+    ("https://u:p@", None),
+    ("https://example.com:notaport/a", None),
+])
+def test_recorded_sources_drop_credentials(url, want):
+    assert image_store._norm_source(url) == want
+
+
+def test_ingest_never_records_userinfo():
+    obj = image_store.ingest(_png(_img()), "png",
+                             source_url="https://Mara:hunter2@Example.COM:8443/c.png#x")
+    assert obj.raw["sources"] == [{"url": "https://example.com:8443/c.png"}]
+    assert "hunter2" not in image_store.object_path(obj.id).read_text(encoding="utf-8")
+
+
+def test_update_callback_may_not_reenter_the_store():
+    # The callback runs under the object's stripe; an ingest from inside it
+    # would take the ingest/GC lock after a stripe -- GC's order reversed.
+    obj = image_store.ingest(_png(_img()), "png")
+    other = _png(_img(9))
+    for reenter in (lambda: image_store.ingest(other, "png"),
+                    lambda: image_store.update(obj.id, lambda raw: None),
+                    lambda: image_store.identify(other, "png")):
+        def change(raw, reenter=reenter):
+            reenter()
+            return raw
+
+        with pytest.raises(RuntimeError, match="update"):
+            image_store.update(obj.id, change)
+    # The latch is released however the callback ended.
+    image_store.ingest(other, "png")
+    image_store.update(obj.id, lambda raw: None)
+
+
+def test_image_object_advertises_no_hash():
+    obj = image_store.ingest(_png(_img()), "png")
+    assert image_store.ImageObject.__hash__ is None
+    with pytest.raises(TypeError):
+        hash(obj)
+    assert obj == image_store.read(obj.id)

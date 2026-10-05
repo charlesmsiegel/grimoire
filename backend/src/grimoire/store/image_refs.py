@@ -131,12 +131,14 @@ def _dump(obj: dict) -> bytes:
 
 
 def delete(d: Path, name: str) -> bool:
-    """Remove the placement; True when a file was actually removed."""
+    """Remove the placement; True when a file was actually removed, False
+    when there was none. Any other failure (permissions, a read-only mount)
+    raises: a placement left standing must not read as removed."""
     if not _valid_name(name):
         return False
     try:
         ref_path(d, name).unlink()
-    except OSError:  # missing, or unremovable: nothing was removed
+    except FileNotFoundError:
         return False
     return True
 

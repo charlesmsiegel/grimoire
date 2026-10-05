@@ -379,7 +379,7 @@ def test_jpeg_empty_exif_app1_is_not_the_first_one():
     # the empty one use up "the first" and dropping the orientation that shows.
     src = _save(_img(), "JPEG", exif=_exif(6))
     src = _jpeg_insert(src, 0xE1, b"Exif\x00\x00")
-    assert [len(p) for m, p in _jpeg_segments(src) if m == 0xE1][0] == 6
+    assert next(len(p) for m, p in _jpeg_segments(src) if m == 0xE1) == 6
     out = sanitize(src)
     app1 = [p for m, p in _jpeg_segments(out) if m == 0xE1]
     assert len(app1) == 1 and _parse_exif(app1[0])[0] == {0x0112: 6}
