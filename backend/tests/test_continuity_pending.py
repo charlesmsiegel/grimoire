@@ -211,6 +211,29 @@ def _settled_temporal(cid):
     return _record(cid, "possible_relation", [OATH, ev], proposal=_proposal("unrelated"))
 
 
+def _declined_temporal_rescheduled(cid):
+    # A declined model-only nomination whose records moved is not the question
+    # the model answered, and it was never the reader's: it is dropped so a
+    # later nomination re-asks, never surfaced as "stale" (Decision 9).
+    record = _settled_temporal(cid)
+    store.events.update(cid, record["refs"][1].partition(":")[2], date="2026-06-01")
+    return record
+
+
+def _declined_touched_new_beat(cid):
+    record = _settled_touched(cid)
+    store.plot.set_movement(cid, "maras-map", "", "", "Mara found a page.", S3)
+    return record
+
+
+def _stale_deterministic_keep_open(cid):
+    # A deterministic nomination the model declined stays the reader's call
+    # when its records move: stale, not hidden.
+    record = _live_stale_keep_open(cid)
+    store.plot.set_movement(cid, "maras-map", "", "", "Mara found a page.", S3)
+    return record
+
+
 def _live_pair(cid):
     return _record(cid, "possible_duplicate", [MAP, CHART], proposal=_proposal("duplicate"))
 
@@ -257,6 +280,9 @@ def _unknown_surrogate(cid):
     (_stale, "stale"),
     (_settled_touched, "settled"),
     (_settled_temporal, "settled"),
+    (_declined_temporal_rescheduled, "gone"),
+    (_declined_touched_new_beat, "gone"),
+    (_stale_deterministic_keep_open, "stale"),
     (_live_pair, "live"),
     (_live_touched_close, "live"),
     (_live_stale_keep_open, "live"),
@@ -267,6 +293,12 @@ def _unknown_surrogate(cid):
 def test_verdicts(cid, setup, expected):
     record = setup(cid)
     assert pending.verdict(pending.Current.load(cid), record) == expected
+
+
+@pytest.mark.parametrize("setup", [_declined_temporal_rescheduled, _declined_touched_new_beat])
+def test_a_declined_nomination_whose_records_moved_is_not_visible(cid, setup):
+    record = setup(cid)
+    assert pending.verdict(pending.Current.load(cid), record) not in pending.VISIBLE
 
 
 @pytest.mark.parametrize("kind", candidates.KINDS)
