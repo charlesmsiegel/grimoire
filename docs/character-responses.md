@@ -44,15 +44,19 @@ automatic chain the indicator also reads **Round n/total**.
   per present NPC. One tap asks that character to respond. With an empty
   composer that is exactly one additional contribution; with text, the text is
   posted and that character leads the round, which then continues by the scene's
-  order with everyone else. Both Continue and an empty-composer chip permit a
-  character who already responded to speak again.
+  order with everyone else, except in Manual, where that character's reply is
+  the only one. Both Continue and an empty-composer chip permit a character who
+  already responded to speak again.
 - **Response actions** offers individual reroll, delete and saved variants.
   A reroll uses the original saved context and does not start another speaker.
   Later replies remain in place and show **Earlier context changed**.
 - **Replay from here** explicitly regenerates onward when later replies need
   revisiting. Review the existing replay controls before accepting its result.
 - **Stop** prevents further responses. Incomplete output cannot authorize the
-  next speaker.
+  next speaker. Retry after a Stop finishes only the interrupted reply and
+  follows no handoff, in every mode. That includes a default Directed scene, where
+  Retry used to carry on to the speaker the finished reply handed to. A Stop
+  before any reply started leaves nothing to retry; use Continue instead.
 
 Older responses have no historical prompt snapshot. They remain deletable, but
 use explicit replay rather than claiming a historical reroll from current
@@ -79,19 +83,25 @@ these settings behaves as it did before they existed.
 
 - **Directed** (default) keeps the model-directed flow described above: the
   selector picks the first speaker and each contribution's handoff picks the next.
+  Continue asks the selector.
 - **Manual** generates no reply to a player post. Choose who answers with a
-  reply-as chip. Manual never continues automatically.
+  reply-as chip. Manual never continues automatically. Continue asks the
+  selector, as in Directed.
 - **List** has every available character speak once per round, in the order set
   in the panel (up and down buttons). A present character the list omits speaks
   after the listed ones, in cast order, so a newcomer is never excluded. Grimoire
-  speaks at its list position if it has one. Continue picks the next available
-  character after the most recent speaker, wrapping around.
+  speaks at its list position if it has one; the panel lists it last, with its
+  own up and down buttons, and places it in the order once it is moved. Until
+  then it speaks only if no character is available. Continue picks the next
+  available character after the most recent speaker, wrapping around.
 - **Natural** has characters the post names speak first, in the order they are
   named; every other available character then joins at random, in shuffled order,
   according to their talkativeness. If nobody is named and nobody joins, the
   character who has been silent longest speaks. Continue applies the same rule to
   the most recent contribution's text and never picks that contribution's own
-  speaker. A character naming themselves does not count as being named.
+  speaker; when nobody else is available it falls back to the selector. A
+  character naming themselves does not count as being named, and a follow-on
+  round never opens with the character who spoke last.
 
 In List and Natural the plan alone decides who speaks: the prompt offers no
 handoff candidates and a handoff block in a contribution is ignored. A director
@@ -139,7 +149,10 @@ locked phone does not interrupt it, and the rolling summary and scene-break
 checks run once, after the chain ends. A character's own name in the
 contribution that starts a follow-on round does not count as naming themselves.
 Only a player post (or a reply-as chip with text) starts a chain; Continue and an
-empty-composer chip produce exactly one contribution.
+empty-composer chip produce exactly one contribution. The setting is read again
+before each follow-on round: lowering it mid-chain stops the chain once it has run
+that many rounds (setting it to 0 starts no further round), while raising it never
+extends a chain past the rounds its post started with.
 
 In Directed, a handoff to a character who already spoke this round ends the round
 and starts the next one with that character leading. With no rounds remaining
@@ -154,6 +167,13 @@ A chain ends early when:
   with the rounds it had left.
 - A contribution is empty, incomplete or fails with an error, or the round
   generated nothing.
+- A contribution speaks for another actor (writes another character's or the
+  player's lines). That ends the chain in every mode.
+- In Directed, a contribution's handoff is missing, invalid or names an
+  ineligible character. A handoff to the current speaker is never offered and
+  never accepted, even with rounds remaining. List and Natural ignore the handoff,
+  so a missing one does not end their chain; the issue is still recorded on the
+  reply.
 - The scene is in Manual mode.
 - In Directed, a contribution or the selector explicitly hands control back
   (`next: null`).
