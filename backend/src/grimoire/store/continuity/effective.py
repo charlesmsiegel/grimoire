@@ -99,7 +99,12 @@ class Ledgers:
 
         threads = attempt("plot", plot.read)
         owed = attempt("commitments", commitments_store.read)
-        planned = attempt("events", events.read)
+        # `events.read` answers a corrupt file with `{}` rather than raising, so
+        # its unreadability has to be asked separately or every event would
+        # read as deleted.
+        planned = attempt("events", events.read) if events.readable(cid) else None
+        if planned is None and "events" not in unreadable:
+            unreadable.append("events")
         return cls(threads, owed, planned, unreadable)
 
     def _table(self, prefix: str):
@@ -264,28 +269,32 @@ def _order(scene) -> int | None:
 
 
 def _merge_beats(members: list[list[dict]]) -> list[dict]:
-    runs: list[tuple[int, int, int, list[dict]]] = []
+    """The members' beats as one list: the canonical's stored beats followed by
+    each alias's, stably sorted by scene play order. An uncomparable beat keeps
+    its place right after its stored predecessor in that concatenation -- for
+    an alias's leading unscened beat, that is the previous member's last beat."""
+    runs: list[tuple[int, int, list[tuple[int, dict]]]] = []
+    key = -1
+    current: list[tuple[int, dict]] = []
     for m_index, beats in enumerate(members):
-        current_key: int = -1
-        current: list[dict] = []
         for beat in beats:
             number = _order(beat.get("scene"))
             if number is not None:
                 if current:
-                    runs.append((current_key, m_index, len(runs), current))
-                current_key, current = number, [beat]
+                    runs.append((key, len(runs), current))
+                key, current = number, [(m_index, beat)]
             else:
-                current.append(beat)
-        if current:
-            runs.append((current_key, m_index, len(runs), current))
-    runs.sort(key=lambda r: (r[0], r[1], r[2]))
+                current.append((m_index, beat))
+    if current:
+        runs.append((key, len(runs), current))
+    runs.sort(key=lambda r: (r[0], r[1]))
     out: list[dict] = []
     owner: dict[tuple[str, str], int] = {}
-    for _, m_index, _, run in runs:
-        for beat in run:
+    for _, _, run in runs:
+        for m_index, beat in run:
             sig = (fieldtext.text(beat.get("scene")), fieldtext.text(beat.get("text")))
             if owner.get(sig, m_index) != m_index:
-                continue
+                continue                      # an exact duplicate ACROSS records only
             owner.setdefault(sig, m_index)
             out.append(beat)
     return out

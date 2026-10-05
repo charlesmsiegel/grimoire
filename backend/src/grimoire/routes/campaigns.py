@@ -454,13 +454,15 @@ def delete_campaign_event(cid: str, eid: str):
 
     Reviewed continuity links naming the event go in the same hold, for the same
     reason: a link is keyed by ``event:<id>``, so one left behind would bind to a
-    recreation of the same name and date a commitment against the wrong day. A
-    continuity.json that cannot be read does not refuse the delete -- an event
-    can never be a merge target, so nothing here can be orphaned, and any link
-    left behind reports itself as broken in the continuity read.
+    recreation of the same name and date a commitment against the wrong day. An
+    event is never part of a merge, so only an unreadable ``links`` section can
+    stop that cleanup -- and then the delete still stands rather than refusing:
+    the links stay on disk, unreadable until the file is repaired.
     """
     _campaign_root_or_404(cid)
     with store.locks.campaign_lock(cid):
+        stored = store.events.read(cid).get(eid)
+        name = str(stored.get("name") or "") if isinstance(stored, dict) else ""
         try:
             found = store.events.delete(cid, eid)
         except store.events.EventError as e:
@@ -473,7 +475,7 @@ def delete_campaign_event(cid: str, eid: str):
         with contextlib.suppress(store.notices.NoticeError):
             store.notices.forget_event(cid, eid)
         with contextlib.suppress(continuity_doc.ContinuityError):
-            continuity_review.forget_ref(cid, f"event:{eid}")
+            continuity_review.forget_ref(cid, f"event:{eid}", name=name)
     return {"ok": True}
 
 

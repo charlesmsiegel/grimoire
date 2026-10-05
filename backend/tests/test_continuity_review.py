@@ -254,3 +254,28 @@ def test_describe_falls_back_to_ref(cid):
     assert review.describe(cid, "nocolon") == "nocolon"
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     assert review.describe(cid, "thread:missing-map") == "thread:missing-map"
+
+
+def test_forget_event_ref_needs_only_readable_links(cid):
+    eid = store.events.create(cid, "The Tribunal", "2026-05-09", "")
+    review.create_link(cid, "commitment:mara-oath", f"event:{eid}", "before")
+    data = doc.read(cid)
+    (_root(cid) / "continuity.json").write_text(
+        json.dumps({"aliases": [], "links": data["links"]}), encoding="utf-8")
+    assert len(review.forget_ref(cid, f"event:{eid}")) == 1
+    assert doc.read(cid)["links"] == {}
+
+
+def test_successful_merge_surfaces_a_due_the_canonical_lacks(cid):
+    result = review.create_alias(cid, "commitment:mara-promise", "commitment:mara-oath")
+    assert result["dues"] == {"source": "by midwinter", "canonical": ""}
+    plain = review.create_alias(cid, "thread:missing-map", "thread:lost-chart")
+    assert "dues" not in plain
+
+
+def test_forget_ref_uses_the_given_name(cid):
+    review.create_alias(cid, "thread:missing-map", "thread:lost-chart")
+    store.plot.restore(cid, "lost-chart", None)
+    review.forget_ref(cid, "thread:lost-chart", name="The lost chart")
+    assert store.journal.read(cid)[-1]["label"] == (
+        "The missing map → merged into The lost chart — removed with deleted record")

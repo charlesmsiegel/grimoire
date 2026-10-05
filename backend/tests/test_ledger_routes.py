@@ -602,3 +602,38 @@ def test_delete_event_removes_links_and_recreation_does_not_reattach(client, cid
     assert again == eid
     body = client.get(f"/api/campaigns/{cid}/continuity").json()
     assert body["links"] == [] and body["raw_links"] == []
+
+
+def test_put_thread_refused_when_aliases_malformed(client, cid):
+    """A merge that cannot be read is no reason to write to a hidden record
+    (spec §3.9): the edit is refused before anything is written."""
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    path = store.campaigns.campaign_root(cid) / "continuity.json"
+    path.write_text("{ no", encoding="utf-8")
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}", json={"status": "advanced"})
+    assert r.status_code == 409 and r.json()["kind"] == "malformed"
+    assert store.plot.get(cid, src)["status"] == "open"
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}", params={"physical": True},
+                   json={"status": "advanced"})
+    assert r.status_code == 200
+
+
+def test_redirected_put_keeps_the_canonical_title(client, cid):
+    """The ledger editor sends the row's title with every save, so a status-only
+    edit of a merged record must not rename the record it lands on."""
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/{src}",
+                   json={"title": "The missing map", "status": "advanced"})
+    assert r.status_code == 200 and r.json()["id"] == canonical
+    assert store.plot.get(cid, canonical)["title"] == "The lost chart"
+    assert store.plot.get(cid, canonical)["status"] == "advanced"
+
+
+def test_cascade_journal_rows_name_the_deleted_record(client, cid):
+    src, canonical = _thread_ids(client, cid, "The missing map", "The lost chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    client.delete(f"/api/campaigns/{cid}/ledger/threads/{canonical}", params={"force": True})
+    labels = [row["label"] for row in client.get(f"/api/campaigns/{cid}/journal").json()]
+    assert "The missing map → merged into The lost chart — removed with deleted record" in labels

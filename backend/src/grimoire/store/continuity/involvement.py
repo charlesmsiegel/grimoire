@@ -59,42 +59,22 @@ def touched_scenes(records) -> dict[str, set[str]]:
 
 
 def stage_history(cid: str, refs: set[str]) -> dict[str, set[str]]:
-    """For each ref, every scene it has stood in — from both sources the module
-    docstring names, unioned.
+    """For each ref, every scene it has stood in -- read off `scene_actors`, the
+    one scene->actor index `of` uses too, so briefing's flag and every newer
+    reader cannot drift apart (spec §8).
 
     Refs are ``"<kind>/<id>"``: the appearance record's own key form, and the
-    form ``chronicle.scene_facts`` writes into a record's ``cast``. Kept per-ref
-    rather than pooled so a row can name *which* of several players it belongs
-    to, which is the case the flag exists for.
+    form ``chronicle.scene_facts`` writes into a record's ``cast``, which is what
+    briefing names actors by. Kept per-ref rather than pooled so a row can name
+    *which* of several players it belongs to, which is the case the flag exists
+    for. A ref that is not a string, or names nobody, stands in no scene.
     """
-    seen: dict[str, set[str]] = {ref: set() for ref in refs}
-    for a in appearances_cast.roster(cid):
-        ref = f"{a['kind']}/{a['id']}"
-        if ref in seen:
-            seen[ref].update(s for s in a["scenes"] if isinstance(s, str))
-    try:
-        chron = chronicle.read_chronicle(cid)
-    except Exception:  # noqa: BLE001 — garbled chronicle.json: the appearance record still answers
-        return seen
-    # `read_chronicle` is a bare `json.loads`, so valid JSON of the wrong shape
-    # arrives without raising -- the same correction `get_ledger` needed. The
-    # KEY is the scene id and is guaranteed a string; the record's own `id`
-    # field repeats it and is not.
-    for sid, rec in (chron.items() if isinstance(chron, dict) else ()):
-        if not isinstance(sid, str) or not isinstance(rec, dict):
-            continue
-        cast = rec.get("cast")
-        for ref in (cast if isinstance(cast, list) else ()):
-            # `isinstance(ref, str)` BEFORE the membership test, the same rule
-            # `touched_scenes` applies to beat scenes and for the same reason:
-            # `seen` is a dict, so a list-valued cast entry is unhashable and
-            # `in` RAISES rather than missing. That raise reaches this function's
-            # tolerant caller, which replaces the whole result -- throwing away
-            # the history already collected from appearances.json and unflagging
-            # every row, for one hand-edited record (Codex review).
-            if isinstance(ref, str) and ref in seen:
-                seen[ref].add(sid)
-    return seen
+    index = scene_actors(cid)
+    out: dict[str, set[str]] = {}
+    for ref in refs:
+        colon = canon.actor_ref(ref) if isinstance(ref, str) else None
+        out[ref] = {sid for sid, actors in index.items() if colon in actors}
+    return out
 
 
 def scene_actors(cid: str) -> dict[str, set[str]]:
