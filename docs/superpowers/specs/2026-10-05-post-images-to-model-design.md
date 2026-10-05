@@ -74,9 +74,10 @@ to read images — open it under Connections to refresh its model list, or set
 Reads images there"). Turning the setting on is otherwise silent when nothing
 can read images; this line is what makes it not silent. A campaign whose chat
 is routed elsewhere gets its per-turn answer from the scene inspector, whose
-`GET .../context` response carries the same field computed for that scene's
-routed connection, and whose Images row is present exactly when images would be
-sent.
+Images row is present exactly when images would be sent to that scene's routed
+connection. (The inspector does not carry `send_images_reach` itself: its live
+payload is pinned to the shape of a frozen prompt snapshot, which records what
+was sent, not a setting.)
 
 ## Which connections can read images
 

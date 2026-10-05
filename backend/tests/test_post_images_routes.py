@@ -59,15 +59,13 @@ def test_a_text_only_connection_composes_text(client):
     assert all(isinstance(m["content"], str) for m in msgs)
 
 
-def test_the_inspector_shows_the_images_and_the_reach(client):
+def test_the_inspector_shows_the_images_only_when_they_would_be_sent(client):
     cid, sid = _setup(client)
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert "history_images" in {r["id"] for r in body["sections"]}
-    assert body["send_images_reach"] == "yes"
     client.put("/api/config", json={"send_images": "off"})
     body = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert "history_images" not in {r["id"] for r in body["sections"]}
-    assert body["send_images_reach"] == "off"
 
 
 def test_a_regenerate_replays_the_frozen_prompt_in_this_campaign(client):
