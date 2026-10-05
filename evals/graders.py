@@ -302,26 +302,24 @@ def grade_absorb(text: str) -> tuple[list[Check], dict]:
 #: restated, so a decision word added to the app is graded the day it lands.
 IDENTITY_DECISIONS = identity.DECISIONS
 
-#: The prefix an id may carry in a reply, which `identity.Examination.decide`
-#: strips before it looks the id up -- a row's candidates are all its own type.
-_IDENTITY_REF_PREFIXES = ("thread:", "commitment:")
-
-
 def _identity_word(value) -> str | None:
     """A decision word as the app compares it (case and padding ignored), or
     None for anything that is not a string."""
     return value.strip().lower() if isinstance(value, str) else None
 
 
-def _identity_id(item: dict) -> str:
-    rid = item.get("id")
-    if not isinstance(rid, str):
-        return ""
-    rid = rid.strip()
-    for prefix in _IDENTITY_REF_PREFIXES:
-        if rid.startswith(prefix):
-            return rid[len(prefix):]
-    return rid
+def _identity_id(item: dict, kind: str | None) -> str:
+    """The id an ``existing`` answer names, read the way
+    `identity.Examination.decide` reads it: through `identity._bare`, which
+    removes a ``<kind>:`` prefix only for the row's OWN kind. A thread row
+    answered with ``commitment:<id>`` keeps that prefix, so it matches no
+    offered id -- exactly as the app downgrades it as not offered. A row the
+    prompt never listed has no kind and no prefix is removed: the app ignores
+    such a row, and nothing was offered to it either way."""
+    if kind is None:
+        rid = item.get("id")
+        return rid.strip() if isinstance(rid, str) else ""
+    return identity._bare(kind, item.get("id"))
 
 
 def _identity_rows(raw: dict) -> tuple[Check, dict[str, dict]]:
@@ -344,18 +342,18 @@ def _identity_rows(raw: dict) -> tuple[Check, dict[str, dict]]:
                   f"{bad} decision(s) were not an object with a string row"), by_row)
 
 
-def _identity_verdict(key: str, got: dict, want: dict) -> Check:
+def _identity_verdict(key: str, got: dict, want: dict, kind: str | None) -> Check:
     word = _identity_word(got.get("decision"))
-    ok = word == want["decision"] and (
-        want["decision"] != "existing" or _identity_id(got) == want["id"])
+    rid = _identity_id(got, kind)
+    ok = word == want["decision"] and (want["decision"] != "existing" or rid == want["id"])
     wanted = want["decision"] + (f" {want['id']}" if want["decision"] == "existing" else "")
     return Check(f"identity.{want['check']}", ok,
-                 f"row {key} was {got.get('decision')!r} {_identity_id(got)!r}, "
-                 f"wanted {wanted}")
+                 f"row {key} was {got.get('decision')!r} {rid!r}, wanted {wanted}")
 
 
 def grade_identity(text: str, expected: dict[str, dict],
-                   offered: dict[str, set[str]]) -> list[Check]:
+                   offered: dict[str, set[str]],
+                   kinds: dict[str, str]) -> list[Check]:
     """Does the resolver answer every row, in the contract's words, naming only
     ids it was offered -- and the right verdict on each scored row?
 
@@ -370,7 +368,8 @@ def grade_identity(text: str, expected: dict[str, dict],
     no decision at all is reported by ``identity.covers_rows`` alone -- its own
     verdict check is left out rather than failed beside it, so "the row was
     skipped" and "the row was misjudged" stay separable. `offered` maps a row
-    key to the candidate ids its prompt listed.
+    key to the candidate ids its prompt listed, and `kinds` maps it to the
+    record kind it was examined as -- the one prefix an answer's id may carry.
     """
     raw = absorb.extract_object(text)
     if raw is None:
@@ -378,9 +377,10 @@ def grade_identity(text: str, expected: dict[str, dict],
     shape, by_row = _identity_rows(raw)
     unknown = sorted(str(d.get("decision")) for d in by_row.values()
                      if _identity_word(d.get("decision")) not in IDENTITY_DECISIONS)
-    unoffered = sorted(f"{key}: {_identity_id(d)!r}" for key, d in by_row.items()
+    unoffered = sorted(f"{key}: {_identity_id(d, kinds.get(key))!r}"
+                       for key, d in by_row.items()
                        if _identity_word(d.get("decision")) == "existing"
-                       and _identity_id(d) not in offered.get(key, set()))
+                       and _identity_id(d, kinds.get(key)) not in offered.get(key, set()))
     missing = [key for key in expected if key not in by_row]
     return [
         Check("identity.json", True),
@@ -390,7 +390,7 @@ def grade_identity(text: str, expected: dict[str, dict],
         Check("identity.known_ids", not unoffered,
               f"existing named an id that row was not offered: {unoffered}"),
         Check("identity.covers_rows", not missing, f"no decision for {missing}"),
-    ] + [_identity_verdict(key, by_row[key], want)
+    ] + [_identity_verdict(key, by_row[key], want, kinds.get(key))
          for key, want in expected.items() if key in by_row]
 
 
