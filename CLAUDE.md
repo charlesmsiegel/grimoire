@@ -533,6 +533,20 @@ would answer neither question.
   ledger's seven sections are deliberately not editable: the relationship
   history and the change log record what happened, and editing a log falsifies
   history rather than correcting state.
+- **World-info activation is one engine, `store/context/activation.py`.**
+  Keys, secondary-key logic, per-entry scan depth, recursion, presence and
+  sticky/cooldown are all decided there. Sticky/cooldown are *derived by
+  replaying the transcript* rather than stored, so a cut, retcon or reroll
+  changes them the way it changes the transcript. Two rules are easy to
+  undo. **Reasons never reach the prompt**: the `reason` dicts and the
+  `names` map feed the inspector rows and prompt-log captures only, and
+  `test_reasons_never_reach_the_prompt` holds that. **A section may carry a
+  `shed` hook** (`{"units", "render"}`) that the packer uses to drop entries
+  one at a time instead of the whole section. `render(kept)` re-renders from
+  bodies already macro-expanded, so shedding never re-draws a `{{random}}`.
+  A store that sets none of the activation fields composes byte-identical
+  prompts, which `test_lore_golden.py` pins against a golden recorded from the
+  pre-engine code. Never regenerate that golden to make a change pass.
 - **The voice anchor is a PROMPT input now, not only a judge input.** It
   renders per present character in `voice_anchors.j2` and is also what
   `voice_drift` judges a played scene against — both through
