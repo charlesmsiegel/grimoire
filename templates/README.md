@@ -152,6 +152,29 @@ mutable line marks "start X -> now Y" against `audit.baseline_field()`, each
 static line is marked `[static]`), `roll_lines` (`audit.roll_lines()` — the
 scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
 
+### `continuity_identity/` — the duplicate check inside POST …/absorb
+Mirrors `store/continuity/identity.py:build_prompt`. Messages: system, user.
+`system.j2` is static. `user.j2` vars: `rows` (`identity.template_rows()` over
+`Examination.prompt_rows()`) — one per proposed-new plot thread or commitment
+that has a plausible same-type neighbour, each `{key, kind ("thread" |
+"commitment"), title, beat, status, commitment_kind, due, quote, speaker,
+certainty, why_new, distinguished_from, candidates}`; each candidate is
+`{id (bare canonical id), title, status, kind, due, latest_beat, earlier (up to
+two earlier beats, newest first), signals, line, signal_text}`, where `line` is
+`snippets/plot_thread_line/absorb.j2` or `snippets/commitment_line/absorb.j2`
+(a blank commitment kind passed as `promise`) rendered by Python, and
+`signal_text` the similarity signals as fixed-order phrases. Every key is
+always passed; a blank optional one renders nothing.
+Reply shape: ONLY `{"decisions": [{"row": "<row key>", "decision": "existing" |
+"new" | "uncertain", "id": "<candidate id, for existing>", "reason": "<one
+short sentence>"}]}`, parsed by `identity.parse_output` through
+`absorb.extract_object`. An undecodable reply means the phase is `failed`
+(every examined row keeps its hints); a decodable one with nothing usable is
+no decisions. The resolver's replies, including each row's `reason`, are
+captured at Debug level like every other LLM response, under the existing
+Settings disclosure, while its info-level log row carries counts and modes
+only.
+
 ### `rolling_summary/` — POST /campaigns/{cid}/scenes/{sid}/rolling-summary
 The live running summary of a scene **still being played** (#85). Mirrors
 `store/rolling_summary.py:build_prompt`. Messages: system, user.

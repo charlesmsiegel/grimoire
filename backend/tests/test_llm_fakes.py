@@ -17,6 +17,7 @@ import pytest
 
 from grimoire import prompts
 from grimoire.llm_errors import LLMError
+from grimoire.store.continuity import identity
 from tests import llm_fakes
 from tests.llm_fakes import (
     Cassette,
@@ -226,6 +227,7 @@ def _rendered_prompts() -> list[str]:
         prompts.render("scene/sections/response_format.j2", player_names=[],
                        response_actor={"ref": "grimoire", "name": "Grimoire"}),
         prompts.render("tracker/update_system.j2"),
+        prompts.render("continuity_identity/system.j2"),
     ]
 
 
@@ -262,3 +264,15 @@ def test_the_absorb_body_is_the_shape_the_parser_expects():
     record = json.loads("".join(reply))
     assert {"one_line", "summary", "keywords", "timeline_events"} <= set(record)
     assert isinstance(record["keywords"], list)
+
+
+def test_the_identity_body_is_the_shape_the_parser_expects():
+    """The duplicate check's canned reply must decode to decisions, or every
+    absorb test that reaches the resolver would see a `failed` phase."""
+    fake = from_cassette("campaign_flow")
+    reply = fake.cassette.reply([{"role": "system",
+                                  "content": "You are checking whether newly proposed story records"}])
+    decisions = identity.parse_output("".join(reply))
+    assert decisions is not None
+    [decision] = decisions
+    assert (decision["row"], decision["decision"]) == ("r1", "new")

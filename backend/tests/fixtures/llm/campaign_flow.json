@@ -6,6 +6,10 @@
       "reply": "{\"one_line\": \"Winifred paid the salt she owed.\", \"summary\": \"Winifred returned to Tidewatch Keep with the salt Seraphine had asked for, and the keeper wrote the payment into the tide ledger without comment.\", \"keywords\": [\"salt\", \"ledger\", \"payment\"], \"timeline_events\": [{\"date\": \"2026-01-05\", \"text\": \"The salt was paid into the tide ledger.\"}], \"plot_movements\": [{\"id\": \"the-debt\", \"status\": \"advanced\", \"beat\": \"A first payment lands against the debt, and Seraphine still will not say what it was for.\"}], \"commitment_movements\": [{\"id\": \"salt-owed\", \"status\": \"fulfilled\", \"beat\": \"The salt arrived before the stated day.\"}]}"
     },
     {
+      "when": {"system_contains": "You are checking whether newly proposed story records"},
+      "reply": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A different debt from the one already owed.\"}]}"
+    },
+    {
       "when": {"system_contains": "You are auditing a completed role-play scene"},
       "reply": "{\"warnings\": [], \"sheet_deltas\": []}"
     },

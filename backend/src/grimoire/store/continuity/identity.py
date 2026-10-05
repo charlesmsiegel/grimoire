@@ -34,14 +34,25 @@ paraphrase is found only once its neighbour's vector is already cached -- by an
 earlier absorb's warm, or by Slice D's reconcile sweep, which warms the whole
 ledger. An embedding failure is a mode, never an exception: the lexical
 and structural candidates still stand.
+
+**The resolver** is one batched call over every examined row (§10.2): its
+prompt (`build_prompt`, the `continuity_identity/` templates) shows each row,
+its citation and identity fields, and its candidates with their signals, and
+nothing else of the campaign. `parse_output` rebuilds the reply field by field;
+a reply with no decodable object is None -- a failed check -- never ``[]``,
+which is a decodable reply with nothing usable in it (§24).
 """
 
 from __future__ import annotations
 
+import math
+import re
 from typing import Literal
 
+from ... import prompts
 from .. import fieldtext
 from ..absorb import materializer as absorb_materializer
+from ..absorb import parse as absorb_parse
 from . import canon, effective, involvement, similarity
 
 #: Parsed section -> the record kind its rows open.
@@ -51,6 +62,21 @@ SECTIONS: dict[str, similarity.Kind] = {"plot_movements": "thread",
 #: The private row key an accepted retarget carries its original row under, for
 #: materialize to build the as-new alternative from.
 AS_NEW_KEY = "_identity_as_new"
+
+#: What the resolver may answer for a row (spec §10.2).
+DECISIONS = ("existing", "new", "uncertain")
+
+#: What a row's `identity_check.decision` may say: a resolver word, or
+#: ``unchecked`` for a row the check never answered.
+CHECK_DECISIONS = (*DECISIONS, "unchecked")
+
+#: How a row's decision came to stand: as given, downgraded by the acceptance
+#: guard, or a hint only (no usable answer).
+STATUSES = ("accepted", "downgraded", "hint_only")
+
+#: A resolver reason is display text; clipping it keeps a runaway reply out of
+#: the stored review. To be tuned against real prompts later.
+REASON_CHARS = 280
 
 #: What the alias reader can raise on a hand-edited continuity.json whose shape
 #: it did not expect; any of them reads as "no aliases", as everywhere else.
@@ -85,6 +111,36 @@ class Examined:
         self.target: str | None = None   # an accepted canonical id
 
 
+def _certainty(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def _candidate(subject: similarity.Subject, signals: dict) -> dict:
+    """One neighbour as the resolver prompt shows it: its bare canonical id,
+    what it is, its latest beat and up to `similarity.PREVIOUS_BEATS` earlier
+    ones, newest first."""
+    rec = subject.record
+    latest, earlier = similarity.beat_lines(rec)
+    return {"id": subject.ref.partition(":")[2], "title": subject.title,
+            "status": subject.status, "kind": _text(rec.get("kind")),
+            "due": _text(rec.get("due")), "latest_beat": latest, "earlier": earlier,
+            "signals": dict(signals)}
+
+
+def _prompt_row(e: Examined) -> dict:
+    row = e.row
+    return {"key": e.key, "kind": e.kind, "title": e.title, "beat": _text(row.get("beat")),
+            "status": _text(row.get("status")), "commitment_kind": _text(row.get("kind")),
+            "due": _text(row.get("due")), "quote": _text(row.get("quote")),
+            "speaker": _text(row.get("speaker")),
+            "certainty": _certainty(row.get("certainty")),
+            "why_new": _text(row.get("why_new")),
+            "distinguished_from": list(e.distinguished_from),
+            "candidates": [_candidate(s, sig) for s, sig in e.candidates]}
+
+
 class Examination:
     """What `examine` found: the examined rows and how it looked for them."""
 
@@ -101,6 +157,12 @@ class Examination:
         self.embedded = embedded
         self.targets = targets   # (kind, canonical id) non-proposed rows stage onto
         self.live = live         # the live_canon map examine loaded
+
+    def prompt_rows(self) -> list[dict]:
+        """The examined rows as the resolver prompt reads them (`build_prompt`).
+        Within one row every candidate is the row's own type, so a bare id is
+        unambiguous."""
+        return [_prompt_row(e) for e in self.rows]
 
 
 def _text(value) -> str:
@@ -263,3 +325,104 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
         "semantic" if similarity.matching() == "semantic" else "basic")
     return Examination(rows, len(proposals), matching, sem.mode, sem.error, sem.embedded,
                        targets, live)
+
+
+# ------------------------------------------------------------ resolver prompt
+
+
+def _signal_text(signals: dict) -> str:
+    """The signals as fixed-order phrases. Hints for the resolver, never a
+    verdict -- the system prompt says so."""
+    parts: list[str] = []
+    if signals.get("title_equal"):
+        parts.append("same title")
+    if signals.get("slug_equal"):
+        parts.append("same slug")
+    for key, label in (("tokens", "word overlap"), ("chars", "text overlap"),
+                       ("cosine", "meaning")):
+        value = signals.get(key)
+        if value:
+            parts.append(f"{label} {value:.2f}")
+    if signals.get("actors"):
+        parts.append("shared characters: " + ", ".join(signals["actors"]))
+    if signals.get("scenes"):
+        parts.append(f"shared scenes: {len(signals['scenes'])}")
+    if signals.get("anchors"):
+        parts.append("shared dates: " + ", ".join(signals["anchors"]))
+    return "; ".join(parts)
+
+
+def _line(kind: str, c: dict) -> str:
+    if kind == "thread":
+        return prompts.render("snippets/plot_thread_line/absorb.j2",
+                              t={"id": c["id"], "title": c["title"], "status": c["status"],
+                                 "latest_beat": c["latest_beat"]})
+    return prompts.render("snippets/commitment_line/absorb.j2",
+                          c={"id": c["id"], "title": c["title"],
+                             "kind": c["kind"] or "promise", "status": c["status"],
+                             "due": c["due"], "latest_beat": c["latest_beat"]})
+
+
+def template_rows(rows: list[dict]) -> list[dict]:
+    """`prompt_rows` output as `continuity_identity/user.j2` reads it: each
+    candidate gains its snippet `line` and its `signal_text`. Snippets are
+    rendered here, by Python, as every other prompt's are. The input is not
+    mutated."""
+    return [{**row, "candidates": [{**c, "line": _line(row["kind"], c),
+                                    "signal_text": _signal_text(c["signals"])}
+                                   for c in row["candidates"]]}
+            for row in rows]
+
+
+def build_prompt(rows: list[dict]) -> list[dict]:
+    """The resolver's messages for `prompt_rows` output: one batched call for
+    every examined row (spec §10.2), never one per row."""
+    return [{"role": "system", "content": prompts.render("continuity_identity/system.j2")},
+            {"role": "user", "content": prompts.render("continuity_identity/user.j2",
+                                                       rows=template_rows(rows))}]
+
+
+#: A leading ``row`` word, as the user prompt prints a key (``Row r1``).
+_ROW_WORD = re.compile(r"^row(?![a-z0-9])[\s:#.-]*")
+
+
+def _row_key(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _ROW_WORD.sub("", value.strip().casefold()).strip()
+
+
+def _decision(item: dict) -> dict:
+    word = item.get("decision")
+    word = word.strip().lower() if isinstance(word, str) else ""
+    rid, reason = item.get("id"), item.get("reason")
+    return {"row": _row_key(item.get("row")),
+            "decision": word if word in DECISIONS else "uncertain",
+            "id": rid.strip() if isinstance(rid, str) else "",
+            "reason": reason.strip()[:REASON_CHARS] if isinstance(reason, str) else ""}
+
+
+def parse_output(text: str) -> list[dict] | None:
+    """The resolver's decisions, rebuilt field by field, or None when the reply
+    holds no decodable object at all -- a failed check, which is not the same
+    as a decodable reply with nothing usable in it (``[]``, spec §24).
+
+    Each usable element becomes ``{row, decision, id, reason}``: the row key as
+    the prompt printed it, without its ``Row`` label; an unknown decision word
+    as ``uncertain``; a reason clipped to `REASON_CHARS`. A duplicate row key
+    keeps its first answer. Nothing here raises on bad JSON."""
+    obj = absorb_parse.extract_object(text)
+    if obj is None:
+        return None
+    items = obj.get("decisions")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in items if isinstance(items, list) else ():
+        if not isinstance(item, dict):
+            continue
+        decision = _decision(item)
+        if not decision["row"] or decision["row"] in seen:
+            continue
+        seen.add(decision["row"])
+        out.append(decision)
+    return out
