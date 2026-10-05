@@ -3293,7 +3293,12 @@ def _retry_start(cid: str, sid: str, request: Request, kind: str, work_for) -> d
     # and spends the whole retry budget before ending in `review_missing`, and
     # aborting the browser's request stops none of that. Reentrant, so
     # `reserve_review`'s own acquisition costs nothing.
+    #
+    # A closed branch first (play controls III): the review a retry merges into
+    # is one the chronicle commit refuses on a closed scene, so the phase would
+    # be spent for nothing -- the same reason a stale review is refused below.
     with store.locks.campaign_lock(cid):
+        runs.require_scene_open(cid, sid)
         record = _pending_for_retry(cid, sid)
         generation = record.get("generation") or ""
         run = runs.reserve_review(request.app, cid, sid, kind, generation)

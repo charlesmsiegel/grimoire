@@ -84,6 +84,7 @@ def test_every_transcript_door_refuses_a_closed_scene(closed, client):
         ("post", f"{base}/responses/{rid}/character",
          {"name": "Seraphine", "passage": "Mara answers.", "source_text": "Mara answers."}),
         ("post", f"{base}/absorb", None),
+        ("post", f"{base}/dossiers", None),
         ("put", f"{base}/chronicle", {"one_line": "x", "summary": "y", "keywords": [],
                                       "timeline_events": [], "edits": [], "commit_token": "t"}),
         ("post", f"{base}/first-post", {"text": "The lamps are lit."}),
@@ -97,6 +98,19 @@ def test_every_transcript_door_refuses_a_closed_scene(closed, client):
         assert r.json().get("kind") == "branch_closed", f"{method} {path}: {r.json()}"
         assert r.json()["closed_by"]["sid"] == absorbed
     assert store.scenes._scene_path(cid, sid).read_bytes() == before
+
+
+def test_an_absorb_phase_retry_on_a_closed_scene_is_refused(closed, client):
+    """The audit and dossier retries re-run a phase of a review the chronicle
+    commit will refuse on a closed scene: refused before a token is spent,
+    as the absorb that started the review is. (Dossiers is in the door table;
+    the audit needs a module bound to get past its own 400.)"""
+    cid, absorbed, sid = closed
+    client.put(f"/api/campaigns/{cid}/module", json={"module": "pool-basic"})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/audit")
+    assert r.status_code == 409, r.text
+    assert r.json()["kind"] == "branch_closed"
+    assert r.json()["closed_by"]["sid"] == absorbed
 
 
 def test_a_manual_check_on_a_closed_scene_is_refused(client):
