@@ -366,6 +366,60 @@ def test_project_filters_scope():
     assert bare == {"format": 1, "id": raw["id"]}
 
 
+def _with_meta(image_id: str, **fields) -> None:
+    image_store.update(image_id, lambda raw: {**raw, **fields})
+
+
+def test_merge_projection_fills_an_absent_description():
+    obj = image_store.ingest(_png(_img(70)), "png")
+    image_store.merge_projection(obj.id, {"description": "Seraphine by the arch."},
+                                 "world:realm")
+    assert _sidecar(obj.id)["description"] == "Seraphine by the arch."
+
+
+@pytest.mark.parametrize("local", ["Mine", ""])
+def test_merge_projection_never_replaces_a_local_description(local):
+    obj = image_store.ingest(_png(_img(71)), "png")
+    _with_meta(obj.id, description=local)
+    image_store.merge_projection(obj.id, {"description": "Theirs"}, "world:realm")
+    assert _sidecar(obj.id)["description"] == local
+
+
+def test_merge_projection_unions_only_its_own_scope():
+    obj = image_store.ingest(_png(_img(72)), "png")
+    mine = {"kind": "character", "relation": "subject", "scope": "world:realm",
+            "id": "seraphine"}
+    _with_meta(obj.id, associations=[mine], reviews={"subjects": ["world:realm"]})
+    theirs = {"kind": "character", "relation": "subject", "scope": "world:saltmarch",
+              "id": "mara"}
+    stray = {"kind": "character", "relation": "subject", "scope": "world:other",
+             "id": "winifred"}
+    image_store.merge_projection(
+        obj.id,
+        {"associations": [theirs, theirs, stray, "junk"],
+         "reviews": {"subjects": ["world:saltmarch", "world:other"]}},
+        "world:saltmarch")
+    side = _sidecar(obj.id)
+    assert side["associations"] == [mine, theirs]
+    assert side["reviews"] == {"subjects": ["world:realm", "world:saltmarch"]}
+
+
+def test_merge_projection_writes_nothing_when_nothing_is_new():
+    obj = image_store.ingest(_png(_img(73)), "png")
+    _with_meta(obj.id, description="Mine")
+    before = image_store.object_path(obj.id).stat().st_mtime_ns
+    time.sleep(0.01)
+    image_store.merge_projection(obj.id, {"description": "Theirs", "sources": [
+        {"url": "https://example.invalid/x"}]}, "world:realm")
+    assert image_store.object_path(obj.id).stat().st_mtime_ns == before
+    assert "sources" not in _sidecar(obj.id)
+
+
+def test_merge_projection_on_a_missing_object_is_a_noop():
+    image_store.merge_projection("px1-" + "0" * 64, {"description": "x"}, "world:realm")
+    assert not image_store.object_path("px1-" + "0" * 64).exists()
+
+
 def test_bad_ids_rejected():
     with pytest.raises(ValueError):
         image_store.object_path("px1-zz")

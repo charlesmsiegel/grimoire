@@ -313,3 +313,46 @@ def test_valid_name_parity_with_assets(name):
         assert mine is False
         return
     assert mine == assets._addressable_name(name)
+
+
+# ---- walk_ids (world bundle export, spec section 10) ----
+
+def test_walk_ids_finds_every_placed_image_at_any_depth(tmp_path):
+    a, b = _obj(1), _obj(2)
+    root = tmp_path / "realm"
+    image_refs.write(root / "assets", "cover", a.id)
+    image_refs.write(root / "characters" / "seraphine" / "assets" / "default", "avatar",
+                     b.id, focus=40)
+    image_refs.write(root / "assets" / "images", "coastline", a.id)
+    image_refs.write(root / "assets" / "images", "crop", None, focus=10)   # focus-only
+    assert image_refs.walk_ids(root) == {a.id, b.id}
+
+
+def test_walk_ids_skips_journals_garbage_and_non_ref_dirs(tmp_path):
+    a = _obj(3)
+    root = tmp_path / "realm"
+    d = root / "lore" / "tide" / "assets" / "default"
+    image_refs.write_journal(d, {"image": a.id})
+    _raw(d, "broken", "{not json")
+    # A JSON file holding an image id outside an `image-refs/` folder is not a
+    # placement.
+    (root / "notes").mkdir(parents=True)
+    (root / "notes" / "x.json").write_text(json.dumps({"format": 1, "image": a.id}),
+                                           encoding="utf-8")
+    assert image_refs.walk_ids(root) == set()
+    assert image_refs.walk_ids(tmp_path / "missing") == set()
+
+
+def test_walk_ids_does_not_follow_symlinks(tmp_path):
+    a, b = _obj(4), _obj(5)
+    outside = tmp_path / "outside"
+    image_refs.write(outside, "avatar", a.id)
+    root = tmp_path / "realm"
+    image_refs.write(root / "assets", "cover", b.id)
+    try:
+        (root / "linked").symlink_to(outside, target_is_directory=True)
+        (root / "assets" / "image-refs" / "alias.json").symlink_to(
+            image_refs.ref_path(outside, "avatar"))
+    except (OSError, NotImplementedError):
+        pytest.skip("this platform/user cannot create symlinks")
+    assert image_refs.walk_ids(root) == {b.id}

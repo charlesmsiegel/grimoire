@@ -39,24 +39,67 @@ checked -- traversal, absolute/UNC/drive names, symlinks, case collisions,
 member count and expanded size -- *before* anything is written, and the tree is
 built in a private staging directory that is published with a single rename or
 discarded whole. A rejected import leaves no partial world in the library.
+
+**Format 2 carries the world's images** (spec section 10). A placement
+(``image-refs/<name>.json``) names an object in the *global* image store, so
+the world directory alone holds an id and no picture: a format-1 export
+imported into another library would leave every placement unresolved (Codex
+review). So the export adds an ``image-store/`` prefix beside ``world/``, with
+one ``blobs/<xx>/<sha>.<ext>`` and one ``objects/<xx>/<id>.json`` per image any
+placement in the world names. The object is a **projection** (`image_store.
+project`): global fields plus this world's own associations and reviews, never
+``sources``.
+
+Nothing a bundle says about an image is trusted. Every blob is re-hashed
+against its name, every object's id is recomputed *here* from its blob
+(``ingest(..., sanitize=False)`` -- the blobs are already stored bytes), and a
+staged ref naming a bundle id that differs from the local one is rewritten
+before the world is published: a bundle can never claim an id for pixels it
+does not contain. Descriptions, associations and reviews are merged only after
+`staging.publish` has named the world, under ``world:<final id>``, and only
+ever fill what the local object lacks (`image_store.merge_projection`). A
+failure there is logged rather than raised: the world already exists, and
+answering "failed" would invite a retry that imports a second copy.
+
+Blobs and objects are ingested before the world is published, so an import
+that fails afterwards leaves an orphan picture behind -- a GC candidate, never
+corruption (spec section 12). Format-1 bundles import exactly as before.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib.metadata
 import json
+import os
+import re
 import zipfile
+from dataclasses import dataclass
 from pathlib import Path
 
-from . import atomic, ziputil
+from . import atomic, fetch, image_refs, image_store, logs, ziputil
 from .frontmatter import parse_frontmatter
 from .paths import ensure_home, now_iso, safe_id, slugify, uniquify
 from .worlds import paths as worlds_paths
 from .worlds import staging as worlds_staging
 
-FORMAT = 1
+FORMAT = 2
+#: Every format this grimoire reads. Format 1 is format 2 without images.
+_READABLE = frozenset({1, 2})
 MANIFEST_NAME = "grimoire-bundle.json"
 WORLD_PREFIX = "world"
+STORE_PREFIX = "image-store"
+
+# The only shapes an `image-store/` member may take. Hex is lower-case, and the
+# shard must equal the hash's own prefix (checked separately: a regex cannot
+# say "these two groups agree" without a backreference that reads worse).
+_BLOB_MEMBER = re.compile(
+    r"image-store/blobs/([0-9a-f]{2})/([0-9a-f]{64})\.(png|jpg|gif|webp)")
+_OBJECT_MEMBER = re.compile(
+    r"image-store/objects/([0-9a-f]{2})/(px1-([0-9a-f]{64}))\.json")
+# A projected sidecar is a few hundred bytes; this is a guard against a
+# hand-built bundle making the import parse something enormous.
+_MAX_OBJECT_BYTES = 1024 * 1024
 
 # Sized for a real library rather than a module pack: worlds here run to
 # thousands of files and a gigabyte of character art, so these are a guard
@@ -152,6 +195,39 @@ def write_bundle(wid: str, dest: Path) -> None:
                 z.write(p, arc, compress_type=compress)
             except FileNotFoundError:
                 continue                                    # deleted mid-walk
+        _pack_images(z, root, wid)
+
+
+def _pack_images(z: zipfile.ZipFile, root: Path, wid: str) -> None:
+    """Add the blob and the projected object of every image a placement under
+    `root` names -- once each, however many placements share it.
+
+    An id that does not resolve (no object, or its blob missing) is skipped:
+    the world still exports, and that ref simply travels without a picture,
+    exactly as unresolvable as it already was here. A blob that is a symlink is
+    skipped for the reason the world walk skips one.
+    """
+    scope = f"world:{wid}"
+    for image_id in sorted(image_refs.walk_ids(root)):
+        obj = image_store.read(image_id)
+        if obj is None:
+            continue
+        blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+        try:
+            if blob.is_symlink() or not blob.is_file():
+                continue
+        except OSError:
+            continue
+        sha = obj.blob_sha256
+        try:
+            z.write(blob, f"{STORE_PREFIX}/blobs/{sha[:2]}/{sha}.{obj.ext}",
+                    compress_type=zipfile.ZIP_STORED)
+        except FileNotFoundError:
+            continue                                        # collected mid-walk
+        projected = image_store.project(obj.raw, scope)
+        z.writestr(f"{STORE_PREFIX}/objects/{image_id[4:6]}/{image_id}.json",
+                   json.dumps(projected, indent=2, sort_keys=True) + "\n",
+                   compress_type=zipfile.ZIP_DEFLATED)
 
 
 # ---- import ----
@@ -174,7 +250,7 @@ def _read_manifest(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> dict:
     # `type(...) is int`, not isinstance: JSON `true` is a Python bool, bool is
     # a subclass of int, and `True == 1` -- so `{"format": true}` would have
     # been read as format 1 (Codex review).
-    if type(fmt) is not int or fmt != FORMAT:
+    if type(fmt) is not int or fmt not in _READABLE:
         # Named separately because the fix differs: a newer bundle needs a
         # newer grimoire, anything else is a broken file.
         if type(fmt) is int and fmt > FORMAT:
@@ -186,24 +262,157 @@ def _read_manifest(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> dict:
     return manifest
 
 
-def _world_members(infos: list[zipfile.ZipInfo]) -> list[zipfile.ZipInfo]:
-    """The members under ``world/``, with the archive's shape checked.
+@dataclass
+class _Members:
+    world: list[zipfile.ZipInfo]
+    #: blob sha -> its member.
+    blobs: dict[str, zipfile.ZipInfo]
+    #: bundle-claimed image id -> its member.
+    objects: dict[str, zipfile.ZipInfo]
 
-    Exactly two things may sit at the archive root: the manifest and the world
-    directory. Anything else means this is not a bundle we understand, and
-    guessing at it is how an import writes files nobody asked for.
+
+def _world_members(infos: list[zipfile.ZipInfo], fmt: int) -> _Members:
+    """The members under ``world/`` and ``image-store/``, with the archive's
+    shape checked.
+
+    Three things may sit at the archive root: the manifest, the world
+    directory, and (format 2) the image store. Anything else means this is not
+    a bundle we understand, and guessing at it is how an import writes files
+    nobody asked for. Inside ``image-store/`` only the two exact shapes are
+    allowed, with the shard agreeing with the hash it shards.
     """
-    members = []
+    out = _Members([], {}, {})
     for i in infos:
         if i.filename == MANIFEST_NAME:
             continue
         parts = ziputil.member_parts(i.filename, min_parts=2, err=BundleError)
-        if parts[0] != WORLD_PREFIX:
+        if parts[0] == WORLD_PREFIX:
+            out.world.append(i)
+            continue
+        if parts[0] != STORE_PREFIX or fmt < 2:
             raise BundleError(f"unexpected entry outside {WORLD_PREFIX}/: {i.filename}")
-        members.append(i)
-    if not any(ziputil.member_parts(i.filename)[1:] == ["world.md"] for i in members):
+        blob = _BLOB_MEMBER.fullmatch(i.filename)
+        if blob is not None and blob.group(1) == blob.group(2)[:2]:
+            # One sha under two extensions is one blob named twice.
+            if out.blobs.setdefault(blob.group(2), i) is not i:
+                raise BundleError(f"image blob packed twice: {i.filename}")
+            continue
+        obj = _OBJECT_MEMBER.fullmatch(i.filename)
+        if obj is not None and obj.group(1) == obj.group(3)[:2]:
+            out.objects[obj.group(2)] = i
+            continue
+        raise BundleError(f"unexpected entry in {STORE_PREFIX}/: {i.filename}")
+    if not any(ziputil.member_parts(i.filename)[1:] == ["world.md"] for i in out.world):
         raise BundleError(f"not a world bundle: no {WORLD_PREFIX}/world.md")
-    return members
+    return out
+
+
+def _read_member(z: zipfile.ZipFile, info: zipfile.ZipInfo, cap: int) -> bytes:
+    """One member's bytes, refused past `cap` and with every way a zip read
+    can fail re-dressed as the import's own error."""
+    if info.file_size > cap:
+        raise BundleError(f"bundle member too large: {info.filename}")
+    try:
+        return z.read(info)
+    except (zipfile.BadZipFile, RuntimeError, NotImplementedError, OSError) as e:
+        raise BundleError(f"unreadable bundle member {info.filename}: {e}") from e
+
+
+def _read_objects(z: zipfile.ZipFile, members: _Members) -> dict[str, dict]:
+    """Each bundled object's projection, keyed by the id the bundle claims.
+
+    Checked before any blob is ingested, so a malformed object refuses the
+    import without leaving pictures behind. The claimed id is only a key: what
+    the object is called *here* is recomputed from its blob.
+    """
+    out: dict[str, dict] = {}
+    for bundle_id, info in members.objects.items():
+        try:
+            raw = json.loads(_read_member(z, info, _MAX_OBJECT_BYTES))
+        except (ValueError, RecursionError) as e:
+            raise BundleError(f"unreadable image object {info.filename}: {e}") from e
+        blob = raw.get("blob") if isinstance(raw, dict) else None
+        sha = blob.get("sha256") if isinstance(blob, dict) else None
+        if not isinstance(sha, str) or sha not in members.blobs:
+            raise BundleError(f"image object names no bundled blob: {info.filename}")
+        out[bundle_id] = raw
+    return out
+
+
+def _ingest_blobs(z: zipfile.ZipFile, members: _Members) -> dict[str, str]:
+    """Re-hash and ingest every bundled blob; returns blob sha -> local id.
+
+    ``sanitize=False``: these are bytes a store already sanitized, and
+    re-sanitizing could change them -- and so their name. Ingest is
+    find-or-create, so a blob the library already holds is reused, and a
+    picture it holds under another encoding keeps its own (first wins).
+    """
+    local: dict[str, str] = {}
+    for sha, info in members.blobs.items():
+        data = _read_member(z, info, fetch.MAX_BYTES)
+        if hashlib.sha256(data).hexdigest() != sha:
+            raise BundleError(f"image blob does not match its name: {info.filename}")
+        ext = info.filename.rsplit(".", 1)[1]
+        try:
+            local[sha] = image_store.ingest(data, ext, sanitize=False).id
+        except ValueError as e:
+            raise BundleError(f"unusable image blob {info.filename}: {e}") from e
+    return local
+
+
+def _rewrite_refs(staging: Path, id_map: dict[str, str]) -> None:
+    """Point every staged placement naming a bundle id at its local id,
+    keeping its focus. Symlinks are not followed (extraction makes none)."""
+    if not id_map:
+        return
+    for dirpath, dirnames, filenames in os.walk(staging, followlinks=False):
+        if Path(dirpath).name != image_refs.REFS_DIR:
+            continue
+        dirnames[:] = []
+        owner = Path(dirpath).parent
+        for fname in filenames:
+            if fname == image_refs.JOURNAL or not fname.endswith(".json"):
+                continue
+            name = fname[: -len(".json")]
+            ref = image_refs.read(owner, name)
+            if ref is None or ref.image not in id_map:
+                continue
+            image_refs.write(owner, name, id_map[ref.image], focus=ref.focus)
+
+
+def _rescoped(projected: dict, old: str, new: str) -> dict:
+    """`projected` with its own scope `old` renamed to `new`. Anything scoped
+    elsewhere is left as it came, and `merge_projection` then ignores it."""
+    out = dict(projected)
+    assoc = out.get("associations")
+    if isinstance(assoc, list):
+        out["associations"] = [
+            {**a, "scope": new} if isinstance(a, dict) and a.get("scope") == old else a
+            for a in assoc]
+    reviews = out.get("reviews")
+    if isinstance(reviews, dict) and isinstance(reviews.get("subjects"), list):
+        out["reviews"] = {**reviews, "subjects": [new if s == old else s
+                                                  for s in reviews["subjects"]]}
+    return out
+
+
+def _merge_metadata(projections: list[tuple[str, dict]], source_wid: str,
+                    wid: str) -> None:
+    """Fill local objects from the bundle's projections, under the final id.
+
+    Never raises: the world is published by now, and a failure here costs its
+    descriptions and tags, not the world -- so it is reported, not returned as
+    a failed import the caller would retry into a duplicate.
+    """
+    old, new = f"world:{source_wid}", f"world:{wid}"
+    for local_id, projected in projections:
+        try:
+            image_store.merge_projection(local_id, _rescoped(projected, old, new), new)
+        except Exception as e:  # noqa: BLE001 -- the world exists; see above
+            logs.record("warning", __name__,
+                        "imported world's image metadata could not be merged",
+                        kind="bundle_metadata_merge_failed", world=wid,
+                        image=local_id, error=f"{type(e).__name__}: {e}")
 
 
 def _world_name(staging: Path, manifest: dict) -> str:
@@ -235,22 +444,31 @@ def import_bundle(path: Path) -> str:
         infos = ziputil.scan(z, max_members=MAX_MEMBERS,
                              max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)
         manifest = _read_manifest(z, infos)
-        members = _world_members(infos)
+        members = _world_members(infos, manifest["format"])
+        projected = _read_objects(z, members)
         # The work directory is the context manager's to name and to remove.
         # It used to be this function's, held in the same name as the world's
         # slug -- which the slug then overwrote, so the cleanup `rmtree`'d a
         # bare relative name against the process working directory and the
         # staging tree leaked on every import (see `worlds.staging`).
         with worlds_staging.staging_tree() as staging:
-            ziputil.extract(z, members, staging, strip=1, err=BundleError)
+            ziputil.extract(z, members.world, staging, strip=1, err=BundleError)
             base = slugify(_world_name(staging, manifest))
+            local = _ingest_blobs(z, members)
+            # bundle id -> local id, for every object; only the ones that
+            # differ need a ref rewritten.
+            id_map = {bid: local[raw["blob"]["sha256"]] for bid, raw in projected.items()}
+            _rewrite_refs(staging, {bid: lid for bid, lid in id_map.items() if bid != lid})
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:
                 worlds_staging.repoint_urls(staging, manifest["world_id"], wid)
             try:
-                return worlds_staging.publish(staging, base, wid)
+                wid = worlds_staging.publish(staging, base, wid)
             except worlds_staging.WorldIdConflictError as e:
                 # Re-dressed as a BundleError subclass so the import's callers
                 # keep one exception family to catch, and the route keeps
                 # answering 409 for it.
                 raise BundleConflict(str(e)) from e
+    _merge_metadata([(id_map[bid], raw) for bid, raw in projected.items()],
+                    manifest["world_id"], wid)
+    return wid
