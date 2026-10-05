@@ -1219,15 +1219,16 @@ def _sampled(conn, params, scope="connection", name="Warm"):
 class KwargRecorder:
     """Records each attempt's (model, kwargs); fails the models in `failing`."""
 
-    def __init__(self, failing=(), kind="bad_response", status=None):
+    def __init__(self, failing=(), kind="bad_response", status=None,
+                 why="temperature must be at most 1"):
         self.failing = set(failing)
-        self.kind, self.status = kind, status
+        self.kind, self.status, self.why = kind, status, why
         self.calls = []
 
     async def stream(self, messages, model="", *args, **kwargs):
         self.calls.append((model, kwargs))
         if model in self.failing:
-            raise LLMError(self.kind, f"{model} refused", status=self.status)
+            raise LLMError(self.kind, f"{model} refused: {self.why}", status=self.status)
         yield f"from {model}"
 
 
@@ -1327,3 +1328,39 @@ async def test_a_400_whose_params_were_all_dropped_still_falls_back():
     client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
     conn = {**_sampled(_route("a", "primary"), {"min_p": 0.1}), "model_params": ["temperature"]}
     assert [c async for c in client.stream([], conn)] == ["from backup"]
+
+
+
+async def test_a_400_that_names_no_sent_param_still_falls_back():
+    """A context overflow is a 400 too; a preset being attached must not turn it
+    into a preset refusal that skips the fallback and the health verdict."""
+    seen = []
+    provider = KwargRecorder(failing={"primary"}, status=400,
+                             why="maximum context length is 8192 tokens")
+    client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
+                       timeout=0, retries=0, fallback=lambda: _route("b", "backup"),
+                       observer=lambda conn, err: seen.append((conn["id"], err)))
+    conn = _sampled(_route("a", "primary"), {"temperature": 1.25})
+    assert [c async for c in client.stream([], conn)] == ["from backup"]
+    assert seen[0][0] == "a" and seen[0][1] is not None
+
+
+async def test_a_refusal_spelled_with_hyphens_is_still_recognized():
+    provider = KwargRecorder(failing={"primary"}, status=400, why="unknown field: repeat_penalty")
+    client = _retry_client(provider, retries=0, fallback=lambda: _route("b", "backup"))
+    conn = {**_sampled(_conn("openai_compatible", id="a", model="primary", base_url="http://x"),
+                       {"repetition_penalty": 1.1}), "sampler_support": "extended"}
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], conn)]
+    assert "fallback connection was not tried" in exc.value.detail
+
+
+async def test_a_fallback_that_refuses_the_preset_reports_both_failures():
+    provider = KwargRecorder(failing={"primary", "backup"}, status=400)
+    client = _retry_client(provider, retries=0,
+                           fallback=lambda: _sampled(_route("b", "backup"), {"temperature": 2}))
+    conn = _route("a", "primary")   # the primary sent nothing, so it falls back
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], conn)]
+    assert "and the fallback failed too" in exc.value.detail
+    assert "not tried" not in exc.value.detail

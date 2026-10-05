@@ -298,7 +298,9 @@ def _map_one(name: str, key: str, value: object, include_max_tokens: bool,
         report["skipped"].append({"param": name, "from": key, "value": value,
                                   "why": MAX_TOKENS_WHY})
         return
-    if name in NEUTRAL and not isinstance(value, bool) and value == NEUTRAL[name]:
+    # -1 is top-k's other "off" (llama.cpp, vLLM).
+    if name in NEUTRAL and not isinstance(value, bool) and (
+            value == NEUTRAL[name] or (name == "top_k" and value == -1)):
         report["neutral"].append({"param": name, "from": key, "value": value})
         return
     try:
@@ -324,14 +326,20 @@ def from_sillytavern(data: object, include_max_tokens: bool = False) -> tuple[di
     report: dict = {"mapped": [], "neutral": [], "skipped": [], "invalid": [],
                     "unmapped": [], "notes": []}
     used: set[str] = set()
+    shadowed: list[str] = []
     for name, keys in ST_KEYS.items():
         present = [k for k in keys if k in data]
-        used.update(present)
         if present:
+            used.add(present[0])
+            shadowed += [f"{k} (unused: {present[0]} carries {name})" for k in present[1:]]
             _map_one(name, present[0], data[present[0]], include_max_tokens, params, report)
-    rest = sorted(k for k in data if k not in used)
+    shadow_keys = {entry.split(" ", 1)[0] for entry in shadowed}
+    rest = sorted(k for k in data if k not in used and k not in shadow_keys)
     report["unmapped"] = [k for k in ORDER_KEYS if k in rest] + \
                          [k for k in rest if k not in ORDER_KEYS]
+    # A second spelling of a parameter already taken is listed too, with what
+    # took it: dropping it in silence is exactly what the report is for.
+    report["unmapped"] += shadowed
     if any(k in rest for k in ORDER_KEYS):
         report["notes"].append(ORDER_NOTE)
     if not params:

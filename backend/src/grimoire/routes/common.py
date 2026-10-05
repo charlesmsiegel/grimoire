@@ -1356,7 +1356,11 @@ def _attach_sampling(conn: dict, task: str, cid: str) -> dict:
                     "params": dict(preset["params"]) if preset else {}}
     except (store.locks.StoreBusy, OSError, UnicodeDecodeError):
         pass
-    out = {**conn, "sampling": sampling}
+    # `model_params` dropped first: the connection handed in may be the
+    # standing one with ITS model's list attached, and a model override must
+    # not inherit that list -- it would report a parameter the new model was
+    # never checked for as verified, in either direction.
+    out = {**{k: v for k, v in conn.items() if k != "model_params"}, "sampling": sampling}
     params = _model_params(conn)
     if params is not None:
         out["model_params"] = params

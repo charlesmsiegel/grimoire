@@ -2,6 +2,8 @@
 a turn is actually sent."""
 
 from grimoire import llm, routes, store
+from grimoire.llm_errors import LLMError
+from grimoire.routes import common
 from grimoire.store.sampler_presets import PRESET_CLEAR
 from tests.llm_fakes import ScriptedProvider
 
@@ -196,3 +198,67 @@ def test_no_preset_anywhere_reports_provider_defaults(client):
     cid, sid = _scene(client)
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["sampling"]["scope"] == "none" and live["sampling"]["applied"] == {}
+
+
+
+def test_a_connection_whose_preset_was_deleted_can_still_be_saved(client):
+    pid = _preset(client)
+    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
+    client.delete(f"/api/sampler-presets/{pid}")
+    r = client.put("/api/llm-connections/openrouter",
+                   json={"name": "Renamed", "sampler_preset": pid})
+    assert r.status_code == 200, r.text
+    # ...while naming a DIFFERENT missing preset is still a decision, and refused.
+    assert client.put("/api/llm-connections/openrouter",
+                      json={"sampler_preset": "other"}).status_code == 400
+
+
+def test_a_model_override_does_not_inherit_the_standing_models_param_list(client):
+    """#77: a reroll at another model must be checked against THAT model, and
+    one the catalog does not list is unverified, never judged by the old list."""
+    cid, _ = _scene(client)
+    pid = _preset(client, temperature=0.6, min_p=0.05)
+    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models("openrouter", [
+        {"id": "m", "name": "m", "context": None, "prompt": None, "completion": None,
+         "params": ["temperature"]}], rev)
+
+    class Body:
+        connection_id = None
+        model = "other/model"
+
+    conn, routed = common._override_connection(Body(), "chat", cid)
+    assert routed and "model_params" not in conn
+    from grimoire import llm_sampling
+    report = llm_sampling.report(conn)
+    assert report["applied"] == {"temperature": 0.6, "min_p": 0.05}
+    assert report["verified"] is False
+
+
+def test_a_fallback_snapshot_reports_the_fallbacks_own_split(client):
+    """The distinct-model fallback capture describes the request the fallback
+    was sent: the route's preset, split for the fallback's kind."""
+    cid, sid = _scene(client)
+    client.put("/api/llm-connections/openrouter", json={"model": "glm-5.3"})
+    pid = _preset(client, temperature=0.6, min_p=0.05)
+    client.put("/api/routing", json={"presets": {"scene": pid}})
+    backup = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Backup", "base_url": "https://example.test/v1",
+        "model": "vendor/unknown"}).json()["id"]
+    client.put("/api/config", json={"fallback_connection_id": backup})
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=("Mara nods.",))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
+                           fallback=common._fallback_connection)
+    client.app.dependency_overrides[routes.get_llm] = lambda: facade
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                       json={"content": "Shall we go?"}).status_code == 200
+    assert fallback.requests[0]["kwargs"]["sampling"] == {"temperature": 0.6}
+    entries = store.prompt_log.list_entries(cid, sid)
+    by_model = {e["model"]: store.prompt_log.read_entry(cid, e["id"], scene=sid)
+                for e in entries}
+    assert by_model["vendor/unknown"]["sampling"]["kind"] == "openai_compatible"
+    assert by_model["vendor/unknown"]["sampling"]["applied"] == {"temperature": 0.6}
+    assert by_model["vendor/unknown"]["sampling"]["dropped"][0]["param"] == "min_p"
+    assert by_model["glm-5.3"]["sampling"]["applied"] == {"temperature": 0.6, "min_p": 0.05}

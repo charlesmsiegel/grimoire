@@ -49,9 +49,9 @@ export function SamplingSummary({ report }: { report: SamplingReport | null | un
       )}
       {!report.verified && (
         <div className="field-hint">
-          Unverified: no model list is cached for this connection, so whether the
-          model takes these cannot be checked — fetch its models on the
-          Connections page.
+          Unverified: this connection's cached model list does not say which
+          parameters the model takes, so these are sent unchecked — refresh its
+          models on the Connections page to check.
         </div>
       )}
     </div>

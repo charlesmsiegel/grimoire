@@ -183,10 +183,19 @@ is wrong: a provider answering **400/422** to a request that carried sampler
 parameters is most likely refusing one of them, and serving the turn from the
 fallback would hide that — every turn silently on the fallback, the primary's
 health dot red over a setting rather than the connection. So adapters record
-the HTTP status on `LLMError.status`, and an attempt that sent parameters and
-failed 400/422 is raised immediately, its detail naming the preset and the
-parameters sent, without falling back and without a health verdict against the
-connection.
+the HTTP status on `LLMError.status`, and a **primary** attempt that sent
+parameters and failed 400/422 **with a message naming one of them** (any
+spelling: `top_k`, `top-k`, `repeat_penalty`) is raised immediately, its detail
+naming the preset and the parameters sent, without falling back and without a
+health verdict against the connection.
+
+Both narrowings came out of review. A 400 is also what a context-length
+overflow or an unknown model id gets, and with a preset attached those must
+still fall back and still count against the connection, exactly as before
+presets existed — so a refusal that names nothing that was sent is an ordinary
+failure. And a *fallback* that refuses has nothing further to skip; the
+existing "and the fallback failed too" message already reports it beside the
+primary's failure.
 
 ### Saying so
 
@@ -236,7 +245,7 @@ presets (`temp`, `rep_pen`, `genamt`, …).
 The response is the saved preset plus a report of five lists:
 
 - `mapped` — `{param, from, value}` for each param set;
-- `neutral` — mapped keys at the sampler's off position (`top_k: 0`,
+- `neutral` — mapped keys at the sampler's off position (`top_k: 0` or `-1`,
   `min_p: 0`, `repetition_penalty: 1`, the two penalties at 0, `top_p: 1`, an
   empty stop list), left **unset**: ST writes every field into every file, and
   storing its off-positions would make every imported preset report `top_k`
@@ -248,7 +257,9 @@ The response is the saved preset plus a report of five lists:
 - `invalid` — `{key, why}`: out of bounds, wrong type, or a stop string
   containing a `{{…}}` macro (ST expands those; stored as text they would never
   match);
-- `unmapped` — every other top-level key, sorted. `temperature_last`,
+- `unmapped` — every other top-level key, sorted, plus any second spelling of
+  a parameter another key already supplied (`temp` beside `temperature`),
+  listed with what took it rather than lost. `temperature_last`,
   `sampler_order` and `sampler_priority` are listed first with a note that the
   order samplers run in is not carried over, since it changes what a min-p
   value means.

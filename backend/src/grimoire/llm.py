@@ -435,14 +435,24 @@ def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
     if exc.status not in PRESET_REFUSAL_STATUSES:
         return None
     sent = llm_sampling.sent_names(conn)
-    if not sent:
+    # Only when the provider's message NAMES something that was sent. A 400 is
+    # also what a context-length overflow or an unknown model id gets, and with
+    # a preset attached those must still reach the fallback and the health
+    # verdict exactly as they did before presets existed. Matched on every
+    # spelling a provider might echo back: the canonical name, the wire
+    # duplicate (`repeat_penalty`), and the hyphen/space forms prose uses.
+    detail = (exc.detail or "").lower()
+    spellings = {name: {name, name.replace("_", "-"), name.replace("_", " ")}
+                 for name in sent}
+    spellings.get("repetition_penalty", set()).add("repeat_penalty")
+    if not any(form in detail for forms in spellings.values() for form in forms):
         return None
     sampling = conn.get("sampling") or {}
     name = sampling.get("preset_name") or sampling.get("preset_id") or "?"
     return LLMError(
         exc.kind,
         f"{exc.detail} — this request carried sampler preset “{name}” "
-        f"({', '.join(sent)}), so the provider may be refusing one of those; "
+        f"({', '.join(sent)}) and the provider's refusal names one of them, so "
         "the fallback connection was not tried",
         exc.retry_after, status=exc.status)
 
@@ -557,7 +567,10 @@ async def _resilient(open_stream, routes, timeout: float,
                 return
             except LLMError as exc:
                 outcome = "error"
-                refused = None if sent else _preset_refusal(exc, conn)
+                # The primary only. A FALLBACK that refuses a preset has
+                # nothing further to skip, and the both-failed message below
+                # already names its failure beside the primary's.
+                refused = None if sent or index else _preset_refusal(exc, conn)
                 if refused is not None:
                     # Not observed: the connection answered, and what it
                     # refused was a setting. A health verdict here would mark
