@@ -85,12 +85,13 @@ def test_campaign_get_names_a_world_switch_off(client, ids):
     assert (entry["rule"]["name"], entry["off"], entry["off_by"]) == ("Glob", False, "world")
 
 
-def test_inherited_id_collision_is_a_400(client, ids):
+def test_inherited_id_collision_is_reminted(client, ids):
     glob = client.put(_url("global", ids), json={"rules": [_rule("Glob")]}).json()
-    clash = _rule("Clash", id=glob["layer"]["rules"][0]["id"])
-    res = client.put(_url("world", ids), json={"rules": [clash]})
-    assert res.status_code == 400
-    assert res.json()["field"] == "id"
+    taken = glob["layer"]["rules"][0]["id"]
+    res = client.put(_url("world", ids), json={"rules": [_rule("Clash", id=taken)]})
+    assert res.status_code == 200
+    [rule] = res.json()["layer"]["rules"]
+    assert rule["name"] == "Clash" and rule["id"] != taken
 
 
 @pytest.mark.parametrize("url", [

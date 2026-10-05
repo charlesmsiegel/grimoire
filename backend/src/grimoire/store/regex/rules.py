@@ -109,8 +109,22 @@ def _check_scalars(rule: dict, raw: dict, index: int | None) -> None:
     imported = rule["imported"]
     if imported is not None and not isinstance(imported, dict):
         raise _fail("must be null or an object", "imported", index)
+    rule["imported"] = _imported(imported)
     if not isinstance(rule["trim"], list) or not all(isinstance(t, str) for t in rule["trim"]):
         raise _fail("must be a list of strings", "trim", index)
+
+
+def _imported(raw: dict | None) -> dict | None:
+    """`imported` in the one shape the editor renders, `{from, pattern, notes}`,
+    or None. It is provenance, not behaviour, so a hand-edited one that lacks
+    its source or pattern is dropped rather than refused, and notes keep only
+    their strings."""
+    if raw is None or not isinstance(raw.get("from"), str) \
+            or not isinstance(raw.get("pattern"), str):
+        return None
+    notes = raw.get("notes")
+    return {"from": raw["from"], "pattern": raw["pattern"],
+            "notes": [n for n in notes if isinstance(n, str)] if isinstance(notes, list) else []}
 
 
 def _check_flags(flags, index: int | None) -> str:
@@ -197,10 +211,14 @@ def _dollar(
     if nxt == "&":
         return ("match", ""), i + 2
     if nxt == "<":
+        # JavaScript's rule: with no named group in the pattern `$<` is just
+        # text; once there is one, a name it lacks is replaced with nothing.
         m = _NAMED.match(replacement, i)
         if m is not None:
             name = m.group(1)
-            return (("name", name) if name in names else ("unknown", m.group(0))), m.end()
+            if name in names:
+                return ("name", name), m.end()
+            return ("missing" if names else "unknown", m.group(0)), m.end()
     elif nxt.isdecimal() and nxt.isascii():
         return _digits(replacement, i, ngroups)
     return None, i + 1
@@ -209,9 +227,11 @@ def _dollar(
 @functools.lru_cache(maxsize=512)
 def _parse(replacement: str, ngroups: int, names: tuple[str, ...]) -> tuple[Token, ...]:
     """The replacement as tokens: ("lit", text), ("group", n), ("name", name),
-    ("match", "") or ("unknown", the reference as written) for a reference to a
-    group the pattern lacks. An unknown one is emitted literally, which is what
-    JavaScript does and so what an imported `"costs $5"` expects."""
+    ("match", ""), ("unknown", the reference as written) for a numbered group
+    the pattern lacks, or ("missing", the reference as written) for a name the
+    pattern lacks while it has named groups. An unknown one is emitted
+    literally and a missing one as nothing, which is what JavaScript does and
+    so what an imported `"costs $5"` expects."""
     out: list[Token] = []
     lit: list[str] = []
     i, n = 0, len(replacement)
@@ -244,8 +264,10 @@ def expand(replacement: str, match: re.Match, trim: list[str]) -> str:
     """`replacement` with its references filled from `match`.
 
     `$1`..`$99`, `$<name>`, `$&` and `{{match}}` (the whole match), `$$` (a
-    literal `$`). A group that did not take part in the match is empty; one the
-    pattern does not have is left as written. `trim` strings are removed from
+    literal `$`). A group that did not take part in the match is empty; a
+    numbered one the pattern does not have is left as written, and so is
+    `$<name>` while the pattern has no named groups -- once it has some, a name
+    it lacks is empty. `trim` strings are removed from
     the matched text that `$&` / `{{match}}` substitute -- and only from that.
     """
     out: list[str] = []
@@ -253,6 +275,8 @@ def expand(replacement: str, match: re.Match, trim: list[str]) -> str:
     for kind, arg in _tokens(replacement, match.re):
         if kind in ("lit", "unknown"):
             out.append(str(arg))
+        elif kind == "missing":
+            continue
         elif kind == "match":
             if whole is None:
                 whole = match.group(0)
@@ -267,16 +291,18 @@ def expand(replacement: str, match: re.Match, trim: list[str]) -> str:
 
 def warnings(rule: dict) -> list[str]:
     """Things worth telling the author that do not stop a save: a replacement
-    naming a group the pattern does not have (left literal at run time)."""
+    naming a group the pattern does not have (left literal at run time, or
+    replaced with nothing -- see `expand`)."""
     try:
         pattern = compile_pattern(rule)
     except (re.error, RecursionError, OverflowError):
         return []
-    seen: list[str] = []
+    seen: dict[str, str] = {}
     for kind, arg in _tokens(rule["replacement"], pattern):
-        if kind == "unknown" and arg not in seen:
-            seen.append(str(arg))
+        if kind in ("unknown", "missing") and arg not in seen:
+            seen[str(arg)] = ("it is left as written" if kind == "unknown"
+                              else "it is replaced with nothing")
     return [
-        f"The replacement refers to {ref}, which the pattern has no group for; it is left as written."
-        for ref in seen
+        f"The replacement refers to {ref}, which the pattern has no group for; {fate}."
+        for ref, fate in seen.items()
     ]

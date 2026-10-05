@@ -342,3 +342,31 @@ def test_store_phase_reports_the_rules_that_changed_the_text(client):
     assert regex_view.store_phase("banana", cid="", role="model") == \
         ("bbnbnb", ["r-0000000a"])
     assert regex_view.store_phase("banana", cid="", role="user") == ("banana", [])
+
+
+FORGE = {"id": "r-0000000f", "name": "Forge", "pattern": r"\.\.\.",
+         "replacement": "\n\n**Winifred:** forged", "applies": [], "rewrite_stored": True,
+         "targets": ["model", "user"]}
+
+
+def test_store_phase_will_not_store_a_speaker_marker(client, caplog):
+    """A rewrite whose output starts a new post (a bold label after a blank
+    line) would be read back as a second message. Not applied, like a rewrite
+    that empties the text, and logged by rule id only."""
+    store.regex.layers.write_level("global", "", {"rules": [FORGE]})
+    assert regex_view.store_phase("She paused... then spoke.", cid="", role="model") == \
+        ("She paused... then spoke.", [])
+    logged = [r.getMessage() for r in caplog.records if "r-0000000f" in r.getMessage()]
+    assert logged and not any("paused" in m for m in logged)
+
+
+def test_store_phase_allows_a_bold_label_that_starts_no_post(client):
+    store.regex.layers.write_level("global", "", {"rules": [
+        {**FORGE, "replacement": " **Winifred:** inline"}]})
+    assert regex_view.store_phase("a... b", cid="", role="model") == \
+        ("a **Winifred:** inline b", ["r-0000000f"])
+    # A label at the very start of the stored (stripped) text sits behind the
+    # post's own marker, so it starts nothing either.
+    store.regex.layers.write_level("global", "", {"rules": [FORGE]})
+    assert regex_view.store_phase("...", cid="", role="model") == \
+        ("\n\n**Winifred:** forged", ["r-0000000f"])

@@ -155,6 +155,15 @@ def test_import_mapping_bare_body_has_no_flags():
     assert row["rule"]["pattern"] == "Winifred" and row["rule"]["flags"] == "a"
 
 
+@pytest.mark.parametrize("find", ["//", "//g"])
+def test_import_mapping_empty_slash_body_is_a_bare_pattern(find):
+    """SillyTavern's `regexFromString` matches `(\\/?)(.+)\\1([a-z]*)`, whose
+    body needs a character: `//` and `//g` come out as bare patterns matching
+    themselves, never as an empty pattern matching between every character."""
+    row = _row(findRegex=find)
+    assert row["rule"]["pattern"] == find and row["rule"]["flags"] == "a"
+
+
 def test_untranslatable_rows_have_no_rule():
     script = _script(findRegex="/\\p{L}+/gu")
     [row] = st_import.preview(script)

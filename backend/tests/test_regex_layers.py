@@ -3,6 +3,7 @@ they read (never raising), validate against what they inherit, and stack."""
 
 import json
 import logging
+import os
 
 import pytest
 
@@ -90,6 +91,19 @@ def test_a_rewritten_file_is_reread(home):
     assert layers.read_level("global")["rules"][0]["name"] == "Old"
     layers.write_level("global", "", {"rules": [_rule("Newer")]})
     assert layers.read_level("global")["rules"][0]["name"] == "Newer"
+
+
+def test_a_same_size_rewrite_with_its_mtime_restored_is_reread(home):
+    """A sync client or a restore can land a file of the same size with the
+    old mtime handed back. What identifies a version is its bytes."""
+    p = layers.path("global")
+    layers.write_level("global", "", {"rules": [_rule("Aaa")]})
+    assert layers.read_level("global")["rules"][0]["name"] == "Aaa"
+    st = p.stat()
+    p.write_text(p.read_text(encoding="utf-8").replace('"Aaa"', '"Bbb"'), encoding="utf-8")
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+    assert (p.stat().st_size, p.stat().st_mtime_ns) == (st.st_size, st.st_mtime_ns)
+    assert layers.read_level("global")["rules"][0]["name"] == "Bbb"
 
 
 def test_read_hands_back_a_copy(home):
@@ -217,12 +231,13 @@ def test_validate_prunes_unknown_off_id(home):
     assert out["off"] == ["r-1"]
 
 
-def test_validate_rejects_id_collision_with_inherited(home):
-    with pytest.raises(rules.RuleError) as exc:
-        layers.validate_doc({"rules": [_rule("A"), {**_rule("B"), "id": "r-1"}]},
-                            level="campaign", inherited_ids={"r-1"})
-    assert exc.value.index == 1
-    assert exc.value.field == "id"
+def test_validate_remints_an_id_that_collides_with_an_inherited_one(home):
+    out = layers.validate_doc({"rules": [_rule("A"), {**_rule("B"), "id": "r-1"}]},
+                              level="campaign", inherited_ids={"r-1"})
+    assert [r["name"] for r in out["rules"]] == ["A", "B"]
+    ids = [r["id"] for r in out["rules"]]
+    assert "r-1" not in ids and len(set(ids)) == 2
+    assert all(i.startswith("r-") for i in ids)
 
 
 def test_validate_rejects_duplicate_ids_and_reports_the_bad_index(home):
@@ -250,20 +265,37 @@ def test_validate_dedupes_off_and_mints_ids(home):
     assert out["rules"][0]["id"].startswith("r-")
 
 
-def test_write_campaign_validates_against_what_it_inherits(home):
+def test_write_campaign_remints_an_id_its_world_already_uses(home):
     wid, cid, _ = _stack(home)
     w = layers.read_level("world", wid)["rules"][0]
-    with pytest.raises(rules.RuleError):
-        layers.write_campaign(cid, {"rules": [{**_rule("Clash"), "id": w["id"]}]})
-    # A refused write leaves the file as it was.
-    assert _names(layers.effective(cid=cid)) == ["G", "W", "K"]
+    out = layers.write_campaign(cid, {"rules": [{**_rule("Clash"), "id": w["id"]}]})
+    assert out["rules"][0]["id"] != w["id"]
+    assert _names(layers.effective(cid=cid)) == ["G", "W", "Clash"]
+    ids = [e["rule"]["id"] for e in layers.effective(cid=cid)]
+    assert len(set(ids)) == len(ids)
 
 
-def test_write_world_validates_against_connections_and_global(home):
+def test_write_world_remints_an_id_global_already_uses(home):
     wid, _, _ = _stack(home)
     g = layers.read_level("global")["rules"][0]
-    with pytest.raises(rules.RuleError):
-        layers.write_level("world", wid, {"rules": [{**_rule("Clash"), "id": g["id"]}]})
+    out = layers.write_level("world", wid, {"rules": [{**_rule("Clash"), "id": g["id"]}]})
+    assert out["rules"][0]["id"] != g["id"]
+
+
+def test_an_upstream_rule_taking_a_lower_id_leaves_the_lower_level_saveable(home):
+    """A global rule written after a campaign rule can arrive under the same id
+    (a hand edit, a synced file): the campaign's next save must still land, and
+    `off` must still name one rule, so the campaign's own copy is re-minted."""
+    _, cid, _ = _stack(home)
+    k = layers.read_level("campaign", cid)["rules"][0]
+    g = layers.read_level("global")["rules"][0]
+    layers.write_level("global", "", {"rules": [g, {**_rule("Same id"), "id": k["id"]}]})
+    doc = layers.read_level("campaign", cid)
+    out = layers.write_level("campaign", cid, doc)
+    assert [r["name"] for r in out["rules"]] == ["K"]
+    assert out["rules"][0]["id"] != k["id"]
+    ids = [e["rule"]["id"] for e in layers.effective(cid=cid)]
+    assert len(set(ids)) == len(ids)
 
 
 def test_deleted_connection_contributes_nothing(home):
