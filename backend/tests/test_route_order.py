@@ -158,6 +158,11 @@ CROSSING_PAIRS = [
     # under it, and `mechanics` is included before `entities`, so sheets wins.
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
      "/api/campaigns/{cid}/{kind}/{eid}/library"),
+    # And again for `adopt-st`: `GET /campaigns/c/sheets/X/adopt-st` matches both,
+    # "sheets" is not an entity kind, so the adopt preview can never
+    # legitimately claim a URL under it, and sheets is included first.
+    ("/api/campaigns/{cid}/sheets/{kind}/{eid}",
+     "/api/campaigns/{cid}/{kind}/{eid}/adopt-st"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}/creation",
      "/api/campaigns/{cid}/{kind}/{eid}/images/{name}"),
     ("/api/campaigns/{cid}/sheets/{kind}/{eid}/advance",
