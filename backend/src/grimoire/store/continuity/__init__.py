@@ -16,8 +16,8 @@ guard forbids. Importers name the submodule they want:
 - ``doc`` -- continuity.json IO and its primitive mutators (the only writer).
 - ``canon`` -- ref grammar, alias-graph resolution, link/candidate ids and
   fingerprints.
-- ``effective`` -- the live resolver and the effective records/links every
-  current-state reader uses.
+- ``effective`` -- the live resolver, the effective records/links every
+  current-state reader uses, and the prompt-snippet renders.
 - ``involvement`` -- which actors and scenes a record has touched.
 - ``review`` -- validated, journalled alias and link writes.
 """
