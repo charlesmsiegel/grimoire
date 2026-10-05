@@ -30,7 +30,7 @@ Later slices (B–G) get their own plans. Nothing here switches a prompt, ledger
 
 ## Global Constraints
 
-- **Privacy:** test fixtures and docstrings use only the placeholder names Seraphine, Mara, Winifred, Realm and Saltmarch, or invented slugs (`missing-map`, `lost-chart`). No real store content.
+- **Privacy:** test fixtures and docstrings use only the placeholder names Seraphine, Mara, Winifred, Realm and Saltmarch, or invented slugs (`maras-map`, `winifreds-chart`). No real store content.
 - **Store writes:** every write goes through `store.atomic` (`test_atomic_guard`), and every path through `campaigns.paths.campaign_root(cid)` (`test_paths_guard`).
 - **JSON format:** `json.dumps(data, indent=2, sort_keys=True) + "\n"`.
 - **Imports inside `store/continuity/`:** all at module scope, with an acyclic graph. A cross-package import binds a *submodule*: `from ..campaigns import paths as campaigns_paths`, `from .. import scene_ids`, then `scene_ids.parse_sid(...)`. Never bind a function (`test_import_guard`).
@@ -378,13 +378,13 @@ def _merge_beats(members: list[list[dict]]) -> list[dict]:
 
 A canonical whose physical record is not a dict never appears as a live target, because `exists` is `False`. Its would-be members therefore stay visible.
 
-- [ ] **Step 1: Write the failing tests.** Fixtures use `store.plot.set_movement`, `store.commitments.set_movement`, `doc.put_alias` / `put_link`, and direct file writes for the hand-edited shapes. Scene ids are `001--saltmarch`, `002--tribunal` and `003--ferry`.
-  - `test_identity_law_threads`: the fixture has a status-only move to `003--ferry`, newer than every beat; beats appended out of scene order; a closed thread; a hand-edited `"status": "Closed"`; and a non-dict record. Assert `effective.threads(cid) == [dict(r, aliases=[]) for r in plot.open_threads(cid)]`, and the same with `include_closed=True`.
+- [ ] **Step 1: Write the failing tests.** Fixtures use `store.plot.set_movement`, `store.commitments.set_movement`, `doc.put_alias` / `put_link`, and direct file writes for the hand-edited shapes. Scene ids are `001--saltmarch`, `002--realm` and `003--winifred`.
+  - `test_identity_law_threads`: the fixture has a status-only move to `003--winifred`, newer than every beat; beats appended out of scene order; a closed thread; a hand-edited `"status": "Closed"`; and a non-dict record. Assert `effective.threads(cid) == [dict(r, aliases=[]) for r in plot.open_threads(cid)]`, and the same with `include_closed=True`.
   - `test_identity_law_commitments`: the same shape.
-  - `test_alias_hides_source_and_merges_beats`: `missing-map`, with beats at 001 and 003, aliased into `lost-chart`, with a beat at 002.
-    - The rows show one `lost-chart`, with `aliases == [{"ref": "thread:missing-map", ...}]`.
+  - `test_alias_hides_source_and_merges_beats`: `maras-map`, with beats at 001 and 003, aliased into `winifreds-chart`, with a beat at 002.
+    - The rows show one `winifreds-chart`, with `aliases == [{"ref": "thread:maras-map", ...}]`.
     - `latest_beat` is the 003 text.
-    - `records(...)["thread:lost-chart"]["beats"]` is in scene order 001, 002, 003.
+    - `records(...)["thread:winifreds-chart"]["beats"]` is in scene order 001, 002, 003.
   - `test_duplicate_beat_dropped_across_records_only`.
   - `test_uncomparable_beat_keeps_position_after_predecessor`.
   - `test_hand_edited_beat_shapes_tolerated`: `"beats": ["stray"]`, `"beats": {"x": 1}` and `{"scene": "001--saltmarch", "text": ["x"]}` in an aliased group. Nothing raises, and only the dict beats with text survive the merge.
@@ -395,8 +395,8 @@ A canonical whose physical record is not a dict never appears as a live target, 
   - `test_missing_target_degrades_source_to_own_record`: the Review Focus 4 case.
   - `test_cycle_degrades_both`: the Review Focus 1 case.
   - `test_wrong_type_and_non_dict_alias_records`: `thread:a → commitment:b` is reported as `wrong_type`, and `"thread:c": "thread:d"` as `malformed_record`. Neither merges anything.
-  - `test_non_dict_canonical_keeps_members_visible`: `lost-chart` is the string `"x"`. Alias `missing-map → lost-chart` leaves `missing-map` visible, and the alias is listed as `missing_target`.
-  - `test_empty_dict_record_exists`: `lost-chart` is `{}`. It counts as existing, and the alias into it is live.
+  - `test_non_dict_canonical_keeps_members_visible`: `winifreds-chart` is the string `"x"`. Alias `maras-map → winifreds-chart` leaves `maras-map` visible, and the alias is listed as `missing_target`.
+  - `test_empty_dict_record_exists`: `winifreds-chart` is `{}`. It counts as existing, and the alias into it is live.
   - `test_removing_alias_restores_two_records`.
   - `test_links_canonicalize_dedupe_and_hide`:
     - `thread:a pays_off commitment:x` and `thread:b pays_off commitment:x` both stored; after alias a→b, `links()` returns one, and the other is in `hidden_links` as `duplicate`.
@@ -448,7 +448,7 @@ A canonical whose physical record is not a dict never appears as a live target, 
 - [ ] **Step 1: Record the briefing tests green before the move.** Run `PYTHONPATH=src .venv/bin/python -m pytest tests/test_briefing_route.py -q`. Expected: PASS.
 - [ ] **Step 2: Move the two functions** (as public names with unchanged bodies) and point `briefing.build` at them. Re-run the same command. Expected: PASS, with no test file edited.
 - [ ] **Step 3: Write the failing tests**
-  - `test_of_unions_roster_and_chronicle`: `characters/mara` is in the chronicle cast of `001--saltmarch`, and `pcs/seraphine` is in the appearances roster for `002--tribunal`. A thread with beats in both scenes gives actors `["characters:mara", "pcs:seraphine"]`.
+  - `test_of_unions_roster_and_chronicle`: `characters/mara` is in the chronicle cast of `001--saltmarch`, and `pcs/seraphine` is in the appearances roster for `002--realm`. A thread with beats in both scenes gives actors `["characters:mara", "pcs:seraphine"]`.
   - `test_of_aggregates_alias_group`: the result is keyed by the ref that was asked for.
   - `test_of_includes_last_scene_without_beat`.
   - `test_of_tolerates_garbled_chronicle_and_appearances`: write `"{ no"` into the chronicle and into one appearances file. The surviving source's actors still appear, and nothing raises.
@@ -564,7 +564,7 @@ A canonical whose physical record is not a dict never appears as a live target, 
 
 - [ ] **Step 1: Write the failing tests**: one per refusal row in both tables, plus:
   - `test_create_alias_journals_and_undo_removes`;
-  - `test_liveness_mismatch_then_accept`: an open `missing-map` into a closed `lost-chart` is refused with 409 and accepted with `accept_status_change=True`;
+  - `test_liveness_mismatch_then_accept`: an open `maras-map` into a closed `winifreds-chart` is refused with 409 and accepted with `accept_status_change=True`;
   - `test_alias_to_an_alias_source_is_stored_as_given_and_judged_on_final_canonical`;
   - `test_affected_lists_transitive_sources`;
   - `test_replace_is_one_journal_row_restoring_previous`;

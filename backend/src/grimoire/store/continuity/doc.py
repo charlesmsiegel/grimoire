@@ -122,7 +122,7 @@ def _write(cid: str, data: dict) -> None:
 # The two helpers take no lock of their own: each public mutator below takes it,
 # so the lock sits on the entry point the domain guard surveys (a helper that
 # locked would read to it as an atomic unit and hide the caller's write).
-def _put(cid: str, section: str, key: str, record: dict) -> None:
+def _put(cid: str, section: str, key: str, record: object) -> None:
     data = _mutable(cid, section)
     data[section][key] = record
     _write(cid, data)
@@ -326,3 +326,49 @@ def restore_link(cid: str, lid: str, value) -> None:
                     "would duplicate it")
         data["links"][lid] = value
         _write(cid, data)
+
+
+# -------------------------------------------------------------- snapshots
+#
+# What `undo` compares and puts back. A record's VALUE cannot be the snapshot:
+# a hand-edited record may be JSON null, which reads exactly like "no record",
+# so deleting one would look like a no-op to the journal and undoing a
+# replacement would remove the key instead of putting the null back. The
+# snapshot says whether the key was there at all.
+
+
+def _snapshot(section: str, cid: str, key: str) -> dict:
+    stored = read(cid)[section]
+    return {"present": key in stored, "value": stored.get(key)}
+
+
+def alias_snapshot(cid: str, ref: str) -> dict:
+    return _snapshot("aliases", cid, ref)
+
+
+def link_snapshot(cid: str, lid: str) -> dict:
+    return _snapshot("links", cid, lid)
+
+
+def _restore_snapshot(cid: str, section: str, key: str, snap, validated) -> None:
+    if not isinstance(snap, dict):
+        raise ContinuityError("this change's record of what was there cannot be read")
+    if not snap.get("present"):
+        validated(cid, key, None)
+    elif isinstance(snap.get("value"), dict):
+        validated(cid, key, snap["value"])
+    else:
+        # A malformed record put back exactly as it was: validating it would
+        # refuse to restore what the file held, which is the whole job.
+        with locks.campaign_lock(cid):
+            _put(cid, section, key, snap.get("value"))
+
+
+def restore_alias_snapshot(cid: str, ref: str, snap) -> None:
+    with locks.campaign_lock(cid):
+        _restore_snapshot(cid, "aliases", ref, snap, restore_alias)
+
+
+def restore_link_snapshot(cid: str, lid: str, snap) -> None:
+    with locks.campaign_lock(cid):
+        _restore_snapshot(cid, "links", lid, snap, restore_link)

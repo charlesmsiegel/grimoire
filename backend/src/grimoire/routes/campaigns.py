@@ -456,11 +456,16 @@ def delete_campaign_event(cid: str, eid: str):
     reason: a link is keyed by ``event:<id>``, so one left behind would bind to a
     recreation of the same name and date a commitment against the wrong day. An
     event is never part of a merge, so only an unreadable ``links`` section can
-    stop that cleanup -- and then the delete still stands rather than refusing:
-    the links stay on disk, unreadable until the file is repaired.
+    stop that cleanup -- and then the delete is refused before anything is
+    written, like a thread's: once the id is free, a link nobody could remove
+    would attach to whatever is created under it next.
     """
     _campaign_root_or_404(cid)
     with store.locks.campaign_lock(cid):
+        if set(continuity_doc.malformed(cid)) & {"file", "links"}:
+            raise HTTPException(status_code=409, detail={
+                "kind": "malformed",
+                "detail": "continuity.json cannot be read; repair it before deleting events"})
         stored = store.events.read(cid).get(eid)
         name = str(stored.get("name") or "") if isinstance(stored, dict) else ""
         try:
@@ -474,8 +479,7 @@ def delete_campaign_event(cid: str, eid: str):
         # that actually landed as an error.
         with contextlib.suppress(store.notices.NoticeError):
             store.notices.forget_event(cid, eid)
-        with contextlib.suppress(continuity_doc.ContinuityError):
-            continuity_review.forget_ref(cid, f"event:{eid}", name=name)
+        continuity_review.forget_ref(cid, f"event:{eid}", name=name)
     return {"ok": True}
 
 

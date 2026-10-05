@@ -159,11 +159,11 @@ def build(cid: str, sid: str) -> dict:
                  for a in focus}
         stage = _tolerant(lambda: involvement.stage_history(cid, set(names)), {})
         # Two reads of one file, both inside the hold: `open_threads` projects
-        # the rows and `_touched_scenes` needs the beats it drops.
+        # the rows and `involvement.touched_scenes` needs the beats it drops.
         #
         # Guarded SEPARATELY, though, because they do not fail together. A file
         # that will not parse takes both, and the section is empty either way.
-        # But `_touched_scenes` can fail on data the projection reads fine --
+        # But `involvement.touched_scenes` can fail on data the projection reads fine --
         # some shape neither of them anticipated -- and pairing them would let
         # that cost every row in the section rather than every flag. Losing the
         # narrowing is this view degrading; losing the obligations is it lying.

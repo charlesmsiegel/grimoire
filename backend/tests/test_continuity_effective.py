@@ -23,7 +23,7 @@ from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import doc, effective
 
-S1, S2, S3 = "001--saltmarch", "002--tribunal", "003--ferry"
+S1, S2, S3 = "001--saltmarch", "002--realm", "003--winifred"
 
 
 @pytest.fixture
@@ -77,12 +77,12 @@ def _plot_raw(cid, data):
 def test_identity_law_threads(cid):
     # Beats appended out of scene order, and a status-only move newer than
     # every beat -- the two reasons a "tidier" projection would differ.
-    _thread(cid, "missing-map", "The missing map", "advanced",
+    _thread(cid, "maras-map", "Mara's map", "advanced",
             beats=[(S2, "Mara found a page."), (S1, "The map was stolen.")], last=S3)
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "Winifred lost it.")])
-    _thread(cid, "old-feud", "The old feud", "closed", beats=[(S1, "It ended.")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S1, "Winifred lost it.")])
+    _thread(cid, "realm-feud", "The Realm feud", "closed", beats=[(S1, "It ended.")])
     data = store.plot.read(cid)
-    data["shouting"] = dict(data["old-feud"], status="Closed")
+    data["shouting"] = dict(data["realm-feud"], status="Closed")
     data["garbage"] = "not a record"
     _plot_raw(cid, data)
     for include in (False, True):
@@ -104,75 +104,75 @@ def test_identity_law_commitments(cid):
 
 
 def test_alias_hides_source_and_merges_beats(cid):
-    _thread(cid, "missing-map", "The missing map", "open",
+    _thread(cid, "maras-map", "Mara's map", "open",
             beats=[(S1, "The map was stolen."), (S3, "Mara traced the thief.")])
-    _thread(cid, "lost-chart", "The lost chart", "advanced", beats=[(S2, "Winifred lost it.")])
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
+    _thread(cid, "winifreds-chart", "Winifred's chart", "advanced", beats=[(S2, "Winifred lost it.")])
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
     rows = effective.threads(cid)
-    assert [r["id"] for r in rows] == ["lost-chart"]
+    assert [r["id"] for r in rows] == ["winifreds-chart"]
     row = rows[0]
-    assert row["aliases"] == [{"ref": "thread:missing-map", "title": "The missing map",
+    assert row["aliases"] == [{"ref": "thread:maras-map", "title": "Mara's map",
                                "status": "open"}]
     assert row["latest_beat"] == "Mara traced the thief."
     assert row["last_scene"] == S3
     assert row["status"] == "advanced"
-    rec = effective.records(cid, "thread")["thread:lost-chart"]
+    rec = effective.records(cid, "thread")["thread:winifreds-chart"]
     assert [b["scene"] for b in rec["beats"]] == [S1, S2, S3]
-    assert rec["members"] == ["lost-chart", "missing-map"]
+    assert rec["members"] == ["winifreds-chart", "maras-map"]
 
 
 def test_duplicate_beat_dropped_across_records_only(cid):
-    _thread(cid, "missing-map", "The missing map", "open",
+    _thread(cid, "maras-map", "Mara's map", "open",
             beats=[(S1, "The map was stolen.")])
-    _thread(cid, "lost-chart", "The lost chart", "open",
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open",
             beats=[(S1, "The map was stolen."), (S2, "Again."), (S2, "Again.")])
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
-    beats = effective.records(cid, "thread")["thread:lost-chart"]["beats"]
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    beats = effective.records(cid, "thread")["thread:winifreds-chart"]["beats"]
     assert [(b["scene"], b["text"]) for b in beats] == [
         (S1, "The map was stolen."), (S2, "Again."), (S2, "Again.")]
 
 
 def test_uncomparable_beat_keeps_position_after_predecessor(cid):
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "One."), (S3, "Three.")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S1, "One."), (S3, "Three.")])
     data = store.plot.read(cid)
-    data["missing-map"] = {"title": "The missing map", "status": "open", "last_scene": S2,
+    data["maras-map"] = {"title": "Mara's map", "status": "open", "last_scene": S2,
                            "beats": [{"scene": S2, "text": "Two."},
                                      {"scene": "", "text": "Two and a half."}]}
     _plot_raw(cid, data)
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
-    beats = effective.records(cid, "thread")["thread:lost-chart"]["beats"]
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    beats = effective.records(cid, "thread")["thread:winifreds-chart"]["beats"]
     assert [b["text"] for b in beats] == ["One.", "Two.", "Two and a half.", "Three."]
 
 
 def test_hand_edited_beat_shapes_tolerated(cid):
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "One.")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S1, "One.")])
     data = store.plot.read(cid)
-    data["missing-map"] = {"title": "The missing map", "status": "open", "last_scene": S2,
+    data["maras-map"] = {"title": "Mara's map", "status": "open", "last_scene": S2,
                            "beats": ["stray", {"scene": S2, "text": ["x"]},
                                      {"scene": S2, "text": "Two."}]}
-    data["torn-map"] = {"title": "The torn map", "status": "open", "beats": {"x": 1}}
+    data["seraphines-map"] = {"title": "Seraphine's map", "status": "open", "beats": {"x": 1}}
     _plot_raw(cid, data)
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
-    _alias(cid, "thread:torn-map", "thread:lost-chart")
-    rec = effective.records(cid, "thread")["thread:lost-chart"]
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    _alias(cid, "thread:seraphines-map", "thread:winifreds-chart")
+    rec = effective.records(cid, "thread")["thread:winifreds-chart"]
     assert [b.get("text") for b in rec["beats"]] == ["One.", ["x"], "Two."]
     assert effective.threads(cid)[0]["latest_beat"] == "Two."
 
 
 def test_effective_last_scene_includes_status_only_moves(cid):
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "One.")])
-    _thread(cid, "missing-map", "The missing map", "open", beats=[(S1, "Also one.")], last=S3)
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S1, "One.")])
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S1, "Also one.")], last=S3)
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
     assert effective.threads(cid)[0]["last_scene"] == S3
 
 
 def test_canonical_status_is_authoritative_and_filters(cid):
-    _thread(cid, "lost-chart", "The lost chart", "closed", beats=[(S1, "Ended.")])
-    _thread(cid, "missing-map", "The missing map", "open", beats=[(S2, "Still going.")])
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
+    _thread(cid, "winifreds-chart", "Winifred's chart", "closed", beats=[(S1, "Ended.")])
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S2, "Still going.")])
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
     assert effective.threads(cid) == []
     closed = effective.threads(cid, include_closed=True)
-    assert [(r["id"], r["status"]) for r in closed] == [("lost-chart", "closed")]
+    assert [(r["id"], r["status"]) for r in closed] == [("winifreds-chart", "closed")]
 
 
 def test_transitive_alias_merges_into_final_target(cid):
@@ -198,12 +198,12 @@ def test_chain_with_missing_tail_stops_at_last_valid_hop(cid):
 
 
 def test_missing_target_degrades_source_to_own_record(cid):
-    _thread(cid, "missing-map", "The missing map", "open", beats=[(S1, "One.")])
-    _alias(cid, "thread:missing-map", "thread:gone")
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S1, "One.")])
+    _alias(cid, "thread:maras-map", "thread:gone")
     assert effective.live_canon(cid) == {}
-    assert [r["id"] for r in effective.threads(cid)] == ["missing-map"]
+    assert [r["id"] for r in effective.threads(cid)] == ["maras-map"]
     assert effective.diagnostics(cid)["dangling_aliases"] == [
-        {"ref": "thread:missing-map", "to": "thread:gone", "reason": "missing_target"}]
+        {"ref": "thread:maras-map", "to": "thread:gone", "reason": "missing_target"}]
 
 
 def test_cycle_degrades_both(cid):
@@ -233,40 +233,40 @@ def test_wrong_type_and_non_dict_alias_records(cid):
 
 
 def test_non_dict_canonical_keeps_members_visible(cid):
-    _thread(cid, "missing-map", "The missing map", "open", beats=[(S1, "One.")])
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S1, "One.")])
     data = store.plot.read(cid)
-    data["lost-chart"] = "x"
+    data["winifreds-chart"] = "x"
     _plot_raw(cid, data)
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
     assert effective.live_canon(cid) == {}
-    assert [r["id"] for r in effective.threads(cid)] == ["missing-map"]
+    assert [r["id"] for r in effective.threads(cid)] == ["maras-map"]
     assert effective.diagnostics(cid)["dangling_aliases"][0]["reason"] == "missing_target"
 
 
 def test_missing_source_is_reported(cid):
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "One.")])
-    _alias(cid, "thread:gone", "thread:lost-chart")
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S1, "One.")])
+    _alias(cid, "thread:gone", "thread:winifreds-chart")
     assert effective.live_canon(cid) == {}
     assert effective.diagnostics(cid)["dangling_aliases"] == [
-        {"ref": "thread:gone", "to": "thread:lost-chart", "reason": "missing_source"}]
+        {"ref": "thread:gone", "to": "thread:winifreds-chart", "reason": "missing_source"}]
 
 
 def test_empty_dict_record_exists(cid):
-    _thread(cid, "missing-map", "The missing map", "open", beats=[(S1, "One.")])
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S1, "One.")])
     data = store.plot.read(cid)
-    data["lost-chart"] = {}
+    data["winifreds-chart"] = {}
     _plot_raw(cid, data)
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
-    assert effective.live_canon(cid) == {"thread:missing-map": "thread:lost-chart"}
-    assert [r["id"] for r in effective.threads(cid)] == ["lost-chart"]
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    assert effective.live_canon(cid) == {"thread:maras-map": "thread:winifreds-chart"}
+    assert [r["id"] for r in effective.threads(cid)] == ["winifreds-chart"]
 
 
 def test_removing_alias_restores_two_records(cid):
-    _thread(cid, "missing-map", "The missing map", "open", beats=[(S1, "One.")])
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S2, "Two.")])
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
+    _thread(cid, "maras-map", "Mara's map", "open", beats=[(S1, "One.")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S2, "Two.")])
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
     assert len(effective.threads(cid)) == 1
-    doc.drop_alias(cid, "thread:missing-map")
+    doc.drop_alias(cid, "thread:maras-map")
     assert effective.threads(cid) == [dict(r, aliases=[]) for r in store.plot.open_threads(cid)]
 
 
@@ -350,26 +350,26 @@ def test_garbled_plot_existence_unknown(cid):
 
 
 def test_leading_unscened_alias_beat_follows_its_stored_predecessor(cid):
-    _thread(cid, "lost-chart", "The lost chart", "open", beats=[(S1, "c1"), (S3, "c3")])
+    _thread(cid, "winifreds-chart", "Winifred's chart", "open", beats=[(S1, "c1"), (S3, "c3")])
     data = store.plot.read(cid)
-    data["missing-map"] = {"title": "The missing map", "status": "open", "last_scene": S2,
+    data["maras-map"] = {"title": "Mara's map", "status": "open", "last_scene": S2,
                            "beats": [{"scene": "", "text": "m-unscened"},
                                      {"scene": S2, "text": "m2"}]}
-    data["torn-map"] = {"title": "The torn map", "status": "open", "last_scene": "",
+    data["seraphines-map"] = {"title": "Seraphine's map", "status": "open", "last_scene": "",
                         "beats": [{"scene": "", "text": "t-unscened"}]}
     _plot_raw(cid, data)
-    _alias(cid, "thread:missing-map", "thread:lost-chart")
-    _alias(cid, "thread:torn-map", "thread:lost-chart")
-    beats = effective.records(cid, "thread")["thread:lost-chart"]["beats"]
+    _alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    _alias(cid, "thread:seraphines-map", "thread:winifreds-chart")
+    beats = effective.records(cid, "thread")["thread:winifreds-chart"]["beats"]
     # In the concatenation the merge sorts, m-unscened follows c3 (the
-    # canonical's last beat) and t-unscened follows m2 (missing-map's last).
+    # canonical's last beat) and t-unscened follows m2 (maras-map's last).
     assert [b["text"] for b in beats] == ["c1", "m2", "t-unscened", "c3", "m-unscened"]
     assert effective.threads(cid)[0]["latest_beat"] == "m-unscened"
 
 
 def test_garbled_events_is_unknown_not_missing(cid):
     _commitment(cid, "x", "X", beats=[(S1, "x.")])
-    eid = store.events.create(cid, "The Tribunal", "2026-05-09", "")
+    eid = store.events.create(cid, "The coronation", "2026-05-09", "")
     _link(cid, "l1", "commitment:x", f"event:{eid}", "before")
     store.events._path(cid).write_text("{ no", encoding="utf-8")
     diag = effective.diagnostics(cid)

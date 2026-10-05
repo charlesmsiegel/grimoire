@@ -45,7 +45,7 @@ def test_split_ref_uses_first_colon():
 def test_ref_kind_and_prefix_tables_are_inverse():
     assert canon.ref_kind("characters:mara") == "character"
     assert canon.ref_kind("locations:saltmarch") == "location"
-    assert canon.ref_kind("thread:missing-map") == "thread"
+    assert canon.ref_kind("thread:maras-map") == "thread"
     with pytest.raises(ValueError):
         canon.ref_kind("place:saltmarch")
     assert {v: k for k, v in canon.KIND_OF_PREFIX.items()} == canon.PREFIX_OF_KIND
@@ -110,16 +110,16 @@ def test_candidate_id_order_independent():
 
 
 def test_pair_fingerprint_ignores_side_order_and_beats():
-    one = {"ref": "thread:a", "title": "The missing map", "status": "open",
+    one = {"ref": "thread:a", "title": "Mara's map", "status": "open",
            "kind": "", "due": "", "latest_beat": "Mara found a page."}
-    two = {"ref": "thread:b", "title": "The lost chart", "status": "advanced"}
+    two = {"ref": "thread:b", "title": "Winifred's chart", "status": "advanced"}
     fp = canon.pair_fingerprint("possible_duplicate", [one, two])
     assert fp.startswith("fp1_")
     assert fp == canon.pair_fingerprint("possible_duplicate", [two, one])
     assert fp == canon.pair_fingerprint(
         "possible_duplicate", [dict(one, latest_beat="Something else."), two])
     assert fp != canon.pair_fingerprint(
-        "possible_duplicate", [dict(one, title="The torn map"), two])
+        "possible_duplicate", [dict(one, title="Seraphine's map"), two])
 
 
 def test_lifecycle_fingerprint_has_no_last_scene():
