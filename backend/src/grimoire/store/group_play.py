@@ -166,25 +166,32 @@ def _list_sequence(settings: dict, avail: list[dict]) -> list[str]:
     return (head + rest) or [GRIMOIRE]
 
 
-def _natural_sequence(settings: dict, avail: list[dict], text: str,
-                      history: list[dict], rng: random.Random) -> list[str]:
+def _natural_sequence(settings: dict, avail: list[dict], text: str, history: list[dict],
+                      rng: random.Random, author: str | None = None) -> list[str]:
     if not avail:
         return [GRIMOIRE]
-    named = _named(text, avail)
+    # A character naming themselves does not summon themselves.
+    named = [r for r in _named(text, avail) if r != author]
     rest = [e["ref"] for e in avail if e["ref"] not in named]
     rng.shuffle(rest)
     order = named + [r for r in rest if rng.random() * 100 < _talk(settings, r)]
-    return order or [_by_silence(avail, history)[0]]
+    if order:
+        return order
+    others = [e for e in avail if e["ref"] != author] or avail
+    return [_by_silence(others, history)[0]]
 
 
-def _directed(settings: dict, avail: list[dict], trigger: str, history: list[dict],
-              rng: random.Random, force: tuple[str, ...]) -> list[dict]:
-    named = set(_named(trigger, avail))
+def _directed(settings: dict, roster: list[dict], avail: list[dict], trigger: str,
+              history: list[dict], rng: random.Random, force: tuple[str, ...],
+              author: str | None) -> list[dict]:
+    named = set(_named(trigger, avail)) - {author}
     # Every available entry rolls, named or not, so the draw count depends on
     # the cast alone and a seeded rng reads the same however the post words it.
     rolls = {e["ref"]: rng.random() * 100 < _talk(settings, e["ref"]) for e in avail}
-    eligible = [e for e in avail
-                if e["ref"] in named or e["ref"] in force or rolls[e["ref"]]]
+    # An explicit pick wins over sitting out: a forced ref stays eligible.
+    eligible = [e for e in roster
+                if e["ref"] in force
+                or (e["ref"] in rolls and (e["ref"] in named or rolls[e["ref"]]))]
     if eligible or not avail:
         return eligible
     silence = _by_silence(avail, history)
@@ -193,13 +200,17 @@ def _directed(settings: dict, avail: list[dict], trigger: str, history: list[dic
 
 
 def plan_post(settings: dict, roster: list[dict], *, trigger: str, history: list[dict],
-              rng: random.Random, force: tuple[str, ...] = ()) -> dict:
+              rng: random.Random, force: tuple[str, ...] = (),
+              author: str | None = None) -> dict:
     """The speakers for an automatic round answering a player post.
 
     `{"mode", "eligible", "actor_ref", "plan"}`. Directed and Manual name no
     actor: Directed hands the selector a filtered `eligible`, Manual generates
     nothing. List and Natural name the lead (`actor_ref`) and the refs after it
     (`plan`), with `force` refs removed because the caller supplies that lead.
+    `author` is whoever wrote the trigger text (a character, in an auto round);
+    their own name in it never counts as naming them. A `force` ref stays
+    eligible under Directed even while sitting out.
     """
     mode = settings["order"]
     avail = available(settings, roster)
@@ -207,11 +218,12 @@ def plan_post(settings: dict, roster: list[dict], *, trigger: str, history: list
         return {"mode": mode, "eligible": roster, "actor_ref": None, "plan": []}
     if mode == "directed":
         return {"mode": mode, "actor_ref": None, "plan": [],
-                "eligible": _directed(settings, avail, trigger, history, rng, force)}
+                "eligible": _directed(settings, roster, avail, trigger, history, rng,
+                                      force, author)}
     if mode == "list":
         order = _list_sequence(settings, avail)
     else:
-        order = _natural_sequence(settings, avail, trigger, history, rng)
+        order = _natural_sequence(settings, avail, trigger, history, rng, author)
     order = [r for r in order if r not in force]
     return {"mode": mode, "eligible": roster,
             "actor_ref": order[0] if order else None, "plan": order[1:]}
@@ -230,8 +242,15 @@ def plan_continue(settings: dict, roster: list[dict], *, last: dict | None,
     if mode == "list":
         seq = _list_sequence(settings, avail)
         ref = last.get("ref") if last else None
-        if ref in seq:
-            return seq[(seq.index(ref) + 1) % len(seq)]
+        # Anchor in the full configured order, so a last speaker who has since
+        # sat out still has a place to continue from.
+        full = list(dict.fromkeys(settings["order_list"] + [e["ref"] for e in roster]))
+        if ref in full:
+            ok = set(seq)
+            for i in range(1, len(full) + 1):
+                cand = full[(full.index(ref) + i) % len(full)]
+                if cand in ok:
+                    return cand
         return seq[0]
     if mode == "natural":
         # Never the speaker of that contribution, and never counted as named
