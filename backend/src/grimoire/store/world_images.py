@@ -127,6 +127,7 @@ def put_image(wid: str, name: str, data: bytes, ext: str) -> str:
         raise ValueError("image name cannot be used in a link")
     with locks.image_collection_lock(wid):
         image_collections.guard_write(wid, name, data)
+        image_collections.check_member_name(wid, name, data)
         return assets.put_in(images_dir(wid), name, data, ext, supported_only=True)
 
 

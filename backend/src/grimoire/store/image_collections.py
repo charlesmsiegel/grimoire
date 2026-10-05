@@ -117,6 +117,22 @@ def guard_write(wid: str, name: str, data: bytes | None = None) -> None:
     raise ImageInCollectionError("image is a member of an image collection")
 
 
+def check_member_name(wid: str, name: str, data: bytes) -> None:
+    """Refuse a world-library write whose name claims to be a collection member
+    but is not the hash of the bytes as received.
+
+    Only for a name no collection references yet: once published, `guard_write`
+    is the rule, and it admits the same pixels under other metadata.
+
+    `publish` trusts a placement as the member's identity and skips the byte
+    hash, so the name must never be fileable over other pixels through the
+    ordinary write path. `put_member` links directly and is not subject to it.
+    """
+    lowered = name.casefold()
+    if _MEMBER.fullmatch(lowered) and not referenced(wid, name) and lowered != MEMBER_PREFIX + hashlib.sha256(data).hexdigest():
+        raise CollectionInvalidError("collection member names are reserved for their own bytes")
+
+
 def put_member(wid: str, data: bytes) -> str:
     image_library.validate_size(data)
     try:

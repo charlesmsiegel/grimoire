@@ -1,3 +1,4 @@
+import hashlib
 import io
 import uuid
 
@@ -105,6 +106,24 @@ def test_pixel_duplicate_reupload_does_not_trip_guard(client):
         return client.put(url, files={'file': ('x.png', data, 'image/png')})
 
     assert png_dpi(72) != png_dpi(144)
+
+    def stored_pixel():
+        body = client.get(url).content
+        return Image.open(io.BytesIO(body)).convert('RGB').getpixel((0, 0))
+
+    assert stored_pixel() == (255, 0, 0)
     assert put(png_dpi(144)).status_code == 200  # same pixels, other pHYs
+    assert stored_pixel() == (255, 0, 0)
     r = put(png_dpi(72, 'blue'))
     assert r.status_code == 409 and r.json()['detail'] == 'image_in_collection'
+    assert stored_pixel() == (255, 0, 0)
+
+
+def test_a_member_name_cannot_be_filed_over_other_pixels(client):
+    wid = worlds.create_world('Realm')
+    name = collections.MEMBER_PREFIX + hashlib.sha256(png('red')).hexdigest()
+    url = f'/api/worlds/{wid}/images/{name}'
+    r = client.put(url, files={'file': ('x.png', png('blue'), 'image/png')})
+    assert r.status_code == 400
+    assert world_images.image_path(wid, name) is None
+    assert client.put(url, files={'file': ('x.png', png('red'), 'image/png')}).status_code == 200

@@ -162,6 +162,31 @@ def test_guard_write_compares_identity_for_ref_members(wid):
         collections.guard_write(wid, name, png('blue'))
     with pytest.raises(collections.ImageInCollectionError):
         collections.guard_write(wid, name)
+    # An accepted same-pixels write through the store leaves the member intact.
+    d = collections.image_directory(wid)
+    before = assets.resolve(d, name).image_id
+    world_images.put_image(wid, name, png_dpi(144), 'png')
+    after = assets.resolve(d, name)
+    assert after.image_id == before
+    assert Image.open(after.blob_path).convert('RGB').getpixel((0, 0)) == (255, 0, 0)
+
+
+def test_a_member_name_is_not_fileable_over_other_pixels(wid):
+    name = collections.MEMBER_PREFIX + hashlib.sha256(png('red')).hexdigest()
+    d = collections.image_directory(wid)
+    with pytest.raises(collections.CollectionInvalidError):
+        world_images.put_image(wid, name, png('blue'), 'png')
+    assert assets.resolve(d, name) is None and world_images.image_path(wid, name) is None
+    assert world_images.put_image(wid, name, png('red'), 'png') == 'png'
+    collections.publish(wid, uuid.uuid4().hex, [name])
+    # Same bytes as received under a member's name is the member's own write.
+    assert collections.put_member(wid, png('red')) == name
+
+
+def test_a_member_alias_in_other_case_is_refused_too(wid):
+    name = collections.MEMBER_PREFIX + hashlib.sha256(png('red')).hexdigest()
+    with pytest.raises(collections.CollectionInvalidError):
+        world_images.put_image(wid, name.upper(), png('blue'), 'png')
 
 
 def _plant_legacy(wid, data):
