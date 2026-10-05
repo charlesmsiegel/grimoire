@@ -169,6 +169,8 @@ One action may change multiple pieces of state.
 
 A crash may not leave half of an action applied with no way to explain/recover it.
 
+That includes the roll. Once a check has selected an outcome, the roll is durable before any effect lands (§13.1), so recovery finishes the action it recorded and never rolls it again.
+
 Mechanics II therefore needs a transaction record rather than a series of unrelated sheet PUTs.
 
 ## 4.7 Audit becomes verification, not ordinary mutation
@@ -310,6 +312,21 @@ Targets:
 
 Fields must exist on the addressed sheet and have compatible field types.
 
+### Multi-target fan-out
+
+An action may let the actor select more than one target (targets.max > 1). The selector stays singular; it fans out deterministically:
+
+- an effect template whose selector is `target` is expanded once per selected target, in selection order — the order of the accepted proposal's `targets` list;
+- each expansion is resolved independently: its field is checked against that target's sheet, its amount is evaluated in that target's scope (§8), and it is validated against that target's current state;
+- an `actor` effect is applied once, however many targets were selected;
+- concrete operations are ordered by template order, then by selection order within a template, and each is computed against the running state the earlier operations of the same transaction produced, so two operations on one field chain rather than both reading the original value;
+- if any expansion fails validation, the whole action is rejected; there is no partial fan-out;
+- a selection naming the same target twice is rejected.
+
+A non-contested check is the actor's check against static inputs, so it is rolled **once**: its single outcome tier selects one outcome branch, and that branch fans out across every selected target. Contested checks (II-D) roll per side, and in v1 a contest takes exactly one target (§18.5).
+
+This was chosen over limiting II-A to one target because the rest of the substrate is already plural — the proposal, resolution object and transaction all carry a `targets` list and per-target operations — and a single roll fanned out is the whole of what a non-contested check can mean. The per-target question only becomes hard once each target rolls too, which is why it is confined to contests and deferred there.
+
 ### set
 
 Assign a validated value.
@@ -374,7 +391,7 @@ An effect amount may be:
 
 Evaluation scope should be deliberately narrow.
 
-For an effect applied to a sheet target, include:
+For an effect applied to a sheet target, include (for a fanned-out `target` effect, the one target that expansion addresses — §7):
 
 - that target's numeric sheet fields;
 - that target's derived values;
@@ -562,21 +579,36 @@ Conceptual transaction:
 
 Do not log private prose beyond labels/ids already represented in campaign data. This is campaign-private state, not generic logs.
 
-## 13.1 Prepare/apply/commit
+status is prepared, committed or rejected (§13.1). resolution carries the roll result and the selected outcome tier from the moment the transaction is first written.
 
-Because one action may touch multiple files, application needs recovery semantics.
+## 13.1 Roll/record/apply/commit
 
-Recommended pattern:
+Because one action may touch multiple files, application needs recovery semantics — and because the roll is random, the roll has to be part of what is recovered rather than something recovery recomputes.
 
-1. Under campaign lock, resolve and validate all effects against current state.
-2. Construct full transaction including before/after and expected source generations.
-3. Persist transaction as prepared.
-4. Apply each concrete operation idempotently.
-5. Mark transaction committed.
-6. Only then project/narrate the resolved proposal.
+Today a check proposal's roll becomes durable at one CAS: `proposals.claim` moves the record `pending -> resolving`, `checks.resolve_check` rolls in memory, and the `resolving -> resolved` transition stores the resolution carrying the result (`RESOLUTION_EDGES`). A crash before that CAS loses a roll nobody saw, which is why the `resolving -> pending` revert is safe there. An action must keep that property while adding effects, so its roll is written down before anything is applied.
+
+Required pattern, all under one campaign lock hold:
+
+1. Claim the proposal (`pending -> resolving`) and validate actor, targets and every cost against current state (§26). A failure here has rolled nothing; the existing revert hands the proposal back.
+2. Resolve the random check in memory (or skip it for a no-roll action) and select the outcome branch.
+3. Resolve every cost and outcome template to concrete operations, with before/after values and expected source generations, validating each against current state.
+4. **Record.** Persist the transaction as prepared, in one atomic write carrying the roll result, the selected outcome tier and every resolved operation. This is the transition that makes the roll exist, and it lands before any effect is applied.
+5. Apply each concrete operation idempotently.
+6. Mark the transaction committed.
+7. Move the proposal `resolving -> resolved` with a resolution naming the transaction, then project the roll (`proposals.project`, idempotent by proposal tag through `rolls.find_or_append_by_proposal`) and narrate.
+
+Nothing is written or shown between steps 2 and 4, so a crash before step 4 leaves a resolving proposal and no transaction: no one observed the roll, and the phase-4 path (revert or supersede, then a fresh accept rolls fresh) stays sound. From step 4 on, the recorded roll is the only roll:
+
+- the `resolving -> pending` revert is refused for a proposal a transaction names, checked under the same lock as the CAS; taking it would hand back a chip whose re-accept rolls again;
+- a retry or double-accept of a resolving proposal that a prepared transaction names finishes that transaction from its record and continues at step 7, instead of answering 409 "adjudication in progress";
+- `proposals.heal`, which `supersede` and `new` already call before retiring or replacing a record (#242), also completes a prepared transaction naming that record, so retirement never outruns a recorded roll. The roll stands as history, as a superseded resolved roll does today, and no continuation is offered;
+- a committed transaction whose proposal is still resolving needs only step 7.
+
+If step 3 rejects the selected outcome after the roll — an amount expression out of range, a target field that no longer fits — the roll is still recorded. The transaction is persisted as rejected, with the roll, the tier and the reason and no operations; nothing is applied; and the proposal resolves carrying that rejection, so the roll is projected like any other. Reverting to pending instead would let a reader re-accept until some roll's outcome validated.
 
 If a crash occurs with a prepared transaction:
 
+- recovery takes the roll, tier and operations from the transaction and never calls resolve_check again;
 - recovery determines which operations landed;
 - completes idempotently if current state still matches either before or intended after;
 - refuses/flags if external mutation makes safe recovery impossible.
@@ -833,6 +865,12 @@ Each side's active conditions modify only its own check unless a condition expli
 
 Keep v1 contest scope understandable.
 
+## 18.5 One target per contest in v1
+
+A contest action must declare targets.max of 1; module validation rejects anything else. One contest is one actor roll against one target roll, and its one outcome branch is applied as in §7.
+
+Multi-target contests are deliberate later work (§37). They have to answer questions II-A's fan-out does not: whether the actor rolls once against every defender or once per defender, and how actor effects compose when several targets each produce their own outcome tier.
+
 ---
 
 # 19. Encounter/round structure — Mechanics II-E, deliberately later
@@ -1050,6 +1088,7 @@ Action:
 - unknown check;
 - invalid target kind;
 - min/max target nonsense;
+- contest action with targets.max other than 1 (II-D, §18.5);
 - unknown rule;
 - unknown outcome tier;
 - invalid effect op;
@@ -1072,6 +1111,7 @@ Clock template:
 Runtime validation handles things pack validation cannot know:
 
 - actual target has appropriate sheet;
+- selected target count within min/max, with no target named twice;
 - resource balance;
 - target still present/existing if presence is required;
 - target field current value;
@@ -1090,9 +1130,11 @@ A cost must be payable **before** random resolution.
 The engine should:
 
 1. validate every cost;
-2. reserve/prepare transaction;
-3. resolve random check;
+2. resolve random check;
+3. record the roll, the selected outcome and the resolved cost and outcome operations as a prepared transaction (§13.1), before any of them is applied;
 4. apply cost and outcome effects under the same transaction protocol.
+
+Nothing durable is written between cost validation and the roll. The transaction is first persisted with its roll already in it, so no prepared transaction ever exists whose roll recovery would have to make up.
 
 If the check itself fails, costs normally still apply unless action schema explicitly defines refundable behavior later.
 
@@ -1219,8 +1261,14 @@ Required scenarios:
 - double-accept same action proposal -> one roll, one transaction, one narration;
 - lost response then retry -> replay same resolved transaction;
 - action superseded before resolution -> no effects;
-- crash after prepared record before first effect -> recovery applies once;
+- crash after the check resolved but before the prepared record -> no transaction, no effects; the proposal reverts or is superseded, and a fresh accept rolls fresh;
+- crash after prepared record before first effect -> recovery applies once, using the recorded roll; fake dice assert resolve_check is not called again;
 - crash after first of several effects -> recovery finishes remaining operations exactly once;
+- revert of a resolving proposal named by a prepared transaction is refused;
+- retry or double-accept of a resolving proposal with a prepared transaction finishes it rather than answering 409;
+- supersede of a resolving proposal with a prepared transaction completes the transaction and projects its roll first;
+- outcome rejected after the roll -> rejected transaction records the roll; re-accepting cannot roll again;
+- multi-target action -> one roll, the target branch applied to each target in selection order; a crash after the first target's operations is finished exactly once; one target failing validation rejects the whole action;
 - sheet manually changed after prepared transaction -> recovery refuses rather than overwrites;
 - undo after later sheet change -> 409;
 - module edited between proposal and resolution -> current pack/check/action validation prevents stale application according to existing module-lock rules;
@@ -1237,7 +1285,7 @@ The first mechanics slice is complete when:
 
 1. Modules may define actions that reference existing checks.
 2. Modules may define no-roll actions.
-3. Actions constrain actor sheet types and target kinds/counts.
+3. Actions constrain actor sheet types and target kinds/counts, and an effect on `target` fans out deterministically across every selected target under one roll (§7).
 4. Actions may declare structured pre-resolution costs.
 5. Check outcome tiers select structured effects.
 6. The effect engine can at least set/add/spend/restore compatible sheet values.
@@ -1296,6 +1344,7 @@ Contests slice is complete when:
 5. Outcome branch maps to ordinary structured effects.
 6. Conditions/modifiers apply independently to each side.
 7. Retry cannot reroll one side separately.
+8. A contest action takes exactly one target; module validation rejects a multi-target contest (§18.5).
 
 ---
 
@@ -1306,6 +1355,7 @@ Do not block II-A on:
 - initiative/rounds;
 - tactical positions/range;
 - area-of-effect targeting;
+- multi-target contests (per-defender rolls, §18.5);
 - reactions/interrupts;
 - nested actions;
 - triggered passive effects;
