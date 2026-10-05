@@ -184,11 +184,10 @@ def test_validate_rejects_off_on_global(home):
                             inherited_ids={"r-1"})
 
 
-def test_validate_rejects_unknown_off_id(home):
-    with pytest.raises(rules.RuleError) as exc:
-        layers.validate_doc({"rules": [], "off": ["r-nope"]}, level="world",
-                            inherited_ids={"r-1"})
-    assert exc.value.field == "off"
+def test_validate_prunes_unknown_off_id(home):
+    out = layers.validate_doc({"rules": [], "off": ["r-nope", "r-1"]}, level="world",
+                              inherited_ids={"r-1"})
+    assert out["off"] == ["r-1"]
 
 
 def test_validate_rejects_id_collision_with_inherited(home):
@@ -229,8 +228,6 @@ def test_write_campaign_validates_against_what_it_inherits(home):
     w = layers.read_level("world", wid)["rules"][0]
     with pytest.raises(rules.RuleError):
         layers.write_campaign(cid, {"rules": [{**_rule("Clash"), "id": w["id"]}]})
-    with pytest.raises(rules.RuleError):
-        layers.write_level("campaign", cid, {"rules": [], "off": ["r-nope"]})
     # A refused write leaves the file as it was.
     assert _names(layers.effective(cid=cid)) == ["G", "W", "K"]
 
@@ -267,3 +264,30 @@ def test_write_to_a_connection_that_is_not_there_is_refused(home):
 def test_unknown_level_is_a_programming_error(home):
     with pytest.raises(ValueError):
         layers.path("planet")
+
+
+def test_campaign_off_of_a_deleted_global_rule_is_pruned_on_write(home):
+    _, cid, conn = _stack(home)
+    g = layers.read_level("global")["rules"][0]["id"]
+    layers.write_level("campaign", cid, {"rules": [], "off": [g]})
+    layers.write_level("global", "", {"rules": []})
+    doc = layers.read_level("campaign", cid)
+    assert doc["off"] == [g], "reading keeps the stale id"
+    assert _names(layers.effective(cid=cid, connection=conn)) == ["C", "W"]
+    assert not any(e["off"] for e in layers.effective(cid=cid, connection=conn))
+    assert layers.write_level("campaign", cid, doc)["off"] == []
+    assert layers.read_level("campaign", cid)["off"] == []
+
+
+def test_world_off_of_a_deleted_connection_rule_is_pruned_on_write(home):
+    wid, cid, conn = _stack(home)
+    c = layers.read_level("connection", conn)["rules"][0]["id"]
+    layers.write_level("world", wid, {"rules": layers.read_level("world", wid)["rules"],
+                                      "off": [c]})
+    layers.write_level("connection", conn, {"rules": []})
+    doc = layers.read_level("world", wid)
+    assert doc["off"] == [c]
+    assert _names(layers.effective(cid=cid, connection=conn)) == ["G", "W", "K"]
+    out = layers.write_level("world", wid, doc)
+    assert out["off"] == [] and [r["name"] for r in out["rules"]] == ["W"]
+    assert layers.read_level("world", wid)["off"] == []
