@@ -441,14 +441,13 @@ a picture was placed.
 image_store.ingest(data, *, source_url=None) -> ImageObject
 ```
 
-1. **Validate.** Sniff the format. Unsniffable bytes are refused, which is
-   exactly today's record-upload rule (`_upload_image_ext`). The paths that
-   stored unsniffable bytes before now fail at ingest:
-   - `fetch.download_url`'s mislabelled `.png` path is reported as a failed
-     download, and the caller handles it as it already handles one;
-   - Chub gallery import is reordered (below).
-
-   Each caller's byte cap is unchanged.
+1. **Validate.** Sniff the format. The store primitive keeps today's contract:
+   `put_in` stores whatever bytes its caller hands it, under the caller's
+   extension, and it is the **routes** that refuse unsniffable uploads
+   (`_upload_image_ext`). Unsniffable bytes reaching ingest therefore keep the
+   caller's extension and take **opaque identity** (§1.3). Nothing accepted
+   today is refused, and nothing refused today is accepted. Each caller's byte
+   cap is unchanged.
 2. **Sanitize** (§1.1).
 3. **Byte hash, then the exact-byte shortcut.**
    - Look up `byte_sha256` in the **rebuildable** blob→object index at
@@ -475,7 +474,7 @@ image_store.ingest(data, *, source_url=None) -> ImageObject
 
 **Chub gallery import** downloads and ingests every image first. Only then does
 it replace the version's `gallery_*` refs in one pass. Today it deletes the
-gallery first and can abort halfway with the gallery already gone.
+gallery first, so a failure partway through leaves the gallery already gone.
 
 ### 6. Resolution and transitional reads
 
@@ -562,8 +561,9 @@ for the image part of `copy_record_dir_down` and `sync._copy_tree`:
 - It never copies `.promote.json`.
 
 `fork._copy` and `fork_world` copy whole trees into a fresh root, where nothing
-can be shadowed. They need only to skip `.promote.json`, through
-`atomic.is_write_temp`'s sibling, `image_store.is_transient(path)`.
+can be shadowed, so they need no change. A `.promote.json` copied along with
+its slots describes the same state in the copy, and §8's pre/post check
+resolves it identically on either side.
 
 **Mixed-version devices.** An older client that writes a legacy file beside an
 existing ref is shadowed by the ref. Upgrade every device that shares a store.
@@ -579,13 +579,17 @@ The release note says so.
   to every consumer; nothing parses it. The plan confirms that with a grep over
   the backend and the frontend.
 - **Legacy files** keep the mtime-size token.
-- **Thumbnails of ref-resolved images:**
-  - key `sha256("cas|<image_id>|<blob_sha256>|<width>|<encoder>")`;
-  - ETag `"<image_id>-<bucket>-<generation>"`;
+- **Thumbnails of blob-backed images:**
+  - key `sha256("cas|<blob_sha256>|<width>|<encoder>")`;
+  - ETag `"<blob_sha256>-<bucket>-<generation>"`;
   - no stat.
 
-  One image used in fifty places gets one thumbnail per bucket. `REVISION` and
+  An object retains exactly one blob, and the blob determines the object, so
+  this is one thumbnail per visual image per bucket: an image used in fifty
+  places gets one, not fifty. Keying on the blob, which the serving path already
+  holds, avoids a sidecar read per thumbnail request. `REVISION` and
   `generation()` are unchanged.
+
 - **`image_id` is added** to every listing row that has one, and to every PUT
   response:
   - record listings;
@@ -1076,7 +1080,7 @@ been folded in above.
 | **S3** CLI racing the server | no CLI; process-scoped name locks (§11) |
 | **S4** Run class unspecified | `maintenance` class with an exclusion key (§11) |
 | **S5** Stale journal replay; no-avatar promote | pre/post-checked journal (§8) |
-| **S6** Unsniffable contradiction; Chub mid-stream wipe | §5 |
+| **S6** Unsniffable contradiction; Chub mid-stream wipe | the primitive keeps today's contract, with opaque identity; Chub ingests before replacing (§5) |
 | **S7** Stale memo on late blob | uncacheable while unresolved (§6) |
 | **S8** Format-2 member URLs, bundle manifest rewrite, harvest roots | §10, §12 |
 | **S9** PNG card export of a non-PNG blob | export-time conversion (§6) |
