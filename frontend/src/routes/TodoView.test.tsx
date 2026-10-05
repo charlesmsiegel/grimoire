@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../api/client", () => ({
@@ -11,7 +11,7 @@ import TodoView from "./TodoView";
 import type { Chore } from "../api/types";
 
 const chore = (over: Partial<Chore> = {}): Chore => ({
-  id: "sheets", scope: "campaign", group: "World content", severity: "warn", n: 3,
+  id: "sheets", scope: "campaign", group: "Game mechanics", severity: "warn", n: 3,
   what: "3 cast members without a sheet",
   why: "A character with no sheet cannot be rolled for.",
   fix: "/campaigns/run/sheets", fix_label: "Sheet coverage", ...over,
@@ -92,7 +92,7 @@ test("with no campaign open the library's own chores are still listed", async ()
   // world's backlog is largest. Hiding them behind that line hid a list with
   // entries in it.
   (api.getTodo as any).mockResolvedValue({
-    chores: [chore({ id: "world-taglines", scope: "world", n: 4,
+    chores: [chore({ id: "world-taglines", scope: "world", group: "Character & voice", n: 4,
                      what: "4 characters with no tagline", fix: "/worlds",
                      fix_label: "The worlds" })],
     ignored: [], count: 1,
@@ -109,9 +109,9 @@ test("two chores with the same sentence are told apart by scope", async () => {
   // accessible name.
   (api.getTodo as any).mockResolvedValue({
     chores: [
-      chore({ id: "taglines", scope: "campaign", n: 3,
+      chore({ id: "taglines", scope: "campaign", group: "Character & voice", n: 3,
               what: "3 characters with no tagline" }),
-      chore({ id: "world-taglines", scope: "world", n: 4,
+      chore({ id: "world-taglines", scope: "world", group: "Character & voice", n: 4,
               what: "4 characters with no tagline" }),
     ],
     ignored: [], count: 2,
@@ -132,7 +132,7 @@ test("the scope chip stays away when every chore is the same kind", async () => 
   (api.getTodo as any).mockResolvedValue({
     chores: [
       chore({ id: "sheets", scope: "campaign" }),
-      chore({ id: "owed", scope: "campaign", group: "Continuity", n: 2,
+      chore({ id: "owed", scope: "campaign", group: "Story & continuity", n: 2,
               what: "2 open threads with a deadline" }),
     ],
     ignored: [], count: 2,
@@ -149,15 +149,32 @@ test("a failed read is not an empty list", async () => {
   expect(screen.queryByText(/nothing outstanding/i)).not.toBeInTheDocument();
 });
 
-test("chores are grouped, and the column counts each group", async () => {
+test("the list and Groups column follow the server's thematic order", async () => {
+  const groups = ["Story & continuity", "Character & voice", "Artwork", "Game mechanics", "Costs & pricing"];
   (api.getTodo as any).mockResolvedValue({
-    chores: [chore(), chore({ id: "owed", group: "Continuity", what: "2 open threads" })],
-    ignored: [], count: 2,
+    // Input order differs from heading order, as it does when a global report
+    // combines library chores with campaign chores.
+    chores: [
+      chore({ id: "unpriced", scope: "library", group: "Costs & pricing", what: "2 unpriced calls" }),
+      chore(),
+      chore({ id: "cover", group: "Artwork", what: "Campaign without a cover" }),
+      chore({ id: "avatars", group: "Character & voice", what: "3 characters without an avatar" }),
+      chore({ id: "world-taglines", scope: "world", group: "Character & voice", what: "2 characters with no tagline" }),
+      chore({ id: "owed", group: "Story & continuity", what: "2 open threads" }),
+    ],
+    ignored: [], count: 6, groups,
   });
   renderTodo();
   await screen.findByText("3 cast members without a sheet");
-  expect(screen.getByRole("heading", { name: "World content" })).toBeInTheDocument();
-  expect(screen.getByRole("heading", { name: "Continuity" })).toBeInTheDocument();
+  expect(screen.getAllByRole("heading", { level: 2 }).map((h) => h.textContent)).toEqual(groups);
+  const links = screen.getAllByRole("link").filter((link) => link.getAttribute("href")?.startsWith("#"));
+  expect(links.map((link) => link.textContent)).toEqual([
+    "Story & continuity1", "Character & voice2", "Artwork1", "Game mechanics1", "Costs & pricing1",
+  ]);
+  expect(links.map((link) => link.getAttribute("href"))).toEqual(groups.map((g) => `#${encodeURIComponent(g)}`));
+  const characterSection = screen.getByRole("heading", { name: "Character & voice" }).closest("section")!;
+  expect(within(characterSection).getByRole("button", { name: /3 characters without an avatar/i })).toBeInTheDocument();
+  expect(within(characterSection).getByRole("button", { name: /2 characters with no tagline/i })).toBeInTheDocument();
 });
 
 

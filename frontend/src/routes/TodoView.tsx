@@ -159,8 +159,8 @@ export default function TodoView({ cid }: { cid: string | null }) {
   const chores = data?.chores ?? [];
   /** The headings, in reading order.
    *
-   *  The server's, because it is the server that decides which chore is more
-   *  urgent than which and grouping them here used to quietly reorder that:
+   *  The server's, because it is the server that assigns each chore its theme
+   *  and orders the themes; grouping them here used to quietly reorder that:
    *  the order fell out of whichever chore happened to be first in each group,
    *  so it moved with the data. The fallback is that old first-appearance
    *  order, for a payload from before `groups` existed -- which renders
