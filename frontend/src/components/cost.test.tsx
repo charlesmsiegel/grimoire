@@ -203,3 +203,17 @@ test("a bucket nobody priced does not render spend as $0.00", () => {
   expect(container.querySelector(".money-figure")?.textContent).toBe("not reported");
   expect(container.textContent).not.toMatch(/\$0\.00/);
 });
+
+test("a post that sent images says how many in its title (#377)", () => {
+  render(<PostCost bucket={{ ...ZERO, post: 0, rerolls: 0, calls: 1,
+                             priced_calls: 1, cost_usd: 0.02, images: 2 }} />);
+  expect(screen.getByText("$0.02").closest(".post-cost")?.getAttribute("title"))
+    .toContain("2 images sent");
+});
+
+test("a post that sent none does not mention images", () => {
+  render(<PostCost bucket={{ ...ZERO, post: 0, rerolls: 0, calls: 1,
+                             priced_calls: 1, cost_usd: 0.02 }} />);
+  expect(screen.getByText("$0.02").closest(".post-cost")?.getAttribute("title"))
+    .not.toContain("image");
+});

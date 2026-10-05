@@ -816,3 +816,46 @@ test("the Storage section reports sync-conflict files in the library (#35)", asy
   // Storage is the section this page opens on.
   expect(await screen.findByText("worlds/realm/lore/pact.sync-conflict-1.md")).toBeInTheDocument();
 });
+
+describe("sending post images (#377)", () => {
+  const images = (reach: string, send = "on") =>
+    ({ ...cfg, send_images: send, send_images_limit: "3", send_images_reach: reach });
+
+  test("the switch saves on and unlocks the limit", async () => {
+    (api.getConfig as any).mockResolvedValue(images("off", "off"));
+    (api.putConfig as any).mockResolvedValue(images("unknown"));
+    renderView();
+    await open(/^Context/);
+    const limit = await screen.findByLabelText("Images sent");
+    expect(limit).toBeDisabled();
+    fireEvent.click(screen.getByRole("checkbox",
+      { name: "Send post images to models that can read them" }));
+    expect(limit).toBeEnabled();
+    save();
+    await waitFor(() => expect(api.putConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ send_images: "on" })));
+  });
+
+  test("an unknown model says images are not being sent", async () => {
+    (api.getConfig as any).mockResolvedValue(images("unknown"));
+    renderView();
+    await open(/^Context/);
+    expect(await screen.findByText(/not known to read images/i)).toBeInTheDocument();
+  });
+
+  test("a text-only model says so", async () => {
+    (api.getConfig as any).mockResolvedValue(images("no"));
+    renderView();
+    await open(/^Context/);
+    expect(await screen.findByText(/cannot read images/i)).toBeInTheDocument();
+  });
+
+  test("a model that reads images needs no hint", async () => {
+    (api.getConfig as any).mockResolvedValue(images("yes"));
+    renderView();
+    await open(/^Context/);
+    await screen.findByLabelText("Images sent");
+    expect(screen.queryByText(/not known to read images/i)).toBeNull();
+    expect(screen.queryByText(/cannot read images/i)).toBeNull();
+  });
+});

@@ -575,3 +575,46 @@ test("the extended-samplers box is offered for a custom endpoint only", async ()
   expect(screen.getByLabelText("Sampler preset")).toBeInTheDocument();
   expect(screen.queryByLabelText(/Extended samplers/)).toBeNull();
 });
+
+describe("Reads images (#377)", () => {
+  async function editCustom(models: unknown[] = []) {
+    (api.readConnection as any).mockImplementation((id: string) => Promise.resolve(
+      id === "openrouter"
+        ? { ...OPENROUTER, models: [], fetched_at: "", health: UNCHECKED }
+        : { ...CUSTOM, models, fetched_at: "", health: UNCHECKED }));
+    render(<ConnectionEditor />);
+    const rail = await waitFor(() => screen.getByText("+ New connection").closest(".editor-list") as HTMLElement);
+    fireEvent.click(await within(rail).findByText("z.ai GLM"));
+    await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("zai-glm"));
+    fireEvent.click(screen.getByRole("button", { name: /^edit$/i }));
+  }
+
+  test("is offered for OpenRouter and custom endpoints, not Claude", async () => {
+    render(<ConnectionEditor />);
+    await screen.findByText("+ New connection");
+    fireEvent.click(screen.getByText("+ New connection"));
+    expect(screen.getByLabelText("Reads images")).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "claude" } });
+    expect(screen.queryByLabelText("Reads images")).toBeNull();
+    fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "openai_compatible" } });
+    expect(screen.getByLabelText("Reads images")).toBeInTheDocument();
+  });
+
+  test("saving Yes stores the override", async () => {
+    await editCustom();
+    fireEvent.change(screen.getByLabelText("Reads images"), { target: { value: "on" } });
+    fireEvent.click(screen.getByRole("button", { name: /^save/i }));
+    await waitFor(() => expect(api.updateConnection).toHaveBeenCalledWith(
+      "zai-glm", expect.objectContaining({ vision: "on" })));
+  });
+
+  test.each([
+    [true, "Catalog: reads images"],
+    [false, "Catalog: text only"],
+    [null, "Catalog: not stated"],
+  ])("the hint says what the catalog says (%s)", async (vision, text) => {
+    await editCustom([{ id: "glm-4.6", name: "GLM", context: null, prompt: null,
+                        completion: null, vision }]);
+    expect(await screen.findByText(text, { exact: false })).toBeInTheDocument();
+  });
+});
