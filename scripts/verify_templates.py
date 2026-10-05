@@ -337,6 +337,8 @@ for label, facts, st, rel, plt, grp, cmt, fct, strg, trk in (
                               tracked_snapshot=trk)
     check(f"absorb system ({label})", exp[0]["content"],
           render("absorb/system.j2", steering=bool(strg)))
+    assert '"why_new"' in exp[0]["content"], \
+        f"absorb system ({label}) no longer asks new-record rows for \"why_new\""
     if strg:
         assert "Treat them as pointers, not as story" in exp[0]["content"], \
             f"absorb system ({label}) missing the steering contract paragraph"

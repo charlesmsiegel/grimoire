@@ -351,11 +351,18 @@ def grade_absorb(ctx: dict, output: str) -> list[Check]:
     # The needle is a phrase unique to that paragraph — "Player steering
     # notes" also heads the user-side block, so it would still match with the
     # contract gone.
+    # The identity fields (`why_new`, `distinguished_from`) live inside plot
+    # and commitment rows, so they are asked for like the citation fields. Their
+    # quoted names alone would survive deleting the move / close / new
+    # instruction around them, so that paragraph gets its own unique needle.
     prompt = graders.grade_prompt(
         ctx["messages"],
         {f"asks_{k}": f'"{k}"'
-         for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS + absorb_store.CITATION_FIELDS}
-        | {"asks_steering_contract": "Treat them as pointers, not as story"})
+         for k in graders.ABSORB_TEXT + graders.ABSORB_LISTS + absorb_store.CITATION_FIELDS
+         + absorb_store.IDENTITY_FIELDS}
+        | {"asks_steering_contract": "Treat them as pointers, not as story",
+           "asks_identity_contract": "Open a new one only when no listed record already "
+                                     "stands for the same narrative question or obligation"})
 
     out, parsed = graders.grade_absorb(output)
     if not all(c.ok for c in out):

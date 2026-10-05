@@ -139,6 +139,10 @@ lines), `rel_snapshot` (`absorb.relationships_snapshot()` — lines per
 steering log as `- <text>` lines; `system.j2`'s "Player steering notes"
 paragraph makes them signals to sharpen or extend lore, never citable
 evidence), `transcript` (`snippets/transcript.j2`).
+`system.j2` also tells the model to move, close or open plot threads and
+commitments against the listed ones, and lets a row that opens a new record carry
+the identity fields `absorb.parse.IDENTITY_FIELDS` (`why_new`,
+`distinguished_from`), which `parse_output` keeps only when well typed.
 
 ### `audit/` — the post-absorb mechanics audit inside POST …/absorb
 Mirrors `store/audit.py:build_prompt`. Messages: system, user.

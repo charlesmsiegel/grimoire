@@ -64,9 +64,11 @@ from .materializer import (  # noqa: F401
 from .parse import (  # noqa: F401
                CITATION_FIELDS,
                CITATION_TEXT,
+               IDENTITY_FIELDS,
                _certainty,
                _cite,
                _confidence,
+               _identity,
                _int05,
                _truthy,
                extract_object,

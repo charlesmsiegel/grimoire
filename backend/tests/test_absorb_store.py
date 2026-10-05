@@ -2955,3 +2955,59 @@ def test_the_cited_sections_are_every_edit_section_there_is():
     # `keywords` is a list of strings and `timeline_events` never reaches
     # `materialize` — neither is an edit, and neither carries a citation.
     assert sections - {"keywords", "timeline_events"} == set(_CITED_SECTIONS)
+
+
+# --- identity fields (continuity capstone slice C) ----------------------------
+# A row that opens a NEW plot thread or commitment may say why no listed record
+# covers it ("why_new") and which listed records it was judged different from
+# ("distinguished_from"). Both are carried only when well typed, so the identity
+# step downstream can read key presence as "the model said something".
+
+def _identity_reply(section: str, row: dict) -> str:
+    return json.dumps({section: [row]})
+
+
+@pytest.mark.parametrize("section", ["plot_movements", "commitment_movements"])
+def test_parse_carries_well_typed_identity_fields(section):
+    row = {"title": "Mara's map", "status": "open", "beat": "Mara owes the guild.",
+           "why_new": " different debt ",
+           "distinguished_from": ["the-debt", " ", 3, "the-debt", "salt-owed"]}
+    out = absorb.parse_output(_identity_reply(section, row))[section][0]
+    assert out["why_new"] == "different debt"
+    assert out["distinguished_from"] == ["the-debt", "salt-owed"]
+    assert absorb.IDENTITY_FIELDS == ("why_new", "distinguished_from")
+
+
+@pytest.mark.parametrize("section", ["plot_movements", "commitment_movements"])
+@pytest.mark.parametrize("field,value", [
+    ("why_new", ""), ("why_new", None), ("why_new", 3), ("why_new", ["x"]),
+    ("distinguished_from", "the-debt"), ("distinguished_from", [1, None]),
+    ("distinguished_from", {}),
+])
+def test_parse_drops_absent_blank_or_mistyped_identity_fields(section, field, value):
+    row = {"title": "Mara's map", "status": "open", "beat": "b", field: value}
+    out = absorb.parse_output(_identity_reply(section, row))[section][0]
+    assert field not in out
+    # And absent stays absent.
+    bare = absorb.parse_output(_identity_reply(section, {"title": "Mara's map"}))[section][0]
+    assert not set(bare) & set(absorb.IDENTITY_FIELDS)
+
+
+def test_identity_fields_live_inside_rows_not_the_top_level():
+    # The graders derive the top-level contract from this key set; the identity
+    # fields ride inside rows and must not widen it.
+    assert set(absorb.parse_output("{}")) == {
+        "one_line", "summary", "keywords", "timeline_events", "facts",
+        "character_state_edits", "group_state_edits", "lore_edits",
+        "authored_edits", "relationship_deltas", "bond_changes",
+        "plot_movements", "commitment_movements", "new_characters",
+        "new_locations", "new_lore", "weather_edits"}
+
+
+def test_absorb_system_prompt_asks_for_the_identity_fields():
+    system = absorb.build_prompt("**You:** hi", {})[0]["content"]
+    assert "You are absorbing a completed role-play scene" in system
+    assert '"why_new"' in system
+    assert '"distinguished_from"' in system
+    assert "Current plot threads:" in system
+    assert "Open commitments:" in system
