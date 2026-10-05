@@ -350,3 +350,15 @@ def test_world_off_of_a_deleted_connection_rule_is_pruned_on_write(home):
     out = layers.write_level("world", wid, doc)
     assert out["off"] == [] and [r["name"] for r in out["rules"]] == ["W"]
     assert layers.read_level("world", wid)["off"] == []
+
+
+def test_an_unreadable_file_reads_empty_and_says_so_once(home, caplog):
+    """A file that is there but cannot be read is not the same news as one that
+    is not there: it is logged, by path only, once."""
+    p = layers.path("global")
+    p.mkdir()   # a directory where the file should be: read_bytes raises IsADirectoryError
+    with caplog.at_level(logging.ERROR, logger="grimoire.store.regex.layers"):
+        assert layers.read_level("global") == {"rules": [], "off": []}
+        assert layers.read_level("global") == {"rules": [], "off": []}
+    logged = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert len(logged) == 1 and str(p) in logged[0].getMessage()

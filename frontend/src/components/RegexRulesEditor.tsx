@@ -185,8 +185,9 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
    *  with. `formIndex` is the place in the list of the rule the open form is
    *  sending, so a refusal that names it lands on its field; any other refusal
    *  is a banner. Reports whether it landed, and whether the screen is still
-   *  the one that asked. */
-  async function commit(next: RegexLayer, formIndex?: number): Promise<{ ok: boolean; current: boolean }> {
+   *  the one that asked, with the stored layer when it landed. */
+  async function commit(next: RegexLayer, formIndex?: number):
+      Promise<{ ok: boolean; current: boolean; layer?: RegexLayer }> {
     const mine = live.current;
     setSaving(true); setError(null); setFailure(null);
     try {
@@ -195,7 +196,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
       // synced file may still carry one that a read keeps.
       const saved = await api.putRegex(apiScope, canOff ? next : { ...next, off: [] });
       if (live.current === mine) setBundle(saved);
-      return { ok: true, current: live.current === mine };
+      return { ok: true, current: live.current === mine, layer: saved.layer };
     } catch (err) {
       if (live.current === mine) {
         const body = (err as { kind?: string; body?: { index?: number | null; field?: string } })?.body;
@@ -226,8 +227,12 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
     const rule = ruleOf(draft);
     const at = layer.rules.findIndex((r) => r.id === rule.id);
     const rules = at === -1 ? [...layer.rules, rule] : layer.rules.map((r, i) => (i === at ? rule : r));
-    const done = await commit({ ...layer, rules }, at === -1 ? layer.rules.length : at);
-    if (done.ok && done.current) { setSelId(rule.id); setMode("view"); }
+    const place = at === -1 ? layer.rules.length : at;
+    const done = await commit({ ...layer, rules }, place);
+    // Selected by its place in what was stored, not by the id sent: an id that
+    // collides with an inherited rule's is re-minted on the server, and the
+    // sent one would then select that inherited rule. Order is kept.
+    if (done.ok && done.current) { setSelId(done.layer?.rules[place]?.id ?? rule.id); setMode("view"); }
   }
 
   function remove(r: RegexRule) {

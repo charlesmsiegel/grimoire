@@ -260,3 +260,10 @@ def test_put_campaign_regex_moves_the_write_token(client, ids):
     before = store.revision.current(cid)
     assert client.put(_url("campaign", ids), json={"rules": [_rule("Camp")]}).status_code == 200
     assert store.revision.current(cid) != before
+
+
+@pytest.mark.parametrize("bad_id", [["r-1"], {"r": 1}])
+def test_an_id_that_is_not_a_string_is_a_400(client, ids, bad_id):
+    res = client.put(_url("global", ids), json={"rules": [_rule("Odd", id=bad_id)]})
+    assert res.status_code == 400
+    assert res.json()["field"] == "id"

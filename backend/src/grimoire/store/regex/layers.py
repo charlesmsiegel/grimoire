@@ -65,6 +65,10 @@ _EMPTY: dict = {"rules": [], "off": []}
 _CACHE_MAX = 256
 _cache: dict[tuple[str, bytes], dict] = {}
 
+# Rule files that are there but could not be read, by path, so each says so
+# once -- not on every display frame -- until a read of it succeeds again.
+_unreadable: set[str] = set()
+
 
 # --- where the files live -----------------------------------------------------
 
@@ -152,10 +156,20 @@ def _load(level: str, key: str) -> dict:
     Never raises; a level whose key names nothing reads empty."""
     try:
         file = path(level, key)
-        data = file.read_bytes()
     except (worlds_paths.WorldNotFound, campaigns_paths.CampaignNotFound,
             llm_connections.ConnectionNotFound, OSError):
         return _EMPTY
+    try:
+        data = file.read_bytes()
+    except FileNotFoundError:
+        return _EMPTY
+    except OSError as exc:
+        # The path and the error, never the contents.
+        if str(file) not in _unreadable:
+            _unreadable.add(str(file))
+            log.error("regex: cannot read the rule file at %s -- %s", file, type(exc).__name__)
+        return _EMPTY
+    _unreadable.discard(str(file))
     ident = (str(file), hashlib.sha256(data).digest())
     doc = _cache.get(ident)
     if doc is None:
@@ -192,7 +206,8 @@ def validate_doc(doc: dict, *, level: str, inherited_ids: set[str]) -> dict:
     clean: list[dict] = []
     seen: set[str] = set()
     # A fresh id must not land on one a later rule of this file still carries.
-    taken = {r.get("id") for r in raw_rules if isinstance(r, dict)}
+    # Strings only: a malformed id is `normalise`'s to refuse, by index.
+    taken = {r["id"] for r in raw_rules if isinstance(r, dict) and isinstance(r.get("id"), str)}
     for i, raw in enumerate(raw_rules):
         rule = rules.normalise(raw, index=i)
         if rule["id"] in seen:
