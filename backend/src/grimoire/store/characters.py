@@ -25,6 +25,7 @@ from . import (
     chub,
     fetch,
     image_descriptions,
+    image_hash,
     image_store,
     lorebook,
     statcache,
@@ -953,6 +954,18 @@ def _carried_uri(uri: str) -> bool:
     return uri.startswith("data:") or cards.embedded_path(uri) is not None
 
 
+def _pixel_id(blob: bytes) -> str:
+    return image_hash.pixel_identity(blob, hashlib.sha256(blob).hexdigest()).id
+
+
+def _plane_is_the_carried_avatar(png: bytes, carried: bytes) -> bool:
+    """Is the PNG's image plane the card's carried avatar, so that the carried
+    copy (the original bytes, lossless) should be the one stored? True for our
+    placeholder plane, and for a plane that IS the same picture -- what an
+    export of a non-PNG avatar writes now that it re-encodes the pixels."""
+    return cards.is_placeholder_png(png) or _pixel_id(png) == _pixel_id(carried)
+
+
 def _resolve_avatar(card: dict, data: bytes, fmt: str, *,
                     network: bool) -> tuple[bytes, str, str] | None:
     """Best-effort avatar bytes from a card: (bytes, ext, the URI they came from).
@@ -1059,12 +1072,13 @@ def import_card(root: Path, data: bytes, fmt: str, into_cid: str | None = None,
     # Resolve (and unhook) a carried avatar BEFORE the card is written: the
     # writes below persist whatever `card` holds at that moment.
     avatar = _resolve_avatar(card, data, fmt, network=(fmt != "png"))
-    if fmt == "png" and avatar and not cards.is_placeholder_png(data):
+    if fmt == "png" and avatar and not _plane_is_the_carried_avatar(data, avatar[0]):
         # A PNG's own pixels are the character's picture -- as they have always
         # been on import. The card's copy only wins when those pixels are the
-        # placeholder our export writes for an avatar it could not encode
-        # (Codex review: preferring it outright would swap the portrait of any
-        # third-party card whose payload happens to carry an embedded icon).
+        # placeholder our export writes for an avatar it could not encode, or
+        # are that very picture re-encoded as a PNG (Codex review: preferring
+        # it outright would swap the portrait of any third-party card whose
+        # payload happens to carry an embedded icon).
         avatar = None
     if avatar and _carried_uri(avatar[2]):
         _drop_avatar_uri(card, avatar[2])
