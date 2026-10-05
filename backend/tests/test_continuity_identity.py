@@ -315,6 +315,21 @@ def test_examine_treats_source_title_with_closed_canonical_as_proposed(cid, s0, 
     assert "thread:mara-s-map" not in by_ref
 
 
+def test_slug_on_an_explicit_source_is_not_examined_with_closed_canonical(cid, s0, sid):
+    """An explicit source row reserves the source's slug, so a later id-less row
+    titled like the source is a second move of the canonical -- dropped, never a
+    proposed-new record -- even when the canonical is closed."""
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara lost the map.", s0)
+    store.plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "closed",
+                            "Winifred copied the map.", s0)
+    review.create_alias(cid, "thread:mara-s-map", "thread:winifreds-chart",
+                        accept_status_change=True)
+    exam = _examine(cid, sid, plot=[
+        {"id": "mara-s-map", "beat": "Mara found a clue.", "status": "advanced"},
+        {"title": "Mara's map", "beat": "Mara hunted for the lost map.", "status": "open"}])
+    assert exam.proposed == 0 and exam.rows == []
+
+
 def test_distinguished_from_drops_unknown_and_canonicalizes(cid, s0, sid):
     _seed_alias(cid, s0)
     row = {"title": "Mara's map", "beat": "Mara hunted for her map.", "status": "open",
