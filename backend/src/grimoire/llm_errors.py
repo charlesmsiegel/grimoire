@@ -42,10 +42,14 @@ class LLMError(Exception):
         #: `Retry-After` of the 429 it becomes (#213).
         self.retry_after = retry_after
         #: The provider's HTTP status, for an error that came from an HTTP
-        #: response, else None. Read by `llm._resilient` for one decision: a
-        #: 400/422 answering a request that carried sampler parameters is the
-        #: preset being refused, not the connection failing, so it must not be
-        #: handed to the fallback (see the sampler-presets spec).
+        #: response, else None. `kind` cannot carry the distinctions the facade
+        #: needs: `bad_response` is both "the provider refused this request"
+        #: and "the provider broke" (a 500). Read by `llm._resilient` for two
+        #: decisions: a 400/422 answering a request that carried sampler
+        #: parameters is the preset being refused, not the connection failing,
+        #: so it must not be handed to the fallback (see the sampler-presets
+        #: spec); and a refusal of a request that carried pictures is retried
+        #: once as text on the same connection (#377).
         self.status = status
 
 
