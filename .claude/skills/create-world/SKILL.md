@@ -264,7 +264,8 @@ the name out, whichever reads better.
   (`{"primary": {...}, "secondary": {...}}`). An authored calendar is saved as
   `confirmed`, so campaigns made from this World start on it without asking.
 - **Module.** Name a mechanics module by id (`pool-basic`, `d20-basic`, or one in the
-  user library) to make it the World's default. `apply` refuses to *change* the
+  user library) to make it the World's default; `"module": ""` clears it, and
+  omitting the key leaves it as it is. `apply` refuses to *change* the
   module of a World that already has campaigns, because rebinding those campaigns
   needs the world editor's locking. Change it there instead.
 

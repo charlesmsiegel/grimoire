@@ -191,6 +191,15 @@ def test_invalid_plan_writes_nothing(home):
     ({"greetings": [{"name": "A", "phase": "a\nb"}]}, "phase must be one line"),
     ({"greetings": [{"name": "A", "character": 0}]}, "character must be a string"),
     ({"greetings": [{"name": "A", "location": {"x": 1}}]}, "location must be a string"),
+    ({"world": "Salt\nmarch"}, "world: a name must be one line"),
+    ({"lore": [{"name": "X", "keys": "pact\nsecrecy: secret"}]}, "must be one line"),
+    ({"greetings": {}}, "greetings: must be a list"),
+    ({"lore": ""}, "lore: must be a list"),
+    ({"tags": {}}, "tags: must be a list"),
+    ({"calendar": {"provider": "hebrew", "regoin": "IL"}}, "unknown keys ['regoin']"),
+    ({"calendar": {"primary": {"provider": "gregorian"}, "secundary": None}},
+     "unknown keys ['secundary']"),
+    ({"module": 5}, "module: must be a module id"),
     ({"lore": [{"name": "X", "secrecy": "sercet"}]}, "secrecy must be one of"),
     ({"lore": [{"name": "X", "fields": {"climate": "x"}}]}, "lore has no fields ['climate']"),
     ({"locations": [{"name": "X", "fields": {"persistence": "2"}}]}, "invalid value"),
@@ -406,3 +415,39 @@ def test_an_offscreen_opener_is_no_opening_for_a_pc(home):
     warnings = "\n".join(result["warnings"])
     assert "pcs/winifred: can start no onscreen greeting" in warnings
     assert "no onscreen greeting is startable: every opening" in warnings
+
+
+@pytest.mark.parametrize("plan", [[], "Saltmarch", 5])
+def test_a_plan_that_is_not_an_object_is_a_plan_error(home, tmp_path, capsys, plan):
+    with pytest.raises(create_world.PlanError):
+        _apply(plan)
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    assert create_world.main(["apply", "--plan", str(path), "--dry-run"]) == 1
+    assert "must be a JSON object" in capsys.readouterr().out
+
+
+def test_an_empty_module_clears_the_binding(home):
+    wid = _apply(_plan(module="pool-basic"))["world"]
+    _apply({"module": ""}, world_id=wid)
+    assert create_world._world_module(wid) == ""
+
+
+def test_check_reports_a_malformed_plotmap_instead_of_raising(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    (root / "plotmap.json").write_text(json.dumps({"saltmarch-eve": []}), encoding="utf-8")
+    result = create_world.check_world(wid)
+    assert any("saltmarch-eve must map to" in e for e in result["errors"])
+    assert create_world.validate_plan({"greetings": [{"name": "X"}]}, root, wid) == []
+
+
+def test_check_flags_a_character_greeting_with_no_version(home):
+    wid = _apply(_plan())["world"]
+    root = worlds.world_root(wid)
+    path = root / "greetings" / "saltmarch-eve.md"
+    path.write_text(path.read_text(encoding="utf-8").replace("version: default", "version: ''"),
+                    encoding="utf-8")
+    assert greetings.read_greeting(root, "saltmarch-eve")["meta"]["version"] == ""
+    errors = "\n".join(create_world.check_world(wid)["errors"])
+    assert "greetings/saltmarch-eve: version (none) of seraphine does not exist" in errors

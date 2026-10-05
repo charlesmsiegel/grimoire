@@ -226,8 +226,12 @@ def _typed(row: dict, where: str, keys, kind: type, label: str) -> Iterator[str]
 
 def _entries(plan: dict, key: str, allowed: set[str], problems: list[str],
              list_keys: set[str] = LIST_KEYS) -> list[dict]:
-    rows = plan.get(key) or []
+    rows = plan.get(key)
+    if rows is None:
+        return []
     if not isinstance(rows, list):
+        # checked BEFORE defaulting: `"lore": {}` is a malformed plan, not an
+        # empty section, and must not validate as one
         problems.append(f"{key}: must be a list")
         return []
     seen: set[str] = set()
@@ -242,6 +246,11 @@ def _entries(plan: dict, key: str, allowed: set[str], problems: list[str],
             problems.append(f"{where}: a name must be one line")
         problems.extend(f"{where}: {k} must be a list of names"
                         for k in sorted(set(row) & list_keys) if not _list_ok(row[k]))
+        # Every item, whichever spelling the list came in (a list, or one
+        # comma-separated string): each is written into a frontmatter line.
+        problems.extend(f"{where}: {k} entry {v!r} must be one line"
+                        for k in sorted(set(row) & list_keys) if _list_ok(row[k])
+                        for v in _as_list(row[k]) if not _one_line(v))
         unknown = sorted(set(row) - allowed)
         if unknown:
             problems.append(f"{where}: unknown keys {unknown} (allowed: {sorted(allowed)})")
@@ -330,8 +339,6 @@ def _check_entity(kind: str, row: dict, idx: Index) -> Iterator[str]:
     if isinstance(row.get("keys"), list):
         yield from (f"{where}: key {k!r} has a comma, which the store reads as two keys"
                     for k in row["keys"] if isinstance(k, str) and "," in k)
-        yield from (f"{where}: key {k!r} must be one line"
-                    for k in row["keys"] if isinstance(k, str) and k and not _one_line(k))
     if "secrecy" in row and str(row["secrecy"]).strip().lower() not in entities.SECRECY_LEVELS:
         yield f"{where}: secrecy must be one of {', '.join(entities.SECRECY_LEVELS)}"
     fields = row.get("fields") or {}
@@ -364,6 +371,29 @@ def _check_greeting(row: dict, idx: Index) -> Iterator[str]:
         yield f"{where}: sequence must be a positive integer"
 
 
+def _edges_ok(edges) -> bool:
+    return isinstance(edges, dict) and all(
+        isinstance(edges.get(k, []), list) and all(isinstance(t, str) for t in edges.get(k, []))
+        for k in ("leads_to", "excludes"))
+
+
+def _read_plotmap(root: Path | None) -> tuple[dict, list[str]]:
+    """The on-disk plot map, keeping only well-formed entries, plus what was
+    wrong with the rest. `plotmap.json` is hand-editable and travels in world
+    bundles, so a reader here must report a bad entry rather than raise on it."""
+    if root is None:
+        return {}, []
+    try:
+        raw = greetings.read_plotmap(root)
+    except ValueError as exc:
+        return {}, [f"plotmap: plotmap.json is not valid JSON ({exc})"]
+    if not isinstance(raw, dict):
+        return {}, ["plotmap: plotmap.json must be an object keyed by greeting id"]
+    bad = [f"plotmap: {src} must map to {{leads_to: [...], excludes: [...]}}"
+           for src, e in raw.items() if not _edges_ok(e)]
+    return {src: e for src, e in raw.items() if _edges_ok(e)}, bad
+
+
 def _merged_plotmap(rows: list[dict], idx: Index, root: Path | None) -> dict[str, list[str]]:
     """The `leads_to` graph as it would stand after apply: what is on disk,
     with each plan greeting's own `leads_to` replacing its stored edges. Nodes
@@ -373,8 +403,7 @@ def _merged_plotmap(rows: list[dict], idx: Index, root: Path | None) -> dict[str
         rid = idx.lookup("greetings", ref)
         return f"new:{_norm(ref)}" if rid in (None, Index.PENDING) else rid
 
-    graph = {src: list(e.get("leads_to") or [])
-             for src, e in (greetings.read_plotmap(root) if root else {}).items()}
+    graph = {src: list(e.get("leads_to") or []) for src, e in _read_plotmap(root)[0].items()}
     for g in rows:
         if "leads_to" in g:
             graph[node(g["name"])] = [node(t) for t in _as_list(g["leads_to"])]
@@ -401,14 +430,51 @@ def _check_actor_names(rows: dict, idx: Index, wid: str | None) -> Iterator[str]
                 yield f"{kind} {row['name']!r}: {exc}"
 
 
+CALENDAR_KEYS = {"primary", "secondary", "confirmed", "stale_after_days", "warn_days"}
+CALENDAR_BLOCK_KEYS = {"provider", "region", "custom_holidays", "anchor"}
+
+
+def _calendar_shape(cal) -> Iterator[str]:
+    """Unknown keys, refused rather than dropped: `write_calendar` normalizes
+    a block to its known keys, so a typo'd `regoin` would save as the default
+    region and report success."""
+    if not isinstance(cal, dict):
+        yield "calendar: must be an object"
+        return
+    if "primary" in cal:
+        unknown = sorted(set(cal) - CALENDAR_KEYS)
+        if unknown:
+            yield f"calendar: unknown keys {unknown} (allowed: {sorted(CALENDAR_KEYS)})"
+        blocks = [("primary", cal.get("primary")), ("secondary", cal.get("secondary"))]
+    else:
+        blocks = [("calendar", cal)]
+    for label, block in blocks:
+        if block is None and label == "secondary":
+            continue
+        if not isinstance(block, dict):
+            yield f"{label}: must be a calendar block (provider, region, ...)"
+            continue
+        unknown = sorted(set(block) - CALENDAR_BLOCK_KEYS)
+        if unknown:
+            yield (f"{label}: unknown keys {unknown} "
+                   f"(allowed: {sorted(CALENDAR_BLOCK_KEYS)})")
+
+
 def _check_world_settings(plan: dict, root: Path | None, wid: str | None) -> Iterator[str]:
     cal = plan.get("calendar")
     if cal is not None:
+        yield from _calendar_shape(cal)
+    if cal is not None and isinstance(cal, dict):
         try:
             calendars.validate_calendar(_calendar_config(cal, root))
         except (calendars.CalendarError, TypeError, AttributeError) as exc:
             yield f"calendar: {exc}"
-    mid = plan.get("module")
+    if "module" not in plan:
+        return
+    mid = plan["module"]
+    if not isinstance(mid, str):
+        yield "module: must be a module id, or \"\" to clear the world's module"
+        return
     if mid:
         # `load_pack`, not `pack_root`: a user-library pack with a module.md
         # resolves either way, and an invalid one is disabled at resolution --
@@ -419,15 +485,17 @@ def _check_world_settings(plan: dict, root: Path | None, wid: str | None) -> Ite
             yield f"module: no module {mid!r} (built-in or in the user library)"
         else:
             yield from (f"module {mid}: {e}" for e in pack_errors)
-        if wid is not None and str(mid) != _world_module(wid) and _world_campaigns(wid):
-            yield ("module: this world already has campaigns; change its module from the "
-                   "world editor, which rebinds them under their locks")
+    if wid is not None and mid != _world_module(wid) and _world_campaigns(wid):
+        yield ("module: this world already has campaigns; change its module from the "
+               "world editor, which rebinds them under their locks")
 
 
 def _index_plan(plan: dict, idx: Index, problems: list[str]) -> dict[str, list[dict]]:
     """The plan's entries per kind, with every new name added to `idx` as
     PENDING so a reference to a record the plan is about to create resolves."""
-    tag_names = plan.get("tags") or []
+    tag_names = plan.get("tags")
+    if tag_names is None:
+        tag_names = []
     if not isinstance(tag_names, list) or not all(isinstance(t, str) and t.strip()
                                                   and _one_line(t) for t in tag_names):
         problems.append("tags: must be a list of display names")
@@ -451,6 +519,16 @@ def _index_plan(plan: dict, idx: Index, problems: list[str]) -> dict[str, list[d
     return rows
 
 
+def _check_world_name(world, wid: str | None) -> Iterator[str]:
+    if not isinstance(world, str):
+        yield "world: must be a string"
+    elif not world.strip():
+        if wid is None:
+            yield "world: the plan needs a world name (or pass --world-id)"
+    elif not _one_line(world.strip()):
+        yield "world: a name must be one line"
+
+
 def validate_plan(plan: dict, root: Path | None, wid: str | None) -> list[str]:
     """Every problem with `plan` against the world at `root` (None: a world
     the plan will create). Empty means `apply_plan` will write it."""
@@ -460,8 +538,7 @@ def validate_plan(plan: dict, root: Path | None, wid: str | None) -> list[str]:
     unknown = sorted(set(plan) - PLAN_KEYS)
     if unknown:
         problems.append(f"unknown top-level keys {unknown} (allowed: {sorted(PLAN_KEYS)})")
-    if not str(plan.get("world", "")).strip() and wid is None:
-        problems.append("world: the plan needs a world name (or pass --world-id)")
+    problems.extend(_check_world_name(plan.get("world", ""), wid))
     idx = world_index(root)
     rows = _index_plan(plan, idx, problems)
     problems.extend(_check_actor_names(rows, idx, wid))
@@ -540,8 +617,8 @@ def _resolve_world(plan: dict, world_id: str | None) -> str | None:
         if not worlds.world_exists(world_id):
             raise PlanError([f"no world with id {world_id!r}"])
         return world_id
-    name = str(plan.get("world", ""))
-    found = find_world(name)
+    name = plan.get("world", "")
+    found = find_world(name) if isinstance(name, str) and name.strip() else None
     if found is not None:
         raise PlanError([(f"world: a world named {name!r} already exists (id {found!r}); "
                           f"pass --world-id {found} to add to it, or choose another name")])
@@ -613,13 +690,17 @@ def _write_settings(plan: dict, root: Path, wid: str, report: Report) -> None:
         calendars.write_calendar(root, _calendar_config(plan["calendar"], root))
         report.note("calendar", "calendar.json", "calendar",
                     "updated" if _changed(before, path) else "unchanged")
-    if plan.get("module") and str(plan["module"]) != _world_module(wid):
-        modules.set_world_module(wid, str(plan["module"]))
-        report.note("module", str(plan["module"]), str(plan["module"]), "updated")
+    # Presence, not truthiness: `"module": ""` clears the binding, omitting
+    # the key leaves it alone.
+    if "module" in plan and plan["module"] != _world_module(wid):
+        modules.set_world_module(wid, plan["module"])
+        report.note("module", plan["module"] or "(none)", plan["module"], "updated")
 
 
 def apply_plan(plan: dict, world_id: str | None = None) -> dict:
     """Validate, then write. Returns `{"world": wid, "records": [...]}`."""
+    if not isinstance(plan, dict):
+        raise PlanError(["the plan must be a JSON object"])
     wid = _resolve_world(plan, world_id)
     problems = validate_plan(plan, worlds.world_root(wid) if wid else None, wid)
     if problems:
@@ -771,7 +852,7 @@ class _World:
             self.ids[kind] = {e["id"] for e in rows}
         self.greetings = greetings.list_greetings(root)
         self.ids["greetings"] = {g["id"] for g in self.greetings}
-        self.plotmap = greetings.read_plotmap(root)
+        self.plotmap, self.plotmap_problems = _read_plotmap(root)
 
     def resolves(self, ref: str) -> bool:
         kind, _, rid = ref.partition(":")
@@ -821,9 +902,11 @@ def _greeting_errors(w: _World) -> Iterator[str]:
         where = f"greetings/{g['id']}"
         if g["character"] and g["character"] not in w.ids["characters"]:
             yield f"{where}: character {g['character']} does not exist"
-        elif g["character"] and g["version"] \
-                and g["version"] not in characters.version_ids(w.root, g["character"]):
-            yield f"{where}: version {g['version']} of {g['character']} does not exist"
+        elif g["character"] and g["version"] not in characters.version_ids(w.root, g["character"]):
+            # an EMPTY version included: a scene opened from this greeting
+            # seats the character at that version, and there is no such one
+            yield (f"{where}: version {g['version'] or '(none)'} of {g['character']} "
+                   "does not exist")
         yield from (f"{where}: present {c} does not exist"
                     for c in g["present"] if c not in w.ids["characters"])
         yield from (f"{where}: requires tag {t}, which is not in the vocabulary"
@@ -834,6 +917,7 @@ def _greeting_errors(w: _World) -> Iterator[str]:
 
 def _plotmap_errors(w: _World) -> Iterator[str]:
     graph: dict[str, list[str]] = {}
+    yield from w.plotmap_problems
     for src, edges in w.plotmap.items():
         if src not in w.ids["greetings"]:
             yield f"plotmap: {src} is not a greeting"
@@ -947,6 +1031,8 @@ def cmd_apply(args: argparse.Namespace) -> int:
     plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
     try:
         if args.dry_run:
+            if not isinstance(plan, dict):
+                raise PlanError(["the plan must be a JSON object"])
             wid = _resolve_world(plan, args.world_id)
             root = worlds.world_root(wid) if wid else None
             problems = validate_plan(plan, root, wid)
