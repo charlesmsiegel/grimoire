@@ -237,3 +237,14 @@ def test_a_second_spelling_of_a_taken_param_is_listed_not_lost():
 def test_top_k_minus_one_is_off_too():
     params, report = sp.from_sillytavern({"top_k": -1})
     assert params == {} and report["neutral"][0]["value"] == -1
+
+
+def test_a_macro_only_stop_list_is_invalid_and_not_also_neutral():
+    params, report = sp.from_sillytavern({"stopping_strings": ["{{user}}:", "{{char}}:"]})
+    assert params == {}
+    assert len(report["invalid"]) == 2 and report["neutral"] == []
+
+
+def test_an_empty_stop_list_is_neutral():
+    _, report = sp.from_sillytavern({"stopping_strings": []})
+    assert report["neutral"][0]["param"] == "stop"

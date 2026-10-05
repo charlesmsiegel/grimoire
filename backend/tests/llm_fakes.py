@@ -443,6 +443,29 @@ class FlakyProvider:
             yield chunk
 
 
+class RefusingProvider:
+    """Records each attempt as `(model, kwargs)` and refuses the models named in
+    `failing` with an `LLMError` carrying an HTTP `status`.
+
+    For the sampler-preset tests below the facade: whether a fallback attempt
+    was sent the route's preset is a question about the KWARGS each provider
+    call received, and whether a refusal skips the fallback turns on the status
+    and on the parameter the refusal names (`why`) -- `llm._preset_refusal`.
+    """
+
+    def __init__(self, failing=(), kind="bad_response", status=None,
+                 why="temperature must be at most 1"):
+        self.failing = set(failing)
+        self.kind, self.status, self.why = kind, status, why
+        self.calls: list[tuple[str, dict]] = []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.calls.append((model, kwargs))
+        if model in self.failing:
+            raise LLMError(self.kind, f"{model} refused: {self.why}", status=self.status)
+        yield f"from {model}"
+
+
 class RecordingProvider:
     """Answers the two non-generating calls and records what it was asked.
 

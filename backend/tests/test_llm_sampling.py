@@ -156,3 +156,17 @@ def test_report_reports_canonical_names_not_wire_duplicates():
 def test_sent_names_lists_what_went_on_the_wire():
     assert ls.sent_names(_conn("openai_compatible", {"temperature": 1, "min_p": 0.1})) == [
         "temperature"]
+
+
+def test_a_huge_integer_is_a_validation_error_not_an_overflow():
+    big = 10 ** 1000
+    for name in ("top_k", "temperature"):
+        with pytest.raises(ValueError, match=name):
+            ls.validate({name: big})
+
+
+def test_a_malformed_catalog_list_costs_its_entries_not_the_split():
+    conn = _conn("openrouter", {"temperature": 0.5, "top_k": 40},
+                 model_params=["temperature", {"bad": 1}, 3])
+    applied, dropped = ls.split(conn)
+    assert applied == {"temperature": 0.5} and dropped[0]["param"] == "top_k"

@@ -1306,11 +1306,18 @@ def _model_params(conn: dict) -> list[str] | None:
         models = store.llm_connections.cached_models(conn["id"])["models"]
     except (OSError, KeyError, TypeError, ValueError):
         return None
+    # The sidecar is a file a sync or a hand can mangle, and this runs on every
+    # OpenRouter generation: a malformed one reads as "no catalog" (unverified),
+    # never as an exception that fails the turn.
+    if not isinstance(models, list):
+        return None
     model = effective_model(conn)
     for entry in models:
         if isinstance(entry, dict) and entry.get("id") == model:
             params = entry.get("params")
-            return list(params) if isinstance(params, list) else None
+            if not isinstance(params, list):
+                return None
+            return [x for x in params if isinstance(x, str)]
     return None
 
 

@@ -105,3 +105,37 @@ test("an import shows what mapped and what did not", async () => {
 test("stop strings round-trip through their escaped form", () => {
   for (const s of ["\nYou:", "a\\nb", "\t#", "plain"]) expect(decodeStop(encodeStop(s))).toBe(s);
 });
+
+test("a slower read of an earlier file pick cannot replace the later one", async () => {
+  // A FileReader whose loads the test finishes by hand, in any order.
+  const readers: { result: string; onload: (() => void) | null; finish: () => void }[] = [];
+  class HeldReader {
+    result = "";
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    readAsText(f: File) {
+      const me = { result: "", onload: null as (() => void) | null,
+                   finish: () => { this.result = me.result; this.onload?.(); } };
+      void f.name;
+      me.result = f.name === "First.json" ? '{"temp": 0.1}' : '{"temp": 0.9}';
+      readers.push(me);
+    }
+  }
+  vi.stubGlobal("FileReader", HeldReader);
+  try {
+    render(<SamplerPresetEditor />);
+    fireEvent.click(await screen.findByText("Import from SillyTavern…"));
+    const input = screen.getByLabelText("Preset file");
+    fireEvent.change(input, { target: { files: [new File(["x"], "First.json")] } });
+    fireEvent.change(input, { target: { files: [new File(["y"], "Second.json")] } });
+    readers[1].finish();   // the later pick lands first...
+    readers[0].finish();   // ...and the earlier, slower one must be ignored
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLInputElement>("Save as").value).toBe("Second"));
+    fireEvent.click(screen.getByRole("button", { name: "Import" }));
+    await waitFor(() => expect(api.importSamplerPreset).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { temp: 0.9 } })));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

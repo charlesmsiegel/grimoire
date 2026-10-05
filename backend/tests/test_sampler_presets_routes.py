@@ -262,3 +262,22 @@ def test_a_fallback_snapshot_reports_the_fallbacks_own_split(client):
     assert by_model["vendor/unknown"]["sampling"]["applied"] == {"temperature": 0.6}
     assert by_model["vendor/unknown"]["sampling"]["dropped"][0]["param"] == "min_p"
     assert by_model["glm-5.3"]["sampling"]["applied"] == {"temperature": 0.6, "min_p": 0.05}
+
+
+def test_a_huge_integer_is_a_400(client):
+    r = client.post("/api/sampler-presets", json={"name": "x", "params": {"top_k": 10 ** 400}})
+    assert r.status_code == 400 and "top_k" in r.json()["detail"]
+
+
+def test_a_malformed_catalog_sidecar_degrades_to_unverified(client):
+    cid, sid = _scene(client)
+    pid = _preset(client, temperature=0.6)
+    client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    sidecar = store.paths.home() / "llm_connections" / "openrouter.models.json"
+    import json as _json
+    for models in (None, [{"id": "m", "params": [{"x": 1}, "temperature"]}]):
+        sidecar.write_text(_json.dumps({"models": models, "fetched_at": "", "rev": rev}))
+        live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context")
+        assert live.status_code == 200, live.text
+        assert live.json()["sampling"]["applied"] == {"temperature": 0.6}
