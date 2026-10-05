@@ -17,6 +17,8 @@ from grimoire.store import (
     characters,
     entities,
     greetings,
+    image_refs,
+    image_store,
     overlay,
     sync,
     worlds,
@@ -324,6 +326,33 @@ def test_promote_carries_an_emergent_character_into_the_library(monkeypatch, tmp
 
     assert characters.read_character(worlds.world_root(wid), aid)["meta"]["name"] == "Winifred"
     assert sync.incoming(cid) == []
+
+
+def test_sync_promote_copies_refs_not_bytes(monkeypatch, tmp_path):
+    """Promotion puts the campaign's placements in the world: the world record
+    names the very images the campaign does, and no blob is written."""
+    wid, cid = _world_and_campaign(monkeypatch, tmp_path)
+    aid, vid = overlay.create_character(cid, "Mara")
+    croot = campaigns.campaign_root(cid)
+    assets.put_image(croot, aid, vid, "avatar", b"\x89PNG\r\n\x1a\nmara", "png")
+    assets.put_image(croot, aid, vid, "gallery_1", b"\x89PNG\r\n\x1a\nstair", "png")
+    assets.write_focus(croot, aid, vid, 70)
+    blobs = image_store.store_root() / "blobs"
+    before = sorted(p for p in blobs.rglob("*") if p.is_file())
+
+    def no_ingest(*args, **kwargs):
+        raise AssertionError("bytes were re-ingested")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(image_store, "ingest", no_ingest)
+        sync.promote(cid, "characters", aid)
+
+    assert sorted(p for p in blobs.rglob("*") if p.is_file()) == before
+    cd = assets.version_dir(croot, aid, vid)
+    wd = assets.version_dir(worlds.world_root(wid), aid, vid)
+    assert image_refs.scan(wd) == image_refs.scan(cd)
+    assert set(image_refs.scan(wd)) == {"avatar", "gallery_1"}
+    assert image_refs.read(wd, "avatar").focus == 70
 
 
 def test_a_promoted_character_then_syncs_like_any_other(monkeypatch, tmp_path):

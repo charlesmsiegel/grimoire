@@ -64,6 +64,8 @@ from . import (
     failsoft,
     greetings,
     image_descriptions,
+    image_refs,
+    image_store,
     locks,
     pcs,
     taglines,
@@ -546,14 +548,23 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
     Two rules, both the overlay's own, and both the reason this lives here
     rather than in the caller:
 
-    - **A file the campaign already has wins**, and is not overwritten. That is
-      the whole per-file overlay rule, and `image_root` checks the campaign's
-      own file *before* anything else, so copying over one would replace a
-      picture this campaign chose with the world's.
+    - **What the campaign already has wins**, and is not overwritten. That is
+      the whole overlay rule, and `image_root` checks the campaign's own image
+      *before* anything else, so copying over one would replace a picture this
+      campaign chose with the world's. Images are judged per logical NAME
+      (`assets.copy_slots`), not per file: a campaign's legacy `gallery_1.png`
+      holds that slot against the world's `gallery_1` placement, and a
+      campaign's image-less placement -- the crop it set on an avatar it
+      inherited -- holds no image, so the world's is written into it under the
+      campaign's crop. Every other file wins by path, as before.
     - **A tombstoned asset stays gone.** `image_root` checks the campaign file
       first and the tombstone second, so a blind copy would hand back exactly
       the image the user deleted here — the deletion undone by an operation
-      aimed at a different record entirely.
+      aimed at a different record entirely. The tombstone names the slot, so
+      it hides a placement and a legacy file alike.
+
+    The promotion journal (``image-refs/.promote.json``) is never copied: it
+    describes a swap in progress in the WORLD's folder.
     """
     if kind not in INHERITED_KINDS or not safe_id(rid):
         return
@@ -562,11 +573,19 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
         return
     dst = _record_dir(croot_of(cid), kind, rid)
     gone = deleted(cid)
+    # The images, per logical NAME (`assets.copy_slots`): a slot is a
+    # placement or a legacy file, and which of them the campaign already holds
+    # under that name is what decides -- never whether one particular FILE of
+    # the world's exists here.
+    assets_dir = src / "assets"
+    if assets_dir.is_dir():
+        for src_v in sorted(p for p in assets_dir.iterdir() if p.is_dir()):
+            _copy_slots_down(kind, rid, src_v, dst / "assets" / src_v.name, gone)
     for p in sorted(src.rglob("*")):
         if not p.is_file():
             continue
         rel = p.relative_to(src)
-        if _tombstoned_asset(kind, rid, rel, gone):
+        if _image_slot_file(rel) or _tombstoned_asset(kind, rid, rel, gone):
             continue
         target = dst / rel
         if target.exists():
@@ -581,15 +600,44 @@ def copy_record_dir_down(cid: str, kind: str, rid: str) -> None:
         atomic.write_bytes(target, p.read_bytes())
 
 
+def _copy_slots_down(kind: str, rid: str, src_v: Path, dst_v: Path, gone: set[str]) -> None:
+    """`copy_record_dir_down` for one version folder: every slot the campaign
+    has not tombstoned BY NAME."""
+    vid = src_v.name
+
+    def tombstoned(name: str) -> bool:
+        return _asset_ref(kind, rid, vid, name) in gone
+
+    assets.copy_slots(src_v, dst_v, skip=tombstoned)
+
+
+def _image_slot_file(rel: Path) -> bool:
+    """Is `rel` (relative to a record dir) part of an image slot that
+    `assets.copy_slots` copies -- a legacy image file directly in
+    `assets/<vid>/`, or anything under its `image-refs/` (placements and the
+    promotion journal, which is never copied)?"""
+    parts = rel.parts
+    if len(parts) < 3 or parts[0] != "assets":
+        return False
+    if len(parts) == 3:
+        return assets.is_slot_file(rel)
+    return parts[2] == image_refs.REFS_DIR
+
+
 def _tombstoned_asset(kind: str, rid: str, rel: Path, gone: set[str]) -> bool:
     """Does a per-asset tombstone hide `rel`? `assets/<vid>/<name>.<ext>` is the
-    layout `assets._dir` writes, and `_asset_ref` keys the tombstone on
-    (base, id, vid, name) — the extension is not part of it, because deleting
-    an image and uploading a different format of it is the same slot."""
+    legacy layout `assets._dir` wrote and `assets/<vid>/image-refs/<name>.json`
+    a placement; `_asset_ref` keys the tombstone on (base, id, vid, name) for
+    both -- the extension is not part of it, because deleting an image and
+    uploading a different format of it is the same slot."""
     parts = rel.parts
-    if len(parts) != 3 or parts[0] != "assets":
+    if parts[:1] != ("assets",):
         return False
-    return _asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
+    if len(parts) == 3:
+        return _asset_ref(kind, rid, parts[1], Path(parts[2]).stem) in gone
+    if len(parts) == 4 and parts[2] == image_refs.REFS_DIR:
+        return _asset_ref(kind, rid, parts[1], Path(parts[3]).stem) in gone
+    return False
 
 
 def _put_base(cid: str, ref: str, base: str) -> None:
@@ -1799,6 +1847,9 @@ def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "character
 def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
     """Copy-up the named image and the current avatar, then swap campaign-side.
 
+    The copy-up is a LINK: the campaign's slot is a placement naming the
+    world's image, so promoting inherited art writes no blob.
+
     UNDER `campaign_lock`, for `set_description`'s reason and then one of its
     own. The sidecar lock serializes each *write* to the file, which is not
     enough here: this reads the resolved descriptions and writes them back a
@@ -1841,8 +1892,14 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
             if n in resolved:
                 image_descriptions.set_description(croot, aid, vid, n, resolved[n],
                                                    base, names=union)
-            assets.put_image(croot, aid, vid, n, src.read_bytes(),
-                             src.suffix.lstrip("."), base)
+            # By REFERENCE (spec section 8): the campaign slot names the very
+            # image the world's does, so no blob is written. A legacy world
+            # file is ingested once -- the store keeps its blob -- and the
+            # world's folder is left as it was.
+            placed = assets.resolve(assets.version_dir(wroot, aid, vid, base), n)
+            image_id = (placed.image_id if placed is not None
+                        else image_store.ingest(src.read_bytes(), src.suffix[1:]).id)
+            assets.link_in(assets.version_dir(croot, aid, vid, base), n, image_id)
         assets.promote_image(croot, aid, vid, name, base)
         # When there was no avatar to swap into the promoted slot, the swap
         # leaves no campaign file at `name`, so the inherited image there would

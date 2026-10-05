@@ -1479,3 +1479,65 @@ def test_a_journal_whose_post_is_not_the_swap_of_its_pre_is_discarded(tmp_path):
     assert _slot_ids(tmp_path, assets.AVATAR, "gallery_1") == (a, g)
     assert _descriptions(tmp_path) == {"avatar": "Seraphine at the gate",
                                        "gallery_1": "Seraphine on the stair"}
+
+
+# ---- copy_slots: tree copies per logical name -------------------------------
+
+def _src_dst(tmp_path):
+    src = _vdir(tmp_path, "sera")
+    dst = _vdir(tmp_path, "mara")
+    return src, dst
+
+
+def test_copy_slots_copies_refs_as_refs_and_legacy_as_files(tmp_path):
+    src, dst = _src_dst(tmp_path)
+    assets.put_image(tmp_path, "sera", "default", assets.AVATAR, _png(1), "png")
+    assets.write_focus(tmp_path, "sera", "default", 20)
+    (src / "gallery_1.png").write_bytes(_png(2))
+    (src / assets.DESCRIPTIONS_FILE).write_text("{}", encoding="utf-8")
+    image_refs.write_journal(src, {"name": "nonsense"})   # malformed: recovery drops it
+
+    assets.copy_slots(src, dst)
+
+    assert image_refs.read(dst, assets.AVATAR) == image_refs.read(src, assets.AVATAR)
+    assert image_refs.read(dst, assets.AVATAR).focus == 20
+    assert (dst / "gallery_1.png").read_bytes() == _png(2)
+    assert image_refs.read(dst, "gallery_1") is None
+    assert not (dst / assets.DESCRIPTIONS_FILE).exists()    # sidecars are the caller's
+    assert image_refs.read_journal(dst) is None
+
+
+def test_copy_slots_skips_tombstoned_names_and_held_slots(tmp_path):
+    src, dst = _src_dst(tmp_path)
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(1), "png")
+    assets.put_image(tmp_path, "sera", "default", "gallery_2", _png(2), "png")
+    assets.put_image(tmp_path, "mara", "default", "gallery_1", _png(3), "png")
+
+    assets.copy_slots(src, dst, skip=lambda n: n == "gallery_2")
+
+    assert assets.image_path(tmp_path, "mara", "default", "gallery_1").read_bytes() == _png(3)
+    assert image_refs.read(dst, "gallery_2") is None
+
+
+def test_copy_slots_overwrite_replaces_a_legacy_slot_with_the_ref(tmp_path):
+    src, dst = _src_dst(tmp_path)
+    assets.put_image(tmp_path, "sera", "default", "gallery_1", _png(1), "png")
+    dst.mkdir(parents=True)
+    (dst / "gallery_1.jpg").write_bytes(b"old legacy bytes")
+
+    assets.copy_slots(src, dst, overwrite=True)
+
+    assert image_refs.read(dst, "gallery_1") == image_refs.read(src, "gallery_1")
+    assert not (dst / "gallery_1.jpg").exists()
+    assert assets.image_path(tmp_path, "mara", "default", "gallery_1").read_bytes() == _png(1)
+
+
+def test_copy_slots_overwrite_with_an_override_replaces_only_the_crop(tmp_path):
+    src, dst = _src_dst(tmp_path)
+    assets.write_focus(tmp_path, "sera", "default", 60)       # image-less override
+    assets.put_image(tmp_path, "mara", "default", assets.AVATAR, _png(4), "png")
+    held = image_refs.read(dst, assets.AVATAR).image
+
+    assets.copy_slots(src, dst, overwrite=True)
+
+    assert image_refs.read(dst, assets.AVATAR) == image_refs.Ref(assets.AVATAR, held, 60)

@@ -24,7 +24,19 @@ import shutil
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import actor_names, atomic, characters, entities, greetings, locks, overlay, pcs, revision
+from . import (
+    actor_names,
+    assets,
+    atomic,
+    characters,
+    entities,
+    greetings,
+    image_refs,
+    locks,
+    overlay,
+    pcs,
+    revision,
+)
 from .appearances import paths as appearances_paths
 from .appearances import versions as appearances_versions
 from .campaigns import lifecycle as campaigns_lifecycle
@@ -651,9 +663,15 @@ def _copy_extras(what: str, copy) -> None:
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
-    """Copy a record's asset tree, file by file and atomically.
+    """Copy a record's asset tree (`<record>/assets`) into a fresh library
+    record, replacing what is there.
 
-    Not `shutil.copytree`, for the reason `sheets/tally.py` gives at the
+    The images go per logical NAME, one version folder at a time
+    (`assets.copy_slots`, ``overwrite=True``): a placement is copied as a
+    placement, so the library record names the very images the campaign does
+    and no blob is written, and a legacy file as a file. The promotion journal
+    never travels. Every other file is copied file by file and atomically --
+    not `shutil.copytree`, for the reason `sheets/tally.py` gives at the
     identical copy in the other direction: a partial copy must never appear
     under a real name. The destination here is a LIVE world record's asset
     directory, which every campaign of that world reads through the overlay the
@@ -661,10 +679,17 @@ def _copy_tree(src: Path, dst: Path) -> None:
     """
     if not src.is_dir():
         return
+    for src_v in sorted(p for p in src.iterdir() if p.is_dir()):
+        assets.copy_slots(src_v, dst / src_v.name, overwrite=True)
     for p in sorted(src.rglob("*")):
         if not p.is_file():
             continue
-        target = dst / p.relative_to(src)
+        rel = p.relative_to(src)
+        if len(rel.parts) == 2 and assets.is_slot_file(rel):
+            continue    # a legacy image file: `copy_slots` copied its slot
+        if len(rel.parts) >= 3 and rel.parts[1] == image_refs.REFS_DIR:
+            continue    # placements and the journal: likewise
+        target = dst / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         atomic.write_bytes(target, p.read_bytes())
 

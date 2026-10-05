@@ -23,6 +23,7 @@ import json
 import os
 import shutil
 import threading
+from collections.abc import Callable
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
@@ -522,6 +523,107 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
                 p.unlink()
             except OSError:
                 pass
+
+
+def is_slot_file(p: Path) -> bool:
+    """Whether file `p`, directly inside a version folder, is a legacy image
+    file -- a slot `copy_slots` answers for -- rather than one of the folder's
+    other files (`descriptions.json`, `focus.json`, ...). The rule is
+    `names_in`'s, so the two agree on what counts as a slot."""
+    return bool(_norm_ext(p.suffix)) and _addressable_name(p.stem)
+
+
+def copy_slots(src: Path, dst: Path, *, skip: Callable[[str], bool] = lambda n: False,
+               overwrite: bool = False) -> None:
+    """Copy the image SLOTS of version folder `src` into `dst`, one logical
+    name at a time -- never file by file (spec section 6, "tree copies are per
+    logical name").
+
+    A slot is every name `names_in(src)` reports plus every image-less
+    placement (an occurrence override). A slot `skip` names is never copied:
+    that is how a caller applies tombstones, which key on the logical name.
+
+    - ``overwrite=False`` copies a slot only into a name `dst` holds no image
+      under -- neither an image-bearing placement nor a legacy file. An
+      image-less placement in `dst` does not count as an image: the source's
+      image is written into it and the DESTINATION's focus kept (it is the
+      crop somebody chose for this occurrence).
+    - ``overwrite=True`` (a promotion into a fresh library record) replaces
+      the slot in `dst`. An image-less source placement replaces only the
+      crop, never the destination's image: it carries no image to replace one
+      with.
+
+    A placement is copied as a placement (same image, same focus) and a legacy
+    file as a file of the same name, through `atomic`; a legacy file is copied
+    only when the source holds no image-bearing placement that resolves --
+    one that does not resolve yet is backed by the file meanwhile, so both
+    travel. The promotion journal is never copied, and nothing else in `src`
+    either: its sidecars (`descriptions.json`, `focus.json`, ...) are the
+    caller's, which copies them by its own rules (`is_slot_file` tells them
+    apart).
+
+    `src` is repaired first (`_recover_promotion`), so a half-finished swap is
+    not copied as a duplicate or a hole; each slot is written under `dst`'s
+    name lock, serialized with uploads, after `dst`'s own repair.
+    """
+    if not src.is_dir():
+        return
+    _recover_promotion(src)
+    refs = image_refs.scan(src)
+    names = names_in(src)[0] | {n for n in refs if _addressable_name(n)}
+    for name in sorted(names):
+        if skip(name) or not _addressable_name(name):
+            continue
+        ref = refs.get(name)
+        legacy = (_legacy_path(src, name, True)
+                  if ref is None or ref.image is None or image_refs.resolve_ref(ref) is None
+                  else None)
+        if ref is None and legacy is None:
+            continue   # vanished since the scan
+        dst.mkdir(parents=True, exist_ok=True)
+        with _image_lock(dst, name):
+            _recover_promotion(dst)
+            _copy_slot(src, dst, name, ref, legacy, overwrite)
+
+
+def _copy_slot(src: Path, dst: Path, name: str, ref: image_refs.Ref | None,
+               legacy: Path | None, overwrite: bool) -> None:
+    """One slot of `copy_slots`: `ref` is the source placement, `legacy` the
+    source file to copy (None when a resolving placement makes it redundant).
+    Caller holds `_image_lock(dst, name)`."""
+    held = image_refs.read(dst, name)
+    held_image = held is not None and held.image is not None
+    held_files = _snapshot_siblings(dst, name, False)
+    if held_image or held_files:
+        if not overwrite:
+            return     # the destination's own image wins
+        if ref is not None and ref.image is None and legacy is None:
+            # An occurrence override carries a crop and no image, so over an
+            # image it replaces the crop alone.
+            image_refs.write(dst, name, held.image if held is not None else None,
+                             focus=ref.focus)
+            return
+    # Without `overwrite`, any placement `dst` still holds here is image-less:
+    # an override whose crop is kept under the image copied into it.
+    if held is not None and not overwrite:
+        focus = held.focus
+    else:
+        focus = ref.focus if ref is not None else None
+    if legacy is not None:
+        target = dst / legacy.name
+        atomic.write_bytes(target, legacy.read_bytes())
+        if overwrite:
+            # Replaced, not merged: another extension left behind would
+            # outrank the copy by mtime.
+            _drop_snapshotted([s for s in held_files if s[0] != target])
+    if ref is not None and ref.image is not None:
+        image_refs.write(dst, name, ref.image, focus=focus)
+        if overwrite and legacy is None:
+            _drop_if_placed(dst, name, ref.image, held_files)
+    elif held is not None or focus is not None:
+        # The copied slot is a legacy file: `dst`'s placement keeps only the
+        # crop (or goes, with none), so it can never shadow the file.
+        image_refs.write(dst, name, None, focus=focus)
 
 
 def image_path(root: Path, cid: str, vid: str, name: str, base: str = "characters") -> Path | None:

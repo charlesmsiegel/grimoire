@@ -1431,6 +1431,34 @@ def test_campaign_avatar_focus_on_inherited_world_avatar(client):
     assert detail["versions"][0]["avatar_focus"] == 40
 
 
+def test_campaign_focus_on_inherited_avatar_is_override(client):
+    """Focus set on an inherited avatar is an occurrence override: an image-less
+    campaign placement, never a campaign `focus.json` and never a copy of the
+    art -- so a later world avatar still shows through, under the campaign's
+    crop (spec section 4)."""
+    wid, cid = _campaign(client)
+    chid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Seraphine"}).json()["character"]
+    world = f"/api/worlds/{wid}/characters/{chid}/versions/default/images"
+    client.put(f"{world}/avatar", files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    base = f"/api/campaigns/{cid}/characters/{chid}/versions/default/images"
+
+    assert client.put(f"{base}/avatar/focus", json={"focus": 35}).status_code == 200
+
+    cd = store.assets.version_dir(store.campaigns.campaign_root(cid), chid, "default")
+    assert store.image_refs.read(cd, "avatar") == store.image_refs.Ref("avatar", None, 35)
+    assert not (cd / store.assets.FOCUS_FILE).exists()
+    detail = client.get(f"/api/campaigns/{cid}/characters/{chid}").json()
+    assert detail["versions"][0]["avatar_focus"] == 35
+
+    new = _png_bytes(color=(200, 10, 10))
+    client.put(f"{world}/avatar", files={"file": ("b.png", io.BytesIO(new), "image/png")})
+
+    served = client.get(f"{base}/avatar")
+    assert served.status_code == 200 and served.content == new
+    detail = client.get(f"/api/campaigns/{cid}/characters/{chid}").json()
+    assert detail["versions"][0]["avatar_focus"] == 35
+
+
 def test_campaign_copy_image_from_greeting_inherited_greeting(client):
     """A thin campaign never copies a greeting's assets either; copying an
     inherited greeting's image into a character must still find the source
