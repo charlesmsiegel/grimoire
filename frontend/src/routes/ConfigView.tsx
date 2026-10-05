@@ -17,6 +17,7 @@ import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
 import { useThemeSetting } from "../theme/useThemeSetting";
+import { EMBEDDINGS_COPY, embeddingsOn } from "./embeddingsOn";
 
 /** Every config field this page edits. One list, because it is what the draft
  *  is built from, what the dirty count is counted over, and what Save sends —
@@ -129,7 +130,7 @@ const SECTIONS: SectionDef[] = [
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
     fields: ["tracker", "perception_rider"] },
-  { id: "semantic", group: "What the model sees", label: "Semantic recall",
+  { id: "semantic", group: "What the model sees", label: "Embeddings",
     fields: ["embeddings_connection_id", "embeddings_model",
              "semantic_recall_depth", "semantic_recall_threshold"] },
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
@@ -377,7 +378,14 @@ export default function ConfigView() {
       case "layout": return draft?.prompt_layout_enabled === "on" ? "on" : "off";
       // Unset reads as on, like the checkbox: the shipped default is on.
       case "tracker": return draft?.tracker === "off" ? "off" : "on";
-      case "semantic": return recallOff ? "off" : "on";
+      // Two answers, because they are two switches: whether anything embeds
+      // (the connection and model — every embedder's gate), and how many
+      // entries recall adds. Depth 0 stops recall and nothing else.
+      case "semantic": {
+        if (!draft || !embeddingsOn(draft, connections)) return "off";
+        const depth = draft.semantic_recall_depth.trim();
+        return depth === "" || depth === "0" ? "on · recall off" : `on · recall ${depth}`;
+      }
       // Deliberately blank: the rate table, the routing records and the
       // response preset are each a document of their own, and "12 entries" is
       // a size rather than a setting.
@@ -485,7 +493,6 @@ export default function ConfigView() {
   }
 
   const current = SECTIONS.find((s) => s.id === section)!;
-  const recallOff = !draft?.embeddings_connection_id || draft.semantic_recall_depth === "0";
   /** The fallback as the picker can show it: a saved id equal to the active
    *  connection is no longer offered as an option, and the backend drops it
    *  anyway, so it reads as None. */
@@ -1089,9 +1096,10 @@ export default function ConfigView() {
               entries the keywords missed, picking the ones closest in meaning to what has just
               been said — so the lore about a character's inherited sword can surface when the
               scene talks about the blade her mother left her. It only ever adds, never removes,
-              and lore owned by an absent character stays hidden either way. Leave the connection
-              blank, or set entries to <code>0</code>, to turn it off.
+              and lore owned by an absent character stays hidden either way. Set recalled entries
+              to <code>0</code> to turn recall off.
             </p>
+            <p className="config-copy">{EMBEDDINGS_COPY}</p>
             <div className="config-fields">
               <div className="config-field">
                 <label htmlFor="cfg-embeddings-connection">Embeddings connection</label>
@@ -1113,7 +1121,7 @@ export default function ConfigView() {
                 </div>
               </div>
               <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"
-                        caption="0 = off" value={draft.semantic_recall_depth}
+                        caption="0 = recall off" value={draft.semantic_recall_depth}
                         onChange={(v) => edit("semantic_recall_depth", v)} />
               <NumField id="cfg-semantic-threshold" label="Similarity threshold" decimal
                         placeholder="0.4" caption="0 to 1" value={draft.semantic_recall_threshold}
@@ -1126,10 +1134,13 @@ export default function ConfigView() {
               actually activated.
             </p>
             <p className="config-copy">
-              <strong>This sends text to the endpoint above.</strong> Turning it on means recent
-              scene text, and the world info being searched, go to that embeddings provider as
-              well as to your LLM connection — a second place your campaign is read. Point it at
-              a local endpoint to keep it on your machine.
+              <strong>This sends text to the endpoint above.</strong> With a connection and model
+              set, these go to that embeddings provider as well as to your LLM connection — a
+              second place your campaign is read: recent scene text and the world info being
+              searched (recall), image descriptions (the art catalogue), the scenes and records
+              being searched when you search the library by meaning, and plot-thread and
+              commitment summaries after each wrap-up (finding possible overlaps). Point it at a
+              local endpoint to keep it on your machine.
             </p>
           </>
         )}

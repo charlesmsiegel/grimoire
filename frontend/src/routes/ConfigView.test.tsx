@@ -1,6 +1,7 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import ConfigView from "./ConfigView";
+import { EMBEDDINGS_COPY } from "./embeddingsOn";
 
 vi.mock("../api/client", () => ({
   ApiError: class ApiError extends Error {},
@@ -107,7 +108,7 @@ test("the column indexes every section in three groups", async () => {
   for (const label of [
     /^Storage/, /^Backups/, /^Connection/, /^Model routing/, /^Timeouts/, /^Context/,
     /^Prompt layout/, /^Scene tracker/,
-    /^Semantic recall/, /^System prompt/, /^Response targets/, /^Transcript/,
+    /^Embeddings/, /^System prompt/, /^Response targets/, /^Transcript/,
     /^While playing/, /^Appearance/,
   ]) {
     expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
@@ -433,7 +434,7 @@ test("edits the context scan depth", async () => {
 
 test("semantic recall is off by default and offers only openai-compatible connections", async () => {
   renderView();
-  await open(/^Semantic recall/);
+  await open(/^Embeddings/);
   const picker = screen.getByLabelText(/embeddings connection/i);
   expect(picker).toHaveValue("");                        // off until pointed somewhere
   expect(screen.getByLabelText(/recalled entries/i)).toHaveValue("0");
@@ -445,7 +446,7 @@ test("semantic recall is off by default and offers only openai-compatible connec
 
 test("turns semantic recall on and saves every knob together", async () => {
   renderView();
-  await open(/^Semantic recall/);
+  await open(/^Embeddings/);
   fireEvent.change(screen.getByLabelText(/embeddings connection/i), { target: { value: "local" } });
   fireEvent.change(screen.getByLabelText(/embedding model/i), { target: { value: "text-embedding-3-small" } });
   fireEvent.change(screen.getByLabelText(/recalled entries/i), { target: { value: "4" } });
@@ -455,6 +456,47 @@ test("turns semantic recall on and saves every knob together", async () => {
     embeddings_connection_id: "local", embeddings_model: "text-embedding-3-small",
     semantic_recall_depth: "4", semantic_recall_threshold: "0.55",
   }));
+});
+
+test("the embeddings chip reports embedding separately from recall depth", async () => {
+  // Set through the SAVED config, never by editing the form: an edited row
+  // shows "unsaved" in the value's slot, not its value.
+  (api.getConfig as any).mockResolvedValue({
+    ...cfg, embeddings_connection_id: "local", embeddings_model: "text-embedding-3-small",
+    semantic_recall_depth: "0",
+  });
+  renderView();
+  expect(await screen.findByRole("button", { name: /^Embeddings.*on · recall off/ }))
+    .toBeInTheDocument();
+});
+
+test("the embeddings chip reads off without a model", async () => {
+  (api.getConfig as any).mockResolvedValue({
+    ...cfg, embeddings_connection_id: "local", embeddings_model: "", semantic_recall_depth: "4",
+  });
+  renderView();
+  const row = await screen.findByRole("button", { name: /^Embeddings/ });
+  expect(row).toHaveAccessibleName(/^Embeddings\s*off$/);
+});
+
+test("the copy is the spec text verbatim", async () => {
+  renderView();
+  await open(/^Embeddings/);
+  // An exact, whole-string match: the sentence is its own paragraph.
+  expect(screen.getByText(EMBEDDINGS_COPY).tagName).toBe("P");
+});
+
+test("the disclosure names every embedded payload", async () => {
+  renderView();
+  await open(/^Embeddings/);
+  const p = screen.getByText(/This sends text to the endpoint above/).closest("p")!;
+  for (const payload of [
+    "recent scene text", "world info", "image descriptions", "search the library by meaning",
+    "plot-thread and commitment summaries",
+  ]) {
+    expect(p.textContent).toContain(payload);
+  }
+  expect(p.textContent).not.toBe(EMBEDDINGS_COPY);
 });
 
 test("saves the rolling-summary cadence", async () => {
