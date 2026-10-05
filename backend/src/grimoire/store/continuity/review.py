@@ -265,6 +265,51 @@ def merged_sources(cid: str, ref: str) -> list[str]:
                   if isinstance(record, dict) and record.get("to") == ref)
 
 
+#: The staged edit kinds whose target can be an alias source, and the ref
+#: prefix each one's target id takes.
+_MERGEABLE_EDITS = {"plot": "thread", "commitment": "commitment"}
+
+
+def merged_edit_targets(cid: str, edits: list) -> list[dict]:
+    """Every plot/commitment edit in a review batch whose physical target is
+    now a live alias source -- merged away after the review was staged.
+
+    Slice C redirects a row naming an alias source when the review is STAGED.
+    A review staged before the merge still names the source, and its `before`
+    token was read off the source, so the save refuses it rather than
+    redirecting: a beat written onto the canonical at save time is one
+    `check_conflicts` never vouched for. Each entry is
+    ``{index, id, label, source, canonical, canonical_title}``; `index` counts
+    the submitted batch, as `check_conflicts`' does.
+
+    A malformed continuity.json reads as no aliases (`doc.read`), so no alias
+    is effective and this lists nothing -- the same view every effective reader
+    and the staging redirect take of it."""
+    ledgers = effective.Ledgers.load(cid)
+    live = effective.live_canon(cid, ledgers)
+    out: list[dict] = []
+    for index, edit in enumerate(edits):
+        if not isinstance(edit, dict):
+            continue
+        kind = edit.get("kind")
+        prefix = _MERGEABLE_EDITS.get(kind) if isinstance(kind, str) else None
+        target = edit.get("target")
+        rid = target.get("id") if isinstance(target, dict) else None
+        if prefix is None or not isinstance(rid, str) or not rid:
+            continue
+        source = f"{prefix}:{rid}"
+        canonical = live.get(source)
+        if canonical is None or canonical == source:
+            continue
+        label = edit.get("label")
+        out.append({"index": index, "id": rid,
+                    "label": label if isinstance(label, str) and label
+                    else describe(cid, source, ledgers),
+                    "source": source, "canonical": canonical,
+                    "canonical_title": describe(cid, canonical, ledgers)})
+    return out
+
+
 def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
     """Remove every alias and link that names `ref`, journalling each removal.
 
