@@ -70,6 +70,19 @@ filtered by verdict here, against the same `pending.Current` discovery read, so
 a pair the reader dismissed or linked, or a re-check under a Keep open that
 still holds, is never re-asked.
 
+**Adjudication** (§11.2-§11.4, Decision 13) is one model call per sweep, never
+one per finding. `select` chooses what it asks -- overdue resolutions, then
+duplicates strongest first, then the rest, capped at `RECONCILE_MAX_CANDIDATES`
+-- from the findings with no proposal, re-checking each model-only nomination
+so nothing the reader dismissed or linked is sent. `build_payload` sends the
+records those findings name and nothing else of the ledger: each record's line,
+its last beats with their scenes, its pressure, links and people, and the
+chronicle lines around them -- never a transcript. The scenes it shows are the
+only evidence `parse_output` accepts. The parser trusts no field of the reply:
+a word outside the candidate's vocabulary, a direction the link rules refuse,
+or a closure without a reason and a known evidence scene is ``uncertain``, and
+a reply with no decodable object is None -- a failed run, not "no proposals".
+
 **Soft all the way down.** Pools, aging, the clock and pressure can each run
 user calendar-plugin code or read a garbled ledger, so each is read through
 `_soft`; a source that fell back, or whose ledger or chronicle could not be
@@ -85,13 +98,26 @@ prompts later.
 from __future__ import annotations
 
 import hashlib
+import re
 import time
 from collections.abc import Callable, Iterable
 from typing import Any, Literal, TypeVar
 
-from ... import embeddings
-from .. import aging, calendars, chronicle, clock, embed_space, errors, fieldtext, paths, vectors
-from . import candidates, canon, effective, pending, pressure, similarity
+from ... import embeddings, prompts
+from .. import (
+    aging,
+    calendars,
+    chronicle,
+    clock,
+    embed_space,
+    errors,
+    fieldtext,
+    paths,
+    relationships,
+    vectors,
+)
+from ..absorb import parse as absorb_parse
+from . import candidates, canon, effective, involvement, pending, pressure, similarity
 
 #: Uncached texts one sweep may embed: four `embeddings.BATCH` round trips under
 #: one shared `embeddings.TIMEOUT`. Nobody waits on a sweep, but a live one
@@ -612,3 +638,442 @@ def pressure_by_ref(cid: str) -> dict[str, dict]:
     none), a thread's aging -- ``stale`` or ``ok``, with no day. ``{}`` when
     the read fails; discovery and the candidates read both use it."""
     return _soft(_pressure_by_ref, {}, cid)
+
+
+# -------------------------------------------------------------- adjudication
+
+#: What the model may answer, per vocabulary (spec §11.3). §5.3 allows
+#: ``continues`` and ``subthread_of`` between threads only, so the same-type
+#: list is read per type (deviation 18), and no vocabulary but a same-type one
+#: offers ``duplicate`` (§3.6).
+DECISIONS: dict[str, tuple[str, ...]] = {
+    "same_thread": ("duplicate", "continuation", "subthread", "related", "distinct",
+                    "uncertain"),
+    "same_commitment": ("duplicate", "related", "distinct", "uncertain"),
+    "cross": ("pays_off", "related", "distinct", "uncertain"),
+    "thread": ("close", "keep_open", "uncertain"),
+    "commitment": ("fulfilled", "broken", "expired", "keep_open", "uncertain"),
+    "temporal": ("before", "on", "after", "by", "unrelated", "uncertain"),
+}
+
+#: What each vocabulary asks, as a candidate's heading in the user prompt.
+LABELS: dict[str, str] = {
+    "same_thread": "two plot threads",
+    "same_commitment": "two commitments",
+    "cross": "a plot thread and a commitment",
+    "thread": "whether a plot thread is finished",
+    "commitment": "whether a commitment is resolved",
+    "temporal": "a commitment and a dated event",
+}
+
+#: A pair word -> the link relation it proposes (§5.3); ``duplicate`` proposes
+#: an alias, which is not a link.
+_RELATION_OF = {"duplicate": "", "continuation": "continues", "subthread": "subthread_of",
+                "related": "related_to", "pays_off": "pays_off"}
+#: The words whose meaning depends on which record is which (§11.3).
+_DIRECTED = frozenset({"duplicate", "continuation", "subthread", "pays_off"})
+#: The lifecycle words that propose a status, and so need positive evidence
+#: (§11.4); ``keep_open`` writes no status.
+_STATUS_OF = {"close": "closed", "fulfilled": "fulfilled", "broken": "broken",
+              "expired": "expired"}
+_LETTERS = ("A", "B")
+#: A leading ``candidate`` word, as the user prompt prints a key (``Candidate c1``).
+_CANDIDATE_WORD = re.compile(r"^candidate(?![a-z0-9])[\s:#.-]*")
+
+
+def vocabulary(record: dict) -> str:
+    """The `DECISIONS` key a cached record is asked under: its lifecycle type,
+    ``temporal`` for a commitment beside an event, the refs' type for a
+    duplicate, else ``cross``."""
+    kind = record.get("kind")
+    if kind == "possible_thread_closure":
+        return "thread"
+    if kind == "possible_commitment_resolution":
+        return "commitment"
+    if pending.is_temporal(record):
+        return "temporal"
+    if kind == "possible_duplicate":
+        refs = record.get("refs") or [""]
+        first = refs[0] if isinstance(refs[0], str) else ""
+        return "same_commitment" if first.startswith("commitment:") else "same_thread"
+    return "cross"
+
+
+# ---------------------------------------------------------------- selection
+
+
+def _number(value) -> float:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else 0.0
+
+
+def _count(value) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _priority(item: dict) -> tuple:
+    """Decision 13: overdue resolutions, then duplicates strongest first, then
+    the rest by kind; the id breaks every tie."""
+    kind, signals = item["kind"], item["signals"]
+    if kind == "possible_commitment_resolution" and signals.get("reason") == "overdue":
+        return (0, (), item["id"])
+    if kind == "possible_duplicate":
+        shared = sum(_count(signals.get(key))
+                     for key in ("shared_actors", "shared_scenes", "shared_anchors"))
+        return (1, (-bool(signals.get("title_exact")), -bool(signals.get("slug_equal")),
+                    -shared, -_number(signals.get("lexical")),
+                    -_number(signals.get("cosine"))), item["id"])
+    return (2, (candidates.KINDS.index(kind),), item["id"])
+
+
+def _item(key: str, record: dict) -> dict:
+    return {"id": key, "kind": record["kind"], "refs": list(record["refs"]),
+            "signals": dict(record["signals"]), "fingerprint": record["fingerprint"]}
+
+
+def select(cid: str, sweep: Sweep) -> list[dict]:
+    """What the one model call is asked (§11.1 step 3, Decision 13), at most
+    `RECONCILE_MAX_CANDIDATES`, by priority.
+
+    Read from the cache as persist 1 left it: every record with no proposal
+    whose verdict is ``live``. Then the sweep's model-only nominations that are
+    not cached with a proposal, each re-checked against the `pending.Current`
+    loaded here: a dismissal or a link that landed after discovery is honoured,
+    so nothing suppressed, satisfied or gone is ever sent. With continuity.json
+    malformed nothing is."""
+    if sweep.continuity == "malformed":
+        return []
+    current = _soft(pending.Current.load, None, cid)
+    if current is None or current.continuity_malformed:
+        return []
+    stored = candidates.read(cid)["records"]
+    chosen: dict[str, dict] = {}
+    for key, record in stored.items():
+        if record["proposal"] is None and _soft(pending.verdict, "", current, record) == "live":
+            chosen[key] = _item(key, record)
+    for key, record in sweep.model_only.items():
+        cached = stored.get(key)
+        if key in chosen or (cached is not None and cached["proposal"] is not None):
+            continue
+        if _soft(pending.verdict, "", current, record) == "live":
+            chosen[key] = _item(key, record)
+    return sorted(chosen.values(), key=_priority)[:RECONCILE_MAX_CANDIDATES]
+
+
+# ------------------------------------------------------------------ payload
+
+
+def snippet_line(ref: str, fields: dict) -> str:
+    """One record's line as the prompt shows it. A thread or commitment is its
+    `snippets/` absorb line with no latest beat (the beats follow it, each with
+    its scene); `fields` is `pending.side`'s ``{title, status, kind, due}``. An
+    event is ``event: <name> (<date>)`` from ``{title, due}``."""
+    prefix, _, rid = ref.partition(":")
+    if prefix == "thread":
+        return prompts.render("snippets/plot_thread_line/absorb.j2",
+                              t={"id": rid, "title": fields["title"], "status": fields["status"],
+                                 "latest_beat": ""})
+    if prefix == "commitment":
+        return prompts.render("snippets/commitment_line/absorb.j2",
+                              c={"id": rid, "title": fields["title"],
+                                 "kind": fields["kind"] or "promise", "status": fields["status"],
+                                 "due": fields["due"], "latest_beat": ""})
+    return f"event: {fields['title']} ({fields['due']})" if fields["due"] else \
+        f"event: {fields['title']}"
+
+
+def _days(n: int) -> str:
+    return "1 day" if n == 1 else f"{n} days"
+
+
+def _when(days) -> str:
+    """``in 3 days`` / ``today`` / ``5 days ago``, or "" for no day."""
+    if not isinstance(days, int) or isinstance(days, bool):
+        return ""
+    if days == 0:
+        return "today"
+    return f"in {_days(days)}" if days > 0 else f"{_days(-days)} ago"
+
+
+def _pressure_text(reading: dict | None) -> str:
+    """A record's deadline or staleness in words; "" when nothing presses."""
+    if not reading or (reading.get("state") == "ok" and reading.get("in_days") is None):
+        return ""
+    state = str(reading.get("state") or "").replace("_", " ")
+    when = _when(reading.get("in_days"))
+    return f"{state}, {when}" if when else state
+
+
+class _Context:
+    """What `build_payload` reads once for every record it shows."""
+
+    def __init__(self, cid: str, refs: list[str]):
+        self.cid = cid
+        self.current: pending.Current = pending.Current.load(cid)
+        self.pressure = pressure_by_ref(cid)
+        ledgered = [r for r in refs if not r.startswith("event:")]
+        self.involved: dict[str, dict] = _soft(involvement.of, {}, cid, ledgered)
+        self._names: dict[str, str] = {}
+
+    def title(self, ref: str) -> str:
+        return pending.label(self.current, [ref])
+
+    def name(self, actor: str) -> str:
+        if actor not in self._names:
+            fallback = actor.partition(":")[2] or actor
+            self._names[actor] = _soft(relationships.actor_name, fallback, self.cid, actor) \
+                or fallback
+        return self._names[actor]
+
+
+def _beats(rec: dict) -> list[dict]:
+    return [{"scene": fieldtext.text(b.get("scene")), "text": fieldtext.text(b.get("text"))}
+            for b in (rec.get("beats") or [])[-RECONCILE_BEATS:] if isinstance(b, dict)]
+
+
+def _record_view(ctx: _Context, letter: str, ref: str) -> dict:
+    """One record as the prompt shows it (§11.2): its line, last beats with
+    their scenes, pressure, effective links and involvement actors. An event
+    carries a line only."""
+    view: dict[str, Any] = {"letter": letter, "ref": ref, "line": ref, "beats": [],
+                            "pressure": "", "links": [], "actors": []}
+    side = pending.side(ctx.current, ref)
+    if side is None:
+        return view
+    view["line"] = snippet_line(ref, side)
+    rec = ctx.current.records.get(ref)
+    if rec is None:                             # an event
+        return view
+    actors = ctx.involved.get(ref, {}).get("actors") or []
+    view.update(beats=_beats(rec), pressure=_pressure_text(ctx.pressure.get(ref)),
+                links=[f"{ctx.title(link['a'])} {link['relation']} {ctx.title(link['b'])}"
+                       for link in ctx.current.links if ref in (link["a"], link["b"])],
+                actors=[ctx.name(a) for a in actors[:RECONCILE_ACTORS]])
+    return view
+
+
+def _lifecycle_text(signals: dict) -> str:
+    reason = signals.get("reason")
+    if reason == "stale":
+        days = signals.get("days_since")
+        if isinstance(days, int) and not isinstance(days, bool):
+            return f"no new beat in {_days(days)}"
+        return "no new beat for a long while"
+    if reason == "overdue":
+        text = ("the event it is tied to has been reached"
+                if signals.get("via") == "linked_deadline" else "its due date has passed")
+        when = _when(signals.get("in_days"))
+        return f"{text} ({when})" if when.endswith("ago") else text
+    if reason == "touched":
+        return "moved in the latest scene"
+    if reason == "temporal":
+        when = _when(signals.get("in_days"))
+        return ("the commitment's due could not be placed on the calendar; the event is "
+                + (when or "upcoming"))
+    return ""
+
+
+def _pair_text(ctx: _Context, signals: dict) -> str:
+    """A pair's similarity signals as fixed-order phrases: why it was found,
+    never a verdict (the system prompt says so)."""
+    parts: list[str] = []
+    if signals.get("title_exact"):
+        parts.append("same title")
+    if signals.get("slug_equal"):
+        parts.append("same slug")
+    for key, label in (("lexical", "word overlap"), ("cosine", "meaning")):
+        if _number(signals.get(key)):
+            parts.append(f"{label} {_number(signals.get(key)):.2f}")
+    actors = [a for a in signals.get("shared_actors") or [] if isinstance(a, str)]
+    if actors:
+        parts.append("shared characters: " + ", ".join(ctx.name(a) for a in actors))
+    if _count(signals.get("shared_scenes")):
+        parts.append(f"shared scenes: {_count(signals.get('shared_scenes'))}")
+    anchors = [a for a in signals.get("shared_anchors") or [] if isinstance(a, str)]
+    if anchors:
+        parts.append("shared dates: " + ", ".join(ctx.title(a) for a in anchors))
+    return "; ".join(parts)
+
+
+def _signal_text(ctx: _Context, item: dict) -> str:
+    signals = item["signals"]
+    if item["kind"] in candidates.LIFECYCLE_KINDS or signals.get("reason") == "temporal":
+        return _lifecycle_text(signals)
+    return _pair_text(ctx, signals)
+
+
+def _campaign_date(cid: str) -> str:
+    built = _soft(pressure.build, None, cid, None, None, frozenset())
+    if built is None:
+        return _soft(clock.now, "", cid)
+    return built["friendly"] or built["now"] or ""
+
+
+def _scene_lines(cid: str, beat_scenes: set[str]) -> list[dict]:
+    """Chronicle one-lines for every beat scene shown and the last
+    `RECONCILE_RECENT_SCENES` scenes, by id; a scene with no line is not
+    shown."""
+    read: Any = _soft(chronicle.read_chronicle, {}, cid)
+    chron: dict = read if isinstance(read, dict) else {}
+    ids = sorted(sid for sid in chron if isinstance(sid, str))
+    recent = ids[-RECONCILE_RECENT_SCENES:] if RECONCILE_RECENT_SCENES > 0 else []
+    out: list[dict] = []
+    for sid in sorted(beat_scenes | set(recent)):
+        rec = chron.get(sid)
+        line = fieldtext.text(rec.get("one_line")).strip() if isinstance(rec, dict) else ""
+        if line:
+            out.append({"id": sid, "one_line": line})
+    return out
+
+
+def build_payload(cid: str, selected: list[dict]) -> dict:
+    """The one call's bounded input (§11.2, Decision 13) for `select`'s items,
+    keyed ``c1``... in selection order. Only the records the candidates name
+    are sent, with their last beats and the chronicle lines around them --
+    never a transcript. `known_scenes` (beat scenes and chronicle lines shown)
+    is the only evidence `parse_output` accepts (§11.4)."""
+    ctx = _Context(cid, sorted({ref for item in selected for ref in item["refs"]}))
+    out: list[dict] = []
+    for n, item in enumerate(selected, 1):
+        records = [_record_view(ctx, letter, ref) for letter, ref in zip(_LETTERS, item["refs"], strict=False)]
+        out.append({"key": f"c{n}", "id": item["id"], "vocabulary": vocabulary(item),
+                    "records": records, "signal_text": _signal_text(ctx, item)})
+    beat_scenes = {b["scene"] for c in out for r in c["records"] for b in r["beats"]} - {""}
+    lines = _scene_lines(cid, beat_scenes)
+    return {"now": _campaign_date(cid), "chronicle": lines, "candidates": out,
+            "known_scenes": sorted(beat_scenes | {line["id"] for line in lines})}
+
+
+def template_vars(payload: dict) -> dict:
+    """`build_payload` output as `continuity_reconcile/user.j2` reads it: each
+    candidate gains its heading `label` and its vocabulary's `words`."""
+    return {"now": payload["now"], "chronicle": payload["chronicle"],
+            "candidates": [{"key": c["key"], "label": LABELS[c["vocabulary"]],
+                            "words": list(DECISIONS[c["vocabulary"]]),
+                            "records": c["records"], "signal_text": c["signal_text"]}
+                           for c in payload["candidates"]]}
+
+
+def build_prompt(payload: dict) -> list[dict]:
+    """The sweep's messages: one call for every selected candidate (§25.1)."""
+    return [{"role": "system", "content": prompts.render("continuity_reconcile/system.j2")},
+            {"role": "user", "content": prompts.render("continuity_reconcile/user.j2",
+                                                       **template_vars(payload))}]
+
+
+# ------------------------------------------------------------------ parsing
+
+
+def _candidate_key(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _CANDIDATE_WORD.sub("", value.strip().casefold()).strip()
+
+
+def _ref_of(value, refs: dict[str, str]) -> str:
+    return refs.get(value.strip().upper(), "") if isinstance(value, str) else ""
+
+
+def _evidence(value, known: set[str]) -> list[str]:
+    """The cited scene ids the prompt showed, deduped in order; the rest dropped."""
+    out: list[str] = []
+    for sid in value if isinstance(value, list) else ():
+        if isinstance(sid, str) and sid in known and sid not in out:
+            out.append(sid)
+    return out
+
+
+def _allowed(relation: str, frm: str, to: str) -> bool:
+    rule = effective.RELATIONS.get(relation)
+    return rule is not None and frm.partition(":")[0] in rule[0] \
+        and to.partition(":")[0] in rule[1]
+
+
+def _temporal_word(word: str, refs: dict[str, str], base: dict) -> dict:
+    """A temporal word runs from the commitment to the event, whatever letters
+    the reply gave; ``unrelated`` and ``uncertain`` propose nothing."""
+    event = next((r for r in refs.values() if r.startswith("event:")), "")
+    owed = next((r for r in refs.values() if r.startswith("commitment:")), "")
+    if word not in pending.TEMPORAL_RELATIONS:
+        return {**base, "decision": word}
+    if not event or not owed or not _allowed(word, owed, event):
+        return base
+    return {**base, "decision": word, "from": owed, "to": event, "relation": word}
+
+
+def _pair(word: str, item: dict, refs: dict[str, str], base: dict) -> dict:
+    """A pair word with its direction (§11.3). A directed word needs two
+    different letters; ``related`` takes A to B when it was given none. A
+    relation `effective.RELATIONS` refuses for ``(from, to)`` is ``uncertain``,
+    so no proposal names a link `create_link` would reject."""
+    if word not in _RELATION_OF:
+        return {**base, "decision": word}
+    frm, to = _ref_of(item.get("from"), refs), _ref_of(item.get("to"), refs)
+    if word not in _DIRECTED and (not frm or not to or frm == to):
+        frm, to = refs.get("A", ""), refs.get("B", "")
+    if not frm or not to or frm == to:
+        return base
+    relation = _RELATION_OF[word]
+    if relation and not _allowed(relation, frm, to):
+        return base
+    if not relation and frm.partition(":")[0] != to.partition(":")[0]:
+        return base
+    return {**base, "decision": word, "from": frm, "to": to, "relation": relation}
+
+
+def _lifecycle_word(word: str, base: dict) -> dict:
+    """A status word stands only with a reason and a known evidence scene (§11.4)."""
+    if word in _STATUS_OF:
+        if not base["reason"] or not base["evidence_scenes"]:
+            return base
+        return {**base, "decision": word, "status": _STATUS_OF[word]}
+    return {**base, "decision": word}
+
+
+def _decide(item: dict, cand: dict, known: set[str]) -> dict:
+    """One reply element rebuilt field by field into a cache proposal (§6)."""
+    vocab = cand["vocabulary"]
+    word = item.get("decision")
+    word = word.strip().casefold() if isinstance(word, str) else ""
+    word = word if word in DECISIONS[vocab] else "uncertain"
+    reason = item.get("reason")
+    base = {"decision": "uncertain", "from": "", "to": "", "relation": "", "status": "",
+            "reason": reason.strip()[:RECONCILE_REASON_CHARS] if isinstance(reason, str) else "",
+            "evidence_scenes": _evidence(item.get("evidence_scenes"), known)}
+    refs = {r["letter"]: r["ref"] for r in cand["records"]}
+    if vocab in ("thread", "commitment"):
+        return _lifecycle_word(word, base)
+    if vocab == "temporal":
+        return _temporal_word(word, refs, base)
+    return _pair(word, item, refs, base)
+
+
+def parse_output(text: str, payload: dict) -> dict[str, dict] | None:
+    """The reply's proposals, ``{candidate id: proposal}``, or None when it
+    holds no decodable object at all -- a failed run, whose deterministic
+    findings stand, which is not the same as a decodable reply with nothing
+    usable in it (``{}``, spec §24).
+
+    A key is matched without its ``Candidate`` label; an unknown one is
+    dropped, and a repeated one keeps its first answer. A word outside the
+    candidate's vocabulary, a direction §5.3 does not allow, or a status word
+    without a reason and a known evidence scene is ``uncertain``. Unknown
+    scene ids are dropped, and the reason is clipped. Nothing here raises on
+    bad JSON."""
+    obj = absorb_parse.extract_object(text)
+    if obj is None:
+        return None
+    items = obj.get("decisions")
+    by_key = {c["key"]: c for c in payload["candidates"]}
+    known = set(payload["known_scenes"])
+    out: dict[str, dict] = {}
+    seen: set[str] = set()
+    for item in items if isinstance(items, list) else ():
+        if not isinstance(item, dict):
+            continue
+        key = _candidate_key(item.get("candidate"))
+        cand = by_key.get(key)
+        if cand is None or key in seen:
+            continue
+        seen.add(key)
+        out[cand["id"]] = _decide(item, cand, known)
+    return out

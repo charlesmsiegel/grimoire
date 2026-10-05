@@ -175,6 +175,34 @@ captured at Debug level like every other LLM response, under the existing
 Settings disclosure, while its info-level log row carries counts and modes
 only.
 
+### `continuity_reconcile/` — the reconciliation sweep after End Scene or a refresh
+Mirrors `store/continuity/reconcile.py:build_prompt`. Messages: system, user.
+One call per sweep, over at most `RECONCILE_MAX_CANDIDATES` findings chosen by
+`reconcile.select`. `system.j2` is static: the vocabularies, the direction
+rules and the evidence floor. `user.j2` vars (`reconcile.template_vars()` over
+`reconcile.build_payload()`): `now` (the campaign date, or blank), `chronicle`
+(`[{id, one_line}]` — the chronicle lines of every beat scene shown and of the
+last `RECONCILE_RECENT_SCENES` scenes), and `candidates`, each `{key ("c1",
+…), label, words (the vocabulary its answer must come from), records,
+signal_text}`. Each record is `{letter ("A" | "B"), ref, line, beats ([{scene,
+text}], its last `RECONCILE_BEATS`), pressure, links, actors}`; `line` is
+`snippets/plot_thread_line/absorb.j2` or `snippets/commitment_line/absorb.j2`
+with no latest beat (the beats follow it), or `event: <name> (<date>)`,
+rendered by Python. No transcript is ever sent. Every key is always passed; a
+blank optional one renders nothing.
+Reply shape: ONLY `{"decisions": [{"candidate": "<key>", "decision":
+"<word>", "from": "A" | "B", "to": "A" | "B", "reason": "<one short
+sentence>", "evidence_scenes": ["<scene id>"]}]}`, parsed by
+`reconcile.parse_output` through `absorb.extract_object` into one cache
+proposal per known candidate. A word outside the candidate's vocabulary, a
+direction the link rules refuse, or a closure or resolution without a reason
+and an evidence scene the prompt showed is `uncertain`. An undecodable reply
+fails the run, and the deterministic findings already cached are kept; a
+decodable one with nothing usable proposes nothing. The sweep's replies,
+including each `reason`, are captured at Debug level like every other LLM
+response, under the existing Settings disclosure, while its info-level log row
+carries counts and modes only.
+
 ### `rolling_summary/` — POST /campaigns/{cid}/scenes/{sid}/rolling-summary
 The live running summary of a scene **still being played** (#85). Mirrors
 `store/rolling_summary.py:build_prompt`. Messages: system, user.

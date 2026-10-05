@@ -10,6 +10,10 @@
       "reply": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A different debt from the one already owed.\"}]}"
     },
     {
+      "when": {"system_contains": "You are reviewing a campaign's story ledger for records that may overlap or be finished"},
+      "reply": "{\"decisions\": []}"
+    },
+    {
       "when": {"system_contains": "You are auditing a completed role-play scene"},
       "reply": "{\"warnings\": [], \"sheet_deltas\": []}"
     },

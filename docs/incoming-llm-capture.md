@@ -37,6 +37,9 @@ Full response bodies can contain private campaign prose and reasoning. Inspect
 the log before sharing it. The absorb duplicate check (the `continuity-identity`
 task) is no exception: its replies, including each row's `reason`, are captured
 at Debug level like every other LLM response, under the existing Settings
-disclosure, while its info-level log row carries counts and modes only. No
-model settings or reasoning requests are changed: capture records only what the
+disclosure, while its info-level log row carries counts and modes only. The
+reconciliation sweep after End Scene or a refresh (the `continuity-reconcile`
+task) is the same: its replies, including each proposal's `reason`, are
+captured at Debug level under that disclosure, and its info-level log row
+carries counts and modes only. No model settings or reasoning requests are changed: capture records only what the
 provider or SDK actually sends.

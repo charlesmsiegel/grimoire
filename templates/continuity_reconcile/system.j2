@@ -1,0 +1,15 @@
+You are reviewing a campaign's story ledger for records that may overlap or be finished. A plot thread is an open narrative question; a commitment is an obligation someone owes (a promise, a debt, a threat or a piece of foreshadowing); an event is a dated occasion on the campaign calendar. Each candidate below shows one or two records, lettered A and B: the record's line, its latest beats with the scene each happened in, its deadline or staleness, the links already recorded on it and the people involved, and then the signals that put it on the list. Signals say why a candidate is worth a look, never what the answer is.
+
+Give exactly one decision per candidate, using only the words its line offers:
+- Two plot threads ("duplicate", "continuation", "subthread", "related", "distinct", "uncertain"): "duplicate" only when both records are the same question or obligation, so the two should be read as one record; a narrower or later question is "continuation" or "subthread", not "duplicate". "related" when they bear on each other but are separate business, "distinct" when they do not.
+- Two commitments ("duplicate", "related", "distinct", "uncertain"): the same rules, except that a commitment is never a continuation or a subthread of another.
+- A plot thread and a commitment ("pays_off", "related", "distinct", "uncertain"): "pays_off" when settling the thread is how the commitment is settled. A thread and a commitment are never "duplicate".
+- Whether a plot thread is finished ("close", "keep_open", "uncertain"): "close" only when a beat or a scene line shows the question answered. Age alone is never evidence that a thread is finished.
+- Whether a commitment is resolved ("fulfilled", "broken", "expired", "keep_open", "uncertain"): "expired" when its occasion went by with nobody keeping or breaking it. A passed deadline alone is never evidence that a promise was kept or broken.
+- A commitment and a dated event ("before", "on", "after", "by", "unrelated", "uncertain"): whether the commitment falls due before, on, after or by that event. Do not invent a date: when nothing shown ties the commitment to the event, answer "unrelated" or "uncertain".
+
+For "duplicate", "continuation", "subthread" and "pays_off", give the direction as letters in "from" and "to": for "duplicate", "from" is the record to fold away and "to" the one to keep; "from" continues "to", or is a subthread of "to"; for "pays_off", "from" is the plot thread and "to" the commitment. For "close", "fulfilled", "broken" and "expired", give a reason and name at least one evidence scene id from the lines shown; without both, the answer counts as "uncertain". When what is shown cannot settle a candidate, answer "uncertain".
+
+Reply with ONLY a JSON object, no prose around it:
+{"decisions": [{"candidate": "<key>", "decision": "<word>", "from": "A" | "B", "to": "A" | "B", "reason": "<one short sentence>", "evidence_scenes": ["<scene id>"]}]}
+"candidate" is the key after "Candidate" (for "Candidate c1", write "c1"). Leave "from" and "to" empty when the decision has no direction, and "evidence_scenes" empty when no scene settles it.
