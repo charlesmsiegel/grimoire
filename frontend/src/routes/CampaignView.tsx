@@ -638,7 +638,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // whenever the view stops being busy.
   const [roundProgress, setRoundProgress] = useState<{ index: number; of: number } | null>(null);
   useEffect(() => { if (!busy) setRoundProgress(null); }, [busy]);
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string; seed?: string }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -2543,7 +2543,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           setRoundProgress(e.round_start);
         } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
-            actor_ref: e.response_start.actor_ref, offset: acc.length };
+            actor_ref: e.response_start.actor_ref, offset: acc.length,
+            // Keep writing: the reply the stream continues, rendered ahead of
+            // it but never part of `acc` (offsets, Retry and re-attach all
+            // read the stream alone).
+            seed: e.response_start.extend?.seed };
           partStart = boundary.offset;
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
@@ -2918,7 +2922,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           setRoundProgress(e.round_start);
         } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
-            actor_ref: e.response_start.actor_ref, offset: acc.length };
+            actor_ref: e.response_start.actor_ref, offset: acc.length,
+            // Keep writing: the reply the stream continues, rendered ahead of
+            // it but never part of `acc` (offsets, Retry and re-attach all
+            // read the stream alone).
+            seed: e.response_start.extend?.seed };
           partStart = boundary.offset;
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
@@ -3587,6 +3595,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // outcome, including a failed generate that kept the previous variant.
   }
 
+  /** Keep writing: continue the trailing response where it stops, landing as a
+   *  new variant (the unextended one stays a swipe back). The reroll's guards,
+   *  plus Keep writing's own disabled flag, re-checked here because a stale
+   *  click must do nothing the button could not. Like `rerollResponse`, it
+   *  never sends or clears the pending one-shot override. No bare key: it
+   *  spends money, so it is only ever a click. */
+  async function extendResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
+    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
+    if (extendDisabled || swipeTarget?.response_id !== id) return;
+    const sid = activeId;
+    await runStream(sid, (onEvent, signal, attempt, onIndex) =>
+      api.extendResponse(cid, sid, id, onEvent, { guidance, ...route }, signal, attempt, onIndex),
+      undefined, true, "", true);
+  }
+
   async function respondAs(ref: string) {
     if (!activeId || busy || rolling || sceneLocked || renamesInFlight || !transcriptIsActive) return;
     const sid = activeId;
@@ -4221,6 +4244,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  the toggle governs. */
   const noteCount = messages.filter((m) => m.speaker === DIRECTOR_SPEAKER).length;
 
+  /** The response a Keep writing stream is continuing, while it streams here. */
+  const hiddenResponse = busy && streamingId === activeId
+    ? streamingSpeakers.find((part) => part.seed !== undefined)?.id ?? null : null;
+
   // Consecutive messages by the same speaker form one run under a single plate.
   // Memoized on what a run is made of, so the run objects -- and so the
   // memoized rows that receive them -- survive every render that is not a
@@ -4234,6 +4261,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // exactly as before — filtering `messages` first would renumber them and
       // send an edit to the wrong post.
       if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
+      // The reply Keep writing is continuing: the live bubble below draws it
+      // whole (its seed, then the stream), so drawing it here too would show
+      // it twice. Skipped while the groups are built, so a run it emptied
+      // draws no plate.
+      if (hiddenResponse !== null && m.response_id === hiddenResponse) return;
       const speaker = speakerOf(m);
       const last = out[out.length - 1];
       if (last && last.speaker === speaker &&
@@ -4246,7 +4278,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                  actor, posts: [{ m, index }] });
     });
     return out;
-  }, [messages, firstIndex, showNotes, speakerOf, matchActor]);
+  }, [messages, firstIndex, showNotes, speakerOf, matchActor, hiddenResponse]);
 
   /** Which posts are the last part of their response in the window — the one
    *  that carries the response's controls and its saved thinking.
@@ -4363,6 +4395,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     reroll: () => void reroll(),
     deleteResponse: (id) => void mutateResponse(id),
     rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
+    extendResponse: (id, guidance, route) => void extendResponse(id, guidance, route),
     activateVariant: (id, variant) => void mutateResponse(id, variant),
     createCharacter: (rid) => void openCharacterPassage(rid),
     // Depth over the stored transcript, which the window always ends at: the
@@ -4400,6 +4433,14 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const swipeNextDisabled = swipeBlocked
     || (swipeGenerates && (!canReroll || !ledgerSwipe?.can_reroll));
   const swipeTip = ledgerSwipe ? swipeTitle(ledgerSwipe) : undefined;
+  // Keep writing, on the swipe target: what a generating › needs, minus the
+  // arrows' own position rules. A hand-edited reply (`edited`, active null) is
+  // continued from the trim, so it does not block; a non-complete active
+  // variant does, as the server refuses it (`variant_incomplete`).
+  const activeVariant = ledgerSwipe && ledgerSwipe.active !== null
+    ? ledgerSwipe.variants[ledgerSwipe.active] : undefined;
+  const extendDisabled = swipeBlocked || !canReroll || !ledgerSwipe?.can_reroll
+    || (activeVariant !== undefined && activeVariant.status !== "complete");
   // Memoized on the primitives above, so a render that changes none of them
   // hands the row the same object.
   const variantSwipe = useMemo<TranscriptVariantSwipe | null>(() => (
@@ -4434,8 +4475,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       : null,
     variantSwipe,
     pop: rerollPrompt !== null ? { prompt: rerollPrompt, route: rerollRoute } : null,
+    extend: swipeTarget ? { disabled: extendDisabled } : null,
   }), [canSwipe, alternates.active, altCount, altTitle, rolling, editingAny, sceneLocked,
-       variantSwipe, rerollPrompt, rerollRoute]);
+       variantSwipe, rerollPrompt, rerollRoute, swipeTarget, extendDisabled]);
   const transcriptCtx = useMemo<TranscriptContext>(() => ({
     cid, sid: activeId ?? "",
     loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
@@ -5254,7 +5296,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                           <strong className="plate-name">{part.speaker}</strong>
                         </div>
                         <Thinking content={part.thinking ?? ""} />
-                        <StreamingMarkdown text={streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
+                        {/* A Keep writing part grows from the reply it continues
+                            (its seed, display only: the server joins the
+                            landed variant itself, and the reload shows that). */}
+                        <StreamingMarkdown text={part.seed !== undefined
+                          ? part.seed + " " + streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)
+                          : streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
                         {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
                           <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>
                             <span className="cursor" aria-hidden="true" /> {roundProgress

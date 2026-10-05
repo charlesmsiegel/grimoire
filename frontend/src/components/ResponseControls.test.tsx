@@ -33,6 +33,31 @@ describe("individual response controls", () => {
     expect(screen.getByRole("button", { name: "Delete response" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reroll response" })).toBeDisabled();
   });
+  it("keeps writing with the shared steer and route, and only when offered", () => {
+    const onExtend = vi.fn();
+    const actions = show({ onExtend });
+    fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "Colder" } });
+    fireEvent.click(screen.getByRole("button", { name: "Keep writing ▸" }));
+    expect(onExtend).toHaveBeenCalledWith("response-a", "Colder", { connection_id: "", model: "" });
+    expect(actions.onReroll).not.toHaveBeenCalled();
+  });
+  it("offers no Keep writing without a handler", () => {
+    show();
+    expect(screen.queryByRole("button", { name: "Keep writing ▸" })).not.toBeInTheDocument();
+  });
+  it("disables Keep writing on its own flag while Reroll response stays usable", () => {
+    show({ onExtend: vi.fn(), extendDisabled: true });
+    expect(screen.getByRole("button", { name: "Keep writing ▸" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reroll response" })).not.toBeDisabled();
+  });
+  it("disables Keep writing with every other write while busy", () => {
+    show({ onExtend: vi.fn(), disabled: true });
+    expect(screen.getByRole("button", { name: "Keep writing ▸" })).toBeDisabled();
+  });
+  it("hides Keep writing where there is no frozen prompt to continue from", () => {
+    show({ onExtend: vi.fn(), canReroll: false });
+    expect(screen.queryByRole("button", { name: "Keep writing ▸" })).not.toBeInTheDocument();
+  });
   it("offers explicit replay when a historical snapshot is unavailable", () => {
     const actions = show({ canReroll: false });
     expect(screen.queryByRole("button", { name: "Reroll response" })).not.toBeInTheDocument();

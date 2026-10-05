@@ -75,6 +75,8 @@ export type TranscriptActions = {
   reroll: () => void;
   deleteResponse: (id: string) => void;
   rerollResponse: (id: string, guidance: string, route: RerollRoute) => void;
+  /** Keep writing: continue the trailing response (play controls IV). */
+  extendResponse: (id: string, guidance: string, route: RerollRoute) => void;
   activateVariant: (id: string, variant: string) => void;
   createCharacter: (responseId: string) => void;
   /** Open the regex test pane on this post's stored text (spec 6.2). */
@@ -106,6 +108,9 @@ export type TranscriptReroll = {
   swipe: TranscriptSwipe | null;
   variantSwipe: TranscriptVariantSwipe | null;
   pop: { prompt: string; route: RerollRoute } | null;
+  /** Keep writing, offered on the swipe target's response controls; null
+   *  where there is no trailing response to continue. */
+  extend: { disabled: boolean } | null;
 };
 
 /** Everything the rows read that is the same for every row.
@@ -217,6 +222,8 @@ export const TranscriptRun = memo(function TranscriptRun({
             variantSwipe={rerollRow && m.response_id && ctx.lastOfResponse.has(index)
               ? reroll?.variantSwipe ?? null : null}
             rerollPop={rerollRow && ctx.canReroll ? reroll?.pop ?? null : null}
+            extend={rerollRow && m.response_id && ctx.lastOfResponse.has(index)
+              ? reroll?.extend ?? null : null}
             canReplayAfter={index < ctx.lastIndex}
             chip={m.role === "user" || m.speaker === DIRECTOR_SPEAKER
               ? ctx.postChips?.[index] : undefined}
@@ -246,7 +253,7 @@ export const TranscriptRun = memo(function TranscriptRun({
  *  re-renders then — once per turn — but a keystroke or a delta reaches none. */
 export const TranscriptPost = memo(function TranscriptPost({
   m, index, actor, speaker, cited, editingText, busy, rolling, active, absorbed, rerollButton, swipe,
-  variantSwipe, rerollPop, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
+  variantSwipe, rerollPop, extend, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
   trackerLabels, trackerEnabled, trackerRerun, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
 }: {
   m: Message; index: number;
@@ -261,6 +268,8 @@ export const TranscriptPost = memo(function TranscriptPost({
   /** The ledger's arrows, on the one row that is the swipe target; else null. */
   variantSwipe: TranscriptVariantSwipe | null;
   rerollPop: { prompt: string; route: RerollRoute } | null;
+  /** Keep writing, on the trailing response's last part only; else null. */
+  extend: { disabled: boolean } | null;
   canReplayAfter: boolean;
   chip: UsagePostBucket | undefined;
   lastOfResponse: boolean;
@@ -504,6 +513,8 @@ export const TranscriptPost = memo(function TranscriptPost({
             disabled={responseDisabled}
             onDelete={actions.deleteResponse}
             onReroll={actions.rerollResponse}
+            onExtend={extend ? actions.extendResponse : undefined}
+            extendDisabled={extend?.disabled ?? false}
             onActivate={actions.activateVariant}
             onReplay={() => actions.replayFrom(index)}
             onCreateCharacter={m.speaker === "Grimoire" && m.response_status === "complete"

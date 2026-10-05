@@ -6,10 +6,15 @@ import { ErrorNote } from "./ErrorNote";
 import { madeByLines, settingsFor } from "./play/swipeTitle";
 
 export function ResponseControls({ cid, sid, responseId, canReroll, status, contextChanged,
-  disabled = false, onDelete, onReroll, onActivate, onReplay, onCreateCharacter }: {
+  disabled = false, onDelete, onReroll, onExtend, extendDisabled = false, onActivate, onReplay,
+  onCreateCharacter }: {
   cid: string; sid: string; responseId: string; canReroll: boolean;
   status?: string; contextChanged?: boolean; disabled?: boolean;
   onDelete: (id: string) => void; onReroll: (id: string, guidance: string, route: RerollRoute) => void;
+  /** Keep writing: offered (on the trailing response only) by passing it.
+   *  Shares the steer box and the route picker with Reroll response. */
+  onExtend?: (id: string, guidance: string, route: RerollRoute) => void;
+  extendDisabled?: boolean;
   onActivate: (id: string, variant: string) => void; onReplay: () => void;
   onCreateCharacter?: () => void;
 }) {
@@ -67,6 +72,9 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
           {routeOpen && <fieldset disabled={disabled}><RerollRoutePicker value={route} onChange={setRoute} /></fieldset>}
         </details>
         <button disabled={disabled} onClick={() => onReroll(responseId, guidance.trim(), route)}>Reroll response</button>
+        {onExtend && <button disabled={disabled || extendDisabled}
+          title="Continue this reply where it stops, as a new version of it"
+          onClick={() => onExtend(responseId, guidance.trim(), route)}>Keep writing ▸</button>}
       </> : <>
         <p className="subtle">Historical context is unavailable for this reply. Replay explicitly rebuilds from this point.</p>
       </>}
