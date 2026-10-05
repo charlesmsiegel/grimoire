@@ -9,6 +9,10 @@ records it cannot interpret are reported with a reason rather than raised on,
 and a ledger that will not parse makes existence unknown rather than turning
 every merge into it into a "broken" row.
 
+The drivers read (`GET .../continuity/drivers`, spec §14) is
+`continuity.drivers.snapshot`, taken without a lock like the suggestion
+snapshot it will feed (Decision 14).
+
 The writes are `continuity.review`'s, journalled as ``manual`` and undoable from
 the play view's Changes panel. A refusal is a `review.RefusedError`, answered as
 ``{"kind", "detail", ...}`` so the client can act on the kind.
@@ -19,7 +23,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from .. import store
-from ..store.continuity import doc, effective, review
+from ..store.continuity import doc, drivers, effective, review
 from .models import ContinuityAliasCreate, ContinuityLinkCreate
 
 router = APIRouter()
@@ -33,14 +37,6 @@ def _campaign_or_404(cid: str) -> None:
 def _refusal(e: review.RefusedError) -> HTTPException:
     return HTTPException(status_code=e.status,
                          detail={"kind": e.kind, "detail": e.detail, **e.extra})
-
-
-def _matching() -> str:
-    """"semantic" iff an embeddings connection and model resolve (spec §3.3)."""
-    try:
-        return "semantic" if store.embed_space.resolve() is not None else "basic"
-    except Exception:  # noqa: BLE001 -- an unreadable config means basic matching
-        return "basic"
 
 
 def _text(value) -> str:
@@ -95,7 +91,13 @@ def get_continuity(cid: str):
     return {"aliases": aliases, "links": links, "raw_links": raw_links,
             "suppressions": suppressions, "diagnostics": diagnostics,
             "malformed": malformed, "unreadable": diagnostics["unreadable"],
-            "matching": _matching()}
+            "matching": drivers.matching()}
+
+
+@router.get("/campaigns/{cid}/continuity/drivers")
+def get_drivers(cid: str, offscreen: bool = False):
+    _campaign_or_404(cid)
+    return drivers.snapshot(cid, offscreen=offscreen)
 
 
 @router.post("/campaigns/{cid}/continuity/aliases")
