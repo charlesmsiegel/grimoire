@@ -170,6 +170,19 @@ def _rows(obj: dict, key: str) -> list:
     return section if isinstance(section, list) else []
 
 
+#: The record kinds a `new_lore` proposal may create, in the order the prompt
+#: names them. Defined here because `parse` clamps the model's word to it and
+#: `apply` clamps a client-edited `payload.kind` to the same set -- one list,
+#: so the two cannot disagree about what a proposal is allowed to become.
+NEW_LORE_KINDS = ("lore", "items", "groups", "creatures")
+
+
+def new_lore_kind(value) -> str:
+    """The kind a `new_lore` row creates: `value` when it names one of
+    `NEW_LORE_KINDS`, else `"lore"` -- missing, null, misspelt or invented."""
+    return value if isinstance(value, str) and value in NEW_LORE_KINDS else "lore"
+
+
 def parse_output(text: str) -> dict:
     obj = extract_object(text) or {}
 
@@ -278,7 +291,9 @@ def parse_output(text: str) -> dict:
             "sd_prompt": _str(e, "sd_prompt"), "current_setting": _truthy(e.get("current_setting")),
         } | _cite(e))
 
-    new_lore = _list("new_lore", ("name", "body", "keys"))
+    new_lore = _list("new_lore", ("name", "body", "keys", "kind"))
+    for e in new_lore:
+        e["kind"] = new_lore_kind(e["kind"].lower())
 
     return {
         "one_line": str(obj.get("one_line", "")).strip(),

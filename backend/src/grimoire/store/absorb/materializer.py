@@ -59,6 +59,9 @@ CLOSED_SINCE = "that record was closed while the review was being prepared"
 #: record another row of the batch already moves -- `identity.ALREADY_MOVED`,
 #: the same verdict the resolver guard gives, restated as `AS_NEW_KEY` is.
 MOVED_SINCE = "another row in this scene already moves that record"
+#: The noun a reviewer reads in "New <noun> — <name>", per kind a proposal creates.
+_NEW_RECORD_NOUNS = {"locations": "location", "lore": "lore entry", "items": "item",
+                     "groups": "group", "creatures": "creature"}
 
 
 def _char_name(cid: str, char_id: str) -> str:
@@ -1275,17 +1278,27 @@ def materialize(cid: str, sid: str, parsed: dict,
                                         "confidence": parse._confidence(e.get("confidence", "")),
                                         "open_questions": e.get("open_questions", "")}}, e))
 
-    for kind, parsed_key, prefix, label_noun in (
-        ("locations", "new_locations", "new_location", "location"),
-        ("lore", "new_lore", "new_lore", "lore entry"),
+    for section_kind, parsed_key, prefix in (
+        ("locations", "new_locations", "new_location"),
+        ("lore", "new_lore", "new_lore"),
     ):
-        existing_names = {ent["name"].strip().lower() for ent in overlay.list_entities(cid, kind)}
+        # Only `new_lore` carries a kind of its own, and it is per ROW; the
+        # dedupe set below is therefore per kind, built the first time a row
+        # of that kind turns up.
+        existing: dict[str, set[str]] = {}
         for e in parsed.get(parsed_key, []):
+            kind = section_kind
+            if prefix == "new_lore":
+                kind = parse.new_lore_kind(e.get("kind"))
+            label_noun = _NEW_RECORD_NOUNS[kind]
+            if kind not in existing:
+                existing[kind] = {ent["name"].strip().lower()
+                                  for ent in overlay.list_entities(cid, kind)}
             name = (e.get("name", "") or "").strip()
             body = (e.get("body", "") or "").strip()
             if not name or not body:
                 continue
-            if name.lower() in existing_names:
+            if name.lower() in existing[kind]:
                 continue
             candidate_id = slugify(name)
             try:
@@ -1294,6 +1307,8 @@ def materialize(cid: str, sid: str, parsed: dict,
             except entities.EntityNotFound:
                 pass
             payload = {"name": name, "keys": e.get("keys", "")}
+            if prefix == "new_lore":
+                payload["kind"] = kind
             if kind == "locations":
                 payload["sd_prompt"] = e.get("sd_prompt", "")
                 payload["current_setting"] = e.get("current_setting", False)

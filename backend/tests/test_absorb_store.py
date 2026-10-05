@@ -672,6 +672,107 @@ def test_apply_edits_new_lore_creates_entity(monkeypatch, tmp_path):
     assert got["body"].strip() == "An old pact." and got["meta"]["keys"] == "pact"
 
 
+def test_parse_new_lore_kind_clamps():
+    out = absorb.parse_output(json.dumps({"new_lore": [
+        {"name": "Lantern", "body": "b", "kind": "items"},
+        {"name": "Weapon", "body": "b", "kind": "weapon"},
+        {"name": "Missing", "body": "b"},
+        {"name": "Null", "body": "b", "kind": None},
+    ]}))
+    assert [r["kind"] for r in out["new_lore"]] == ["items", "lore", "lore", "lore"]
+
+
+def test_materialize_dedupes_new_lore_per_kind(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    entities.create_entity(croot, "items", "Lantern")
+    sid = scenes.create_scene(cid, "S")
+    parsed = {"new_lore": [
+        {"name": "Lantern", "body": "an item twin", "keys": "", "kind": "items"},
+        {"name": "Lantern", "body": "a lore twin", "keys": "", "kind": "lore"},
+        {"name": "Tide Wardens", "body": "a group", "keys": "", "kind": "groups"},
+    ]}
+    edits = {e["id"]: e for e in absorb.materialize(cid, sid, parsed)}
+    assert len(edits) == 2                       # the items twin is the only one skipped
+    lore = edits["new_lore:lantern"]
+    assert lore["target"] == {"kind": "lore", "id": ""} and lore["after"] == "a lore twin"
+    group = edits["new_lore:tide-wardens"]
+    assert group["target"] == {"kind": "groups", "id": ""}
+    assert group["payload"]["kind"] == "groups"
+    assert group["label"] == "New group — Tide Wardens"
+
+
+def test_apply_new_lore_creates_the_proposed_kind(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "new_lore:lantern", "kind": "new_lore",
+         "target": {"kind": "items", "id": ""}, "field": "body", "after": "A brass lantern.",
+         "payload": {"name": "Lantern", "keys": "lantern", "kind": "items"}}], sid)
+    assert applied == ["new_lore:lantern"] and failures == []
+    got = entities.read_entity(croot, "items", "lantern")
+    assert got["body"].strip() == "A brass lantern." and got["meta"]["keys"] == "lantern"
+    with pytest.raises(entities.EntityNotFound):
+        entities.read_entity(croot, "lore", "lantern")
+
+
+def test_apply_clamps_a_client_edited_kind(monkeypatch, tmp_path):
+    from grimoire.store import entities, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    applied, failures = absorb.apply_edits(cid, [
+        {"id": "new_lore:lantern", "kind": "new_lore",
+         "target": {"kind": "items", "id": ""}, "field": "body", "after": "A brass lantern.",
+         "payload": {"name": "Lantern", "keys": "", "kind": "locations"}}], sid)
+    assert applied == ["new_lore:lantern"] and failures == []
+    assert entities.read_entity(croot, "lore", "lantern")["body"].strip() == "A brass lantern."
+    with pytest.raises(entities.EntityNotFound):
+        entities.read_entity(croot, "locations", "lantern")
+
+
+def test_created_record_citation_is_recorded(monkeypatch, tmp_path):
+    from grimoire.store import provenance, scenes
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "S")
+    review = {"quote": "She lifted the brass lantern.", "speaker": "Mara", "certainty": 0.8}
+    applied, _ = absorb.apply_edits(cid, [
+        {"id": "new_lore:lantern", "kind": "new_lore",
+         "target": {"kind": "items", "id": ""}, "field": "body", "after": "A brass lantern.",
+         "payload": {"name": "Lantern", "keys": "", "kind": "items"}, "review": review},
+        {"id": "new_location:the-crypt", "kind": "new_location",
+         "target": {"kind": "locations", "id": ""}, "field": "body", "after": "A cold crypt.",
+         "payload": {"name": "The Crypt", "keys": "", "sd_prompt": "", "current_setting": False},
+         "review": review}], sid)
+    assert len(applied) == 2
+    rows = provenance.read(cid)
+    assert rows["items/lantern#body"]["quote"] == "She lifted the brass lantern."
+    assert rows["locations/the-crypt#body"]["quote"] == "She lifted the brass lantern."
+
+
+def test_created_outcome_names_the_new_record(monkeypatch, tmp_path):
+    from grimoire.store import scenes
+    from grimoire.store.absorb import apply as absorb_apply
+    cid = _campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    sid = scenes.create_scene(cid, "S")
+    out = absorb_apply._apply_one(cid, croot, {
+        "id": "new_lore:lantern", "kind": "new_lore",
+        "target": {"kind": "items", "id": ""}, "field": "body", "after": "A brass lantern.",
+        "payload": {"name": "Lantern", "keys": "", "kind": "items"}}, sid)
+    assert out["state"] == "applied" and out["created"] == {"kind": "items", "id": "lantern"}
+
+
+def test_absorb_prompt_asks_for_kind():
+    from grimoire import prompts
+    text = prompts.render("absorb/system.j2", steering=False)
+    line = next(ln for ln in text.splitlines() if ln.lstrip().startswith('"new_lore"'))
+    assert '"kind"' in line and '"items"' in line
+
+
 def test_apply_edits_writes_dossier(monkeypatch, tmp_path):
     from grimoire.store import dossiers
     cid = _campaign(monkeypatch, tmp_path)
@@ -899,7 +1000,8 @@ def test_parse_output_new_entities():
                                       "sd_prompt": "an old man"}]
     assert out["new_locations"] == [{"name": "The Crypt", "body": "cold", "keys": "crypt",
                                      "sd_prompt": "a dark crypt", "current_setting": True}]
-    assert out["new_lore"] == [{"name": "Salt Pact", "body": "an old pact", "keys": "pact"}]
+    assert out["new_lore"] == [{"name": "Salt Pact", "body": "an old pact", "keys": "pact",
+                                "kind": "lore"}]
 
 
 def test_parse_output_new_locations_current_setting_defaults_false():
@@ -1192,7 +1294,8 @@ def test_materialize_new_locations_and_lore(monkeypatch, tmp_path):
     assert loc["payload"] == {"name": "The Crypt", "keys": "crypt", "sd_prompt": "a dark crypt",
                               "current_setting": True}
     lore = edits["new_lore:salt-pact"]
-    assert lore["kind"] == "new_lore" and lore["payload"] == {"name": "Salt Pact", "keys": "pact"}
+    assert lore["kind"] == "new_lore" and lore["target"] == {"kind": "lore", "id": ""}
+    assert lore["payload"] == {"name": "Salt Pact", "keys": "pact", "kind": "lore"}
 
 
 def test_apply_edits_writes_relationships(monkeypatch, tmp_path):
