@@ -21,7 +21,7 @@ vi.mock("../api/client", async () => (await import("../testkit/campaignMocks")).
 vi.mock("../components/PostImagePicker", async () =>
   (await import("../testkit/campaignMocks")).componentStubs.PostImagePicker());
 vi.mock("../api/models", () => ({ getModels: vi.fn() }));
-import { api, type Message, type ResponseSwipe } from "../api/client";
+import { api, ApiError, type Message, type ResponseSwipe } from "../api/client";
 import { installCampaignMocks, ONE_SCENE, renderCampaign } from "../testkit/campaignHarness";
 import { TestPointerEvent } from "../testkit/pointer";
 import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
@@ -55,6 +55,14 @@ function swipeRead(over: Partial<ResponseSwipe> = {}): ResponseSwipe {
 }
 function reads(over: Partial<ResponseSwipe> = {}) {
   (api.getResponseSwipe as any).mockResolvedValue(swipeRead(over));
+}
+
+/** A touch drag right-to-left on `el`: the gesture's ›. */
+function swipeLeft(el: Element) {
+  fireEvent(el, new TestPointerEvent("pointerdown",
+    { bubbles: true, pointerType: "touch", pointerId: 5, clientX: 200, clientY: 100 }));
+  fireEvent(el, new TestPointerEvent("pointerup",
+    { bubbles: true, pointerType: "touch", pointerId: 5, clientX: 110, clientY: 104 }));
 }
 
 /** The transcript row holding `text`. */
@@ -96,6 +104,25 @@ test("‹ activates the previous complete variant, skipping an incomplete one, a
   expect(previous()).toBeDisabled();
 });
 
+// Spec §7: a refused activate is reported, and the read is asked again so the
+// arrows reflect the server's state rather than the one they were drawn from.
+test("an activate refused with 409 shows the refusal and refetches the swipe read", async () => {
+  playing();
+  reads();
+  (api.activateResponseVariant as any).mockRejectedValue(
+    new ApiError(409, "a roll was applied after this response"));
+  renderCampaign();
+  expect(await screen.findByText("2/3")).toBeInTheDocument();
+  const before = (api.getResponseSwipe as any).mock.calls.length;
+  fireEvent.click(previous());
+  await waitFor(() => expect(api.activateResponseVariant).toHaveBeenCalledWith("run", "s1", "rB", "v1"));
+  expect(await screen.findByText(/a roll was applied after this response/)).toBeInTheDocument();
+  await waitFor(() => expect((api.getResponseSwipe as any).mock.calls.length).toBeGreaterThan(before));
+  expect((api.getResponseSwipe as any).mock.calls.at(-1)).toEqual(["run", "s1", "rB"]);
+  // Unchanged content: the refetch came from the refresh, not from the text.
+  expect(screen.getByText("The second answer.")).toBeInTheDocument();
+});
+
 test("› at the newest generates once, with no guidance, and keeps the pending length chip", async () => {
   playing();
   reads({ active: 2 });
@@ -109,10 +136,19 @@ test("› at the newest generates once, with no guidance, and keeps the pending 
   const picker = screen.getByLabelText("Next reply words");
   await waitFor(() => expect(picker).toHaveValue(null));
   fireEvent.change(picker, { target: { value: "120" } });
-  const button = screen.getByRole("button", { name: "Generate a new reply variant" });
-  fireEvent.click(button);
-  fireEvent.click(button);
+  fireEvent.click(screen.getByRole("button", { name: "Generate a new reply variant" }));
   await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
+  // A second attempt while the first is in flight. Through the gesture, not
+  // the button: the gutter hides its icons while busy, but the target row is
+  // still mounted with its handlers spread, so this reaches `stepVariant`'s
+  // own re-check of the disabled flag.
+  vi.stubGlobal("PointerEvent", TestPointerEvent);
+  try {
+    swipeLeft(screen.getByText("The second answer."));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  expect(row("The second answer.")).toHaveClass("swipe-target");
   const call = (api.regenerateResponse as any).mock.calls[0];
   expect(call[2]).toBe("rB");
   expect(call[4]).toEqual({ guidance: "", connection_id: "", model: "" });
@@ -315,5 +351,5 @@ test("a trailing reply with no response id keeps the legacy alternates arrows", 
 test("the swipe target leaves vertical panning to the browser", () => {
   const { css } = stylesheet();
   const bodies = bodiesOf(css, ".msg.swipe-target");
-  expect(bodies.map((b) => declares(b, "touch-action"))).toContain("pan-y");
+  expect(bodies.map((b) => declares(b, "touch-action"))).toContain("pan-y pinch-zoom");
 });

@@ -84,6 +84,16 @@ function renderPlay() {
   );
 }
 
+/** The swipe read for the last response, so the arrows are on screen while
+ *  renders are counted: the reroll row carries the swipe control and the
+ *  gesture handlers, and a dependency of theirs that moved on every render
+ *  would re-render that row. */
+function withArrows() {
+  (api.getResponseSwipe as any).mockResolvedValue({
+    active: 1, variants: ["v1", "v2", "v3"].map((id) => ({ id, status: "complete" })),
+    settings: null, resume_settings: null, can_reroll: true, editable: true, round_open: false });
+}
+
 /** A promise and the function that settles it. */
 function gate() {
   let open!: () => void;
@@ -119,9 +129,12 @@ test("composer keystrokes and streamed deltas re-render none of the posts on scr
     await streamed.opened;                  // and reads them before the turn ends
     onEvent({ done: true });
   });
+  withArrows();
   renderPlay();
   const composer = await screen.findByRole("textbox");
   await waitFor(() => expect(renders.controls).toBeGreaterThan(0));
+  expect(await screen.findByText("2/3")).toBeInTheDocument();
+  expect(document.querySelectorAll(".msg.swipe-target")).toHaveLength(1);
   const rowsOnScreen = document.querySelectorAll(".msg").length;
   expect(rowsOnScreen).toBe(posts.length);
 
@@ -157,7 +170,9 @@ test("typing in a post's edit form re-renders that post's run and no other", asy
   (api.getScene as any).mockResolvedValue(
     { meta: { id: "s1", title: "Old" }, messages: posts, total: posts.length,
       has_user_message: true });
+  withArrows();
   renderPlay();
+  expect(await screen.findByText("2/3")).toBeInTheDocument();
   fireEvent.click(await screen.findByRole("button", { name: "Edit message 4" }));  // round 1's player post
   const box = await screen.findByLabelText("Edit message");
 

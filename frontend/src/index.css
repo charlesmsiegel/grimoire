@@ -1968,9 +1968,10 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .swipe-nav { display: flex; align-items: center; gap: 3px; }
 .swipe-count { color: var(--page-muted); font-family: var(--fm); font-size: 10px; }
 /* The last response takes a sideways touch drag as a swipe. Vertical panning
-   stays the browser's; a horizontal one would otherwise be claimed as a pan
-   and cancel the pointer before the gesture is decided. */
-.msg.swipe-target { touch-action: pan-y; }
+   and pinch-zoom stay the browser's (the gesture discards a second finger);
+   a horizontal drag would otherwise be claimed as a pan and cancel the
+   pointer before the gesture is decided. */
+.msg.swipe-target { touch-action: pan-y pinch-zoom; }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }
 
 /* ---- scene inspector + record drawer ---- */

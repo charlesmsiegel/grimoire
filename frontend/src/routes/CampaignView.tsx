@@ -3532,10 +3532,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       api.regenerateResponse(cid, sid, id, onEvent,
         { guidance, response, ...route }, signal, attempt, onIndex),
       undefined, true, "", true);
+    // No swipe refresh here: `runStream`'s finally asks again on every
+    // outcome, including a failed generate that kept the previous variant.
     if (landed && !keepPending) setPendingResponse(null);
-    // A failed generate keeps the previous variant (`replacement_incomplete`),
-    // so the content does not change and nothing else would refetch the count.
-    responseSwipe.refresh();
   }
 
   async function respondAs(ref: string) {
