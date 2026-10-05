@@ -1,4 +1,5 @@
 import { type SceneContext } from "../api/client";
+import { approxMark, estimateNote } from "./ContextBreakdown";
 
 /** The four groups the stacked bar shows, in the order the packer protects
  *  them — most protected first, so the bar reads left to right as "what would
@@ -39,7 +40,9 @@ const BUCKET_OF: Record<string, string> = {
  *  page would be claiming an authority no stored record has.
  *
  *  Every figure here is read off a frozen snapshot the context builder already
- *  wrote; nothing is estimated. Sections the packer DROPPED are left out of
+ *  wrote; nothing is recomputed. (Those figures are themselves estimates
+ *  unless the snapshot says its tokenizer was the model's own, and the total
+ *  carries the same "≈" the inspector does.) Sections the packer DROPPED are left out of
  *  the stack — they were rendered but not sent, and a bar that counted them
  *  would be drawing a prompt that never existed — and reported instead by the
  *  verdict, which is the one number a user is actually looking for. */
@@ -62,15 +65,18 @@ export function ContextBudgetBar({ ctx, label }: { ctx: SceneContext; label: str
   const verdict = ctx.dropped_tokens > 0
     ? `${ctx.dropped_tokens.toLocaleString()} TOKENS DROPPED`
     : "NOTHING DROPPED";
+  // Marked, not corrected: the packer measured with the same tokenizer, so the
+  // fraction is the one it packed to -- it is the provider's count that differs.
+  const approx = approxMark(ctx);
   const total = ceiling > 0
-    ? `${ctx.total_tokens.toLocaleString()} / ${ceiling.toLocaleString()} · ${pct}%`
-    : `${ctx.total_tokens.toLocaleString()} TOKENS · NO CEILING`;
+    ? `${approx}${ctx.total_tokens.toLocaleString()} / ${ceiling.toLocaleString()} · ${pct}%`
+    : `${approx}${ctx.total_tokens.toLocaleString()} TOKENS · NO CEILING`;
 
   return (
     <section className="ctx-budget">
       <header className="ctx-budget-head">
         <span className="data-label">{label}</span>
-        <span className="ctx-budget-total">{total}</span>
+        <span className="ctx-budget-total" title={approx ? estimateNote(ctx) : undefined}>{total}</span>
       </header>
       {/* The bar is a picture of a sentence a screen reader still has to be
           told: the legend below carries the same figures as text, so the track

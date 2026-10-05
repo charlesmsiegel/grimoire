@@ -73,7 +73,55 @@ synced-library flow (requires All-files access).
 
 Cold start shows a spinner for roughly the interpreter + import time (budget
 ≤2.5 s mid-range; measure per device class), then the regular grimoire UI.
-Add the OpenRouter key under Configuration, exactly as on desktop.
+Add the OpenRouter key under Configuration, exactly as on desktop — or point a
+connection at an LLM server on your network (see
+[Using a local LLM server](#using-a-local-llm-server)).
+
+## Using a local LLM server
+
+The app can talk to an LLM server running on a computer on the same network —
+Ollama, llama.cpp, LM Studio, vLLM, KoboldCpp, text-generation-webui, or
+anything else with an OpenAI-compatible endpoint. Set it up as an
+**OpenAI-compatible** connection exactly as on desktop (see "Local and
+OpenAI-compatible backends" in the top-level README), with three differences:
+
+1. **Use the computer's LAN address, not `localhost`.** On the phone,
+   `localhost` and `127.0.0.1` are the phone itself — that is where the app's
+   own embedded server lives. Find the computer's address (for example
+   `192.168.1.20`) and use `http://192.168.1.20:11434/v1`, with that server's
+   port. The Base URL presets fill in `localhost`; replace the host before
+   saving.
+2. **Make the server listen on the network.** Most bind to loopback by default
+   and so refuse the phone:
+
+   | Server | How to listen on the network |
+   |---|---|
+   | Ollama | set `OLLAMA_HOST=0.0.0.0` before starting it |
+   | llama.cpp | `llama-server --host 0.0.0.0` |
+   | LM Studio | enable *Serve on Local Network* in the server settings |
+   | vLLM | listens on all interfaces unless `--host` says otherwise |
+   | KoboldCpp | listens on all interfaces unless `--host` says otherwise |
+   | text-generation-webui | start it with `--api --listen` |
+
+   Then allow the port through the computer's firewall.
+3. **Same network, no client isolation.** The phone and the computer have to
+   be able to reach each other: a guest Wi-Fi or a hotspot that isolates
+   clients will not work, and neither will mobile data.
+
+Plain `http://` is fine for a server on your own network. The app's network
+security config restricts cleartext only for traffic that goes through
+Android's Java networking — the WebView, which loads the app from its own
+loopback server. LLM calls are made by the embedded Python backend (`httpx`
+over its own sockets), which that policy does not cover, so no HTTPS proxy is
+needed in front of the local server.
+
+Use **Test connection** on the Connections page to check the phone can reach
+it; a `network` failure there almost always means one of the three points
+above. Since a local model can be slow to start a reply, raise **No-reply
+timeout** under Settings → Timeouts if turns time out — a turn keeps running
+with the screen off, because the app holds a foreground service while a run is
+live. The context inspector's token counts are always marked as estimates on
+Android: the APK ships no tokenizer and counts by length.
 
 ## Syncing the store with a phone
 

@@ -534,7 +534,7 @@ test("draws the last prompt against the budget, and names whose it is", async ()
   // The most recently played campaign by `activity`, not by `updated`.
   expect(await screen.findByText("LAST TURN IN SALTMARCH, AGAINST THIS BUDGET")).toBeInTheDocument();
   expect(api.listScenePrompts).toHaveBeenCalledWith("saltmarch", "s11");
-  expect(screen.getByText("13,180 / 32,000 · 41%")).toBeInTheDocument();
+  expect(screen.getByText("≈ 13,180 / 32,000 · 41%")).toBeInTheDocument();
   expect(screen.getByText(/CHARACTERS 2,700/)).toBeInTheDocument();
   expect(screen.getByText(/STANDING FRAME 1,840/)).toBeInTheDocument();
   expect(screen.getByText(/CONVERSATION 3,900/)).toBeInTheDocument();

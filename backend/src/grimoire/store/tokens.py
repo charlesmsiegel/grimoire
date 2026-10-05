@@ -37,6 +37,14 @@ except Exception:  # noqa: BLE001 - an unimportable build must degrade, not brea
 
 _log = logging.getLogger(__name__)
 
+#: The one encoding `count_tokens` loads. OpenAI's GPT-4-era tokenizer: there is
+#: no portable way to load another model's, so every count in the app -- the
+#: packer's budget, the inspector's rows, the per-record badge -- is this one.
+ENCODING = "cl100k_base"
+
+#: What `counting` names the characters/4 fallback.
+HEURISTIC = "heuristic"
+
 #: How long a failed encoder load is believed before it is tried again.
 #: Ten minutes: long enough that a turn's assembly -- hundreds of counts --
 #: pays for at most one attempt, short enough that a laptop which was offline
@@ -75,7 +83,7 @@ class _Loader:
                     and time.monotonic() - self._failed_at < RETRY_AFTER_S):
                 return None
             try:
-                self._encoding = tiktoken.get_encoding("cl100k_base")
+                self._encoding = tiktoken.get_encoding(ENCODING)
             except Exception as exc:  # noqa: BLE001 - any failure means the heuristic, see count_tokens
                 self._failed_at = time.monotonic()
                 _log.warning("tiktoken could not load its encoding -- %s; counting "
@@ -108,6 +116,50 @@ def count_tokens(text: str) -> int:
         # non-empty string is at least one token; overestimating slightly is
         # the safe direction for a ceiling.
         return -(-len(text) // 4)
+
+
+def _native_encoding(model: str) -> str:
+    """The encoding tiktoken says `model` itself uses, or "" when it does not
+    know the model -- which is every model that is not OpenAI's.
+
+    Only an `openai/` routing prefix is stripped (OpenRouter's spelling). Any
+    other prefix names somebody else's model, and stripping it would let
+    `someorg/gpt-4-tune` claim GPT-4's tokenizer through tiktoken's prefix
+    table. A bare `gpt-4` reached through an OpenAI-compatible endpoint is
+    taken at its word: an endpoint serving that name is serving that model, and
+    the only way to be wrong is a local server deliberately misnaming one.
+
+    Never raises, and never touches the network -- the lookup is tiktoken's own
+    static table, not an encoding load.
+    """
+    if tiktoken is None or not model:
+        return ""
+    name = model.removeprefix("openai/")
+    try:
+        return str(tiktoken.encoding_name_for_model(name))
+    except Exception:  # noqa: BLE001 - KeyError for an unknown model; anything else means the same
+        return ""
+
+
+def counting(model: str) -> dict:
+    """How the token counts reported beside `model` were made, and whether
+    they are that model's own.
+
+    `tokenizer` is `ENCODING` or `HEURISTIC`; `exact` is true only when the
+    encoder actually loaded AND the model is one tiktoken maps to that same
+    encoding. Everything else -- a Claude model, a llama on a local server, an
+    OpenAI model on the newer `o200k_base`, an Android build with no tiktoken,
+    a desktop that could not fetch the encoding -- is an estimate, and the
+    context inspector says so rather than presenting a GPT-4 count as what the
+    provider will bill.
+
+    It is a description of the counting, not a correction of it. Counting each
+    model with its own tokenizer would change what the packer keeps per
+    connection, and for most backends there is no tokenizer to load at all.
+    """
+    if _encoder() is None:
+        return {"tokenizer": HEURISTIC, "exact": False}
+    return {"tokenizer": ENCODING, "exact": _native_encoding(model) == ENCODING}
 
 
 def record_tokens(path: Path, body: str) -> int:

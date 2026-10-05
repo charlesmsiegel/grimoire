@@ -235,6 +235,57 @@ Grimoire opens on your campaigns — one row each, newest play first, with
    to begin playing. Use **absorb** when a scene is done to fold it into the
    campaign's memory.
 
+## Local and OpenAI-compatible backends
+
+Besides OpenRouter and Claude, a connection can be **OpenAI-compatible**: a base
+URL, an optional API key and a model name, spoken to in the OpenAI
+chat-completions format. That covers local servers — Ollama, the llama.cpp
+server, LM Studio, vLLM, KoboldCpp, text-generation-webui — and most hosted
+providers that offer an OpenAI-style endpoint.
+
+1. Start the server and load a model. Each one serves an OpenAI-compatible root
+   at a default address:
+
+   | Server | Base URL |
+   |---|---|
+   | Ollama | `http://localhost:11434/v1` |
+   | llama.cpp (`llama-server`) | `http://localhost:8080/v1` |
+   | LM Studio | `http://localhost:1234/v1` |
+   | vLLM | `http://localhost:8000/v1` |
+   | KoboldCpp | `http://localhost:5001/v1` |
+   | text-generation-webui (`--api`) | `http://localhost:5000/v1` |
+
+2. Open **Library → Connections**, add a connection, and set its kind to
+   **OpenAI-compatible**. The presets under the Base URL field fill in
+   the addresses above; change the port if yours differs. Leave the API key
+   blank unless the server asks for one.
+3. Press **Fetch models** (**Refresh models** on a saved connection). Grimoire asks the endpoint's `/models` list and
+   offers what it returns; a server that does not serve one (or is not running
+   yet) leaves the field as free text, so type the model name the server uses.
+   **Test connection** asks the same endpoint, so it costs no generation.
+4. Some endpoints reject a system message part-way through a conversation. If
+   yours does, set **Prompt post-processing** to *Strict*.
+
+Connections plug into **Model routing**, so a local model does not have to do
+everything: point *Absorb & mechanics audit* and *Summaries & scene-break
+checks* at the local connection under Settings → Model routing, and leave scene
+prose on a hosted one (or the other way round). Routes left on *inherit* use the
+active connection.
+
+Two things behave differently from a hosted model:
+
+- **Token counts are estimates.** Grimoire counts with OpenAI's `cl100k_base`
+  tokenizer (or by length where that is not installed); a local model has its
+  own. The context inspector marks such counts with `≈` and says which
+  tokenizer produced them. The packer's budget is measured the same way, so
+  leave some headroom below the model's real context window.
+- **Slow replies.** A local model can take a long time to start answering. If
+  turns time out, raise **No-reply timeout** under Settings → Timeouts (`0`
+  removes the bound).
+
+The Android app can use a server on your computer too — see
+[Using a local LLM server from Android](android/README.md#using-a-local-llm-server).
+
 ## Where your data lives
 
 Everything is stored as Markdown and JSON under a single data directory, resolved

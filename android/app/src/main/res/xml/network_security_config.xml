@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- Cleartext is allowed ONLY to the in-process loopback server; everything
-     else (OpenRouter, chub.ai) stays HTTPS-only. -->
+     else that goes through Android's Java networking stays HTTPS-only.
+     That is the WebView, which is the only client of this policy: the
+     embedded Python backend makes its LLM and chub.ai calls with httpx over
+     its own sockets, which the platform does not hold to this config. That
+     is what lets an OpenAI-compatible connection reach a plain-http LLM
+     server on the local network (android/README.md, "Using a local LLM
+     server"). Allowing more cleartext here would widen the WebView, not
+     the backend. -->
 <network-security-config>
     <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="true">

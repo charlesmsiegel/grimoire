@@ -15,6 +15,7 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
   const ctxLen = contextLimit(ctx, models);
   const pct = (t: number) => (ctxLen > 0 ? ` · ${Math.round((t / ctxLen) * 100)}%` : "");
   const pctNumber = (t: number) => (ctxLen > 0 ? Math.round((t / ctxLen) * 100) : 0);
+  const approx = approxMark(ctx);
 
   return (
     <>
@@ -22,8 +23,9 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
         <div className="ctx-bar-fill" style={{ width: `${Math.min(100, pctNumber(ctx.total_tokens))}%` }} />
       </div>
       <div className="ctx-tokens">
-        {ctx.total_tokens.toLocaleString()}{ctxLen > 0 ? ` / ${ctxLen.toLocaleString()}` : ""} tok
+        {approx}{ctx.total_tokens.toLocaleString()}{ctxLen > 0 ? ` / ${ctxLen.toLocaleString()}` : ""} tok
       </div>
+      {approx && <div className="field-hint ctx-estimate">{estimateNote(ctx)}</div>}
       {ctx.dropped_tokens > 0 && (
         <div className="ctx-tokens">
           {ctx.dropped_tokens.toLocaleString()} tok dropped to fit the budget
@@ -55,6 +57,29 @@ export function ContextBreakdown({ ctx, models }: { ctx: SceneContext; models: M
       ))}
     </>
   );
+}
+
+/** "≈ " when these counts are not the model's own tokenizer's, "" when they
+ *  are. A snapshot frozen before the server said which tokenizer counted is an
+ *  estimate too: that is the answer nobody can rule out. */
+export function approxMark(ctx: SceneContext): string {
+  return ctx.token_count?.exact ? "" : "≈ ";
+}
+
+/** Why the counts are estimates, in one sentence. Only meaningful when
+ *  `approxMark` is non-empty. */
+export function estimateNote(ctx: SceneContext): string {
+  const model = ctx.model ? ctx.model : "this model";
+  const tokenizer = ctx.token_count?.tokenizer;
+  if (tokenizer === undefined) {
+    return `Estimated: counted with Grimoire's tokenizer, which may not be ${model}'s own.`;
+  }
+  if (tokenizer === "heuristic") {
+    return "Estimated: no tokenizer is available here, so tokens are counted as "
+      + "about four characters each. The provider's own count will differ.";
+  }
+  return `Estimated: counted with ${tokenizer} (OpenAI's GPT-4 tokenizer); `
+    + `${model} uses its own, so the provider's count will differ.`;
 }
 
 /** What actually bounds this prompt, in tokens; 0 when nothing is known.
