@@ -176,6 +176,27 @@ test("alternate reads never coalesce, so a set matches the transcript it was rea
   expect(await older).toEqual({ active: 0, alternates: [{ id: "a" }] });
 });
 
+test("swipe reads never coalesce, so a refresh after a swipe sees the swipe", async () => {
+  // `useResponseSwipe` re-reads after every activate, reroll and delete. A
+  // shared read is as old as the request it joined, so a refresh issued while
+  // the pre-mutation GET is still open would install that older state: the
+  // counter names the take the swipe just replaced.
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk({ active: 1, variants: [{ id: "a" }, { id: "b" }] }));
+  globalThis.fetch = fetchMock;
+
+  const older = api.getResponseSwipe("run", "s1", "r1");   // in flight, unresolved
+  const newer = api.getResponseSwipe("run", "s1", "r1");   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  expect((await newer).active).toBe(1);
+  releaseFirst(jsonOk({ active: 0, variants: [{ id: "a" }, { id: "b" }] }));
+  expect((await older).active).toBe(0);
+});
+
 test("scene reads never coalesce, so a refresh after a mutation sees the mutation", async () => {
   // The alternates read being fresh is only half of it: the readiness gate
   // compares a set against the TRANSCRIPT it was read with, and `selectScene` is

@@ -1663,8 +1663,12 @@ export const api = {
   // the wrong active take, and an arrow promotes a still-valid but wrong id.
   getResponse: (cid: string, sid: string, rid: string) =>
     request<ResponseRecord>("GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
+  // Never coalesced, like `getAlternates` below: the swipe hook re-reads after
+  // every activate, reroll and delete, and a shared read is as old as the
+  // request it joined -- the pre-mutation state, naming the replaced take.
   getResponseSwipe: (cid: string, sid: string, rid: string) =>
-    request<ResponseSwipe>("GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/swipe`),
+    request<ResponseSwipe>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/swipe`, undefined, { fresh: true }),
   deleteResponse: (cid: string, sid: string, rid: string) =>
     request<Scene>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
   activateResponseVariant: (cid: string, sid: string, rid: string, vid: string) =>
