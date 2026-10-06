@@ -2511,7 +2511,7 @@ Story Graph:
 - the Now boundary and future nodes;
 - narrow width: at `innerWidth` 375, tapping an Arcs row or a node button renders that node's detail in main, outside the drawing container;
 - no hover-only essential information: every node is a button with an accessible name that includes its label and status;
-- no generation call: across mount and every lens or toggle change, the only API call is the graph read, made once.
+- no generation call: across mount and every lens or toggle change, the only API call is the graph read, made once -- under StrictMode too, whose rehearsed mount joins the read the first setup has in flight rather than sending a second (the read stays `fresh`: only an in-flight read is joined, so a later mount, a Retry or a campaign switch reads afresh).
 
 ## 28.10 LLM eval cases
 
