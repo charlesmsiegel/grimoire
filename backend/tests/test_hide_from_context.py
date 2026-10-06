@@ -324,18 +324,18 @@ def test_a_reply_composed_after_the_exclusion_rerolls(client, monkeypatch):
 
 def test_composed_turn_and_inspector_omit_an_excluded_post(client):
     cid, sid = seed(client)
-    store.scenes.append_message(cid, sid, "user", "ooc: the heliotrope is my cat")
+    store.scenes.append_message(cid, sid, "user", "ooc: the pact is my cat")
     store.scenes.append_message(cid, sid, "user", "Mara, the tide is turning.")
-    entities.create_entity(campaigns.campaign_root(cid), "lore", "Heliotrope",
-                           "The flower of oaths.", keys="heliotrope")
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "The Pact",
+                           "Signed at dusk.", keys="pact")
     text = "\n".join(m["content"] for m in store.context.build_messages(cid, sid))
-    assert "heliotrope is my cat" in text and "The flower of oaths." in text   # the control
+    assert "pact is my cat" in text and "Signed at dusk." in text   # the control
     store.scenes.set_excluded(cid, sid, 0, True)
     text = "\n".join(m["content"] for m in store.context.build_messages(cid, sid))
-    assert "heliotrope is my cat" not in text and "The flower of oaths." not in text
+    assert "pact is my cat" not in text and "Signed at dusk." not in text
     assert "the tide is turning" in text
     rows = store.context.context_breakdown(cid, sid)["sections"]
-    assert all("heliotrope is my cat" not in r.get("text", "") for r in rows)
+    assert all("pact is my cat" not in r.get("text", "") for r in rows)
     assert any("the tide is turning" in r.get("text", "") for r in rows)
 
 

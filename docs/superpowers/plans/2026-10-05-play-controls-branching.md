@@ -563,7 +563,8 @@ amended to match items 1, 2 and 9.
    `sid` is absorbed; the scene-regenerate row branches at `through=1`; the
    `/branch` `branch_closed` row is added in Task 5.
 6. **Fork-by-number test** gives the branch a title that sorts **before** the
-   source (`"Abel"` → `001--abel`) so it fails on today's string comparison.
+   source (`"Mara"` → `001--mara`, against a source titled after it, e.g.
+   "Saltmarch") so it fails on today's string comparison.
 7. **`require_scene_open` runs before `_reserve`** in `reserve_turn` (a 409 after
    reserving would strand a run).
 8. **Gate 13 deviation (recorded):** the sibling seats the actors present at
