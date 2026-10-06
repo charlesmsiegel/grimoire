@@ -146,6 +146,15 @@ export function CandidateDetail(props: Props) {
     return null;
   })();
 
+  /** What kind the merged commitment keeps (§5.1, §7.1): the canonical's
+   *  kind overrides the source's, so where the two differ the reader is told
+   *  which one each Keep leaves in the play prompt. */
+  const kinds = candidate.kind === "possible_duplicate" && A?.commitment_kind
+    && B?.commitment_kind && A.commitment_kind !== B.commitment_kind
+    ? `The merged commitment takes the kept one's kind: ${A.commitment_kind} if you keep `
+      + `${nameA}, ${B.commitment_kind} if you keep ${nameB}.`
+    : null;
+
   /** The finding's actions, by its shape (§12.3, §12.4). Each is keyed by
    *  what it does, not by its label: a label is for the reader. */
   function actions(): { key: string; label: string; run: () => void }[] {
@@ -298,6 +307,7 @@ export function CandidateDetail(props: Props) {
             <button key={a.key} type="button" disabled={off} onClick={a.run}>{a.label}</button>
           ))}
         </div>
+        {kinds && <p className="field-hint continuity-kinds">{kinds}</p>}
         {due && (
           <label className="continuity-due">
             <input type="checkbox" checked={copyDue} disabled={off}
@@ -379,8 +389,8 @@ const TYPE_LABELS: Record<string, string> = {
   thread: "Plot thread", commitment: "Commitment", event: "Dated event",
 };
 
-/** One record as it is now: its title (a link to its Ledger row), status,
- *  dates and beats. */
+/** One record as it is now: its title (a link to its Ledger row), a
+ *  commitment's own kind, status, dates and beats. */
 function RecordView(
   { cid, record, sceneLink }: {
     cid: string; record: CandidateRecord;
@@ -403,7 +413,9 @@ function RecordView(
             </Link>
           : <span className="chip on">{title}</span>}
         <span className="continuity-item-meta">
-          {TYPE_LABELS[type] ?? "Record"}{record.status && ` · ${record.status}`}
+          {TYPE_LABELS[type] ?? "Record"}
+          {record.commitment_kind && ` (${record.commitment_kind})`}
+          {record.status && ` · ${record.status}`}
         </span>
       </div>
       {record.gone && <p className="field-hint">No longer a current record.</p>}

@@ -2248,7 +2248,12 @@ export type CandidateRecord = {
   ref: string;
   /** The record type off the ref prefix: `thread`, `commitment` or `event`. */
   kind: string;
-  title: string; status: string; latest_beat: string;
+  title: string; status: string;
+  /** A commitment's own kind (`promise`, `threat`, `foreshadowing`), as the
+   *  play prompt prints it. Blank for a thread, an event or a gone record. A
+   *  merge keeps the canonical's (§5.1). */
+  commitment_kind: string;
+  latest_beat: string;
   last_scene: { id: string; title: string };
   pressure: { state: string; in_days: number | null; friendly: string } | null;
   aliases: LedgerAlias[];

@@ -23,7 +23,8 @@ function record(ref: string, title: string, extra: Partial<CandidateRecord> = {}
   return {
     ref, kind: ref.split(":")[0], title, status: "open", latest_beat: "",
     last_scene: { id: "", title: "" }, pressure: null, aliases: [], due: "",
-    beats: [], gone: false, ...extra,
+    beats: [], gone: false,
+    commitment_kind: ref.startsWith("commitment:") ? "promise" : "", ...extra,
   };
 }
 
@@ -968,6 +969,30 @@ describe("the finding detail", () => {
       op: "alias", canonical: SER_OATH.ref, copy_due: true,
       expect_fingerprint: OATHS.fingerprint,
     });
+  });
+
+  test("a commitment's own kind is shown, and a merge says which kind it keeps", async () => {
+    // §5.1: the kind the canonical will override is shown before apply. Same
+    // title and both open, so no liveness 409 would ever name it.
+    const threat = record("commitment:mara-s-oath", "Mara's oath",
+                          { commitment_kind: "threat", due: "spring" });
+    const promise = record("commitment:mara-s-oath-2", "Mara's oath");
+    const pair = finding("possible_duplicate-9999999999999999", "possible_duplicate",
+                         "overlaps", [threat, promise]);
+    (api.continuityCandidates as any).mockResolvedValue({ ...DETAIL, candidates: [pair] });
+    renderLedger(at(pair));
+    await sidebar();
+    expect(main().getByText("Commitment (threat) · open")).toBeInTheDocument();
+    expect(main().getByText("Commitment (promise) · open")).toBeInTheDocument();
+    expect(aside().getByText("The merged commitment takes the kept one's kind: threat if you "
+      + "keep Mara's oath (first), promise if you keep Mara's oath (second).")).toBeInTheDocument();
+  });
+
+  test("a merge of two commitments of one kind says nothing about kind", async () => {
+    renderLedger(at(OATHS));
+    await sidebar();
+    expect(main().getAllByText("Commitment (promise) · open")).toHaveLength(2);
+    expect(aside().queryByText(/takes the kept one's kind/)).toBeNull();
   });
 
   test("the due copy is not sent when the kept record is the one with the due", async () => {
