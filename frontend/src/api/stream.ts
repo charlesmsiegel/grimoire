@@ -46,8 +46,10 @@ export type RunHandle = {
    *  frames to read and a `review` produces a payload to fetch, so a client
    *  that discovers a live run has to know which before it decides what to do
    *  with it. Attaching to a review's (empty) frame stream would show an
-   *  endless empty reply over a scene that is being absorbed perfectly well. */
-  cls?: "turn" | "review" | "background" | "draft";
+   *  endless empty reply over a scene that is being absorbed perfectly well.
+   *  `maintenance` is image-store migration or collection on the global
+   *  subject: a payload to poll, like a review, whose result is its report. */
+  cls?: "turn" | "review" | "background" | "draft" | "maintenance";
   /** Which piece of work within that class — `absorb`, `audit`, `dossiers`,
    *  `chat`, … . A whole review's worth of runs share one `cls`, so this is
    *  what tells the absorb apart from a retry of one of its phases. */
