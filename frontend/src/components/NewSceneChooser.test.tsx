@@ -759,6 +759,50 @@ test("with no anchors, Choose anchor is disabled and says why", async () => {
   expect(screen.getByText(/No upcoming dated events/)).toBeVisible();
 });
 
+const UNDATED_HINT = /no current date/;
+
+test("in an undated campaign, Stay near and Let time move are disabled and say why", async () => {
+  (api.continuityDrivers as any).mockResolvedValue(
+    snapshot({ now: "", friendly: "", fixed: null }));
+  const { container } = renderChooser();
+  await pickerReady(container);
+  const time = screen.getByRole("radiogroup", { name: "Time" });
+  expect(within(time).getByRole("radio", { name: "Stay near current date" })).toBeDisabled();
+  expect(within(time).getByRole("radio", { name: "Let time move" })).toBeDisabled();
+  expect(within(time).getByRole("radio", { name: "Any date" })).toBeEnabled();
+  expect(screen.getByText(UNDATED_HINT)).toBeVisible();
+});
+
+test("in a dated campaign, Stay near and Let time move are offered", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  const time = screen.getByRole("radiogroup", { name: "Time" });
+  expect(within(time).getByRole("radio", { name: "Stay near current date" })).toBeEnabled();
+  expect(within(time).getByRole("radio", { name: "Let time move" })).toBeEnabled();
+  expect(screen.queryByText(UNDATED_HINT)).toBeNull();
+});
+
+test("a held near falls back to any date when a re-read has no current date", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  chooseTime("Stay near current date");
+  (api.sceneSuggestions as any).mockRejectedValueOnce(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
+  (api.continuityDrivers as any).mockResolvedValue(
+    snapshot({ now: "", friendly: "", fixed: null }));
+  await regenerate();
+  await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText(/were reset — press Regenerate\./))
+    .toHaveTextContent(/Mara's map, near date/);
+  await waitFor(() => expect(within(screen.getByRole("radiogroup", { name: "Time" }))
+    .getByRole("radio", { name: "Any date" })).toBeChecked());
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "" });
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({ time_mode: "auto" }));
+});
+
 test("anchor mode sends the anchor and relation", async () => {
   (api.continuityDrivers as any).mockResolvedValue(
     snapshot({ anchors: [CORONATION, MONTH_BIRTHDAY] }));

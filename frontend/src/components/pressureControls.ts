@@ -150,9 +150,21 @@ export function chooseAnchor(c: PressureControls, ref: string,
            relation: option?.precision === "month" ? "on" : c.relation };
 }
 
+/** Whether `snap` offers a time setting at all. `near` and `move` are measured
+ *  from the campaign's current date -- the clock, else the newest chronicle
+ *  date, which is what the drivers read and the suggestion read both resolve
+ *  -- so with no date they would ask for nothing (§15.3, Decision 12); anchor
+ *  mode needs an anchor to choose. */
+export function timeModeAvailable(mode: TimeMode, snap: DriversSnapshot): boolean {
+  if (mode === "near" || mode === "move") return snap.now !== "";
+  if (mode === "anchor") return snap.anchors.length > 0;
+  return true;
+}
+
 /** The request's control fields. The last line of defence against a 400: no
  *  anchor mode without an anchor, no relation but `on` for a month anchor, and
- *  never the anchored ref as avoided. */
+ *  never the anchored ref as avoided -- nor against a no-op: no `near`/`move`
+ *  without a read that has a current date. */
 export function toRequest(c: PressureControls, snap: DriversSnapshot | null): Pick<
   SceneSuggestionsOptions,
   "focus_refs" | "avoid_refs" | "must_refs" | "time_mode" | "time_anchor_ref"
@@ -164,14 +176,18 @@ export function toRequest(c: PressureControls, snap: DriversSnapshot | null): Pi
     focus_refs: refsWith(c, "focus"),
     avoid_refs: refsWith(c, "avoid").filter((ref) => !anchored || ref !== c.anchor),
     must_refs: refsWith(c, "must"),
-    time_mode: c.time === "anchor" && !anchored ? "auto" : c.time,
+    time_mode: (c.time === "anchor" && !anchored)
+      || ((c.time === "near" || c.time === "move") && !(snap && timeModeAvailable(c.time, snap)))
+      ? "auto" : c.time,
     time_anchor_ref: anchored ? c.anchor : "",
     time_anchor_relation: anchored ? (month ? "on" : c.relation) : "",
   };
 }
 
 /** Controls held to a fresh read (Decision 19): a driver or an anchor the read
- *  no longer lists goes back to Normal / `auto`, and is named in `dropped`. */
+ *  no longer lists goes back to Normal / `auto`, and is named in `dropped`; so
+ *  does a `near`/`move` the read no longer offers (no current date), named by
+ *  its `timeLabel`. */
 export function pruneControls(c: PressureControls, snap: DriversSnapshot): {
   controls: PressureControls; dropped: string[];
 } {
@@ -182,6 +198,10 @@ export function pruneControls(c: PressureControls, snap: DriversSnapshot): {
   if (c.anchor && !snap.anchors.some((a) => a.ref === c.anchor)) {
     controls = withoutAnchor(controls);
     dropped.push(c.anchor);
+  }
+  if ((c.time === "near" || c.time === "move") && !timeModeAvailable(c.time, snap)) {
+    controls = { ...controls, time: "auto" };
+    dropped.push(timeLabel(c));
   }
   return { controls, dropped };
 }

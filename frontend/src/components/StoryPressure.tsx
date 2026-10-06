@@ -1,7 +1,8 @@
 import type { AnchorRelation, Driver, DriverControl, DriversSnapshot, PressureState,
               TimeMode } from "../api/types";
 import { ANCHOR_RELATIONS, MUST_CAP, chooseAnchor, controlOf, groupDrivers, mustAllowed,
-         steeredCount, timeLabel, whenPhrase, type PressureControls } from "./pressureControls";
+         steeredCount, timeLabel, timeModeAvailable, whenPhrase,
+         type PressureControls } from "./pressureControls";
 
 /** The Story Pressure controls (capstone §16.2): a disclosure inside the
  *  chooser's Generated group, under Direction, collapsed unless a Story Graph
@@ -75,12 +76,18 @@ export function StoryPressure({ snap, value, onChange, disabled, open, onToggle 
             <label className="radio-row" key={mode}>
               <input type="radio" name="pressure-time" value={mode}
                      checked={value.time === mode}
-                     disabled={disabled || (mode === "anchor" && snap.anchors.length === 0)}
+                     disabled={disabled || !timeModeAvailable(mode, snap)}
                      onChange={() => setTime(mode)} />
               {label}
             </label>
           ))}
         </div>
+        {!snap.now && (
+          <div className="field-hint">
+            The campaign has no current date yet, so there is none to stay near or move
+            from — set the clock or date a scene.
+          </div>
+        )}
         {snap.anchors.length === 0 && (
           <div className="field-hint">
             No upcoming dated events, holidays or birthdays to anchor to.

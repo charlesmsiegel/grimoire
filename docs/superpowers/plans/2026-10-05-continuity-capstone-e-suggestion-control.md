@@ -1316,6 +1316,7 @@ The slices above each prove one layer. This task proves they agree, through one 
 18. The prompt index is ordered by `SORT_ORDER`, the §16.2 order, rather than B's decision precedence `PRESSURE_STATES` (Decision 9).
 19. A saved idea anchored other than `on` a live occurrence opens the confirm form with an empty date, rather than the chooser's `nextDate` (Decision 23). §17.1 named only the live-`on` case.
 20. §16.3 step 5's "shows which selections dropped" lasts until the next suggestion request goes out, and §16.5's seed note until the reader changes a control (Decision 19). A note that says "press Regenerate" is not left under the cards Regenerate brought.
+21. §16.2's Stay near / Let time move are disabled, with a visible hint, when the drivers read's `now` is empty, and `toRequest`/`pruneControls` never send or keep either without one (a held one falls back to `auto` with the reset note). The drivers read and the suggestion snapshot resolve `now` the same way (`clock.now`, falling back to the newest chronicle date), so the chooser's empty `now` is exactly the case where §15.3 skips the `near`/`move` checks and the prompt omits their sentences (Decision 12).
 
 **Open questions (none block execution):**
 
