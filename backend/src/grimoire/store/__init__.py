@@ -83,6 +83,7 @@ from . import (
     image_collections,
     image_descriptions,
     image_drafts,
+    image_gc,
     image_hash,
     image_library,
     image_migration,

@@ -32,6 +32,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import stat
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -213,6 +214,193 @@ def walk(root: Path) -> Iterator[tuple[Path, Ref]]:
             ref = _read_file(path, stem)
             if ref is not None and ref.image is not None:
                 yield Path(dirpath).parent, ref
+
+
+class ImageRefParseError(ValueError):
+    """`walk_strict` met something it cannot vouch for. `path` names it and
+    `reason` says what it is (`UNREADABLE`, `SYMLINK`, `UNPARSEABLE`,
+    `UNKNOWN_FORMAT`, `NOT_A_FILE`, `NOT_A_DIRECTORY`)."""
+
+    def __init__(self, path: Path, reason: str) -> None:
+        super().__init__(f"{reason}: {path}")
+        self.path = Path(path)
+        self.reason = reason
+
+
+UNREADABLE = "unreadable"
+SYMLINK = "symlink"
+UNPARSEABLE = "unparseable"
+UNKNOWN_FORMAT = "unknown-format"
+NOT_A_FILE = "not-a-regular-file"
+NOT_A_DIRECTORY = "not-a-directory"
+
+#: Files an OS or a file browser drops into any folder it shows. Grimoire never
+#: writes one, and none can hold a placement, so a strict walk passes them by
+#: rather than refusing a collection over a folder somebody opened in Finder.
+OS_LITTER = frozenset({".ds_store", "thumbs.db", "desktop.ini"})
+
+
+def _linkish(e: os.DirEntry) -> bool:
+    """A symlink, or (on Windows) a junction, which `is_symlink` does not
+    report and which leads outside the tree just as well."""
+    return e.is_symlink() or bool(getattr(e, "is_junction", lambda: False)())
+
+
+def strict_dirs(root: Path) -> Iterator[tuple[Path, list[os.DirEntry]]]:
+    """Every directory under `root`, `root` included, with its entries --
+    and an `ImageRefParseError` for a directory that does not list, an entry
+    that cannot be tested, or a link anywhere. Nothing is followed."""
+    stack = [root]
+    while stack:
+        d = stack.pop()
+        try:
+            with os.scandir(d) as it:
+                entries = sorted(it, key=lambda e: e.name)
+        except OSError as exc:
+            raise ImageRefParseError(d, UNREADABLE) from exc
+        for e in entries:
+            try:
+                if _linkish(e):
+                    raise ImageRefParseError(Path(e.path), SYMLINK)
+                if e.is_dir(follow_symlinks=False):
+                    stack.append(Path(e.path))
+            except OSError as exc:
+                raise ImageRefParseError(Path(e.path), UNREADABLE) from exc
+        yield d, entries
+
+
+def ids_in(obj: object) -> Iterator[str]:
+    """Every image id anywhere in a parsed JSON value, keys included."""
+    if isinstance(obj, str):
+        if image_hash.is_image_id(obj):
+            yield obj
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from ids_in(k)
+            yield from ids_in(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from ids_in(v)
+
+
+def load_json_strict(path: Path) -> object:
+    """`path` parsed, or `ImageRefParseError`: a file the walk listed and
+    cannot read (gone since, a permission, bad UTF-8) or parse is a root
+    nobody can vouch for."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, ValueError) as exc:
+        raise ImageRefParseError(path, UNREADABLE) from exc
+    try:
+        return json.loads(text)
+    except (ValueError, RecursionError) as exc:
+        raise ImageRefParseError(path, UNPARSEABLE) from exc
+
+
+def strict_ref_ids(path: Path) -> list[str]:
+    """The image id a placement file names (a list of none or one), or
+    `ImageRefParseError` for anything that is not a placement this format
+    describes: not JSON, not an object, a ``format`` other than this one, or
+    an ``image`` that is not an id. A focus-only override names none."""
+    obj = load_json_strict(path)
+    if not isinstance(obj, dict):
+        raise ImageRefParseError(path, UNPARSEABLE)
+    fmt = obj.get("format")
+    if type(fmt) is not int or fmt != FORMAT:
+        raise ImageRefParseError(path, UNKNOWN_FORMAT)
+    if "image" not in obj:
+        return []
+    image = obj["image"]
+    if not image_hash.is_image_id(image):
+        raise ImageRefParseError(path, UNPARSEABLE)
+    return [image]
+
+
+def _strict_file(path: Path) -> list[str]:
+    """The ids one entry of an ``image-refs/`` folder holds (module docs of
+    `walk_strict`)."""
+    if path.name == JOURNAL:
+        obj = load_json_strict(path)
+        if not isinstance(obj, dict):
+            raise ImageRefParseError(path, UNPARSEABLE)
+        return sorted(set(ids_in(obj)))
+    if atomic.is_write_temp(path):
+        try:
+            return sorted(set(ids_in(json.loads(path.read_text(encoding="utf-8")))))
+        except (OSError, ValueError, RecursionError):
+            return []               # a temp caught mid-write: its writer owns it
+    return strict_ref_ids(path)
+
+
+def walk_strict(root: Path) -> Iterator[tuple[Path, str]]:
+    """`(file, image id)` for every id any file in any ``image-refs/`` folder
+    under `root` names -- the garbage collector's roots (stage 4, M12), where
+    `walk` is an exporter's view and forgives what it cannot read.
+
+    Strict where `walk` is tolerant, because a reference this cannot read is a
+    reference it cannot rule out:
+
+    - **every regular file** in an ``image-refs/`` folder is parsed, whatever
+      its stem: a sync client's ``avatar (conflicted copy).json`` names a
+      picture somebody may still want;
+    - the promotion journal (``.promote.json``) gives every id in it, both
+      sides of the swap;
+    - an atomic temp (`atomic.is_write_temp`) is parsed when it can be and
+      passed by when it cannot -- its writer is mid-write and owns it;
+    - an OS's folder litter (`OS_LITTER`) is passed by.
+
+    Raises `ImageRefParseError` on anything else it cannot vouch for: a file
+    that does not parse as a placement or names an unknown ``format``, a
+    directory that does not list (`os.scandir` failing anywhere), any symlink
+    or junction under `root`, `root` itself a link or not a directory, and a
+    non-regular file in an ``image-refs/`` folder. A missing `root` holds
+    nothing. Nothing is followed, written or cached.
+
+    A generator: the error surfaces when iteration reaches the bad entry, so
+    a caller treats the walk as all-or-nothing.
+    """
+    root = Path(root)
+    if not _strict_root(root):
+        return
+    for d, entries in strict_dirs(root):
+        if d.name != REFS_DIR:
+            continue
+        for e in entries:
+            for image_id in _strict_entry(e):
+                yield Path(e.path), image_id
+
+
+def _strict_root(root: Path) -> bool:
+    """Whether `root` is a directory to walk: False when absent, and
+    `ImageRefParseError` when it is a link, not a directory, or unreadable."""
+    try:
+        st = os.lstat(root)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise ImageRefParseError(root, UNREADABLE) from exc
+    if stat.S_ISLNK(st.st_mode):
+        raise ImageRefParseError(root, SYMLINK)
+    if not stat.S_ISDIR(st.st_mode):
+        raise ImageRefParseError(root, NOT_A_DIRECTORY)
+    return True
+
+
+def _strict_entry(e: os.DirEntry) -> list[str]:
+    """The ids one entry of an ``image-refs/`` folder holds; a subdirectory
+    holds none here (`strict_dirs` walks it as a directory of its own)."""
+    path = Path(e.path)
+    try:
+        if e.is_dir(follow_symlinks=False):
+            return []
+        regular = e.is_file(follow_symlinks=False)
+    except OSError as exc:
+        raise ImageRefParseError(path, UNREADABLE) from exc
+    if e.name.casefold() in OS_LITTER:
+        return []
+    if not regular:
+        raise ImageRefParseError(path, NOT_A_FILE)
+    return _strict_file(path)
 
 
 def walk_ids(root: Path) -> set[str]:
