@@ -1,8 +1,13 @@
 import { StrictMode } from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { NewSceneChooser } from "./NewSceneChooser";
+import type { Driver, DriversSnapshot } from "../api/types";
 
-vi.mock("../api/client", () => ({
+// The real module first: the suggestion hook tells a stale refusal apart with
+// `err instanceof ApiError`, which a factory with no `ApiError` export would
+// turn into a throw inside its `.catch`.
+vi.mock("../api/client", async () => ({
+  ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
   api: {
     availableGreetings: vi.fn(), sceneSuggestions: vi.fn(), sceneIntent: vi.fn(),
     createScene: vi.fn(), startFromGreeting: vi.fn(), addCastBatch: vi.fn(),
@@ -15,13 +20,40 @@ vi.mock("../api/client", () => ({
     // The pre-notice banner above the mode cards (#106): what is imminent in
     // the campaign, read from the clock since there is no scene yet.
     campaignNotices: vi.fn(), dismissNotices: vi.fn(),
+    // The Story Pressure controls' one read (capstone §16.2).
+    continuityDrivers: vi.fn(),
   },
 }));
 vi.mock("./CalendarDatePicker", () => ({
   CalendarDatePicker: ({ value, onChange, ariaLabel }: any) =>
     <input aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
+
+function driver(ref: string, kind: Driver["kind"], label: string,
+                state: Driver["pressure"]["state"], in_days: number | null = null): Driver {
+  return { ref, kind, label, summary: "", actors: [], status: "open",
+           pressure: { state, in_days, friendly: "" }, time_anchors: [], links: [] };
+}
+
+const CORONATION = {
+  ref: "event:the-coronation", kind: "event" as const, label: "The coronation",
+  native: "2026-05-17", friendly: "17 May 2026", fixed: 110, in_days: 10,
+  precision: "exact" as const,
+};
+
+function snapshot(over: Partial<DriversSnapshot> = {}): DriversSnapshot {
+  return {
+    now: "2026-05-07", friendly: "7 May 2026", fixed: 100, matching: "basic",
+    drivers: [
+      driver("thread:mara-s-map", "thread", "Mara's map", "stale"),
+      driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2),
+      driver("event:the-coronation", "event", "The coronation", "upcoming", 10),
+    ],
+    anchors: [CORONATION],
+    ...over,
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -48,6 +80,7 @@ beforeEach(() => {
   (api.sceneImport as any).mockResolvedValue({ id: "s9", messages: 1, cast: 0 });
   (api.campaignNotices as any).mockResolvedValue({ notices: [], now: "", warn_days: 7 });
   (api.dismissNotices as any).mockResolvedValue({ ok: true, marked: [] });
+  (api.continuityDrivers as any).mockResolvedValue(snapshot());
 });
 
 test("picking a mode asks the ranked question, which is what fills the picker", async () => {
@@ -60,7 +93,8 @@ test("picking a mode asks the ranked question, which is what fills the picker", 
 
   await screen.findByText(/blank scene/i);
   await waitFor(() => expect(api.sceneSuggestions)
-    .toHaveBeenCalledWith("c", "s1", false, "", true));
+    .toHaveBeenCalledWith("c", expect.objectContaining(
+      { after: "s1", offscreen: false, direction: "", rank: true })));
   expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
   // and the control is the one that REPLACES what the open call produced
   expect(await screen.findByRole("button", { name: /regenerate/i })).toBeInTheDocument();
@@ -92,7 +126,8 @@ test("Regenerate makes a second, unranked call carrying the typed direction", as
   // rank=false: the open call already ordered the greeting cards, and
   // re-ranking would reshuffle them under the reader's cursor.
   expect(api.sceneSuggestions)
-    .toHaveBeenLastCalledWith("c", "s1", false, "something at sea", false);
+    .toHaveBeenLastCalledWith("c", expect.objectContaining(
+      { after: "s1", offscreen: false, direction: "something at sea", rank: false }));
 });
 
 test("an offscreen chooser asks for offscreen ideas", async () => {
@@ -103,7 +138,8 @@ test("an offscreen chooser asks for offscreen ideas", async () => {
   render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
   fireEvent.click(screen.getByText("Offscreen (NPCs only)"));
   await waitFor(() => expect(api.sceneSuggestions)
-    .toHaveBeenCalledWith("c", "s1", true, "", true));
+    .toHaveBeenCalledWith("c", expect.objectContaining(
+      { after: "s1", offscreen: true, direction: "", rank: true })));
 });
 
 test("a campaign switch drops the ideas the last one earned", async () => {
@@ -124,7 +160,8 @@ test("a campaign switch drops the ideas the last one earned", async () => {
   fireEvent.click(screen.getByText("With your PC"));
   await screen.findByText("Campaign B's idea");
   expect(screen.queryByText("Campaign A's idea")).toBeNull();
-  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("b", "s1", false, "", true);
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("b", expect.objectContaining(
+      { after: "s1", offscreen: false, direction: "", rank: true }));
 });
 
 test("the import mode opens the import pane and asks for no suggestions", async () => {
@@ -539,4 +576,390 @@ test.each([false, true])("Regenerate shows progress over existing ideas and clea
   await waitFor(() => expect(screen.getByRole("button", { name: /regenerate/i })).toBeEnabled());
   expect(screen.queryByRole("status")).not.toBeInTheDocument();
   expect(await screen.findByText(fails ? /Scene generation failed/ : "Back in Saltmarch")).toBeVisible();
+});
+
+// ---- Story pressure (capstone §16.2-§16.5, plan Decision 19) ----
+
+const CARD = { title: "At sea", premise: "", cast: [], location: null };
+const MONTH_BIRTHDAY = {
+  ref: "birthday:characters:mara:month:2026-06", kind: "birthday" as const,
+  label: "Mara's birthday", native: "", friendly: "June 2026", fixed: null, in_days: null,
+  precision: "month" as const,
+};
+
+function renderChooser(props: Partial<Parameters<typeof NewSceneChooser>[0]> = {}) {
+  return render(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}}
+                                 onCreated={() => {}} {...props} />);
+}
+
+/** The disclosure, once the drivers read has settled and the picker shows it. */
+async function pressureDetails(container: HTMLElement): Promise<HTMLDetailsElement> {
+  return waitFor(() => {
+    const d = container.querySelector<HTMLDetailsElement>("details.story-pressure");
+    expect(d).not.toBeNull();
+    return d!;
+  });
+}
+
+async function openPressure(container: HTMLElement): Promise<HTMLDetailsElement> {
+  const details = await pressureDetails(container);
+  if (!details.hasAttribute("open")) fireEvent.click(details.querySelector("summary")!);
+  await waitFor(() => expect(details).toHaveAttribute("open"));
+  return details;
+}
+
+function row(label: string) {
+  return screen.getByRole("radiogroup", { name: `${label}: story pressure` });
+}
+
+function choose(label: string, control: "Normal" | "Focus" | "Avoid" | "Must") {
+  fireEvent.click(within(row(label)).getByRole("radio", { name: control }));
+}
+
+function chooseTime(name: string) {
+  fireEvent.click(within(screen.getByRole("radiogroup", { name: "Time" }))
+    .getByRole("radio", { name }));
+}
+
+function lastOptions() {
+  const calls = (api.sceneSuggestions as any).mock.calls as unknown[][];
+  return calls[calls.length - 1][1] as Record<string, unknown>;
+}
+
+async function regenerate() {
+  const before = (api.sceneSuggestions as any).mock.calls.length as number;
+  fireEvent.click(await screen.findByRole("button", { name: /regenerate/i }));
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(before + 1));
+}
+
+/** Mode picked and the open call settled with one card on screen. */
+async function pickerReady(container: HTMLElement, mode = "With your PC") {
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "2026-01-01" });
+  fireEvent.click(screen.getByText(mode));
+  await screen.findByText("At sea");
+  return openPressure(container);
+}
+
+test("the drivers read happens once on open", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "2026-01-01" });
+  renderChooser();
+  fireEvent.click(screen.getByText("Import a transcript"));
+  await screen.findByLabelText(/transcript file/i);
+  fireEvent.click(screen.getByRole("button", { name: /back/i }));
+  fireEvent.click(screen.getByText("With your PC"));
+  fireEvent.click(await screen.findByText("At sea"));
+  fireEvent.click(await screen.findByRole("button", { name: /back/i }));
+  await screen.findByText("At sea");
+  // Once per open and per campaign, without `offscreen`: the mode is picked
+  // after opening, and the ref set does not depend on it.
+  expect(api.continuityDrivers).toHaveBeenCalledTimes(1);
+  expect(api.continuityDrivers).toHaveBeenCalledWith("c");
+});
+
+test("story pressure is a collapsed disclosure under Direction", async () => {
+  const { container, rerender } = renderChooser();
+  fireEvent.click(screen.getByText("With your PC"));
+  const details = await pressureDetails(container);
+  expect(details).not.toHaveAttribute("open");
+  // Inside the Generated group, which is a run of siblings rather than one
+  // element: after its role header and the Direction row, before "Your own".
+  const FOLLOWS = Node.DOCUMENT_POSITION_FOLLOWING;
+  const generated = screen.getByText("Generated", { selector: ".role" });
+  const direction = container.querySelector(".idea-direction")!;
+  const yourOwn = screen.getByText("Your own", { selector: ".role" });
+  expect(generated.compareDocumentPosition(details) & FOLLOWS).toBeTruthy();
+  expect(direction.compareDocumentPosition(details) & FOLLOWS).toBeTruthy();
+  expect(details.compareDocumentPosition(yourOwn) & FOLLOWS).toBeTruthy();
+  expect(within(details).getAllByRole("radio", { name: "Focus", hidden: true })[0])
+    .not.toBeVisible();
+
+  fireEvent.click(details.querySelector("summary")!);
+  await waitFor(() => expect(details).toHaveAttribute("open"));
+  expect(row("Mara's map")).toBeVisible();
+  expect(row("Mara's oath")).toBeVisible();
+  expect(screen.getByRole("radiogroup", { name: "Time" })).toBeVisible();
+
+  rerender(<NewSceneChooser cid="d" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  rerender(<NewSceneChooser cid="c" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  expect(await pressureDetails(container)).not.toHaveAttribute("open");
+});
+
+test("a failed drivers read hides Story pressure and Suggest still works", async () => {
+  (api.continuityDrivers as any).mockRejectedValue(new Error("offline"));
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "2026-01-01" });
+  const { container } = renderChooser();
+  fireEvent.click(screen.getByText("With your PC"));
+  await screen.findByText("At sea");
+  await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalled());
+  expect(container.querySelector("details.story-pressure")).toBeNull();
+  expect(screen.queryByText(/story pressure/i)).toBeNull();
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining(
+    { focus_refs: [], avoid_refs: [], must_refs: [], time_mode: "auto" }));
+});
+
+test("driver controls alter the request body", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  choose("Mara's oath", "Must");
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    focus_refs: ["thread:mara-s-map"], must_refs: ["commitment:mara-s-oath"],
+    avoid_refs: [], time_mode: "auto",
+  }));
+});
+
+test("changing a control starts no generation", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+  choose("Mara's map", "Focus");
+  choose("Mara's oath", "Avoid");
+  chooseTime("Stay near current date");
+  chooseTime("Choose anchor…");
+  await screen.findByRole("combobox", { name: "Anchor" });
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("Must is disabled for temporal drivers and after three", async () => {
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [
+      driver("thread:mara-s-map", "thread", "Mara's map", "stale"),
+      driver("thread:find-the-ledger", "thread", "Find the ledger", "ok"),
+      driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2),
+      driver("commitment:salt-owed", "commitment", "Salt owed", "ok"),
+      driver("event:the-coronation", "event", "The coronation", "upcoming", 10),
+    ],
+  }));
+  const { container } = renderChooser();
+  await pickerReady(container);
+  const must = (label: string) => within(row(label)).getByRole("radio", { name: "Must" });
+  expect(must("The coronation")).toBeDisabled();
+  expect(must("Salt owed")).toBeEnabled();
+  choose("Mara's map", "Must");
+  choose("Find the ledger", "Must");
+  choose("Mara's oath", "Must");
+  expect(must("Salt owed")).toBeDisabled();
+  // A held must stays changeable, and the reason is visible text.
+  expect(must("Mara's map")).toBeEnabled();
+  expect(screen.getByText(/up to 3 threads or commitments/)).toBeVisible();
+});
+
+test("with no anchors, Choose anchor is disabled and says why", async () => {
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({ anchors: [] }));
+  const { container } = renderChooser();
+  await pickerReady(container);
+  expect(within(screen.getByRole("radiogroup", { name: "Time" }))
+    .getByRole("radio", { name: "Choose anchor…" })).toBeDisabled();
+  expect(screen.getByText(/No upcoming dated events/)).toBeVisible();
+});
+
+test("anchor mode sends the anchor and relation", async () => {
+  (api.continuityDrivers as any).mockResolvedValue(
+    snapshot({ anchors: [CORONATION, MONTH_BIRTHDAY] }));
+  const { container } = renderChooser();
+  await pickerReady(container);
+  // Nothing else touched: an anchor is always selected.
+  chooseTime("Choose anchor…");
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    time_mode: "anchor", time_anchor_ref: "event:the-coronation", time_anchor_relation: "on",
+  }));
+
+  fireEvent.change(screen.getByRole("combobox", { name: "Relation" }),
+                   { target: { value: "before" } });
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    time_anchor_ref: "event:the-coronation", time_anchor_relation: "before",
+  }));
+
+  // A month-only birthday has no day to be before: it takes `on`, and the
+  // Relation select offers nothing else.
+  fireEvent.change(screen.getByRole("combobox", { name: "Anchor" }),
+                   { target: { value: MONTH_BIRTHDAY.ref } });
+  const relation = screen.getByRole("combobox", { name: "Relation" });
+  expect(within(relation).getAllByRole("option").map((o) => o.textContent)).toEqual(["on"]);
+  expect(screen.getByRole("option", { name: "Mara's birthday — June 2026 (day unknown)" }))
+    .toBeInTheDocument();
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    time_mode: "anchor", time_anchor_ref: MONTH_BIRTHDAY.ref, time_anchor_relation: "on",
+  }));
+});
+
+test("the anchored row cannot be avoided", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("The coronation", "Avoid");
+  chooseTime("Choose anchor…");
+  // The anchor beats avoid (plan Decision 26): the row is back to Normal and
+  // cannot be set to Avoid while it is the anchor.
+  expect(within(row("The coronation")).getByRole("radio", { name: "Normal" })).toBeChecked();
+  expect(within(row("The coronation")).getByRole("radio", { name: "Avoid" })).toBeDisabled();
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    avoid_refs: [], time_anchor_ref: "event:the-coronation",
+  }));
+});
+
+test("the summary counts drivers and names the time separately", async () => {
+  const { container } = renderChooser();
+  const details = await pickerReady(container);
+  const summary = () => details.querySelector("summary")!.textContent;
+  expect(summary()).toBe("Story pressure");
+  choose("Mara's map", "Focus");
+  chooseTime("Choose anchor…");
+  expect(summary()).toBe("Story pressure (1 not Normal · anchored)");
+  choose("Mara's map", "Normal");
+  expect(summary()).toBe("Story pressure (anchored)");
+});
+
+test("driver chips read naturally", async () => {
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [
+      driver("commitment:mara-s-oath", "commitment", "Mara's oath", "overdue", -3),
+      driver("event:the-coronation", "event", "The coronation", "today", 0),
+      driver("thread:find-the-ledger", "thread", "Find the ledger", "due_soon", 1),
+      driver("thread:mara-s-map", "thread", "Mara's map", "ok"),
+    ],
+  }));
+  const { container } = renderChooser();
+  const details = await pickerReady(container);
+  expect(within(details).getByText("overdue · 3 days ago")).toHaveClass("chip");
+  expect(within(details).getByText("today")).toHaveClass("chip");
+  expect(within(details).getByText("due soon · in 1 day")).toHaveClass("chip");
+  expect(details.textContent).not.toMatch(/in -\d|in 0 days|in 1 days/);
+  // An `ok` driver carries no chip at all.
+  expect(row("Mara's map").parentElement!.querySelector(".chip")).toBeNull();
+});
+
+test("basic matching keeps Suggest enabled and says nothing about embeddings", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  expect(screen.queryByText(/embedding/i)).toBeNull();
+  expect(screen.getByRole("button", { name: /regenerate/i })).toBeEnabled();
+});
+
+test("story pressure survives Back and resets on a campaign switch", async () => {
+  const { container, rerender } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  fireEvent.click(screen.getByText("At sea"));
+  fireEvent.click(await screen.findByRole("button", { name: /back/i }));
+  await screen.findByText("At sea");
+  expect(within(row("Mara's map")).getByRole("radio", { name: "Focus" })).toBeChecked();
+
+  rerender(<NewSceneChooser cid="b" afterSid="s1" ready onClose={() => {}} onCreated={() => {}} />);
+  fireEvent.click(screen.getByText("With your PC"));
+  const details = await openPressure(container);
+  expect(within(row("Mara's map")).getByRole("radio", { name: "Normal" })).toBeChecked();
+  expect(details.querySelector("summary")!.textContent).toBe("Story pressure");
+  expect(api.continuityDrivers).toHaveBeenLastCalledWith("b");
+});
+
+test("a seed focuses its drivers and the open call carries them", async () => {
+  const { container } = renderChooser({ seed: { drivers: { "thread:mara-s-map": "focus" } } });
+  fireEvent.click(screen.getByText("With your PC"));
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
+  expect(lastOptions()).toEqual(expect.objectContaining(
+    { rank: true, focus_refs: ["thread:mara-s-map"] }));
+  // A seeded disclosure opens expanded, so the reader sees what was set.
+  expect(await pressureDetails(container)).toHaveAttribute("open");
+  expect(within(row("Mara's map")).getByRole("radio", { name: "Focus" })).toBeChecked();
+});
+
+test("an anchor seed sends anchor mode on the open call", async () => {
+  renderChooser({ seed: { anchor: { ref: "event:the-coronation", relation: "on" } } });
+  fireEvent.click(screen.getByText("With your PC"));
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    rank: true, time_mode: "anchor", time_anchor_ref: "event:the-coronation",
+    time_anchor_relation: "on",
+  }));
+});
+
+test("a seed waits for the drivers read before the open call", async () => {
+  let release: (v: DriversSnapshot) => void = () => {};
+  (api.continuityDrivers as any).mockReturnValue(new Promise((r) => { release = r; }));
+  renderChooser({ seed: { drivers: { "thread:mara-s-map": "focus" } } });
+  fireEvent.click(screen.getByText("With your PC"));
+  await screen.findByText(/blank scene/i);
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+  expect(screen.getByRole("button", { name: /suggest ideas/i })).toBeDisabled();
+  expect(screen.getByText("Reading story pressure…")).toBeInTheDocument();
+
+  await act(async () => { release(snapshot()); });
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
+  expect(lastOptions()).toEqual(expect.objectContaining({ focus_refs: ["thread:mara-s-map"] }));
+  expect(screen.queryByText("Reading story pressure…")).toBeNull();
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("a seed naming a missing driver is dropped with a note", async () => {
+  renderChooser({ seed: { drivers: { "thread:ghost": "focus", "thread:mara-s-map": "focus" } } });
+  fireEvent.click(screen.getByText("With your PC"));
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
+  expect(lastOptions()).toEqual(expect.objectContaining({ focus_refs: ["thread:mara-s-map"] }));
+  expect(await screen.findByText("Not current any more, so not applied: thread:ghost"))
+    .toBeInTheDocument();
+});
+
+test("a seed after a failed read is dropped with a note and the open call goes unsteered", async () => {
+  (api.continuityDrivers as any).mockRejectedValue(new Error("offline"));
+  const { container } = renderChooser({ seed: { drivers: { "thread:mara-s-map": "focus" } } });
+  fireEvent.click(screen.getByText("With your PC"));
+  await waitFor(() => expect(api.sceneSuggestions).toHaveBeenCalledTimes(1));
+  expect(lastOptions()).toEqual(expect.objectContaining(
+    { focus_refs: [], time_mode: "auto", rank: true }));
+  expect(await screen.findByText(
+    "Story pressure could not be read; the Story Graph selection was not applied."))
+    .toBeInTheDocument();
+  expect(container.querySelector("details.story-pressure")).toBeNull();
+});
+
+test("a stale_drivers refusal re-reads drivers and says what dropped", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  (api.sceneSuggestions as any).mockRejectedValue(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2)],
+  }));
+  await regenerate();
+  await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
+  expect(await screen.findByText(
+    /Some selections are no longer current and were reset — press Regenerate\./))
+    .toHaveTextContent("Mara's map");
+  expect(screen.queryByText(/No ideas came back/)).toBeNull();
+  // Not an error either: nothing failed, the campaign moved.
+  expect(container.querySelector(".banner")).toBeNull();
+  await waitFor(() => expect(screen.queryByRole("radiogroup",
+    { name: "Mara's map: story pressure" })).toBeNull());
+});
+
+test("a refused ref spelled differently is still cleared", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  // The server names its canonical spelling, which is not what the chooser
+  // holds; the re-read's prune is what clears the held one.
+  (api.sceneSuggestions as any).mockRejectedValueOnce(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:find-the-ledger"] }));
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2)],
+  }));
+  await regenerate();
+  await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.queryByRole("radiogroup",
+    { name: "Mara's map: story pressure" })).toBeNull());
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "" });
+  await regenerate();
+  expect(JSON.stringify(lastOptions())).not.toContain("thread:mara-s-map");
 });

@@ -1846,10 +1846,68 @@ export type ReplaySession = {
 export type ReplayPreview = {
   posts: number; turns: number; threshold: number; fork: boolean; blocked: string;
 };
+/** The story-pressure vocabulary (capstone §16, §20). Each union is held to
+ *  its Python tuple by `backend/tests/test_suggest_controls.py`, which parses
+ *  this file -- so each stays a plain union of string literals. */
+export type DriverKind = "thread" | "commitment" | "event" | "birthday" | "holiday";
+export type DriverAction =
+  | "advance" | "close_candidate" | "address" | "fulfill_candidate" | "break_candidate"
+  | "expire_candidate" | "anchor";
+/** Declared in the chooser's display order (`pressure.SORT_ORDER`). */
+export type PressureState =
+  "overdue" | "today" | "due_soon" | "upcoming" | "passed" | "stale" | "ok";
+export type TimeMode = "auto" | "near" | "move" | "anchor";
+export type AnchorRelation = "before" | "on" | "after" | "by";
+/** What the reader set on one driver. Not a server vocabulary: the request
+ *  carries it as three ref lists. */
+export type DriverControl = "normal" | "focus" | "avoid" | "must";
+export type DriverLink = { id: string; relation: string; other: string;
+                           direction: "out" | "in" | "both" };
+/** One row of `GET /continuity/drivers`. */
+export type Driver = {
+  ref: string; kind: DriverKind; label: string; summary: string; actors: string[];
+  status: string;
+  pressure: { state: PressureState; in_days: number | null; friendly: string };
+  time_anchors: string[]; links: DriverLink[];
+};
+/** A dated temporal item a batch may be anchored to. A month-only birthday has
+ *  no `fixed` day, so it takes only the `on` relation. */
+export type AnchorOption = {
+  ref: string; kind: "event" | "birthday" | "holiday"; label: string; native: string;
+  friendly: string; fixed: number | null; in_days: number | null;
+  precision: "exact" | "yearless" | "month";
+};
+export type DriversSnapshot = {
+  now: string; friendly: string; fixed: number | null; matching: "basic" | "semantic";
+  drivers: Driver[]; anchors: AnchorOption[];
+};
+/** A driver a generated card claims to serve, as the server validated it. */
+export type SuggestionDriver = { ref: string; kind: DriverKind; action: DriverAction;
+                                 label: string };
+export type SuggestionAnchor = { ref: string; kind: DriverKind; relation: AnchorRelation;
+                                 label: string; friendly: string; in_days: number | null };
+export type RefLabel = { ref: string; label: string };
+/** A generated card. The provenance fields are optional: a reply from before
+ *  them, or a fixture, has none, and reads as claiming nothing (§27). */
 export type SceneSuggestion = {
   title: string; premise: string; date?: string;
   cast: { kind: string; id: string; name: string }[];
   location: { id: string; name: string } | null;
+  drivers?: SuggestionDriver[];
+  time_anchor?: SuggestionAnchor | null;
+  date_friendly?: string;
+  in_days?: number | null;
+  date_rejected?: boolean;
+  unmet_must?: RefLabel[];
+  avoided?: RefLabel[];
+};
+/** The body of `POST /scene-suggestions`. Every field defaults in
+ *  `api.sceneSuggestions`, so a caller names only what it sets. */
+export type SceneSuggestionsOptions = {
+  after?: string; offscreen?: boolean; direction?: string; rank?: boolean;
+  focus_refs?: string[]; avoid_refs?: string[]; must_refs?: string[];
+  time_mode?: TimeMode; time_anchor_ref?: string;
+  time_anchor_relation?: AnchorRelation | "";
 };
 /** A row of the scene ledger (#88) — a saved idea, or a greeting composed into
  *  the same shape. Deliberately a superset of `SceneSuggestion`, so one card
@@ -1866,10 +1924,20 @@ export type SceneIdea = {
   source: "llm" | "user" | "greeting";
   status: "active" | "used" | "dismissed";
   created: string; used_scene: string;
+  /** Derived on read (§17): what the idea was about and whether it still is.
+   *  Absent on a composed greeting and on an older server. */
+  drivers?: (SuggestionDriver & { state: "live" | "finished" })[];
+  /** No `in_days`: the read derives the anchor's state, not its distance. */
+  time_anchor?: (Omit<SuggestionAnchor, "in_days">
+                 & { native: string; state: "live" | "finished" }) | null;
+  stale_reason?: string;
+  anchor_date?: string;
 };
 export type SceneIdeaDraft = {
   title?: string; premise?: string; cast?: string[]; location?: string;
   date?: string; pcless?: boolean; source?: "llm" | "user";
+  drivers?: { ref: string; action: DriverAction }[];
+  time_anchor?: { ref: string; relation: AnchorRelation };
 };
 export type SceneIntentResult = {
   title: string; date: string;

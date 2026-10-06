@@ -1,8 +1,14 @@
 import { renderHook, waitFor, act } from "@testing-library/react";
 import { useSceneSuggestions } from "./useSceneSuggestions";
 
-vi.mock("../api/client", () => ({ api: { sceneSuggestions: vi.fn() } }));
-import { api } from "../api/client";
+// The real module first: the hook tells a stale refusal apart with
+// `err instanceof ApiError`, and a factory that defined no `ApiError` export
+// would throw inside the hook's `.catch` on every rejection.
+vi.mock("../api/client", async () => ({
+  ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
+  api: { sceneSuggestions: vi.fn() },
+}));
+import { api, ApiError } from "../api/client";
 
 const R = (suggestions: any[], picks: string[] = [], next_date = "") =>
   ({ suggestions, greeting_picks: picks, next_date });
@@ -19,7 +25,7 @@ test("opening asks the ranked question, with no direction", () => {
   const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false));
   // rank=true: the picker's four slots are 2 greetings + 2 ideas, and the
   // greeting half is an ordering only this call returns.
-  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", false, "", true);
+  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", { after: "s1", offscreen: false, direction: "", rank: true });
   expect(result.current.asked).toBe(true);
   // Both groups pending, so the picker draws "Generating…" and "Choosing…"
   // rather than two empty groups it is about to fill.
@@ -39,7 +45,7 @@ test("opening asks once, however often the hook re-renders", () => {
 test("an offscreen hook asks the offscreen question", () => {
   (api.sceneSuggestions as any).mockReturnValue(pending());
   renderHook(() => useSceneSuggestions("c", "s1", true, true));
-  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", "s1", true, "", true);
+  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", { after: "s1", offscreen: true, direction: "", rank: true });
 });
 
 test("without a connection nothing is asked, and suggest stays a no-op", () => {
@@ -81,7 +87,7 @@ test("a press after the ranking lands regenerates without re-ranking", async () 
   await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "B" }]));
   // rank=false: the greeting order is earned, and re-ranking would reshuffle
   // the cards under the reader's cursor.
-  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s1", false, "something at sea", false);
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", { after: "s1", offscreen: false, direction: "something at sea", rank: false });
   expect(result.current.picks).toEqual(["g1"]);       // not clobbered by the empty list
   expect(result.current.nextDate).toBe("2026-01-01");  // not cleared by an empty one
 });
@@ -123,7 +129,7 @@ test("an open call that failed leaves the next press ranked", async () => {
   (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"]));
   act(() => result.current.suggest(""));
   await waitFor(() => expect(result.current.picks).toEqual(["g1"]));
-  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s1", false, "", true);
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", { after: "s1", offscreen: false, direction: "", rank: true });
 });
 
 test("a press after a failure is pending again rather than showing the failure's empty list", async () => {
@@ -189,7 +195,7 @@ test("a different reference scene asks the new question rather than keeping the 
   rerender({ after: "s2" });
   // Cards ranked against one scene answer the wrong question about another, so
   // the old answer is cleared and the new one asked for.
-  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s2", false, "", true);
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", { after: "s2", offscreen: false, direction: "", rank: true });
   expect(result.current.suggestions).toBeNull();
   expect(result.current.picks).toBeNull();
 });
@@ -206,7 +212,7 @@ test("switching between PC and offscreen asks again too", async () => {
   // wrong answer, not a stale one.
   (api.sceneSuggestions as any).mockReturnValue(pending());
   rerender({ off: true });
-  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", "s1", true, "", true);
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith("c", { after: "s1", offscreen: true, direction: "", rank: true });
 });
 
 test("a reply to the old question cannot land on the new one", async () => {
@@ -225,4 +231,152 @@ test("a reply to the old question cannot land on the new one", async () => {
   // Campaign A's reply is discarded rather than landing on B's pending state.
   expect(result.current.suggestions).toBeNull();
   expect(result.current.picks).toBeNull();
+});
+
+// ---- story pressure (capstone §16, plan Decision 19) ----
+
+test("the open call carries the controls getter's value", () => {
+  (api.sceneSuggestions as any).mockReturnValue(pending());
+  renderHook(() => useSceneSuggestions("c", "s1", true, false, {
+    controls: () => ({ focus_refs: ["thread:mara-s-map"], time_mode: "near" }),
+  }));
+  expect(api.sceneSuggestions).toHaveBeenCalledWith("c", {
+    after: "s1", offscreen: false, direction: "", rank: true,
+    focus_refs: ["thread:mara-s-map"], time_mode: "near",
+  });
+});
+
+test("changing controls starts no call", () => {
+  (api.sceneSuggestions as any).mockReturnValue(pending());
+  const { rerender } = renderHook(
+    ({ focus }) => useSceneSuggestions("c", "s1", true, false, {
+      controls: () => ({ focus_refs: focus }),
+    }),
+    { initialProps: { focus: [] as string[] } },
+  );
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+  // A control is not part of the question: it rides the next request the
+  // reader makes, and setting one spends nothing (§3.10).
+  rerender({ focus: ["thread:mara-s-map"] });
+  rerender({ focus: ["commitment:mara-s-oath"] });
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("hold delays the open call until released, then asks once", () => {
+  (api.sceneSuggestions as any).mockReturnValue(pending());
+  const { result, rerender } = renderHook(
+    ({ hold }) => useSceneSuggestions("c", "s1", true, false, {
+      hold, controls: () => ({ focus_refs: ["thread:mara-s-map"] }),
+    }),
+    { initialProps: { hold: true } },
+  );
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+  expect(result.current.held).toBe(true);
+  rerender({ hold: false });
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+  expect(api.sceneSuggestions).toHaveBeenCalledWith(
+    "c", expect.objectContaining({ rank: true, focus_refs: ["thread:mara-s-map"] }));
+  expect(result.current.held).toBe(false);
+  rerender({ hold: false });
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("suggest during a hold makes no call, and the release asks exactly once", () => {
+  (api.sceneSuggestions as any).mockReturnValue(pending());
+  const { result, rerender } = renderHook(
+    ({ hold }) => useSceneSuggestions("c", "s1", true, false, { hold }),
+    { initialProps: { hold: true } },
+  );
+  expect(result.current.held).toBe(true);
+  // A press during the read would be an unsteered paid call, and the release
+  // would then make a second one for the same question.
+  act(() => result.current.suggest(""));
+  expect(api.sceneSuggestions).not.toHaveBeenCalled();
+  expect(result.current.asked).toBe(false);
+  rerender({ hold: false });
+  expect(api.sceneSuggestions).toHaveBeenCalledTimes(1);
+});
+
+test("a stale_drivers refusal calls onStale with its refs and sets no error", async () => {
+  (api.sceneSuggestions as any).mockRejectedValue(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:ghost"] }));
+  const onStale = vi.fn();
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, { onStale }));
+  await waitFor(() => expect(result.current.stale).toBe(true));
+  expect(onStale).toHaveBeenCalledWith(["thread:ghost"]);
+  expect(result.current.error).toBeNull();
+  expect(result.current.suggestions).toEqual([]);
+  expect(result.current.picks).toEqual([]);
+  expect(result.current.busy).toBe(false);
+
+  // Until the next request starts, and no longer.
+  (api.sceneSuggestions as any).mockReturnValue(pending());
+  act(() => result.current.suggest(""));
+  expect(result.current.stale).toBe(false);
+  // Nothing ranked landed, so the next press still ranks.
+  expect(api.sceneSuggestions).toHaveBeenLastCalledWith(
+    "c", expect.objectContaining({ rank: true }));
+});
+
+test("a refusal with no refs list still reports stale, with an empty list", async () => {
+  (api.sceneSuggestions as any).mockRejectedValue(new ApiError(409, "stale", "stale_drivers", {}));
+  const onStale = vi.fn();
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, { onStale }));
+  await waitFor(() => expect(result.current.stale).toBe(true));
+  expect(onStale).toHaveBeenCalledWith([]);
+});
+
+test("any other refusal is an error, not stale", async () => {
+  (api.sceneSuggestions as any).mockRejectedValue(
+    new ApiError(400, "bad", "bad_controls", { reason: "must_cap" }));
+  const onStale = vi.fn();
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, { onStale }));
+  await waitFor(() => expect(result.current.error).toBeTruthy());
+  expect(result.current.stale).toBe(false);
+  expect(onStale).not.toHaveBeenCalled();
+});
+
+test("controlled follows the batch on screen", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }], ["g1"]));
+  const { result, rerender } = renderHook(
+    ({ focus }) => useSceneSuggestions("c", "s1", true, false, {
+      controls: () => ({ focus_refs: focus, time_mode: "auto" }),
+    }),
+    { initialProps: { focus: ["thread:mara-s-map"] } },
+  );
+  expect(result.current.controlled).toBe(false);   // nothing has landed yet
+  await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "A" }]));
+  expect(result.current.controlled).toBe(true);
+  // An unsent edit never re-slices the cards the reader is looking at.
+  rerender({ focus: [] });
+  expect(result.current.controlled).toBe(true);
+
+  // The next reply, to an unsteered request, is an unsteered batch.
+  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "B" }]));
+  act(() => result.current.suggest(""));
+  await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "B" }]));
+  expect(result.current.controlled).toBe(false);
+});
+
+test("a time setting alone counts as controlled", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }]));
+  const { result } = renderHook(() => useSceneSuggestions("c", "s1", true, false, {
+    controls: () => ({ focus_refs: [], avoid_refs: [], must_refs: [], time_mode: "move" }),
+  }));
+  await waitFor(() => expect(result.current.suggestions).toEqual([{ title: "A" }]));
+  expect(result.current.controlled).toBe(true);
+});
+
+test("a new question resets controlled", async () => {
+  (api.sceneSuggestions as any).mockResolvedValue(R([{ title: "A" }]));
+  const { result, rerender } = renderHook(
+    ({ after }) => useSceneSuggestions("c", after, true, false, {
+      controls: () => ({ must_refs: ["commitment:mara-s-oath"] }),
+    }),
+    { initialProps: { after: "s1" } },
+  );
+  await waitFor(() => expect(result.current.controlled).toBe(true));
+  (api.sceneSuggestions as any).mockReturnValue(pending());
+  rerender({ after: "s2" });
+  expect(result.current.controlled).toBe(false);
 });

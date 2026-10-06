@@ -2378,6 +2378,23 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 .chooser .radio-group { display: flex; flex-direction: column; gap: 4px; }
 .chooser .radio-row { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .chooser .radio-row input[type="radio"] { flex: none; width: auto; margin: 0; accent-color: var(--accent); }
+/* Story pressure (capstone §16.2): a disclosure under Direction. The body is
+   bounded and scrolls on its own, so a campaign with many drivers cannot push
+   Suggest and the cards off a phone screen (the chooser is 92vw and 80vh). The
+   per-driver radios wrap as a row: four options in a column would make every
+   driver five lines tall. */
+.chooser .story-pressure > summary { cursor: pointer; font-family: var(--fm); font-size: 11px; }
+.chooser .story-pressure-body {
+  max-height: 40vh; overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+  padding: 6px 0;
+}
+.chooser .story-pressure h4 { margin: 6px 0 0; font-family: var(--fm); font-size: 10px; text-transform: uppercase; letter-spacing: 0.08em; }
+.chooser .story-pressure-row { display: flex; flex-direction: column; gap: 2px; }
+.chooser .story-pressure-label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.chooser .story-pressure .chip { cursor: default; padding: 2px 6px; }
+.chooser .story-pressure .radio-group { flex-direction: row; flex-wrap: wrap; gap: 4px 12px; }
+.chooser .story-pressure-anchor { display: flex; flex-direction: column; gap: 4px; }
+.chooser .chip.warn { background: var(--banner-bg); color: var(--banner-ink); border-color: var(--accent); }
 
 .avatar-crop-btn { padding: 0; border: none; background: transparent; cursor: pointer; flex: none; display: block; }
 .focus-modal { width: min(420px, 92vw); }

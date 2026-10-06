@@ -59,7 +59,8 @@ import {
   type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
   type SceneLocation,
   type SceneBreak, type SceneBreakAnswer,
-  type SceneMeta, type ScenePage, type SceneSuggestion, type SceneUsage,
+  type SceneMeta, type ScenePage, type SceneSuggestion, type SceneSuggestionsOptions,
+  type SceneUsage, type DriversSnapshot,
   type SceneWeather, type ScheduledEvent, type SearchMode,
   type SearchResult, type Sheet, type SheetBulkResult, type SheetCoverage,
   type SheetExpected, type SheetRoster, type StagedEdit, type Stats,
@@ -1417,6 +1418,12 @@ export const api = {
    *  hand back the findings it just settled. */
   getContinuity: (cid: string) =>
     request<ContinuityState>("GET", `/api/campaigns/${encodeSegment(cid)}/continuity`,
+                             undefined, { fresh: true }),
+  /** The drivers and anchor options the suggestion chooser offers (§16.2).
+   *  `fresh`: the chooser reads again after a `stale_drivers` refusal, and a
+   *  shared read could be the very answer it was refused against. */
+  continuityDrivers: (cid: string) =>
+    request<DriversSnapshot>("GET", `/api/campaigns/${encodeSegment(cid)}/continuity/drivers`,
                              undefined, { fresh: true }),
   continuityCandidates: (cid: string) =>
     request<ContinuityCandidates>(
@@ -2810,20 +2817,24 @@ export const api = {
    *  Answers with the state it wrote. */
   dismissSceneBreak: (cid: string, sid: string) =>
     request<SceneBreak>("POST", `/api/campaigns/${cid}/scenes/${sid}/scene-break/dismiss`),
-  sceneSuggestions: (cid: string, after?: string, offscreen?: boolean,
-                     direction?: string, rank = true, signal?: AbortSignal) => {
-    const params = new URLSearchParams();
-    if (after) params.set("after", after);
-    if (offscreen) params.set("offscreen", "true");
-    if (direction) params.set("direction", direction);
-    if (!rank) params.set("rank", "false");
-    const qs = params.toString();
+  /** One JSON body, every field defaulted, rather than a query string: the
+   *  story-pressure controls are ref lists, and when a body is present the
+   *  server reads it wholly and ignores the query (§16.3). `after` is sent only
+   *  when set, so "no scene to follow" stays absent rather than `""`. */
+  sceneSuggestions: (cid: string, opts: SceneSuggestionsOptions = {},
+                     signal?: AbortSignal) => {
+    const { after, ...rest } = opts;
+    const body = {
+      offscreen: false, direction: "", rank: true, focus_refs: [], avoid_refs: [],
+      must_refs: [], time_mode: "auto", time_anchor_ref: "", time_anchor_relation: "",
+      ...rest, ...(after ? { after } : {}),
+    };
     return draftRun<{ suggestions: SceneSuggestion[]; greeting_picks?: string[];
                       next_date?: string }>(
       { at: "campaign", id: cid }, (attempt) =>
         request<{ run: RunHandle }>(
-          "POST", `/api/campaigns/${cid}/scene-suggestions${qs ? `?${qs}` : ""}`,
-          undefined, { attempt, signal }), { signal });
+          "POST", `/api/campaigns/${cid}/scene-suggestions`, body, { attempt, signal }),
+      { signal });
   },
   sceneIntent: (cid: string, text: string, offscreen: boolean, signal?: AbortSignal) =>
     draftRun<SceneIntentResult>({ at: "campaign", id: cid }, (attempt) =>

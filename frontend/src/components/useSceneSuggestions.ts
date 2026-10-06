@@ -1,5 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type SceneSuggestion } from "../api/client";
+import { api, ApiError, type SceneSuggestion, type SceneSuggestionsOptions } from "../api/client";
+
+/** Story pressure, as the chooser hands it to the hook (capstone §16, plan
+ *  Decision 19).
+ *
+ *  `controls` is a GETTER, read at dispatch: a control is not part of the
+ *  question, so changing one starts nothing -- it rides the next request the
+ *  reader makes (§3.10). `hold` keeps the open call (and the button) back
+ *  while a seeded chooser is still reading the drivers it seeds, so the
+ *  ranked call carries the seed rather than going out unsteered and then
+ *  again. `onStale` hears a `stale_drivers` refusal's refs: the campaign
+ *  moved since the chooser read its drivers, and only the chooser can reset
+ *  what it holds and read them again. */
+export type SuggestionPressure = {
+  controls?: () => SceneSuggestionsOptions;
+  hold?: boolean;
+  onStale?: (refs: string[]) => void;
+};
+
+/** Whether a request was steered at all -- a time setting, or any ref list. */
+function steered(c: SceneSuggestionsOptions): boolean {
+  return (c.time_mode !== undefined && c.time_mode !== "auto")
+    || [c.focus_refs, c.avoid_refs, c.must_refs].some((refs) => (refs?.length ?? 0) > 0);
+}
 
 /** The generated half of the picker, and the one thing in it that costs money.
  *
@@ -34,7 +57,8 @@ import { api, type SceneSuggestion } from "../api/client";
  *  that says so — **Save** files it in the ledger (#88), which survives
  *  everything and belongs to the reader rather than to a cache. */
 export function useSceneSuggestions(cid: string, afterSid: string | null,
-                                    ready: boolean, offscreen: boolean) {
+                                    ready: boolean, offscreen: boolean,
+                                    opts?: SuggestionPressure) {
   // `false`/`[]`/`[]`: idle, which is what every mount starts at now.
   const [asked, setAsked] = useState(false);
   // Whether a RANKED reply has actually landed, which is not the same question
@@ -52,6 +76,20 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
   // The raw rejection, so the picker can tell an unreachable model from any
   // other refusal and offer the local-connection recovery (#210).
   const [error, setError] = useState<unknown>(null);
+  // Whether the batch ON SCREEN was asked for with a control active -- set
+  // when a reply lands, never when a control changes, so an unsent edit
+  // cannot re-slice the cards the reader is looking at (plan Decision 22).
+  const [controlled, setControlled] = useState(false);
+  // The last request was refused `stale_drivers`. Not an empty reply: nothing
+  // was generated, and the chooser's note says why. Cleared when the next
+  // request starts.
+  const [stale, setStale] = useState(false);
+  const hold = !!opts?.hold;
+  // Read through a ref updated every render, so the getter and the callback
+  // are current at dispatch and in no dependency list: neither may start a
+  // call by changing.
+  const pressure = useRef(opts);
+  pressure.current = opts;
 
   // Only the NEWEST request may write state. The first ranked fetch and a
   // regenerate race freely, and without this a slow first reply lands after the
@@ -63,20 +101,33 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     const mine = ++seq.current;
     setBusy(true);
     setError(null);
-    api.sceneSuggestions(cid, afterSid ?? undefined, offscreen, direction, rank)
+    setStale(false);
+    const controls = pressure.current?.controls?.() ?? {};
+    api.sceneSuggestions(cid, { after: afterSid ?? undefined, offscreen, direction, rank,
+                                ...controls })
       .then((r) => {
         if (mine !== seq.current) return;
         setSuggestions(r.suggestions);
+        setControlled(steered(controls));
         // A rank=false reply carries no picks; writing its empty list would
         // wipe the ranking the greeting cards are ordered by.
         if (rank) { setPicks(r.greeting_picks ?? []); setRanked(true); }
         // Likewise: a refresh that estimates no date must not clear a good one.
         if (r.next_date) setNextDate(r.next_date);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (mine !== seq.current) return;
         setSuggestions([]);
         if (rank) setPicks([]);
+        // A control named a driver the campaign no longer lists. No run was
+        // reserved and nothing was spent: it is the chooser's to reset and
+        // re-read, not a failure to show.
+        if (err instanceof ApiError && err.kind === "stale_drivers") {
+          setStale(true);
+          const refs = err.body?.refs;
+          pressure.current?.onStale?.(Array.isArray(refs) ? (refs as string[]) : []);
+          return;
+        }
         setError(err);
       })
       .finally(() => { if (mine === seq.current) setBusy(false); });
@@ -97,6 +148,8 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setNextDate("");
     setError(null);
     setBusy(false);
+    setControlled(false);
+    setStale(false);
   }, [cid, afterSid, offscreen]);
 
   // The picker opens on an answer. Its four slots are 2 greetings + 2 ideas,
@@ -118,10 +171,13 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
   // rather than `asked`, because StrictMode double-invokes effects in dev and
   // no re-render separates the two -- the flag would still read false on the
   // second pass and buy the same answer twice.
+  //
+  // A `hold` (a seeded chooser still reading its drivers) defers it, and the
+  // release asks then: the question is unchanged, so it is still unasked.
   const autoAsked = useRef("");
+  const question = `${cid}/${afterSid ?? ""}/${offscreen}`;
   useEffect(() => {
-    if (!ready) return;
-    const question = `${cid}/${afterSid ?? ""}/${offscreen}`;
+    if (!ready || hold) return;
     if (autoAsked.current === question) return;
     autoAsked.current = question;
     // The pending pair, exactly as `suggest`'s first press sets them: the
@@ -132,7 +188,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setSuggestions(null);
     setPicks(null);
     run("", true);
-  }, [cid, afterSid, offscreen, ready, run]);
+  }, [question, ready, hold, run]);
 
   /** The button — every press of it, the first and the fifth.
    *
@@ -155,13 +211,20 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     // Guarded, not merely delegated: `run` no-ops without a connection, and
     // setting the pending state around a call that never happens would leave
     // "Generating…" on screen forever.
-    if (!ready) return;
+    //
+    // Held too: a press while a seeded chooser is reading its drivers would be
+    // an unsteered paid call, and the release would then make a second one.
+    // And it marks the question asked before it runs, so a release after a
+    // press cannot ask it again.
+    if (!ready || hold) return;
+    autoAsked.current = question;
     setAsked(true);
     if (!ranked) { setSuggestions(null); setPicks(null); }
     run(direction, !ranked);
-  }, [ready, ranked, run]);
+  }, [ready, hold, question, ranked, run]);
 
-  return { asked, suggestions, picks, nextDate, busy, error, suggest };
+  return { asked, suggestions, picks, nextDate, busy, error, suggest,
+           controlled, held: hold, stale };
 }
 
 /** The shape `SceneIdeaPicker` needs to render this data — shared so the

@@ -721,13 +721,13 @@ export default function CampaignHub() {
 
           {/* What to play next, and where the reason comes from.
               The design draws generated suggestions here with the reason each
-              was suggested. Generating them is an LLM call, and a call that
-              fires because a page loaded is exactly what `useSceneSuggestions`
-              was rebuilt to stop -- so this card shows the ideas the reader has
-              already SAVED (`#88`'s scene ledger, which survives everything and
-              belongs to them rather than to a cache), and sends anyone who
-              wants fresh ones to the picker, where the button that spends the
-              money is. The premise is the reason: it is what the idea was
+              was suggested. Generating them is an LLM call, and the one place
+              that makes it is the scene chooser: its ranked call goes out when
+              a mode is picked, which is the reader starting a scene, not a page
+              loading. So this card shows the ideas the reader has already SAVED
+              (`#88`'s scene ledger, which survives everything and belongs to
+              them rather than to a cache), and sends anyone who wants fresh
+              ones to the picker, where that call and Regenerate are. The premise is the reason: it is what the idea was
               written down for. */}
           <Card title="Play next"
                 tail={ideas ? String(ideas.length) : undefined}

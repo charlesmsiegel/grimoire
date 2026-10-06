@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { api, type Availability, type SceneIdea, type SceneIdeaDraft,
          type SceneSuggestion } from "../api/client";
 import { errorText } from "../api/errors";
@@ -26,15 +26,23 @@ const SAVED_SLOTS = 4;
  *  stays local for the same reason and one more: this pane is what writes to
  *  it, so it is also what has to re-read it.
  *
- *  Nothing in the generated group happens until it is asked for: `asked` is
- *  false until the reader presses **Suggest ideas**, and that press is the
- *  only thing in this pane that spends a generation. Everything else on the
- *  screen -- greetings, the saved ledger, a blank scene, their own typed
- *  premise -- works without one, which is what the picker showed anyone with
- *  no model configured all along. */
+ *  The generated group opens on an answer: `NewSceneChooser`'s hook makes the
+ *  ranked call when a mode is picked (spec §3.10), and this pane's button is
+ *  the reader's Regenerate. `asked` is false only where nothing could ask --
+ *  no LLM connection -- or while a seeded chooser holds the call for its
+ *  drivers read (`held`). Everything else on the screen -- greetings, the
+ *  saved ledger, a blank scene, their own typed premise -- works without a
+ *  generation, which is what the picker shows anyone with no model
+ *  configured.
+ *
+ *  `storyPressure` is the chooser's Story Pressure disclosure and
+ *  `pressureNote` its note, rendered under Direction because they steer the
+ *  same group. All of it is optional: a picker rendered without them is
+ *  today's. */
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
                                   asked, suggestions, picks, nextDate, busy, error: genError,
-                                  suggest, onPicked, onCancel }: {
+                                  suggest, onPicked, onCancel, storyPressure, pressureNote,
+                                  held = false, stale = false }: {
   cid: string;
   afterSid: string | null;
   ready: boolean;
@@ -45,7 +53,10 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
    *  instant a draft is emitted, so its own banner cannot carry one. */
   onPicked: (draft: SceneDraft, warning?: string) => void;
   onCancel: () => void;
-} & SceneSuggestionsState) {
+  storyPressure?: ReactNode;
+  pressureNote?: string;
+} & Omit<SceneSuggestionsState, "controlled" | "held" | "stale">
+  & Partial<Pick<SceneSuggestionsState, "controlled" | "held" | "stale">>) {
   const [greetings, setGreetings] = useState<Availability[]>([]);
   // The saved half of the ledger (#88). Greeting-sourced rows are dropped
   // here rather than server-side: they have their own group below, ordered by
@@ -136,8 +147,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
 
   // 4 slots: 2 greetings + 2 generated; greetings grow to 4 when nothing will
   // generate -- no LLM connection, or a reply that came back empty. With one
-  // configured the ideas are fetched on open, so the ordinary picker is the
-  // 2 + 2 split and the greetings in it are the two the ranking chose.
+  // configured the ranked call is made when the mode is picked, so the
+  // ordinary picker is the 2 + 2 split and the greetings in it are the two
+  // the ranking chose.
   const wantGenerated = ready && asked && (suggestions === null || suggestions.length > 0);
   // with >2 available the LLM chooses; until it answers, show nothing rather than
   // cards that would shuffle. Empty/failed picks fall back to today's order.
@@ -277,14 +289,23 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
             moment it arrives. A generation started here would be paid for and
             then thrown away with the component -- which is the whole thing
             this button exists to stop. */}
-        <button className="subtle" aria-busy={busy} disabled={!ready || busy || inferring}
+        {/* `held` too: a seeded chooser is reading the drivers its seed names,
+            and a press now would be an unsteered paid call. */}
+        <button className="subtle" aria-busy={busy}
+                disabled={!ready || busy || inferring || held}
                 onClick={() => { setError(null); suggest(direction); }}>
           {busy ? (suggestions === null ? "Generating…" : "Regenerating…") : asked ? "↻ Regenerate" : "✨ Suggest ideas"}
         </button>
       </div>
+      {storyPressure}
+      {pressureNote && <div className="field-hint">{pressureNote}</div>}
       {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+      {ready && held && <div className="field-hint">Reading story pressure…</div>}
       {busy && <div className="field-hint" role="status">Generating scene ideas…</div>}
-      {ready && asked && suggestions !== null && suggestions.length === 0 && !busy && genError == null && (
+      {/* Not after a stale refusal: nothing was generated, and the note above
+          says why. */}
+      {ready && asked && suggestions !== null && suggestions.length === 0 && !busy
+       && genError == null && !stale && (
         <div className="field-hint">No ideas came back — Regenerate, or steer it and try again.</div>
       )}
       {generatedCards.map((s, i) => (
