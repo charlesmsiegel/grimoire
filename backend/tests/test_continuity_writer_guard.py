@@ -72,7 +72,8 @@ FORBIDDEN: dict[str, frozenset[str]] = {
         "restore_alias_snapshot", "restore_link_snapshot",
         "repoint_scenes", "put_suppression", "drop_suppression"}),
     "grimoire.store.continuity.review": frozenset({
-        "create_alias", "remove_alias", "create_link", "remove_link", "forget_ref"}),
+        "create_alias", "remove_alias", "create_link", "remove_link", "forget_ref",
+        "settle", "dismiss", "restore_suppression"}),
     "grimoire.store.events": frozenset({"create", "update", "delete", "fire", "unfire"}),
     "grimoire.store.scene_ideas": frozenset({"add", "set_status", "mark_used", "repoint_scenes"}),
 }
