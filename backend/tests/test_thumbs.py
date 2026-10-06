@@ -985,23 +985,36 @@ def test_a_damaged_blob_is_never_served_under_its_sha(client, tmp_path, how):
     assert _cached(tmp_path) == []                 # no thumbnail made from it
 
 
-def test_a_damaged_blob_falls_back_to_the_legacy_file_beside_its_placement(client, tmp_path):
+def test_a_damaged_blob_is_still_listed(client, tmp_path):
+    """Integrity is a serving question: the listing (and every other lookup)
+    still sees the placement, under its sha."""
     base = _avatar_route(client)
     listing = base.rsplit("/", 1)[0]
     sha = client.get(listing).json()[0]["v"]
+    _damage(_blob_of(tmp_path), "truncated")
+    assert [i["v"] for i in client.get(listing).json()] == [sha]
+
+
+def test_a_made_thumbnail_is_served_without_hashing_its_source(client, tmp_path, monkeypatch):
+    """A thumbnail keyed by the blob's sha was made from intact bytes, so it
+    is served as is: neither a later damage nor the hash that would find it
+    stands between the request and the thumbnail."""
+    from grimoire.store import image_store
+    base = _avatar_route(client)
+    listing = base.rsplit("/", 1)[0]
+    sha = client.get(listing).json()[0]["v"]
+    made = client.get(f"{base}?w=128&v={sha}")
+    assert made.status_code == 200 and made.headers["content-type"] == "image/webp"
     _damage(_blob_of(tmp_path), "same-size")
-    (legacy_dir,) = {p.parent.parent for p in tmp_path.rglob("image-refs/avatar.json")}
-    legacy = _png_bytes(color=(30, 30, 200))
-    (legacy_dir / "avatar.png").write_bytes(legacy)
-    asked = {"If-None-Match": f'"{sha}"'}
-    for url in (base, f"{base}?v={sha}"):
-        r = client.get(url, headers=asked)
-        assert r.status_code == 200 and r.content == legacy, url
-        assert sha not in r.headers["etag"]
-        assert "immutable" not in r.headers["cache-control"]
-    thumb = client.get(f"{base}?w=128&v={sha}", headers=asked)
-    assert thumb.status_code == 200 and sha not in thumb.headers["etag"]
-    assert "immutable" not in thumb.headers["cache-control"]
+
+    def refuse(_p):
+        raise AssertionError("hashed the original to serve a made thumbnail")
+
+    monkeypatch.setattr(image_store, "blob_intact", refuse)
+    again = client.get(f"{base}?w=128&v={sha}")
+    assert again.status_code == 200 and again.content == made.content
+    assert client.get(f"{base}?w=128&v={sha}",
+                      headers={"If-None-Match": made.headers["etag"]}).status_code == 304
 
 
 def test_re_ingesting_the_picture_repairs_a_damaged_blob(client, tmp_path):

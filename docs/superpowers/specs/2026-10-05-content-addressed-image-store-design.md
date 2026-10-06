@@ -1295,14 +1295,17 @@ before `px1` shipped, so the version stays `px1`:
   bundle there. A blob that fails `image_store.blob_intact` is left out like
   an id that does not resolve, and logged (`bundle_image_skipped`). Its
   placement then arrives image-less through the import's own containment.
-- **A damaged blob is not served** (§6). `image_store.blob_intact` re-hashes
-  a blob against its name, memoized on its stat signature under statcache's
-  racy-window rule. `assets.path_in` treats a blob that fails it as not
-  arrived, so the legacy file beside the placement answers, or the image is
-  missing as an unresolved one is. The serving path refuses it under its sha
-  ETag or an immutable `?v=` (a `?v=` naming a blob is honoured only by that
-  blob), and no thumbnail is made from it. `image_refs.resolve_ref` does not
-  ask: listings stay unhashed. Re-ingesting the picture repairs it.
+- **A damaged blob is never served under its sha or used as a new thumbnail
+  source** (§6). `image_store.blob_intact` re-hashes a blob against its name,
+  memoized on its stat signature under statcache's racy-window rule. Serving
+  an original answers a damaged blob with 404: no sha ETag, no immutable
+  `?v=`, no 304. A `?v=` naming a blob is honoured as immutable only by that
+  blob. A thumbnail already made under the sha is served without hashing the
+  original; only making a new one asks. Listings and every other lookup
+  (`resolve_ref`, `assets.path_in`, promote, delete, tombstones) still see the
+  placement. Re-ingesting the same picture in any encoding that yields the
+  same id repairs it: ingest adopts the newcomer's bytes over a damaged blob
+  as over a missing one. Bundle export skips a damaged blob.
 
 **Accepted as they stand**, each with its reason:
 

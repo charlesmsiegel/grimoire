@@ -393,6 +393,64 @@ def test_promote_image_copies_up_and_swaps(monkeypatch, tmp_path):
     assert assets.image_path(wroot, aid, "default", "gallery_0").read_bytes() == PNG + b"2"
 
 
+# ---- a damaged blob is still an image to every lookup (Codex C2 rework) ----
+
+def _damage_placed(root, aid, vid, name):
+    """Truncate the blob placement `name` resolves to, in place."""
+    r = assets.resolve(assets.version_dir(root, aid, vid), name)
+    r.blob_path.write_bytes(r.blob_path.read_bytes()[:-5])
+    assert not image_store.blob_intact(r.blob_path)
+    return r.image_id
+
+
+def _png(color) -> bytes:
+    import io
+
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.new("RGB", (4, 4), color).save(buf, "PNG")
+    return buf.getvalue()
+
+
+def test_promote_copies_up_a_world_avatar_whose_blob_is_damaged(monkeypatch, tmp_path):
+    """Integrity is a serving question, not an existence one: the world's
+    avatar is still there to be swapped down into the gallery slot, and the
+    promoted slot is not tombstoned."""
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "avatar", _png((1, 1, 1)), "png")
+    assets.put_image(wroot, aid, "default", "gallery_0", _png((2, 2, 2)), "png")
+    gallery = assets.image_id(wroot, aid, "default", "gallery_0")
+    avatar = _damage_placed(wroot, aid, "default", "avatar")
+    overlay.promote_image(cid, aid, "default", "gallery_0")
+    cdir = assets.version_dir(campaigns.campaign_root(cid), aid, "default")
+    assert image_refs.read(cdir, "avatar").image == gallery
+    assert image_refs.read(cdir, "gallery_0").image == avatar
+    assert not any(k.endswith("/gallery_0") for k in overlay.deleted(cid))
+
+
+def test_deleting_an_inherited_image_whose_blob_is_damaged_tombstones_it(
+        monkeypatch, tmp_path):
+    wroot, cid, aid = _actor_pair(monkeypatch, tmp_path)
+    assets.put_image(wroot, aid, "default", "gallery_1", _png((3, 3, 3)), "png")
+    _damage_placed(wroot, aid, "default", "gallery_1")
+    overlay.delete_image(cid, aid, "default", "gallery_1")
+    assert f"assets/characters/{aid}/default/gallery_1" in overlay.deleted(cid)
+    image_store.ingest(_png((3, 3, 3)), "png")                # repaired
+    assert "gallery_1" not in {i["name"] for i in overlay.list_images(cid, aid, "default")}
+
+
+def test_a_campaign_library_image_whose_blob_is_damaged_takes_a_re_upload(
+        monkeypatch, tmp_path):
+    from grimoire.store import campaign_images, world_images
+    wid, _wroot, cid, _eid = _pair(monkeypatch, tmp_path)
+    campaign_images.put_image(cid, "coastline", _png((5, 5, 5)), "png")
+    world_images.put_image(wid, "coastline", _png((4, 4, 4)), "png")   # the world's, later
+    d = campaign_images.images_dir(cid)
+    r = assets.resolve(d, "coastline")
+    r.blob_path.write_bytes(r.blob_path.read_bytes()[:-5])
+    campaign_images.put_image(cid, "coastline", _png((5, 5, 5)), "png")   # not refused
+    assert image_store.blob_intact(assets.resolve(d, "coastline").blob_path)
+
 def test_promote_inherited_without_avatar_tombstones_source(monkeypatch, tmp_path):
     """Promoting an inherited image when there's no avatar to swap into its
     slot must tombstone the inherited source, or the world image would still

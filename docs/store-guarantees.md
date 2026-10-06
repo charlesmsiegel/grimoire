@@ -414,16 +414,23 @@ ingested, which are by construction the right ones, and the repair is logged as
 `test_corrupt_blob_repaired` and `test_same_size_corrupt_blob_repaired`.
 
 **Until then, a damaged blob is not served.** Its sha is the ETag and the
-`?v=` token a browser caches for good, so `assets.path_in` treats a blob whose
-bytes no longer match its name as not arrived (`image_store.blob_intact`,
-memoized on the blob's stat signature and re-hashed every time inside the
-racy window): the legacy file beside its placement answers if there is one,
-and otherwise the image is missing, as an unresolved placement is. It is never
-answered under its sha as an ETag or an immutable `?v=`, and no thumbnail is
-made from it. Logged as `image_blob_damaged`, once per stat signature. Pinned
-by `test_a_damaged_blob_is_never_served_under_its_sha`,
-`test_a_damaged_blob_falls_back_to_the_legacy_file_beside_its_placement` and
-`test_no_thumbnail_is_made_from_a_damaged_blob`.
+`?v=` token a browser caches for good, so a blob whose bytes no longer match
+its name (`image_store.blob_intact`, memoized on the blob's stat signature
+and re-hashed every time inside the racy window) is never answered under its
+sha: no ETag, no immutable `?v=`, no 304 -- the original is a 404 -- and it is
+never the source of a new thumbnail. A thumbnail already made under the sha
+was made from intact bytes and is still served, without hashing the original.
+Every other lookup -- listings, existence checks, promote, delete,
+tombstones, `assets.path_in` -- still sees the placement as it is: integrity
+is a serving question, not an existence one. Re-ingesting the same picture
+in any encoding that yields the same id repairs it (an exact-byte re-upload
+rewrites the blob, any other adopts the newcomer's bytes), and a world bundle
+export leaves a damaged blob out. Logged as `image_blob_damaged`, once per
+stat signature. Pinned by `test_a_damaged_blob_is_never_served_under_its_sha`,
+`test_a_made_thumbnail_is_served_without_hashing_its_source`,
+`test_no_thumbnail_is_made_from_a_damaged_blob`,
+`test_ingest_adopts_another_encoding_over_a_damaged_retained_blob` and
+`test_promote_copies_up_a_world_avatar_whose_blob_is_damaged`.
 
 An image object keeps exactly one blob. A later upload of the same pixels in a
 different encoding finds the object and discards the newcomer, so the slot goes
