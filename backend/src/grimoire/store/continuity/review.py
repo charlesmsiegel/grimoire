@@ -506,7 +506,8 @@ class PartialSettleError(OSError):
 
 def _scene_titles(cid: str) -> dict[str, str] | None:
     """Scene id -> title for every scene that exists now, or None when the list
-    cannot be read (nothing can then be said about evidence either way)."""
+    cannot be read. None proves nothing about evidence, so a check that needs
+    the list refuses on it rather than reading it as a pass (§22, §3.9)."""
     try:
         rows = scenes_read.list_scenes(cid)
     except OSError:
@@ -539,7 +540,9 @@ def check_candidate(cid: str, candidate_id: str, expect: str | None, *,
     unreadable ledger); and its CURRENT fingerprint must equal `expect` -- the
     cached one when None -- with every evidence scene still there (409
     ``stale_candidate``, carrying the current fingerprint and rows so the
-    reader can look and resubmit against them, §12.9). `evidence=False` is
+    reader can look and resubmit against them, §12.9) -- a proposal that cites
+    a scene while the scene list cannot be read is 409 ``unreadable``, since
+    that check was not made rather than passed. `evidence=False` is
     dismiss's: setting a finding aside does not depend on the model's citation.
 
     Returns ``{"record", "current", "fingerprint", "scenes"}`` -- the current
@@ -561,6 +564,9 @@ def check_candidate(cid: str, candidate_id: str, expect: str | None, *,
         reason = None
         if fp != (record["fingerprint"] if expect is None else expect):
             reason = "records"
+        elif evidence and scenes is None and not pending.evidence_ok(
+                record["proposal"], set()):
+            raise RefusedError(409, "unreadable", "the scene list cannot be read right now")
         elif evidence and scenes is not None and not pending.evidence_ok(
                 record["proposal"], set(scenes)):
             reason = "evidence"
