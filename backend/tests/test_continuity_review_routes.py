@@ -293,6 +293,30 @@ def test_a_hand_edited_cache_with_bad_nested_fields_reads_200(client):
     assert _read(client, cid)["diagnostics"]["cache_malformed"] is False
 
 
+def test_a_hand_edited_pair_naming_one_record_twice_is_no_finding(client):
+    """A duplicate whose two refs are one record passes no normalization it
+    should: it is not listed, and applying or dismissing it is the gone
+    refusal -- never an alias plan with no record to merge away (a 500)."""
+    cid, _sid = _seeded(client)
+    refs = [LEDGER, LEDGER]
+    key = canon.candidate_id("possible_duplicate", refs)
+    path = _root(cid) / "continuity_candidates.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    fp = pending.fingerprint(pending.Current.load(cid), "possible_duplicate", refs)
+    data["records"][key] = {"kind": "possible_duplicate", "refs": refs, "fingerprint": fp,
+                            "signals": {}, "proposal": None, "created": ""}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    listed = _listed(client, cid)
+    assert key not in listed and PAIR in listed
+    r = _apply(client, cid, key, {"op": "alias", "canonical": LEDGER})
+    assert r.status_code == 404, r.text
+    assert r.json()["kind"] == "not_found"
+    gone = _dismiss(client, cid, key, {"decision": "dismiss"})
+    assert gone.status_code == 404, gone.text
+    assert doc.get_alias(cid, LEDGER) is None
+
+
 def test_a_malformed_continuity_file_hides_findings(client):
     """Decision 2: a malformed continuity.json reads as no dismissals, so every
     finding is `unknown` -- hidden and kept -- rather than resurrected."""

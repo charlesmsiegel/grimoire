@@ -1177,6 +1177,16 @@ def test_continuity_counts_come_from_the_cache_after_the_live_filter(client):
         assert _chore(client, scope, "continuity-closures") is None
 
 
+def test_a_pair_naming_one_record_twice_is_not_counted(client):
+    """A hand-edited duplicate whose two refs are one record is no finding."""
+    cid, _ = _run(client)
+    _seed(cid, ("possible_duplicate", [MAP, MAP]))
+    assert candidates.read(cid)["records"] == {}
+    for scope in (cid, ""):
+        assert _chore(client, scope, "continuity-overlaps") is None
+    assert _items(client, "continuity-overlaps", cid)["items"] == []
+
+
 def test_absent_cache_shows_no_continuity_chore(client):
     cid, _ = _run(client)
     assert not (store.campaigns.paths.campaign_root(cid) / "continuity_candidates.json").exists()
