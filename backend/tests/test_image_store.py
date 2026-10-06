@@ -282,7 +282,7 @@ def test_ingest_adopts_another_encoding_over_a_damaged_retained_blob():
     old.write_bytes(old.read_bytes()[:-5])
     again = image_store.ingest(b, "png")
     assert again.id == first.id
-    assert again.blob_sha256 == _sha(image_store._prepared(b, "png").data) != first.blob_sha256
+    assert again.blob_sha256 == _sha(image_store.prepare(b, "png").data) != first.blob_sha256
     fresh = image_store.blob_path(again.blob_sha256, "png")
     assert image_store.blob_intact(fresh)
     assert image_store.read(first.id).blob_sha256 == again.blob_sha256

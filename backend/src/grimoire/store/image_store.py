@@ -93,26 +93,33 @@ class ImageObject:
     raw: dict
 
 
-def store_root() -> Path:
-    return paths.home() / "assets" / "image-store"
+def store_root(root: Path | None = None) -> Path:
+    """``<home>/assets/image-store``.
+
+    `root` is a store home pinned by the caller -- a maintenance run captures
+    ``paths.home().resolve()`` when it starts and builds every path from that,
+    so a data-dir move mid-run cannot point it at another tree (stage-4 M4).
+    None, the default everywhere else, is the live `paths.home()`. The same
+    keyword on `blob_path`, `object_path` and `read_fresh` means the same."""
+    return (paths.home() if root is None else Path(root)) / "assets" / "image-store"
 
 
 def _is_sha(s: object) -> bool:
     return isinstance(s, str) and _SHA_RE.match(s) is not None
 
 
-def blob_path(sha: str, ext: str) -> Path:
+def blob_path(sha: str, ext: str, *, root: Path | None = None) -> Path:
     if not _is_sha(sha):
         raise ValueError("bad blob sha")
     if ext not in MIME:
         raise ValueError("bad blob ext")
-    return store_root() / "blobs" / sha[:2] / f"{sha}.{ext}"
+    return store_root(root) / "blobs" / sha[:2] / f"{sha}.{ext}"
 
 
-def object_path(image_id: str) -> Path:
+def object_path(image_id: str, *, root: Path | None = None) -> Path:
     if not image_hash.is_image_id(image_id):
         raise ValueError("bad image id")
-    return store_root() / "objects" / image_id[4:6] / f"{image_id}.json"
+    return store_root(root) / "objects" / image_id[4:6] / f"{image_id}.json"
 
 
 def iter_ids() -> Iterator[str]:
@@ -232,15 +239,17 @@ def read(image_id: str) -> ImageObject | None:
                           pool=_OBJECT_POOL, max_entries=_OBJECT_MAX)
 
 
-def read_fresh(image_id: str) -> ImageObject | None:
+def read_fresh(image_id: str, *, root: Path | None = None) -> ImageObject | None:
     """`read` without the cache: parsed from disk every time, remembered never.
 
     For a whole-store sweep (every sidecar once, rarely): memoized, it would
-    cycle the object pool and leave nothing a hot path could reuse.
+    cycle the object pool and leave nothing a hot path could reuse. `root`
+    pins the store home (`store_root`): a maintenance run reads the tree it
+    captured, never whatever the live root has become since.
     """
     if not image_hash.is_image_id(image_id):
         return None
-    return _load(object_path(image_id), image_id)
+    return _load(object_path(image_id, root=root), image_id)
 
 
 def _dump(raw: dict) -> str:
@@ -491,7 +500,7 @@ def _ingest_hit(image_id: str, sha: str, data: bytes,
 
 
 @dataclass(frozen=True)
-class _Prepared:
+class Prepared:
     data: bytes
     ext: str
     sha: str
@@ -502,9 +511,13 @@ class _Prepared:
     raw_reason: str | None
 
 
-def _prepared(data: bytes, ext: str) -> _Prepared:
+def prepare(data: bytes, ext: str) -> Prepared:
     """The bytes as the store would keep them: sniffed (falling back to the
-    caller's `ext`, validated) and sanitized where they sniff."""
+    caller's `ext`, validated) and sanitized where they sniff.
+
+    Pure: nothing is read from or written to the store. Public for the
+    migration's planner, which hashes every legacy file the way ingest would
+    before anything is ingested, and groups them by `sha` (stage-4 M7)."""
     sniffed = fetch.sniff_ext(data)
     if sniffed is None:
         ext = _norm_ext(ext)
@@ -513,7 +526,7 @@ def _prepared(data: bytes, ext: str) -> _Prepared:
         ext = sniffed
         data, clean = image_sanitize.sanitize_checked(data)
         reason = None if clean else "unsanitizable"
-    return _Prepared(data, ext, hashlib.sha256(data).hexdigest(), reason)
+    return Prepared(data, ext, hashlib.sha256(data).hexdigest(), reason)
 
 
 def _opens(data: bytes) -> bool:
@@ -525,8 +538,10 @@ def _opens(data: bytes) -> bool:
         return False
 
 
-def _identity(p: _Prepared) -> image_hash.PixelIdentity:
-    """The identity `p` is stored under.
+def identity_of(p: Prepared) -> image_hash.PixelIdentity:
+    """The identity `p` is stored under -- ingest's, with no store consulted:
+    the blob index is not asked, so this decodes (once per call; the
+    migration's planner calls it once per distinct sanitized stream).
 
     Bytes kept as received are opaque, however well they decode: named by their
     pixels, they would share an object with a clean upload of the same picture,
@@ -568,13 +583,13 @@ def identify(data: bytes, ext: str) -> str:
     without restoring a missing blob.
     """
     _no_reentry("identify")
-    p = _prepared(data, ext)
+    p = prepare(data, ext)
     hit = _index_lookup(p.sha)
     if hit is not None:
         obj = read(hit)
         if obj is not None and obj.blob_sha256 == p.sha:
             return hit
-    return _identity(p).id
+    return identity_of(p).id
 
 
 def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObject:
@@ -587,7 +602,7 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
     (`_identity`).
     """
     _no_reentry("ingest")
-    p = _prepared(data, ext)
+    p = prepare(data, ext)
     data, ext, sha = p.data, p.ext, p.sha
 
     hit = _index_get(sha)
@@ -596,7 +611,7 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
         if obj is not None:
             return obj
 
-    pid = _identity(p)
+    pid = identity_of(p)
     image_id = pid.id
     with locks.image_ingest_gc_lock(), locks.image_object_lock(image_id):
         found = read(image_id)
