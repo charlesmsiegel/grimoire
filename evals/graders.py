@@ -20,7 +20,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from grimoire.store import absorb, fence, length_drift, scenes
-from grimoire.store.continuity import identity
+from grimoire.store.continuity import identity, reconcile
 
 from . import slop
 
@@ -392,6 +392,105 @@ def grade_identity(text: str, expected: dict[str, dict],
         Check("identity.covers_rows", not missing, f"no decision for {missing}"),
     ] + [_identity_verdict(key, by_row[key], want, kinds.get(key))
          for key, want in expected.items() if key in by_row]
+
+
+# ------------------------------------------------------------------- reconcile
+
+#: The words whose meaning depends on which record is which, and the status
+#: words that need positive evidence -- borrowed, so the grader and the parser
+#: cannot disagree about either list.
+RECONCILE_DIRECTED = reconcile._DIRECTED
+RECONCILE_STATUS = frozenset(reconcile._STATUS_OF)
+
+
+def _letter(value) -> str:
+    """A direction letter as the parser reads it (padding and case ignored)."""
+    return value.strip().upper() if isinstance(value, str) else ""
+
+
+def _reconcile_items(raw: dict) -> tuple[Check, dict[str, dict]]:
+    """The shape check, and the decisions keyed by candidate as the app keys
+    them: through `reconcile._candidate_key` (a ``Candidate`` label and case
+    removed), the first answer kept when a key repeats. A directed word needs
+    two different letters, A and B, or the app reads it as ``uncertain``."""
+    items = raw.get("decisions")
+    if not isinstance(items, list):
+        return (Check("reconcile.shape", False,
+                      f"decisions was {type(items).__name__}, wanted a list"), {})
+    by_key: dict[str, dict] = {}
+    bad: list[str] = []
+    for item in items:
+        key = reconcile._candidate_key(item.get("candidate")) if isinstance(item, dict) else ""
+        if not key:
+            bad.append("not an object with a string candidate")
+            continue
+        by_key.setdefault(key, item)
+    for key, item in by_key.items():
+        word = _identity_word(item.get("decision"))
+        if word in RECONCILE_DIRECTED:
+            frm, to = _letter(item.get("from")), _letter(item.get("to"))
+            if {frm, to} != {"A", "B"}:
+                bad.append(f"{key} {word!r} ran {frm or '-'} to {to or '-'}")
+    return Check("reconcile.shape", not bad, f"malformed decisions: {bad}"), by_key
+
+
+def _founded(item: dict, known: set[str]) -> bool:
+    reason, scenes_ = item.get("reason"), item.get("evidence_scenes")
+    return (isinstance(reason, str) and bool(reason.strip()) and isinstance(scenes_, list)
+            and any(isinstance(s, str) and s in known for s in scenes_))
+
+
+def _reconcile_verdict(key: str, got: dict, want: dict) -> Check:
+    word = _identity_word(got.get("decision"))
+    frm = _letter(got.get("from"))
+    directions: dict[str, str] = want.get("from") or {}
+    ok = word in want["decisions"] and frm == directions.get(word, frm)
+    wanted = " or ".join(w + (f" from {directions[w]}" if w in directions else "")
+                         for w in want["decisions"])
+    return Check(f"reconcile.{want['check']}", ok,
+                 f"candidate {key} was {got.get('decision')!r} from {frm or '-'}, "
+                 f"wanted {wanted}")
+
+
+def grade_reconcile(text: str, expected: dict[str, dict],
+                    vocab: dict[str, tuple[str, ...]], known: set[str]) -> list[Check]:
+    """Does the reconciliation reply answer every candidate in its own
+    vocabulary, found every status word on a scene the prompt showed, and give
+    the right verdict on each scored candidate?
+
+    Scored on the RAW extracted object, as grade_absorb is and for its reason:
+    `reconcile.parse_output` rewrites a word outside the candidate's
+    vocabulary, a disallowed direction and an unfounded closure all as
+    ``uncertain``, so an enum or evidence check over its output could never
+    fail. Candidate keys are the one thing read the app's way.
+
+    `expected` maps a candidate key to ``{"check", "decisions", "from"}``: the
+    words that candidate may be decided as, the check that reports it, and,
+    per directed word, the letter its ``from`` must name. A candidate with no
+    decision is reported by ``reconcile.covers`` alone. `vocab` maps every key
+    the prompt sent to its vocabulary, and `known` is the payload's known
+    scene set -- the only evidence the parser accepts.
+    """
+    raw = absorb.extract_object(text)
+    if raw is None:
+        return [Check("reconcile.json", False, "no JSON object recoverable from the reply")]
+    shape, by_key = _reconcile_items(raw)
+    outside = sorted(f"{key}: {d.get('decision')!r}" for key, d in by_key.items()
+                     if _identity_word(d.get("decision")) not in vocab.get(key, ()))
+    unfounded = sorted(key for key, d in by_key.items()
+                       if _identity_word(d.get("decision")) in RECONCILE_STATUS
+                       and not _founded(d, known))
+    missing = [key for key in vocab if key not in by_key]
+    return [
+        Check("reconcile.json", True),
+        shape,
+        Check("reconcile.enum", not outside,
+              f"decisions outside their candidate's vocabulary: {outside}"),
+        Check("reconcile.covers", not missing, f"no decision for {missing}"),
+        Check("reconcile.evidence", not unfounded,
+              f"status words without a reason and a known evidence scene: {unfounded}"),
+    ] + [_reconcile_verdict(key, by_key[key], want)
+         for key, want in expected.items() if key in by_key]
 
 
 # ------------------------------------------------------------ prompt contract
