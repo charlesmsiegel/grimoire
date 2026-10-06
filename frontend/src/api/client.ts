@@ -124,6 +124,14 @@ export class ApiError extends Error {
   }
 }
 
+/** A continuity Refresh refused by its own POST (409 `busy` while the store
+ *  moves, 404 for a campaign that is not there): no run was started, so no
+ *  sweep saved anything (§26). Told apart from the run's own failures by
+ *  class, not by shape -- a poll's `run_gone` 404 looks just like a refusal,
+ *  and comes from a run that may have saved its findings before it was
+ *  reaped or the server restarted. */
+export class RefreshRefused extends ApiError {}
+
 // `attempt` is this client's own name for one piece of work, sent as
 // `X-Grimoire-Attempt`. It is the same contract `streamPost` already carries and
 // it is here for the same two reasons: it makes a duplicate delivery adopt the
@@ -1421,7 +1429,15 @@ export const api = {
     draftRun<ReconcileResult>({ at: "campaign", id: cid }, (attempt) =>
       request<{ run: RunHandle }>(
         "POST", `/api/campaigns/${encodeSegment(cid)}/continuity/reconcile`, undefined,
-        { attempt, signal }), { signal }),
+        { attempt, signal })
+        // A 4xx from the POST itself started nothing. Marked here, where it is
+        // known, because what reaches the caller from the poll can look the
+        // same (`RefreshRefused`).
+        .catch((err: unknown) => {
+          throw err instanceof ApiError && err.status < 500
+            ? new RefreshRefused(err.status, err.detail, err.kind, err.body)
+            : err;
+        }), { signal }),
   /** Follow a campaign run this client did not start -- the sweep End Scene
    *  began, found on the candidates read (Decision 24). It has no attempt id
    *  of ours, so the last word before giving up on it is the subject's run

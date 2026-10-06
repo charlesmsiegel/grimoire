@@ -25,7 +25,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  api, ApiError, type CandidateRecord, type ContinuityCandidates, type ContinuityState,
+  api, ApiError, RefreshRefused, type CandidateRecord, type ContinuityCandidates, type ContinuityState,
 } from "../../api/client";
 import type { RunHandle } from "../../api/stream";
 import type { ContinuityGroup } from "../../api/types";
@@ -40,20 +40,26 @@ export const FAILED_NOTE = "The model check did not finish — basic findings ar
 export const NOT_SAVED_NOTE = "The refresh did not finish — nothing it found was saved.";
 /** A failure that does not say which of the two it was. */
 export const UNFINISHED_NOTE = "The refresh did not finish.";
+/** The pass a run adds for refs End Scene left failed, after the first
+ *  pass landed: the first pass's findings stand, and its model check ran. */
+export const FOLLOW_ON_NOTE =
+  "The follow-on pass did not finish — the first pass's findings are listed.";
 
 /** The note for a failed Refresh (§26). A failed reconcile run's `error`
- *  carries `saved` -- whether persist 1 landed -- and `sweep`
- *  (`routes/continuity._reconcile_work`). An `ApiError` with no `sweep` and a
- *  4xx is the start's own refusal (409 `busy` while the store moves, 404), so
- *  no sweep ran. Anything else -- a poll that gave up, a cancelled run, no
- *  answer at all -- may or may not have saved, and says neither. */
+ *  carries `saved` -- whether persist 1 landed -- `follow_on` -- whether the
+ *  failure was the follow-on pass's -- and `sweep`
+ *  (`routes/continuity._reconcile_work`). Only a `RefreshRefused` -- the
+ *  POST's own 4xx -- is known to have run nothing. Anything else -- a poll's
+ *  `run_gone` 404 (a run reaped, a server restarted), a poll that gave up, a
+ *  cancelled run, no answer at all -- may or may not have saved, and says
+ *  neither. */
 export function failedNote(err: unknown): string {
+  if (err instanceof RefreshRefused) return NOT_SAVED_NOTE;
   const body = err instanceof ApiError ? err.body : undefined;
+  if (body?.follow_on === true) return FOLLOW_ON_NOTE;
   if (body?.saved === true) return FAILED_NOTE;
   if (body?.saved === false) return NOT_SAVED_NOTE;
-  const refused = err instanceof ApiError && body?.sweep === undefined
-    && err.status < 500 && err.kind !== "cancelled";
-  return refused ? NOT_SAVED_NOTE : UNFINISHED_NOTE;
+  return UNFINISHED_NOTE;
 }
 
 type Current = { fingerprint: string; records: CandidateRecord[] };
