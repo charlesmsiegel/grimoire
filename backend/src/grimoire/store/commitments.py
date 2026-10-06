@@ -58,7 +58,8 @@ def get(cid: str, mid: str) -> dict | None:
 
 
 def set_movement(cid: str, mid: str, title: str, kind: str, status: str,
-                 due: str | None, beat_text: str, scene: str) -> None:
+                 due: str | None, beat_text: str, scene: str,
+                 *, last_scene: str | None = None) -> None:
     """Create or advance one commitment. A blank `title` and an unrecognized
     `kind`/`status` preserve the stored value, so an absorb that only adds a
     beat cannot erase what the commitment was created with.
@@ -70,6 +71,10 @@ def set_movement(cid: str, mid: str, title: str, kind: str, status: str,
     deadline without resolving the commitment ("forget midnight, pay me
     whenever") gets recorded instead of leaving a stale date on the ledger
     forever. Text sets it.
+
+    ``last_scene`` defaults to `scene`, as `plot.set_movement`'s does, and for
+    the same reason: one write, so a closure that keeps the later scene cannot
+    land half.
     """
     with locks.campaign_lock(cid):
         data = read(cid)
@@ -110,7 +115,7 @@ def set_movement(cid: str, mid: str, title: str, kind: str, status: str,
             if not isinstance(rec.get("beats"), list):
                 rec["beats"] = []
             rec["beats"].append({"scene": scene, "text": beat_text.strip()})
-        rec["last_scene"] = scene
+        rec["last_scene"] = scene if last_scene is None else last_scene
         data[mid] = rec
         _write(cid, data)
 

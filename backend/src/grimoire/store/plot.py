@@ -34,7 +34,12 @@ def get(cid: str, pid: str) -> dict | None:
     return read(cid).get(pid)
 
 
-def set_movement(cid: str, pid: str, title: str, status: str, beat_text: str, scene: str) -> None:
+def set_movement(cid: str, pid: str, title: str, status: str, beat_text: str, scene: str,
+                 *, last_scene: str | None = None) -> None:
+    """Create or advance one thread in one write. The beat is filed under
+    `scene`; ``last_scene`` defaults to it too, and a caller that must not move
+    it backwards (a continuity closure, §12.4) names the later one here rather
+    than putting it right with a second write that could fail after the first."""
     data = read(cid)
     thread = data.get(pid) or {"title": "", "status": "open", "beats": [], "last_scene": ""}
     if title.strip():
@@ -45,7 +50,7 @@ def set_movement(cid: str, pid: str, title: str, status: str, beat_text: str, sc
         thread["status"] = status
     if beat_text.strip():
         thread.setdefault("beats", []).append({"scene": scene, "text": beat_text.strip()})
-    thread["last_scene"] = scene
+    thread["last_scene"] = scene if last_scene is None else last_scene
     data[pid] = thread
     _write(cid, data)
 
