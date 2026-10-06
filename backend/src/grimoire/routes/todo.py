@@ -5,6 +5,10 @@ nothing is cached: a chore whose count is zero does not appear, and the number
 in its label is the number this request computed. That is what makes the list
 worth opening twice -- a to-do list that can go stale teaches the reader to
 distrust it, and then the one entry that mattered is the one they scroll past.
+One exception, read-only: the continuity chores read the reconciliation cache
+(`continuity_candidates.json`) through `continuity.pending`'s live filter in the
+same request — suppressed, stale, merged-away and already-closed findings never
+count.
 
 The cost rule from `routes/shell.py` applies here for the same reason: a chore
 that cannot be counted cheaply is not offered. This page is opened casually and
@@ -25,11 +29,14 @@ surface's resolver too, so the report cannot disagree with what the user sees.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException
 
 from .. import store
+from ..store.continuity import candidates as continuity_candidates
 from ..store.continuity import effective as continuity_effective
+from ..store.continuity import pending as continuity_pending
 from .common import _dump  # noqa: F401  (kept for the pydantic-agnostic rule)
 
 router = APIRouter()
@@ -97,6 +104,22 @@ class _Ctx:
 
     def character_gaps(self) -> tuple[list[dict], list[dict]]:
         return self._once("gaps", lambda: _character_gaps(self.cid))
+
+    def continuity(self) -> list[tuple[str, dict]]:
+        """The cached continuity findings whose verdict is ``live`` now, as
+        ``(candidate id, record)``, read once for both continuity chores.
+
+        Through `pending.findings`, the GET's own live filter (§18.2), so the
+        count cannot disagree with what the Ledger lists. A cache or ledger
+        that cannot be read is no findings -- memoized as such, so the second
+        chore does not pay for the same failure again."""
+        def read() -> list[tuple[str, dict]]:
+            try:
+                found = continuity_pending.findings(self.cid)
+            except (OSError, ValueError, store.CampaignNotFound):
+                return []
+            return [(key, record) for key, record, verdict in found if verdict == "live"]
+        return self._once("continuity", read)
 
     def avatar_gaps(self) -> list[dict]:
         return self._once("avatars", lambda: _items_avatars(self.cid))
@@ -326,6 +349,18 @@ def _chore_cover(ctx: _Ctx) -> dict | None:
     }
 
 
+def _ledger_href(cid: str, section: str = "", *segments: str) -> str:
+    """A Ledger address, in the grammar `frontend/src/ledgerPaths.ts`'s
+    `ledgerHref` parses (§12.1): ``/campaigns/<cid>/ledger[/<section>][/<id>...]``
+    with the campaign id and every segment percent-encoded whole, so a
+    model-written id holding a ``/`` or ``:`` stays one segment."""
+    parts = [f"/campaigns/{quote(cid, safe='')}/ledger"]
+    if section:
+        parts.append(section)
+    parts.extend(quote(segment, safe="") for segment in segments)
+    return "/".join(parts)
+
+
 def _owed(cid: str) -> list[dict]:
     """The live canonical commitments with a stated deadline, in effective
     order: a merged-away source is never a second row, and its due is never
@@ -350,7 +385,46 @@ def _chore_owed(ctx: _Ctx) -> dict | None:
         "what": f"{n} open commitment{'s' if n != 1 else ''} with a deadline",
         "why": "A promise with a date is the kind the campaign is expected to answer, "
                "and the ledger is where it is still waiting.",
-        "fix": f"/campaigns/{cid}/ledger", "fix_label": "The ledger",
+        "fix": _ledger_href(cid, "commitments"), "fix_label": "The ledger",
+    }
+
+
+def _continuity_live(ctx: _Ctx, chore_id: str) -> list[tuple[str, dict]]:
+    return [(key, record) for key, record in ctx.continuity()
+            if continuity_pending.CHORE_OF.get(record["kind"]) == chore_id]
+
+
+def _chore_continuity_overlaps(ctx: _Ctx) -> dict | None:
+    n = len(_continuity_live(ctx, "continuity-overlaps"))
+    if not n:
+        return None
+    return {
+        "id": "continuity-overlaps", "scope": "campaign", "group": "Continuity",
+        "severity": "note", "n": n,
+        "what": f"{n} possible overlap{'s' if n != 1 else ''} to review",
+        "why": "The last continuity sweep found records that may be the same story business "
+               "or belong together, and nothing is merged or linked until you review it.",
+        "fix": _ledger_href(ctx.cid, "continuity", "overlaps"),
+        "fix_label": "Continuity review",
+    }
+
+
+def _chore_continuity_closures(ctx: _Ctx) -> dict | None:
+    found = _continuity_live(ctx, "continuity-closures")
+    n = len(found)
+    if not n:
+        return None
+    # The chore counts both lifecycle kinds, which the Ledger lists in two
+    # groups: a campaign with resolutions only must not land on an empty one.
+    threads = any(r["kind"] == "possible_thread_closure" for _k, r in found)
+    return {
+        "id": "continuity-closures", "scope": "campaign", "group": "Continuity",
+        "severity": "note", "n": n,
+        "what": f"{n} record{'s' if n != 1 else ''} that may be finished",
+        "why": "The last continuity sweep found threads or commitments that may be finished, "
+               "and nothing is closed or resolved until you review it.",
+        "fix": _ledger_href(ctx.cid, "continuity", "closures" if threads else "resolutions"),
+        "fix_label": "Continuity review",
     }
 
 
@@ -378,7 +452,36 @@ def _chore_unpriced(ctx: _Ctx) -> dict | None:
         "why": f"Nobody reported a price for these and your table has no rate that "
                f"matches them, so they are counted rather than costed: {names}{more}. "
                f"The model string has to match exactly.",
-        "fix": "/config", "fix_label": "Pricing",
+        "fix": "/config?section=pricing", "fix_label": "Pricing",
+    }
+
+
+def _chore_embeddings(ctx: _Ctx) -> dict | None:
+    """The one library note §18.1 asks for: no embeddings connection and model.
+
+    It asks `embed_space.resolve` -- whether a sweep COULD embed -- and not the
+    recall depth, which governs prompt recall rather than matching. Shown only
+    once a campaign exists, since before then there is nothing to match. A
+    resolve that raises is "could not tell", never "not configured": an outage
+    is not a setup task."""
+    try:
+        if store.embed_space.resolve() is not None:
+            return None
+    except Exception:  # noqa: BLE001 -- an outage is not "not configured"
+        return None
+    try:
+        if not store.campaigns.read.list_campaigns():
+            return None
+    except OSError:
+        return None
+    return {
+        "id": "embeddings", "scope": "library", "group": "Housekeeping", "severity": "note",
+        "n": 1,
+        "what": "Semantic matching is not configured",
+        "why": "Grimoire still uses basic matching to find possible overlaps in your ledgers. "
+               "Semantic matching improves detection when the same story business is phrased "
+               "differently.",
+        "fix": "/config?section=semantic", "fix_label": "Embeddings",
     }
 
 
@@ -612,6 +715,8 @@ CAMPAIGN_BUILDERS = (
     ("avatars", _chore_avatars),
     ("cover", _chore_cover),
     ("owed", _chore_owed),
+    ("continuity-overlaps", _chore_continuity_overlaps),
+    ("continuity-closures", _chore_continuity_closures),
 )
 
 #: Builders that answer with no campaign open: the library's own backlog.
@@ -626,6 +731,7 @@ LIBRARY_BUILDERS = (
     ("world-covers", _chore_world_covers),
     ("world-subjects", _chore_world_subjects),
     ("unpriced", _chore_unpriced),
+    ("embeddings", _chore_embeddings),
 )
 
 #: Both, in display order. Adding a chore is one entry and one function.
@@ -643,7 +749,8 @@ LIBRARY_IDS = frozenset(i for i, _b in LIBRARY_BUILDERS)
 KNOWN = frozenset(i for i, _b in BUILDERS)
 CAMPAIGN_IDS = frozenset(i for i, _b in CAMPAIGN_BUILDERS)
 
-#: The order the themes are read in: story, character, art, rules, then costs.
+#: The order the themes are read in: story, continuity review, character, art,
+#: rules, costs, then housekeeping.
 #:
 #: Declared rather than derived, and that is the fix rather than the taste.
 #: `BUILDERS` orders CHORES deliberately -- unreviewed proposals before open
@@ -660,10 +767,12 @@ CAMPAIGN_IDS = frozenset(i for i, _b in CAMPAIGN_BUILDERS)
 #: here, and `test_todo_route.py` says so.
 GROUP_ORDER = (
     "Story & continuity",
+    "Continuity",
     "Character & voice",
     "Artwork",
     "Game mechanics",
     "Costs & pricing",
+    "Housekeeping",
 )
 
 
@@ -831,7 +940,7 @@ def _items_owed(cid: str) -> list[dict]:
     return [{"id": c["id"], "label": c["title"],
              "detail": " · ".join(x for x in (f"due {c['due']}", c.get("kind"),
                                               c.get("latest_beat")) if x),
-             "fix": f"/campaigns/{cid}/ledger"} for c in owed]
+             "fix": _ledger_href(cid, "commitments", c["id"])} for c in owed]
 
 
 def _items_unpriced(cid: str) -> list[dict]:
@@ -841,7 +950,55 @@ def _items_unpriced(cid: str) -> list[dict]:
         return []
     return [{"id": m["model"], "label": m["model"],
              "detail": f"{m['calls']} calls that a rate would price",
-             "fix": "/config"} for m in models]
+             "fix": "/config?section=pricing"} for m in models]
+
+
+def _items_embeddings(cid: str) -> list[dict]:
+    return [{"id": "embeddings", "label": "Semantic matching",
+             "detail": "No embeddings connection and model are set",
+             "fix": "/config?section=semantic"}]
+
+
+#: What a continuity item says it is, in §30's hedged wording.
+_CONTINUITY_KIND = {
+    "possible_duplicate": "Possible overlap",
+    "possible_relation": "Possible relation",
+    "possible_thread_closure": "May be finished",
+    "possible_commitment_resolution": "Needs resolution review",
+}
+
+
+def _continuity_items(cid: str, chore_id: str) -> list[dict]:
+    """One row per live finding of the chore, opening that finding in its own
+    Ledger group. A proposal is named only through `pending.DECISION_LABELS`,
+    so a raw decision word never reaches the page (Decision 25)."""
+    try:
+        if not continuity_candidates.read(cid)["records"]:
+            return []
+        current = continuity_pending.Current.load(cid)
+        found = continuity_pending.findings(cid, current)
+    except (OSError, ValueError, store.CampaignNotFound):
+        return []
+    out = []
+    for key, record, verdict in found:
+        kind = record["kind"]
+        if verdict != "live" or continuity_pending.CHORE_OF.get(kind) != chore_id:
+            continue
+        proposal = record["proposal"] or {}
+        suggested = continuity_pending.DECISION_LABELS.get(proposal.get("decision", ""), "")
+        out.append({"id": key, "label": continuity_pending.label(current, record["refs"]),
+                    "detail": " · ".join(x for x in (_CONTINUITY_KIND[kind], suggested) if x),
+                    "fix": _ledger_href(cid, "continuity", continuity_pending.GROUP_OF[kind],
+                                        key)})
+    return out
+
+
+def _items_continuity_overlaps(cid: str) -> list[dict]:
+    return _continuity_items(cid, "continuity-overlaps")
+
+
+def _items_continuity_closures(cid: str) -> list[dict]:
+    return _continuity_items(cid, "continuity-closures")
 
 
 def _items_world_describe(cid: str) -> list[dict]:
@@ -903,7 +1060,10 @@ ITEMS = {
     "world-covers": _items_world_covers,
     "world-subjects": _items_world_subjects,
     "owed": _items_owed,
+    "continuity-overlaps": _items_continuity_overlaps,
+    "continuity-closures": _items_continuity_closures,
     "unpriced": _items_unpriced,
+    "embeddings": _items_embeddings,
     "world-describe": _items_world_describe,
     "world-taglines": _items_world_taglines,
     "world-anchors": _items_world_anchors,

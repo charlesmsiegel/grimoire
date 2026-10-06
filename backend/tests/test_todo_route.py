@@ -14,7 +14,9 @@ from __future__ import annotations
 import importlib
 import inspect
 import io
+import json
 import re
+from urllib.parse import quote
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +25,7 @@ from PIL import Image
 import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo
+from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
 
 
@@ -619,9 +622,12 @@ def test_groups_keep_their_thematic_order_in_campaign_and_global_reports(client,
             "world-anchors": "Character & voice",
             "world-taglines": "Character & voice",
             "world-avatars": "Character & voice",
+            # No embeddings are configured and a campaign exists (§18.1).
+            "embeddings": "Housekeeping",
         }
         assert {c["id"]: c["group"] for c in body["chores"]} == wanted
-        assert body["groups"] == ["Story & continuity", "Character & voice", "Artwork"]
+        assert body["groups"] == ["Story & continuity", "Character & voice", "Artwork",
+                                  *([] if scope else ["Housekeeping"])]
         assert body["count"] == len(wanted)
 
 
@@ -1022,3 +1028,303 @@ def test_a_closed_branch_is_not_an_open_scene(client, campaign):
     assert "open-scenes" not in {row["id"] for row in _todo(client, cid)["chores"]}
     items = client.get("/api/todo/open-scenes/items", params={"campaign": cid}).json()
     assert items["items"] == []
+
+
+# ---- §18: the semantic-matching setup note and the continuity review chores ----
+
+
+_EMBEDDINGS = {
+    "id": "embeddings", "scope": "library", "group": "Housekeeping", "severity": "note", "n": 1,
+    "what": "Semantic matching is not configured",
+    "why": "Grimoire still uses basic matching to find possible overlaps in your ledgers. "
+           "Semantic matching improves detection when the same story business is phrased "
+           "differently.",
+    "fix": "/config?section=semantic", "fix_label": "Embeddings",
+}
+
+_THREADS = {
+    "mara-s-map": "Mara's map",
+    "winifred-s-chart": "Winifred's chart",
+    "seraphine-s-letter": "Seraphine's letter",
+    "seraphine-s-reply": "Seraphine's reply",
+    "saltmarch-bells": "The Saltmarch bells",
+    "saltmarch-tide": "The Saltmarch tide",
+    "realm-crown": "The Realm's crown",
+    "the-coronation": "The coronation",
+    "mara-s-errand": "Mara's errand",
+    "winifred-s-errand": "Winifred's errand",
+}
+
+MAP, CHART = "thread:mara-s-map", "thread:winifred-s-chart"
+OATH = "commitment:mara-s-oath"
+
+
+def _configure_embeddings(depth: str = "2") -> None:
+    conn = store.llm_connections.create_connection(
+        "openai_compatible", "Vectors", base_url="https://vectors.example/v1",
+        api_key="sk-x", model="", post_process="none")
+    store.config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn,
+                              semantic_recall_depth=depth)
+
+
+def _run(client) -> tuple[str, str]:
+    """A campaign whose id is `run`, a scene, and the ten threads above."""
+    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
+    cid = client.post("/api/campaigns", json={"name": "Run", "world": wid}).json()["id"]
+    assert cid == "run"
+    sid = store.scenes.create_scene(cid, "Saltmarch docks")
+    for pid, title in _THREADS.items():
+        store.plot.set_movement(cid, pid, title, "open", f"{title} came up.", sid)
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "", "Mara swore it on the quay.", sid)
+    return cid, sid
+
+
+def _proposal(decision: str) -> dict:
+    return {"decision": decision, "from": "", "to": "", "relation": "", "status": "",
+            "reason": "", "evidence_scenes": []}
+
+
+def _seed(cid: str, *found: tuple) -> list[str]:
+    """Cache each `(kind, refs[, proposal])` with its CURRENT fingerprint, as a
+    sweep that just ran would have; returns the candidate ids in order."""
+    current = pending.Current.load(cid)
+    data = candidates.empty()
+    keys = []
+    for kind, refs, *rest in found:
+        key = canon.candidate_id(kind, refs)
+        data["records"][key] = {"kind": kind, "refs": list(refs),
+                                "fingerprint": pending.fingerprint(current, kind, refs),
+                                "signals": {}, "proposal": rest[0] if rest else None,
+                                "created": "2026-10-01T00:00:00Z"}
+        keys.append(key)
+    candidates.write(cid, data)
+    return keys
+
+
+def _chore(client, cid: str, chore_id: str) -> dict | None:
+    return next((c for c in _todo(client, cid)["chores"] if c["id"] == chore_id), None)
+
+
+def test_missing_embeddings_shows_one_library_chore_on_the_global_page(client, campaign):
+    cid, _ = campaign
+    rows = [c for c in _todo(client, "")["chores"] if c["id"] == "embeddings"]
+    assert rows == [_EMBEDDINGS]
+    assert _chore(client, cid, "embeddings") is None
+    items = _items(client, "embeddings", "")
+    assert items["items"] == [{"id": "embeddings", "label": "Semantic matching",
+                               "detail": "No embeddings connection and model are set",
+                               "fix": "/config?section=semantic"}]
+
+
+def test_no_campaign_no_embeddings_chore(client):
+    assert "embeddings" not in {c["id"] for c in _todo(client, "")["chores"]}
+
+
+def test_embeddings_with_recall_depth_zero_show_no_chore(client, campaign):
+    """It asks whether a connection and model are set, not whether recall
+    uses them: semantic matching in a sweep does not read the recall depth."""
+    _configure_embeddings(depth="0")
+    assert store.embed_space.resolve() is not None
+    assert "embeddings" not in {c["id"] for c in _todo(client, "")["chores"]}
+
+
+def test_a_raising_resolve_is_not_not_configured(client, campaign, monkeypatch):
+    def broken(*_a, **_kw):
+        raise OSError("the store is mid-sync")
+
+    monkeypatch.setattr(store.embed_space, "resolve", broken)
+    assert "embeddings" not in {c["id"] for c in _todo(client, "")["chores"]}
+
+
+def test_no_embeddings_still_shows_continuity_chores(client):
+    cid, _ = _run(client)
+    _seed(cid, ("possible_duplicate", [MAP, CHART]))
+    assert store.embed_space.resolve() is None
+    chore = _chore(client, cid, "continuity-overlaps")
+    assert chore is not None
+    assert {k: chore[k] for k in ("id", "scope", "group", "severity", "n", "what",
+                                  "fix", "fix_label")} == {
+        "id": "continuity-overlaps", "scope": "campaign", "group": "Continuity",
+        "severity": "note", "n": 1, "what": "1 possible overlap to review",
+        "fix": "/campaigns/run/ledger/continuity/overlaps", "fix_label": "Continuity review"}
+    assert chore["why"]
+    assert "embeddings" in {c["id"] for c in _todo(client, "")["chores"]}
+
+
+def test_continuity_counts_come_from_the_cache_after_the_live_filter(client):
+    """Live, suppressed, stale, merged-away and already-closed: one counts."""
+    cid, sid = _run(client)
+    _seed(cid,
+          ("possible_duplicate", [MAP, CHART]),
+          ("possible_duplicate", ["thread:seraphine-s-letter", "thread:seraphine-s-reply"]),
+          ("possible_duplicate", ["thread:saltmarch-bells", "thread:saltmarch-tide"]),
+          ("possible_duplicate", ["thread:realm-crown", "thread:the-coronation"]),
+          ("possible_thread_closure", ["thread:winifred-s-errand"]))
+    refs = ["thread:seraphine-s-letter", "thread:seraphine-s-reply"]
+    fp = pending.fingerprint(pending.Current.load(cid), "possible_duplicate", refs)
+    continuity_doc.put_suppression(cid, fp, {"kind": "possible_duplicate", "refs": refs,
+                                             "decision": "dismiss", "created": ""})
+    store.plot.set_movement(cid, "saltmarch-tide", "The Saltmarch spring tide", "", "", sid)
+    _alias(cid, "thread:realm-crown", "thread:mara-s-errand")
+    store.plot.set_movement(cid, "winifred-s-errand", "", "closed", "", sid)
+    assert len(candidates.read(cid)["records"]) == 5
+
+    for scope in (cid, ""):
+        chore = _chore(client, scope, "continuity-overlaps")
+        assert chore is not None
+        assert (chore["n"], chore["what"]) == (1, "1 possible overlap to review")
+        assert _chore(client, scope, "continuity-closures") is None
+
+
+def test_absent_cache_shows_no_continuity_chore(client):
+    cid, _ = _run(client)
+    assert not (store.campaigns.paths.campaign_root(cid) / "continuity_candidates.json").exists()
+    ids = {c["id"] for c in _todo(client, cid)["chores"]}
+    assert not ids & {"continuity-overlaps", "continuity-closures"}
+    assert _items(client, "continuity-overlaps", cid)["items"] == []
+
+
+class _Raising:
+    def __getattr__(self, name):
+        raise AssertionError("Todo must not reach an embeddings client")
+
+
+def test_todo_makes_no_embedding_calendar_or_client_call(client, monkeypatch):
+    """§25.4: the continuity chores read the cache through the live filter and
+    nothing else -- no embedding, calendar, involvement or chronicle work."""
+    cid, _ = _run(client)
+    _seed(cid, ("possible_duplicate", [MAP, CHART]),
+          ("possible_commitment_resolution", [OATH], _proposal("fulfilled")))
+
+    def refuse(*_a, **_kw):
+        raise AssertionError("Todo must not do this work")
+
+    monkeypatch.setattr(similarity, "_CLIENT", _Raising())
+    monkeypatch.setattr(store.calendars, "primary_provider", refuse)
+    monkeypatch.setattr(involvement, "of", refuse)
+    monkeypatch.setattr(store.chronicle, "read_chronicle", refuse)
+
+    for scope in (cid, ""):
+        ids = {c["id"] for c in _todo(client, scope)["chores"]}
+        assert {"continuity-overlaps", "continuity-closures"} <= ids
+    for chore_id in ("continuity-overlaps", "continuity-closures"):
+        assert _items(client, chore_id, cid)["total"] == 1
+
+
+def test_continuity_items_link_to_their_group_and_id(client):
+    """Review Focus 1: an item opens its own finding in its own group."""
+    cid, _ = _run(client)
+    pair, resolve = _seed(cid, ("possible_duplicate", [MAP, CHART]),
+                          ("possible_commitment_resolution", [OATH]))
+    [item] = _items(client, "continuity-overlaps", cid)["items"]
+    assert item["id"] == pair
+    assert item["fix"] == f"/campaigns/run/ledger/continuity/overlaps/{pair}"
+    assert "Mara's map" in item["label"] and "Winifred's chart" in item["label"]
+    [item] = _items(client, "continuity-closures", cid)["items"]
+    assert item["id"] == resolve
+    assert item["fix"] == f"/campaigns/run/ledger/continuity/resolutions/{resolve}"
+    assert item["label"] == "Mara's oath"
+
+
+def test_a_resolutions_only_closures_chore_opens_resolutions(client):
+    """The chore counts both lifecycle kinds; with no thread closure among them
+    it must not land the reader on an empty group."""
+    cid, _ = _run(client)
+    _seed(cid, ("possible_commitment_resolution", [OATH]))
+    chore = _chore(client, cid, "continuity-closures")
+    assert chore is not None
+    assert (chore["n"], chore["what"]) == (1, "1 record that may be finished")
+    assert chore["fix"] == "/campaigns/run/ledger/continuity/resolutions"
+
+    _seed(cid, ("possible_commitment_resolution", [OATH]),
+          ("possible_thread_closure", [MAP]))
+    chore = _chore(client, cid, "continuity-closures")
+    assert chore is not None
+    assert (chore["n"], chore["what"]) == (2, "2 records that may be finished")
+    assert chore["fix"] == "/campaigns/run/ledger/continuity/closures"
+
+
+def test_continuity_item_details_use_hedged_labels(client):
+    """Decision 25: a raw decision word never reaches the page."""
+    cid, _ = _run(client)
+    _seed(cid, ("possible_duplicate", [MAP, CHART], _proposal("duplicate")),
+          ("possible_thread_closure", ["thread:mara-s-errand"]))
+    [item] = _items(client, "continuity-overlaps", cid)["items"]
+    assert "Suggested: same business (merge)" in item["detail"]
+    assert "duplicate" not in item["detail"]
+    [item] = _items(client, "continuity-closures", cid)["items"]
+    assert item["detail"]
+    assert "Suggested" not in item["detail"]
+
+
+def test_owed_items_link_to_their_commitment_row(client):
+    cid, sid = _run(client)
+    store.commitments.set_movement(cid, "mara-s-oath", "", "", "", "2026-06-01", "", sid)
+    chore = _owed(client, cid)
+    assert chore is not None
+    assert chore["fix"] == "/campaigns/run/ledger/commitments"
+    [item] = _items(client, "owed", cid)["items"]
+    assert item["fix"] == "/campaigns/run/ledger/commitments/" + quote("mara-s-oath", safe="")
+
+
+def test_ledger_href_encodes_every_segment():
+    assert todo._ledger_href("run", "commitments", "mara/oath:2") == \
+        "/campaigns/run/ledger/commitments/mara%2Foath%3A2"
+    assert todo._ledger_href("a b", "continuity", "overlaps") == \
+        "/campaigns/a%20b/ledger/continuity/overlaps"
+    assert todo._ledger_href("run", "") == "/campaigns/run/ledger"
+
+
+def test_a_hand_edited_cache_leaves_the_todo_page_200(client):
+    cid, _ = _run(client)
+    [good] = _seed(cid, ("possible_duplicate", [MAP, CHART], _proposal("duplicate")))
+    path = store.campaigns.paths.campaign_root(cid) / "continuity_candidates.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    refs = ["thread:saltmarch-bells", "thread:saltmarch-tide"]
+    data["records"][canon.candidate_id("possible_duplicate", refs)] = {
+        "kind": "possible_duplicate", "refs": refs, "fingerprint": "hand-edited",
+        "signals": [], "proposal": {"decision": 3}, "created": ""}
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    for scope in (cid, ""):
+        chore = _chore(client, scope, "continuity-overlaps")
+        assert chore is not None and chore["n"] == 1
+    assert [i["id"] for i in _items(client, "continuity-overlaps", cid)["items"]] == [good]
+
+
+@pytest.mark.parametrize("chore_id", ["continuity-overlaps", "continuity-closures"])
+def test_chore_and_items_agree(client, chore_id):
+    cid, sid = _run(client)
+    _seed(cid,
+          ("possible_duplicate", [MAP, CHART]),
+          ("possible_duplicate", ["thread:saltmarch-bells", "thread:saltmarch-tide"]),
+          ("possible_duplicate", ["thread:realm-crown", "thread:the-coronation"]),
+          ("possible_thread_closure", ["thread:winifred-s-errand"]),
+          ("possible_thread_closure", ["thread:mara-s-errand"]),
+          ("possible_commitment_resolution", [OATH]))
+    store.plot.set_movement(cid, "saltmarch-tide", "The Saltmarch spring tide", "", "", sid)
+    store.plot.set_movement(cid, "winifred-s-errand", "", "closed", "", sid)
+    chore = _chore(client, cid, chore_id)
+    assert chore is not None
+    assert chore["n"] == _items(client, chore_id, cid)["total"] == 2
+
+
+def test_continuity_chores_can_be_ignored(client):
+    cid, _ = _run(client)
+    _seed(cid, ("possible_duplicate", [MAP, CHART]))
+    r = client.put("/api/todo/continuity-overlaps/ignored",
+                   json={"ignored": True, "campaign": cid})
+    assert r.status_code == 200, r.text
+    assert "continuity-overlaps" in {c["id"] for c in _todo(client, cid)["ignored"]}
+    assert client.put("/api/todo/embeddings/ignored",
+                      json={"ignored": True}).status_code == 200
+
+
+def test_unpriced_fix_opens_pricing(client, monkeypatch):
+    monkeypatch.setattr(store.usage, "unpriced_models",
+                        lambda: [{"model": "z-ai/glm", "calls": 3}])
+    chore = next(c for c in _todo(client, "")["chores"] if c["id"] == "unpriced")
+    assert chore["fix"] == "/config?section=pricing"
+    assert [i["fix"] for i in _items(client, "unpriced", "")["items"]] == [
+        "/config?section=pricing"]
