@@ -721,6 +721,11 @@ def settle(cid: str, candidate_id: str, record: dict, fingerprint: str,
     unsuppressed and the next refresh would bring it back. Suppressions are not
     journalled (§12.8). Returns the parts that landed; an `OSError` after one
     did is re-raised as `PartialSettleError` naming them.
+
+    A model-only finding set aside (`pending.model_only`) is not dropped: no
+    sweep would find it again, so the cache is the only place a restore can
+    bring it back from, proposal and all (§12.7). Its ``suppressed`` verdict
+    hides it, and the persists keep it while that holds.
     """
     landed: list[str] = []
     with locks.campaign_lock(cid):
@@ -730,6 +735,8 @@ def settle(cid: str, candidate_id: str, record: dict, fingerprint: str,
                     "kind": record["kind"], "refs": list(record["refs"]),
                     "decision": decision, "created": paths.now_iso()})
                 landed.append("suppression")
+                if pending.model_only(record):
+                    return landed
             if candidates.drop(cid, candidate_id) is not None:
                 landed.append("cache")
         except OSError as e:
@@ -765,8 +772,10 @@ def dismiss(cid: str, candidate_id: str, decision: str,
 
 
 def restore_suppression(cid: str, fp: str) -> dict:
-    """Undo a dismissal (§12.7): the finding comes back at the next refresh.
-    One atomic write, so a failure lands nothing."""
+    """Undo a dismissal (§12.7): a finding a sweep finds comes back at the next
+    refresh; a model-only one, which no sweep re-finds, was kept cached by
+    `settle` and is back at once with its proposal. One atomic write, so a
+    failure lands nothing."""
     with locks.campaign_lock(cid):
         _require_wellformed(cid, {"suppressions"})
         if fp not in doc.read(cid)["suppressions"]:

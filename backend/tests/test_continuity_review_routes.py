@@ -726,6 +726,79 @@ def test_restore_brings_the_finding_back_at_the_next_refresh(client):
     assert again.json()["kind"] == "not_found"
 
 
+def _restore_after_refresh(client, cid: str, key: str, decision: str) -> dict:
+    """Dismiss `key`, Refresh (a full sweep, which nominates no touched record
+    and asks nothing with no connection), restore, Refresh again; the listing."""
+    r = _dismiss(client, cid, key, {"decision": decision})
+    assert r.status_code == 200, r.text
+    fp = r.json()["fingerprint"]
+    _sweep(cid)
+    assert key not in _listed(client, cid)
+    r = client.delete(f"/api/campaigns/{cid}/continuity/suppressions/{fp}")
+    assert r.status_code == 200, r.text
+    _sweep(cid)
+    return _listed(client, cid)
+
+
+@pytest.mark.parametrize("decision", ["dismiss", "keep_open"])
+def test_a_restored_touched_closure_comes_back_with_its_proposal(client, decision):
+    """§12.7 for a model-only finding (Decision 9): a touched re-check is
+    nominated only by an incremental sweep, so no Refresh can find it again.
+    Setting it aside keeps it cached, hidden by its ``suppressed`` verdict, and
+    a restore brings it back with the proposal the model was paid for."""
+    cid, sid = _campaign(client)
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "The map turned up in Saltmarch.", sid)
+    sweep = _sweep(cid, full=False, touched=[MAP])
+    closure = _proposal("close", status="closed", reason="The map was found.",
+                        evidence_scenes=[sid])
+    reconcile.persist_proposals(cid, sweep, {CLOSE_MAP: closure})
+    assert CLOSE_MAP in _listed(client, cid)
+
+    listed = _restore_after_refresh(client, cid, CLOSE_MAP, decision)
+
+    assert CLOSE_MAP in listed
+    assert candidates.read(cid)["records"][CLOSE_MAP]["proposal"] == closure
+
+
+def test_a_restored_temporal_pair_comes_back_without_a_connection(client):
+    """A temporal pair lands only with a proposal (Decision 9), so with no
+    connection a Refresh never persists it again: the restore must find it
+    still cached."""
+    cid, sid = _campaign(client)
+    store.clock.advance(cid, to="2026-05-10")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "before the bells stop", "Mara swore it.", sid)
+    event = "event:" + store.events.create(cid, "The coronation", "2026-05-13")
+    key = canon.candidate_id("possible_relation", [OATH, event])
+    sweep = _sweep(cid)
+    assert key in sweep.model_only
+    reconcile.persist_proposals(cid, sweep, {key: _proposal(
+        "before", **{"from": OATH, "to": event}, relation="before",
+        reason="The oath falls before the coronation.")})
+
+    assert key in _restore_after_refresh(client, cid, key, "dismiss")
+
+
+def test_a_dismissed_model_only_finding_whose_record_moved_is_dropped(client):
+    """Kept only while its dismissal holds: once the record moves, the old
+    question is not the reader's any more, and the next persist drops it
+    rather than surfacing it."""
+    cid, sid = _campaign(client)
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "The map turned up in Saltmarch.", sid)
+    sweep = _sweep(cid, full=False, touched=[MAP])
+    reconcile.persist_proposals(cid, sweep, {CLOSE_MAP: _proposal(
+        "close", status="closed", reason="The map was found.", evidence_scenes=[sid])})
+    assert _dismiss(client, cid, CLOSE_MAP, {"decision": "dismiss"}).status_code == 200
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "Mara folded the map away.", sid)
+
+    _sweep(cid)
+
+    assert CLOSE_MAP not in candidates.read(cid)["records"]
+
+
 def test_get_continuity_marks_suppressions_live(client):
     """§12.7: a dismissal for records that have since changed suppresses
     nothing, and the read says so."""

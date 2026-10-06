@@ -4,8 +4,10 @@
  *  Only dismissals that still name their records as they are (`live`): one
  *  whose records have since changed no longer suppresses anything -- its
  *  finding, if it is still one, comes back on its own -- so listing it would
- *  offer a Restore that restores nothing. A restored finding reappears at the
- *  next refresh, not at once: the sweep is what finds it again.
+ *  offer a Restore that restores nothing. A restored finding a sweep finds
+ *  reappears at the next refresh; a model-only one (a touched re-check, a
+ *  temporal pair), which no sweep re-finds, stayed cached while it was set
+ *  aside and is back at once.
  */
 import type { ContinuityState } from "../../api/client";
 import { SUPPRESSION_LABELS } from "./labels";

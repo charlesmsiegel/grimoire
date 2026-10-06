@@ -1212,7 +1212,7 @@ Every entry speaks in words, never in store tokens (Slice G plan, Decision 12). 
 
 ## 12.7 Dismissed group
 
-This group lists suppressions whose fingerprint still matches current records. That `live` flag is computed on read; suppressions for records that have since changed are not shown, because they no longer suppress anything. Each entry has a resolved label and a **Restore** action (`DELETE /continuity/suppressions/{fingerprint}`). Restored candidates reappear at the next refresh.
+This group lists suppressions whose fingerprint still matches current records. That `live` flag is computed on read; suppressions for records that have since changed are not shown, because they no longer suppress anything. Each entry has a resolved label and a **Restore** action (`DELETE /continuity/suppressions/{fingerprint}`). Restored candidates reappear at the next refresh. A model-only finding (Decision 9: a touched re-check or a temporal pair) is one no sweep re-finds, so setting it aside keeps it cached, hidden by its `suppressed` verdict while the dismissal holds, and a restore brings it back at once with its proposal.
 
 ## 12.8 Journalling
 
