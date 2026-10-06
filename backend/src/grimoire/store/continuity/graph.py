@@ -14,9 +14,10 @@ code that can do anything, including wait -- must never run under that hold
 (spec §11.1; D's reconcile and B's drivers route keep the same rule).
 
 - (A) `_temporal`, outside the hold: the primary provider, `pressure.build`,
-  one `_probe` of the present through the provider and the chooser's
-  `drivers.snapshot` over that same pressure result (later the event list),
-  each of which can run plugin code.
+  one `_probe` of the present through the provider, the chooser's
+  `drivers.snapshot` over that same pressure result, and the event list
+  (`events.list_events` dates each row through the provider), each of which
+  can run plugin code.
 - (B) `_files`, inside one `best_effort_campaign_lock` hold: every campaign file
   the graph projects. Best effort, never `campaign_lock`, because a read that
   can raise `StoreBusy` is a new way for opening a page to fail (§19.7,
@@ -25,8 +26,9 @@ code that can do anything, including wait -- must never run under that hold
   best-effort reader, and refusing would turn a read into an error.
 - (C) `_names` and `_assemble`, outside again: the roster summaries that label
   actors and locations, then the per-row `calendars.fixed_of` /
-  `calendars.friendly` on scene dates (plugin code, so never inside `_files`
-  beside the list they derive from), then one private builder per family.
+  `calendars.friendly` on scene, event and idea dates (plugin code, so never
+  inside `_files`
+  beside the lists they derive from), then one private builder per family.
 
 **Play order is the sorted scene ids**, `timeline.build`'s rule: the scene id
 grammar puts the number first so lexicographic filename order equals play
@@ -61,10 +63,19 @@ equal.
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any, TypeVar
 
-from .. import calendars, chronicle, fieldtext, locks, overlay, relationships
+from .. import (
+    calendars,
+    chronicle,
+    events,
+    fieldtext,
+    locks,
+    overlay,
+    relationships,
+    scene_ideas,
+)
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 from . import canon, drivers, effective, involvement, pressure
@@ -102,6 +113,10 @@ _RECORD_PARTS = (("thread", "plot"), ("commitment", "commitments"))
 #: Per record kind, the movement edge kinds (Decision 8): opened, moved, done.
 _MOVEMENTS = {"thread": ("opened_in", "advanced_in", "closed_in"),
               "commitment": ("opened_in", "touched_in", "resolved_in")}
+
+#: The pressure item kinds that become occurrence nodes (Decision 11): only
+#: what pressure dated inside its horizon, never a ref parsed back apart.
+_OCCURRENCE_KINDS = ("holiday", "birthday")
 
 #: A commitment's dated fields when it carries no deadline item.
 _UNDATED = {"native": "", "friendly": "", "fixed": None, "in_days": None}
@@ -205,8 +220,25 @@ def _temporal(cid: str, omitted: set[str]) -> dict:
     # use, so "Focus" and "Anchor" never offer a ref the chooser would drop.
     snapshot: dict = _attempt(omitted, "calendar",
                               lambda: drivers.snapshot(cid, pressure_result=p), _NO_SNAPSHOT)
+    rows, event_provider = _events(cid, provider, p, omitted)
     return {"provider": provider, "pressure": p,
-            "snapshot": snapshot if isinstance(snapshot, dict) else _NO_SNAPSHOT}
+            "snapshot": snapshot if isinstance(snapshot, dict) else _NO_SNAPSHOT,
+            "events": rows, "event_provider": event_provider}
+
+
+def _events(cid: str, provider, p, omitted: set[str]) -> tuple[list[dict], Any]:
+    """Every stored event through `events.list_events`, whose `passed` reading
+    is reused rather than restated, and the provider its rows are dated by.
+    A call that raises falls back to the provider-less list -- every event
+    undated, none dated by guesswork -- and reports "calendar"."""
+    now_fixed = _int_or_none(p.get("fixed")) if isinstance(p, dict) else None
+    rows: list[dict] | None = _attempt(omitted, "calendar", events.list_events, None, cid,
+                                       provider, now_fixed)
+    if rows is None:
+        provider = None
+        none: list[dict] = []
+        rows = _attempt(omitted, "events", events.list_events, none, cid)
+    return (rows if isinstance(rows, list) else []), provider
 
 
 # ---- phase B: campaign files, inside one hold -------------------------------
@@ -258,10 +290,13 @@ def _files(cid: str, omitted: set[str]) -> dict:
             omitted.add("chronicle")
         # `read` raises on bad JSON, and on a list top level from `setdefault`.
         rels: dict = _attempt(omitted, "relationships", relationships.read, {}, cid)
+        # `records` raises on a file whose top level is not an object.
+        ideas: list[dict] = _attempt(omitted, "scene_ideas", scene_ideas.records, [], cid)
     # Valid JSON of the wrong shape arrives without raising.
     return {"scenes": scenes, "chronicle": chron if isinstance(chron, dict) else {},
             "histories": histories, "actors": actors if isinstance(actors, dict) else {},
             "relationships": rels if isinstance(rels, dict) else {},
+            "ideas": ideas if isinstance(ideas, list) else [],
             "ledgers": ledgers, **recs}
 
 
@@ -409,25 +444,43 @@ def _actor_parts(files: dict, names: dict[str, str]) -> tuple[list, list]:
     return [_actor_node(a, names) for a in sorted(actors)] + place_nodes, edges
 
 
-def _drivers_by_ref(temporal: dict) -> dict[str, dict]:
-    """The chooser's thread and commitment drivers, by ref."""
+def _drivers_by_ref(temporal: dict,
+                    kinds: tuple[str, ...] = effective.ALIASABLE) -> dict[str, dict]:
+    """The chooser's drivers of `kinds` (by default threads and commitments),
+    by ref."""
     found = temporal["snapshot"].get("drivers")
     return {d["ref"]: d for d in (found if isinstance(found, list) else ())
-            if isinstance(d, dict) and d.get("kind") in effective.ALIASABLE}
+            if isinstance(d, dict) and d.get("kind") in kinds}
+
+
+def _anchor_refs(temporal: dict) -> set[str]:
+    """The refs the chooser accepts as a date anchor (`drivers.snapshot`'s
+    `anchors`), so "Anchor" is never offered on one it would drop."""
+    found = temporal["snapshot"].get("anchors")
+    return {a["ref"] for a in (found if isinstance(found, list) else ())
+            if isinstance(a, dict) and isinstance(a.get("ref"), str)}
+
+
+def _items(temporal: dict) -> list[dict]:
+    p = temporal["pressure"]
+    items = p.get("items") if isinstance(p, dict) else None
+    return [i for i in (items if isinstance(items, list) else ()) if isinstance(i, dict)]
+
+
+def _item_dated(item: dict) -> dict:
+    """A pressure item's four dated fields, as pressure computed them."""
+    return {"native": fieldtext.text(item.get("native")),
+            "friendly": fieldtext.text(item.get("friendly")),
+            "fixed": _int_or_none(item.get("fixed")),
+            "in_days": _int_or_none(item.get("in_days"))}
 
 
 def _deadline(temporal: dict, ref: str) -> dict:
     """A commitment's dated fields from its own deadline item: the pressure
     item whose subject it is and whose relation is not `after` (at most one)."""
-    p = temporal["pressure"]
-    items = p.get("items") if isinstance(p, dict) else None
-    for item in items if isinstance(items, list) else ():
-        if isinstance(item, dict) and item.get("subject") == ref \
-                and item.get("relation") != "after":
-            return {"native": fieldtext.text(item.get("native")),
-                    "friendly": fieldtext.text(item.get("friendly")),
-                    "fixed": _int_or_none(item.get("fixed")),
-                    "in_days": _int_or_none(item.get("in_days"))}
+    for item in _items(temporal):
+        if item.get("subject") == ref and item.get("relation") != "after":
+            return _item_dated(item)
     return dict(_UNDATED)
 
 
@@ -515,6 +568,105 @@ def _record_parts(files: dict, temporal: dict, names: dict[str, str]) -> tuple[l
     return nodes, edges
 
 
+def _event_status(row: dict, fixed: int | None) -> str:
+    """`EVENT_STATUSES`, first match: a fire stamp, `events`' own `passed`
+    reading, a day nobody can name, else scheduled."""
+    if row.get("fired"):
+        return "fired"
+    if row.get("passed"):
+        return "passed"
+    return "undated" if fixed is None else "scheduled"
+
+
+def _event_nodes(temporal: dict, anchors: set[str], omitted: set[str]) -> list[dict]:
+    """Every stored event -- fired, passed and undated ones too (Decision 10).
+    Its pressure is its driver's reading, which only an unfired event (or one
+    fired today) has; `findings` is filled by the review family."""
+    readings = _drivers_by_ref(temporal, ("event",))
+    dating = {**temporal, "provider": temporal["event_provider"]}
+    nodes = []
+    for row in temporal["events"]:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            continue
+        ref = f"event:{row['id']}"
+        dated = _dated(dating, fieldtext.text(row.get("date")), omitted)
+        reading = readings.get(ref, {}).get("pressure")
+        nodes.append({"id": ref, "kind": "event",
+                      "label": fieldtext.text(row.get("name")) or row["id"], **dated,
+                      "status": _event_status(row, dated["fixed"]),
+                      "pressure": dict(reading) if isinstance(reading, dict) else None,
+                      "anchorable": ref in anchors, "findings": []})
+    return nodes
+
+
+def _occurrence_node(item: dict, anchors: set[str]) -> dict:
+    ref = item["ref"]
+    node = {"id": ref, "kind": item["kind"], "label": fieldtext.text(item.get("label")),
+            **_item_dated(item),
+            "pressure": {"state": item.get("state"),
+                         "in_days": _int_or_none(item.get("in_days")),
+                         "friendly": fieldtext.text(item.get("friendly"))},
+            "anchorable": ref in anchors}
+    if item["kind"] == "birthday":
+        actor = item.get("actor")
+        node.update(actor=actor if isinstance(actor, str) else None,
+                    precision=item.get("precision"), age=_int_or_none(item.get("age")))
+    return node
+
+
+def _temporal_parts(temporal: dict, names: dict[str, str],
+                    omitted: set[str]) -> tuple[list, list]:
+    """Events, and the holiday and birthday occurrences pressure dated inside
+    its horizon (Decision 11), with `birthday_of` to each birthday's actor."""
+    anchors = _anchor_refs(temporal)
+    nodes, edges = _event_nodes(temporal, anchors, omitted), []
+    for item in _items(temporal):
+        if item.get("kind") not in _OCCURRENCE_KINDS or not isinstance(item.get("ref"), str):
+            continue
+        node = _occurrence_node(item, anchors)
+        nodes.append(node)
+        actor = node.get("actor")
+        if isinstance(actor, str) and _actor_kind(actor) is not None:
+            nodes.append(_actor_node(actor, names))
+            edges.append(_edge("birthday_of", node["id"], actor))
+    return nodes, edges
+
+
+def _idea_edges(ref: str, idea: dict, live: dict[str, str],
+                node_ids: Collection[str]) -> list[dict]:
+    """Decision 12: `serves` to each stored driver's live canonical and
+    `anchored_to` the stored anchor, each only when its target is a node; one
+    edge per target, the first stored entry winning."""
+    served: dict[str, str] = {}
+    for d in idea.get("drivers") or ():
+        target = live.get(d["ref"], d["ref"])
+        if target in node_ids:
+            served.setdefault(target, d["action"])
+    edges = [_edge("serves", ref, target, relation=action) for target, action in served.items()]
+    anchor = idea.get("time_anchor")
+    if isinstance(anchor, dict) and anchor.get("ref") in node_ids:
+        edges.append(_edge("anchored_to", ref, anchor["ref"], relation=anchor.get("relation")))
+    return edges
+
+
+def _idea_parts(files: dict, temporal: dict, live: dict[str, str],
+                node_ids: Collection[str], omitted: set[str]) -> tuple[list, list]:
+    """Active saved ideas only (Decision 6): a used idea is already a scene on
+    the spine, and a dismissed one is the reader's own "no". An idea keeps its
+    stored `time_anchor` even when the anchor has no node to draw to."""
+    nodes, edges = [], []
+    for idea in files["ideas"]:
+        if not isinstance(idea, dict) or idea.get("status") != scene_ideas.ACTIVE:
+            continue
+        ref = f"idea:{idea['id']}"
+        nodes.append({"id": ref, "kind": "idea", "label": idea["title"],
+                      "premise": idea["premise"], "source": idea["source"],
+                      "pcless": idea["pcless"], "time_anchor": idea.get("time_anchor"),
+                      **_dated(temporal, fieldtext.text(idea.get("date")), omitted)})
+        edges += _idea_edges(ref, idea, live, node_ids)
+    return nodes, edges
+
+
 def _node_key(node: dict) -> tuple:
     kind = node["kind"]
     return (NODE_KINDS.index(kind), node.get("order", 0) if kind == "scene" else 0, node["id"])
@@ -526,13 +678,18 @@ def _edge_key(edge: dict) -> tuple:
 
 def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
               omitted: set[str]) -> dict:
+    nodes: dict[str, dict] = {}
+    edges: dict[str, dict] = {}
+    # Families run in order, and `nodes.keys()` is a live view: a family that
+    # keeps an edge only when its target is a node (ideas) runs after every
+    # family whose nodes it may name.
     families: tuple[tuple[str, Callable[..., tuple[list, list]], tuple], ...] = (
         ("scenes", _scene_nodes, (temporal, files, omitted)),
         ("chronicle", _actor_parts, (files, names)),
         ("plot", _record_parts, (files, temporal, names)),
+        ("events", _temporal_parts, (temporal, names, omitted)),
+        ("scene_ideas", _idea_parts, (files, temporal, files["live"], nodes.keys(), omitted)),
     )
-    nodes: dict[str, dict] = {}
-    edges: dict[str, dict] = {}
     for part, builder, args in families:
         built: tuple[list, list] = _attempt(omitted, part, builder, ([], []), *args)
         built_nodes, built_edges = built
