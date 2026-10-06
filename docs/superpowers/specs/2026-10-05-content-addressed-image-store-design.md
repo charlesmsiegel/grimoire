@@ -1483,8 +1483,9 @@ they refine §10, and where they differ from the text above, they win.
   placement step). For another world the key stays in the greeting's
   `subjects.json` (R11). Format-1 keys are unchanged.
 - **C7, greeting tiles and copy.** `greeting_images.local_path` and a
-  target-aware `local_target` resolve a member URL through
-  `image_collections.member_path`; `routes/greetings._greeting_image_urls`
+  target-aware `local_target` resolve a member URL by reading the manifest
+  and resolving the member's ref (`resolve_ref`, as C2 allows; `member_path`
+  returns no id, so a shared member primitive is a later refactor); `routes/greetings._greeting_image_urls`
   gives a member row a `v`, a `thumb` and an `image_id`; and
   `image_subjects.copy_to_character` links by object id for an object target.
 - **C8, export.** `export._COLLECTION_URL` also matches

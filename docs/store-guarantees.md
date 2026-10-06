@@ -469,7 +469,7 @@ collector exists yet, so for now the second lock only serializes ingests.
 ### Collections: members by id
 
 A collection is an immutable, ordered manifest under the world,
-`<world>/image-collections/<id>.json`. Two formats are read and only one is
+`<world>/assets/image-collections/<id>.json`. Two formats are read and only one is
 written. **Format 1**, left by an older grimoire, names world-library images
 (`collection-image-<sha256>`) and is served under the library's URLs. **Format
 2**, the only one written now, is `{"format": 2, "members": [<image id>, ...]}`:
@@ -497,8 +497,8 @@ library URLs, and the member route serves a format-1 index too.
 publication and the library-name checks that read manifests;
 `locks.image_collection_job_lock(wid, job)` serializes one transient harvest
 journal. The order is the job lock, then the collection lock, then any image
-lock (the two leaf locks above), never the reverse. A world's two spellings
-on a case-insensitive volume share both locks
+lock (the two leaf locks above), never the reverse. On Windows a world's two
+spellings share both locks
 (`test_windows_world_aliases_share_both_locks`).
 
 **The library guard is retired by condition.** `guard_write` and
