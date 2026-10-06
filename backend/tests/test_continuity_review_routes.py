@@ -27,6 +27,7 @@ from grimoire.store.continuity import (
     candidates,
     canon,
     doc,
+    effective,
     pending,
     pressure,
     reconcile,
@@ -387,6 +388,78 @@ def test_pressure_is_computed_outside_the_hold(client, monkeypatch):
     found = _listed(client, cid)[PAIR]
     assert calls == [cid]
     assert {row["pressure"]["state"] for row in found["records"]} == {"ok"}
+
+
+def _no_join(monkeypatch) -> list[str]:
+    """Make every part of the join fail loudly, and record what was reached.
+    `pressure_by_ref` swallows its own failures, so `pressure.build` records
+    rather than relying on the raise to surface."""
+    reached: list[str] = []
+
+    def refuse(name):
+        def call(*_a, **_k):
+            reached.append(name)
+            raise AssertionError(f"an empty cache must not reach {name}")
+        return call
+
+    monkeypatch.setattr(pressure, "build", refuse("pressure.build"))
+    monkeypatch.setattr(reconcile, "pressure_by_ref", refuse("pressure_by_ref"))
+    monkeypatch.setattr(pending.Current, "load", refuse("Current.load"))
+    monkeypatch.setattr(pending, "findings", refuse("findings"))
+    monkeypatch.setattr(store.scenes, "list_scenes", refuse("list_scenes"))
+    return reached
+
+
+def test_an_empty_cache_answers_without_the_join(client, monkeypatch):
+    """The Ledger mounts this read for every section and re-reads it on every
+    write, so a campaign no sweep has found anything in must not pay for the
+    join: no pressure pass (user calendar-plugin code, aging over every
+    thread), no current view, no scene list. What the top level reports with
+    no findings still answers -- the diagnostics (a dangling alias is there
+    whether or not a sweep ran), the cache's own flags, the live run."""
+    cid, sid = _campaign(client)
+    _threads(cid, sid)
+    doc.put_alias(cid, MAP, {"to": "thread:gone", "created": "", "source": "manual",
+                             "note": ""})
+    expected_diagnostics = {**effective.diagnostics(cid),
+                            "malformed": [], "cache_malformed": False}
+    assert expected_diagnostics["dangling_aliases"]
+    reached = _no_join(monkeypatch)
+
+    body = _read(client, cid)
+
+    assert reached == []
+    assert body == {"generated": "", "matching": "basic",
+                    "diagnostics": expected_diagnostics, "run": None,
+                    "names": {}, "scenes": [], "candidates": []}
+
+
+def test_a_swept_cache_with_no_findings_still_says_when(client, monkeypatch):
+    """A sweep whose last finding went away leaves a cache with a stamp and no
+    records: the read reports the stamp, and pays for no join either."""
+    cid, _sid = _campaign(client)
+    stamp = "2026-10-01T09:00:00+00:00"
+    candidates.write(cid, {**candidates.empty(), "generated": stamp})
+    assert not candidates.read(cid)["records"]
+    reached = _no_join(monkeypatch)
+
+    body = _read(client, cid)
+
+    assert reached == []
+    assert (body["generated"], body["candidates"]) == (stamp, [])
+
+
+def test_an_unreadable_cache_reads_as_empty_and_says_so(client, monkeypatch):
+    cid, _sid = _campaign(client)
+    (_root(cid) / "continuity_candidates.json").write_text("{not json", encoding="utf-8")
+    assert candidates.malformed(cid)
+    reached = _no_join(monkeypatch)
+
+    body = _read(client, cid)
+
+    assert reached == []
+    assert body["diagnostics"]["cache_malformed"] is True
+    assert body["candidates"] == []
 
 
 # ---------------------------------------------------------------- applying
