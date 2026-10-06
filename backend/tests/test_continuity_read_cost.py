@@ -246,6 +246,11 @@ def test_read_paths_read_each_file_a_constant_number_of_times(client, monkeypatc
     small, large = (_measure(client, monkeypatch, n, read) for n in SIZES)
     for key in WHOLE:
         assert _total(large[key]) == _total(small[key]), (route, key, small[key], large[key])
+    # `list_scenes` reads every scene's frontmatter head (`_scene_row`), not
+    # through a PER_SCENE reader, so a sweep per record or finding grows with
+    # the campaign while every per-scene maximum above stays put.
+    assert _total(large["list_scenes"]) == _total(small["list_scenes"]), (
+        route, small["list_scenes"], large["list_scenes"])
     for key in PER_SCENE:
         assert max(large[key].values(), default=0) == max(small[key].values(), default=0), (
             route, key, small[key], large[key])
