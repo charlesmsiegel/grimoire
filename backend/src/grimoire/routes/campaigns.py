@@ -992,12 +992,15 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
         # "no key" -- that is the store's own rule, not a normalization.
         return store.fork.fork_campaign(cid, name, from_scene,
                                         key=body.idempotency_key,
-                                        expect_revision=body.expect_revision)
+                                        expect_revision=body.expect_revision,
+                                        from_index=body.from_index)
+    except IndexError as e:                     # a `from_index` outside the scene
+        raise HTTPException(status_code=400, detail="message index out of range") from e
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except store.SceneNotFound:
         raise HTTPException(status_code=404, detail="scene not found")
-    except ValueError as e:                     # a key past `fork.KEY_LIMIT`
+    except ValueError as e:     # a key past `fork.KEY_LIMIT`, a `from_index` without a scene
         raise HTTPException(status_code=400, detail=str(e)) from e
     except store.fork.ForkContentionError as e:
         # Every id this fork computed was taken by another writer before it

@@ -737,3 +737,83 @@ def test_every_book_format_names_the_player_rather_than_you(monkeypatch, tmp_pat
     text = export.build_text(cid)[0].decode()
     assert "**Elara Vane:** I step off the boat." in text
     assert "You:" not in text
+
+
+# --- a post hidden from context: kept, and marked -----------------------------
+
+def _hidden_scene(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The Pier")
+    scenes.append_message(cid, sid, "user", "hi")
+    scenes.append_message(cid, sid, "user", "ooc: brb")
+    scenes.set_excluded(cid, sid, 1, True)
+    return cid, sid
+
+
+def test_every_export_marks_an_excluded_post(monkeypatch, tmp_path):
+    from grimoire.store import epub
+
+    cid, _sid = _hidden_scene(monkeypatch, tmp_path)
+    md = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0]))
+    chapter = next(n for n in md.namelist() if n != "index.md" and not n.startswith("images/"))
+    text = md.read(chapter).decode()
+    assert "*(not in context)*\nooc: brb" in text
+    assert "*(not in context)*\nhi" not in text
+    assert "*(not in context)*\nooc: brb" in export.build_text(cid)[0].decode()
+    html = export.build_html(cid)[0].decode()
+    assert 'class="excluded"' in html and "not in context" in html
+    assert html.count('class="excluded"') == 1
+    doc = json.loads(export.build_json(cid)[0])
+    assert doc["scenes"][0]["messages"][1]["excluded"]
+    assert "excluded" not in doc["scenes"][0]["messages"][0]
+    book = zipfile.ZipFile(io.BytesIO(epub.build_epub(cid)[0]))
+    pages = [book.read(n).decode() for n in book.namelist() if n.endswith(".xhtml")]
+    assert any('class="excluded"' in p and "not in context" in p for p in pages)
+
+
+def test_an_unflagged_chapter_carries_no_excluded_key(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The Pier")
+    scenes.append_message(cid, sid, "user", "hi")
+    assert all("excluded" not in m for m in export.collect(cid)["chapters"][0]["messages"])
+
+
+def test_a_closed_branch_is_not_a_chapter(monkeypatch, tmp_path):
+    """A book holds one past: the sibling of an absorbed scene is left out."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    a = scenes.create_scene(cid, "Mara")
+    b = scenes.create_scene(cid, "Winifred")
+    for sid in (a, b):
+        scenes.append_message(cid, sid, "user", "Mara waits.")
+    g = scenes.ensure_identity(cid, a)
+    scenes.write.set_branch_keys(cid, b, g, of=g)
+    scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
+    chapters = export.collect(cid)["chapters"]
+    assert len(chapters) == 1
+
+
+def test_the_json_dump_keeps_a_closed_branch(monkeypatch, tmp_path):
+    """The JSON dump is the nearest-to-disk export, so `scenes` holds every
+    scene on disk, a closed branch included -- marked `closed_by`, so a reader
+    can tell what the book left out. `contents` is the book's table of
+    contents, so it numbers exactly the scenes `collect` makes chapters of."""
+    _, cid = _campaign(monkeypatch, tmp_path)
+    a = scenes.create_scene(cid, "Mara")
+    b = scenes.create_scene(cid, "Winifred")
+    c = scenes.create_scene(cid, "Seraphine")
+    for sid in (a, b, c):
+        scenes.append_message(cid, sid, "user", "Mara waits.")
+    g = scenes.ensure_identity(cid, a)
+    scenes.write.set_branch_keys(cid, b, g, of=g)
+    scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
+    payload = json.loads(export.build_json(cid)[0].decode())
+
+    assert [s["meta"]["id"] for s in payload["scenes"]] == sorted([a, b, c])
+    closed = {s["meta"]["id"]: s["meta"].get("closed_by") for s in payload["scenes"]}
+    assert closed[b] == {"sid": a, "title": "Mara"}
+    assert closed[a] is None and closed[c] is None
+
+    chapters = export.collect(cid)["chapters"]
+    assert [(row["number"], row["title"]) for row in payload["contents"]] == \
+        [(ch["number"], ch["title"]) for ch in chapters]
+    assert [row["id"] for row in payload["contents"]] == [a, c]

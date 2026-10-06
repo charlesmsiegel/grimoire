@@ -59,6 +59,7 @@ def post_scene_roll(cid: str, sid: str, body: RollBody, request: Request):
         # the narration ignored. Inside the hold, so a send cannot reserve
         # between the check and the append.
         runs.require_scene_free(request.app, cid, sid)
+        runs.require_scene_open(cid, sid)
         entry = store.rolls.append(cid, sid, label, result)
         store.scenes.append_message(cid, sid, "assistant", line,
                                     speaker=store.scenes.ROLL_SPEAKER)
@@ -366,6 +367,7 @@ def post_scene_check(cid: str, sid: str, body: CheckBody, request: Request):
     with store.locks.campaign_lock(cid):
         # Appends the 🎲 line, so the same refusal as the manual roll above.
         runs.require_scene_free(request.app, cid, sid)
+        runs.require_scene_open(cid, sid)
         entry = store.rolls.append(cid, sid, store.checks.roll_label(resolution),
                                    resolution["result"],
                                    tier=resolution.get("tier"))

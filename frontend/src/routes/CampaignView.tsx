@@ -11,7 +11,7 @@ import {
   type CampaignBudget,
   type IncomingRef,
   type SceneUsage,
-  type TrackerSummary, type UsagePostBucket,
+  type TrackerSummary, type UsagePostBucket, type QuickReply, type QuickReplyTask,
 } from "../api/client";
 import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -57,6 +57,8 @@ import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
 import GroupPanel from "../components/play/GroupPanel";
 import ReplyChips from "../components/play/ReplyChips";
+import { QuickReplyStrip } from "../components/QuickReplyStrip";
+import type { QuickReplyContext } from "../components/quickReplies";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
@@ -66,7 +68,10 @@ import { RegexTestDialog, type RegexTestTarget } from "../components/play/RegexT
 import {
   DIRECTOR_LABEL, DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER, TranscriptRun,
   type TranscriptActions, type TranscriptContext, type TranscriptReroll, type TranscriptRunData,
+  type TranscriptVariantSwipe,
 } from "../components/play/TranscriptPost";
+import { useResponseSwipe } from "../components/play/useResponseSwipe";
+import { swipeTitle } from "../components/play/swipeTitle";
 
 // The transcript's four kinds of line — a roll, a transition, a director note
 // and what a shown note is labelled — are defined beside the row that renders
@@ -216,6 +221,11 @@ function useStableHandlers<T extends { [K in keyof T]: (...args: never[]) => voi
     return out as T;
   });
   return stable;
+}
+
+/** A manual task in flight: which surface started it, in which scene. */
+function taskKey(origin: "strip" | "inspector", cid: string, sid: string, task: string): string {
+  return `${origin}:${cid}/${sid}:${task}`;
 }
 
 export default function CampaignView({ ready }: { ready: boolean }) {
@@ -635,7 +645,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // whenever the view stops being busy.
   const [roundProgress, setRoundProgress] = useState<{ index: number; of: number } | null>(null);
   useEffect(() => { if (!busy) setRoundProgress(null); }, [busy]);
-  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string }[]>([]);
+  const [streamingSpeakers, setStreamingSpeakers] = useState<{ id: string; speaker: string; actor_ref?: string; offset: number; ended?: boolean; thinking?: string; seed?: string }[]>([]);
   const [characterPassage, setCharacterPassage] = useState<{ cid: string; sid: string; rid: string; source: string } | null>(null);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   /** The whole dossier feature. `null` is the cast grid; a ref is one actor's
@@ -773,6 +783,55 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the dice button renders on `true` only, so a control never appears and then
   // vanishes a moment later once the read lands.
   const [moduleBound, setModuleBound] = useState<boolean | null>(null);
+  // The composer's quick replies: the campaign's effective set (world replies
+  // with the campaign's layered on), read per campaign. Tagged with the
+  // campaign it was read for, so a set still on screen across a campaign
+  // switch is never offered for the new one.
+  const [quickSet, setQuickSet] = useState<{ cid: string; replies: QuickReply[] } | null>(null);
+  // What the last quick reply has to say -- a declined fold, a failed roll --
+  // scoped to the scene it was tapped in.
+  const [quickNotice, setQuickNotice] =
+    useState<{ cid: string; sid: string; text: string } | null>(null);
+  // The two manual tasks in flight, from the strip or the inspector, keyed
+  // `${origin}:${cid}/${sid}:${task}` -- so the same task is never started
+  // twice from two surfaces, and a run in one scene never holds another's.
+  // Bumped by an `opener` quick reply: the cast panel expands and focuses its
+  // opener prompt (see `CastPanel`'s `openerRequest`).
+  const [openerRequest, setOpenerRequest] = useState(0);
+  const [taskBusy, setTaskBusy] = useState<Record<string, true>>({});
+  const markTask = useCallback((key: string, on: boolean) => {
+    setTaskBusy((cur) => {
+      if (on === !!cur[key]) return cur;
+      const next = { ...cur };
+      if (on) next[key] = true;
+      else delete next[key];
+      return next;
+    });
+  }, []);
+  useEffect(() => {
+    let live = true;
+    api.getEffectiveQuickReplies(cid)
+      .then((b) => { if (live) setQuickSet({ cid, replies: b.replies }); })
+      // A set that cannot be read is a strip that is not there, not a page
+      // that is broken.
+      .catch(() => { if (live) setQuickSet({ cid, replies: [] }); });
+    return () => { live = false; };
+  }, [cid]);
+  const stripSummary = !!activeId && !!taskBusy[taskKey("strip", cid, activeId, "rolling_summary")];
+  const stripBreak = !!activeId && !!taskBusy[taskKey("strip", cid, activeId, "scene_break")];
+  // Stable unless one of the two flags moves: the inspector is memoized.
+  const stripTasks = useMemo(() => ({ rolling_summary: stripSummary, scene_break: stripBreak }),
+    [stripSummary, stripBreak]);
+  // Keyed on the scene it was handed to, so a run the inspector started in one
+  // scene clears its own flag even after the reader has moved on.
+  const onInspectorTaskBusy = useCallback(
+    (task: "rolling_summary" | "scene_break", on: boolean) => {
+      if (activeId) markTask(taskKey("inspector", cid, activeId, task), on);
+    }, [cid, activeId, markTask]);
+  function taskRunning(task: "rolling_summary" | "scene_break"): boolean {
+    return !!activeId && (!!taskBusy[taskKey("strip", cid, activeId, task)]
+      || !!taskBusy[taskKey("inspector", cid, activeId, task)]);
+  }
   const streamRef = useRef<HTMLDivElement>(null);
   /** The scene inspector, which used to be a permanently-open third column.
    *
@@ -1112,6 +1171,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const activeDone = useMemo(
     () => scenes.find((s) => s.id === activeId)?.done ?? false,
     [scenes, activeId]);
+
+  // A closed branch (play controls III): a sibling in its branch group was
+  // absorbed, so the campaign's files now hold THAT past and this one is
+  // read-only. Rendered like an absorbed scene and further still -- no
+  // composer, no gutter actions, no swipes, no reroll keys -- because every
+  // write here is refused `branch_closed` anyway. The server resolves which
+  // sibling, so the banner can link it.
+  const activeClosed = useMemo(
+    () => scenes.find((s) => s.id === activeId)?.closed_by ?? null,
+    [scenes, activeId]);
+  // Whether the active scene has a sibling: its group has another row.
+  const activeBranched = useMemo(() => {
+    const group = scenes.find((s) => s.id === activeId)?.branch_group;
+    return !!group && scenes.filter((s) => s.branch_group === group).length > 1;
+  }, [scenes, activeId]);
 
   // The response-length chip. A pending one-shot pick beats the scene's own
   // saved preset; with neither, the label comes from what the SERVER resolved
@@ -2215,10 +2289,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  `what the fork could not put back is reported, and outlives the
    *  navigation` pins.
    */
-  async function forkAtScene(sid: string) {
-    const later = scenes.filter((x) => x.id > sid).length;
+  async function forkAtScene(sid: string, fromIndex?: number) {
+    // By NUMBER, as the server cuts (gate 9): every later scene goes, and so
+    // does every other scene sharing this one's number -- its branches. An id
+    // with no number falls back to the order ids sort in.
+    const mine = numberOf(sid);
+    const later = scenes.filter((x) => {
+      if (x.id === sid) return false;
+      const theirs = numberOf(x.id);
+      return mine === null || theirs === null ? x.id > sid : theirs >= mine;
+    }).length;
     const title = scenes.find((x) => x.id === sid)?.title ?? sid;
     const ask = [
+      ...(fromIndex === undefined ? [] : [
+        "This scene is absorbed, so branching it from this post makes a copy of the " +
+        "campaign cut at that post."]),
       `Fork this campaign at '${title}'?`,
       later === 0
         ? "It is the newest scene, so the fork is a copy of this campaign as it stands."
@@ -2233,7 +2318,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!forkName) return;
     let report;
     try {
-      report = await api.forkCampaign(cid, forkName, sid);
+      report = fromIndex === undefined
+        ? await api.forkCampaign(cid, forkName, sid)
+        : await api.forkCampaign(cid, forkName, sid, {}, fromIndex);
     } catch (err: any) {
       // Not retryable: the banner's Retry generates, and there is nothing here
       // to generate — the same call `deleteMessagesFrom` makes for the same
@@ -2256,6 +2343,59 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     }
     // A clean fork takes the reader with it, to the scene it was cut at.
     navigate(`/campaigns/${report.id}/scenes`);
+  }
+
+  /** "Branch from here" (⑂ in the gutter, play controls III). An unabsorbed
+   *  scene branches into a sibling keeping everything through this post, and
+   *  the reader is taken there. An absorbed scene's past lives in the
+   *  campaign's files, which only a copy of the campaign can hold twice -- so
+   *  there it is the fork dialog, cut at this post. */
+  async function branchFrom(index: number) {
+    if (!activeId || rolling) return;
+    if (activeDone) {
+      await forkAtScene(activeId, index);
+      return;
+    }
+    // The latch every other write to this transcript takes, held until the
+    // reader is on the sibling: it disables ⑂ (and the gutter beside it), so a
+    // double click makes one branch rather than two (codex review, PR #458).
+    const release = takeRollLatch(activeId);
+    try {
+      let made;
+      try {
+        made = await api.branchScene(cid, activeId, index);
+      } catch (err) {
+        // Not retryable: the banner's Retry generates, and a branch is not a
+        // generation -- `forkAtScene`'s reason.
+        fail(err, false);
+        return;
+      }
+      await openBranch(made.id);
+    } finally {
+      release();
+    }
+  }
+
+  /** Open a sibling a branch has just created -- after the relist that lists
+   *  it, as `sceneCreated` does. The resolver only opens a scene the installed
+   *  list knows, so a URL naming the sibling ahead of that list is read as a
+   *  stale id and replaced with the scene the reader was on, and nothing
+   *  navigates back (codex review, PR #458). A failed relist is reported rather
+   *  than navigated past, for the same reason: the list it left lacks the row.
+   *  Not retryable: the banner's Retry generates, and the branch exists. */
+  async function openBranch(id: string) {
+    try {
+      await loadScenes();
+    } catch (err: unknown) {
+      if (cidRef.current === cid) {
+        setError({ text: `The branch was created, but the scene list could not be `
+                         + `refreshed: ` + errorText(err), retryable: false });
+      }
+      return;
+    }
+    // The campaign is asked after the relist, as `sceneCreated` asks it.
+    if (cidRef.current !== cid) return;
+    navigate(sceneUrl(cid, id));
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -2488,7 +2628,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           setRoundProgress(e.round_start);
         } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
-            actor_ref: e.response_start.actor_ref, offset: acc.length };
+            actor_ref: e.response_start.actor_ref, offset: acc.length,
+            // Keep writing: the reply the stream continues, rendered ahead of
+            // it but never part of `acc` (offsets, Retry and re-attach all
+            // read the stream alone).
+            seed: e.response_start.extend?.seed };
           partStart = boundary.offset;
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
@@ -2863,7 +3007,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
           setRoundProgress(e.round_start);
         } else if (e.response_start) {
           const boundary = { id: e.response_start.id, speaker: e.response_start.speaker,
-            actor_ref: e.response_start.actor_ref, offset: acc.length };
+            actor_ref: e.response_start.actor_ref, offset: acc.length,
+            // Keep writing: the reply the stream continues, rendered ahead of
+            // it but never part of `acc` (offsets, Retry and re-attach all
+            // read the stream alone).
+            seed: e.response_start.extend?.seed };
           partStart = boundary.offset;
           setStreamingSpeakers((prior) => [...prior, boundary]);
         } else if (e.thinking_reset || e.thinking_delta) {
@@ -3241,6 +3389,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
         // requests the player is waiting on, so there is a client here by
         // construction. It is only the turn whose end this side can miss.
       }
+      // However it ended: a turn that landed on the swipe target's response, or
+      // one that failed and left its content alone, both move what the swipe
+      // read answers without necessarily moving the text it refetches on.
+      responseSwipe.refresh();
     }
     // Landed means the backend said so, not that the promise resolved -- and
     // not that it produced anything: an ephemeral turn that finished cleanly
@@ -3250,13 +3402,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   async function send(speakerRef?: string) {
     if (busy || rolling || renamesInFlight) return;
-    // A new prompt supersedes a failed reroll: whatever Retry would have
-    // repeated, the player has moved on from it.
-    rerollToRetryRef.current = null;
-    // a new turn supersedes any pending proposal durably on the backend —
-    // clear the chip optimistically rather than wait for the re-fetch. Ordered,
-    // so a read issued before this send cannot put the chip back afterwards.
-    setProposalNow(null);
     const content = input.trim();
     let id = activeId;
     if (!id) {
@@ -3292,6 +3437,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // the player just spoke: put them back at the tail even if they had
     // scrolled up into older history to re-read something
     atBottomRef.current = true;
+    await sendText(id, content, directing, true, speakerRef);
+  }
+
+  /** One turn's worth of text, sent to scene `id` -- the body of `send` from
+   *  the point the composer has been read. Takes the text and the turn kind as
+   *  arguments, so a quick reply can send without writing composer state first:
+   *  it never reads or clears `input`, so a draft survives a quick reply.
+   *
+   *  `recover` is whether a failed turn hands `content` back to the composer
+   *  (and arms the durable copy). True for what the player typed; false for a
+   *  quick reply, whose canned text is re-tappable and would otherwise land in
+   *  the box -- and flip its mode -- on a failure. The one-shot response
+   *  targets are consumed exactly as Send consumes them. */
+  async function sendText(id: string, content: string, director: boolean, recover: boolean,
+                          speakerRef?: string) {
+    // A new prompt supersedes a failed reroll: whatever Retry would have
+    // repeated, the player has moved on from it.
+    rerollToRetryRef.current = null;
+    // a new turn supersedes any pending proposal durably on the backend —
+    // clear the chip optimistically rather than wait for the re-fetch. Ordered,
+    // so a read issued before this send cannot put the chip back afterwards.
+    setProposalNow(null);
     // Ephemeral turns are never stored: a director note — asked for in Direct
     // mode, or the only kind of turn an offscreen scene has — or, in any scene
     // and either mode, an empty send meaning "next NPC round".
@@ -3324,19 +3491,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // own generation and rendered beside the NEXT turn's reply, claiming to
     // have steered something it never saw. Every send now states what note is
     // in force, and for a Speak post that statement is "none".
-    const note = directing && content ? { cid, sid: id, text: content } : null;
+    const note = director && content ? { cid, sid: id, text: content } : null;
     // Trailing argument only when a chip named a speaker, so every other send
     // is the same call it always was.
     const speakerArg: [] | [string] = speakerRef ? [speakerRef] : [];
-    if (directing || !content) {
+    if (director || !content) {
       try {
         const landed = await runStream(id,
           (onEvent, signal, attempt, onIndex) =>
-            api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
-                     signal, attempt, onIndex, directing, ...speakerArg),
+            api.chat(cid, id, content, onEvent, pendingResponse ?? undefined,
+                     signal, attempt, onIndex, director, ...speakerArg),
           // An empty send has nothing to give back — it is the "next NPC round"
           // fast path, not words anyone typed.
-          content ? () => recoverPrompt(cid, id, content, true) : undefined,
+          content && recover ? () => recoverPrompt(cid, id, content, true) : undefined,
           false, "", true, note);
         if (landed) setPendingResponse(null);
       } finally {
@@ -3363,12 +3530,117 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       (onEvent, signal, attempt, onIndex) =>
         // The trailing `false` is `director`: this is the branch that POSTS, so
         // it is the one send that can never be a note.
-        api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
+        api.chat(cid, id, content, onEvent, pendingResponse ?? undefined,
                  signal, attempt, onIndex, false, ...speakerArg),
-      () => recoverPrompt(cid, id!, content), false,
+      recover ? () => recoverPrompt(cid, id, content) : undefined, false,
       // The words the player typed, held until the outcome proves them durable.
-      content);
+      recover ? content : "");
     if (landed) setPendingResponse(null);
+  }
+
+  /** A quick reply's send: the canned text, as the player or as a director
+   *  note, through the same path Send takes -- but the composer is neither read
+   *  nor cleared, and a failure does not hand the text back (it is still on the
+   *  button). The guard is Send's own. */
+  async function sendQuick(text: string, director: boolean) {
+    if (!activeId || busy || rolling || renamesInFlight || !text.trim()) return;
+    atBottomRef.current = true;
+    await sendText(activeId, text.trim(), director, false);
+  }
+
+  /** A quick reply's insert: the canned text into the composer, to edit and
+   *  send. An empty box takes it and the reply's turn kind; a draft of the same
+   *  kind gets it appended after a blank line. A draft of the OTHER kind keeps
+   *  the box -- one composer carries one mode -- so the text waits exactly as a
+   *  recovered prompt does, behind the existing held-draft notice, and comes
+   *  back when the box is cleared. If something recovered is already waiting
+   *  for this scene, the insert is refused instead: parking over it would
+   *  drop words the player wrote. */
+  function insertQuick(text: string, director: boolean) {
+    if (!activeId) return;
+    if (!input.trim()) {
+      setInput(text);
+      setDirectMode(director);
+      return;
+    }
+    if (director === directing) {
+      setInput((cur) => `${cur.trimEnd()}\n\n${text}`);
+      return;
+    }
+    const key = parkKey(cid, activeId);
+    if (parkedPrompts.current.has(key)) {
+      setQuickNotice({ cid, sid: activeId,
+        text: `${director ? "🎬 note" : "post"} not inserted · clear the box first` });
+      return;
+    }
+    parkedPrompts.current.set(key, { text, director });
+    setParkedTick((n) => n + 1);
+  }
+
+  /** A saved roll: the dice button's route, with its own notice on failure. */
+  async function rollQuick(notation: string, label: string | undefined) {
+    const forCid = cid;
+    const sid = activeId;
+    const outcome = await doRoll(notation, label);
+    if (sid && typeof outcome === "object")
+      setQuickNotice({ cid: forCid, sid, text: `Roll failed: ${outcome.error}` });
+  }
+
+  /** A task on the strip: the rolling summary or the scene-break check run now
+   *  (forced, and bounded at the transcript on screen so a fold cannot swallow
+   *  a post the reply to which has not landed), or the next-scene chooser. */
+  async function runQuickTask(task: QuickReplyTask) {
+    if (task === "next_scene") {
+      newScene();
+      return;
+    }
+    if (!activeId || sceneLocked || !ready || messages.length === 0 || taskRunning(task)) return;
+    const forCid = cid;
+    const sid = activeId;
+    const key = taskKey("strip", forCid, sid, task);
+    // Absolute: the transcript is read in windows, and `messages[0]` is post
+    // `firstIndex`.
+    const upto = firstIndex + messages.length;
+    const here = () => cidRef.current === forCid && activeIdRef.current === sid;
+    const notice = (text: string) => { if (here()) setQuickNotice({ cid: forCid, sid, text }); };
+    markTask(key, true);
+    try {
+      if (task === "rolling_summary") {
+        const r = await api.refreshRollingSummary(forCid, sid, true, upto);
+        if (r.refreshed) { if (here()) setCtxKey((n) => n + 1); }
+        else notice("Summary already current — nothing new to fold");
+      } else {
+        const r = await api.askSceneBreak(forCid, sid, true, upto);
+        if (r.asked) { if (here()) setCtxKey((n) => n + 1); }
+        else notice("No scene-break question asked");
+      }
+    } catch (err: unknown) {
+      notice(`${task === "rolling_summary" ? "Summary" : "Scene-break check"} failed: ${errorText(err)}`);
+    } finally {
+      markTask(key, false);
+    }
+  }
+
+  function runQuickReply(r: QuickReply) {
+    setQuickNotice(null);
+    switch (r.kind) {
+      case "send":
+      case "direct":
+        if (r.mode === "insert") insertQuick(r.text ?? "", r.kind === "direct");
+        else void sendQuick(r.text ?? "", r.kind === "direct");
+        return;
+      case "roll":
+        void rollQuick(r.notation ?? "", r.roll_label);
+        return;
+      case "task":
+        if (r.task) void runQuickTask(r.task);
+        return;
+      case "opener":
+        setOpenerRequest((n) => n + 1);
+        return;
+      default:
+        return;
+    }
   }
 
   async function saveEdit() {
@@ -3503,17 +3775,44 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       else await api.deleteResponse(cid, sid, id);
       if (cidRef.current === cid && activeIdRef.current === sid) await selectScene(sid);
     } catch (err) { fail(err); }
-    finally { release(); }
+    finally {
+      release();
+      // Success or refusal alike: a 409 means the server's state is not the one
+      // the arrows were drawn from, and an activate that landed may have left
+      // the content unchanged (a variant with the same text).
+      responseSwipe.refresh();
+    }
   }
 
+  /** A ledger reroll -- the swipe's ›, the reroll box (↻, `r`, → at the
+   *  newest) and the Response variants disclosure alike. It streams the frozen
+   *  snapshot and the server ignores `response`, so it never sends the pending
+   *  one-shot override and never clears it: doing either would spend the
+   *  player's next-turn length chip on a request that never used it. The
+   *  legacy `reroll` path, which recomposes, still carries and spends it. */
   async function rerollResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
     if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
     const sid = activeId;
-    const landed = await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.regenerateResponse(cid, sid, id, onEvent,
-        { guidance, response: pendingResponse ?? undefined, ...route }, signal, attempt, onIndex),
+    await runStream(sid, (onEvent, signal, attempt, onIndex) =>
+      api.regenerateResponse(cid, sid, id, onEvent, { guidance, ...route }, signal, attempt, onIndex),
       undefined, true, "", true);
-    if (landed) setPendingResponse(null);
+    // No swipe refresh here: `runStream`'s finally asks again on every
+    // outcome, including a failed generate that kept the previous variant.
+  }
+
+  /** Keep writing: continue the trailing response where it stops, landing as a
+   *  new variant (the unextended one stays a swipe back). The reroll's guards,
+   *  plus Keep writing's own disabled flag, re-checked here because a stale
+   *  click must do nothing the button could not. Like `rerollResponse`, it
+   *  never sends or clears the pending one-shot override. No bare key: it
+   *  spends money, so it is only ever a click. */
+  async function extendResponse(id: string, guidance: string, route: RerollRoute = NO_REROLL_ROUTE) {
+    if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
+    if (extendDisabled || swipeTarget?.response_id !== id) return;
+    const sid = activeId;
+    await runStream(sid, (onEvent, signal, attempt, onIndex) =>
+      api.extendResponse(cid, sid, id, onEvent, { guidance, ...route }, signal, attempt, onIndex),
+      undefined, true, "", true);
   }
 
   async function respondAs(ref: string) {
@@ -3523,6 +3822,27 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       api.chat(cid, sid, "", onEvent, pendingResponse ?? undefined, signal, attempt, onIndex, false, ref),
       undefined, false, "", true);
     if (landed) setPendingResponse(null);
+  }
+
+  /** Hide a post from context, or return it. Guarded as `saveEdit` is, and for
+   *  its reasons: a swap in flight is rewriting these posts, and the indices on
+   *  screen must be the active scene's own. The same latch the cut takes, since
+   *  the toggle rewrites the transcript too. Exclusion moves the digests the
+   *  rolling summary and scene-break check are measured against, so the
+   *  follow-ups are asked for as after an edit. */
+  async function toggleExcluded(index: number, excluded: boolean) {
+    if (!activeId || rolling || !transcriptIsActive) return;
+    const release = takeRollLatch(activeId);
+    try {
+      await api.setExcluded(cid, activeId, index, excluded);
+    } catch (err: unknown) {
+      fail(err, false);
+      return;
+    } finally {
+      release();
+    }
+    const seen = await selectScene(activeId);
+    askAfterPost(activeId, seen);   // #85, #84
   }
 
   async function deleteMessagesFrom(index: number) {
@@ -3802,24 +4122,39 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // line has to stay in lockstep with rolls.json — so a roll landing in the
   // flush window makes the restore refuse and the rerolled reply is gone for
   // good. The backend cannot rescue that one; only not racing it can (#95).
-  async function doRoll() {
-    if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
-    const notation = rollForm.notation.trim();
-    if (!notation) return;
-    const releaseLatch = takeRollLatch(activeId);
+  /** Roll `notation` into the active scene: the popover's Roll ▸ and a saved
+   *  roll on the strip both come here. Takes the roll latch and asks for the
+   *  follow-ups exactly as before; says how it went rather than writing the
+   *  popover's form error itself, since the strip has no form. */
+  async function doRoll(notation: string, label: string | undefined):
+      Promise<"skipped" | "ok" | { error: string }> {
+    if (!activeId || busy || sceneLocked || rolling) return "skipped";
+    if (!notation.trim()) return "skipped";
+    const sid = activeId;
+    const releaseLatch = takeRollLatch(sid);
     try {
-      await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
-      setRollForm(null);
-      const seen = await selectScene(activeId);
+      await api.roll(cid, sid, notation.trim(), label);
+      const seen = await selectScene(sid);
       // The length the re-read saw is this write's boundary, for the reason the
       // turn loop passes one: nothing holds the scene once this returns.
-      askAfterPost(activeId, seen);   // a roll is a post too (#85, #84)
-    } catch (err: any) {
-      setRollForm({ ...rollForm, error: err.detail ?? String(err) });
+      askAfterPost(sid, seen);   // a roll is a post too (#85, #84)
+      return "ok";
+    } catch (err: unknown) {
+      return { error: errorText(err) };
     } finally {
       releaseLatch();
     }
   }
+
+  /** The popover's Enter / Roll ▸. */
+  async function rollFromForm() {
+    if (!rollForm) return;
+    const form = rollForm;
+    const outcome = await doRoll(form.notation.trim(), form.label.trim() || undefined);
+    if (outcome === "ok") setRollForm(null);
+    else if (outcome !== "skipped") setRollForm({ ...form, error: outcome.error });
+  }
+
 
   // Unbinding the pack removes the dice button, which is the popover's only
   // way in and its only way out -- left open it would be a form nothing can
@@ -4009,7 +4344,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     while (i >= 0 && messages[i].speaker === TRANSITION_SPEAKER) i--;
     return i;
   })();
-  const canReroll = transcriptIsActive &&
+  const canReroll = transcriptIsActive && !activeClosed &&
     rerollIndex >= 0 &&
     messages[rerollIndex].role === "assistant" &&
     messages[rerollIndex].speaker !== ROLL_SPEAKER &&
@@ -4020,6 +4355,22 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // scan is the fallback for an unwindowed read, which holds everything.
     (hasUserPost ?? messages.some((x) => x.role === "user"));
   const rerollAt = rerollIndex < 0 ? -1 : firstIndex + rerollIndex;
+
+  // The ledger's swipe target (spec §6): the post Reroll hangs off, when it is
+  // a response. Nothing after it can share its id (only transitions follow, and
+  // they are not responses), so it is also the last part of that response —
+  // the one `TranscriptPost` hangs the response's controls off. Only while the
+  // posts on screen are the active scene's: the read is addressed by
+  // `activeId`, and a target taken from another scene's transcript would ask
+  // about a response this scene does not have. A trailing reply with no
+  // response id keeps the legacy alternates arrows below.
+  const swipeTarget = transcriptIsActive && rerollIndex >= 0
+    && messages[rerollIndex].role === "assistant" && messages[rerollIndex].response_id
+    ? messages[rerollIndex] : null;
+  const responseSwipe = useResponseSwipe({
+    cid, sid: swipeTarget ? activeId : null, rid: swipeTarget?.response_id ?? null,
+    content: swipeTarget?.content ?? null, windowToken: loaded?.token,
+  });
 
   // The swipe control hangs off the same message as Reroll — they act on the
   // same generation, so it renders against `rerollAt` (absolute), not
@@ -4034,7 +4385,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     && loaded?.cid === cid && loaded?.sid === alternates.sid
     && loaded.token === alternates.window
       ? alternates.alternates.length : 0;
-  const canSwipe = rerollIndex >= 0 && (altCount > 1 || (altCount > 0 && alternates.active === null));
+  const canSwipe = !activeClosed && rerollIndex >= 0 && (altCount > 1 || (altCount > 0 && alternates.active === null));
   // Wraps, so ‹/› tour the set. With the slot empty, ‹ reaches for the newest
   // variant and › for the oldest, which is what "one step off nothing" means.
   const stepAlternate = (delta: number) =>
@@ -4113,6 +4464,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  the toggle governs. */
   const noteCount = messages.filter((m) => m.speaker === DIRECTOR_SPEAKER).length;
 
+  /** The response a Keep writing stream is continuing, while it streams here. */
+  const hiddenResponse = busy && streamingId === activeId
+    ? streamingSpeakers.find((part) => part.seed !== undefined)?.id ?? null : null;
+
   // Consecutive messages by the same speaker form one run under a single plate.
   // Memoized on what a run is made of, so the run objects -- and so the
   // memoized rows that receive them -- survive every render that is not a
@@ -4126,6 +4481,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // exactly as before — filtering `messages` first would renumber them and
       // send an edit to the wrong post.
       if (m.speaker === DIRECTOR_SPEAKER && !showNotes) return;
+      // The reply Keep writing is continuing: the live bubble below draws it
+      // whole (its seed, then the stream), so drawing it here too would show
+      // it twice. Skipped while the groups are built, so a run it emptied
+      // draws no plate.
+      if (hiddenResponse !== null && m.response_id === hiddenResponse) return;
       const speaker = speakerOf(m);
       const last = out[out.length - 1];
       if (last && last.speaker === speaker &&
@@ -4138,7 +4498,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                  actor, posts: [{ m, index }] });
     });
     return out;
-  }, [messages, firstIndex, showNotes, speakerOf, matchActor]);
+  }, [messages, firstIndex, showNotes, speakerOf, matchActor, hiddenResponse]);
 
   /** Which posts are the last part of their response in the window — the one
    *  that carries the response's controls and its saved thinking.
@@ -4239,7 +4599,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setRerollRoute(NO_REROLL_ROUTE);
     },
     stepAlternate: (delta) => void pickAlternate(stepAlternate(delta)),
+    stepVariant,
     edit: (index, text) => setEditing({ index, text }),
+    toggleExcluded: (index, excluded) => void toggleExcluded(index, excluded),
     cancelEdit: () => setEditing(null),
     saveEdit: () => void saveEdit(),
     saveRetcon: () => void saveRetcon(),
@@ -4247,11 +4609,13 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       setPicking({ index, target: pickerTarget(actor, speaker) }),
     cutFrom: (index) => void deleteMessagesFrom(index),
     replayFrom: (index) => setReplayAt(index),
+    branchFrom: (index) => void branchFrom(index),
     setRerollPrompt,
     setRerollRoute,
     reroll: () => void reroll(),
     deleteResponse: (id) => void mutateResponse(id),
     rerollResponse: (id, guidance, route) => void rerollResponse(id, guidance, route),
+    extendResponse: (id, guidance, route) => void extendResponse(id, guidance, route),
     activateVariant: (id, variant) => void mutateResponse(id, variant),
     createCharacter: (rid) => void openCharacterPassage(rid),
     // Depth over the stored transcript, which the window always ends at: the
@@ -4262,24 +4626,100 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   });
 
   const editingAny = editing !== null;
+  const responseDisabled = busy || rolling || sceneLocked || editingAny || renamesInFlight > 0;
+  // The empty-scene cast panel's mount condition, which is also when a quick
+  // reply may open the opener generator inside it.
+  const openerOffered = !!activeId && landedScene?.cid === cid && landedScene.sid === activeId
+    && messages.length === 0;
+  // What decides each quick reply: the guards of the controls they stand for.
+  const quickCtx: QuickReplyContext = {
+    busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
+    moduleKnown: moduleBound !== null, pcless: activePcless, ready,
+    openerOffered, taskRunning,
+  };
+
+  // The ledger's arrows, worked out once for the row, the keys and the gesture.
+  // Shown with two complete variants to tour, or one that can be generated from
+  // (the ledger's `can_reroll` and this
+  // view's `canReroll`, so › has somewhere to go). An active variant that is not complete has no
+  // place among the complete ones to count from, so it shows none — the
+  // Response variants disclosure still lists it.
+  //
+  // `blocked` is every refusal the client can know about: the transcript's own
+  // guards; a landed review, whose watermark digests the content a swipe would
+  // change; any proposal, which `activate` would supersede; the server's
+  // `editable` and `round_open`; and a read still outstanding, whose count may
+  // be stale. Generating also needs what the reroll needs. The server still
+  // answers a race with 409, which `mutateResponse` reports.
+  const { swipe: ledgerSwipe, complete: swipeComplete, position: swipePosition,
+          pending: swipePending } = responseSwipe;
+  const swipeCount = swipeComplete.length;
+  const swipeShown = !activeClosed && !!ledgerSwipe && swipePosition !== null
+    && (swipeCount >= 2 || (swipeCount === 1 && ledgerSwipe.can_reroll && canReroll));
+  const swipeBlocked = responseDisabled || !!absorb || proposal !== null || swipePending
+    || !ledgerSwipe?.editable || !!ledgerSwipe.round_open;
+  const swipeGenerates = swipeShown && swipePosition === swipeCount - 1;
+  const swipePrevDisabled = swipeBlocked || swipePosition === 0;
+  const swipeNextDisabled = swipeBlocked
+    || (swipeGenerates && (!canReroll || !ledgerSwipe?.can_reroll));
+  const swipeTip = ledgerSwipe ? swipeTitle(ledgerSwipe) : undefined;
+  // Keep writing, on the swipe target: what a generating › needs, minus the
+  // arrows' own position rules. A hand-edited reply (`edited`, active null) is
+  // continued from the trim, so it does not block; a non-complete active
+  // variant does, as the server refuses it (`variant_incomplete`).
+  const activeVariant = ledgerSwipe && ledgerSwipe.active !== null
+    ? ledgerSwipe.variants[ledgerSwipe.active] : undefined;
+  const extendDisabled = swipeBlocked || !canReroll || !ledgerSwipe?.can_reroll
+    || (activeVariant !== undefined && activeVariant.status !== "complete");
+  // Memoized on the primitives above, so a render that changes none of them
+  // hands the row the same object.
+  const variantSwipe = useMemo<TranscriptVariantSwipe | null>(() => (
+    swipeShown && swipePosition !== null
+      ? { position: swipePosition, count: swipeCount, title: swipeTip,
+          previousDisabled: swipePrevDisabled, nextDisabled: swipeNextDisabled,
+          generates: swipeGenerates }
+      : null
+  ), [swipeShown, swipePosition, swipeCount, swipeTip, swipePrevDisabled, swipeNextDisabled,
+      swipeGenerates]);
+
+  /** ‹ / › on the last response, from the arrows and the touch swipe. Each
+   *  re-checks its own disabled flag, so a gesture can do nothing the button
+   *  beside it could not. At the newest, › generates — the reroll popover's
+   *  plain submit, keeping the pending length chip. */
+  function stepVariant(delta: -1 | 1) {
+    const rid = swipeTarget?.response_id;
+    if (!variantSwipe || !rid) return;
+    if (delta < 0 ? variantSwipe.previousDisabled : variantSwipe.nextDisabled) return;
+    if (delta > 0 && variantSwipe.generates) {
+      void rerollResponse(rid, "", NO_REROLL_ROUTE);
+      return;
+    }
+    const vid = swipeComplete[variantSwipe.position + delta];
+    if (vid) void mutateResponse(rid, vid);
+  }
+
   const transcriptReroll = useMemo<TranscriptReroll>(() => ({
     swipe: canSwipe
       ? { active: alternates.active, count: altCount, title: altTitle,
           disabled: rolling || editingAny || sceneLocked }
       : null,
+    variantSwipe,
     pop: rerollPrompt !== null ? { prompt: rerollPrompt, route: rerollRoute } : null,
+    extend: swipeTarget ? { disabled: extendDisabled } : null,
   }), [canSwipe, alternates.active, altCount, altTitle, rolling, editingAny, sceneLocked,
-       rerollPrompt, rerollRoute]);
+       variantSwipe, rerollPrompt, rerollRoute, swipeTarget, extendDisabled]);
   const transcriptCtx = useMemo<TranscriptContext>(() => ({
     cid, sid: activeId ?? "",
     loadedCid: loaded?.cid ?? null, loadedSid: loaded?.sid ?? null,
-    busy, rolling, active: transcriptIsActive,
-    responseDisabled: busy || rolling || sceneLocked || editingAny || renamesInFlight > 0,
+    // A closed branch is read-only: no gutter actions, no response controls.
+    busy, rolling, active: transcriptIsActive && !activeClosed, absorbed: activeDone,
+    responseDisabled,
     lastIndex: firstIndex + messages.length - 1,
     rerollAt, canReroll, postChips, citedNeedle, lastOfResponse, tracker, trackerKeys,
     trackerRerun,
-  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, sceneLocked,
-       editingAny, renamesInFlight, firstIndex, messages.length, rerollAt, canReroll,
+  }), [cid, activeId, loaded?.cid, loaded?.sid, busy, rolling, transcriptIsActive, activeDone,
+       activeClosed, responseDisabled,
+       firstIndex, messages.length, rerollAt, canReroll,
        postChips, citedNeedle, lastOfResponse, tracker, trackerKeys, trackerRerun]);
 
   // The rows themselves, as one list built only when one of its inputs moves.
@@ -4411,7 +4851,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // of it. A chord that ignored that would put one there -- the transcript
       // and the chronicle disagreeing, with nothing to say which is right
       // (PR #400 review).
-      enabled: !absorb && !activeDone && !busy && !rolling && !renamesInFlight,
+      // A closed branch's composer is replaced the same way, for the same reason.
+      enabled: !absorb && !activeDone && !activeClosed && !busy && !rolling && !renamesInFlight,
       run: () => void send(),
     },
     {
@@ -4426,8 +4867,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       // was just generated. The ↻ button is hidden while its own post is being
       // edited, so a key that fired anyway would reach past it (PR #400
       // review).
-      enabled: !absorb && !busy && !rolling && !editing && canReroll,
+      enabled: !absorb && !activeClosed && !busy && !rolling && !editing && canReroll,
       run: () => setRerollPrompt(""),
+    },
+    // The last response's ‹ and ›, carrying their buttons' disabled flags. →
+    // at the newest variant opens the reroll box, as `r` does, rather than
+    // generating as › does: the rule above, and a bare arrow is easily pressed
+    // with a tab button or any other non-typing control focused. Its enabled
+    // flag there already requires what that box's submit needs to reach the
+    // ledger reroll rather than fall through to Replay.
+    {
+      keys: "arrowleft", label: "Previous reply variant", group: "IN THIS SCENE",
+      enabled: !activeClosed && !!variantSwipe && !variantSwipe.previousDisabled,
+      run: () => stepVariant(-1),
+    },
+    {
+      keys: "arrowright", label: "Next reply variant", group: "IN THIS SCENE",
+      enabled: !activeClosed && !!variantSwipe && !variantSwipe.nextDisabled,
+      run: () => {
+        if (!variantSwipe?.generates) return stepVariant(1);
+        setRerollPrompt("");
+        setRerollRoute(NO_REROLL_ROUTE);
+      },
     },
     {
       keys: "t", label: "Retry the turn that failed", group: "IN THIS SCENE",
@@ -4681,12 +5142,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               shielded-abort window above, which it is not and which End scene
               must never be pressed inside. Folded together, a Discard settling
               here would open the #95 door. */}
-          <button className="scene-action end" onClick={review.endScene}
-                  disabled={!activeId || review.absorbing || busy || rolling
-                            || activeId === streamingId
-                            || (sceneLocked && !review.settlesScene(activeId))}>
-            {review.absorbing ? "Ending…" : "End scene"}
-          </button>
+          {/* Not on a closed branch: a sibling's absorb closed it, and the
+              server refuses to absorb it (`branch_closed`). */}
+          {!activeClosed && (
+            <button className="scene-action end" onClick={review.endScene}
+                    disabled={!activeId || review.absorbing || busy || rolling
+                              || activeId === streamingId
+                              || (sceneLocked && !review.settlesScene(activeId))}>
+              {review.absorbing ? "Ending…" : "End scene"}
+            </button>
+          )}
           {/* The way out of an absorb that is still running (#396). A review
               holds the scene against play for as long as it runs and
               `absorb_budget = 0` means nothing bounds that, so without this a
@@ -4897,11 +5362,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               that unmounted as soon as the posts came in. `landedScene`
               rather than `loaded`, so a rename from the panel's own date field
               does not remount it -- see there. */}
-          {activeId && landedScene?.cid === cid && landedScene.sid === activeId
-            && messages.length === 0 && (
+          {activeId && openerOffered && (
             <CastPanel
               cid={cid}
               sid={activeId}
+              openerRequest={openerRequest}
               ready={ready}
               onSeeded={() => refreshAndAsk(activeId)}
               onSceneRenamed={sceneRenamed}
@@ -4935,7 +5400,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               budget={budget}
                               onBudgetSaved={onBudgetSaved}
                               rewritten={rewrittenPosts}
-                              onTranscriptEdited={onInspectorTranscriptEdited} />
+                              onTranscriptEdited={onInspectorTranscriptEdited}
+                              stripTasks={stripTasks}
+                              onTaskBusy={onInspectorTaskBusy} />
             </div>
           )}
           {activeId && !focus && (
@@ -4969,6 +5436,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 <h2 className="scene-title">
                   {sceneTitle}
                   {activePcless && <span className="chip on offscreen-badge">Offscreen</span>}
+                  {activeBranched && <span className="chip">branch</span>}
+                  {activeClosed && (
+                    <span className="chip" title="A sibling branch was absorbed">closed</span>
+                  )}
                 </h2>
               )}
               {/* Rename and delete belong to the scene you are reading, and to
@@ -5057,7 +5528,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                           <strong className="plate-name">{part.speaker}</strong>
                         </div>
                         <Thinking content={part.thinking ?? ""} />
-                        <StreamingMarkdown text={streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
+                        {/* A Keep writing part grows from the reply it continues
+                            (its seed, display only: the server joins the
+                            landed variant itself, and the reload shows that). */}
+                        <StreamingMarkdown text={part.seed !== undefined
+                          ? part.seed + " " + streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)
+                          : streaming.slice(part.offset, streamingSpeakers[index + 1]?.offset)} />
                         {busy && streamingId === activeId && !part.ended && index === streamingSpeakers.length - 1 && (
                           <div className="response-progress" role="status" aria-label={`${part.speaker} is responding`}>
                             <span className="cursor" aria-hidden="true" /> {roundProgress
@@ -5096,6 +5572,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          // itself over that run and the view taking it back.
                          onUnanswered={() => { void adoptPendingRun(cid, activeId); }}
                          onStartHandled={() => setReplayAt(null)}
+                         // Only an unabsorbed scene branches; an absorbed one's
+                         // branch is a campaign fork, which "Fork first" is.
+                         branchable={!activeDone}
+                         // A closed branch refuses every generation here; the
+                         // panel keeps only accept and stop, as the server does.
+                         closed={!!activeClosed}
+                         // The replay runs in the sibling; this scene was not
+                         // touched, so the reader goes where the walk is.
+                         onBranched={(branched) => { void openBranch(branched); }}
                          // Into the SAME scene in the copy, not the campaign's
                          // front door: a fork copies the scenes wholesale, so
                          // this id is there, and the reader asked to replay one
@@ -5124,7 +5609,16 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                            if (!asked) askAfterPost(activeId, seen);
                          }} />
           )}
-          {activeDone ? (
+          {activeClosed && !activeDone ? (
+            /* A closed branch: replaced like an absorbed scene's composer, and
+               with no editing either -- the sibling's absorb is the past the
+               campaign holds, and every write here is refused. */
+            <div className="scene-complete scene-closed">
+              A sibling branch was absorbed:{" "}
+              <Link to={sceneUrl(cid, activeClosed.sid)}>{activeClosed.title}</Link>.
+              {" "}This branch is read-only — delete it to discard it.
+            </div>
+          ) : activeDone ? (
             /* The whole composer, not a disabled entry box. This scene's summary
                is written and its changes are applied, so a post added now would
                sit outside the record taken of it -- and a greyed-out textarea
@@ -5209,6 +5703,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             {selectedActor && (
               <span className="composer-notice">Still your turn · dossier open</span>
             )}
+            {quickNotice && quickNotice.cid === cid && quickNotice.sid === activeId && (
+              <span className="composer-notice" role="status">{quickNotice.text}</span>
+            )}
             <button type="button" className="composer-link"
                     aria-expanded={showInspector}
                     onClick={() => setShowInspector((v) => !v)}>
@@ -5226,6 +5723,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 setGroup(next);
               }}
               onClose={() => setShowGroup(false)} />
+          )}
+          {activeId && quickSet?.cid === cid && (
+            <QuickReplyStrip replies={quickSet.replies} ctx={quickCtx} onRun={runQuickReply} />
           )}
           <div className="inputbar">
             {/* Dice are a mechanics affordance: both the popover's tabs lead to
@@ -5293,7 +5793,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
                   onKeyDown={(e) => {
                     // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); doRoll(); }
+                    if (e.key === "Enter") { e.preventDefault(); void rollFromForm(); }
                     if (e.key === "Escape") setRollForm(null);
                   }}
                 />
@@ -5305,11 +5805,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
                   onKeyDown={(e) => {
                     // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); doRoll(); }
+                    if (e.key === "Enter") { e.preventDefault(); void rollFromForm(); }
                     if (e.key === "Escape") setRollForm(null);
                   }}
                 />
-                <button className="btn-chrome" onClick={doRoll} disabled={rolling}>Roll ▸</button>
+                <button className="btn-chrome" onClick={() => void rollFromForm()} disabled={rolling}>Roll ▸</button>
                 <button type="button" className="roll-syntax-help" aria-label="Dice notation syntax"
                         aria-expanded={showRollSyntax}
                         onClick={() => setShowRollSyntax((v) => !v)}>syntax {showRollSyntax ? "▾" : "▸"}</button>

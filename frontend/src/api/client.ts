@@ -16,7 +16,7 @@ import { THUMB_REV } from "./thumbs";
 // imported by name for the ones the calls below actually mention.
 export * from "./types";
 import {
-  type Actor, type AdvanceDigest, type AdvanceRequest, type Appearance, type Availability,
+  type Actor, type AdvanceDigest, type AuthorsNote, type AuthorsNotes, type AuthorsNotesNext, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type ImageBackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
   type CampaignMeta,
@@ -27,7 +27,7 @@ import {
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
   type CatalogDraft, type CharacterDetail, type ChronicleLineSave,
-  type Scene, type ResponseRecord, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
+  type Scene, type ResponseRecord, type ResponseSwipe, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
   type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
@@ -49,7 +49,7 @@ import {
   type PricingTable, type PromptDiff, type PromptEntry,
   type PromptLayout, type PromptSnapshot, type ProposalRecord, type Provenance,
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
-  type RelationshipSave, type ReplayPreview, type ReplaySession, type ResponseBundle, type GroupSettings, type ResponseFields, type ResponseOverride,
+  type RelationshipSave, type ReplayPreview, type ReplaySession, type ReplayStarted, type ResponseBundle, type GroupSettings, type ResponseFields, type ResponseOverride,
   type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
   type RetconReport, type RosterEntry, type RoutingBundle, type SamplerImportReport, type SamplerParamSpec,
   type SamplerPreset, type SamplerPresetDraft, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
@@ -68,6 +68,7 @@ import {
   type CalendarYear, type ChoreItems,
   type ShellPayload, type TodoPayload,
   type CampaignTrackerSetting, type TrackerEdits, type TrackerLayer, type TrackerLayerBundle,
+  type QuickReply, type QuickReplyDraft, type QuickReplyEntry, type QuickReplyScope, type QuickReplySet,
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
   type RegexBundle, type RegexImportRow, type RegexLayer, type RegexRule, type RegexScope,
   type RegexStep, type RegexTestBody, type SceneRewrite,
@@ -1086,6 +1087,13 @@ export function invalidateConfigCache() {
 /** The `PCCreate` body, which both PC create routes take (#14). */
 type PCCreateBody = { name: string; tags?: string[]; version_name?: string; persona?: Persona };
 
+/** A quick-reply set's path: the world's, or the campaign's own layer. */
+function quickRepliesPath(scope: QuickReplyScope): string {
+  return scope.kind === "world"
+    ? `/api/worlds/${scope.wid}/quick-replies`
+    : `/api/campaigns/${scope.cid}/quick-replies`;
+}
+
 /** The tracker's three field-definition layers share one body and differ only in path. */
 function trackerFieldsPath(scope: TrackerScope): string {
   switch (scope.kind) {
@@ -1301,9 +1309,11 @@ export const api = {
    *  since it was priced. A client can check that itself and cannot BIND it:
    *  between its own check and this call is a whole request, and only the
    *  server holds the source's lock across the copy. */
-  forkCampaign: (cid: string, name: string, fromScene?: string, guards: ForkGuards = {}) =>
+  forkCampaign: (cid: string, name: string, fromScene?: string, guards: ForkGuards = {},
+                 fromIndex?: number) =>
     request<ForkReport>("POST", `/api/campaigns/${cid}/fork`,
       { name, ...(fromScene ? { from_scene: fromScene } : {}),
+        ...(fromIndex !== undefined ? { from_index: fromIndex } : {}),
         ...(guards.idempotencyKey ? { idempotency_key: guards.idempotencyKey } : {}),
         ...(guards.expectRevision ? { expect_revision: guards.expectRevision } : {}) },
     ).then(notifyCampaigns),
@@ -1498,6 +1508,13 @@ export const api = {
                                            { title }).then(notifyShell),
   deleteScene: (cid: string, sid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/scenes/${sid}`).then(notifyShell),
+  /** Branch a scene from a post into a sibling (play controls III): the
+   *  sibling keeps the transcript through `through`. `notifyShell`, because a
+   *  new scene is a new open scene on the rail. */
+  branchScene: (cid: string, sid: string, through: number, title?: string) =>
+    request<{ id: string; scene: ScenePage }>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/branch`,
+      { through, ...(title ? { title } : {}) }).then(notifyShell),
 
   // `response` is a one-shot, unpersisted per-turn override (the length chip
   // beside Send) — rides only this call, exactly like regenerate's guidance.
@@ -1663,6 +1680,12 @@ export const api = {
   // the wrong active take, and an arrow promotes a still-valid but wrong id.
   getResponse: (cid: string, sid: string, rid: string) =>
     request<ResponseRecord>("GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
+  // Never coalesced, like `getAlternates` below: the swipe hook re-reads after
+  // every activate, reroll and delete, and a shared read is as old as the
+  // request it joined -- the pre-mutation state, naming the replaced take.
+  getResponseSwipe: (cid: string, sid: string, rid: string) =>
+    request<ResponseSwipe>(
+      "GET", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/swipe`, undefined, { fresh: true }),
   deleteResponse: (cid: string, sid: string, rid: string) =>
     request<Scene>("DELETE", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}`),
   activateResponseVariant: (cid: string, sid: string, rid: string, vid: string) =>
@@ -1670,6 +1693,11 @@ export const api = {
   regenerateResponse: (cid: string, sid: string, rid: string, onEvent: (e: ChatEvent) => void,
     body?: RegenerateOverrides, signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
     streamPost(`/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/regenerate`, body ?? {}, onEvent, signal, attempt, onIndex),
+  /** Keep writing: continue the trailing response, landing as a new variant.
+   *  The same overrides and stream as `regenerateResponse`. */
+  extendResponse: (cid: string, sid: string, rid: string, onEvent: (e: ChatEvent) => void,
+    body?: RegenerateOverrides, signal?: AbortSignal, attempt?: string, onIndex?: (i: number) => void) =>
+    streamPost(`/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/extend`, body ?? {}, onEvent, signal, attempt, onIndex),
   passageCharacterEvidence: (cid: string, sid: string, rid: string, body: PassageCharacterInput) =>
     request<Pick<PassageCharacterDraft, "quotes" | "mes_example">>("POST", `/api/campaigns/${cid}/scenes/${sid}/responses/${rid}/character-evidence`, body),
   draftPassageCharacter: (cid: string, sid: string, rid: string, body: PassageCharacterInput, signal?: AbortSignal) =>
@@ -2523,6 +2551,20 @@ export const api = {
     request<RoutingBundle>("GET", `/api/campaigns/${cid}/routing`, undefined, { fresh: true }),
   setCampaignRouting: (cid: string, routes: Record<string, string>) =>
     request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }).then(notifyConfig),
+  // Author's notes (play controls V). `fresh` on the reads: the panel reloads
+  // right after a save, and a cached copy would show the note it just replaced.
+  getAuthorsNotes: (cid: string) =>
+    request<AuthorsNotes>("GET", `/api/campaigns/${cid}/authors-notes`, undefined, { fresh: true }),
+  setCampaignAuthorsNote: (cid: string, note: AuthorsNote) =>
+    request<AuthorsNotes>("PUT", `/api/campaigns/${cid}/authors-notes/campaign`, note),
+  setCharacterAuthorsNote: (cid: string, ref: string, note: AuthorsNote) =>
+    request<AuthorsNotes>("PUT",
+      `/api/campaigns/${cid}/authors-notes/characters/${encodeURIComponent(ref)}`, note),
+  setSceneAuthorsNote: (cid: string, sid: string, note: AuthorsNote) =>
+    request<AuthorsNotes>("PUT", `/api/campaigns/${cid}/scenes/${sid}/authors-note`, note),
+  getAuthorsNotesNext: (cid: string, sid: string) =>
+    request<AuthorsNotesNext>("GET", `/api/campaigns/${cid}/scenes/${sid}/authors-notes/next`,
+      undefined, { fresh: true }),
   // The sampler-preset half of the same bundle. Separate calls rather than a
   // second argument to the two above: one write per choice, like routes, and
   // a preset does not move which model the status bar names, so no notify.
@@ -2728,6 +2770,11 @@ export const api = {
   getSceneRewrites: (cid: string, sid: string) =>
     request<Record<string, SceneRewrite>>(
       "GET", `/api/campaigns/${cid}/scenes/${sid}/rewrites`, undefined, { fresh: true }),
+  // Hide a post from context, or return it. Refused on a roll, transition or
+  // note line (400 `not_excludable`), an absorbed scene and an open round (409).
+  setExcluded: (cid: string, sid: string, index: number, excluded: boolean) =>
+    request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/messages/${index}/excluded`,
+                             { excluded }),
   // Cascade post-delete (#75): this post and everything after it, plus the
   // reversal of what the scene wrote. The reply is a report, not an ack — a
   // record the compare-and-swap refused to put back is the one thing the
@@ -2755,9 +2802,12 @@ export const api = {
                                   undefined, { fresh: true }),
   // Answers with the session in the same shape `getReplay` does, plus the
   // cascade's report — the backlog is never on the wire, however this is asked.
-  startReplay: (cid: string, sid: string, index: number) =>
-    request<ReplaySession & { cascade: CascadeReport }>(
-      "POST", `/api/campaigns/${cid}/scenes/${sid}/replay`, { index }),
+  // `branch` replays inside a sibling of the scene, leaving the original
+  // untouched; the answer then names the sibling under `branched`.
+  startReplay: (cid: string, sid: string, index: number, branch = false) =>
+    request<ReplayStarted>(
+      "POST", `/api/campaigns/${cid}/scenes/${sid}/replay`,
+      { index, ...(branch ? { branch: true } : {}) }),
   // Streams like `chat` and for the same reason: it re-posts the player's own
   // words and then generates one reply against the edited history. Rerolling
   // that reply is plain `regenerate` — it is the trailing run.
@@ -3270,6 +3320,14 @@ export const api = {
     request<{ rows: RegexImportRow[] }>("POST", "/api/regex/import/preview", { data }),
   importRegex: (scope: RegexScope, rows: Omit<RegexRule, "id">[]) =>
     request<RegexBundle & { added: string[] }>("POST", "/api/regex/import", { scope, rows }),
+  getQuickReplies: (scope: QuickReplyScope) =>
+    request<QuickReplySet>("GET", quickRepliesPath(scope)),
+  /** Replaces the whole set; `expect` is the digest the caller read (409
+   *  `set_changed` when the stored set moved since). */
+  setQuickReplies: (scope: QuickReplyScope, replies: (QuickReplyEntry | QuickReplyDraft)[], expect: string) =>
+    request<QuickReplySet>("PUT", quickRepliesPath(scope), { replies, expect }),
+  getEffectiveQuickReplies: (cid: string) =>
+    request<{ replies: QuickReply[] }>("GET", `/api/campaigns/${cid}/quick-replies/effective`),
   getCampaignTracker: (cid: string) =>
     request<CampaignTrackerSetting>("GET", `/api/campaigns/${cid}/tracker`),
   setCampaignTracker: (cid: string, setting: TrackerSetting) =>

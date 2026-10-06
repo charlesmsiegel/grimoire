@@ -506,6 +506,7 @@ from grimoire.store import (  # noqa: E402
     styles,
     worlds,
 )
+from grimoire.store import authors_notes as anstore  # noqa: E402
 from grimoire.store import dossiers as dstore
 from grimoire.store import facts as fstore
 from grimoire.store import taglines as tstore
@@ -626,6 +627,13 @@ scenes.append_message(cid, sid, "assistant", "Seraphine glances toward the wareh
                       speaker="Seraphine Vale")
 scenes.append_message(cid, sid, "assistant", "Fog rolls in off the water.")
 scenes.append_message(cid, sid, "user", "I follow her.", speaker="Hero", post_id="c" * 32)
+
+# A campaign author's note (play controls V), so every composition below carries
+# one: at depth 1 it sits before the closing player post, in the offscreen
+# scene's single assistant line it sits at the start, and an opener places it
+# after its prompt. No macros, so the mirror needs no expansion.
+AUTHORS_NOTE = {"text": "Keep the storm audible in every scene.", "depth": 1, "every": 1}
+anstore.set_campaign(cid, AUTHORS_NOTE)
 
 # One tracker record, on the closing player post, so the Scene state section
 # renders here: two characters, both with a value anyone present can see and
@@ -1089,6 +1097,42 @@ ADAPT_NARRATOR_INSTRUCTION = ("Set the scene as narrator, from the greeting's se
                               "Do not write any NPC or PC actions or dialogue.")
 
 
+def _note_split(messages: list[dict], depth: int) -> int:
+    """Where an author's note at `depth` goes: before the `depth`-th most
+    recent post (0 = after the last), clamped to the start, then snapped back
+    to the start of a run of player posts, or the start. Written out here
+    rather than imported -- this script is a mirror of the real path."""
+    if depth <= 0:
+        return len(messages)
+    for i in range(max(len(messages) - depth, 0), -1, -1):
+        if (i < len(messages) and messages[i]["role"] == "user"
+                and (i == 0 or messages[i - 1]["role"] != "user")):
+            return i
+    return 0
+
+
+def _authors_note() -> dict:
+    return {"role": "system", "content": render("scene/authors_note.j2", level="campaign",
+                                                name="", text=AUTHORS_NOTE["text"])}
+
+
+def _history_with_note(messages: list[dict]) -> list[dict]:
+    """The projected history, the fixture's author's note at its split point."""
+    out: list[dict] = []
+    split = _note_split(messages, AUTHORS_NOTE["depth"])
+    for n, m in enumerate(messages):
+        if n == split:
+            out.append(_authors_note())
+        line = render("scene/history_line.j2", m=m)
+        if out and out[-1]["role"] == m["role"] and out[-1]["role"] != "system":
+            out[-1]["content"] += "\n\n" + line
+        else:
+            out.append({"role": m["role"], "content": line})
+    if split == len(messages):
+        out.append(_authors_note())
+    return out
+
+
 def rendered_messages(scene_id: str, data: dict, note: str | None = None,
                       opener_prompt: str | None = None) -> list[dict]:
     out = []
@@ -1096,16 +1140,13 @@ def rendered_messages(scene_id: str, data: dict, note: str | None = None,
     if system:
         out.append({"role": "system", "content": system})
     if opener_prompt is None:
-        for m in scenes.read_scene(cid, scene_id)["messages"]:
-            line = render("scene/history_line.j2", m=m)
-            if out and out[-1]["role"] == m["role"] and out[-1]["role"] != "system":
-                out[-1]["content"] += "\n\n" + line
-            else:
-                out.append({"role": m["role"], "content": line})
+        out += _history_with_note(scenes.read_scene(cid, scene_id)["messages"])
     if note is not None:
         out.append({"role": "user", "content": note})
     if opener_prompt is not None:
         out.append({"role": "user", "content": opener_prompt})
+        # An opener has no history: the note follows its prompt.
+        out.append(_authors_note())
     # Mirrors context._assemble exactly — this script's whole point is proving
     # the templates render what the real path renders, so the corrective is
     # measured from the same scene rather than injected from a fixture.

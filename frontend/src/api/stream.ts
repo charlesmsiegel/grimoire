@@ -83,7 +83,9 @@ export type ChatEvent = {
   speaker_done?: OpenerContribution;
   thinking_delta?: string;
   thinking_reset?: boolean;
-  response_start?: { id: string; speaker: string; actor_ref: string };
+  /** `extend` marks a Keep writing stream: `seed` is the reply as shown, which
+   *  the live bubble grows from (the stream carries only the continuation). */
+  response_start?: { id: string; speaker: string; actor_ref: string; extend?: { seed: string } };
   response_end?: { id: string; status: "complete" | "incomplete" };
   /** Group play: this turn is round `index` of `of` automatic rounds. */
   round_start?: { index: number; of: number };

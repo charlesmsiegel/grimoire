@@ -4966,3 +4966,37 @@ def test_world_overview_renders_the_campaign_worlds_profile(monkeypatch, tmp_pat
             "Themes: salt, debt\n\nA drowned coast.") in system
     ids = [s["id"] for s in context.context_sections(cid, sid)]
     assert "world_overview" in ids
+
+
+# --- author's notes and the history floor (play controls V) ----------------
+
+
+def _note_msg(c, r="user"):
+    return {"role": r, "content": c}
+
+
+def test_floor_ignores_notes():
+    """A depth-0 note under a tight budget must not push out the post being
+    answered: the floor counts non-note messages only."""
+    hist = [_note_msg("P1"), _note_msg("R1", "assistant"), _note_msg("P2"),
+            _note_msg("NOTE", "system")]
+    out = context_pack.pack([], hist, budget=20, count=lambda t: 10, notes=frozenset({3}))
+    assert [m["content"] for m in out["history"]] == ["R1", "P2", "NOTE"]
+    assert out["notes_trimmed"] == 0
+
+
+def test_note_trimmed_with_the_post_it_precedes():
+    hist = [_note_msg("NOTE", "system"), _note_msg("P1"), _note_msg("R1", "assistant"),
+            _note_msg("P2"), _note_msg("R2", "assistant")]
+    out = context_pack.pack([], hist, budget=70, count=lambda t: 10, notes=frozenset({0}))
+    assert [m["content"] for m in out["history"]] == ["R1", "P2", "R2"]
+    assert out["history_trimmed"] == 2 and out["notes_trimmed"] == 1
+
+
+def test_no_notes_is_unchanged():
+    hist = [_note_msg("NOTE", "system"), _note_msg("P1"), _note_msg("R1", "assistant"),
+            _note_msg("P2"), _note_msg("R2", "assistant")]
+    out = context_pack.pack([], hist, budget=70, count=lambda t: 10)
+    assert out["history_trimmed"] == 1 and out["notes_trimmed"] == 0
+    assert [m["content"] for m in out["history"]] == ["P1", "R1", "P2", "R2"]
+    assert context_pack.pack([], hist, budget=0)["notes_trimmed"] == 0

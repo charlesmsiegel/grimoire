@@ -483,3 +483,34 @@ test("an opener finishing after a scene switch does not drag the reader back", a
 
   expect(onSeeded).not.toHaveBeenCalled();
 });
+
+// ---- a quick reply opens the opener generator ----
+
+test("an opener request expands the panel and then focuses the opener prompt", async () => {
+  const { container, rerender } = render(<CastPanel cid="c" sid="s" ready onSeeded={() => {}} />);
+  const details = container.querySelector("details")!;
+  const prompt = await screen.findByLabelText("Opener prompt");
+  details.open = false;
+  fireEvent(details, new Event("toggle"));
+  await waitFor(() => expect(details.open).toBe(false));
+  let openWhenFocused: boolean | null = null;
+  const focus = vi.spyOn(prompt, "focus").mockImplementation(() => { openWhenFocused = details.open; });
+  rerender(<CastPanel cid="c" sid="s" ready onSeeded={() => {}} openerRequest={1} />);
+  await waitFor(() => expect(focus).toHaveBeenCalledTimes(1));
+  expect(openWhenFocused).toBe(true);
+  expect(details.open).toBe(true);
+  focus.mockRestore();
+  // The panel stays the reader's to fold again; the handled request does not reopen it.
+  details.open = false;
+  fireEvent(details, new Event("toggle"));
+  rerender(<CastPanel cid="c" sid="s" ready onSeeded={() => {}} openerRequest={1} />);
+  await waitFor(() => expect(details.open).toBe(false));
+});
+
+test("a request already made before the panel mounted does not focus anything", async () => {
+  const focus = vi.spyOn(HTMLInputElement.prototype, "focus");
+  render(<CastPanel cid="c" sid="s" ready onSeeded={() => {}} openerRequest={1} />);
+  await screen.findByLabelText("Opener prompt");
+  expect(focus).not.toHaveBeenCalled();
+  focus.mockRestore();
+});

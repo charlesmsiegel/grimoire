@@ -50,23 +50,23 @@ def _md(text: str) -> str:
     return _md_lib.markdown(text, extensions=["tables"], output_format="xhtml")
 
 
-def _message_html(speaker: str | None, content: str) -> str:
+def _message_html(speaker: str | None, content: str, excluded: bool = False) -> str:
     """One message as an XHTML fragment; a named message carries its speaker
-    as a run-in label on the first paragraph."""
+    as a run-in label on the first paragraph, and a post hidden from context
+    is wrapped and tagged as the HTML export does."""
     html = _md(content)
-    if speaker is None:
-        return html
-    label = f'<span class="speaker">{escape(speaker)}</span> '
-    if html.startswith("<p>"):
-        return "<p>" + label + html[3:]
-    return f"<p>{label}</p>\n{html}"
+    if speaker is not None:
+        label = f'<span class="speaker">{escape(speaker)}</span> '
+        html = "<p>" + label + html[3:] if html.startswith("<p>") else f"<p>{label}</p>\n{html}"
+    return _export.mark_excluded(html) if excluded else html
 
 
 def _chapter_doc(ch: dict) -> dict:
     """One scene as a spine document. `label` is what the nav and the NCX list;
     `title` is what the page itself shows, which stays the bare scene title —
     numbering belongs on the contents entry, not on the chapter opening."""
-    body = "\n".join(_message_html(m["speaker"], m["content"]) for m in ch["messages"])
+    body = "\n".join(_message_html(m["speaker"], m["content"], bool(m.get("excluded")))
+                     for m in ch["messages"])
     doc = _render("chapter.xhtml", title=ch["title"], date=ch["date"], location=ch["location"],
                   cast=ch["cast"], epigraph=ch["epigraph"], body=Markup(body))
     return {"file": f"{_export.chapter_anchor(ch)}.xhtml", "title": ch["title"],

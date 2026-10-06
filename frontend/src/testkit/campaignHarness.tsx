@@ -124,6 +124,7 @@ export function installCampaignMocks() {
   (api.createScene as any).mockResolvedValue({ id: "s1" });
   (api.renameScene as any).mockResolvedValue({ id: "s1", title: "New" });
   (api.deleteScene as any).mockResolvedValue({ ok: true });
+  (api.branchScene as any).mockResolvedValue({ id: "s1-b", scene: { meta: {}, messages: [] } });
   // Every streaming route ends a successful turn with a `done` frame — that is
   // how the client knows the backend finalized and persisted, rather than the
   // body merely reaching EOF. A default that resolved silently modelled a
@@ -149,6 +150,11 @@ export function installCampaignMocks() {
   (api.regenerate as any).mockImplementation(streamsDone);
   (api.getAlternates as any).mockResolvedValue({ active: null, alternates: [] });
   (api.pickAlternate as any).mockResolvedValue({ ok: true });
+  // "No arrows": a failed swipe read hides them, so the suites that predate
+  // swipes render the gutter they were written against. The tests that want
+  // arrows say what the read answers.
+  (api.getResponseSwipe as any).mockRejectedValue(new Error("no swipe read"));
+  (api.extendResponse as any).mockImplementation(streamsDone);
   (api.getRollProposal as any).mockResolvedValue({ record: null });
   (api.resolveProposal as any).mockImplementation(streamsDone);
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
@@ -165,6 +171,7 @@ export function installCampaignMocks() {
       model: "campaign/model", effective_model: "campaign/model", post_process: "none", key_set: true, rev: "r1",
       models: [], fetched_at: "" });
   (api.editMessage as any).mockResolvedValue({ ok: true });
+  (api.setExcluded as any).mockResolvedValue({ ok: true });
   (api.getReplay as any).mockResolvedValue(null);
   (api.replayPreview as any).mockResolvedValue(
     { posts: 1, turns: 1, threshold: 10, fork: false, blocked: "" });
@@ -232,6 +239,9 @@ export function installCampaignMocks() {
     active_connection_id: "openrouter",
     connections: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter",
                     model: "vendor/opus" }] });
+  // No author's notes: the inspector section draws no count.
+  (api.getAuthorsNotesNext as any).mockResolvedValue({ turn: 1, count: 0, notes: [] });
+  (api.getAuthorsNotes as any).mockResolvedValue({ campaign: null, scenes: {}, characters: {} });
   (getModels as any).mockResolvedValue([]);
   // `{review, generation}`, not the review alone (#396): the absorb is a
   // detached run now, and the client's `absorbScene` starts it, polls it, and
@@ -287,6 +297,7 @@ export function installCampaignMocks() {
   (api.getSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
   (api.askSceneBreak as any).mockResolvedValue({ ...NO_SCENE_BREAK, asked: false });
   (api.dismissSceneBreak as any).mockResolvedValue(NO_SCENE_BREAK);
+  (api.getEffectiveQuickReplies as any).mockResolvedValue({ replies: [] });
 }
 
 // The two paths the play view answers to, nested exactly as App.tsx nests them

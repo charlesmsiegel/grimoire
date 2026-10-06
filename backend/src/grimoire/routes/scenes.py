@@ -54,11 +54,13 @@ from .common import (
 from .models import (
     Appear,
     AppearBatch,
+    BranchScene,
     ChatTurn,
     ChronicleSave,
     Dismiss,
     EditMessage,
     EmergentCast,
+    ExcludeMessage,
     NewScene,
     RegenerateBody,
     RenameScene,
@@ -546,6 +548,11 @@ def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
         if found is not None:
             message["rewritten"] = True
             message["rewrite_key"] = found[0]
+    # Which absorbed sibling makes this branch read-only, resolved here so the
+    # play view's banner can name and link it. Only when set.
+    closed = store.scenes.read.closed_by(cid, sid)
+    if closed:
+        scene["meta"]["closed_by"] = closed
     return scene
 
 
@@ -635,6 +642,31 @@ def get_scene_rewrites(cid: str, sid: str):
     return {key: {"original": rec["original"], "rules": rec.get("rules", []),
                   "at": rec.get("at", "")}
             for key, rec in store.regex.rewrites.read_all(cid, sid).items()}
+
+
+@router.post("/campaigns/{cid}/scenes/{sid}/branch")
+def post_branch(cid: str, sid: str, body: BranchScene, request: Request) -> dict:
+    """Branch a scene from a post into a sibling scene (play controls III).
+
+    The sibling keeps the transcript through `through` and the records that go
+    with it (`store/branch.py`). An absorbed scene is refused
+    `absorbed_use_fork` -- its past lives in campaign files, so it branches by
+    forking the campaign (`POST /fork` with `from_index`) -- and a closed one
+    `branch_closed`. Held like any shape change: a live turn would append to
+    the transcript mid-copy. The activity middleware stamps the revision.
+    """
+    _require_scene(cid, sid)
+    try:
+        with runs.scene_held_open(request.app, cid, sid):
+            new = store.branch.branch_scene(cid, sid, body.through, title=body.title.strip())
+        return {"id": new, "scene": store.scenes.read_scene(cid, new)}
+    except store.branch.BranchRefused as exc:
+        raise HTTPException(status_code=409,
+                            detail={"kind": exc.kind, "detail": exc.detail}) from exc
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
 
 
 @router.put("/campaigns/{cid}/scenes/{sid}")
@@ -940,7 +972,9 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
             turn=_turn_override(turn),automatic=not ephemeral,
             actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client),
             kind="post" if not ephemeral else ("note" if content else "continue"),
-            trigger=content)
+            trigger=content,
+            # The player's own words only: the template above is app wording.
+            typed_note=content if ephemeral else "")
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default
@@ -1468,6 +1502,7 @@ def post_scene_alternate(cid: str, sid: str, vid: str, request: Request):
         # and parks the current one as a variant. Inside the hold that already
         # covers the swap, so nothing reserves a turn between the two.
         runs.require_scene_free(request.app, cid, sid)
+        runs.require_scene_open(cid, sid)
         # Resolve FIRST. The id comes from a client snapshot that another tab
         # may have moved on from, and retiring a decision is not something a
         # request that then 404s gets to do: a stale click would cancel a
@@ -2839,7 +2874,13 @@ def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
                     "detail": "this scene's id is too long for its review file — "
                               "rename the scene to something shorter, then end it"})
     generation = uuid.uuid4().hex
-    run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
+    # One hold: a closed branch is refused, the review waits for every member
+    # of the group (absorbing this one closes them), and nothing reserves a
+    # turn in a sibling between those checks and this reservation.
+    with store.locks.campaign_lock(cid):
+        runs.require_scene_open(cid, sid)
+        runs.require_group_free(request.app, cid, sid)
+        run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
     with runs.reservation(request.app, run):
         return _absorb_start(cid, sid, force, request, client, conn, run, generation)
 
@@ -2855,7 +2896,9 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
     review on the scene.
     """
     epoch, scene, tracked = _absorb_snapshot(cid, sid, run.scene_identity)
-    if not scene["messages"]:
+    # Counted in context: an all-hidden scene has nothing a review could read,
+    # and a director note left beside it is dropped from the transcript too.
+    if not store.scenes.in_context(scene["messages"]):
         raise HTTPException(status_code=400, detail="nothing to absorb")
     # Absorb is not idempotent: lore edits append and plot movements add a beat,
     # so a second pass over the same scene duplicates both. Refuse by default
@@ -3250,7 +3293,12 @@ def _retry_start(cid: str, sid: str, request: Request, kind: str, work_for) -> d
     # and spends the whole retry budget before ending in `review_missing`, and
     # aborting the browser's request stops none of that. Reentrant, so
     # `reserve_review`'s own acquisition costs nothing.
+    #
+    # A closed branch first (play controls III): the review a retry merges into
+    # is one the chronicle commit refuses on a closed scene, so the phase would
+    # be spent for nothing -- the same reason a stale review is refused below.
     with store.locks.campaign_lock(cid):
+        runs.require_scene_open(cid, sid)
         record = _pending_for_retry(cid, sid)
         generation = record.get("generation") or ""
         run = runs.reserve_review(request.app, cid, sid, kind, generation)
@@ -3428,7 +3476,11 @@ def _rolling_view(cid: str, sid: str, scene: dict, facts: dict) -> dict:
             "at": stored["at"] if has_summary else 0, "total": total,
             "stale": has_summary and not intact,
             "prior": stored["summary"] if intact else "",
-            "base": stored["at"] if intact else 0}
+            "base": stored["at"] if intact else 0,
+            # Pending posts a fold would actually SEE: one over hidden posts (or
+            # director notes, which the render drops too) only would pay a
+            # provider to restate the summary.
+            "fresh": len(store.scenes.in_context(messages[stored["at"] if intact else 0:]))}
 
 
 def _rolling_digest(cid: str, sid: str, covered: list[dict], total: int) -> str:
@@ -3464,6 +3516,8 @@ def _rolling_due(view: dict, every: int, force: bool) -> bool:
     already-current scene -- and folding an empty list of posts onto a summary
     would pay a provider to restate it.
     """
+    if view["fresh"] <= 0:
+        return False   # nothing pending is in context: an all-hidden span folds nothing
     pending = view["total"] - view["base"]
     if pending <= 0:
         return False
@@ -3609,6 +3663,11 @@ async def post_rolling_summary(cid: str, sid: str, force: bool = False,
     so. Omitted (the panel's own button, which is held while a turn streams) the
     scene is taken as it is.
     """
+    # A forced fold on a closed branch spends a call on a scene nobody can play
+    # (play controls III). The unforced call is the automatic path and is left
+    # alone: a closed scene takes no turns, so it has nothing due to fold.
+    if force:
+        runs.require_scene_open(cid, sid)
     # Two passes at most. The second only happens for a FORCED call that found
     # another fold already at the provider: it waits for that one, then starts
     # over from a fresh read, because everything below -- the scene, the facts,
@@ -3917,6 +3976,10 @@ async def post_scene_break(cid: str, sid: str, force: bool = False,
     simply wins. `_break_commit` still refuses a write whose transcript moved
     underneath it, which is the case that actually corrupts.
     """
+    # `post_rolling_summary`'s refusal, for its reason: a forced question about
+    # a closed branch is a paid answer about a scene nobody can play.
+    if force:
+        runs.require_scene_open(cid, sid)
     return await _break_once(cid, sid, force, upto, client)
 
 
@@ -3943,6 +4006,9 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
     # `force` overrides the threshold, never the emptiness: a forced question
     # about a scene with nothing new since the last one would pay a provider to
     # answer the question it just answered.
+    # Nor does it override a span that is all hidden from context: those posts
+    # are in no prompt, so `evaluate` does not count them, and the question
+    # would be asked about nothing.
     if not (view["due"] or (force and view["posts"] > 0)):
         return {**_break_body(view, every), "asked": False}
     return await _break_ask(cid, sid, scene, view, every, conn, client, provider)
@@ -4243,11 +4309,12 @@ def post_dossiers(cid: str, sid: str, request: Request,
     """
     scene = _require_scene(cid, sid)
     conn = _require_connection("dossier", cid)
-    if not scene["messages"]:
+    if not store.scenes.in_context(scene["messages"]):
         # A dossier is a paragraph the model rewrites FROM the transcript, so an
         # empty one can only produce invention. The audit needs no equivalent
         # guard: with nothing to audit it simply finds nothing, where this would
-        # stage a proposal to overwrite a real dossier with fiction.
+        # stage a proposal to overwrite a real dossier with fiction. Hidden
+        # posts and director notes do not count: the transcript below drops them.
         raise HTTPException(status_code=400, detail="nothing to build dossiers from")
     shown = store.regex.view.view(scene["messages"], cid=cid, phase="prompt")
     transcript = store.chronicle.transcript_text(
@@ -4423,6 +4490,11 @@ def put_chronicle(cid: str, sid: str, body: ChronicleSave, request: Request):
         # already covers the whole sequence, so nothing reserves a turn between
         # the check and the first write.
         runs.require_scene_free(request.app, cid, sid)
+        # A closed branch cannot be absorbed, and absorbing one member closes
+        # the rest -- so this waits for every member, or a turn landing in a
+        # sibling just closed would write to a read-only scene.
+        runs.require_scene_open(cid, sid)
+        runs.require_group_free(request.app, cid, sid)
         # Inside the lock: two saves racing on one token must not both miss.
         prior = store.commits.lookup(cid, body.commit_token)
         progress: dict = {}
@@ -4711,7 +4783,7 @@ def post_scene_cast(cid: str, sid: str, body: Appear, request: Request):
     # reason the plan lists them beside the rename. Held across the check and
     # the write, like every other door.
     try:
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             _seat_cast_member(cid, sid, body)
     except store.appearances.AppearError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
@@ -4726,7 +4798,7 @@ def delete_scene_cast(cid: str, sid: str, kind: str, id: str, request: Request):
     # The most destructive of the cast routes, and the one an inventory of them
     # is most likely to miss: `leave` removes the actor AND appends a "leaves
     # the scene" transition whenever the transcript is non-empty.
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         store.appearances.leave(cid, sid, kind, id)
     return {"ok": True}
 
@@ -4740,7 +4812,7 @@ def post_scene_cast_batch(cid: str, sid: str, body: AppearBatch, request: Reques
     added, skipped = 0, []
     # ONE hold over the whole batch, not one per member: a turn reserved
     # mid-loop would otherwise have half the cast seated under it.
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         for ref in body.refs:
             try:
                 _seat_cast_member(cid, sid, ref)
@@ -4784,7 +4856,7 @@ def post_emergent_cast(cid: str, sid: str, body: EmergentCast, request: Request)
         # transition), so the guard belongs around it rather than around the
         # create -- refusing after the character exists is the same shape as the
         # AppearError below, and the character is campaign state either way.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             _seat_cast_member(cid, sid,
                               Appear(kind="characters", id=char, version=version, role=role))
     except store.appearances.AppearError as exc:
@@ -4855,7 +4927,7 @@ def put_scene_location(cid: str, sid: str, body: SceneLocation, request: Request
         # `set_location` appends a transition line, so this moves the transcript
         # a live turn is generating into -- not merely the context it was built
         # from.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             result = store.scenes.set_location(cid, sid, body.location)
     except store.entities.EntityNotFound:
         raise HTTPException(status_code=404, detail="location not found")
@@ -4910,7 +4982,7 @@ def put_scene_datetime(cid: str, sid: str, body: SceneDatetime, request: Request
         # the scene, so this does not merely change the context a live turn was
         # built from -- it mints a new `sid` and can trip the identity fence
         # that discards a completed reply.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             result = store.scenes.set_datetime(cid, sid, body.datetime)
     except store.calendars.CalendarError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -5162,7 +5234,7 @@ def put_scene_message(cid: str, sid: str, index: int, body: EditMessage,
         # review caught that it was not: checking and then locking leaves room
         # for a send to reserve and detach in between, so the edit lands under a
         # turn that started after the check said there was none.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             messages = store.scenes.read_scene(cid,sid)["messages"]
             if 0 <= index < len(messages) and messages[index].get("response_id"):
                 try:
@@ -5289,6 +5361,44 @@ def _forget_rewrite(cid: str, sid: str, key: str) -> None:
                     key, cid, sid, exc_info=True)
 
 
+@router.put("/campaigns/{cid}/scenes/{sid}/messages/{index}/excluded")
+def put_scene_message_excluded(cid: str, sid: str, index: int, body: ExcludeMessage,
+                               request: Request):
+    """Hide a post from context, or return it.
+
+    It stays in the transcript, the play view and every export; it reaches no
+    prompt. Refused on an absorbed scene (no future prompt to protect, and what
+    absorb took from it is corrected by retcon or re-absorb) and while a round
+    is open (the toggle moves `transcript_hash`, stranding that round's Retry or
+    roll resolution). Every check sits inside the same hold as the write, for
+    the reason `put_scene_message` gives.
+    """
+    _require_scene(cid, sid)
+    try:
+        with runs.scene_held_open(request.app, cid, sid):
+            if _already_absorbed(store.scenes.read_scene(cid, sid)):
+                raise HTTPException(409, detail={
+                    "kind": "scene_absorbed",
+                    "detail": "this scene has been absorbed; its posts can no longer be hidden"})
+            if store.responses.unfinished(cid, sid) is not None:
+                raise HTTPException(409, detail={
+                    "kind": "round_open",
+                    "detail": "finish or discard the open round before hiding a post"})
+            if store.scenes.set_excluded(cid, sid, index, body.excluded):
+                # What later tracker records were built on has changed, as after
+                # an edit: flagged, not re-run, and in this hold. Fail-soft.
+                tracker_routes.after_text_edit(cid, sid, index)
+    except IndexError as exc:
+        raise HTTPException(status_code=400, detail="message index out of range") from exc
+    except store.scenes.NotExcludable as exc:
+        raise HTTPException(status_code=400, detail={
+            "kind": "not_excludable",
+            "detail": "a roll, scene-transition or director-note line can't be hidden from context"}) from exc
+    except (store.scenes.SceneNotFound, store.campaigns.CampaignNotFound) as exc:
+        raise HTTPException(status_code=404, detail="scene not found") from exc
+    return {"ok": True}
+
+
 @router.delete("/campaigns/{cid}/scenes/{sid}/messages/{index}")
 def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request):
     """Delete this post and everything after it, undoing what the scene wrote (#75).
@@ -5327,7 +5437,7 @@ def delete_scene_messages_from(cid: str, sid: str, index: int, request: Request)
         # Held across the check and the cascade, not merely ahead of it: the
         # campaign lock is reentrant, so the cascade's own acquisitions are
         # free, and a send cannot reserve a turn in the gap.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             report = store.cascade.delete_from(cid, sid, index)
             # The cut posts' tracker records describe posts that no longer
             # exist. Nothing is left after them to flag: a cut takes the tail.
@@ -5366,7 +5476,7 @@ def post_scene_retcon(cid: str, sid: str, index: int, body: EditMessage,
         body.content, store.context.scene_substitutions(cid, sid), cid, sid)
     try:
         # One hold over check and rewrite, as for the cascade delete above.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             # The stored-rewrite handling the plain edit gets, in this same
             # hold: the store phase on the new text, then the post's record
             # settled -- replaced when a rule fired, retired when the retcon
@@ -5465,7 +5575,9 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
         # at `index` and reverses everything the removed posts caused. Under a
         # live turn that is history moving out from under a reply already being
         # written.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
+            if body.branch:
+                return _replay_in_branch(cid, sid, body.index)
             report = store.replay.begin(cid, sid, body.index)
             # The cut half of a replay: the held tail's records go with it, as
             # for any cut (a restore brings the posts back untracked, Retry).
@@ -5476,8 +5588,33 @@ def post_replay(cid: str, sid: str, body: ReplayStart, request: Request):
     except store.replay.ReplayError as exc:
         raise HTTPException(status_code=409,
                             detail={"detail": str(exc), "kind": "replay_refused"})
+    except store.branch.BranchRefused as exc:
+        raise HTTPException(status_code=409,
+                            detail={"kind": exc.kind, "detail": exc.detail}) from exc
     except (store.SceneNotFound, store.CampaignNotFound):
         raise HTTPException(status_code=404, detail="scene not found")
+
+
+def _replay_in_branch(cid: str, sid: str, index: int) -> dict:
+    """Branch the whole transcript and begin the replay inside the sibling, so
+    the original is never touched (#151). Called inside the door's hold.
+
+    Every refusal `begin` makes is evaluated FIRST, so a replay that would be
+    refused leaves no sibling; if `begin` still refuses after the branch, the
+    sibling is discarded (`branch.discard`, which also bumps the revision for
+    the roll entries the branch appended). Answers the session with the
+    sibling's id under `branched`, for the client to navigate to.
+    """
+    store.replay.check_begin(cid, sid, index)
+    last = len(store.scenes.read_scene(cid, sid)["messages"]) - 1
+    new = store.branch.branch_scene(cid, sid, last)
+    try:
+        report = store.replay.begin(cid, new, index)
+    except BaseException:
+        store.branch.discard(cid, new)
+        raise
+    tracker_routes.after_cut(cid, new)
+    return {**report, "branched": new}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/replay/turn")

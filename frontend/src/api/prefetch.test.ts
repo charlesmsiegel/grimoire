@@ -3,6 +3,7 @@
 import { createElement } from "react";
 import { render, fireEvent } from "@testing-library/react";
 import { INTENT_DWELL_MS, intentProps, resetPrefetch } from "./prefetch";
+import { TestPointerEvent } from "../testkit/pointer";
 
 vi.mock("./client", () => ({
   api: {
@@ -11,21 +12,6 @@ vi.mock("./client", () => ({
   },
 }));
 import { api } from "./client";
-
-/** jsdom has no PointerEvent, and testing-library then falls back to a bare
- *  Event -- which drops `pointerType`, `pointerId` and the coordinates, the
- *  very fields a touch is told apart by. The smallest stand-in that keeps
- *  them, so these tests drive the real React handlers rather than calling
- *  the functions directly. */
-class TestPointerEvent extends MouseEvent {
-  pointerType: string;
-  pointerId: number;
-  constructor(type: string, init: PointerEventInit = {}) {
-    super(type, init);
-    this.pointerType = init.pointerType ?? "";
-    this.pointerId = init.pointerId ?? 0;
-  }
-}
 
 const WORLD = { kind: "world" as const, id: "saltmarch" };
 const finger = (x = 40, y = 40) => ({ pointerType: "touch", pointerId: 7, clientX: x, clientY: y });

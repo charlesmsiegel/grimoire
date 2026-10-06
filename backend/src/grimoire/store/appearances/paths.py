@@ -170,3 +170,37 @@ def begin_observing(cid: str, sid: str, actor_refs: list[str], start: int) -> No
                 changed = True
         if changed:
             _write(cid, data)
+
+
+def join_branch(cid: str, src_sid: str, dst_sid: str, through: int) -> None:
+    """Seat a branch of `src_sid` with the cast it had at message `through`.
+
+    Each actor's presence intervals in the source that start at or before
+    `through` are copied to the branch (a cut that follows clips them). The
+    actor joins the branch's `scenes` only when present at `through` -- an
+    interval covering it -- or when it is a member of the source with no
+    presence record at all (legacy cast, which has no past to consult). An
+    actor who had already left keeps the clipped interval, so the posts it saw
+    stay visible to it, but is not seated: `leave` takes an actor out of
+    `scenes`, and the branch is the source as it stood at that point.
+
+    Written BEFORE the branch's transcript is cut, because the cut reads the
+    player cast to tell player posts from model posts.
+    """
+    with locks.campaign_lock(cid):
+        data = record(cid)
+        changed = False
+        for rec in data.values():
+            intervals = rec.get("presence", {}).get(src_sid)
+            kept = [dict(r) for r in intervals or []
+                    if isinstance(r, dict) and r.get("start", 0) <= through]
+            if kept:
+                rec.setdefault("presence", {})[dst_sid] = kept
+                changed = True
+            member = src_sid in rec.get("scenes", [])
+            present = any(r.get("end") is None or r["end"] > through for r in kept)
+            if (present or (member and intervals is None)) and dst_sid not in rec.get("scenes", []):
+                rec.setdefault("scenes", []).append(dst_sid)
+                changed = True
+        if changed:
+            _write(cid, data)

@@ -27,12 +27,17 @@ export async function campaignApiMock() {
       createScene: vi.fn(),
       renameScene: vi.fn(),
       deleteScene: vi.fn(),
+      branchScene: vi.fn(),
       forkCampaign: vi.fn(),
       chat: vi.fn(),
       retry: vi.fn(),
       regenerate: vi.fn(),
       getResponse: vi.fn(), deleteResponse: vi.fn(), activateResponseVariant: vi.fn(),
-      regenerateResponse: vi.fn(), passageCharacterEvidence: vi.fn(), draftPassageCharacter: vi.fn(), savePassageCharacter: vi.fn(),
+      // The swipe read for the last response. Listed here because `...actual`
+      // does not reach inside `api`: without it every suite would call
+      // `undefined(...)` on every scene that ends on a response.
+      getResponseSwipe: vi.fn(),
+      regenerateResponse: vi.fn(), extendResponse: vi.fn(), passageCharacterEvidence: vi.fn(), draftPassageCharacter: vi.fn(), savePassageCharacter: vi.fn(),
       // Stop. Closing the connection is no longer the cancel -- a turn outlives
       // its socket now -- so the run has to be told, and a mock without this
       // would make `cancelTurn` throw instead of failing the assertion that
@@ -61,7 +66,7 @@ export async function campaignApiMock() {
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),
       getSceneChecks: vi.fn(), rollCheck: vi.fn(),
       getConfig: vi.fn(),
-      editMessage: vi.fn(), deleteMessagesFrom: vi.fn(),
+      editMessage: vi.fn(), setExcluded: vi.fn(), deleteMessagesFrom: vi.fn(),
       // Retcon and its replay (#78/#79/#80). `getReplay` answers null for every
       // suite here, which is what makes the embedded ReplayPanel render nothing
       // -- the tests that want it say so.
@@ -116,6 +121,12 @@ export async function campaignApiMock() {
       // Per-task routing (#142): the page resolves the model its turns run on
       // and publishes it to the header.
       getCampaignRouting: vi.fn(), setCampaignRouting: vi.fn(),
+      // Author's notes (play controls V): the inspector's section and its count.
+      getAuthorsNotes: vi.fn(), setCampaignAuthorsNote: vi.fn(),
+      setCharacterAuthorsNote: vi.fn(), setSceneAuthorsNote: vi.fn(),
+      getAuthorsNotesNext: vi.fn(),
+      // Quick replies: the composer's strip reads the effective set.
+      getEffectiveQuickReplies: vi.fn(), getQuickReplies: vi.fn(), setQuickReplies: vi.fn(),
       // The width a portrait asks for is part of the URL a test reads, so a
       // plate that fell back to the full-size original says so.
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string,
@@ -130,8 +141,9 @@ export async function campaignApiMock() {
  *  campaign-view suite is measuring the page rather than five other pages. */
 export const componentStubs = {
   CastPanel: () => ({
-    CastPanel: ({ initialPrompt, greeting, onSceneRenamed, onSeeded }: any) => (
-      <div data-testid="cast-panel" data-greeting={greeting ?? ""}>
+    CastPanel: ({ initialPrompt, greeting, onSceneRenamed, onSeeded, openerRequest }: any) => (
+      <div data-testid="cast-panel" data-greeting={greeting ?? ""}
+           data-opener-request={openerRequest ?? 0}>
         {initialPrompt ?? ""}
         <button onClick={() => onSceneRenamed?.("s10")}>stub-datestamp</button>
         <button onClick={() => onSeeded?.()}>stub-seeded</button>
@@ -158,8 +170,12 @@ export const componentStubs = {
   // of its own that drives the real thing. What CampaignView owns is which post
   // the gutter hands it, so that is all the stub reports.
   ReplayPanel: () => ({
-    ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch }: any) => (
-      <div data-testid="replay-panel" data-start-at={startAt ?? ""}>
+    ReplayPanel: ({ startAt, onStartHandled, onForked, onChanged, latch, branchable,
+                    onBranched, closed }: any) => (
+      <div data-testid="replay-panel" data-start-at={startAt ?? ""}
+           data-branchable={branchable ? "true" : "false"}
+           data-closed={closed ? "true" : "false"}>
+        <button onClick={() => onBranched?.("s1-b")}>stub-replay-branched</button>
         <button onClick={() => onStartHandled()}>stub-replay-close</button>
         <button onClick={() => onForked("forked")}>stub-replay-forked</button>
         <button onClick={() => onChanged()}>stub-replay-changed</button>

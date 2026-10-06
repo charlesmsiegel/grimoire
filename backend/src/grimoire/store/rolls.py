@@ -129,3 +129,32 @@ def replay(cid: str, rid: str) -> dict:
     entry = get(cid, rid)
     result = dice.roll(entry["result"]["notation"], entry["result"]["seed"])
     return {"entry": entry, "result": result, "match": result == entry["result"]}
+
+
+def copy_for_branch(cid: str, src_sid: str, dst_sid: str, ids: list[str]) -> list[dict]:
+    """Copy the source scene's entries `ids` names, in that order, to a branch.
+
+    The branch keeps the transcript lines these entries produced, and a roll
+    line with no entry is one the audit cannot account for -- so each is copied
+    with the branch as its `scene` and a fresh positional id. Never the
+    `proposal` tag: `find_by_proposal` answers with the first entry carrying
+    one, and two would make that answer depend on which scene asked. Which
+    entries match which lines is the caller's decision (`store/branch.py`); an
+    id that is not the source's is skipped. Returns the copies.
+    """
+    with locks.campaign_lock(cid):
+        entries = read(cid)
+        by_id = {e.get("id"): e for e in entries if e.get("scene") == src_sid}
+        copies: list[dict] = []
+        for rid in ids:
+            source = by_id.get(rid)
+            if source is None:
+                continue
+            entry = {"id": f"r{len(entries) + 1}", "ts": now_iso(), "scene": dst_sid,
+                     "label": source.get("label"), "result": source.get("result"),
+                     **({"tier": source["tier"]} if source.get("tier") else {})}
+            entries.append(entry)
+            copies.append(entry)
+        if copies:
+            _write(cid, entries)
+        return copies

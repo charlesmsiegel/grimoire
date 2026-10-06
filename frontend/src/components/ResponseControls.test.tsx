@@ -33,6 +33,31 @@ describe("individual response controls", () => {
     expect(screen.getByRole("button", { name: "Delete response" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Reroll response" })).toBeDisabled();
   });
+  it("keeps writing with the shared steer and route, and only when offered", () => {
+    const onExtend = vi.fn();
+    const actions = show({ onExtend });
+    fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "Colder" } });
+    fireEvent.click(screen.getByRole("button", { name: "Keep writing ▸" }));
+    expect(onExtend).toHaveBeenCalledWith("response-a", "Colder", { connection_id: "", model: "" });
+    expect(actions.onReroll).not.toHaveBeenCalled();
+  });
+  it("offers no Keep writing without a handler", () => {
+    show();
+    expect(screen.queryByRole("button", { name: "Keep writing ▸" })).not.toBeInTheDocument();
+  });
+  it("disables Keep writing on its own flag while Reroll response stays usable", () => {
+    show({ onExtend: vi.fn(), extendDisabled: true });
+    expect(screen.getByRole("button", { name: "Keep writing ▸" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Reroll response" })).not.toBeDisabled();
+  });
+  it("disables Keep writing with every other write while busy", () => {
+    show({ onExtend: vi.fn(), disabled: true });
+    expect(screen.getByRole("button", { name: "Keep writing ▸" })).toBeDisabled();
+  });
+  it("hides Keep writing where there is no frozen prompt to continue from", () => {
+    show({ onExtend: vi.fn(), canReroll: false });
+    expect(screen.queryByRole("button", { name: "Keep writing ▸" })).not.toBeInTheDocument();
+  });
   it("offers explicit replay when a historical snapshot is unavailable", () => {
     const actions = show({ canReroll: false });
     expect(screen.queryByRole("button", { name: "Reroll response" })).not.toBeInTheDocument();
@@ -82,5 +107,27 @@ describe("individual response controls", () => {
     expect(screen.getByText("Response issue: invalid_handoff")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Use variant 2" }));
     expect(actions.onActivate).toHaveBeenCalledWith("response-a", "v2");
+  });
+  it("shows what made each variant under its text, and nothing for one with no record", async () => {
+    vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
+      settings: { words: 120, paragraphs: 3, style_id: "", phase: "play" },
+      resume_settings: { words: 60, paragraphs: 1, style_id: "noir", phase: "play" },
+      variants: [{ id: "v1", content: "First", status: "complete" },
+        { id: "v2", content: "Second", status: "complete", made_by: { model: "vendor/m", guidance: "Colder." } },
+        { id: "v3", content: "Third", status: "complete", made_by: { model: "vendor/r", composed: "resume" } }] } as Awaited<ReturnType<typeof api.getResponse>>);
+    show();
+    fireEvent.click(screen.getByRole("button", { name: "Response variants" }));
+    await screen.findByRole("button", { name: "Use variant 2" });
+    expect(screen.getAllByText(/^Model: /)).toHaveLength(2);
+    expect(screen.getByText("Model: vendor/m")).toBeInTheDocument();
+    expect(screen.getByText("Guided: Colder.")).toBeInTheDocument();
+    expect(screen.getAllByText("Guided: Colder.")).toHaveLength(1);
+    // Each variant reads the settings it was composed under.
+    expect(screen.getByText("Length: ~120 words, 3 paragraphs")).toBeInTheDocument();
+    expect(screen.getByText("Length: ~60 words, 1 paragraph")).toBeInTheDocument();
+    expect(screen.getByText("Style: noir")).toBeInTheDocument();
+    // The variant with no `made_by` renders no provenance beside its text.
+    const first = screen.getByText("First").parentElement as HTMLElement;
+    expect(first.querySelectorAll("p.subtle")).toHaveLength(0);
   });
 });

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from .. import statcache
 from ..appearances import cast
+from ..campaigns import paths as campaigns_paths
 from ..frontmatter import parse_frontmatter, parse_frontmatter_head
 from ..paths import safe_id
 from . import paths, serialize
@@ -54,6 +55,12 @@ def _scene_row(p: Path) -> dict:
             # rail that called a scene unfinished while the absorb guard
             # called it done would be worse than either answer alone.
             "done": str(meta.get("done", "")).lower() == "true",
+            # The branch keys (play controls III), emitted only when present
+            # so a scene that was never branched lists exactly as before.
+            **{k: str(meta[k]) for k in ("branch_group", "branch_of") if meta.get(k)},
+            # Never reaches a caller: `list_scenes` reads it to resolve groups
+            # (a scene's group is `branch_group or identity`) and pops it.
+            "_identity": str(meta.get("identity", "") or ""),
         }
     sig = statcache.signature(p)
     if sig is None:
@@ -72,7 +79,60 @@ def list_scenes(cid: str) -> list[dict]:
                 continue
             out.append({"id": p.stem, **_scene_row(p)})
     out.sort(key=lambda m: m["updated"], reverse=True)
+    _resolve_groups(out)
     return out
+
+
+def _resolve_groups(rows: list[dict]) -> None:
+    """Fill in each row's branch group and `closed_by`, in place.
+
+    A scene's group is its `branch_group`, else its own identity: the scene a
+    branch was taken from is never written, so it carries no key and is found
+    by the token its siblings name. A group shows on a row only when it has
+    more than one member, so an unbranched scene lists exactly as it always did.
+
+    **Closed is derived, not stored.** A member that is not absorbed is closed
+    while another member is (`done`); the absorbed member with the smallest id
+    names it. Deleting, un-absorbing or hand-editing that member reopens the
+    rest with no bookkeeping, which is the whole reason it is computed here.
+    """
+    members: dict[str, list[dict]] = {}
+    for row in rows:
+        ident = row.pop("_identity", "")
+        group = row.get("branch_group") or ident
+        if group:
+            members.setdefault(group, []).append(row)
+    for group, rows_in in members.items():
+        if len(rows_in) < 2:
+            continue
+        done = sorted((r for r in rows_in if r["done"]), key=lambda r: r["id"])
+        for row in rows_in:
+            row["branch_group"] = group
+            if done and not row["done"]:
+                row["closed_by"] = {"sid": done[0]["id"], "title": done[0]["title"]}
+
+
+def closed_by(cid: str, sid: str) -> dict | None:
+    """`{"sid", "title"}` of the absorbed sibling that makes this scene
+    read-only, or `None` -- for an open scene, an absorbed one, a scene that is
+    not there, and a campaign that is not there (the caller's own not-found
+    mapping answers those).
+
+    Asked on every turn's reservation, so the common answers are cheap: an
+    absorbed scene is never closed, and the listing it otherwise consults is
+    memoized per file.
+    """
+    p = paths._scene_path(cid, sid)
+    try:
+        if not safe_id(sid) or not p.exists():
+            return None
+        if str(parse_frontmatter_head(p).get("done", "")).lower() == "true":
+            return None
+        rows = list_scenes(cid)
+    except (OSError, campaigns_paths.CampaignNotFound):
+        return None
+    row = next((r for r in rows if r["id"] == sid), None)
+    return dict(row["closed_by"]) if row and row.get("closed_by") else None
 
 
 def is_pcless(cid: str, sid: str) -> bool:

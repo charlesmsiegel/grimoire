@@ -166,7 +166,7 @@ def _campaign_block(cid: str, ctx: todo_routes._Ctx) -> dict | None:
     # transcript body acceptable on a route that runs on every navigation; see
     # the module docstring.
     open_scenes = [{"sid": s["id"], "title": s["title"], "turns": _scene_turns(cid, s["id"])}
-                   for s in scenes if not s["done"]]
+                   for s in scenes if not s["done"] and not s.get("closed_by")]
 
     unreviewed, pending = _pending(cid)
 

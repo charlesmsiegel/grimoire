@@ -176,6 +176,27 @@ test("alternate reads never coalesce, so a set matches the transcript it was rea
   expect(await older).toEqual({ active: 0, alternates: [{ id: "a" }] });
 });
 
+test("swipe reads never coalesce, so a refresh after a swipe sees the swipe", async () => {
+  // `useResponseSwipe` re-reads after every activate, reroll and delete. A
+  // shared read is as old as the request it joined, so a refresh issued while
+  // the pre-mutation GET is still open would install that older state: the
+  // counter names the take the swipe just replaced.
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk({ active: 1, variants: [{ id: "a" }, { id: "b" }] }));
+  globalThis.fetch = fetchMock;
+
+  const older = api.getResponseSwipe("run", "s1", "r1");   // in flight, unresolved
+  const newer = api.getResponseSwipe("run", "s1", "r1");   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+
+  expect((await newer).active).toBe(1);
+  releaseFirst(jsonOk({ active: 0, variants: [{ id: "a" }, { id: "b" }] }));
+  expect((await older).active).toBe(0);
+});
+
 test("scene reads never coalesce, so a refresh after a mutation sees the mutation", async () => {
   // The alternates read being fresh is only half of it: the readiness gate
   // compares a set against the TRANSCRIPT it was read with, and `selectScene` is
@@ -1148,7 +1169,19 @@ const TURN_PRODUCERS: [string,
    (on, a, oi) => api.resolveProposal("c1", "s1", { proposal: "pr-1", action: "decline" },
                                       on, undefined, a, oi)],
   ["replayTurn", (on, a, oi) => api.replayTurn("c1", "s1", on, undefined, a, oi)],
+  ["extendResponse",
+   (on, a, oi) => api.extendResponse("c1", "s1", "r1", on, undefined, undefined, a, oi)],
 ];
+
+test("extendResponse posts its overrides to the response's extend route", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
+  globalThis.fetch = fetchMock;
+  await api.extendResponse("c1", "s1", "r1", () => {},
+                           { guidance: "Colder", connection_id: "", model: "" });
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/c1/scenes/s1/responses/r1/extend");
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(
+    { guidance: "Colder", connection_id: "", model: "" });
+});
 
 test.each(TURN_PRODUCERS)(
   "%s sends its attempt and reports the wire index", async (_name, call) => {
@@ -2443,4 +2476,37 @@ test("editMessage sends restore only when asked, so every plain edit is unchange
   expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/campaigns/run/scenes/s1/messages/2",
     expect.objectContaining({ method: "PUT",
                               body: JSON.stringify({ content: "the original", restore: true }) }));
+});
+
+test("branchScene POSTs the branch point, and a title only when given", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "s1-b", scene: { meta: {}, messages: [] } }));
+  globalThis.fetch = fetchMock;
+  await api.branchScene("c1", "s1", 2);
+  expect(fetchMock).toHaveBeenCalledWith("/api/campaigns/c1/scenes/s1/branch",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ through: 2 }) }));
+  await api.branchScene("c1", "s1", 2, "Winifred");
+  expect(fetchMock).toHaveBeenLastCalledWith("/api/campaigns/c1/scenes/s1/branch",
+    expect.objectContaining({ body: JSON.stringify({ through: 2, title: "Winifred" }) }));
+});
+
+test("forkCampaign sends from_index only when it is given", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ id: "b" }));
+  globalThis.fetch = fetchMock;
+  await api.forkCampaign("c1", "B", "s1", {}, 3);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual(
+    { name: "B", from_scene: "s1", from_index: 3 });
+  await api.forkCampaign("c1", "B", "s1");
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ name: "B", from_scene: "s1" });
+  await api.forkCampaign("c1", "B", "s1", {}, 0);
+  expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toEqual(
+    { name: "B", from_scene: "s1", from_index: 0 });
+});
+
+test("startReplay asks for a branch only when told to", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ cut: 2, cascade: {} }));
+  globalThis.fetch = fetchMock;
+  await api.startReplay("c1", "s1", 2, true);
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({ index: 2, branch: true });
+  await api.startReplay("c1", "s1", 2);
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ index: 2 });
 });

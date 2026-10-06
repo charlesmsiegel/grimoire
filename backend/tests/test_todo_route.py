@@ -1010,3 +1010,15 @@ def test_owed_chore_and_items_agree(client, campaign):
     chore = _owed(client, cid)
     assert chore is not None
     assert chore["n"] == _items(client, "owed", cid)["total"] == 2
+
+
+def test_a_closed_branch_is_not_an_open_scene(client, campaign):
+    cid, _ = campaign
+    a = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Mara"}).json()["id"]
+    b = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Winifred"}).json()["id"]
+    g = store.scenes.ensure_identity(cid, a)
+    store.scenes.write.set_branch_keys(cid, b, g, of=g)
+    store.scenes.mark_absorbed(cid, a, "It ended.", "It ended, at length.")
+    assert "open-scenes" not in {row["id"] for row in _todo(client, cid)["chores"]}
+    items = client.get("/api/todo/open-scenes/items", params={"campaign": cid}).json()
+    assert items["items"] == []

@@ -47,6 +47,7 @@ def test_every_shape_change_is_refused_while_a_run_holds_the_scene(held_scene, c
         ("put",    base,                        {"title": "Winifred"}),
         ("delete", base,                        None),
         ("put",    f"{base}/messages/0",        {"content": "edited"}),
+        ("put",    f"{base}/messages/0/excluded", {"excluded": True}),
         ("delete", f"{base}/messages/0",        None),
         ("post",   f"{base}/messages/0/retcon", {"content": "retconned"}),
         ("post",   f"{base}/alternates/v-nope",  None),
@@ -72,6 +73,8 @@ def test_every_shape_change_is_refused_while_a_run_holds_the_scene(held_scene, c
         # inventory built by reading `scenes.py` never reached it.
         ("post",   f"{base}/first-post",         {"text": "The lamps are lit."}),
         ("post",   f"{base}/start-from-greeting", {"greeting": "g1"}),
+        # Branching copies the transcript a live turn is about to append to.
+        ("post",   f"{base}/branch",             {"through": 0}),
     ]
     for method, path, body in calls:
         r = getattr(client, method)(path, **({"json": body} if body else {}))

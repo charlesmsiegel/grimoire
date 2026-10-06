@@ -16,12 +16,15 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``continuity``  /campaigns/{cid}/continuity, reviewed aliases and links,
                   /campaigns/{cid}/continuity/drivers
   ``scenes``      /campaigns/{cid}/scenes
+  ``authors_notes`` /campaigns/{cid}/authors-notes and a scene's author's note
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
   ``usage``       /usage/summary, /campaigns/{cid}/usage cost rollups, /pricing
   ``search``      /search, the keyword sweep over content and facts
   ``tracker``     /campaigns/{cid}/tracker, the scene state tracker
   ``regex_rules`` /regex, the output-processing rule files and their test pane
+  ``quick_replies`` /worlds/{wid}/quick-replies and /campaigns/{cid}/quick-replies,
+                  the composer's one-tap buttons
   ``entities``    the generic /{kind} entity surface for both scopes
 
 ORDERING: FastAPI matches in registration order and never backtracks, so the
@@ -56,6 +59,7 @@ from __future__ import annotations
 from fastapi import APIRouter
 
 from . import (
+    authors_notes,
     campaigns,
     character_turns,
     characters,
@@ -70,6 +74,7 @@ from . import (
     modules,
     observability,
     passage_characters,
+    quick_replies,
     regex_rules,
     runs,
     scenes,
@@ -166,8 +171,8 @@ def _compose(domain: APIRouter) -> None:
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, greetings,
-                runs, scenes, character_turns, passage_characters, weather, mechanics, usage, observability,
-                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules):
+                runs, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
+                campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
     _compose(_domain.router)
 
 _compose(entities.router)  # keep last: generic /{kind} catch-alls

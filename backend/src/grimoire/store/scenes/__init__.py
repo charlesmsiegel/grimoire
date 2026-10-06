@@ -69,6 +69,7 @@ from .serialize import (  # noqa: F401
     _MARKER,
     _SAFE_LABEL,
     DIRECTOR_SPEAKER,
+    EXCLUDED_MARKER,
     RESERVED_LABELS,
     ROLE_TO_LABEL,
     ROLL_SPEAKER,
@@ -83,10 +84,17 @@ from .serialize import (  # noqa: F401
     _serialize_messages,
     _speaker_and_role,
     confusable,
+    escape_marker,
+    excludable,
+    excluded_since,
+    in_context,
     is_director_note,
+    is_excluded,
     label_preserved,
     match_name,
     speaker_base,
+    unescape_marker,
+    without_excluded,
 )
 from .turns import (  # noqa: F401
     TurnSizesDesynced,
@@ -100,6 +108,7 @@ from .turns import (  # noqa: F401
 )
 from .write import (  # noqa: F401
     RESPONSE_FIELDS,
+    NotExcludable,
     RollMessageImmutable,
     add_dismissed,
     append_message,
@@ -113,6 +122,7 @@ from .write import (  # noqa: F401
     remove_trailing_user_post,
     replace_messages,
     restore_trailing_assistant_run,
+    set_excluded,
     set_group,
     set_pcless,
     set_response,

@@ -596,6 +596,50 @@ def edit_message(cid: str, sid: str, index: int, content: str) -> None:
     atomic.write_text(p, dump_frontmatter(meta, new_body))
 
 
+class NotExcludable(Exception):  # noqa: N818 - follows RollMessageImmutable
+    """A roll, transition or director-note line cannot be hidden from context."""
+
+
+@locking._serialized
+def set_excluded(cid: str, sid: str, index: int, excluded: bool) -> bool:
+    """Hide a post from context, or return it; whether anything changed.
+
+    Exclusion belongs to the post slot and to the WHOLE response: a reply split
+    into parts around a roll is one reply, so every part sharing the target's
+    `response_id` moves together. The stored value is the time it was set
+    (`now_iso`), kept as-is on a part that already had one; an included post
+    has no key. Like an edit, it changes what later prompts saw, so every
+    later ledger response is flagged `context_changed`. Excluding is not
+    deleting: content and block structure are unchanged, so `turn_sizes` is too.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    players = frozenset(cast.player_names(cid, sid))
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    messages = serialize._parse_messages(body, players)
+    if index < 0 or index >= len(messages):
+        raise IndexError(index)
+    if not serialize.excludable(messages[index]):
+        raise NotExcludable(index)
+    rid = messages[index].get("response_id")
+    group = [i for i, m in enumerate(messages) if m.get("response_id") == rid] if rid else [index]
+    if all(serialize.is_excluded(messages[i]) == excluded for i in group):
+        return False
+    stamp = now_iso()
+    for i in group:
+        if not excluded:
+            messages[i].pop("excluded", None)
+        elif not serialize.is_excluded(messages[i]):
+            messages[i]["excluded"] = stamp
+    for later in messages[max(group) + 1:]:
+        if later.get("response_id"):
+            later["context_changed"] = True
+    meta["updated"] = stamp
+    atomic.write_text(p, dump_frontmatter(meta, serialize._serialize_messages(messages)))
+    return True
+
+
 @locking._serialized
 def set_rolling_summary(cid: str, sid: str, summary: str, at: int, digest: str,
                         facts: str = "") -> None:
@@ -745,6 +789,24 @@ def mark_absorbed(cid: str, sid: str, one_line: str, summary: str) -> None:
     meta["summary"] = summary
     meta["done"] = "true"
     meta["updated"] = now_iso()
+    atomic.write_text(p, dump_frontmatter(meta, body))
+
+
+@locking._serialized
+def set_branch_keys(cid: str, sid: str, group: str, of: str | None = None) -> None:
+    """Stamp a scene's branch group, and the identity it was branched from.
+
+    `updated` is left alone: the transcript did not change, and the scenes list
+    sorts on it. Closedness is not stored here or anywhere — `read.list_scenes`
+    derives it from the group's `done` flags.
+    """
+    p = paths._scene_path(cid, sid)
+    if not safe_id(sid) or not p.exists():
+        raise paths.SceneNotFound(sid)
+    meta, body = parse_frontmatter(p.read_text(encoding="utf-8"))
+    meta["branch_group"] = group
+    if of:
+        meta["branch_of"] = of
     atomic.write_text(p, dump_frontmatter(meta, body))
 
 

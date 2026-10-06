@@ -116,7 +116,11 @@ def variants_by_response(
 
 
 def transcript_hash(messages):
-    public = [{k: m[k] for k in ("role", "speaker", "content") if k in m} for m in messages]
+    # A hidden post changes what the round's next prompt holds, so the flag is
+    # hashed -- but only when present, so an unflagged transcript hashes exactly
+    # as it did before the flag existed and no open round is stranded on upgrade.
+    public = [{**{k: m[k] for k in ("role", "speaker", "content") if k in m},
+               **({"excluded": True} if m.get("excluded") else {})} for m in messages]
     return hashlib.sha256(
         json.dumps(public, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
@@ -126,13 +130,16 @@ def _id():
     return uuid.uuid4().hex
 
 
-def _message(record, content, status, variant=None):
+def _message(record, content, status, variant=None, excluded=None):
     variant = variant or next((v for v in record["variants"] if v["id"] == record["active_variant"]), {})
     # Only an opaque pointer enters transcript metadata. The reasoning itself
     # stays in the response ledger and cannot become scene context or mechanics.
     thinking = {"response_thinking": variant["id"]} if variant.get("reasoning") else {}
     # Only when known, so a variant saved before provenance serializes as it did.
     served = {"connection": variant["connection"]} if variant.get("connection") else {}
+    # Hidden-from-context belongs to the post slot, not the take: this dict is
+    # rebuilt whole, so a writer that does not pass the flag through drops it.
+    hidden = {"excluded": excluded} if excluded else {}
     return {**thinking, **served,
         "role": "assistant",
         "speaker": record["speaker"],
@@ -141,7 +148,15 @@ def _message(record, content, status, variant=None):
         "response_status": status,
         "response_can_reroll": bool(record.get("snapshot_ref") or record.get("snapshot")),
         "context_changed": False,
+        **hidden,
     }
+
+
+def _excluded_of(messages: list[dict], rid: str) -> str | None:
+    """The exclusion stamp a response carries -- the greatest among its parts --
+    or None when no part of it is hidden."""
+    stamps = [str(m["excluded"]) for m in messages if m.get("response_id") == rid and m.get("excluded")]
+    return max(stamps) if stamps else None
 
 
 def _unassigned(message: dict) -> bool:
@@ -274,8 +289,14 @@ def get(cid: str, sid: str, rid: str, *, private=False) -> dict:
 def new_round(
     cid: str, sid: str, *, eligible, automatic, post, run_id, actor_ref=None, note="", turn=None,
     mode="directed", plan=(), auto_remaining=0, round_index=1, auto_total=0, present=None,
+    typed_note: str = "",
 ) -> dict:
     """Open a round, superseding any unfinished one.
+
+    `note` is what the prompt is steered by, which for an empty send, a replay
+    turn or an automatic follow-on round is the `director_note.j2` template;
+    `typed_note` is only what the player typed, so a variant's `made_by.note`
+    never puts app wording in their mouth.
 
     `mode` and `plan` are the group-play order this round follows (the refs
     still to speak after `actor_ref`); `auto_remaining`, `round_index` and
@@ -308,6 +329,7 @@ def new_round(
             "run_id": run_id,
             "actor_ref": actor_ref,
             "note": note,
+            "typed_note": typed_note,
             "turn": turn,
             "status": "pending",
             "pending_response": None,
@@ -322,6 +344,23 @@ def new_round(
         scope["rounds"][round_id] = record
         _write(cid, data)
         return copy.deepcopy(record)
+
+
+def round_typed_note(cid: str, sid: str, round_id: str | None) -> str:
+    """The note the player typed for a round, or "" -- for a round that has
+    none, is missing, or for `None` (a migrated response has no round).
+
+    Read-only and lock-free, for `actor_refs`' reasons: it resolves the
+    identity without minting (`_scope` would write the scene file) and the
+    ledger is one file written whole. A caller deciding against it holds the
+    campaign lock itself."""
+    if not round_id:
+        return ""
+    token = identity.scene_identity(cid, sid)
+    if not token:
+        return ""
+    rounds = _read(cid)["scenes"].get(token, {}).get("rounds", {})
+    return rounds.get(round_id, {}).get("typed_note", "")
 
 
 def update_round(cid: str, sid: str, round_id: str, **fields) -> dict:
@@ -354,7 +393,13 @@ def unfinished(cid: str, sid: str) -> dict | None:
 
 
 def prepare(
-    cid: str, sid: str, round_id: str, actor_ref: str, speaker: str, snapshot: dict
+    cid: str,
+    sid: str,
+    round_id: str,
+    actor_ref: str,
+    speaker: str,
+    snapshot: dict,
+    settings: dict | None = None,
 ) -> dict:
     with locks.campaign_lock(cid):
         data = _read(cid)
@@ -370,6 +415,8 @@ def prepare(
             "variants": [],
             "created": now_iso(),
         }
+        if settings is not None:
+            record["settings"] = copy.deepcopy(settings)
         record["snapshot_ref"] = response_snapshots.write(cid, record["id"], "primary", snapshot)
         scope["responses"][record["id"]] = record
         scope["rounds"][round_id].update(pending_response=record["id"], actor_ref=actor_ref)
@@ -390,11 +437,16 @@ def save_variant(
     part="",
     reasoning="",
     connection="",
+    made_by: dict | None = None,
 ) -> dict:
+    """Append a variant. `made_by` (the call that wrote it) is stored only when
+    given: a variant from before it existed, or one whose provenance could not
+    be built, has no key at all rather than an empty one."""
     with locks.campaign_lock(cid):
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         messages = read.read_scene(cid, sid)["messages"]
+        excluded = _excluded_of(messages, rid)
         prefix = (
             [
                 m["content"]
@@ -421,6 +473,8 @@ def save_variant(
         }
         if connection:
             variant["connection"] = connection
+        if made_by is not None:
+            variant["made_by"] = copy.deepcopy(made_by)
         record["variants"].append(variant)
         if activate:
             record.update(active_variant=variant["id"], status=status)
@@ -435,7 +489,7 @@ def save_variant(
                 ),
                 None,
             )
-            message = {**_message(record, content, status), "response_part": part}
+            message = {**_message(record, content, status, excluded=excluded), "response_part": part}
             if index is None:
                 write.append_reply(cid, sid, [message])
             else:
@@ -446,20 +500,72 @@ def save_variant(
         return copy.deepcopy(variant)
 
 
+def _response_index(messages: list[dict], rid: str) -> int | None:
+    return next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
+
+
+def is_trailing(messages: list[dict], rid: str) -> bool:
+    """Whether response `rid` is the transcript's last reply -- the one "Keep
+    writing" may continue.
+
+    Among the messages that are not synthetic lines (a roll, a scene transition,
+    a director note), the ones carrying `rid` must be a non-empty suffix: a
+    transition line appended after the reply does not make it "not last", a
+    player post or another actor's reply does. Pure: no reads, no lock."""
+    story = [m for m in messages if m.get("speaker") not in serialize.SYNTHETIC_SPEAKERS]
+    ours = [i for i, m in enumerate(story) if m.get("response_id") == rid]
+    return bool(ours) and ours == list(range(len(story) - len(ours), len(story)))
+
+
+def require_context_included(messages: list[dict], record: dict) -> None:
+    """Refuse to replay a frozen prompt that still holds a now-hidden post.
+
+    A reroll replays the response's snapshot rather than recomposing, so a
+    snapshot taken before a preceding post was hidden still contains it. The
+    flag's value is when it was set; a record created at or before the latest
+    exclusion preceding the response is refused (a same-second tie cannot
+    prove the snapshot came after, so it refuses -- replay is the safe way out).
+    """
+    index = _response_index(messages, record["id"])
+    if index is None:
+        return
+    since = serialize.excluded_since(messages, index)
+    if since and since >= record.get("created", ""):
+        raise ResponseConflict(
+            "context_excluded",
+            "A post this reply was written from is now hidden. Replay from here to regenerate without it.",
+        )
+
+
+def _editable_reason(record: dict, messages: list[dict], scene_rolls: bool, rid: str) -> str | None:
+    """Why this response's prose may not change, or `None` when it may.
+
+    The one place the three checks live, so `editable` (which refuses) and
+    `swipe_state` (which reports) cannot drift: the response was mechanically
+    locked, the scene has an audit entry but no roll line left in the
+    transcript to say where it applied (`scene_rolls`: a roll was logged for
+    this scene), or a roll line sits at or after the response's first message.
+    """
+    index = _response_index(messages, rid)
+    has_roll_line = any(m.get("speaker") == serialize.ROLL_SPEAKER for m in messages)
+    if (
+        record.get("mechanically_locked")
+        or (scene_rolls and not has_roll_line)
+        or (index is not None
+            and any(m.get("speaker") == serialize.ROLL_SPEAKER for m in messages[index:]))
+    ):
+        return "applied_mechanics"
+    return None
+
+
 def editable(cid: str, sid: str, rid: str) -> int:
     messages = read.read_scene(cid, sid)["messages"]
-    index = next((i for i, m in enumerate(messages) if m.get("response_id") == rid), None)
+    index = _response_index(messages, rid)
     if index is None:
         raise ResponseNotFound(rid)
     record = _scope(cid, sid, _read(cid))["responses"].get(rid, {})
-    unknown_audit_boundary = any(r.get("scene") == sid for r in rolls.read(cid)) and not any(
-        m.get("speaker") == serialize.ROLL_SPEAKER for m in messages
-    )
-    if (
-        record.get("mechanically_locked")
-        or unknown_audit_boundary
-        or any(m.get("speaker") == serialize.ROLL_SPEAKER for m in messages[index:])
-    ):
+    scene_rolls = any(r.get("scene") == sid for r in rolls.read(cid))
+    if _editable_reason(record, messages, scene_rolls, rid) is not None:
         raise ResponseConflict(
             "applied_mechanics",
             "A completed roll follows this response. Correct state or explicitly replay before changing this prose.",
@@ -467,7 +573,73 @@ def editable(cid: str, sid: str, rid: str) -> int:
     return index
 
 
-def _invalidate(cid, sid):
+def swipe_state(cid: str, sid: str, rid: str) -> dict:
+    """What the swipe arrows need to know about a response, and nothing more.
+
+    Lock-free and write-free, as `variants_by_response` is: the identity comes
+    from `scene_identity` (`_scope` would mint one and write the scene file),
+    the ledger is one file written whole so a single read is one state, and no
+    snapshot is opened. `get` is none of those -- it waits behind the campaign
+    lock, mints, and reads snapshots -- which is what a read made on every
+    scene open and every landed turn cannot afford. A variant's content and
+    reasoning stay out; the disclosure fetches them through `get`.
+
+    `editable` is the answer `editable` would give, evaluated without raising,
+    because the client cannot see the audit boundary. `round_open` is an
+    unfinished round in the scene: `activate` supersedes it, which would
+    destroy a paused roll or a Retry the player has not used. `edited` is the
+    transcript's prose differing from the active variant's -- a hand edit
+    (`scenes.edit_message`) keeps the response id and leaves the ledger alone
+    -- and then `active` is None: the prose is no variant's, so it is not "n of
+    m", its provenance is not that variant's, and a swipe would silently
+    discard the edit. The comparison is `get`'s join, stripped. A response the
+    ledger does not know, or that `delete` left a record of after removing it
+    from the transcript, is `ResponseNotFound`.
+    """
+    messages = read.read_scene(cid, sid)["messages"]
+    if _response_index(messages, rid) is None:
+        raise ResponseNotFound(rid)
+    token = identity.scene_identity(cid, sid)
+    scope = _read(cid)["scenes"].get(token, {}) if token else {}
+    record = scope.get("responses", {}).get(rid)
+    if record is None:
+        raise ResponseNotFound(rid)
+    variants = record.get("variants", [])
+    active = next((i for i, v in enumerate(variants) if v["id"] == record.get("active_variant")), None)
+    prose = "\n\n".join(m["content"] for m in messages if m.get("response_id") == rid)
+    edited = active is not None and prose.strip() != (variants[active].get("content") or "").strip()
+    if edited:
+        active = None
+    scene_rolls = any(r.get("scene") == sid for r in rolls.read(cid))
+    return {
+        "active": active,
+        "variants": [
+            {"id": v["id"], "status": v["status"],
+             **({"made_by": copy.deepcopy(v["made_by"])} if "made_by" in v else {})}
+            for v in variants
+        ],
+        "settings": copy.deepcopy(record.get("settings")),
+        "resume_settings": copy.deepcopy(record.get("resume_settings")),
+        "can_reroll": bool(record.get("snapshot_ref") or record.get("snapshot")),
+        "editable": _editable_reason(record, messages, scene_rolls, rid) is None,
+        "round_open": any(r.get("status") in ("pending", "incomplete", "paused")
+                          for r in scope.get("rounds", {}).values()),
+        "edited": edited,
+    }
+
+
+def _invalidate(cid, sid, changed_at: int, *, in_context: bool = True):
+    """Supersede what a change at message index `changed_at` made stale.
+
+    The rolling summary folded the first `at` messages, so a change at or after
+    that index leaves both the prose and its digest true -- a swipe on the
+    trailing response is the common case, and resetting there forced a re-fold
+    from post 0. Only a change inside the fold throws it away, and only to a
+    post `in_context`: a hidden post's prose never reached the summary, and
+    `rolling_summary.covered_digest` skips it, so the digest still decides if
+    anything else moved. Rounds, proposals and the scene-break check reset
+    either way.
+    """
     data = _read(cid)
     scope = _scope(cid, sid, data)
     for round_record in scope["rounds"].values():
@@ -475,7 +647,9 @@ def _invalidate(cid, sid):
             round_record["status"] = "superseded"
     _write(cid, data)
     proposals.supersede(cid, sid)
-    write.set_rolling_summary(cid, sid, "", 0, "")
+    covered = read.rolling_summary_fields(read.read_scene_meta(cid, sid))["at"]
+    if in_context and changed_at < covered:
+        write.set_rolling_summary(cid, sid, "", 0, "")
     write.set_scene_break(cid, sid, 0, 0, 0)
 
 
@@ -491,7 +665,7 @@ def delete(cid: str, sid: str, rid: str) -> None:
         for message in messages[index:]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid)
+        _invalidate(cid, sid, index)
         write.replace_messages(cid, sid, messages)
 
 
@@ -506,16 +680,17 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
                 "variant_incomplete", "Only a completed variant can be selected."
             )
         messages = read.read_scene(cid, sid)["messages"]
+        excluded = _excluded_of(messages, rid)  # read before the parts collapse
         retained = [i for i, m in enumerate(messages) if i == index or m.get("response_id") != rid]
         appearance_paths.remap_presence(
             cid, sid, {old: new for new, old in enumerate(retained)}, len(retained)
         )
         messages = [messages[i] for i in retained]
-        messages[index] = _message(record, variant["content"], "complete", variant)
+        messages[index] = _message(record, variant["content"], "complete", variant, excluded=excluded)
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid)
+        _invalidate(cid, sid, index, in_context=excluded is None)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         record.update(active_variant=vid, status="complete")
@@ -523,12 +698,16 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         write.replace_messages(cid, sid, messages)
 
 
-def save_resume_prompt(cid: str, sid: str, rid: str, snapshot: dict) -> None:
+def save_resume_prompt(
+    cid: str, sid: str, rid: str, snapshot: dict, settings: dict | None = None
+) -> None:
     with locks.campaign_lock(cid):
         data = _read(cid)
         reference = response_snapshots.write(cid, rid, "resume", snapshot)
         record = _scope(cid, sid, data)["responses"][rid]
         record["resume_snapshot_ref"] = reference
+        if settings is not None:
+            record["resume_settings"] = copy.deepcopy(settings)
         record.setdefault("resume_snapshot_refs", []).append(reference)
         _write(cid, data)
 
@@ -544,7 +723,8 @@ def publish_saved(cid: str, sid: str, rid: str) -> None:
                       if m.get("response_id") == rid and m.get("response_part", "") == part), None)
         text = variant.get("part_content", variant["content"])
         if text.strip():
-            message = {**_message(record, text, variant["status"]), "response_part": part}
+            message = {**_message(record, text, variant["status"], excluded=_excluded_of(messages, rid)),
+                       "response_part": part}
             if index is None:
                 write.append_reply(cid, sid, [message])
             elif messages[index] != message:
@@ -599,3 +779,78 @@ def drop_scene(cid: str, sid: str) -> None:
                 response_snapshots.remove(cid, reference)
         data["scenes"].pop(token, None)
         _write(cid, data)
+
+
+def _snapshot_kind(reference: str) -> str:
+    """`primary` or `resume`: the prefix of a reference's file name."""
+    return reference.rsplit("/", 1)[-1].split("-", 1)[0]
+
+
+def clone_for_branch(cid: str, src_sid: str, dst_sid: str,
+                     rid_map: dict[str, str], locked: set[str]) -> None:
+    """Copy the records `rid_map` names from one scene's ledger scope into a
+    branch's, each under its NEW response id (play controls III).
+
+    New ids, not shared ones, because `drop_scene` removes every snapshot a
+    record references: two scenes holding one id would mean deleting either
+    took the other's prompts. Each snapshot is therefore re-published under
+    the new id (the bytes are identical, so the digest is too).
+
+    `mechanically_locked` is recomputed rather than inherited: the branch's
+    caller decides which clones a kept roll line follows (`locked`), since the
+    source may have locked a record for a roll the branch does not keep.
+
+    Rounds the clones name are copied under the same round id, pointing at the
+    clone of their pending response (else none), and one still unfinished is
+    marked `superseded` -- a branch starts with no turn in flight. An old id
+    with no record (a manual post that only looks like a response) is skipped.
+    """
+    with locks.campaign_lock(cid):
+        data = _read(cid)
+        token = identity.scene_identity(cid, src_sid)
+        source = data["scenes"].get(token) if token else None
+        if not source:
+            return
+        scope = _scope(cid, dst_sid, data)
+        rounds: set[str] = set()
+        for old, new in rid_map.items():
+            record = source["responses"].get(old)
+            if record is None:
+                continue
+            scope["responses"][new] = _cloned_record(cid, record, new, new in locked)
+            if record.get("round_id"):
+                rounds.add(record["round_id"])
+        for round_id in rounds:
+            original = source["rounds"].get(round_id)
+            if original is not None:
+                scope["rounds"][round_id] = _cloned_round(original, rid_map)
+        _write(cid, data)
+
+
+def _cloned_record(cid: str, record: dict, new: str, locked: bool) -> dict:
+    clone = copy.deepcopy(record)
+    clone["id"] = new
+    for field in ("snapshot_ref", "resume_snapshot_ref"):
+        if clone.get(field):
+            clone[field] = _republish(cid, new, clone[field])
+    if clone.get("resume_snapshot_refs"):
+        clone["resume_snapshot_refs"] = [
+            _republish(cid, new, ref) for ref in clone["resume_snapshot_refs"]]
+    if locked:
+        clone["mechanically_locked"] = True
+    else:
+        clone.pop("mechanically_locked", None)
+    return clone
+
+
+def _cloned_round(original: dict, rid_map: dict[str, str]) -> dict:
+    copied = copy.deepcopy(original)
+    copied["pending_response"] = rid_map.get(original.get("pending_response") or "")
+    if copied.get("status") in ("pending", "incomplete", "paused"):
+        copied["status"] = "superseded"
+    return copied
+
+
+def _republish(cid: str, rid: str, reference: str) -> str:
+    return response_snapshots.write(cid, rid, _snapshot_kind(reference),
+                                    response_snapshots.read(cid, reference))

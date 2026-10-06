@@ -17,6 +17,7 @@ import logging
 from .. import (
     alternates,
     atomic,
+    authors_notes,
     calendars,
     commits,
     pending_reviews,
@@ -274,6 +275,13 @@ def delete_scene(cid: str, sid: str) -> None:
             tracker_records.drop(cid, ident)
         except Exception:
             log.warning("delete_scene: could not drop the tracker records of %s/%s (%s)",
+                        cid, sid, ident, exc_info=True)
+        # The scene's author's note, keyed by the same identity and for the
+        # same reasons: after the unlink, fail-soft, logged.
+        try:
+            authors_notes.drop(cid, ident)
+        except Exception:
+            log.warning("delete_scene: could not drop the author's note of %s/%s (%s)",
                         cid, sid, ident, exc_info=True)
     # AFTER the unlink, so a delete that raised records nothing. Deleting the
     # newest scene would otherwise drag the campaign's derived activity

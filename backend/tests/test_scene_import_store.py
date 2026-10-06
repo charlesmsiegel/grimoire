@@ -547,3 +547,79 @@ def test_a_bundle_chapter_round_trips_through_the_exporter(monkeypatch, tmp_path
         ("assistant", "Mara", '"You found me."'),
     ]
     assert [c["id"] for c in draft["cast"]] == ["mara"]
+
+
+# ---- a post hidden from context survives the round trip ----
+
+def test_markdown_export_reimports_excluded(monkeypatch, tmp_path):
+    import io
+    import zipfile
+
+    from grimoire.store import export
+
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The Pier")
+    scenes.append_message(cid, sid, "user", "hi")
+    scenes.append_message(cid, sid, "user", "ooc: brb")
+    scenes.set_excluded(cid, sid, 1, True)
+    md = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0]))
+    name = next(n for n in md.namelist() if n != "index.md" and not n.startswith("images/"))
+
+    draft = scene_import.parse(cid, md.read(name))
+    hidden = next(m for m in draft["messages"] if "brb" in m["content"])
+    assert hidden["content"] == "ooc: brb"
+    assert isinstance(hidden["excluded"], str) and hidden["excluded"]
+    assert "excluded" not in next(m for m in draft["messages"] if m["content"] == "hi")
+
+    target = scenes.create_scene(cid, "Imported")
+    out = scene_import.commit(cid, target, draft["messages"])
+    messages = scenes.read_scene(cid, out["id"])["messages"]
+    assert messages[1]["content"] == "ooc: brb" and messages[1]["excluded"]
+    assert "excluded" not in messages[0]
+
+
+def test_a_visible_post_that_opens_with_the_marker_text_round_trips_visible(
+        monkeypatch, tmp_path):
+    """A post whose first line is literally the marker is escaped on export and
+    unescaped on import, so it is not read back as hidden (codex review, PR
+    #458) -- and an escape a post really opened with survives as well."""
+    import io
+    import zipfile
+
+    from grimoire.store import export
+
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The Pier")
+    marker = scenes.EXCLUDED_MARKER
+    posts = [f"{marker}\nMara laughs.", f"\\{marker}\nWinifred frowns.",
+             f"{marker}\nhidden twice"]
+    for post in posts:
+        scenes.append_message(cid, sid, "user", post)
+    scenes.set_excluded(cid, sid, 2, True)
+    md = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0]))
+    name = next(n for n in md.namelist() if n != "index.md" and not n.startswith("images/"))
+
+    draft = scene_import.parse(cid, md.read(name))
+    assert [m["content"] for m in draft["messages"]] == posts
+    assert [bool(m.get("excluded")) for m in draft["messages"]] == [False, False, True]
+
+
+def test_a_stored_scene_file_import_keeps_its_stamp(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    text = STORED.replace(
+        '**Mara:** "You found me. Now what?"',
+        '**Mara:** <!-- grimoire-response {"excluded": "2026-10-05T12:00:00Z"} -->\n'
+        '"You found me. Now what?"')
+    draft = scene_import.parse(cid, text.encode())
+    assert draft["messages"][1]["excluded"] == "2026-10-05T12:00:00Z"
+    assert draft["messages"][1]["content"] == '"You found me. Now what?"'
+    assert "excluded" not in draft["messages"][0]
+
+
+def test_a_non_string_flag_is_restamped(monkeypatch, tmp_path):
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    text = STORED.replace(
+        '**Mara:** "You found me. Now what?"',
+        '**Mara:** <!-- grimoire-response {"excluded": true} -->\n"You found me. Now what?"')
+    draft = scene_import.parse(cid, text.encode())
+    assert isinstance(draft["messages"][1]["excluded"], str) and draft["messages"][1]["excluded"]

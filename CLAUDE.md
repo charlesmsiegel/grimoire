@@ -260,11 +260,14 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Twenty-one handlers** start detached runs, in three classes:
+subscriber. **Twenty-three handlers** start detached runs, in three classes:
 
-- `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn` and
-  `post_roll_proposal`. All six synchronous streaming handlers are detached
-  now; the sixth, `post_opener`, is a `draft` rather than a turn (below).
+- `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
+  `post_roll_proposal`, and the per-response pair in `character_turns.py`,
+  `regenerate_response` (reroll one reply) and `extend_response` (Keep
+  writing: continue the last reply as a new variant). All eight synchronous
+  streaming handlers are detached now; the eighth, `post_opener`, is a `draft`
+  rather than a turn (below).
 - `review` — `post_absorb`, `post_audit` and `post_dossiers`. These are not
   streams: each answers **202** with a run to poll and persists its result to
   `store/pending_reviews.py`, because a review's value is a payload nobody has

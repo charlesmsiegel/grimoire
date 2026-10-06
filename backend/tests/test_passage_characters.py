@@ -142,3 +142,23 @@ def test_neighbor_selection_excludes_director_and_nonconversation_entries():
              {"role": "assistant", "speaker": "Winifred", "content": "Observable later speech"},
              {"role": "assistant", "speaker": "Grimoire", "content": "Source"}]
     assert passage_characters._observable_neighbors(posts, 5) == [posts[0], posts[4]]
+
+
+def test_draft_refuses_an_excluded_source(client):
+    cid, sid, rid, body = source(client)
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    fake = FakeOpenRouterComplete("Watches the door.")
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    scenes.set_excluded(cid, sid, 0, True)
+    reply = client.post(f"/api/campaigns/{cid}/scenes/{sid}/responses/{rid}/character-draft", json=body)
+    assert reply.status_code == 409, reply.text
+    assert reply.json()["kind"] == "excluded_source"
+
+
+def test_neighbor_selection_skips_excluded_posts():
+    a = {"role": "user", "content": "Observable earlier speech"}
+    b = {"role": "assistant", "speaker": "Winifred", "content": "Hidden aside",
+         "excluded": "2026-10-05T12:00:00Z"}
+    c = {"role": "assistant", "speaker": "Winifred", "content": "Observable later speech"}
+    target = {"role": "assistant", "speaker": "Grimoire", "content": "Source"}
+    assert passage_characters._observable_neighbors([a, b, c, target], 3) == [a, c]

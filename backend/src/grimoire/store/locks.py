@@ -226,6 +226,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # at once lose one phase). New module, so it starts inside the exclusion
     # rather than joining the frozen `UNREVIEWED` backlog.
     "store.pending_reviews",
+    # `quick_replies.json` (the campaign's quick-reply set) is rewritten whole
+    # from a set the client read, so the digest check that refuses a stale
+    # `expect` and the write have to be one hold -- or two tabs' override and
+    # hide edits each pass the check and one is lost. New module, so it starts
+    # inside the exclusion rather than joining the frozen `UNREVIEWED` backlog.
+    "store.quick_replies",
     # `commitments.json` is rewritten whole by `set_movement` and
     # `repoint_scenes`, exactly like `plot.json` -- but this module is new
     # (#115), so it starts inside the exclusion rather than joining the
@@ -315,6 +321,13 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # module (#129), so it starts inside the exclusion rather than joining the
     # frozen `UNREVIEWED` backlog.
     "store.pins",
+    # authors_notes.json the same: rewritten whole by every save, so two
+    # unlocked saves lose one note -- and a lost write here is a steer the
+    # player set and then finds the next turn ignoring, the reason `pins`
+    # gives. Reads stay lock-free (the opener composes on the event loop).
+    # New module (play controls V), so it starts inside the exclusion rather
+    # than joining the frozen `UNREVIEWED` backlog.
+    "store.authors_notes",
     # Forking copies one campaign's whole directory into another and, for a
     # retrospective fork, cuts the copy back to an earlier scene. It is the
     # only mutator in the package whose critical section spans TWO campaigns,
@@ -325,6 +338,12 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # finishing. New module (#72), so it starts inside the exclusion rather
     # than joining the frozen `UNREVIEWED` backlog.
     "store.fork",
+    # Branching a scene builds a sibling out of a transcript copy and one copy
+    # helper per record module, then cuts it -- all inside one campaign-lock
+    # hold, so a turn cannot append to the source mid-copy and nobody sees the
+    # sibling between its file landing and its records following. New module
+    # (play controls III), so it starts inside the exclusion.
+    "store.branch",
     "store.sheets.tally",
     "store.sheets.writer",
     "store.audit.baselines",

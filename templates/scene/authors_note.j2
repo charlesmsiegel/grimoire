@@ -1,0 +1,11 @@
+{#- An author's note (play controls V): a standing instruction inserted into
+    the conversation history as its own system message, at a chosen depth.
+    Rendered once per note that applies to this turn -- campaign, then scene,
+    then the character note, which only that character's own call receives.
+    Vars: level ("campaign" | "scene" | "character"), name (the character's
+    name for a character note, "" otherwise), text. -#}
+{%- if level == "character" -%}
+[Author's note for {{ name }}: {{ text }}]
+{%- else -%}
+[Author's note: {{ text }}]
+{%- endif -%}

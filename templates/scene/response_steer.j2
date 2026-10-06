@@ -1,1 +1,5 @@
-User direction for this replacement only: {{ guidance }}
+{#- The player's steer for one reroll (or, with `continuation`, one "Keep
+    writing" prefill), appended as a system message. Vars: guidance (str),
+    continuation (bool, optional: the reply that follows is being continued
+    rather than replaced). -#}
+{% if continuation | default(false) %}User direction for continuing this reply only: {{ guidance }}{% else %}User direction for this replacement only: {{ guidance }}{% endif %}

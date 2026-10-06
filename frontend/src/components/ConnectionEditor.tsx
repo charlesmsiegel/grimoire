@@ -140,7 +140,7 @@ export function ConnectionEditor() {
     setDetail(d);
     setForm({ kind: d.kind, name: d.name, base_url: d.base_url, model: d.model, post_process: d.post_process, reasoning_effort: d.reasoning_effort ?? "",
               sampler_preset: d.sampler_preset ?? "", sampler_support: d.sampler_support ?? "",
-              vision: d.vision ?? "" });
+              vision: d.vision ?? "", prefill: d.prefill ?? false });
     setKey("");
     setMode("view");
     setModels(d.models);
@@ -174,7 +174,7 @@ export function ConnectionEditor() {
         const patch: Record<string, unknown> = {
           name: form.name, base_url: form.base_url, model: form.model, post_process: form.post_process, reasoning_effort: form.reasoning_effort ?? "",
           sampler_preset: form.sampler_preset ?? "", sampler_support: form.sampler_support ?? "",
-          vision: form.vision ?? "",
+          vision: form.vision ?? "", prefill: form.prefill ?? false,
         };
         if (key) patch.api_key = key;
         await api.updateConnection(id, patch);
@@ -365,6 +365,7 @@ export function ConnectionEditor() {
                 <p>Model: {detail.model || "(none set)"}</p>
                 {detail.kind === "openai_compatible" && <p>Base URL: {detail.base_url || "(none set)"}</p>}
                 {detail.kind === "openai_compatible" && <p>Prompt post-processing: {detail.post_process}</p>}
+                <p>Keep writing: {detail.prefill ? "prefill" : "instruction"}</p>
               </div>
             </div>
             <aside className="detail-sidebar">

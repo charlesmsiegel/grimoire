@@ -8,6 +8,11 @@ moment the cut lands — and handed back to the walk one step at a time:
   words and no model rewrites them; manual dice rolls are a transcript line in
   lockstep with an immutable `rolls.json` entry, so re-appending the line is
   what keeps the two in step.
+- a **kept** step is a model turn every post of which the player hid from
+  context. It is replayed as it was, still hidden -- regenerating text no
+  prompt will ever read buys nothing -- but through `append_reply`, so it lands
+  with its turn boundary. It is not a turn to redo: no count of turns includes
+  it, and the panel is told it is `verbatim`.
 - a **generation** step is one model turn. It is NOT replayed: the caller
   regenerates it against the edited history (the route composes and streams the
   same way an ordinary turn does), and the reviewer accepts it, rerolls it
@@ -142,6 +147,10 @@ def _segment(messages: list[dict], cut: int, sizes: list[int]) -> list[dict]:
         if not steps or steps[-1]["kind"] != kind or steps[-1].get("gen") != gid:
             steps.append({"kind": kind, "gen": gid, "messages": []})
         steps[-1]["messages"].append(_message(messages[i]))
+    for step in steps:
+        if step["kind"] == "generation" and all(
+                scenes_serialize.is_excluded(m) for m in step["messages"]):
+            step["kind"] = "kept"
     return steps
 
 
@@ -232,11 +241,14 @@ def state(cid: str) -> dict | None:
     if not rec.get("steps"):
         return None
     pending = _pending(rec)
-    nxt = pending[0]["kind"] if pending else "done"
+    ahead = 0
     if rec.get("staged"):
-        # The verbatim posts are already in the transcript; what is owed now is
+        # The original posts are already in the transcript; what is owed now is
         # the generation they were staged for.
-        nxt = pending[1]["kind"] if len(pending) > 1 else "done"
+        ahead = int(rec.get("staged_steps", 1))
+    nxt = pending[ahead]["kind"] if len(pending) > ahead else "done"
+    if nxt == "kept":
+        nxt = "verbatim"     # put back as it was, like a player post: not a turn to run
     return {"scene": rec.get("scene", ""), "cut": rec.get("cut", 0),
             "done": rec.get("done", 0), "steps": len(rec.get("steps") or []),
             "turns_left": _turns_left(rec), "next": nxt,
@@ -250,6 +262,50 @@ def state(cid: str) -> dict | None:
             # only copy of those posts, and dropping it on a READ would destroy
             # them without anyone asking.
             "gone": not scenes_paths._scene_path(cid, rec.get("scene", "")).exists()}
+
+
+def check_begin(cid: str, sid: str, index: int) -> None:
+    """Every refusal `begin` makes, and nothing it writes.
+
+    For a caller that has to know a replay WILL start before doing something
+    else first -- replay-in-a-branch (play controls III) evaluates these before
+    building the sibling, so a refused replay leaves no sibling behind. Same
+    order as `begin`: a replay already running (`ReplayError`),
+    `scenes.SceneNotFound`, `IndexError`, a blocked transition span and no
+    generation step (`ReplayError`).
+    """
+    with locks.campaign_lock(cid):
+        _checked(cid, sid, index)
+
+
+def _checked(cid: str, sid: str, index: int) -> list[dict]:
+    """`check_begin`'s refusals, returning the steps a replay at `index` would
+    walk. Called under the campaign lock."""
+    running = read(cid)
+    if running.get("steps"):
+        # Named, not merely reported. One replay runs per campaign, so a
+        # refusal here means the reviewer has a walk open somewhere else and
+        # has to go and finish or stop it -- and "somewhere else" is not a
+        # place they can be sent without its name. Falls back to the id when
+        # the scene will not read; the refusal is not worth failing over.
+        other = running.get("scene", "")
+        try:
+            label = scenes_read.read_scene_meta(cid, other).get("title") or other
+        except Exception:  # noqa: BLE001 -- a label, on a path that is already refusing
+            label = other
+        raise ReplayError(f"a replay is already running in “{label}” — finish or stop "
+                          "that one first")
+    scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
+    messages = scene["messages"]
+    if index < 0 or index >= len(messages):
+        raise IndexError(index)
+    if _moves(messages, index):
+        raise ReplayError(BLOCKED_TRANSITION)
+    sizes = scenes_turns._parse_turn_sizes(scene["meta"].get("turn_sizes", ""))
+    steps = _segment(messages, index, sizes)
+    if not any(s["kind"] == "generation" for s in steps):
+        raise ReplayError("there is no model turn after that post to replay")
+    return steps
 
 
 def begin(cid: str, sid: str, index: int) -> dict:
@@ -273,30 +329,7 @@ def begin(cid: str, sid: str, index: int) -> dict:
     honestly rebuild.
     """
     with locks.campaign_lock(cid):
-        running = read(cid)
-        if running.get("steps"):
-            # Named, not merely reported. One replay runs per campaign, so a
-            # refusal here means the reviewer has a walk open somewhere else and
-            # has to go and finish or stop it -- and "somewhere else" is not a
-            # place they can be sent without its name. Falls back to the id when
-            # the scene will not read; the refusal is not worth failing over.
-            other = running.get("scene", "")
-            try:
-                label = scenes_read.read_scene_meta(cid, other).get("title") or other
-            except Exception:  # noqa: BLE001 -- a label, on a path that is already refusing
-                label = other
-            raise ReplayError(f"a replay is already running in “{label}” — finish or stop "
-                              "that one first")
-        scene = scenes_read.read_scene(cid, sid)     # raises SceneNotFound
-        messages = scene["messages"]
-        if index < 0 or index >= len(messages):
-            raise IndexError(index)
-        if _moves(messages, index):
-            raise ReplayError(BLOCKED_TRANSITION)
-        sizes = scenes_turns._parse_turn_sizes(scene["meta"].get("turn_sizes", ""))
-        steps = _segment(messages, index, sizes)
-        if not any(s["kind"] == "generation" for s in steps):
-            raise ReplayError("there is no model turn after that post to replay")
+        steps = _checked(cid, sid, index)
         rec = {"scene": sid, "cut": index, "created": now_iso(),
                "steps": steps, "done": 0, "mark": index, "staged": 0}
         _write(cid, rec)
@@ -324,7 +357,7 @@ def _append_steps(cid: str, sid: str, steps: list[dict]) -> int:
     """
     written = 0
     for step in steps:
-        if step.get("kind") == "generation":
+        if step.get("kind") in ("generation", "kept"):
             scenes_write.append_reply(
                 cid, sid, [{**m,"speaker":m["speaker"] or None} for m in step["messages"]])
         else:
@@ -335,11 +368,16 @@ def _append_steps(cid: str, sid: str, steps: list[dict]) -> int:
 
 
 def stage(cid: str) -> dict:
-    """Append the next verbatim step to the transcript, if one is owed.
+    """Append every original step owed ahead of the next generation.
+
+    That is the leading run of steps that are not regenerated: verbatim posts,
+    a post at a time, and kept (hidden) model turns, through `append_reply` so
+    each keeps its turn boundary.
 
     Idempotent by construction: `staged` records that it has run, and the count
-    it holds is what `accept` steps over. A caller that retries a failed
-    generation calls this again and appends nothing.
+    it holds is what `accept` steps over (`staged_steps` is how many steps that
+    was). A caller that retries a failed generation calls this again and
+    appends nothing.
     """
     with locks.campaign_lock(cid):
         rec = read(cid)
@@ -355,14 +393,19 @@ def stage(cid: str) -> dict:
         if _pending_reply(cid, rec):
             raise ReplayError("this replayed turn is waiting on you — accept it or "
                               "try it again before running the next one")
-        if not rec.get("staged") and pending[0]["kind"] == "verbatim":
-            for m in pending[0]["messages"]:
-                scenes_write.append_messages(cid,sid,[{**m,"speaker":m["speaker"] or None}])
-            # The COUNT, not a flag. `accept` has to tell a replayed reply from
-            # the originals staged in front of it, and both raise the
-            # transcript's length -- so the count is what its guard subtracts.
-            rec["staged"] = len(pending[0]["messages"])
-            _write(cid, rec)
+        if not rec.get("staged"):
+            lead: list[dict] = []
+            for step in pending:
+                if step.get("kind") == "generation":
+                    break
+                lead.append(step)
+            if lead:
+                # The COUNT, not a flag. `accept` has to tell a replayed reply
+                # from the originals staged in front of it, and both raise the
+                # transcript's length -- so the count is what its guard subtracts.
+                rec["staged"] = _append_steps(cid, sid, lead)
+                rec["staged_steps"] = len(lead)
+                _write(cid, rec)
         return rec
 
 
@@ -393,10 +436,11 @@ def accept(cid: str) -> dict | None:
         # The verbatim step (if one was staged) and the generation it led to are
         # accepted together: they are one step of the walk to the reviewer, who
         # never saw the player's own post as a decision.
-        taken = 1 if staged else 0
+        taken = int(rec.get("staged_steps", 1 if staged else 0)) if staged else 0
         step = taken + (1 if len(pending) > taken else 0)
         rec["done"] = int(rec.get("done", 0)) + step
         rec["staged"] = 0
+        rec["staged_steps"] = 0
         rec["mark"] = landed
         # A tail with no model turn left in it is not a step anybody reviews:
         # the scene ended on the player's own posts, and there is nothing to

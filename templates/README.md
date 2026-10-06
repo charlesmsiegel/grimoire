@@ -289,6 +289,17 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
 2. The projected history: each stored message through
    `scene/history_line.j2`, consecutive same-role lines merged with a blank
    line between them (`context/story.py:_project_history`).
+   2a. Author's notes (`context/authors_note.py`): `scene/authors_note.j2`
+   (vars `level`, `name`, `text`) rendered once per note that applies to this
+   turn -- campaign, then scene, then the character note in that character's
+   own call only -- each as its own system message, never merged and never
+   labelled. It is inserted into the projected history before the `depth`-th
+   most recent in-context post (0 = after the last), snapped back to the start
+   of a player post. A scene with no player posts (an offscreen scene) has no
+   such start, so there a note with depth > 0 lands at the very start of the
+   history, the first thing trimmed. Cadence is `every`, counted over the
+   scene's player posts plus director notes. Openers have no history, so theirs (every-turn notes
+   only) follow the opener prompt.
 3. Director turn only: the note as a user message — the player's text, or
    `scene/director_note.j2` when blank. Opener only: the (substituted)
    opener prompt as the user message (openers include no history).
@@ -469,6 +480,16 @@ for the POST …/roll-proposal accept/decline call; never persisted.
   `on_roll_docs` (`list[str]`, bodies of every `on_roll` rules doc),
   `check_docs` (`list[str]`, the check's linked rules docs).
 - `roll_declined.j2` (decline): no vars.
+
+### Reroll steer and Keep writing — `scene/response_steer.j2` / `scene/extend_instruction.j2`
+Ephemeral messages `routes.character_turns` appends to a response's frozen
+snapshot for POST …/responses/{rid}/regenerate and …/responses/{rid}/extend;
+never persisted (the steer's text is recorded in the steering log).
+- `response_steer.j2` (system): vars `guidance`, and optional `continuation`
+  (true for a Keep writing prefill, whose reply is continued, not replaced).
+- `extend_instruction.j2` (user, after the partial reply in instruction mode):
+  vars `words` (the response's word target, or none) and `guidance` (`""`
+  when no steer). A prefill-mode extend sends no instruction at all.
 
 ## Keeping templates honest
 

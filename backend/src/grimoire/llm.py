@@ -163,6 +163,18 @@ LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible"})
 ATTEMPTED = "_attempted_conn"
 
 
+def prefill_capable(conn: dict) -> bool:
+    """Whether a prompt ending in a partial assistant turn may be sent on `conn`
+    as a prefill for the model to continue ("Keep writing", play controls IV).
+
+    The connection's own opt-in and nothing else -- no kind check. Whether a
+    trailing assistant message is continued depends on the model behind the
+    route, not on the adapter: current Claude models refuse one, and most chat
+    templates read it as history and write a fresh reply. So the default is
+    the instruction, and the user says where prefill works."""
+    return conn.get("prefill") is True
+
+
 def _carries_parts(messages: list[dict]) -> bool:
     """Does any message hold content parts this facade cannot LOWER to text?
 
@@ -801,7 +813,11 @@ class LLMClient:
         # fallback repacks that same context with its own model's guidance.
         # Ordinary message lists (JSON extraction, judges, drafts) stay ordinary.
         if isinstance(messages, model_guidance.PreparedMessages):
-            messages = messages.for_model(effective_model(conn))
+            # `for_connection`, not `for_model`: a prompt with per-attempt
+            # tails ("Keep writing") ends the way THIS attempt's connection
+            # can take -- a fallback that cannot continue a prefill is sent
+            # the instruction instead. Untailed prompts are `for_model`.
+            messages = messages.for_connection(conn, effective_model(conn))
         if usage is not None:
             usage["images"] = 0
         if not content_parts.needs_lowering(messages):

@@ -38,6 +38,7 @@ from . import (  # noqa: F401
                archive,
                art,
                assemble,
+               authors_note,
                cast,
                compare,
                layout,

@@ -332,6 +332,10 @@ def speaker_index(cid: str, sid: str, messages: list[dict] | None = None,
             messages = scenes_read.read_scene(cid, sid)["messages"]
         except Exception:                                      # noqa: BLE001
             messages = []
+    # A post hidden from context never reached the absorb prompt, so a quote
+    # from it is not evidence -- filtered here so the snapshot and the
+    # fallback read are held to the same transcript the model was shown.
+    messages = scenes_serialize.without_excluded(messages)
     # A list, not a set: `match_name`'s prefix rule counts how many names a
     # label could mean by iterating. Deduped as it is built, so a speaker with
     # fifty lines does not look like fifty candidates.

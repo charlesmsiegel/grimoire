@@ -475,31 +475,37 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     """
     import time
 
+    # CPU time, not wall time: `process_time` stops while the process is
+    # descheduled, which is what a contended runner does to it for whole
+    # milliseconds at a time -- longer than a 20k-word parse takes. And the
+    # collector off while timing: 40k fresh strings trip collections whose cost
+    # is the size of the WHOLE heap, and late in a full-suite run that heap
+    # dwarfs the parse, so the larger sample paid for the session's garbage.
+    # Both are noise in the measure, not the parser, and both reddened CI at
+    # a 3.9x "scaling" with the parser unchanged. The collector is off around
+    # each timed sample rather than the whole measure: `_parse` re-enables it on
+    # the way out, so an outer disable would only cover the first sample.
     def _parse(n):
         q = " ".join(f"w{i}" for i in range(n))
-        started = time.perf_counter()
-        assert len(search.query_terms(q)) == n
-        return time.perf_counter() - started
+        gc.collect()
+        gc.disable()
+        try:
+            started = time.process_time()
+            assert len(search.query_terms(q)) == n
+            return time.process_time() - started
+        finally:
+            gc.enable()
 
-    # Best-of-three at each size. A single sample is dominated by whatever the
+    # Best-of-five at each size. A single sample is dominated by whatever the
     # machine was doing at that instant -- the first call alone measured a 0.74x
     # "scaling" here, which is noise, not sublinearity. The minimum is the run
     # least interfered with, which is what the comparison wants.
-    def _best(n, rounds=3):
+    def _best(n, rounds=5):
         return min(_parse(n) for _ in range(rounds))
 
-    # The cyclic collector off for the measure. It triggers on allocation
-    # counts and each pass walks every live object, so the 40k run pays for
-    # more and costlier collections than the 20k run -- a superlinear term the
-    # parser does not have, which alone pushed the ratio past 3 on CI.
-    gc.collect()
-    gc.disable()
-    try:
-        _best(20000)                       # warm the interpreter, not the measure
-        small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
-        large = _best(40000)
-    finally:
-        gc.enable()
+    _best(20000)                       # warm the interpreter, not the measure
+    small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
+    large = _best(40000)
     assert large / small < 3, (
         f"parsing scaled {large / small:.1f}x for 2x the words -- linear is ~2, "
         f"quadratic is ~4")

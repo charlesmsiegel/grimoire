@@ -121,6 +121,21 @@ def test_a_scene_that_was_never_absorbed_still_gets_a_card(client):
     assert card["beats"] == []
 
 
+def test_a_closed_branch_card_says_what_closed_it(client):
+    """A sibling whose group was absorbed is not in play: its card carries the
+    `closed_by` the scene listing derives, so the view can say so; an open
+    scene's card carries no such key."""
+    cid = _campaign(client)
+    a = _absorbed(cid, "Mara", "Mara left.")
+    b = store.scenes.create_scene(cid, "Winifred")
+    g = store.scenes.ensure_identity(cid, a)
+    store.scenes.write.set_branch_keys(cid, b, g, of=g)
+    c = store.scenes.create_scene(cid, "Seraphine")
+    cards = {card["id"]: card for card in _timeline(client, cid)["scenes"]}
+    assert cards[b]["closed_by"] == {"sid": a, "title": "Mara"}
+    assert "closed_by" not in cards[a] and "closed_by" not in cards[c]
+
+
 def test_a_card_with_no_one_line_falls_back_to_its_summary(client):
     """The fallback every other chronicle consumer uses
     (`context.story._story_entries`, `get_ledger`): a save may leave `one_line`

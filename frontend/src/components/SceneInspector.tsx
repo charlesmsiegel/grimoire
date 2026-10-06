@@ -6,12 +6,13 @@ import {
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
   type PinRule, type PromptDiff, type PromptEntry, type PromptSnapshot,
   type RollingSummary, type SceneBreak, type CampaignBudget, type SceneUsage,
-  type Message, type RegexBundle, type SceneRewrite,
+  type Message, type RegexBundle, type SceneRewrite, type AuthorsNotesNext,
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { getModels, type Model } from "../api/models";
 import { THUMB } from "../api/thumbs";
 import { onNoticesChanged } from "../appEvents";
+import { AuthorsNotesPanel } from "./AuthorsNotesPanel";
 import { approxMark, ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
 import { CostPanel } from "./CostPanel";
@@ -234,7 +235,7 @@ function RewriteDetail({ cid, sid, post, locked, onRestored, onStale }: {
  *  character and per location. */
 export const SceneInspector = memo(function SceneInspector({
   cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless, sceneLocked, onRenaming, posts,
-  usage, budget, onBudgetSaved, rewritten, onTranscriptEdited,
+  usage, budget, onBudgetSaved, rewritten, onTranscriptEdited, stripTasks, onTaskBusy,
 }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void; pcless?: boolean;
@@ -265,8 +266,20 @@ export const SceneInspector = memo(function SceneInspector({
     /** A restore rewrote the transcript. Left out, `onSceneChanged` stands in;
      *  the play view passes its own so a restore asks for the follow-ups any
      *  edit does. */
-    onTranscriptEdited?: () => void }) {
+    onTranscriptEdited?: () => void;
+    /** The manual tasks a composer quick reply is running for this scene, so
+     *  the same task cannot be started twice from two surfaces. */
+    stripTasks?: { rolling_summary?: boolean; scene_break?: boolean };
+    /** Reports this panel's own Refresh now / Ask now in and out of flight,
+     *  for the same reason in the other direction. */
+    onTaskBusy?: (task: "rolling_summary" | "scene_break", busy: boolean) => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
+  // Which author's notes apply to the NEXT turn (play controls V), for the
+  // section's count. Stamped with its scene, like the briefing, so a late answer
+  // for the previous scene never counts against this one.
+  const [notesNext, setNotesNext] = useState<{ cid: string; sid: string;
+                                               data: AuthorsNotesNext } | null>(null);
+  const [notesTick, setNotesTick] = useState(0);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -778,6 +791,17 @@ export const SceneInspector = memo(function SceneInspector({
     return () => { live = false; };
   }, [cid, sid, refreshKey]);
 
+  useEffect(() => {
+    let live = true;
+    api.getAuthorsNotesNext(cid, sid)
+      .then((data) => { if (live) setNotesNext({ cid, sid, data }); })
+      .catch(() => { if (live) setNotesNext(null); });
+    return () => { live = false; };
+  }, [cid, sid, refreshKey, notesTick]);
+  const nextNotes = notesNext && notesNext.cid === cid && notesNext.sid === sid
+    ? notesNext.data : null;
+  const onNotesSaved = useCallback(() => setNotesTick((t) => t + 1), []);
+
   // Which scene is on screen *now*, readable from a fetch that started under a
   // previous one — the same "a late answer is wrong, not just stale" problem
   // the briefing effect above solves with its `live` flag. A ref rather than
@@ -1094,6 +1118,7 @@ export const SceneInspector = memo(function SceneInspector({
     // pressed may not overwrite what the button installs, however late it lands.
     const ticket = ++writeTicket.current;
     setRollingBusy(key);
+    onTaskBusy?.("rolling_summary", true);
     try {
       // `force`, always: this button exists so the player can ask for a summary
       // *now*, including when the automatic refresh is switched off. The
@@ -1127,6 +1152,7 @@ export const SceneInspector = memo(function SceneInspector({
       // another record while this one is out, and clearing unconditionally
       // would free that one's button while its call is still running.
       setRollingBusy((busy) => (busy === key ? null : busy));
+      onTaskBusy?.("rolling_summary", false);
     }
   }
 
@@ -1156,6 +1182,7 @@ export const SceneInspector = memo(function SceneInspector({
     const key = `${cid}/${sid}`;
     setBreakError(null);
     setBreakBusy(key);
+    onTaskBusy?.("scene_break", true);
     try {
       const data = await api.askSceneBreak(cid, sid, true);
       // Guarded on the reader still being on this record, like every other
@@ -1173,6 +1200,7 @@ export const SceneInspector = memo(function SceneInspector({
       setBreakError({ key, err });
     } finally {
       setBreakBusy((busy) => (busy === key ? null : busy));
+      onTaskBusy?.("scene_break", false);
     }
   }
 
@@ -1311,7 +1339,7 @@ export const SceneInspector = memo(function SceneInspector({
               digest valid, so it would stay out of the "current" summary until
               the next threshold came round. */}
           <button className="primary" onClick={refreshRolling}
-                  disabled={rollingBusy === `${cid}/${sid}` || sceneLocked}
+                  disabled={rollingBusy === `${cid}/${sid}` || sceneLocked || !!stripTasks?.rolling_summary}
                   title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
             {rollingBusy === `${cid}/${sid}` ? "Summarizing…" : "Refresh now"}
           </button>
@@ -1402,12 +1430,13 @@ export const SceneInspector = memo(function SceneInspector({
               half-written turn is asking about a beat whose reply has not
               arrived. */}
           <button className="primary" onClick={askBreakNow}
-                  disabled={breakBusy === `${cid}/${sid}` || sceneLocked}
+                  disabled={breakBusy === `${cid}/${sid}` || sceneLocked || !!stripTasks?.scene_break}
                   title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
             {breakBusy === `${cid}/${sid}` ? "Asking…" : "Ask now"}
           </button>
           {breakState?.key === `${cid}/${sid}` && breakState.data.verdict === "yes" && (
-            <button onClick={dismissBreak} disabled={breakBusy === `${cid}/${sid}`}>
+            <button onClick={dismissBreak}
+                    disabled={breakBusy === `${cid}/${sid}` || !!stripTasks?.scene_break}>
               Not here
             </button>
           )}
@@ -1605,6 +1634,19 @@ export const SceneInspector = memo(function SceneInspector({
       <SideSection id="routing" title="Model routing" collapsed={collapsed.routing ?? true}
                    onToggle={toggleSection}>
         <ModelRoutingPicker scope="campaign" cid={cid} />
+      </SideSection>
+
+      {/* Standing instructions placed in the history at a depth (play controls
+          V). Collapsed by default, like routing: set once, then left alone.
+          The count is every note due on the next turn. */}
+      <SideSection id="authors_notes" title="Author's notes"
+                   collapsed={collapsed.authors_notes ?? true} onToggle={toggleSection}
+                   extra={nextNotes && nextNotes.count > 0
+                     ? <span className="chip on" aria-label="Notes applying next turn">
+                         {nextNotes.count}</span>
+                     : undefined}>
+        <AuthorsNotesPanel cid={cid} sid={sid} cast={cast} next={nextNotes}
+                           onSaved={onNotesSaved} />
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>

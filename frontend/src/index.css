@@ -996,6 +996,21 @@ button.plate-avatar, button.plate-name { cursor: pointer; }
      without something between them. */
   padding-right: 12px; margin-right: 4px; border-right: 1px solid var(--line);
 }
+/* Quick replies: one row between the composer's meta strip and the input bar.
+   It scrolls sideways rather than wrapping, so a long set on a phone costs one
+   row of height, not five. */
+.quick-replies {
+  display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
+  padding: 8px 26px 0;
+}
+.quick-reply {
+  flex: none; min-height: 34px; padding: 4px 12px; cursor: pointer;
+  border: 1px solid var(--line-strong); border-radius: 3px; background: transparent;
+  color: var(--ink); font-family: var(--fm); font-size: 10px; letter-spacing: 0.1em;
+  text-transform: uppercase; white-space: nowrap;
+}
+.quick-reply:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.quick-reply:disabled { opacity: 0.4; cursor: default; }
 .composer-link {
   background: none; border: 0; cursor: pointer; color: var(--muted);
   font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; line-height: 22px;
@@ -1204,6 +1219,15 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 pre.regex-code { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0 0 10px; }
 .regex-checks { margin-bottom: 12px; }
 .regex-check { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 4px 0; }
+/* A quick reply's rail row: the row itself plus its ↑/↓, as siblings -- a
+   button cannot hold buttons. */
+.quick-reply-row { display: flex; align-items: stretch; gap: 4px; margin-bottom: 6px; }
+.quick-reply-row .row { flex: 1; min-width: 0; margin-bottom: 0; text-align: left; cursor: pointer; }
+.quick-reply-row .quick-reply-move { flex: none; padding: 0 8px; min-width: 30px; }
+.editor-list .rail-heading {
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--muted); margin: 12px 0 6px;
+}
 .row-label { flex: 1; cursor: pointer; overflow: hidden; }
 /* A row of [title][mark] rather than one clipped run: the ellipsis has to
    truncate the TITLE and leave the completion mark standing, so the mark is its
@@ -1964,9 +1988,29 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 /* The cascade cut (#75) takes this post and every one after it, so its hover
    reads as the destructive action it is rather than as another accent icon. */
 .msg-edit.msg-cut:hover { color: var(--alert); }
+/* Hidden from context: still in the transcript, reaching no prompt. Marked per
+   post rather than per run, since a hidden post can sit inside a run of
+   included ones. */
+.msg.excluded { border-left: 1px dashed var(--page-muted); }
+.msg.excluded .msg-body { opacity: 0.55; }
+.not-in-context { font-size: 0.75em; font-style: italic; color: var(--page-muted); margin-right: 0.5em; }
+.msg-exclude[aria-pressed="true"] { color: var(--accent); }
 /* reroll alternates: ‹ n/m › in the gutter, on the message Reroll acts on */
 .swipe-nav { display: flex; align-items: center; gap: 3px; }
 .swipe-count { color: var(--page-muted); font-family: var(--fm); font-size: 10px; }
+/* The last response takes a sideways touch drag as a swipe. Vertical panning
+   and pinch-zoom stay the browser's (the gesture discards a second finger);
+   a horizontal drag would otherwise be claimed as a pan and cancel the
+   pointer before the gesture is decided. */
+.msg.swipe-target { touch-action: pan-y pinch-zoom; }
+/* That pan-y also stops an ANCESTOR from panning sideways for a drag that
+   starts on the post, so wide content overflowing it could not be reached by
+   touch. The touch-action intersection stops at a scroll container, which
+   then pans natively, so a code block or a GFM table here scrolls itself --
+   and useSwipe declines a gesture that starts inside a horizontally
+   scrollable element, so the native scroll wins there. */
+.msg.swipe-target .msg-body pre { overflow-x: auto; }
+.msg.swipe-target .msg-body table { display: block; max-width: 100%; overflow-x: auto; }
 .msg-edit-form textarea { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--accent); padding: 8px; font-family: var(--fb); resize: vertical; }
 
 /* ---- scene inspector + record drawer ---- */
@@ -4324,6 +4368,9 @@ a.hub-row-title { text-decoration: none; color: inherit; }
   font-family: var(--fm, monospace); font-size: 11px;
   color: var(--muted); text-align: right;
 }
+/* The status chip and, for a scene with a sibling branch, the branch chip:
+   one grid cell, so a second chip never claims a track of its own. */
+.scene-item-chips { display: inline-flex; gap: 4px; align-items: center; min-width: 0; }
 .scene-item-title { font-size: 15.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The three mono cells share one look: they are all secondary facts about the
    row, and giving each its own size would make the row read as five things
@@ -4405,7 +4452,7 @@ a.hub-row-title { text-decoration: none; color: inherit; }
   /* Folded into one mono line under the title, so an empty figure should take
      no room at all rather than leave a gap in the middle of the sentence. */
   .scene-item-turns:empty, .scene-item-spend:empty { display: none; }
-  .scene-item .chip { grid-column: 1; grid-row: 3; margin-left: 56px; }
+  .scene-item-chips { grid-column: 1; grid-row: 3; margin-left: 56px; }
   .scene-item-act { grid-column: 3; grid-row: 3; min-height: 44px; }
   /* Beside the action, on the action's own line. Not next to the title: the
      one control that cannot be undone does not belong under a thumb reaching
@@ -4774,7 +4821,7 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   }
   /* Aligned under the title rather than under the number. */
   .scene-item-when { padding-left: 46px; }
-  .scene-item .chip { margin-left: 46px; }
+  .scene-item-chips { margin-left: 46px; }
   /* Compact: on the desktop row this sits at the end of a line it shares, so
      it can afford a label. Here it is a second line of its own. */
   .scenes-head .hub-primary { width: auto; min-height: 38px; padding: 0 13px; }

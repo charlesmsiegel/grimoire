@@ -48,6 +48,9 @@ export type LLMConnection = {
    *  penalty; "" reads as standard. */
   sampler_support?: "" | "standard" | "extended";
   vision?: VisionOverride;
+  /** Whether Keep writing sends a cut-short reply back as the start of the
+   *  model's own turn (prefill) rather than asking it to continue. */
+  prefill?: boolean;
   key_set: boolean; rev: string; health: ProviderHealth;
 };
 export type LLMConnectionDetail = LLMConnection & {
@@ -73,7 +76,7 @@ export type LLMConnectionDraft = {
   model?: string; post_process?: "none" | "strict";
   reasoning_effort?: "" | "low" | "high" | "max";
   sampler_preset?: string; sampler_support?: "" | "standard" | "extended";
-  vision?: VisionOverride;
+  vision?: VisionOverride; prefill?: boolean;
 };
 
 /** The nine sampler parameters, as a preset stores them. Every one optional:
@@ -407,6 +410,10 @@ export type ForkReport = {
    *  retried after a lost response gets `true` and the first fork's report
    *  verbatim, which is how it learns it did not make a second campaign. */
   replayed: boolean;
+  /** The post a fork AT A POST kept its scene through (play controls III).
+   *  Absent on a fork cut at a scene, and on a report replayed from before it
+   *  existed. */
+  cut_at?: number;
 };
 /** A fork request's optional guards (#409). `idempotencyKey` makes a repeat
  *  safe; `expectRevision` is the source's write token as the caller priced the
@@ -426,6 +433,15 @@ export type SceneMeta = {
    *  "when & where" without a second read per scene. */
   place?: string;
   pcless?: boolean; done?: boolean;
+  /** The scene's branch group (play controls III), present only on a scene
+   *  whose group has more than one member: siblings share it, and the scene
+   *  they were branched from carries it too (its own identity is the group). */
+  branch_group?: string;
+  /** The identity of the scene this one was branched from. */
+  branch_of?: string;
+  /** The absorbed sibling that makes this branch read-only. Derived by the
+   *  server, never stored: deleting or un-absorbing that sibling reopens it. */
+  closed_by?: { sid: string; title: string };
 };
 export type Message = { role: "user" | "assistant"; content: string; speaker?: string;
   actor_ref?: string;
@@ -438,10 +454,43 @@ export type Message = { role: "user" | "assistant"; content: string; speaker?: s
    *  rewrote, and `rewrite_key` names the record that says so (a later part of
    *  a response has a key of its own); `connection` is the connection that
    *  produced it. */
-  shown?: string; rewritten?: boolean; rewrite_key?: string; connection?: string };
+  shown?: string; rewritten?: boolean; rewrite_key?: string; connection?: string;
+  /** Hidden from context: the ISO time it was hidden. Absent on a post that is
+   *  in context -- the server never writes `false`. The post stays in the
+   *  transcript and every export; it reaches no prompt. */
+  excluded?: string };
+// The response settings a record's prompt rendered (`settings`) and, for a roll
+// continuation, the ones its resume prompt rendered (`resume_settings`).
+export type ResponseSettingsRecord = { style_id: string; phase: string; words: number; paragraphs: number };
+// `made_by` is the call that wrote a variant. Every key is optional because
+// unknown is absent, never zero: a variant from before it existed has no
+// `made_by`, and a key the provider never reported is missing rather than
+// guessed. `note` is only what the player typed, never the app's template.
+export type ResponseVariant = {
+  id: string; content: string; reasoning?: string; status: string; issue?: string | null;
+  made_by?: {
+    task?: string; connection_id?: string; connection?: string; model?: string; provider?: string;
+    composed?: "primary" | "resume"; guidance?: string; note?: string;
+    // Only on a resume-composed variant: the settings its own prompt rendered,
+    // since a later roll fence overwrites the record's `resume_settings`.
+    settings?: ResponseSettingsRecord;
+  };
+};
 export type ResponseRecord = { content: string; id: string; actor_ref: string | null; speaker: string; status: string;
   round_id: string | null; active_variant: string; context_changed: boolean; can_reroll: boolean;
-  variants: { id: string; content: string; reasoning?: string; status: string; issue?: string | null }[] };
+  variants: ResponseVariant[];
+  settings?: ResponseSettingsRecord; resume_settings?: ResponseSettingsRecord };
+// The lock-free read the swipe arrows are drawn from (`GET .../responses/{rid}/swipe`):
+// ids, statuses and provenance, never a variant's text. `active` indexes `variants` and is
+// null when the record's active id matches none, or when `edited`: the post's prose was
+// hand-edited and is no variant's, so it is not "n of m" and has no provenance.
+// `settings` / `resume_settings` are null for a response from before they were recorded.
+export type ResponseSwipe = {
+  active: number | null;
+  variants: Pick<ResponseVariant, "id" | "status" | "made_by">[];
+  settings: ResponseSettingsRecord | null; resume_settings: ResponseSettingsRecord | null;
+  can_reroll: boolean; editable: boolean; round_open: boolean; edited: boolean;
+};
 export type PassageCharacterDraft = { name: string; description: string; mes_example: string; quotes: string[] };
 export type PassageCharacterInput = { name: string; passage: string; source_text: string };
 export type PassageCharacterSave = PassageCharacterInput & { description: string; mes_example: string; existing_ref?: string };
@@ -1424,7 +1473,7 @@ export type PinRule = {
 export type PromptEntry = {
   id: string; scene: string; ts: string; model: string;
   task: "chat" | "director" | "retry" | "regenerate" | "continuation" | "opener"
-      | "replay";
+      | "replay" | "extend";
   total_tokens: number; dropped_tokens: number; budget_tokens: number;
 };
 /** A frozen breakdown: the same shape `getSceneContext` returns, plus which
@@ -1823,6 +1872,9 @@ export type ChronicleEntry = {
  *  by the time either is non-empty, which is why they are reported rather than
  *  raised. A count of zero beside a name in `failed` means "not known", not
  *  "none". */
+/** What starting a replay answers: the session, the cut's cascade report and,
+ *  for a replay begun inside a branch, the sibling it runs in. */
+export type ReplayStarted = ReplaySession & { cascade: CascadeReport; branched?: string };
 export type CascadeReport = {
   index: number; removed: number; was_absorbed: boolean;
   records: number; refused: { label: string; reason: string }[];
@@ -2044,6 +2096,9 @@ export type TimelineScene = {
   /** The scene's own opening moment, falling back to the chronicle's date. */
   date: string;
   location: string; done: boolean; pcless: boolean; beats: TimelineBeat[];
+  /** Present only on a closed branch: the absorbed sibling that closed it
+   *  (the scene listing's `closed_by`). */
+  closed_by?: { sid: string; title: string };
 };
 /** Only the threads with a beat on some card: a chip that filters to nothing
  *  is worse than no chip. */
@@ -2654,3 +2709,43 @@ export type RegexImportRow = {
   index: number; name: string; verdict: "exact" | "approximate" | "untranslatable";
   notes: string[]; rule: Omit<RegexRule, "id"> | null; original: unknown;
 };
+/** An author's note (play controls V): a standing instruction inserted into
+ *  the history `depth` posts from the end (0 = after the last), on every
+ *  `every`-th turn. */
+export type AuthorsNote = { text: string; depth: number; every: number };
+/** A campaign's notes; scene notes keyed by sid (the server resolves them). */
+export type AuthorsNotes = {
+  campaign: AuthorsNote | null;
+  scenes: Record<string, AuthorsNote>;
+  characters: Record<string, AuthorsNote>;
+};
+/** Which notes apply to the scene's NEXT turn. A character entry applies when
+ *  that character speaks. */
+export type AuthorsNotesNext = {
+  turn: number; count: number;
+  notes: { level: "campaign" | "scene" | "character"; depth: number; every: number;
+           applies: boolean; ref?: string; name?: string }[];
+};
+
+
+/** A composer quick reply (store/quick_replies.py). The kind decides which of
+ *  the optional fields it carries: `send`/`direct` → `text` + `mode`; `roll` →
+ *  `notation` + `roll_label?`; `task` → `task`; `opener` → none. */
+export type QuickReplyKind = "send" | "direct" | "roll" | "task" | "opener";
+export type QuickReplyTask = "rolling_summary" | "scene_break" | "next_scene";
+export type QuickReplyMode = "send" | "insert";
+export type QuickReply = {
+  id: string; label: string; kind: QuickReplyKind;
+  text?: string; mode?: QuickReplyMode; notation?: string; roll_label?: string; task?: QuickReplyTask;
+};
+/** A campaign entry hiding the world reply with the same id. */
+export type QuickReplyHide = { id: string; hidden: true };
+export type QuickReplyEntry = QuickReply | QuickReplyHide;
+/** An entry not saved yet: the server mints its id. */
+export type QuickReplyDraft = Omit<QuickReply, "id"> & { id?: string };
+/** A stored set. `digest` goes back as `expect` on the next PUT; a campaign
+ *  set also carries the world replies it layers on as `inherited`. */
+export type QuickReplySet = {
+  version: 1; replies: QuickReplyEntry[]; digest: string; inherited?: QuickReply[];
+};
+export type QuickReplyScope = { kind: "world"; wid: string } | { kind: "campaign"; cid: string };

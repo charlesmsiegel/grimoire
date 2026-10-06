@@ -111,3 +111,51 @@ async def test_strict_endpoint_receives_selected_profile_and_final_content_only(
     assert "GLM profile." in payload["messages"][0]["content"]
     assert payload["messages"][-1]["content"] == "Keep it brief."
     assert not {"temperature", "top_p", "thinking", "reasoning_effort"} & payload.keys()
+
+
+async def test_a_prefill_prompt_falls_back_with_the_instruction_tail():
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=(" and left.",))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
+                           fallback={"kind": "openai_compatible", "model": "vendor/unknown"})
+    conn = {"model": "vendor/unknown", "prefill": True}
+    messages = _prepared("vendor/unknown").with_tails(
+        {"prefill": [{"role": "assistant", "content": "Mara paused"}],
+         "instruction": [{"role": "assistant", "content": "Mara paused"},
+                         {"role": "user", "content": "Continue exactly where your last message stops."}]},
+        lambda c: "prefill" if llm.prefill_capable(c) else "instruction", conn)
+    assert await facade.complete(messages, conn) == " and left."
+    assert primary.requests[0]["messages"][-1] == {"role": "assistant", "content": "Mara paused"}
+    assert fallback.requests[0]["messages"][-2] == {"role": "assistant", "content": "Mara paused"}
+    assert fallback.requests[0]["messages"][-1]["role"] == "user"
+
+
+async def test_a_same_model_fallback_with_another_tail_is_still_recorded():
+    """A fallback on the primary's model but another `prefill` setting is sent
+    another ending, so it is a variant the prompt log must hear about -- keyed
+    on the tail the attempt chose, not only on the model id (codex, PR #458)."""
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=(" and left.",))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
+                           fallback={"kind": "openai_compatible", "model": "vendor/unknown"})
+    conn = {"model": "vendor/unknown", "prefill": True}
+    messages = _prepared("vendor/unknown").with_tails(
+        {"prefill": [{"role": "assistant", "content": "Mara paused"}],
+         "instruction": [{"role": "assistant", "content": "Mara paused"},
+                         {"role": "user", "content": "Continue exactly where your last message stops."}]},
+        lambda c: "prefill" if llm.prefill_capable(c) else "instruction", conn)
+    captured = []
+
+    def capture(model, _breakdown):
+        # As `character_turns._capture` does: read the variant back through the
+        # fallback's own connection.
+        fallback_conn = {"kind": "openai_compatible", "model": model}
+        captured.append((model, messages.for_connection(fallback_conn, model)))
+    messages.on_variant = capture
+
+    assert await facade.complete(messages, conn) == " and left."
+    assert len(captured) == 1
+    model, sent = captured[0]
+    assert model == "vendor/unknown"
+    assert sent == fallback.requests[0]["messages"]
+    assert sent[-1]["role"] == "user"

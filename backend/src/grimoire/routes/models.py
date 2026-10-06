@@ -95,6 +95,9 @@ class ConnectionCreate(BaseModel):
     #: penalty. "" reads as standard.
     sampler_support: Literal["", "standard", "extended"] = ""
     vision: Literal["", "on", "off"] = ""
+    #: Whether "Keep writing" sends a cut-short reply back as the start of the
+    #: model's own turn (prefill) rather than asking it to continue.
+    prefill: bool = False
 
 
 class ConnectionUpdate(BaseModel):
@@ -107,6 +110,7 @@ class ConnectionUpdate(BaseModel):
     sampler_preset: str | None = None
     sampler_support: Literal["", "standard", "extended"] | None = None
     vision: Literal["", "on", "off"] | None = None
+    prefill: bool | None = None
 
 
 class CatalogProbe(BaseModel):
@@ -203,6 +207,16 @@ class RegexImport(BaseModel):
 
     scope: dict
     rows: list[dict] = []
+
+
+class QuickReplySetBody(BaseModel):
+    """A whole quick-reply set, replacing what is stored. Loose on purpose: every
+    rule is checked in `store.quick_replies`, so a violation is a 400 with a
+    `kind`, never a pydantic 422. `expect` is the digest of the set the caller
+    read; a stored set that has moved since refuses the write (409)."""
+
+    replies: list[dict] = []
+    expect: str = ""
 
 
 class TrackerLayer(BaseModel):
@@ -390,6 +404,9 @@ class ForkCampaign(BaseModel):
     """
     name: str
     from_scene: str | None = None
+    #: Fork AT A POST of `from_scene` (play controls III): the copy keeps that
+    #: scene through this index and cuts the rest. Requires `from_scene`.
+    from_index: int | None = None
     #: An optional idempotency key (#409). A repeat with the same key is answered
     #: with the fork the first call made instead of copying the campaign again —
     #: because a lost response and a failed write are the same thing to a client,
@@ -703,6 +720,13 @@ class RenameScene(BaseModel):
     title: str
 
 
+class BranchScene(BaseModel):
+    """Branch a scene from a post: the sibling keeps `messages[: through + 1]`.
+    An empty `title` takes "<source title> (branch)"."""
+    through: int
+    title: str = ""
+
+
 class ChronicleSave(BaseModel):
     one_line: str = ""
     summary: str = ""
@@ -833,9 +857,18 @@ class EditMessage(BaseModel):
     restore: bool = False
 
 
+class ExcludeMessage(BaseModel):
+    excluded: bool
+
+
 class ReplayStart(BaseModel):
     #: The first post to replay -- the one AFTER the retconned post.
     index: int
+    #: Replay inside a branch of the scene (play controls III, #151): the whole
+    #: transcript is branched and the replay runs in the sibling, so the
+    #: original is never touched. Off by default, so existing callers keep the
+    #: in-place replay; the client turns it on for an unabsorbed scene.
+    branch: bool = False
 
 
 class ReplayCancel(BaseModel):
@@ -1036,6 +1069,9 @@ class ImportedMessage(BaseModel):
     role: Literal["user", "assistant"] = "assistant"
     speaker: str | None = None
     content: str = ""
+    # The hidden-from-context stamp the draft carried ("" when included), so a
+    # reviewed import keeps a hidden post out of context.
+    excluded: str = ""
 
 
 class SceneImportCommit(BaseModel):
@@ -1187,3 +1223,11 @@ class SamplerImportBody(BaseModel):
     name: str = ""
     data: Any = None
     include_max_tokens: bool = False
+
+
+class AuthorsNote(BaseModel):
+    """An author's note (play controls V). Ranges are checked by the route, so
+    a bad field answers a 400 naming it rather than a 422 from the model."""
+    text: str = ""
+    depth: int = 4
+    every: int = 1

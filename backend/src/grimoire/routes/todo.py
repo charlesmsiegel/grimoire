@@ -241,7 +241,8 @@ def _chore_unreviewed(ctx: _Ctx) -> dict | None:
 
 def _chore_open_scenes(ctx: _Ctx) -> dict | None:
     cid, scenes = ctx.cid, ctx.scenes()
-    n = sum(1 for s in scenes if not s["done"])
+    # A closed branch (a sibling was absorbed) is read-only, not unfinished.
+    n = sum(1 for s in scenes if not s["done"] and not s.get("closed_by"))
     if not n:
         return None
     return {
@@ -726,7 +727,7 @@ def _items_unreviewed(cid: str) -> list[dict]:
 def _items_open_scenes(cid: str) -> list[dict]:
     out = []
     for sc in store.scenes.read.list_scenes(cid):
-        if sc["done"]:
+        if sc["done"] or sc.get("closed_by"):
             continue
         where = " · ".join(x for x in (sc.get("date"), sc.get("place")) if x)
         out.append({"id": sc["id"], "label": sc["title"],

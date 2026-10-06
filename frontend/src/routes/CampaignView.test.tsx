@@ -32,6 +32,7 @@ import { api, ApiError } from "../api/client";
 import type { GroupSettings } from "../api/client";
 import { onConfigChanged } from "../appEvents";
 import { LOCKED_WHILE_GENERATING } from "../components/sceneLock";
+import { DIRECTOR_SPEAKER, ROLL_SPEAKER, TRANSITION_SPEAKER } from "../components/play/TranscriptPost";
 import {
   DEFAULT_GROUP, here, Here, installCampaignMocks, ONE_SCENE, openScene, playRoutes,
   renderCampaign, withPalette,
@@ -887,6 +888,68 @@ test("the confirm counts the posts and names what an absorbed scene loses", asyn
   // The two records this deliberately does not touch, said before the fact.
   expect(asked).toMatch(/roll log/i);
   expect(asked).toMatch(/timeline/i);
+});
+
+// ---- hide a post from context ----
+
+test("the hide toggle is on player and model posts only", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" },
+    { role: "assistant", speaker: ROLL_SPEAKER, content: "🎲 1d20 = 12" },
+    { role: "assistant", speaker: TRANSITION_SPEAKER, content: "*Time passes.*" },
+    { role: "assistant", speaker: DIRECTOR_SPEAKER, content: "faster" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  // The note is not drawn until asked for, so the count below would be vacuous
+  // for it: show it first, then assert it still has no toggle.
+  fireEvent.click(screen.getByRole("button", { name: "Show director notes · 1" }));
+  const note = (await screen.findByText("faster")).closest(".msg") as HTMLElement;
+  expect(within(note).queryByTitle("Hide from context")).toBeNull();
+  expect(screen.getAllByTitle("Hide from context")).toHaveLength(2);
+  expect(screen.getByLabelText("Hide message 1 from context")).toBeTruthy();
+  expect(screen.getByLabelText("Hide message 2 from context")).toBeTruthy();
+});
+
+test("hiding a post calls setExcluded and reloads the scene", async () => {
+  twoPostScene();
+  renderCampaign();
+  await screen.findByText("a reply");
+  const loads = (api.getScene as any).mock.calls.length;
+  const toggle = screen.getAllByTitle("Hide from context")[0];
+  expect(toggle.getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.setExcluded).toHaveBeenCalledWith("run", "s1", 0, true));
+  await waitFor(() => expect((api.getScene as any).mock.calls.length).toBeGreaterThan(loads));
+});
+
+test("an excluded post is marked and its toggle is pressed", async () => {
+  (api.listScenes as any).mockResolvedValue(ONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi", excluded: "2026-10-05T12:00:00Z" },
+    { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  const toggle = screen.getByTitle("Return to context");
+  expect(toggle.getAttribute("aria-pressed")).toBe("true");
+  expect(toggle.getAttribute("aria-label")).toBe("Return message 1 to context");
+  expect(toggle.closest(".msg")?.classList.contains("excluded")).toBe(true);
+  expect(screen.getByText("a reply").closest(".msg")?.classList.contains("excluded")).toBe(false);
+  expect(screen.getAllByText("not in context")).toHaveLength(1);
+  fireEvent.click(toggle);
+  await waitFor(() => expect(api.setExcluded).toHaveBeenCalledWith("run", "s1", 0, false));
+});
+
+test("an absorbed scene offers no hide toggle", async () => {
+  (api.listScenes as any).mockResolvedValue(DONE_SCENE);
+  (api.getScene as any).mockResolvedValue({ meta: { id: "s1", title: "Old" }, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  await screen.findByText(/scene complete/i);
+  expect(screen.queryAllByTitle("Hide from context")).toHaveLength(0);
+  // The cut is still offered there; it is only the toggle that is withheld.
+  expect(screen.getByLabelText("Delete message 1 and everything after it")).toBeTruthy();
 });
 
 test("a record the reversal could not put back is reported", async () => {
@@ -8519,7 +8582,9 @@ test("individual response deletion uses its stable id and keeps cut-from-here se
 });
 
 
-test("individual reroll keeps the old reply until accepted and spends its one-shot override without transcript growth", async () => {
+// A ledger reroll streams the frozen snapshot, so the server ignores a
+// `response` override: the client neither sends the pending chip nor spends it.
+test("individual reroll keeps the old reply until accepted and leaves its one-shot override pending, without transcript growth", async () => {
   vi.mocked(api.listScenes).mockResolvedValue(ONE_SCENE.map((scene) => ({ ...scene, date: "" })));
   const message = { role: "assistant" as const, content: "The accepted response.", speaker: "Mara",
     response_id: "response-a", response_status: "complete" as const, response_can_reroll: true };
@@ -8542,12 +8607,12 @@ test("individual reroll keeps the old reply until accepted and spends its one-sh
   fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
   await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledOnce());
   expect(vi.mocked(api.regenerateResponse).mock.calls[0][2]).toBe("response-a");
-  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", response: { response_continuation_words: "120" }, connection_id: "", model: "" });
+  expect(vi.mocked(api.regenerateResponse).mock.calls[0][4]).toEqual({ guidance: "Calmer", connection_id: "", model: "" });
   expect(screen.getByText("The accepted response.")).toBeInTheDocument();
   expect(api.regenerate).not.toHaveBeenCalled();
   await act(async () => finish?.());
   await screen.findByText("The revised response.");
-  await waitFor(() => expect(picker).toHaveValue(null));
+  expect(picker).toHaveValue(120);
 });
 
 test("streaming response boundaries display separate speakers and Stop remains the parent-run control", async () => {
@@ -8804,4 +8869,200 @@ test("a reattached run applies display frames within each part", async () => {
   expect(screen.getByText(/The lamps\. Lit\./).closest(".streaming-response")).toHaveTextContent("Mara");
   expect(screen.queryByText(/Secret plan|Draft/)).not.toBeInTheDocument();
   await act(async () => resume());
+});
+
+// --- branching (play controls III) -------------------------------------------
+
+// The sibling is listed, as the relist after a branch would list it: a scene id
+// the list does not hold is one the view redirects away from.
+const WITH_SIBLING = [...ONE_SCENE,
+  { id: "s1-b", title: "Old (branch)", model: "", created: "", updated: "" }];
+
+test("⑂ on an unabsorbed scene branches and opens the sibling", async () => {
+  (api.listScenes as any).mockResolvedValue(WITH_SIBLING);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Branch from message 1" }));
+  await waitFor(() => expect(api.branchScene).toHaveBeenCalledWith("run", "s1", 0));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+  expect(api.forkCampaign).not.toHaveBeenCalled();
+});
+
+// The sibling does not exist until the branch does, so the list the view holds
+// when ⑂ is clicked lacks it. Navigating before the relist installs hands the
+// resolver an id the installed list does not know, which it reads as stale and
+// replaces with the scene the reader was on (codex review, PR #458).
+function relistAddsSiblingLate() {
+  let release: () => void = () => {};
+  const late = new Promise<void>((resolve) => { release = resolve; });
+  let branched = false;
+  (api.branchScene as any).mockImplementation(async () => {
+    branched = true;
+    return { id: "s1-b", scene: { meta: {}, messages: [] } };
+  });
+  (api.listScenes as any).mockImplementation(async () => {
+    if (!branched) return ONE_SCENE;
+    await late;
+    return WITH_SIBLING;
+  });
+  return () => release();
+}
+
+test("⑂ waits for the relist that lists the sibling before opening it", async () => {
+  const release = relistAddsSiblingLate();
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Branch from message 1" }));
+  await waitFor(() => expect(api.branchScene).toHaveBeenCalled());
+  await act(async () => release());
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+});
+
+test("⑂ whose relist fails says so instead of opening a sibling the list lacks", async () => {
+  let branched = false;
+  (api.branchScene as any).mockImplementation(async () => {
+    branched = true;
+    return { id: "s1-b", scene: { meta: {}, messages: [] } };
+  });
+  (api.listScenes as any).mockImplementation(async () => {
+    if (branched) throw new ApiError(500, "list down");
+    return ONE_SCENE;
+  });
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Branch from message 1" }));
+  expect(await screen.findByText(/branch was created, but the scene list could not be refreshed: list down/i))
+    .toBeInTheDocument();
+  expect(here()).toBe("/campaigns/run/scenes/s1");
+});
+
+test("⑂ is held while its branch request is in flight, so a double click makes one", async () => {
+  let finish: () => void = () => {};
+  (api.branchScene as any).mockImplementation(() => new Promise((resolve) => {
+    finish = () => resolve({ id: "s1-b", scene: { meta: {}, messages: [] } });
+  }));
+  (api.listScenes as any).mockResolvedValue(WITH_SIBLING);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  const button = await screen.findByRole("button", { name: "Branch from message 1" });
+  fireEvent.click(button);
+  await waitFor(() => expect(api.branchScene).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("button", { name: "Branch from message 1" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Branch from message 1" }));
+  await act(async () => finish());
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+  expect(api.branchScene).toHaveBeenCalledTimes(1);
+});
+
+test("⑂ on an absorbed scene forks the campaign at that post", async () => {
+  (api.listScenes as any).mockResolvedValue([{ ...ONE_SCENE[0], done: true }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  (api.forkCampaign as any).mockResolvedValue({
+    id: "branch", from_scene: "s1", removed_scenes: [], records: 0, refused: [], failed: [],
+    replayed: false, cut_at: 1 });
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.spyOn(window, "prompt").mockReturnValue("Run One (fork)");
+  renderCampaign();
+  await screen.findByText(/scene complete/i);
+  fireEvent.click(await screen.findByRole("button", { name: "Branch from message 2" }));
+  await waitFor(() =>
+    expect(api.forkCampaign).toHaveBeenCalledWith("run", "Run One (fork)", "s1", {}, 1));
+  expect(confirm.mock.calls[0][0]).toContain("copy of the campaign");
+  expect(api.branchScene).not.toHaveBeenCalled();
+});
+
+const CLOSED_SCENES = [
+  { ...ONE_SCENE[0], branch_group: "g", closed_by: { sid: "s0", title: "Mara" } },
+  { id: "s0", title: "Mara", model: "", created: "", updated: "", done: true, branch_group: "g" },
+];
+
+test("a closed branch shows the banner and offers nothing to write with", async () => {
+  (api.listScenes as any).mockResolvedValue(CLOSED_SCENES);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  await screen.findByText(/A sibling branch was absorbed/);
+  expect(screen.getByRole("link", { name: "Mara" })).toHaveAttribute(
+    "href", "/campaigns/run/scenes/s0");
+  expect(screen.queryByRole("textbox")).toBeNull();
+  expect(screen.queryByRole("button", { name: "Branch from message 1" })).toBeNull();
+  expect(screen.queryByLabelText("Edit message 1")).toBeNull();
+  expect(screen.queryByRole("button", { name: "End scene" })).toBeNull();
+  const head = document.querySelector(".scene-head")!;
+  expect(within(head as HTMLElement).getByText("closed")).toHaveAttribute(
+    "title", "A sibling branch was absorbed");
+  expect(within(head as HTMLElement).getByText("branch")).toBeInTheDocument();
+  // A replay running in it can be accepted or stopped, never stepped.
+  expect(screen.getByTestId("replay-panel").getAttribute("data-closed")).toBe("true");
+  fireEvent.keyDown(window, { key: "r" });
+  expect(screen.queryByLabelText("Reroll guidance")).toBeNull();
+});
+
+test("an open branch keeps its composer and wears a branch chip", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    { ...ONE_SCENE[0], branch_group: "g" },
+    { id: "s0", title: "Mara", model: "", created: "", updated: "", branch_group: "g" },
+  ]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText("a reply");
+  const head = document.querySelector(".scene-head")!;
+  await waitFor(() => expect(within(head as HTMLElement).getByText("branch")).toBeInTheDocument());
+  expect(within(head as HTMLElement).queryByText("closed")).toBeNull();
+  expect(screen.queryByText(/A sibling branch was absorbed/)).toBeNull();
+  expect(await screen.findByRole("button", { name: "Branch from message 1" })).toBeInTheDocument();
+  expect(screen.getByTestId("replay-panel").getAttribute("data-closed")).toBe("false");
+});
+
+test("the replay dialog can branch on an unabsorbed scene, and follows the branch", async () => {
+  twoPostScene();
+  (api.listScenes as any).mockResolvedValue(WITH_SIBLING);
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(await screen.findByLabelText("Replay the turns after message 1"));
+  const panel = screen.getByTestId("replay-panel");
+  expect(panel.getAttribute("data-branchable")).toBe("true");
+  fireEvent.click(within(panel).getByText("stub-replay-branched"));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+});
+
+test("a replay in a branch opens the sibling only once the relist lists it", async () => {
+  twoPostScene();
+  let release: () => void = () => {};
+  const late = new Promise<void>((resolve) => { release = resolve; });
+  let branched = false;
+  (api.listScenes as any).mockImplementation(async () => {
+    if (!branched) return ONE_SCENE;
+    await late;
+    return WITH_SIBLING;
+  });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(await screen.findByLabelText("Replay the turns after message 1"));
+  const panel = screen.getByTestId("replay-panel");
+  branched = true;
+  fireEvent.click(within(panel).getByText("stub-replay-branched"));
+  await act(async () => release());
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+});
+
+test("an absorbed scene's replay dialog does not offer a branch", async () => {
+  (api.listScenes as any).mockResolvedValue([{ ...ONE_SCENE[0], done: true }]);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "hi" }, { role: "assistant", content: "a reply" }] });
+  renderCampaign();
+  await screen.findByText(/scene complete/i);
+  expect(screen.getByTestId("replay-panel").getAttribute("data-branchable")).toBe("false");
 });

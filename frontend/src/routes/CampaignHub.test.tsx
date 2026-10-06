@@ -20,6 +20,10 @@ vi.mock("../components/RegexRulesEditor", () => ({
   RegexRulesEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
     <div data-testid="regex-rules" data-scope={`${scope.kind}:${scope.cid}`} />,
 }));
+vi.mock("../components/QuickReplyEditor", () => ({
+  QuickReplyEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
+    <div data-testid="quick-replies" data-scope={`${scope.kind}:${scope.cid}`} />,
+}));
 vi.mock("../components/CampaignCover", () => ({
   CampaignCover: () => <div data-testid="cover-panel" />,
 }));
@@ -434,6 +438,14 @@ test("the Output processing panel mounts the campaign's rule editor", async () =
   expect(screen.queryByTestId("regex-rules")).not.toBeInTheDocument();
 });
 
+test("Settings opens the campaign's quick replies", async () => {
+  renderHub();
+  await screen.findByText("Run One");
+  expect(screen.queryByTestId("quick-replies")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Quick replies" }));
+  expect(screen.getByTestId("quick-replies")).toHaveAttribute("data-scope", "campaign:run");
+});
+
 test("the Tracker panel holds the campaign's switch and its field editor", async () => {
   (api.getCampaignTracker as any).mockResolvedValue({ setting: "", enabled: true });
   (api.setCampaignTracker as any).mockResolvedValue({ setting: "off", enabled: false });
@@ -638,6 +650,25 @@ test("a scene row on the hub opens the scene and offers to delete it", async () 
   expect(c.getByRole("link", { name: "The third" }))
     .toHaveAttribute("href", "/campaigns/run/scenes/s3");
   expect(c.getByRole("button", { name: "Delete The third" })).toBeInTheDocument();
+});
+
+test("a closed branch on the scenes card says closed, not open", async () => {
+  // The headline above already leaves it out of "open"; the card must agree.
+  (api.listScenes as any).mockResolvedValue([
+    { id: "s3", title: "The third", done: false, model: "", created: "", updated: "", date: "" },
+    { id: "s2-branch", title: "The second (branch)", done: false, model: "", created: "",
+      updated: "", date: "", closed_by: { sid: "s2", title: "The second" } },
+    { id: "s2", title: "The second", done: true, model: "", created: "", updated: "", date: "" },
+  ]);
+  renderHub();
+  await screen.findByText("The second (branch)");
+  const row = (title: string) =>
+    within(scenesCard().getByRole("link", { name: title }).closest(".hub-row") as HTMLElement);
+  expect(row("The second (branch)").getByText("closed")).toHaveAttribute(
+    "title", "A sibling branch was absorbed");
+  expect(row("The second (branch)").queryByText("open")).toBeNull();
+  expect(row("The third").getByText("open")).toBeInTheDocument();
+  expect(row("The second").getByText("absorbed")).toBeInTheDocument();
 });
 
 test("deleting a scene from the hub confirms, deletes, and re-reads", async () => {

@@ -407,3 +407,43 @@ def drop(cid: str, identity: str) -> None:
     the removal raises, so a delete that half-worked is reported."""
     with locks.campaign_lock(cid), contextlib.suppress(FileNotFoundError):
         shutil.rmtree(paths.scene_dir(cid, identity))
+
+
+def clone(cid: str, src_identity: str, dst_identity: str, rid_map: dict[str, str]) -> None:
+    """Copy one scene's records to a branch of it (play controls III).
+
+    A player post's key (`p-…`) is its post id, which the branch's transcript
+    keeps, so it is copied unchanged; a character post's key names its response,
+    which the branch re-issued under a new id, so `r-<old>-<vid>` becomes
+    `r-<new>-<vid>` -- and a response the branch did not keep is not copied.
+    The scene's field layer comes along, so the branch's next prompt sees the
+    tracker exactly as the source saw it at that point. Snapshot files first,
+    then the index, as `save` orders them. A source with no records is a no-op.
+    """
+    with locks.campaign_lock(cid):
+        src_dir = paths.scene_dir(cid, src_identity)
+        if not src_dir.is_dir():
+            return
+        entries: dict[str, dict] = {}
+        for key, entry in read_index(cid, src_identity).items():
+            new_key = key
+            if key.startswith("r-"):
+                _, old, vid = key.split("-")
+                if old not in rid_map:
+                    continue
+                new_key = paths.response_key(rid_map[old], vid)
+            try:
+                raw = _snapshot_path(cid, src_identity, key).read_bytes()
+            except FileNotFoundError:
+                continue
+            target = _snapshot_path(cid, dst_identity, new_key)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic.write_bytes(target, raw)
+            entries[new_key] = entry
+        if entries:
+            _write_index(cid, dst_identity, entries)
+        layer = paths.scene_layer_path(cid, src_identity)
+        if layer.is_file():
+            target = paths.scene_layer_path(cid, dst_identity)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic.write_bytes(target, layer.read_bytes())

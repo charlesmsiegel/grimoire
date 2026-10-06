@@ -189,6 +189,10 @@ cannot answer it and neither can pytest. What they hold is the prompt side:
 `prompt.active_speaker` renders the whole section from the nomination the
 fixture computed and requires it verbatim in the assembled prompt, so the
 layer going away, or the flag plumbing breaking, is caught offline.
+The same case hosts the author's-note checks (play controls V):
+`prompt.authors_note` requires the rendered campaign note in the narrator's
+prompt, and `prompt.authors_note_scoped` requires Seraphine's character note in
+her own call and in neither Tobin's nor the narrator's.
 
 The answer itself comes from:
 

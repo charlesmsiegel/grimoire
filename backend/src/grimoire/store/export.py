@@ -383,10 +383,15 @@ def _chapter(cid: str, provider, sid: str, number: int, images: Images, prefix: 
     # (markdown, HTML, plain text, EPUB) say the same thing without each
     # re-deriving it; `build_json` reads the scenes directly and stays verbatim,
     # which is what that format is for.
+    # ...and a post hidden from context is KEPT, marked: a book is the record
+    # of what was written, and the flag is what each renderer marks it by
+    # (absent on every post that is not hidden, so an unflagged chapter is
+    # exactly what it was).
     player = appearances_cast.player_label(cid, sid)
     messages = [{"role": m["role"],
                  "speaker": _book_speaker(m, player),
-                 "content": rewrite_images(m["content"], cid, images, prefix)}
+                 "content": rewrite_images(m["content"], cid, images, prefix),
+                 **({"excluded": True} if scenes_serialize.is_excluded(m) else {})}
                 for m in scene["messages"]
                 if not scenes_serialize.is_director_note(m)]
     return {"sid": sid, "number": number, "title": title, "date": date, "location": location,
@@ -450,7 +455,10 @@ def collect(cid: str, image_prefix: str = "images/") -> dict:
     provider = calendars.get_provider(calendars.read_calendar(croot)["primary"])
     images = Images()
 
-    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
+    # A closed branch is left out: its group's absorbed member is the past the
+    # book tells, and a book holds one past.
+    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])
+            if not s.get("closed_by")]
     chapters = [_chapter(cid, provider, sid, i, images, image_prefix)
                 for i, sid in enumerate(sids, start=1)]
     appendix = _appendix_entries(cid, appearances_paths.locked_actor_root(cid), sids, images, image_prefix)
@@ -532,6 +540,18 @@ def _header_lines(ch: dict) -> list[str]:
     return lines
 
 
+def _marked(messages: list[dict]) -> list[dict]:
+    """A hidden post's content opened by the marker line, for the two text
+    formats. `scene_import` strips the same line back into the flag, so an
+    export re-imported does not bring the post back into context. A visible
+    post that itself opens with the marker text is escaped
+    (`serialize.escape_marker`), so a re-import does not hide it."""
+    return [{**m, "content": f"{scenes_serialize.EXCLUDED_MARKER}\n{m['content']}"}
+            if m.get("excluded")
+            else {**m, "content": scenes_serialize.escape_marker(m["content"])}
+            for m in messages]
+
+
 def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
     """A zip of one markdown file per scene plus an appendix and packed
     images/, reusing the campaign's own `**Speaker:** content` transcript
@@ -568,7 +588,7 @@ def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
             # the chapter marker a markdown reader sees, and numbering it is what
             # lets a reader landing in one file know where in the run they are.
             lines = [f"# {toc_label(c)}", *_header_lines(c),
-                     chronicle.transcript_text(c["messages"])]
+                     chronicle.transcript_text(_marked(c["messages"]), include_excluded=True)]
             z.writestr(chapter_filename(c, "md"), "\n\n".join(lines) + "\n")
         for e in data["appendix"]:
             lines = [f"# {e['name']}"]
@@ -604,6 +624,8 @@ section.chapter, section.appendix { margin-bottom: 3em; }
 .speaker { font-weight: 600; font-size: 0.82em; letter-spacing: 0.04em; }
 .appendix .portrait { max-width: 40%; float: right; margin: 0 0 1em 1em; }
 .actor-role { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.1em; color: #666; margin-top: -0.5em; }
+.excluded{opacity:.6;border-left:1px dashed #999;padding-left:.5em}
+.not-in-context{font-size:.75em;font-style:italic}
 """
 
 
@@ -611,14 +633,18 @@ def _html_md(text: str) -> str:
     return _md_lib.markdown(text, extensions=["tables"])
 
 
-def _html_message(speaker: str | None, content: str) -> str:
+def _html_message(speaker: str | None, content: str, excluded: bool = False) -> str:
     html = _html_md(content)
-    if not speaker:
-        return html
-    label = f'<span class="speaker">{escape(speaker)}</span> '
-    if html.startswith("<p>"):
-        return "<p>" + label + html[3:]
-    return f"<p>{label}</p>\n{html}"
+    if speaker:
+        label = f'<span class="speaker">{escape(speaker)}</span> '
+        html = "<p>" + label + html[3:] if html.startswith("<p>") else f"<p>{label}</p>\n{html}"
+    return mark_excluded(html) if excluded else html
+
+
+def mark_excluded(html: str) -> str:
+    """A hidden post's rendered fragment, wrapped and tagged -- shared by the
+    HTML page and the EPUB so the two books mark it the same way."""
+    return f'<div class="excluded"><span class="not-in-context">not in context</span>\n{html}</div>'
 
 
 def _html_toc(data: dict) -> str:
@@ -681,7 +707,8 @@ def build_html(cid: str) -> tuple[bytes, str]:
         if ch["cast"]:
             meta.append(f"<p class=\"scene-cast\">{escape(' · '.join(ch['cast']))}</p>")
         epigraph = f"<p class=\"epigraph\">{escape(ch['epigraph'])}</p>" if ch["epigraph"] else ""
-        body = "\n".join(_html_message(m["speaker"], m["content"]) for m in ch["messages"])
+        body = "\n".join(_html_message(m["speaker"], m["content"], bool(m.get("excluded")))
+                         for m in ch["messages"])
         sections.append(f"<section class=\"chapter\" id=\"{escape(chapter_anchor(ch))}\">"
                         f"<h2>{escape(ch['title'])}</h2>"
                         f"{''.join(meta)}{epigraph}{body}</section>")
@@ -744,7 +771,7 @@ def build_text(cid: str) -> tuple[bytes, str]:
         if ch["epigraph"]:
             lines.append(ch["epigraph"])
         messages = [{**m, "content": drop_images(m["content"])} for m in ch["messages"]]
-        lines.append(chronicle.transcript_text(messages))
+        lines.append(chronicle.transcript_text(_marked(messages), include_excluded=True))
         chapters.append("\n\n".join(lines))
 
     sep = "\n\n\f\n"
@@ -758,15 +785,29 @@ def build_json(cid: str) -> tuple[bytes, str]:
 
     `contents` is this format's table of contents: the scene order the book
     formats number their chapters by, stated rather than left implicit in the
-    order of a JSON array a consumer may well re-sort."""
+    order of a JSON array a consumer may well re-sort. A closed branch is in
+    `scenes` and has no `contents` entry, exactly as it has no chapter."""
     campaign = campaigns_read.read_campaign(cid)  # raises CampaignNotFound
-    sids = [s["id"] for s in sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])]
-    scene_docs = [scenes_read.read_scene(cid, sid) for sid in sids]
+    # `scenes` is every scene on disk, a closed branch included: the book
+    # formats tell one past, this dump is the data. A closed branch says so in
+    # its meta (as the scene GET does), so a reader can tell what the book
+    # left out -- and `contents` numbers exactly what the book makes chapters
+    # of, the same filter `collect` applies, or its numbers would drift from
+    # the chapters' from the first closed branch on.
+    rows = sorted(scenes_read.list_scenes(cid), key=lambda s: s["id"])
+    scene_docs = []
+    for row in rows:
+        doc = scenes_read.read_scene(cid, row["id"])
+        if row.get("closed_by"):
+            doc["meta"]["closed_by"] = dict(row["closed_by"])
+        scene_docs.append(doc)
+    in_book = [doc for row, doc in zip(rows, scene_docs, strict=True) if not row.get("closed_by")]
     payload = {
         "campaign": {"id": cid, "name": campaign["meta"].get("name", cid),
                     "world": campaign["meta"].get("world", "")},
-        "contents": [{"number": n, "id": sid, "title": doc["meta"].get("title", sid)}
-                    for n, (sid, doc) in enumerate(zip(sids, scene_docs, strict=True), start=1)],
+        "contents": [{"number": n, "id": doc["meta"]["id"],
+                      "title": doc["meta"].get("title", doc["meta"]["id"])}
+                    for n, doc in enumerate(in_book, start=1)],
         "scenes": scene_docs,
         "chronicle": chronicle.read_chronicle(cid),
         "roster": appearances_cast.roster(cid),

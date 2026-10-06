@@ -8,6 +8,7 @@ import { SavedThinking } from "../Thinking";
 import { TrackerDisclosure } from "../tracker/TrackerDisclosure";
 import { RenderedMarkdown } from "./StreamingMarkdown";
 import { quotedIn } from "./citation";
+import { useSwipe } from "./useSwipe";
 
 // Marks a manual dice-roll transcript line's speaker (backend: scenes.ROLL_SPEAKER).
 // Prefixed with an invisible separator so it can never collide with a real
@@ -53,19 +54,29 @@ export type TranscriptActions = {
   openActor: (kind: string, id: string) => void;
   openReroll: () => void;
   stepAlternate: (delta: number) => void;
+  /** Step the last response's variants: ‹ is -1, › is +1. At the newest, +1
+   *  generates a new one (the ›, the touch swipe — never the → key). */
+  stepVariant: (delta: -1 | 1) => void;
   /** Open (or keep typing into) the edit form for one post. */
   edit: (index: number, text: string) => void;
+  /** Hide a post from context (`true`) or return it (`false`). */
+  toggleExcluded: (index: number, excluded: boolean) => void;
   cancelEdit: () => void;
   saveEdit: () => void;
   saveRetcon: () => void;
   pickImage: (index: number, actor: Actor | undefined, speaker: string) => void;
   cutFrom: (index: number) => void;
   replayFrom: (index: number) => void;
+  /** Branch the scene from this post: a sibling keeping everything through it
+   *  (or, for an absorbed scene, a copy of the campaign cut at it). */
+  branchFrom: (index: number) => void;
   setRerollPrompt: (text: string | null) => void;
   setRerollRoute: (route: RerollRoute) => void;
   reroll: () => void;
   deleteResponse: (id: string) => void;
   rerollResponse: (id: string, guidance: string, route: RerollRoute) => void;
+  /** Keep writing: continue the trailing response (play controls IV). */
+  extendResponse: (id: string, guidance: string, route: RerollRoute) => void;
   activateVariant: (id: string, variant: string) => void;
   createCharacter: (responseId: string) => void;
   /** Open the regex test pane on this post's stored text (spec 6.2). */
@@ -81,11 +92,25 @@ export type TranscriptSwipe = {
   active: number | null; count: number; title: string | undefined; disabled: boolean;
 };
 
-/** What hangs off the reroll row, when this run holds it: the swipe control,
- *  and the reroll popover's guidance and route while it is open. */
+/** The ledger's swipe control, on the last response. `position` and `count`
+ *  are over the COMPLETE variants only; `generates` is true at the newest,
+ *  where › makes another rather than stepping. Both disabled flags are worked
+ *  out by the view, which is the one that knows every guard. */
+export type TranscriptVariantSwipe = {
+  position: number; count: number; title?: string;
+  previousDisabled: boolean; nextDisabled: boolean; generates: boolean;
+};
+
+/** What hangs off the reroll row, when this run holds it: the swipe control
+ *  (the legacy alternates', or the ledger's on a response), and the reroll
+ *  popover's guidance and route while it is open. */
 export type TranscriptReroll = {
   swipe: TranscriptSwipe | null;
+  variantSwipe: TranscriptVariantSwipe | null;
   pop: { prompt: string; route: RerollRoute } | null;
+  /** Keep writing, offered on the swipe target's response controls; null
+   *  where there is no trailing response to continue. */
+  extend: { disabled: boolean } | null;
 };
 
 /** Everything the rows read that is the same for every row.
@@ -108,6 +133,9 @@ export type TranscriptContext = {
   busy: boolean; rolling: boolean;
   /** `transcriptIsActive`: the posts on screen are the active scene's own. */
   active: boolean;
+  /** The active scene has been absorbed: no post can be hidden from context
+   *  there (there is no future prompt to protect), so the toggle is not shown. */
+  absorbed: boolean;
   responseDisabled: boolean;
   /** Absolute index of the last post in the window. */
   lastIndex: number;
@@ -188,10 +216,14 @@ export const TranscriptRun = memo(function TranscriptRun({
             // an excerpt, and there is no index to trust.
             cited={quotedIn(m, ctx.citedNeedle)}
             editingText={editing?.index === index ? editing.text : null}
-            busy={ctx.busy} rolling={ctx.rolling} active={ctx.active}
+            busy={ctx.busy} rolling={ctx.rolling} active={ctx.active} absorbed={ctx.absorbed}
             rerollButton={rerollRow && ctx.canReroll && !m.response_id}
             swipe={rerollRow && !m.response_id ? reroll?.swipe ?? null : null}
+            variantSwipe={rerollRow && m.response_id && ctx.lastOfResponse.has(index)
+              ? reroll?.variantSwipe ?? null : null}
             rerollPop={rerollRow && ctx.canReroll ? reroll?.pop ?? null : null}
+            extend={rerollRow && m.response_id && ctx.lastOfResponse.has(index)
+              ? reroll?.extend ?? null : null}
             canReplayAfter={index < ctx.lastIndex}
             chip={m.role === "user" || m.speaker === DIRECTOR_SPEAKER
               ? ctx.postChips?.[index] : undefined}
@@ -220,8 +252,8 @@ export const TranscriptRun = memo(function TranscriptRun({
  *  describe does. A scene refresh replaces every message object, so every row
  *  re-renders then — once per turn — but a keystroke or a delta reaches none. */
 export const TranscriptPost = memo(function TranscriptPost({
-  m, index, actor, speaker, cited, editingText, busy, rolling, active, rerollButton, swipe,
-  rerollPop, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
+  m, index, actor, speaker, cited, editingText, busy, rolling, active, absorbed, rerollButton, swipe,
+  variantSwipe, rerollPop, extend, canReplayAfter, chip, lastOfResponse, trackerKey, trackerEntry, trackerNames,
   trackerLabels, trackerEnabled, trackerRerun, loadedCid, loadedSid, cid, sid, responseDisabled, actions,
 }: {
   m: Message; index: number;
@@ -230,10 +262,14 @@ export const TranscriptPost = memo(function TranscriptPost({
   cited: boolean;
   /** This post's edit buffer, or null when it is not the one being edited. */
   editingText: string | null;
-  busy: boolean; rolling: boolean; active: boolean;
+  busy: boolean; rolling: boolean; active: boolean; absorbed: boolean;
   rerollButton: boolean;
   swipe: TranscriptSwipe | null;
+  /** The ledger's arrows, on the one row that is the swipe target; else null. */
+  variantSwipe: TranscriptVariantSwipe | null;
   rerollPop: { prompt: string; route: RerollRoute } | null;
+  /** Keep writing, on the trailing response's last part only; else null. */
+  extend: { disabled: boolean } | null;
   canReplayAfter: boolean;
   chip: UsagePostBucket | undefined;
   lastOfResponse: boolean;
@@ -252,9 +288,19 @@ export const TranscriptPost = memo(function TranscriptPost({
   actions: TranscriptActions;
 }) {
   const editing = editingText !== null;
+  // Every row calls it (a hook cannot be conditional); only the swipe target
+  // spreads the handlers, and only it is enabled. `stepVariant` re-checks the
+  // disabled flags, so a swipe can do nothing the arrows could not.
+  const gesture = useSwipe({
+    enabled: variantSwipe !== null && !editing,
+    onNext: () => actions.stepVariant(1),
+    onPrevious: () => actions.stepVariant(-1),
+  });
   return (
     /* `.cited` marks the line a hovered citation was taken from. */
-    <div className={`msg ${m.role}` + (cited ? " cited" : "")}>
+    <div className={`msg ${m.role}` + (cited ? " cited" : "") + (variantSwipe ? " swipe-target" : "")
+                     + (m.excluded ? " excluded" : "")}
+         {...(variantSwipe ? gesture : {})}>
       <span className="msg-gutter">
         {!editing && !busy && (
           <span className="gutter-icons">
@@ -275,10 +321,40 @@ export const TranscriptPost = memo(function TranscriptPost({
                         onClick={() => actions.stepAlternate(1)}>›</button>
               </span>
             )}
+            {variantSwipe && (
+              <span className="swipe-nav">
+                <button className="msg-edit" aria-label="Previous reply variant"
+                        disabled={variantSwipe.previousDisabled}
+                        onClick={() => actions.stepVariant(-1)}>‹</button>
+                <span className="swipe-count" title={variantSwipe.title}>
+                  {variantSwipe.position + 1}/{variantSwipe.count}
+                </span>
+                <button className="msg-edit"
+                        aria-label={variantSwipe.generates
+                          ? "Generate a new reply variant" : "Next reply variant"}
+                        disabled={variantSwipe.nextDisabled}
+                        onClick={() => actions.stepVariant(1)}>›</button>
+              </span>
+            )}
             {m.speaker !== ROLL_SPEAKER && active && (
               <button className="msg-edit" title="Edit message" aria-label={`Edit message ${index + 1}`}
                       disabled={rolling}
                       onClick={() => actions.edit(index, m.content)}>✎</button>
+            )}
+            {/* Hide from context: the post stays here and in every export,
+                and reaches no prompt. Player and model posts only -- a roll
+                line is half of an immutable rolls.json fact, a transition is
+                half of the scene's location/time history, and a note never
+                reaches a story prompt anyway. Not on an absorbed scene,
+                which has no future prompt to protect. */}
+            {active && !absorbed && m.speaker !== ROLL_SPEAKER && m.speaker !== TRANSITION_SPEAKER
+              && m.speaker !== DIRECTOR_SPEAKER && (
+              <button className="msg-edit msg-exclude"
+                      title={m.excluded ? "Return to context" : "Hide from context"}
+                      aria-label={`${m.excluded ? "Return" : "Hide"} message ${index + 1} ${m.excluded ? "to" : "from"} context`}
+                      aria-pressed={!!m.excluded}
+                      disabled={rolling}
+                      onClick={() => actions.toggleExcluded(index, !m.excluded)}>⊘</button>
             )}
             {/* Refused on a dice-roll line for the same reason
                 Edit is: this rewrites the post, and that line's
@@ -324,6 +400,15 @@ export const TranscriptPost = memo(function TranscriptPost({
                       aria-label={`Replay the turns after message ${index + 1}`}
                       disabled={rolling}
                       onClick={() => actions.replayFrom(index + 1)}>⏩</button>
+            )}
+            {/* Branch from here (play controls III): on every post of an
+                active scene, roll lines included -- the branch keeps this post
+                as its last. */}
+            {active && (
+              <button className="msg-edit" title="Branch from here"
+                      aria-label={`Branch from message ${index + 1}`}
+                      disabled={rolling}
+                      onClick={() => actions.branchFrom(index)}>⑂</button>
             )}
           </span>
         )}
@@ -374,6 +459,7 @@ export const TranscriptPost = memo(function TranscriptPost({
         )}
       </span>
       <div className="msg-body">
+        {m.excluded && !editing && <span className="not-in-context">not in context</span>}
         {/* What this post cost to answer, over every reroll of it
             (#153). On what the player PUT there and nothing
             else: those are the lines a generation was made FOR,
@@ -427,6 +513,8 @@ export const TranscriptPost = memo(function TranscriptPost({
             disabled={responseDisabled}
             onDelete={actions.deleteResponse}
             onReroll={actions.rerollResponse}
+            onExtend={extend ? actions.extendResponse : undefined}
+            extendDisabled={extend?.disabled ?? false}
             onActivate={actions.activateVariant}
             onReplay={() => actions.replayFrom(index)}
             onCreateCharacter={m.speaker === "Grimoire" && m.response_status === "complete"

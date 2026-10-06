@@ -473,3 +473,47 @@ test("a draft that carries no premise arrives without one", async () => {
   const landed = await screen.findByTestId("play");
   expect(landed).toHaveTextContent("seed:none");
 });
+
+test("branches carry a branch chip, and a closed one says so in place of open", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "002--other", title: "Other" }),
+    scene({ id: "001--alt", title: "Alt", branch_group: "g",
+            closed_by: { sid: "001--first", title: "First" } }),
+    scene({ id: "001--first", title: "First", done: true, branch_group: "g" }),
+  ]);
+  renderScenes();
+  await screen.findByText("Other");
+  const rows = screen.getAllByRole("listitem");
+  const row = (title: string) => rows.find((r) => within(r).queryByText(title))!;
+  expect(screen.getAllByText("branch")).toHaveLength(2);
+  expect(within(row("Other")).queryByText("branch")).toBeNull();
+  const closed = within(row("Alt")).getByText("closed");
+  expect(closed).toHaveAttribute("title", "A sibling branch was absorbed");
+  expect(within(row("Alt")).queryByText("open")).toBeNull();
+  expect(within(row("Alt")).getByText("Read →")).toBeInTheDocument();
+  expect(within(row("Other")).queryByText("closed")).toBeNull();
+});
+
+test("a group of one shows no branch chip", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--first", title: "First", branch_group: "g" }),
+  ]);
+  renderScenes();
+  await screen.findByText("First");
+  expect(screen.queryByText("branch")).toBeNull();
+});
+
+test("a closed branch is not counted or listed as open", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "002--other", title: "Other" }),
+    scene({ id: "001--alt", title: "Alt", branch_group: "g",
+            closed_by: { sid: "001--first", title: "First" } }),
+    scene({ id: "001--first", title: "First", done: true, branch_group: "g" }),
+  ]);
+  renderScenes();
+  await screen.findByText("Other");
+  expect(screen.getByText("Run One · every scene, newest first · 1 open")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: /^Open/ }));
+  await screen.findByText("Other");
+  expect(screen.queryByText("Alt")).toBeNull();
+});

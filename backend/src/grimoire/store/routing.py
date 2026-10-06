@@ -54,9 +54,10 @@ class Route(NamedTuple):
 #: this line is a red test, not a silently unroutable call.
 ROUTES: tuple[Route, ...] = (
     Route("scene", "Scene turns",
-          "Every streamed turn in play: sends, retries, regenerations, director "
-          "turns, replayed turns and mechanics continuations.",
-          ("chat", "retry", "regenerate", "director", "replay", "continuation", "response-selector"), True),
+          "Every streamed turn in play: sends, retries, regenerations, kept-writing "
+          "replies, director turns, replayed turns and mechanics continuations.",
+          ("chat", "retry", "regenerate", "extend", "director", "replay", "continuation",
+           "response-selector"), True),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",

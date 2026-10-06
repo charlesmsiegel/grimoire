@@ -12,7 +12,9 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 `usage` is the accounting holder the real facade fills in place (#152). Every
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
 but the half of the contract `store.usage.Meter` reads to tell "the request went
-out and reported nothing" from "the request was never made". A fake built with
+out and reported nothing" from "the request was never made". That stamp includes
+the connection dict itself under `llm.ATTEMPTED`, which is where a saved
+variant's `made_by.connection_id` is read from. A fake built with
 `usage=` then adds what a *provider* would report on top, so a test can drive a
 route and assert on the ledger row it filed; the default adds nothing, which is
 what an endpoint that reports no usage does.
@@ -58,7 +60,7 @@ from pathlib import Path
 
 import anyio
 
-from grimoire.llm import effective_model
+from grimoire.llm import ATTEMPTED, effective_model
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -217,7 +219,8 @@ class FakeLLM:
             usage.update({"model": effective_model(conn),
                           "connection": conn.get("name") or conn.get("id")
                           or conn.get("kind") or "?",
-                          "provider": conn.get("kind", "openrouter"), "attempts": 1})
+                          "provider": conn.get("kind", "openrouter"), "attempts": 1,
+                          ATTEMPTED: conn})
         deltas = self._next(messages, conn)   # records the request and counts it
         for delta in deltas:
             yield delta
@@ -557,6 +560,18 @@ class QuietThenAnswers(FakeLLM):
 
     def __init__(self, text="At last."):
         super().__init__([["", text]])
+
+
+class ModelessHolder(FakeLLM):
+    """Answers like `FakeLLM` but leaves the usage holder with no `model` --
+    a provider that served the call without saying which model ran it, so a
+    test can pin that the record leaves the field absent rather than empty."""
+
+    async def stream(self, messages, conn, usage=None):
+        async for delta in super().stream(messages, conn, usage):
+            if usage is not None:
+                usage.pop("model", None)
+            yield delta
 
 
 class HeldOpenRouter(FakeLLM):

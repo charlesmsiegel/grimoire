@@ -33,6 +33,8 @@ vi.mock("../api/client", async () => {
       getSceneUsage: vi.fn(), getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(),
       // Turn history's stored rewrites (regex output processing, spec 6.3).
       getSceneRewrites: vi.fn(), getRegex: vi.fn(), editMessage: vi.fn(),
+      // The Author's notes section's count (play controls V).
+      getAuthorsNotesNext: vi.fn(),
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, _n: string,
                       o?: { w?: number; v?: string | null }) =>
         `/img/${k}/${a}/${v}${o?.w ? `?w=${o.w}` : ""}${o?.v ? `${o?.w ? "&" : "?"}v=${o.v}` : ""}`,
@@ -50,6 +52,11 @@ vi.mock("./ResponseTargetsPicker", () => ({
 vi.mock("./ModelRoutingPicker", () => ({
   ModelRoutingPicker: ({ scope, cid }: any) => (
     <div data-testid="model-routing-picker" data-scope={scope} data-cid={cid} />
+  ),
+}));
+vi.mock("./AuthorsNotesPanel", () => ({
+  AuthorsNotesPanel: ({ cid, sid }: any) => (
+    <div data-testid="authors-notes-panel" data-cid={cid} data-sid={sid} />
   ),
 }));
 import { api } from "../api/client";
@@ -73,6 +80,7 @@ const GREG_MONTHS = [
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
+  (api.getAuthorsNotesNext as any).mockResolvedValue({ turn: 1, count: 0, notes: [] });
   (api.getCast as any).mockResolvedValue([{ kind: "characters", id: "seraphine", role: "npc" }]);
   (api.getSceneUsage as any).mockResolvedValue({
     campaign: "c", scene: "s", since: "2026-08-01", until: "2026-08-14",
@@ -788,6 +796,29 @@ test("the routing section is shut until asked for, then scoped to this campaign"
   const picker = await screen.findByTestId("model-routing-picker");
   expect(picker).toHaveAttribute("data-scope", "campaign");
   expect(picker).toHaveAttribute("data-cid", "c");
+});
+
+test("the Author's notes section counts the notes applying next turn", async () => {
+  (api.getAuthorsNotesNext as any).mockResolvedValue({
+    turn: 3, count: 2,
+    notes: [{ level: "campaign", depth: 4, every: 1, applies: true },
+            { level: "character", depth: 0, every: 1, applies: true,
+              ref: "characters:seraphine", name: "Seraphine" }],
+  });
+  renderInspector();
+  expect(await screen.findByLabelText("Notes applying next turn")).toHaveTextContent("2");
+  const header = screen.getByRole("button", { name: /author's notes/i });
+  expect(header).toHaveAttribute("aria-expanded", "false");
+  fireEvent.click(header);
+  const panel = await screen.findByTestId("authors-notes-panel");
+  expect(panel).toHaveAttribute("data-cid", "c");
+  expect(panel).toHaveAttribute("data-sid", "s");
+});
+
+test("no notes applying next turn draws no count", async () => {
+  renderInspector();
+  await screen.findByRole("button", { name: /author's notes/i });
+  expect(screen.queryByLabelText("Notes applying next turn")).not.toBeInTheDocument();
 });
 
 test("clicking a section header collapses its body and toggles aria-expanded", async () => {
@@ -2368,4 +2399,39 @@ test("a later part of a response opens its own record, by the key the scene read
   const detail = await screen.findByRole("region", { name: "Rewrite of post 5" });
   expect(within(detail).getByText("Second part...")).toBeInTheDocument();
   expect(within(detail).queryByText("First part...")).not.toBeInTheDocument();
+});
+
+// ---- quick replies share the two manual tasks ----
+
+test("a task the strip is running disables its manual button", async () => {
+  const { rerender } = render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} stripTasks={{ rolling_summary: true }} /></MemoryRouter>);
+  expect(await screen.findByRole("button", { name: /refresh now/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /ask now/i })).toBeEnabled();
+  rerender(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} stripTasks={{ scene_break: true }} /></MemoryRouter>);
+  expect(await screen.findByRole("button", { name: /ask now/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /refresh now/i })).toBeEnabled();
+});
+
+test("Not here is held while the strip has a scene-break question out", async () => {
+  // Dismissing under a strip-started question would let that question land
+  // afterwards and raise the prompt the player just turned down.
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} stripTasks={{ scene_break: true }} /></MemoryRouter>);
+  expect(await screen.findByRole("button", { name: /not here/i })).toBeDisabled();
+});
+
+test("its manual buttons report themselves busy", async () => {
+  const onTaskBusy = vi.fn();
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} onTaskBusy={onTaskBusy} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await waitFor(() => expect(onTaskBusy).toHaveBeenLastCalledWith("rolling_summary", false));
+  expect(onTaskBusy.mock.calls[0]).toEqual(["rolling_summary", true]);
+  onTaskBusy.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: /ask now/i }));
+  await waitFor(() => expect(onTaskBusy).toHaveBeenLastCalledWith("scene_break", false));
+  expect(onTaskBusy.mock.calls[0]).toEqual(["scene_break", true]);
 });

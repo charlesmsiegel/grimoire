@@ -478,6 +478,97 @@ def test_a_fork_whose_parent_was_deleted_lists_as_a_root(cid):
     assert cid not in rows
 
 
+
+# --- forking at a post (play controls III) ----------------------------------
+
+
+def _tree(cid):
+    root = campaigns.campaign_root(cid)
+    return {p.relative_to(root).as_posix(): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+
+
+def test_a_fork_at_a_post_keeps_the_scene_through_that_post(cid):
+    one = _played(cid, "Mara", posts=4)
+    two = _played(cid, "Winifred")
+    scenes.mark_absorbed(cid, one, "They swore.", "A long night.")
+    before = _tree(cid)
+    out = fork.fork_campaign(cid, "Branch", from_scene=one, from_index=1)
+    child = out["id"]
+    assert out["cut_at"] == 1 and out["removed_scenes"] == [two]
+    assert [m["content"] for m in scenes.read_scene(child, one)["messages"]] == \
+        ["Mara post 0", "Mara post 1"]
+    assert "done" not in scenes.read_scene_meta(child, one)          # un-absorbed in the copy
+    assert _tree(cid) == before                                       # source byte-identical
+
+
+def test_a_fork_at_a_post_reverses_that_posts_absorb_writes(cid):
+    from grimoire.store import absorb
+
+    one = _played(cid, "Mara", posts=4)
+    entities.create_entity(campaigns.campaign_root(cid), "lore", "Pact", body="old body")
+    absorb.apply_edits(cid, [{
+        "id": "lore:pact", "kind": "lore", "target": {"kind": "lore", "id": "pact"},
+        "label": "The Pact — lore", "field": "body",
+        "before": "old body", "after": "new body", "authored": False,
+        "review": {"quote": "she named the pact", "speaker": "Seraphine",
+                   "certainty": 0.9, "authority": "witness", "band": "likely"},
+    }], one)
+    chronicle.absorb(cid, {"id": one, "one_line": "They swore.", "summary": "A long night.",
+                           "keywords": [], "cast": [], "location": "", "date": ""})
+    scenes.mark_absorbed(cid, one, "They swore.", "A long night.")
+    child = fork.fork_campaign(cid, "Branch", from_scene=one, from_index=1)["id"]
+    root = campaigns.campaign_root(child)
+    assert entities.read_entity(root, "lore", "pact")["body"] == "old body"
+    assert one not in chronicle.read_chronicle(child)
+    assert entities.read_entity(campaigns.campaign_root(cid), "lore", "pact")["body"] == "new body"
+
+
+def test_a_fork_at_the_last_post_cuts_nothing(cid):
+    one = _played(cid, "Mara", posts=3)
+    scenes.mark_absorbed(cid, one, "They swore.", "A long night.")
+    out = fork.fork_campaign(cid, "Branch", from_scene=one, from_index=2)
+    assert out["cut_at"] == 2
+    assert len(scenes.read_scene(out["id"], one)["messages"]) == 3
+    assert scenes.read_scene_meta(out["id"], one)["done"] == "true"
+
+
+def test_an_out_of_range_index_copies_nothing(cid):
+    one = _played(cid, "Mara")
+    shelf = {c["id"] for c in campaigns.list_campaigns()}
+    for index in (-1, 2):
+        with pytest.raises(IndexError):
+            fork.fork_campaign(cid, "Branch", from_scene=one, from_index=index)
+    with pytest.raises(ValueError):
+        fork.fork_campaign(cid, "Branch", from_index=0)
+    assert {c["id"] for c in campaigns.list_campaigns()} == shelf
+
+
+def test_a_fork_removes_the_scenes_alternatives_by_number(cid):
+    from grimoire.store import branch
+
+    one = _played(cid, "Mara")
+    alt = branch.branch_scene(cid, one, 0, title="Abel")      # 001--abel sorts first
+    assert alt < one
+    two = _played(cid, "Winifred")
+    out = fork.fork_campaign(cid, "Branch", from_scene=one)
+    assert sorted(out["removed_scenes"]) == sorted([alt, two])
+    assert _sids(out["id"]) == [one]
+
+
+def test_a_keyed_fork_at_a_post_replays_its_cut(cid):
+    one = _played(cid, "Mara", posts=3)
+    first = fork.fork_campaign(cid, "Branch", from_scene=one, from_index=0, key="k-1")
+    again = fork.fork_campaign(cid, "Branch", from_scene=one, from_index=0, key="k-1")
+    assert again["replayed"] is True and again["cut_at"] == 0 and again["id"] == first["id"]
+
+
+def test_a_marker_without_cut_at_still_replays(cid):
+    one = _played(cid, "Mara")
+    first = fork.fork_campaign(cid, "Branch", from_scene=one, key="k-1")
+    assert "cut_at" not in first
+    again = fork.fork_campaign(cid, "Branch", from_scene=one, key="k-1")
+    assert again["replayed"] is True and again["id"] == first["id"]
+
 def test_a_fork_inherits_the_same_library_and_the_same_hidden_entries(monkeypatch, tmp_path):
     """`store.fork` copies a campaign's own tree and the world is shared, so a
     fork sees the same world library and carries the same tombstones. Nothing

@@ -504,7 +504,7 @@ def post_start_from_greeting(cid: str, sid: str, body: StartFromGreeting, reques
         # `mechanics.py`. Both routes here mutate a live scene: this one seats a
         # cast and writes the greeting as the opener, and can RENAME the scene
         # while doing it.
-        with runs.scene_held_free(request.app, cid, sid):
+        with runs.scene_held_open(request.app, cid, sid):
             new_sid = store.playing.start_from_greeting(cid, sid, body.greeting,
                                                         seed_location=body.seed_location,
                                                         seed=body.seed)
@@ -654,7 +654,7 @@ def post_first_post(cid: str, sid: str, body: FirstPost, request: Request,
     # empty scene. It also puts the busy refusal ahead of the already-has-
     # messages one, which is the honest order -- a scene a turn is generating
     # into is refused for that reason, whatever else is true of it.
-    with runs.scene_held_free(request.app, cid, sid), store.locks.campaign_lock(cid):
+    with runs.scene_held_open(request.app, cid, sid), store.locks.campaign_lock(cid):
             if body.contributions:
                 cast = _opener_cast(cid, sid)
                 if body.snapshot != cast:

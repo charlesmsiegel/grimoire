@@ -68,7 +68,7 @@ class PreparedMessages(list):
         self._primary_model = primary_model
         messages, breakdown = factory(primary_model)
         self._variants = {primary_model: deepcopy((messages, breakdown))}
-        self._notified: set[str] = set()
+        self._notified: set[tuple[str, str | None]] = set()
         self.breakdown = deepcopy(breakdown)
         self.on_variant: VariantCallback | None = None
         #: The campaign whose prompt this is. Image references (#377,
@@ -76,23 +76,99 @@ class PreparedMessages(list):
         #: resolves them against -- the campaign running the attempt, which for
         #: a snapshot restored in a fork is the fork.
         self.campaign = campaign
+        # The response settings the prompt rendered; set by `assemble._prepare`.
+        self.settings: dict | None = None
+        #: Alternative endings chosen per dispatched ATTEMPT (`with_tails`), and
+        #: the chooser that picks one from the attempt's connection. None for
+        #: every ordinary prompt.
+        self._tails: dict[str, list[dict]] | None = None
+        self._choose: Callable[[dict], str] | None = None
+        #: The tail the primary attempt is sent: with the primary model, the
+        #: one combination the prompt record already holds.
+        self._primary_tail: str | None = None
         super().__init__(deepcopy(messages))
 
     def for_model(self, model: str) -> list[dict]:
         """Return a fresh outgoing copy and record each fallback at most once."""
+        messages, breakdown = self._variant(model)
+        if model != self._primary_model:
+            self._notify((model, None), model, breakdown)
+        return deepcopy(messages)
+
+    def _variant(self, model: str) -> tuple[list[dict], dict | None]:
         if model not in self._variants:
             self._variants[model] = deepcopy(self._factory(model))
-        messages, breakdown = self._variants[model]
-        if model != self._primary_model and model not in self._notified:
-            self._notified.add(model)
-            if self.on_variant is not None:
-                try:
-                    self.on_variant(model, deepcopy(breakdown))
-                except Exception:  # noqa: BLE001 - optional observers must not abort provider dispatch
-                    # Recording is observability; its failure cannot turn a
-                    # usable fallback into another provider failure.
-                    _log.exception("Could not record model prompt variant")
-        return deepcopy(messages)
+        return self._variants[model]
+
+    def _notify(self, key: tuple[str, str | None], model: str,
+                breakdown: dict | None) -> None:
+        """Tell `on_variant` about a prompt the record does not hold yet.
+
+        Keyed on what the attempt was SENT -- the model, and for a tailed prompt
+        the ending its connection chose -- rather than the model id alone: a
+        fallback on the primary's model with another `prefill` setting is sent
+        another tail, which the primary's record does not show (codex, #458).
+        Marked before the call, so an observer reading the variant back through
+        `for_connection` does not notify again."""
+        if key in self._notified:
+            return
+        self._notified.add(key)
+        if self.on_variant is not None:
+            try:
+                self.on_variant(model, deepcopy(breakdown))
+            except Exception:  # noqa: BLE001 - optional observers must not abort provider dispatch
+                # Recording is observability; its failure cannot turn a
+                # usable fallback into another provider failure.
+                _log.exception("Could not record model prompt variant")
+
+    def with_tails(self, tails: dict[str, list[dict]], choose: Callable[[dict], str],
+                   primary: dict) -> PreparedMessages:
+        """A copy whose sent messages end in one of `tails`, chosen per attempt.
+
+        "Keep writing" sends a partial reply either as a prefill (the reply is
+        the last message) or followed by an instruction to continue it, and
+        which one a route can take depends on that route's connection -- so a
+        fallback of another sort has to get its own ending, not the primary's.
+        `choose(conn)` names the tail for a connection; `primary` is the one
+        the call starts on, and the list body (what the prompt log and a fake
+        LLM see) is what that primary attempt sends.
+
+        Built from the factory rather than `snapshot()`, which refuses a prompt
+        that was never frozen. No breakdown: the old one does not measure the
+        appended tail, so callers get None rather than a falsely precise total.
+        """
+        copy = PreparedMessages(self._primary_model, self._factory,
+                                profiles=self._frozen_profiles, campaign=self.campaign)
+        copy._tails = deepcopy(tails)
+        copy._choose = choose
+        copy._primary_tail = choose(primary)
+        copy.breakdown = None
+        copy.settings = deepcopy(self.settings)
+        copy[:] = [*copy, *deepcopy(tails[copy._primary_tail])]
+        return copy
+
+    def for_connection(self, conn: dict, model: str) -> list[dict]:
+        """`for_model`, plus the tail this attempt's connection chooses.
+
+        `on_variant` fires once per (model, tail) the primary attempt was not
+        sent -- so a same-model fallback whose connection takes the other
+        ending is recorded too. An observer recording a tailed prompt reads
+        `for_connection` with the fallback's connection
+        (`character_turns._capture` does), so the prompt log holds the ending
+        that fallback was really sent."""
+        if self._tails is None or self._choose is None:
+            return self.for_model(model)
+        mode = self._choose(conn)
+        messages, breakdown = self._variant(model)
+        if (model, mode) != (self._primary_model, self._primary_tail):
+            self._notify((model, mode), model, breakdown)
+        return [*deepcopy(messages), *deepcopy(self._tails[mode])]
+
+    def mode_for(self, conn: dict) -> str | None:
+        """The tail `conn` would be sent, or None for an untailed prompt."""
+        if self._tails is None or self._choose is None:
+            return None
+        return self._choose(conn)
 
     def any_variant(self, test: Callable[[list[dict]], bool]) -> bool:
         """Whether `test` holds for any variant this prompt could send, without

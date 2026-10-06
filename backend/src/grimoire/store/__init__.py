@@ -35,8 +35,10 @@ from . import (
     atomic,
     attempts,
     audit,
+    authors_notes,
     backups,
     birthdays,
+    branch,
     briefing,
     campaign_climate,
     campaign_images,
@@ -110,6 +112,7 @@ from . import (
     prompt_log,
     proposals,
     provenance,
+    quick_replies,
     reclassify,
     record_refs,
     regex,
@@ -213,6 +216,7 @@ __all__ = [
     "alternates",
     "attempts",
     "backups",
+    "branch",
     "briefing",
     "cascade",
     "fork",
@@ -319,6 +323,9 @@ __all__ = [
     "playing",
     "PlayError",
     "pins",
+    # Author's notes (play controls V): read by the context builder and
+    # written by `routes.authors_notes` -- reached the way `pins` is.
+    "authors_notes",
     "post_images",
     # The end-of-scene review held on disk between generating it and saving it
     # (#396) -- a deliberate addition to the facade, not a leak: `routes.scenes`
@@ -380,6 +387,9 @@ __all__ = [
     "length_drift",
     "response_presets",
     "sampler_presets",
+    # The composer's quick-reply sets (world and campaign layers) -- a
+    # deliberate addition: `routes.quick_replies` reaches it through the facade.
+    "quick_replies",
     "actor_names",
     "response_targets",
     "routing",

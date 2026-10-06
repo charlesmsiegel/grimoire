@@ -12,6 +12,7 @@ import { PCEditor } from "../components/PCEditor";
 import { TagEditor } from "../components/TagEditor";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
+import { QuickReplyEditor } from "../components/QuickReplyEditor";
 import { EntityEditor } from "../components/EntityEditor";
 import { GreetingEditor } from "../components/GreetingEditor";
 import { PlotMapEditor } from "../components/PlotMapEditor";
@@ -28,7 +29,7 @@ import {
 type IndexKey =
   | "characters" | "pcs" | "creatures" | "groups"
   | "locations" | "items"
-  | "lore" | "greetings" | "tags" | "tracker" | "output";
+  | "lore" | "greetings" | "tags" | "tracker" | "output" | "quick-replies";
 
 /** The index that replaced the ten-tab strip.
  *
@@ -54,6 +55,7 @@ const INDEX: { group: string; rows: { key: IndexKey; label: string }[] }[] = [
     { key: "tags", label: "Tags" },
     { key: "tracker", label: "Tracker" },
     { key: "output", label: "Output processing" },
+    { key: "quick-replies", label: "Quick replies" },
   ] },
 ];
 
@@ -121,6 +123,10 @@ function countOf(key: IndexKey, scope: EntityScope, wid: string): Promise<number
   }
   // The rules this world's own file holds, not what it inherits.
   if (key === "output") return api.getRegex({ kind: "world", wid }).then((b) => b.layer.rules.length);
+  // A world's own quick replies; a campaign's are edited from its hub.
+  if (key === "quick-replies") {
+    return api.getQuickReplies({ kind: "world", wid }).then((b) => b.replies.length);
+  }
   return api.listEntities(scope, key).then((l) => l.length);
 }
 
@@ -381,7 +387,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
   // a campaign's fork of the world has, so none is offered on that shape.
   const groups = useMemo(
     () => INDEX
-      .map((g) => ({ group: g.group, rows: g.rows.filter((r) => !(campaign && (r.key === "tags" || r.key === "tracker" || r.key === "output"))) }))
+      .map((g) => ({ group: g.group, rows: g.rows.filter((r) => !(campaign && (r.key === "tags" || r.key === "tracker" || r.key === "output" || r.key === "quick-replies"))) }))
       .filter((g) => g.rows.length > 0),
     [campaign],
   );
@@ -397,7 +403,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
       readCounts(groups.flatMap((g) => g.rows.map((r) => r.key)), true,
                  { kind: "campaign", id: cid }, "", apply);
     } else {
-      readCounts(["tags", "tracker", "output"], false, { kind: "world", id: widParam }, widParam, apply);
+      readCounts(["tags", "tracker", "output", "quick-replies"], false, { kind: "world", id: widParam }, widParam, apply);
     }
   }, [campaign, cid, widParam, groups, countsFor]);
 
@@ -747,6 +753,7 @@ export default function WorldView({ campaign = false }: { campaign?: boolean }) 
         {!campaign && section === "tracker" && <TrackerFieldsEditor key={wid} scope={{ kind: "world", wid }} />}
         {/* World only, like Tracker: a campaign's own rules live in its hub. */}
         {!campaign && section === "output" && <RegexRulesEditor key={wid} scope={{ kind: "world", wid }} />}
+        {!campaign && section === "quick-replies" && <QuickReplyEditor key={wid} scope={{ kind: "world", wid }} />}
         {section === "locations" && <EntityEditor wid={wid} scope={scope} kind="locations"
                                           selected={section === "locations" ? rid : null}
                                           sectionPath={sectionHref(scopeForPaths, { kind: "section", at: "locations" })}

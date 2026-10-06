@@ -197,6 +197,11 @@ def mark(cid: str, sid: str, key: str) -> Mark | None:
     try:
         if not store.tracker.settings.enabled(cid):
             return None
+        # A post hidden from context is paid no update: nothing reads its
+        # state (`walk._latest_ok` steps over it), so marking it would buy a
+        # call whose answer is never used.
+        if store.tracker.walk.key_excluded(cid, sid, key):
+            return None
         ident = store.scenes.ensure_identity(cid, sid)
         gen = store.tracker.records.mark_pending(cid, ident, key)
     except Exception as exc:  # noqa: BLE001 -- see the docstring
@@ -511,12 +516,14 @@ def _locate(cid: str, sid: str, key: str) -> dict | None:
 
 def _context_posts(cid: str, sid: str, first: int) -> list[dict]:
     """The two non-synthetic messages before the post, oldest first. Rolls,
-    transitions and director notes are not things a character did."""
+    transitions and director notes are not things a character did, and a post
+    hidden from context is in no prompt."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
     player = store.appearances.player_label(cid, sid)
     picked: list[int] = []
     for i in range(min(first, len(messages)) - 1, -1, -1):
-        if messages[i].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS:
+        if (messages[i].get("speaker") in store.scenes.SYNTHETIC_SPEAKERS
+                or store.scenes.is_excluded(messages[i])):
             continue
         picked.append(i)
         if len(picked) == 2:
@@ -576,6 +583,12 @@ def _prepare(cid: str, identity: str, hint: str, key: str, gen: int | None = Non
         located = _locate(cid, sid, key)
         if located is None:
             _settle_unwritten(cid, sid, identity, key, "")
+            return None
+        if walk.key_excluded(cid, sid, key):
+            # Marked before the post was hidden: nothing reads its state
+            # (`walk._latest_ok`), so the call would be paid for nothing.
+            _settle_unwritten(cid, sid, identity, key,
+                              "the post was hidden from context before this update ran")
             return None
         index = located["index"]
         base_key, prior = walk.state_before(cid, sid, index)
@@ -652,12 +665,17 @@ def _base_unsettled(cid: str, sid: str, index: int, base_key: str | None,
     queued behind this one (a Retry of an earlier post), or one that died.
     In every case this result is built without that post's contribution. A
     `failed` post is not counted: its final state is "no result", and a Retry
-    that gives it one flags every later record itself (`flag_later`)."""
+    that gives it one flags every later record itself (`flag_later`). Nor is a
+    post hidden from context, which `walk._latest_ok` steps over the same way:
+    its update is never going to land, and nothing reads what it would say."""
+    hidden = store.tracker.walk.hidden_keys(cid, sid)
     for i, key in reversed(store.tracker.walk.ordered_keys(cid, sid)):
         if i >= index:
             continue
         if key == base_key:
             return False
+        if key in hidden:
+            continue
         if (entries.get(key) or {}).get("status") == "pending":
             return True
     return False
@@ -976,8 +994,11 @@ def post_tracker_retry(cid: str, sid: str, key: str, request: Request,
 
     When the record had no usable result (failed, interrupted, or never
     tracked), a success flags every later record: each was built without this
-    post's contribution. A retry of an `ok` record leaves them alone."""
+    post's contribution. A retry of an `ok` record leaves them alone.
+
+    Refused on a closed branch: a paid update of a scene nobody can play."""
     _require_scene(cid, sid)
+    runs.require_scene_open(cid, sid)
     _require_key(key)
     _require_on(cid)
     if _locate(cid, sid, key) is None:
@@ -1001,15 +1022,24 @@ def post_tracker_rerun_from(cid: str, sid: str, key: str, request: Request,
     so each starts from what the one before it just wrote. Each save clears its
     own flags; nothing needs flagging, because everything after is re-run.
     The first is started from its base record on purpose (`trust_base`): the
-    person chose to re-run from here with that record's warning in view."""
+    person chose to re-run from here with that record's warning in view.
+    Refused on a closed branch, as `post_tracker_retry` is."""
     _require_scene(cid, sid)
+    runs.require_scene_open(cid, sid)
     _require_key(key)
     _require_on(cid)
     ordered = [k for _, k in store.tracker.walk.ordered_keys(cid, sid)]
     if key not in ordered:
         raise HTTPException(status_code=404, detail="tracker record not found")
-    for n, later in enumerate(ordered[ordered.index(key):]):
-        schedule(request.app, cid, sid, later, client, trust_base=n == 0)
+    # A hidden post is scheduled nothing (`mark`), so the starting point the
+    # person chose passes to the first post that does run.
+    hidden = store.tracker.walk.hidden_keys(cid, sid)
+    first = True
+    for later in ordered[ordered.index(key):]:
+        if later in hidden:
+            continue
+        schedule(request.app, cid, sid, later, client, trust_base=first)
+        first = False
     return get_scene_tracker(cid, sid, request)
 
 

@@ -257,3 +257,181 @@ def test_the_ledger_is_written_compact_and_still_reads_indented(tmp_path, monkey
     path.write_text(json.dumps(json.loads(raw), ensure_ascii=False, indent=2),
                     encoding="utf-8")
     assert store.responses.get(cid, sid, rid)["content"] == "Salt — and tide."
+
+
+def _two_turns_with_a_reroll(client):
+    """Two played turns, the second's reply rerolled once: the transcript is
+    user / Mara / user / Mara, and the trailing response has two variants."""
+    from grimoire import routes
+    from tests.llm_fakes import FakeLLM
+    from tests.test_character_turns import seed
+
+    cid, sid = seed(client)
+    fake = FakeLLM([
+        ['First.\n```handoff\n{"next":null}\n```'],
+        ['Second.\n```handoff\n{"next":null}\n```'],
+        ['Second, again.\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    for text in ("Hello", "And then?"):
+        sent = client.post(base + "/chat", json={"content": text, "speaker_ref": "characters:mara"})
+        assert sent.status_code == 200, sent.text
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m["role"] for m in messages] == ["user", "assistant", "user", "assistant"]
+    rid = messages[-1]["response_id"]
+    old = store.responses.get(cid, sid, rid)["active_variant"]
+    rerolled = client.post(base + f"/responses/{rid}/regenerate", json={})
+    assert "error" not in rerolled.text, rerolled.text
+    assert store.responses.get(cid, sid, rid)["active_variant"] != old
+    return cid, sid, base, rid, old
+
+
+def _fold(cid, sid, at):
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    digest = store.rolling_summary.covered_digest(
+        messages[:at], store.appearances.player_label(cid, sid))
+    store.scenes.set_rolling_summary(cid, sid, "Earlier.", at, digest)
+
+
+def _summary(cid, sid):
+    meta = store.scenes.read_scene(cid, sid)["meta"]
+    return store.scenes.rolling_summary_fields(meta)
+
+
+def test_activating_the_trailing_response_keeps_an_earlier_fold(client):
+    cid, sid, base, rid, old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 2)
+    swiped = client.post(base + f"/responses/{rid}/variants/{old}/activate")
+    assert swiped.status_code == 200, swiped.text
+    kept = _summary(cid, sid)
+    assert (kept["summary"], kept["at"]) == ("Earlier.", 2)
+    assert kept["digest"]
+
+
+def test_activating_a_folded_response_resets_the_summary(client):
+    cid, sid, base, rid, old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 4)
+    swiped = client.post(base + f"/responses/{rid}/variants/{old}/activate")
+    assert swiped.status_code == 200, swiped.text
+    reset = _summary(cid, sid)
+    assert (reset["summary"], reset["at"], reset["digest"]) == ("", 0, "")
+
+
+def test_deleting_a_response_after_the_fold_keeps_it(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 2)
+    store.responses.delete(cid, sid, rid)
+    assert _summary(cid, sid)["summary"] == "Earlier."
+
+
+def test_deleting_a_folded_response_resets_the_summary(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    _fold(cid, sid, 4)
+    store.responses.delete(cid, sid, rid)
+    assert _summary(cid, sid)["summary"] == ""
+
+
+def _swipe_path(base, rid):
+    return base + f"/responses/{rid}/swipe"
+
+
+def test_swipe_state_takes_no_lock_and_writes_nothing(client):
+    import threading
+
+    from grimoire.store.campaigns import paths as campaign_paths
+    from grimoire.store.scenes import paths as scene_paths
+
+    cid, sid, _base, rid, old = _two_turns_with_a_reroll(client)
+    watched = (scene_paths._scene_path(cid, sid), campaign_paths.campaign_root(cid) / "responses.json")
+    before = [p.stat().st_mtime_ns for p in watched]
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with store.locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert held.wait(5)
+        answer = {}
+        reader = threading.Thread(
+            target=lambda: answer.update(store.responses.swipe_state(cid, sid, rid)))
+        reader.start()
+        reader.join(1)
+        assert not reader.is_alive(), "swipe_state waited behind the campaign lock"
+    finally:
+        release.set()
+        holder.join()
+    assert [p.stat().st_mtime_ns for p in watched] == before
+    assert answer["editable"] is True and answer["round_open"] is False
+    assert answer["can_reroll"] is True
+    assert len(answer["variants"]) == 2
+    assert answer["variants"][answer["active"]]["id"] != old
+
+
+def test_swipe_state_omits_contents(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    store.responses.save_variant(cid, sid, rid, "Thought.", "complete", activate=False,
+                                 reasoning="Because.", made_by={"task": "turn", "model": "m"})
+    state = store.responses.swipe_state(cid, sid, rid)
+    assert len(state["variants"]) == 3
+    assert state["variants"][-1]["made_by"] == {"task": "turn", "model": "m"}
+    for variant in state["variants"]:
+        assert set(variant) <= {"id", "status", "made_by"}
+        assert "content" not in variant and "reasoning" not in variant
+
+
+def test_swipe_state_not_editable_after_a_roll(client):
+    cid, sid, base, rid, _old = _two_turns_with_a_reroll(client)
+    assert store.responses.swipe_state(cid, sid, rid)["editable"] is True
+    rolled = client.post(base + "/roll", json={"notation": "1d6"})
+    assert rolled.status_code == 200, rolled.text
+    assert store.responses.swipe_state(cid, sid, rid)["editable"] is False
+
+
+def test_swipe_state_not_editable_at_the_audit_boundary(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    store.rolls.append(cid, sid, "Test", {"total": 4})
+    messages = store.scenes.read_scene(cid, sid)["messages"]
+    assert not any(m.get("speaker") == store.scenes.serialize.ROLL_SPEAKER for m in messages)
+    assert store.responses.swipe_state(cid, sid, rid)["editable"] is False
+
+
+def test_swipe_state_round_open_while_paused(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    assert store.responses.swipe_state(cid, sid, rid)["round_open"] is False
+    record = store.responses.new_round(
+        cid, sid, eligible=[{"ref": "characters:mara", "name": "Mara"}],
+        automatic=True, post=0, run_id="run-paused", actor_ref="characters:mara")
+    store.responses.update_round(cid, sid, record["id"], status="paused")
+    assert store.responses.swipe_state(cid, sid, rid)["round_open"] is True
+    store.responses.update_round(cid, sid, record["id"], status="superseded")
+    assert store.responses.swipe_state(cid, sid, rid)["round_open"] is False
+
+
+def test_swipe_state_raises_not_found_for_an_unknown_response(client):
+    cid, sid, *_ = _two_turns_with_a_reroll(client)
+    with pytest.raises(store.responses.ResponseNotFound):
+        store.responses.swipe_state(cid, sid, "missing")
+
+
+def test_swipe_state_of_an_unedited_response_is_not_edited(client):
+    cid, sid, _base, rid, _old = _two_turns_with_a_reroll(client)
+    state = store.responses.swipe_state(cid, sid, rid)
+    assert state["edited"] is False and state["active"] is not None
+
+
+def test_swipe_state_of_hand_edited_prose_names_no_variant(client):
+    # `edit_message` keeps the response id and leaves the ledger alone, so the
+    # active variant no longer describes the prose: reporting it as n/m (with
+    # its provenance) would be wrong, and swiping away would drop the edit.
+    cid, sid, base, rid, _old = _two_turns_with_a_reroll(client)
+    index = len(store.scenes.read_scene(cid, sid)["messages"]) - 1
+    edited = client.put(base + f"/messages/{index}", json={"content": "My own words."})
+    assert edited.status_code == 200, edited.text
+    state = client.get(_swipe_path(base, rid)).json()
+    assert state["edited"] is True and state["active"] is None
+    assert len(state["variants"]) == 2

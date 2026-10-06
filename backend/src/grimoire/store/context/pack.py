@@ -201,7 +201,8 @@ def _drop_images(hist: list[dict], hist_costs: list[int], room: int, count) -> i
 
 
 def pack(sections: list[dict], history: list[dict], reserved: int = 0,
-         budget: int | None = None, compose=None, count=None) -> dict:
+         budget: int | None = None, compose=None, count=None,
+         notes: frozenset[int] = frozenset()) -> dict:
     """Fit `sections` + `history` into `budget` tokens.
 
     `sections` are the rendered sections in prompt order, each ``{"label",
@@ -232,10 +233,21 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     whenever it shed any. A section without ``shed`` packs exactly as it always
     has.
 
-    Returns ``{"sections", "history", "history_trimmed"}``: the same sections
-    in the same order with a ``dropped`` flag added (dropped ones stay in the
-    list, for the inspector), the surviving history, and how many messages the
-    trim removed from the front.
+    `notes` holds the indices into `history` of author's-note messages (play
+    controls V, `context/authors_note.py`). They are history the packer may
+    trim, but they are not the conversation: ``HISTORY_FLOOR`` counts the
+    other messages only, so a depth-0 note cannot push out the post being
+    answered, and a note at the front of the trim goes out together with the
+    post it sits before -- a note left standing ahead of nothing it steers is
+    tokens spent on a dangling instruction. The flip side: a note among the
+    floor's own messages is never trimmed, so notes (up to three, at most 2000
+    characters each) can carry a floor-sized history over the budget.
+
+    Returns ``{"sections", "history", "history_trimmed", "notes_trimmed"}``:
+    the same sections in the same order with a ``dropped`` flag added (dropped
+    ones stay in the list, for the inspector), the surviving history, how many
+    messages the trim removed from the front (notes included), and how many of
+    those were notes.
 
     When even lock-in plus the history floor overruns the budget, that is what
     comes back: the packer will not drop a section it promised never to drop,
@@ -249,7 +261,8 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
         budget = budget_tokens()
     if budget <= 0:  # unbounded: skip counting entirely, it is not free
         return {"sections": packed, "history": list(history), "history_trimmed": 0,
-                "history_trimmed_tokens": 0, "images_dropped_tokens": 0}
+                "history_trimmed_tokens": 0, "images_dropped_tokens": 0,
+                "notes_trimmed": 0}
     if compose is None:
         compose = SEPARATOR.join
     if count is None:
@@ -279,10 +292,15 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     # are gone the costs below are exactly today's text costs, so a route sent
     # the text lowering gets exactly today's packing.
     images_dropped = _drop_images(hist, hist_costs, budget - reserved - sys_cost, count)
+    # Which surviving messages are notes. `_drop_images` only ever removes a
+    # carrier, which is appended after everything else, so the list it leaves
+    # is a prefix of the one it was handed and the flags line up truncated.
+    is_note = [i in notes for i in range(len(history))][:len(hist)]
     hist_total = sum(hist_costs)
     total = reserved + sys_cost + hist_total
     trimmed = 0
     trimmed_tokens = 0
+    notes_trimmed = 0
 
     def shed(section: dict) -> None:
         """Give `section` way one unit at a time until the prompt fits or only
@@ -325,13 +343,20 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
             sys_cost = system_cost()
             total = reserved + sys_cost + hist_total
         if tier == ARCHIVE:
-            while total > budget and len(hist) > HISTORY_FLOOR:
-                cost = hist_costs.pop(0)
-                hist_total -= cost
-                trimmed_tokens += cost
-                hist.pop(0)
-                trimmed += 1
+            while total > budget and is_note.count(False) > HISTORY_FLOOR:
+                # One conversation message per step, with any notes standing
+                # in front of it: a note goes out with the post it precedes.
+                while True:
+                    cost = hist_costs.pop(0)
+                    hist_total -= cost
+                    trimmed_tokens += cost
+                    hist.pop(0)
+                    trimmed += 1
+                    if not is_note.pop(0):
+                        break
+                    notes_trimmed += 1
                 total = reserved + sys_cost + hist_total
 
     return {"sections": packed, "history": hist, "history_trimmed": trimmed,
-            "history_trimmed_tokens": trimmed_tokens, "images_dropped_tokens": images_dropped}
+            "history_trimmed_tokens": trimmed_tokens, "images_dropped_tokens": images_dropped,
+            "notes_trimmed": notes_trimmed}

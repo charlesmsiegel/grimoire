@@ -1285,3 +1285,17 @@ def test_an_unreadable_marker_costs_a_second_copy_rather_than_a_wrong_answer(cli
                                                                          encoding="utf-8")
     again = _fork(client, cid, "Branch", idempotency_key="k-1")
     assert again["id"] != first["id"] and again["replayed"] is False
+
+
+def test_a_fork_at_a_post_out_of_range_or_without_a_scene_is_a_400(client):
+    cid = _campaign(client)
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Arrival"}).json()["id"]
+    store.scenes.append_message(cid, sid, "user", "Mara waits.")
+    r = client.post(f"/api/campaigns/{cid}/fork",
+                    json={"name": "B", "from_scene": sid, "from_index": 99})
+    assert r.status_code == 400, r.text
+    r = client.post(f"/api/campaigns/{cid}/fork", json={"name": "B", "from_index": 0})
+    assert r.status_code == 400, r.text
+    r = client.post(f"/api/campaigns/{cid}/fork",
+                    json={"name": "B", "from_scene": sid, "from_index": 0})
+    assert r.status_code == 200 and r.json()["cut_at"] == 0, r.text

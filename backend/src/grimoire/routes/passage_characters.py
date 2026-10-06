@@ -50,6 +50,7 @@ def _observable_neighbors(posts: list[dict], index: int | None) -> list[dict]:
     return [post for post in posts[:index]
             if post.get("role") in ("user", "assistant")
             and post.get("speaker") not in serialize.SYNTHETIC_SPEAKERS
+            and not serialize.is_excluded(post)
             and not str(post.get("speaker", "")).startswith("\u2063")][-2:]
 
 
@@ -70,6 +71,10 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
     # The neighbours are prompt context, so they are read in the prompt view.
     posts = regex.view.view(scene["messages"], cid=cid, phase="prompt")
     index = next((i for i, post in enumerate(posts) if post.get("response_id") == rid), None)
+    if any(post.get("response_id") == rid and serialize.is_excluded(post) for post in posts):
+        raise HTTPException(409, detail={
+            "kind": "excluded_source",
+            "detail": "This response is hidden from context. Return it to context before drafting from it."})
     neighbors = _observable_neighbors(posts, index)
     context = "\n\n".join(str(post.get("speaker", post["role"])) + ": "
                            + post["content"][-2000:] for post in neighbors)
@@ -91,7 +96,7 @@ def draft_character(cid: str, sid: str, rid: str, body: PassageDraft, request: R
 
 @router.post("/campaigns/{cid}/scenes/{sid}/responses/{rid}/character")
 def save_character(cid: str, sid: str, rid: str, body: PassageSave, request: Request):
-    with runs.scene_held_free(request.app, cid, sid):
+    with runs.scene_held_open(request.app, cid, sid):
         _source(cid, sid, rid, body)
         if body.existing_ref:
             kind, _, aid = body.existing_ref.partition(":")
