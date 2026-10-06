@@ -23,7 +23,7 @@ export type Draft = Record<string, string>;
  *  above it. A modal would cover exactly what the reader is checking against.
  */
 export function LedgerRowEditor(
-  { fields, initial, busy, error, onSave, onCancel, onDelete, deleteLabel }: {
+  { fields, initial, busy, error, errorAction, onSave, onCancel, onDelete, deleteLabel }: {
     fields: readonly Field[];
     initial: Draft;
     busy: boolean;
@@ -31,6 +31,9 @@ export function LedgerRowEditor(
      *  in the editor rather than at the top of the page, because that is where
      *  the reader is looking and which row it belongs to is otherwise a guess. */
     error?: string | null;
+    /** The one way forward a refusal offers, as a button beside it -- a delete
+     *  refused for merged records offers "Delete anyway". */
+    errorAction?: { label: string; run: () => void };
     onSave: (draft: Draft) => void;
     onCancel: () => void;
     /** Absent for a record that cannot be removed — the chronicle line, whose
@@ -107,7 +110,18 @@ export function LedgerRowEditor(
         </label>
       ))}
 
-      {error && <p className="ledger-editor-error">{error}</p>}
+      {error && (
+        <p className="ledger-editor-error">
+          {error}
+          {errorAction && (
+            <>
+              {" "}
+              <button className="subtle danger" type="button" disabled={busy}
+                      onClick={errorAction.run}>{errorAction.label}</button>
+            </>
+          )}
+        </p>
+      )}
 
       <div className="ledger-editor-actions">
         <button className="primary" type="button" disabled={busy}

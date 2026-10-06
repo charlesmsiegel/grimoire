@@ -319,8 +319,9 @@ const AppRoutes = memo(function AppRoutes(
       <Route path="/campaigns/:cid/characters/:eid" element={<LegacyCharacterRedirect />} />
       {/* The ledger is a room, not a drawer over the transcript (4e): it is a
           table read top to bottom, and the supersession chains it exists to
-          show do not fit in a panel wedged above the scene. */}
-      <Route path="/campaigns/:cid/ledger" element={<LedgerView />} />
+          show do not fit in a panel wedged above the scene. The splat is
+          its sections, rows and continuity findings (`ledgerPaths.ts`). */}
+      <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
       <Route path="/campaigns/:cid/costs" element={<CostsView />} />
       {/* The timeline is the ledger's other half and a room for the same
           reason (#198): the ledger says what is still open, this says what

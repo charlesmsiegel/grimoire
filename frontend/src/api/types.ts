@@ -10,7 +10,7 @@
  *  Nothing in this module may import from `client.ts`: the types describe the
  *  wire format and know nothing about how a request is made.
  */
-import type { RollProposalPayload } from "./stream";
+import type { RollProposalPayload, RunHandle } from "./stream";
 
 /** One entry of a provider's model catalog, as the backend normalizes it.
  *
@@ -2037,6 +2037,147 @@ export type Ledger = {
    *  of them: a panel saying "40 days untouched" needs to be able to say what
    *  this campaign calls too long. */
   stale_after_days: number;
+};
+
+// ---- continuity review (capstone Slice D) ------------------------------
+//
+// Findings the reconciliation sweep cached in `continuity_candidates.json`,
+// joined at read time to the records they name (§12.2), and what acting on
+// one sends (§21). The wire shapes are the backend's (`routes/continuity.py`,
+// `store/continuity/pending.py`); nothing here re-derives a verdict.
+
+/** The four finding kinds (§6.1). Nothing else is ever cached. */
+export type CandidateKind =
+  | "possible_duplicate" | "possible_relation"
+  | "possible_thread_closure" | "possible_commitment_resolution";
+/** Where a finding is reviewed (§6.2), plus the two lists of what was already
+ *  decided: aliases and links, and dismissals. */
+export type ContinuityGroup = "overlaps" | "closures" | "resolutions" | "reviewed" | "dismissed";
+
+/** Why a finding was found. A pair carries the similarity signals; a lifecycle
+ *  finding carries its `reason` (`stale`, `overdue`, `touched`) and a temporal
+ *  pairing `reason: "temporal"`. Every key is optional because which ones a
+ *  record has depends on how it was found. */
+export type CandidateSignals = {
+  title_exact?: boolean; slug_equal?: boolean;
+  /** max(token Jaccard, character-3-gram Jaccard). */
+  lexical?: number;
+  /** Null when semantic matching was off or a text had no vector. */
+  cosine?: number | null;
+  shared_actors?: string[]; shared_scenes?: string[]; shared_anchors?: string[];
+  /** The clause that admitted a pair, or a pressure item's kind for an
+   *  overdue commitment. */
+  via?: string | null;
+  reason?: "stale" | "overdue" | "touched" | "temporal";
+  days_since?: number | null;
+  in_days?: number | null;
+  /** The event an overdue commitment's linked deadline names. */
+  event?: string;
+};
+/** The model's proposed decision, or null when none was asked or it was
+ *  voided. `from`/`to` are refs; blank on a downgraded `uncertain`. */
+export type CandidateProposal = {
+  decision: string; from: string; to: string; relation: string; status: string;
+  reason: string; evidence_scenes: string[];
+};
+/** One record a finding names, as it is now. `gone` when it is no longer a
+ *  current canonical record (deleted, merged away). An event side carries only
+ *  its title and date (`due`). */
+export type CandidateRecord = {
+  ref: string;
+  /** The record type off the ref prefix: `thread`, `commitment` or `event`. */
+  kind: string;
+  title: string; status: string; latest_beat: string;
+  last_scene: { id: string; title: string };
+  pressure: { state: string; in_days: number | null; friendly: string } | null;
+  aliases: LedgerAlias[];
+  due: string;
+  beats: { scene: string; text: string }[];
+  gone: boolean;
+};
+export type ContinuityCandidate = {
+  id: string; kind: CandidateKind; group: ContinuityGroup; refs: string[];
+  /** The CACHED fingerprint: what an apply's default `expect_fingerprint` is. */
+  fingerprint: string;
+  stale: boolean;
+  stale_reason: "records" | "evidence" | null;
+  signals: CandidateSignals;
+  proposal: CandidateProposal | null;
+  created: string;
+  records: CandidateRecord[];
+};
+/** What the effective view set aside, and why (§26). */
+export type ContinuityDiagnostics = {
+  dangling_aliases: { ref: string; to: string; reason: string }[];
+  broken_links: { id: string; reason: string }[];
+  hidden_links: { id: string; reason: string }[];
+  unreadable: string[];
+};
+/** `GET .../continuity/candidates` (§12.2, Decision 23). */
+export type ContinuityCandidates = {
+  generated: string;
+  matching: "basic" | "semantic";
+  diagnostics: ContinuityDiagnostics & {
+    /** continuity.json sections the reader had to discard. */
+    malformed: string[];
+    cache_malformed: boolean;
+  };
+  /** The sweep running on the campaign now, so the section can follow it. */
+  run: RunHandle | null;
+  /** A display name for every scene id, actor ref and event ref mentioned. */
+  names: Record<string, string>;
+  /** Every scene, newest first by play order. */
+  scenes: { id: string; title: string }[];
+  candidates: ContinuityCandidate[];
+};
+/** `POST .../candidates/{id}/apply` (§21): flat, with a key named `from`. */
+export type ContinuityApply = {
+  op: "alias" | "link" | "close" | "resolve" | "keep_open";
+  canonical?: string;
+  from?: string; to?: string; relation?: string;
+  status?: string;
+  beat?: string; scene?: string;
+  copy_due?: boolean;
+  accept_status_change?: boolean;
+  expect_fingerprint?: string;
+};
+/** A reconciliation run's result (`routes/continuity._blank_result`). */
+export type ReconcileResult = {
+  sweep: "full" | "incremental";
+  matching: string;
+  embedding: "off" | "configured" | "failure";
+  llm: "off" | "ok" | "failed" | "skipped";
+  reason: string;
+  candidates: number; adjudicated: number;
+  pairs_capped: boolean; superseded: boolean;
+  continuity: "ok" | "malformed";
+  follow_on: boolean;
+};
+export type ContinuityAliasRow = {
+  ref: string; to: string; canonical: string; title: string; to_title: string;
+  created: string; source: string; note: string; dangling: boolean; reason: string;
+};
+export type ContinuityLinkRow = {
+  id: string; relation: string; a: string; b: string; a_raw: string; b_raw: string;
+  scene: string; note: string; created: string; a_title: string; b_title: string;
+};
+export type ContinuityRawLink = {
+  id: string; a: string; b: string; relation: string; scene: string; note: string;
+  created: string; state: "ok" | "broken" | "hidden"; reason: string;
+};
+/** A stored dismissal. `live` is whether it still names the records as they
+ *  are; one whose records have since changed suppresses nothing (§12.7). */
+export type ContinuitySuppression = {
+  fingerprint: string; kind: string; refs: string[]; decision: string; created: string;
+  live: boolean; titles: string[];
+};
+/** `GET .../continuity`. */
+export type ContinuityState = {
+  aliases: ContinuityAliasRow[]; links: ContinuityLinkRow[]; raw_links: ContinuityRawLink[];
+  suppressions: ContinuitySuppression[];
+  diagnostics: ContinuityDiagnostics;
+  malformed: string[]; unreadable: string[];
+  matching: "basic" | "semantic";
 };
 
 // keyword search (#33)

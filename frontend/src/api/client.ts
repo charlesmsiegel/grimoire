@@ -35,6 +35,8 @@ import {
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
+  type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
+  type ReconcileResult,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
@@ -1358,15 +1360,19 @@ export const api = {
     request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/threads`, body),
   ledgerSaveThread: (cid: string, pid: string, body: ThreadSave) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/threads/${pid}`, body),
-  ledgerDeleteThread: (cid: string, pid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/ledger/threads/${pid}`),
+  /** `force` deletes a record that has records merged into it, un-merging
+   *  them (§5.7); without it the route refuses with `has_merged_records`. */
+  ledgerDeleteThread: (cid: string, pid: string, force = false) =>
+    request<{ ok: boolean }>(
+      "DELETE", `/api/campaigns/${cid}/ledger/threads/${pid}${force ? "?force=true" : ""}`),
 
   ledgerCreateCommitment: (cid: string, body: CommitmentSave) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/commitments`, body),
   ledgerSaveCommitment: (cid: string, mid: string, body: CommitmentSave) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/commitments/${mid}`, body),
-  ledgerDeleteCommitment: (cid: string, mid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/ledger/commitments/${mid}`),
+  ledgerDeleteCommitment: (cid: string, mid: string, force = false) =>
+    request<{ ok: boolean }>(
+      "DELETE", `/api/campaigns/${cid}/ledger/commitments/${mid}${force ? "?force=true" : ""}`),
 
   ledgerRecordFact: (cid: string, body: FactRecord) =>
     request<{ id: string }>("POST", `/api/campaigns/${cid}/ledger/facts`, body),
@@ -1395,6 +1401,81 @@ export const api = {
 
   ledgerSaveChronicleLine: (cid: string, sid: string, body: ChronicleLineSave) =>
     request<{ ok: boolean }>("PUT", `/api/campaigns/${cid}/ledger/chronicle/${sid}`, body),
+
+  /** The continuity review (capstone §12, §21).
+   *
+   *  Both reads are `fresh`: each is re-read right after a write or a sweep
+   *  that changed it, and a shared in-flight GET from before the write would
+   *  hand back the findings it just settled. */
+  getContinuity: (cid: string) =>
+    request<ContinuityState>("GET", `/api/campaigns/${encodeSegment(cid)}/continuity`,
+                             undefined, { fresh: true }),
+  continuityCandidates: (cid: string) =>
+    request<ContinuityCandidates>(
+      "GET", `/api/campaigns/${encodeSegment(cid)}/continuity/candidates`,
+      undefined, { fresh: true }),
+  /** Start a full reconciliation sweep and wait for it. One live per campaign:
+   *  a Refresh pressed while End Scene's sweep runs adopts that run, under
+   *  this attempt id, so a lost 202 can still be found. */
+  reconcileContinuity: (cid: string, signal?: AbortSignal) =>
+    draftRun<ReconcileResult>({ at: "campaign", id: cid }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/campaigns/${encodeSegment(cid)}/continuity/reconcile`, undefined,
+        { attempt, signal }), { signal }),
+  /** Follow a campaign run this client did not start -- the sweep End Scene
+   *  began, found on the candidates read (Decision 24). It has no attempt id
+   *  of ours, so the last word before giving up on it is the subject's run
+   *  list, read by the run's own id. */
+  awaitCampaignRun: (cid: string, handle: RunHandle, signal?: AbortSignal) => {
+    const base = draftBase({ at: "campaign", id: cid });
+    return awaitRunAt(base, handle, () =>
+      request<{ runs: RunHandle[] }>("GET", base, undefined, { fresh: true, signal })
+        .then((found) => found.runs.find((r) => r.id === handle.id) ?? null)
+        .catch(() => null), signal);
+  },
+  /** The current records a `409 stale_candidate` carries (§12.9), or null when
+   *  the error is anything else or its `current` is not that shape. Checked
+   *  rather than cast: the detail re-renders from it and binds its actions to
+   *  its fingerprint, so a malformed body must fall back to a re-read. */
+  staleCurrent: (err: unknown): { fingerprint: string; records: CandidateRecord[] } | null => {
+    if (!(err instanceof ApiError)) return null;
+    const current = err.body?.current;
+    if (typeof current !== "object" || current === null) return null;
+    const { fingerprint, records } = current as Record<string, unknown>;
+    if (typeof fingerprint !== "string" || !Array.isArray(records)) return null;
+    const wellFormed = records.every((r: unknown) =>
+      typeof r === "object" && r !== null && typeof (r as { ref?: unknown }).ref === "string");
+    return wellFormed ? { fingerprint, records: records as CandidateRecord[] } : null;
+  },
+  /** Act on one finding. `notifyShell` because Todo's continuity chores and
+   *  the rail count what is pending. */
+  applyCandidate: (cid: string, id: string, body: ContinuityApply) =>
+    request<{ ok: boolean; applied: string[] }>(
+      "POST",
+      `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/apply`,
+      body).then(notifyShell),
+  /** `expectFingerprint` is the current fingerprint a reader saw on a 409
+   *  `stale_candidate` and chose to dismiss against (Decision 17). */
+  dismissCandidate: (cid: string, id: string, decision: "dismiss" | "keep_open",
+                     expectFingerprint?: string) =>
+    request<{ ok: boolean; fingerprint: string }>(
+      "POST",
+      `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/dismiss`,
+      { decision, ...(expectFingerprint ? { expect_fingerprint: expectFingerprint } : {}) },
+    ).then(notifyShell),
+  restoreSuppression: (cid: string, fp: string) =>
+    request<{ ok: boolean }>(
+      "DELETE",
+      `/api/campaigns/${encodeSegment(cid)}/continuity/suppressions/${encodeSegment(fp)}`,
+    ).then(notifyShell),
+  /** Unmerge. By query, not path: a ref holds `:` and a plot id may hold `/`. */
+  removeAlias: (cid: string, ref: string) =>
+    request<{ ok: boolean }>(
+      "DELETE",
+      `/api/campaigns/${encodeSegment(cid)}/continuity/aliases?ref=${encodeURIComponent(ref)}`),
+  removeLink: (cid: string, lid: string) =>
+    request<{ ok: boolean }>(
+      "DELETE", `/api/campaigns/${encodeSegment(cid)}/continuity/links/${encodeSegment(lid)}`),
   /** The relationship timeline (#63), optionally narrowed to one pair — both
    *  actor tokens or neither, since half a pair names no pair. `fresh` for the
    *  ledger's reason: this is re-read precisely when an absorb or an undo has

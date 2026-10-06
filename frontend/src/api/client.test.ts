@@ -2510,3 +2510,76 @@ test("startReplay asks for a branch only when told to", async () => {
   await api.startReplay("c1", "s1", 2);
   expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ index: 2 });
 });
+
+// ---- the continuity review (Slice D) ---------------------------------------
+
+describe("staleCurrent", () => {
+  const stale = (current: unknown) =>
+    new ApiError(409, "records have changed", "stale_candidate",
+                 { kind: "stale_candidate", detail: "records have changed", current });
+
+  test("reads the current records off a well-formed 409", () => {
+    const current = {
+      fingerprint: "fp2",
+      records: [{ ref: "thread:mara-s-map", title: "Mara's map" },
+                { ref: "thread:winifred-s-chart", title: "Winifred's chart" }],
+    };
+    expect(api.staleCurrent(stale(current))).toEqual(current);
+  });
+
+  test("is null for a missing or malformed current", () => {
+    expect(api.staleCurrent(new ApiError(409, "x", "stale_candidate"))).toBeNull();
+    expect(api.staleCurrent(new ApiError(409, "x", "stale_candidate", {}))).toBeNull();
+    expect(api.staleCurrent(stale(null))).toBeNull();
+    expect(api.staleCurrent(stale("fp2"))).toBeNull();
+    expect(api.staleCurrent(stale({ fingerprint: 2, records: [] }))).toBeNull();
+    expect(api.staleCurrent(stale({ fingerprint: "fp2" }))).toBeNull();
+    expect(api.staleCurrent(stale({ fingerprint: "fp2", records: "no" }))).toBeNull();
+    expect(api.staleCurrent(stale({ fingerprint: "fp2", records: [null] }))).toBeNull();
+    expect(api.staleCurrent(stale({ fingerprint: "fp2", records: [{ ref: 3 }] }))).toBeNull();
+    expect(api.staleCurrent(new Error("not an api error"))).toBeNull();
+    expect(api.staleCurrent(undefined)).toBeNull();
+  });
+});
+
+test("the continuity mutators address their routes, encoding what is not a slug", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
+  await api.removeAlias("run", "thread:mara/map");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/continuity/aliases?ref=thread%3Amara%2Fmap",
+    expect.objectContaining({ method: "DELETE" }));
+  await api.removeLink("run", "l1");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/continuity/links/l1", expect.objectContaining({ method: "DELETE" }));
+  await api.applyCandidate("run", "possible_duplicate-01",
+                           { op: "alias", canonical: "thread:winifred-s-chart" });
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/continuity/candidates/possible_duplicate-01/apply",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ op: "alias", canonical: "thread:winifred-s-chart" }) }));
+  await api.dismissCandidate("run", "possible_thread_closure-01", "keep_open");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/continuity/candidates/possible_thread_closure-01/dismiss",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ decision: "keep_open" }) }));
+  await api.restoreSuppression("run", "fp1");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/continuity/suppressions/fp1", expect.objectContaining({ method: "DELETE" }));
+});
+
+test("a ledger delete asks for force only when told to", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true }));
+  globalThis.fetch = fetchMock;
+  await api.ledgerDeleteThread("run", "mara-s-map");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/ledger/threads/mara-s-map", expect.objectContaining({ method: "DELETE" }));
+  await api.ledgerDeleteThread("run", "mara-s-map", true);
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/ledger/threads/mara-s-map?force=true",
+    expect.objectContaining({ method: "DELETE" }));
+  await api.ledgerDeleteCommitment("run", "mara-s-oath", true);
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/campaigns/run/ledger/commitments/mara-s-oath?force=true",
+    expect.objectContaining({ method: "DELETE" }));
+});
