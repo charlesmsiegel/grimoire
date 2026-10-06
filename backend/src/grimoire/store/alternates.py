@@ -181,7 +181,8 @@ def _canonical(segments: object) -> list[dict] | None:
         if seg is None:
             return None
         # Which connection wrote it: provenance, carried so a promote puts it
-        # back on the post. Not part of what makes two takes the same (`_said`).
+        # back on the post, and part of what makes two takes the same where
+        # both name one (`_same`).
         if isinstance(s.get("connection"), str) and s["connection"]:
             seg["connection"] = s["connection"]
         # A synthetic speaker is internal metadata, never model output.
@@ -286,11 +287,21 @@ def _slot(cid: str, sid: str) -> dict:
             "end": end}
 
 
-def _said(segments: list[dict]) -> list[tuple]:
-    """What a run says, which is what makes two runs the same take: speaker and
-    text, in order. A segment's `connection` is provenance and stays out, so
-    one archived before it was carried still matches its live twin."""
-    return [(s.get("speaker"), s["content"]) for s in segments]
+def _same(a: list[dict], b: list[dict]) -> bool:
+    """Whether two runs are the same take: the same speaker and text, in order,
+    from the same connection. Which connection served a take decides which
+    connection-level rules apply to it, so the same words from two connections
+    are two takes -- a reroll on B that reproduces A's prose is not A's, and
+    promoting it back must not hand it A.
+
+    A connection only tells takes apart when BOTH segments name one: a run
+    archived before connections were carried has none, and still matches its
+    live twin exactly as it always did."""
+    return len(a) == len(b) and all(
+        x.get("speaker") == y.get("speaker") and x["content"] == y["content"]
+        and (not (x.get("connection") and y.get("connection"))
+             or x["connection"] == y["connection"])
+        for x, y in zip(a, b, strict=True))
 
 
 def _unforged(segments: list[dict], players: frozenset[str]) -> list[dict]:
@@ -341,10 +352,10 @@ def _distinct(runs: list[dict], players: frozenset[str]) -> list[dict]:
     that is not wedged.
     """
     out: list[dict] = []
-    seen: list[list[tuple]] = []
+    seen: list[list[dict]] = []
     for r in runs:
-        replayed = _said(_unforged(r["segments"], players))
-        if replayed in seen:
+        replayed = _unforged(r["segments"], players)
+        if any(_same(replayed, other) for other in seen):
             continue
         seen.append(replayed)
         out.append(dict(r))
@@ -408,7 +419,7 @@ def _resolve(cid: str, sid: str) -> dict:
         active = None                       # the slot is empty (a reroll in flight)
     else:
         active = next((i for i, r in enumerate(runs)
-                       if _said(_unforged(r["segments"], players)) == _said(live)), None)
+                       if _same(_unforged(r["segments"], players), live)), None)
         if active is None:
             runs.append({"created": _landed_at(cid, sid), "guidance": hint,
                          "model": aimed, "segments": live})
@@ -495,8 +506,15 @@ def variant_id(run: dict) -> str:
     every call until something persisted it. Content is already the identity
     `_resolve` matches on, it survives a shift, and it simply stops existing
     once the variant is trimmed away — so a stale pick 404s.
+
+    A segment's connection is hashed only when it names one, which is what
+    keeps two takes `_same` tells apart from sharing an id while leaving the
+    id of every run without one -- everything archived before connections
+    were carried -- exactly what it was.
     """
-    said = [{"speaker": s.get("speaker"), "content": s["content"]} for s in run["segments"]]
+    said = [{"speaker": s.get("speaker"), "content": s["content"],
+             **({"connection": s["connection"]} if s.get("connection") else {})}
+            for s in run["segments"]]
     body = json.dumps(said, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
 
