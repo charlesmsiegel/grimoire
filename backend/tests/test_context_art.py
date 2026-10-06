@@ -695,3 +695,77 @@ def _art_png() -> bytes:
     buf = io.BytesIO()
     Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
     return buf.getvalue()
+
+
+# ---- one picture is offered once -----------------------------------------
+
+def _share_the_characters_picture(world):
+    """The campaign library also holds the character's picture (the same
+    bytes, so one image object and, by R4, one description)."""
+    campaign_images.put_image(world["cid"], "poster", b"png-30", "png")
+
+
+def test_one_picture_in_cast_and_library_is_offered_once_as_the_cast_handle(world, sid):
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _cast(camp, char, vid, sid)
+    _share_the_characters_picture(world)
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}],
+                           world["loc"], [])
+    handles = [c["handle"] for c in cands]
+    assert f"[[art:characters:{char}:gallery_1]]" in handles
+    assert "[[art:campaign:poster]]" not in handles           # the library copy yielded
+    assert "[[art:campaign:coastline]]" in handles             # another picture stays
+    kept = next(c for c in cands if c["name"] == "gallery_1" and c["kind"] == "characters")
+    assert kept["image_id"] == assets.image_id(world["wroot"], char, vid, "gallery_1")
+    assert len(handles) == len(set(handles)) == 3
+
+
+def _legacy_pair(world):
+    """Two image-less (legacy) files, one in the cast's directory and one in the
+    library, with the same bytes and each its own legacy description key."""
+    char, vid = world["char"], world["vid"]
+    d = assets.version_dir(world["wroot"], char, vid)
+    (d / "gallery_9.png").write_bytes(b"png-77")
+    image_descriptions.carry_legacy(d, "gallery_9", "A tapestry of a drowned bell tower.")
+    lib = campaign_images.images_dir(world["cid"])
+    lib.mkdir(parents=True, exist_ok=True)
+    (lib / "tapestry.png").write_bytes(b"png-77")
+    image_descriptions.carry_legacy(lib, "tapestry", "A tapestry of a drowned bell tower.")
+
+
+def test_legacy_rows_are_not_deduped(world, sid):
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _cast(camp, char, vid, sid)
+    _legacy_pair(world)
+    cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
+    handles = {c["handle"] for c in cands}
+    assert {f"[[art:characters:{char}:gallery_9]]", "[[art:campaign:tapestry]]"} <= handles
+    assert all("image_id" not in c for c in cands if c["name"] in ("gallery_9", "tapestry"))
+
+
+def test_dedupe_is_deterministic_across_calls(world, sid):
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _cast(camp, char, vid, sid)
+    _share_the_characters_picture(world)
+    cast = [{"kind": "characters", "id": char, "role": "npc"}]
+    first = art.candidates(camp, cast, world["loc"], [])
+    assert [art.candidates(camp, cast, world["loc"], []) for _ in range(3)] == [first] * 3
+
+
+def test_candidates_never_resolve_a_blob(world, sid, monkeypatch):
+    from grimoire.store import image_refs
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    _cast(camp, char, vid, sid)
+    _share_the_characters_picture(world)
+    calls = []
+    real = image_refs.resolve_ref
+    monkeypatch.setattr(image_refs, "resolve_ref",
+                        lambda ref: calls.append(ref.name) or real(ref))
+    # What the listings themselves cost, with no dedupe on top.
+    overlay.list_images(camp, char, vid, base="characters")
+    overlay.list_images(camp, world["loc"], "default", base="locations")
+    campaign_images.list_images(camp)
+    listing_calls = len(calls)
+    calls.clear()
+    art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], world["loc"], [])
+    assert len(calls) <= 2 * listing_calls     # one read of each listing per record

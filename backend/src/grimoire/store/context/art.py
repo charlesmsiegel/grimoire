@@ -338,6 +338,18 @@ def _base_pass_through(cid: str, kind: str, rid: str, vid: str) -> list[dict]:
     return [b for b in overlay.base_versions(cid, rid) if b["id"] != vid]
 
 
+def _ids_of(rows: list[dict]) -> dict[str, str]:
+    """name -> image id for the placed rows of a listing."""
+    return {i["name"]: i["image_id"] for i in rows if i.get("image_id")}
+
+
+def _id_field(image_id: str | None) -> dict:
+    """``{"image_id": ...}`` for a candidate whose listing row had one, else
+    nothing -- the key is absent, never null, so a legacy file reads as
+    'no identity' and is never deduped."""
+    return {"image_id": image_id} if image_id else {}
+
+
 def _record_candidates(cid: str, kind: str, rid: str) -> list[dict]:
     """Every described, visible image of one record, at its locked version --
     and, for a character, the art of every world version the campaign lacks,
@@ -354,23 +366,28 @@ def _record_candidates(cid: str, kind: str, rid: str) -> list[dict]:
     vid = _version(cid, kind, rid)
     if vid is None:
         return []
-    tiers = [(vid, overlay.read_descriptions(cid, rid, vid, base=kind))]
+    # One listing of the locked version: the names a base tier is shadowed by,
+    # and the image each placed name holds. The ids are what `candidates`
+    # dedupes on; nothing is read per candidate.
+    rows = overlay.list_images(cid, rid, vid, base=kind)
+    tiers = [(vid, overlay.read_descriptions(cid, rid, vid, base=kind), _ids_of(rows))]
     bases = _base_pass_through(cid, kind, rid, vid)
     if bases:
-        taken = {i["name"] for i in overlay.list_images(cid, rid, vid, base=kind)}
+        taken = {i["name"] for i in rows}
         for base in bases:
             tiers.append((base["id"], {n: t for n, t in base["image_descriptions"].items()
-                                       if n not in taken}))
+                                       if n not in taken}, base.get("image_ids", {})))
             taken |= set(base["images"])
     out = []
-    for tier_vid, described in tiers:
+    for tier_vid, described, ids in tiers:
         for name, text in sorted(described.items()):
             if not text.strip():
                 continue   # reviewed-empty: deliberately not offered
             out.append({"kind": kind, "id": rid, "vid": tier_vid, "name": name,
                         "description": text.strip(),
                         "handle": handle_for(kind, rid, name),
-                        "url": url_for(cid, kind, rid, tier_vid, name)})
+                        "url": url_for(cid, kind, rid, tier_vid, name),
+                        **_id_field(ids.get(name))})
     return out
 
 
@@ -381,6 +398,7 @@ def _library_candidates(cid: str) -> list[dict]:
     the campaign's own uploads -- resolving against that directory would offer
     the narrator none of the world's art, however carefully it was described.
     """
+    ids = _ids_of(campaign_images.list_images(cid))
     out = []
     for name, text in sorted(campaign_images.read_descriptions(cid).items()):
         if not text.strip():
@@ -388,7 +406,8 @@ def _library_candidates(cid: str) -> list[dict]:
         out.append({"kind": LIBRARY, "id": "", "vid": "", "name": name,
                     "description": text.strip(),
                     "handle": handle_for(LIBRARY, "", name),
-                    "url": url_for(cid, LIBRARY, "", "", name)})
+                    "url": url_for(cid, LIBRARY, "", "", name),
+                    **_id_field(ids.get(name))})
     return out
 
 
@@ -400,6 +419,13 @@ def candidates(cid: str, cast: list[dict], current_loc: str | None,
     setting and a world-info activation, and an entry can be in both the
     keyword and the recalled list, so the same picture would otherwise be
     offered twice and take two of `depth`'s slots.
+
+    Then on the image itself: one picture placed on a character, on a location
+    and in the library is one candidate, offered under the FIRST handle in tier
+    order (cast, location, world-info entities, library) -- the narrator is
+    never shown the same picture under two names, and never spends two of
+    `depth`'s slots on it. Only a row whose listing carried an image id takes
+    part: a legacy file has no identity to compare, so it is never merged.
     """
     refs: list[tuple[str, str]] = [(a["kind"], a["id"]) for a in cast
                                    if a.get("kind") in ACTOR_KINDS]
@@ -410,17 +436,25 @@ def candidates(cid: str, cast: list[dict], current_loc: str | None,
 
     out: list[dict] = []
     seen: set[tuple[str, str, str]] = set()
+    pictures: set[str] = set()
+
+    def offer(c: dict) -> None:
+        key = (c["kind"], c["id"], c["name"])
+        if key in seen:
+            return
+        seen.add(key)
+        image_id = c.get("image_id")
+        if image_id is not None:
+            if image_id in pictures:
+                return
+            pictures.add(image_id)
+        out.append(c)
+
     for kind, rid in refs:
         for c in _record_candidates(cid, kind, rid):
-            key = (c["kind"], c["id"], c["name"])
-            if key not in seen:
-                seen.add(key)
-                out.append(c)
+            offer(c)
     for c in _library_candidates(cid):
-        key = (c["kind"], c["id"], c["name"])
-        if key not in seen:
-            seen.add(key)
-            out.append(c)
+        offer(c)
     return out
 
 
