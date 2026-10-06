@@ -509,7 +509,7 @@ def put_in(d: Path, name: str, data: bytes, ext: str, *,
     # decode is the slow part of a write.
     obj = image_store.ingest(data, ext, source_url=source_url)
     with _image_lock(d, name):
-        _recover_promotion(d)
+        _recover_before_write(d, name)
         _place(d, name, obj.id, keep_focus=False, supported_only=supported_only)
     return obj.ext
 
@@ -526,7 +526,7 @@ def link_in(d: Path, name: str, image_id: str, *, keep_focus: bool = False) -> N
     if not _safe_name(name):
         raise ValueError("unsafe image id")
     with _image_lock(d, name):
-        _recover_promotion(d)
+        _recover_before_write(d, name)
         _place(d, name, image_id, keep_focus=keep_focus, supported_only=False)
 
 
@@ -580,7 +580,7 @@ def delete_in(d: Path, name: str, *, supported_only: bool = False) -> None:
     # the upload just published and leave the caller thinking it wrote one, nor
     # half-remove a set the upload is mid-way through replacing.
     with _image_lock(d, name):
-        _recover_promotion(d)
+        _recover_before_write(d, name)
         with suppress(OSError):     # swallowed like the legacy files below
             image_refs.delete(d, name)
         for p in _siblings(d, name, supported_only):
@@ -647,7 +647,7 @@ def copy_slots(src: Path, dst: Path, *, skip: Callable[[str], bool] = lambda n: 
             continue   # vanished since the scan
         dst.mkdir(parents=True, exist_ok=True)
         with _image_lock(dst, name):
-            _recover_promotion(dst)
+            _recover_before_write(dst, name)
             _copy_slot(src, dst, name, ref, legacy, overwrite)
 
 
@@ -1148,7 +1148,7 @@ def write_focus(root: Path, cid: str, vid: str, focus: int, base: str = "charact
     value = max(0, min(100, int(focus)))
     d.mkdir(parents=True, exist_ok=True)
     with _image_lock(d, AVATAR):
-        _recover_promotion(d)
+        _recover_before_write(d, AVATAR)
         ref = image_refs.read(d, AVATAR)
         if ref is None and _siblings(d, AVATAR, False):
             atomic.write_text(d / FOCUS_FILE, json.dumps({AVATAR: value}))
@@ -1608,6 +1608,29 @@ def recover_promotion(d: Path) -> None:
     _recover_promotion(d)
 
 
+def _recover_before_write(d: Path, name: str) -> None:
+    """`_recover_promotion` for a writer about to change slot `name`, under
+    that slot's lock; `OSError` when a promotion journal naming this slot is
+    still there afterwards.
+
+    The recovery never waits, so it can be left undone by a lock it could not
+    take -- with striped locks, one held by a write to an unrelated name that
+    shares the stripe. Writing then would move this slot out of its `pre` and
+    `post` states, the next recovery would discard the journal as stale, and
+    mid-swap that journal is the only record of the picture it moved out of the
+    avatar slot. So the writer refuses, as `promote_image` refuses to overwrite
+    a journal it could not finish, and a retry finds the swap done. A journal
+    naming other slots is left to its own recovery: this write cannot make it
+    stale. A malformed one is never replayed, so it blocks nothing."""
+    _recover_promotion(d)
+    journal = image_refs.read_journal(d)
+    if journal is None:
+        return
+    slot = _journal_ok(journal)
+    if slot is not None and name.casefold() in {slot.casefold(), AVATAR}:
+        raise OSError("an earlier promotion is still unfinished; retry")
+
+
 def _recover_promotion(d: Path) -> None:
     """Finish or discard the promotion journal in `d`, if there is one.
 
@@ -1622,10 +1645,12 @@ def _recover_promotion(d: Path) -> None:
     or a write fails, the journal stays for the next read to finish.
 
     And from the writers (`put_in`, `link_in`, `delete_in`, `delete_image`,
-    `write_focus`), under their own name lock, before they write: a write
-    landing first would move a slot out of its `pre`/`post` states, and
-    recovery would then discard the journal as stale -- and, mid-swap, with
-    it the only record of the old avatar's picture.
+    `write_focus`, `copy_slots`), under their own name lock, before they write:
+    a write landing first would move a slot out of its `pre`/`post` states,
+    and recovery would then discard the journal as stale -- and, mid-swap,
+    with it the only record of the old avatar's picture. Since this can skip,
+    those writers go through `_recover_before_write`, which refuses rather
+    than write over a journal still naming their slot.
     """
     journal = image_refs.read_journal(d)
     if journal is None:
