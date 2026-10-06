@@ -1543,6 +1543,7 @@ What the route returns per suggestion, resolved server-side from the captured dr
     drivers:      [{ref, kind, action, label}]          (avoided refs excluded)
     time_anchor:  {ref, kind, relation, label, friendly, in_days} | null
     date, date_friendly, in_days, date_rejected
+    date_rejected_by: "anchor" | "time" | null   (which rule blanked the date)
     unmet_must:   [{ref, label}]
     avoided:      [{ref, label}]
 
@@ -1564,9 +1565,9 @@ All comparisons use primary-provider fixed days. An anchor's time component is s
 
 **Batch anchor.** With an anchor in the request, every suggestion's `time_anchor` is forced to that ref. Its relation is the request's relation if given; otherwise the model's relation, if valid; otherwise `on`.
 
-**A failing date is blanked**, not the suggestion: `date: ""`, `date_rejected: true`. The card shows “date not consistent with anchor”.
+**A failing date is blanked**, not the suggestion: `date: ""`, `date_rejected: true`, `date_rejected_by: "anchor"`. The card shows “date not consistent with anchor”.
 
-**Unanchored suggestions** keep today's date behaviour (`date_addendum.j2`). `time_mode` (§16.3) may constrain them further. A date blanked by `near` or `move` is marked `date_rejected` too, and its card reads “date not consistent with the time setting” (Decision 12). The reply's `next_date` is checked under `near`/`move`, and is not checked under an anchor: it answers “if none is used”, and an anchor constrains suggestions, not that.
+**Unanchored suggestions** keep today's date behaviour (`date_addendum.j2`). `time_mode` (§16.3) may constrain them further. A date blanked by `near` or `move` is marked `date_rejected` too, with `date_rejected_by: "time"`, and its card reads “date not consistent with the time setting” (Decision 12). That holds on an anchored card as well: a date the anchor allowed or derived (an `on` anchor 31 days out) can still be refused by `near`, and the card names the time setting, not the anchor (Slice E plan, deviation 22). `date_rejected_by` is `null` when nothing blanked the date. The reply's `next_date` is checked under `near`/`move`, and is not checked under an anchor: it answers “if none is used”, and an anchor constrains suggestions, not that.
 
 ---
 
@@ -1658,7 +1659,7 @@ A generated card renders validated provenance:
 - `date_friendly · <relation> <anchor label>` when anchored;
 - one chip per driver, labelled by action: Advances / May close / Addresses / May fulfil / May break / May expire;
 - warning chips for `unmet_must` and `avoided`, worded “Doesn't claim to address <label>” and “Claims to address <label> (avoided)” (Slice E plan, deviation 15);
-- “date not consistent with anchor” when `date_rejected` on an anchored card, and “date not consistent with the time setting” when a `near` or `move` check blanked an unanchored card's date (§15.3).
+- “date not consistent with anchor” when `date_rejected_by` is `"anchor"`, and “date not consistent with the time setting” when it is `"time"`, i.e. a `near` or `move` check blanked the date, anchored or not (§15.3; Slice E plan, deviation 22). A reply from before the field falls back to whether the card is anchored.
 
 Example using placeholders:
 

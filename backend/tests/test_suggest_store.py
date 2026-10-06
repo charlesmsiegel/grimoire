@@ -1120,8 +1120,8 @@ def test_parse_output_resolves_labels_and_dates(monkeypatch, tmp_path):
         "2026-05-12", "12 May 2026", 2, False)
     assert (row["unmet_must"], row["avoided"]) == ([], [])
     assert set(row) == {"title", "premise", "cast", "location", "date", "date_friendly",
-                        "in_days", "date_rejected", "drivers", "time_anchor", "unmet_must",
-                        "avoided"}
+                        "in_days", "date_rejected", "date_rejected_by", "drivers",
+                        "time_anchor", "unmet_must", "avoided"}
 
 
 def test_plugin_calendar_dates_derive_in_native_notation(monkeypatch, tmp_path):

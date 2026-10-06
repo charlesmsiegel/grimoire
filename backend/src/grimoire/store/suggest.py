@@ -1552,15 +1552,19 @@ def _against_mode(provider, snapshot: dict, controls: Controls, now: int | None,
     return (date, False) if ok else ("", True)
 
 
-def check_date(provider, snapshot: dict, controls: Controls, time_anchor: dict | None,
-               date: str) -> tuple[str, bool]:
-    """`(date, rejected)` for one already normalized native (spec §15.3,
+def judge_date(provider, snapshot: dict, controls: Controls, time_anchor: dict | None,
+               date: str) -> tuple[str, str | None]:
+    """`(date, rejected_by)` for one already normalized native (spec §15.3,
     Decision 12). An `on` anchor derives the date; `before`/`by`/`after`
     check it on fixed days; a month-only `on` keeps it only inside its month;
-    then `near`/`move` check what is left. An absent date is never rejected,
-    and with no calendar nothing is derived or checked."""
+    then `near`/`move` check what is left. `rejected_by` names the rule that
+    blanked the date -- `"anchor"` or `"time"` -- and is None when nothing
+    did: an anchored card's date can be the anchor's own and still be refused
+    by the time setting, and the card has to say which (§16.4). An absent
+    date is never rejected, and with no calendar nothing is derived or
+    checked."""
     if provider is None:
-        return "", False
+        return "", None
     now = _now_fixed(provider, snapshot)
     if time_anchor is not None:
         anchor = next((a for a in snapshot.get("anchors", []) if a["ref"] == time_anchor["ref"]),
@@ -1568,10 +1572,18 @@ def check_date(provider, snapshot: dict, controls: Controls, time_anchor: dict |
         date, rejected = ((date, False) if anchor is None else
                           _against_anchor(provider, anchor, time_anchor["relation"], now, date))
         if rejected:
-            return "", True
+            return "", "anchor"
     if not date:
-        return "", False
-    return _against_mode(provider, snapshot, controls, now, date)
+        return "", None
+    date, rejected = _against_mode(provider, snapshot, controls, now, date)
+    return date, "time" if rejected else None
+
+
+def check_date(provider, snapshot: dict, controls: Controls, time_anchor: dict | None,
+               date: str) -> tuple[str, bool]:
+    """`(date, rejected)`: `judge_date` without saying which rule refused it."""
+    date, rejected_by = judge_date(provider, snapshot, controls, time_anchor, date)
+    return date, rejected_by is not None
 
 
 def _claimed_refs(row: dict) -> list[str]:
@@ -1625,7 +1637,7 @@ def _card(entry, ctx: dict) -> dict | None:
     snap, controls, provider = ctx["snapshot"], ctx["controls"], ctx["provider"]
     claimed = claim(entry, snap, controls)
     date = normalize_date(provider, snap.get("now") or "", entry.get("date", ""))
-    date, rejected = check_date(provider, snap, controls, claimed["time_anchor"], date)
+    date, rejected_by = judge_date(provider, snap, controls, claimed["time_anchor"], date)
     fixed = _fixed(provider, date)
     loc = str(entry.get("location", "")).strip()
     labels = ctx["labels"]
@@ -1639,7 +1651,7 @@ def _card(entry, ctx: dict) -> dict | None:
             "date": date, "date_friendly": _friendly_of(provider, fixed),
             "in_days": (fixed - ctx["now"] if fixed is not None and ctx["now"] is not None
                         else None),
-            "date_rejected": rejected,
+            "date_rejected": rejected_by is not None, "date_rejected_by": rejected_by,
             "drivers": [{"ref": d["ref"], "kind": ctx["kinds"].get(d["ref"], d["ref"].split(":")[0]),
                          "action": d["action"], "label": labels.get(d["ref"], d["ref"])}
                         for d in claimed["drivers"]],

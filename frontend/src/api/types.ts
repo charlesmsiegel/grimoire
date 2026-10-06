@@ -1898,6 +1898,10 @@ export type SceneSuggestion = {
   date_friendly?: string;
   in_days?: number | null;
   date_rejected?: boolean;
+  /** Which rule blanked the date: the card's anchor, or the `near`/`move`
+   *  time setting -- which can refuse an anchored card's derived date too.
+   *  Null when nothing did; absent on a reply from before it (§15.2). */
+  date_rejected_by?: "anchor" | "time" | null;
   unmet_must?: RefLabel[];
   avoided?: RefLabel[];
 };

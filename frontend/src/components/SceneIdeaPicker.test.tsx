@@ -664,6 +664,22 @@ test("a rejected date says so", async () => {
   expect(within(anchored).queryByText(/time setting/)).toBeNull();
 });
 
+test("a rejected date names the rule that refused it, not whether the card is anchored",
+     async () => {
+  renderPicker({ suggestions: [
+    { ...SUGGESTION, title: "Anchor refused", date: "", date_rejected: true,
+      date_rejected_by: "anchor", time_anchor: CORONATION },
+    { ...SUGGESTION, title: "Near refused", date: "", date_rejected: true,
+      date_rejected_by: "time", time_anchor: { ...CORONATION, relation: "on" } },
+  ] });
+  const byAnchor = (await screen.findByText("Anchor refused")).closest("button")!;
+  const byTime = screen.getByText("Near refused").closest("button")!;
+  expect(within(byAnchor).getByText("date not consistent with anchor")).toBeInTheDocument();
+  expect(within(byTime).getByText("date not consistent with the time setting"))
+    .toBeInTheDocument();
+  expect(within(byTime).queryByText("date not consistent with anchor")).toBeNull();
+});
+
 test("every generated suggestion shows while controls produced the batch", async () => {
   (api.availableGreetings as any).mockResolvedValue(
     [1, 2, 3].map((n) => (
