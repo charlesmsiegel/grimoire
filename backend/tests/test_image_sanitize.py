@@ -11,6 +11,7 @@ import io
 import struct
 import zlib
 
+import pytest
 from PIL import Image, ImageCms
 from PIL.PngImagePlugin import PngInfo
 
@@ -491,6 +492,116 @@ def test_gif_drops_comments_keeps_loop():
         a.seek(i), b.seek(i)
         assert a.convert("RGBA").tobytes() == b.convert("RGBA").tobytes()
     assert sanitize(out) == out
+
+
+def _anim_gif(loop=0) -> bytes:
+    frames = [_img((8, 8)).convert("P"), _img((8, 8)).transpose(Image.FLIP_LEFT_RIGHT).convert("P")]
+    kw = {} if loop is None else {"loop": loop}
+    return _save(frames[0], "GIF", save_all=True, append_images=frames[1:],
+                 duration=[90, 140], **kw)
+
+
+def _gif_at_start(src: bytes, block: bytes) -> bytes:
+    """`src` with `block` inserted as the first block after the colour table."""
+    pos = image_sanitize._gif_start(src)
+    return src[:pos] + block + src[pos:]
+
+
+def _played(raw: bytes) -> tuple:
+    """What a reader plays: every frame's pixels and duration, and the loop."""
+    im = Image.open(io.BytesIO(raw))
+    frames = []
+    for n in range(im.n_frames):
+        im.seek(n)
+        frames.append((im.convert("RGBA").tobytes(), im.info.get("duration")))
+    im.seek(0)
+    return tuple(frames), im.info.get("loop")
+
+
+_MARKER = b"private-marker"
+
+
+def _sub_blocks(payload: bytes) -> bytes:
+    return b"".join(bytes([len(payload[i:i + 255])]) + payload[i:i + 255]
+                    for i in range(0, len(payload), 255)) + b"\x00"
+
+
+@pytest.mark.parametrize("label", [0xF0, 0x01, 0x02, 0xFA])
+def test_gif_drops_every_extension_but_control_and_loop(label):
+    """An unknown label -- or Plain Text, which no browser draws -- is skipped
+    by every reader, so its sub-blocks are a place for private bytes to ride
+    along under the identity of a clean upload. Dropped whole."""
+    clean = _anim_gif()
+    if label == 0x01:   # Plain Text: a 12-byte header sub-block, then the text
+        ext = b"\x21\x01\x0c" + bytes(12) + _sub_blocks(_MARKER)
+    else:
+        ext = bytes([0x21, label]) + _sub_blocks(_MARKER)
+    dirty = _gif_at_start(clean, ext)
+    out = sanitize(dirty)
+    assert _MARKER not in out
+    assert out == sanitize(clean)
+    assert _played(out) == _played(dirty) == _played(clean)
+    assert sanitize(out) == out
+
+
+def test_gif_loop_extension_keeps_only_its_loop_sub_block():
+    """A NETSCAPE2.0 / ANIMEXTS1.0 extension is kept for its loop count alone:
+    a buffering sub-block, or any other one after it, is dropped."""
+    clean = _anim_gif(loop=3)
+    start = clean.index(b"\x21\xff\x0bNETSCAPE2.0")
+    end = start + len(b"\x21\xff\x0bNETSCAPE2.0\x03\x01\x03\x00\x00")
+    assert clean[start:end].endswith(b"\x03\x01\x03\x00\x00")
+    padded = (b"\x21\xff\x0bNETSCAPE2.0" + b"\x05\x02" + _MARKER[:4]
+              + b"\x03\x01\x03\x00" + bytes([len(_MARKER)]) + _MARKER + b"\x00")
+    dirty = clean[:start] + padded + clean[end:]
+    out = sanitize(dirty)
+    assert _MARKER[:4] not in out and _MARKER not in out
+    assert out == sanitize(clean)
+    assert _played(out) == _played(clean)
+    assert sanitize(out) == out
+
+
+def test_gif_loop_extension_without_a_loop_sub_block_is_dropped():
+    clean = _anim_gif(loop=None)
+    ext = b"\x21\xff\x0bNETSCAPE2.0" + bytes([len(_MARKER)]) + _MARKER + b"\x00"
+    out = sanitize(_gif_at_start(clean, ext))
+    assert b"NETSCAPE2.0" not in out and _MARKER not in out
+    assert out == sanitize(clean)
+
+
+def test_gif_control_extension_keeps_only_its_four_bytes():
+    """The Graphic Control Extension is kept for its timing, disposal and
+    transparency -- its first four bytes, which is all any reader takes."""
+    clean = _anim_gif()
+    gce = clean.index(b"\x21\xf9\x04")
+    body = clean[gce + 3:gce + 7]
+    dirty = (clean[:gce] + b"\x21\xf9\x06" + body + b"\xaa\xbb"
+             + bytes([len(_MARKER)]) + _MARKER + b"\x00" + clean[gce + 8:])
+    out = sanitize(dirty)
+    assert _MARKER not in out and b"\xaa\xbb" not in out
+    assert out == sanitize(clean)
+    assert _played(out) == _played(clean)
+    assert sanitize(out) == out
+
+
+def test_a_short_gif_control_extension_is_not_guessed_at():
+    clean = _anim_gif()
+    gce = clean.index(b"\x21\xf9\x04")
+    short = clean[:gce] + b"\x21\xf9\x02\x00\x0a\x00" + clean[gce + 8:]
+    assert image_sanitize.sanitize_checked(short) == (short, False)
+
+
+def test_the_late_loop_check_reads_what_the_sanitizer_keeps():
+    """`gif_loop_after_image` and the sanitizer agree on what is a loop
+    extension: one with no loop sub-block is neither kept nor a late loop."""
+    from tests.fixtures.images.make_fixtures import NETSCAPE_LOOP_0, insert_after_first_image
+    plain = _anim_gif(loop=None)
+    late = insert_after_first_image(plain, NETSCAPE_LOOP_0)
+    assert image_sanitize.gif_loop_after_image(late)
+    assert image_sanitize.gif_loop_after_image(sanitize(late))
+    empty = insert_after_first_image(plain, b"\x21\xff\x0bNETSCAPE2.0\x00")
+    assert not image_sanitize.gif_loop_after_image(empty)
+    assert sanitize(empty) == sanitize(plain)
 
 
 # --- fallbacks ---------------------------------------------------------------
