@@ -254,7 +254,7 @@ Out of scope:
     - **A month-only anchor's month comes from its ref.** Slice B's pressure items and anchor options carry no `year` or `month_key`; only the occurrence row does, and §4 fixes the ref as `birthday:<kind>:<id>:month:<year>-<key>`. The pure helper `_month_of(ref) -> tuple[int, str] | None` takes the text after `:month:` and matches `^(-?\d+)-(.+)$`. A key may contain `-`, and the year may be negative. The same helper serves Task 6's "is this month behind `now`".
     - **`provider is None`** (Decision 25) returns `("", False)`. Without a calendar, no date is checked or derived.
     - With no `now` (no clock and no chronicle date), the `now ≤` lower bound and the `near`/`move` checks are skipped, while the D bound still applies. No date is fabricated.
-    - **`near` and `move` set `date_rejected` too.** The card text says "date not consistent with anchor" when anchored and "date not consistent with the time setting" otherwise.
+    - **`near` and `move` set `date_rejected` too.** `judge_date` returns `(date, rejected_by)` with `rejected_by` `"anchor"`, `"time"` or `None`; `check_date` is its `(date, rejected)` projection for the grader and `parse_next_date`. The card row carries `date_rejected_by`, and the card text follows it: "date not consistent with anchor" for `"anchor"`, "date not consistent with the time setting" for `"time"`, including an anchored card whose anchor-derived date `near`/`move` refused (deviation 22).
     - **`next_date`** gets the `near`/`move` check, and is untouched under an anchor: it answers "if none is used", and an anchor constrains suggestions, not that.
 13. **Card order (`order_cards`, a stable re-ordering of the parsed rows):**
     1. The first row whose claimed drivers or time anchor include a driver in `HIGH_PRESSURE` is moved first.
@@ -636,7 +636,7 @@ The snapshot gains its new keys here, while `upcoming` and the templates stay as
   - `order_cards(rows: list[dict], snapshot: dict, controls: Controls) -> list[dict]`, per Decision 13. It reads driver states from `snapshot["driver_index"]`.
   - `parse_output(text, cid, offscreen=False, *, snapshot: dict | None = None, controls: Controls | None = None) -> list[dict]` (store-reading: `valid_ids`, the provider). It resolves the provider once through `_soft_provider`, not `date_normalizer`, and normalizes each date with `normalize_date(provider, now, raw)` before `check_date`. `now` is the snapshot's, or `clock.now(cid)` without a snapshot, which is today's anchor. It labels from the snapshot (`snapshot=None` means an empty index and `NO_CONTROLS`). Each row is:
     - `title`, `premise`, `cast`, `location`;
-    - `date`, `date_friendly` (`describe(fixed)["friendly"]`, or `""`), `in_days` (`int | None`), `date_rejected`;
+    - `date`, `date_friendly` (`describe(fixed)["friendly"]`, or `""`), `in_days` (`int | None`), `date_rejected`, `date_rejected_by` (`"anchor" | "time" | None`, deviation 22);
     - `drivers`: `[{ref, kind, action, label}]`;
     - `time_anchor`: `{ref, kind, relation, label, friendly, in_days}` or `None`;
     - `unmet_must` and `avoided`: `[{ref, label}]`.
@@ -1317,6 +1317,7 @@ The slices above each prove one layer. This task proves they agree, through one 
 19. A saved idea anchored other than `on` a live occurrence opens the confirm form with an empty date, rather than the chooser's `nextDate` (Decision 23). §17.1 named only the live-`on` case.
 20. §16.3 step 5's "shows which selections dropped" lasts until the next suggestion request goes out, and §16.5's seed note until the reader changes a control (Decision 19). A note that says "press Regenerate" is not left under the cards Regenerate brought.
 21. §16.2's Stay near / Let time move are disabled, with a visible hint, when the drivers read's `now` is empty, and `toRequest`/`pruneControls` never send or keep either without one (a held one falls back to `auto` with the reset note). The drivers read and the suggestion snapshot resolve `now` the same way (`clock.now`, falling back to the newest chronicle date), so the chooser's empty `now` is exactly the case where §15.3 skips the `near`/`move` checks and the prompt omits their sentences (Decision 12).
+22. A card row adds `date_rejected_by: "anchor" | "time" | null` beside the unchanged `date_rejected` boolean, and the card words a blanked date from it rather than from whether the card is anchored. §15.3 applies the anchor rule and then `near`/`move`, so an anchored card's derived date can be refused by the time setting; §16.4's "with anchor" wording would have blamed the anchor for it (Decision 12).
 
 **Open questions (none block execution):**
 

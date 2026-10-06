@@ -383,10 +383,15 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
                 {`Claims to address ${a.label} (avoided)`}
               </span>
             ))}
+            {/* Worded from the rule that refused the date, which the server
+                names: an anchored card's derived date can still be refused by
+                `near`/`move`. Only a reply from before that field falls back
+                to guessing from the anchor. */}
             {s.date_rejected && (
               <span className="field-hint">
-                {s.time_anchor ? "date not consistent with anchor"
-                               : "date not consistent with the time setting"}
+                {(s.date_rejected_by ?? (s.time_anchor ? "anchor" : "time")) === "anchor"
+                  ? "date not consistent with anchor"
+                  : "date not consistent with the time setting"}
               </span>
             )}
           </button>

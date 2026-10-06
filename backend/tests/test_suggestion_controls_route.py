@@ -315,6 +315,34 @@ def test_payload_carries_resolved_provenance(client):
     assert s["cast"] == [] and s["location"] is None
 
 
+def test_a_blanked_date_names_the_rule_that_refused_it(client):
+    # spec §15.3/§16.4: an `on` anchor derives a date 31 days out and `near`
+    # blanks it -- the time setting refused it, not the anchor
+    cid = _campaign(client)
+    assert events.create(cid, "The feast", "2026-06-10") == "the-feast"
+    _fake(client, json.dumps({"suggestions": [
+        {"title": "At the feast", "premise": "Mara raises a cup.", "cast": [],
+         "location": "", "time_anchor": {"ref": "event:the-feast", "relation": "on"}},
+        {"title": "After the crown", "premise": "Mara counts the days.", "cast": [],
+         "location": "", "date": "2026-05-12",
+         "time_anchor": {"ref": CORONATION, "relation": "after"}},
+        {"title": "Far off", "premise": "Mara waits.", "cast": [], "location": "",
+         "date": "2026-07-01"},
+        {"title": "Soon", "premise": "Mara walks.", "cast": [], "location": "",
+         "date": "2026-05-11"},
+    ]}))
+    r = _post(client, cid, json={"time_mode": "near"})
+    assert r.status_code == 200
+    rows = {s["title"]: s for s in r.json()["suggestions"]}
+    assert rows["At the feast"]["time_anchor"]["ref"] == "event:the-feast"
+    assert [(t, rows[t]["date"], rows[t]["date_rejected"], rows[t]["date_rejected_by"])
+            for t in ("At the feast", "After the crown", "Far off", "Soon")] == [
+        ("At the feast", "", True, "time"),
+        ("After the crown", "", True, "anchor"),
+        ("Far off", "", True, "time"),
+        ("Soon", "2026-05-11", False, None)]
+
+
 def test_payload_uses_the_captured_index(client, monkeypatch):
     cid = _campaign(client)
     _fake(client)
