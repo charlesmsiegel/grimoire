@@ -12,7 +12,7 @@ surface end to end, so a surface added there and forgotten here fails.
 
 - **a legacy file** to place: the one file per logical name that
   `assets._legacy_path` would serve (library and cover directories with
-  `supported_only`, as their own modules read them);
+  `supported_only`, as their own modules read them), sidecars excepted;
 - **a legacy file left alone** (`untouched` says why): a name's other
   siblings, an extension nothing accepts, a name nothing can store;
 - **a collection manifest** (kind ``collection``), whose format the planner
@@ -30,6 +30,11 @@ surface end to end, so a surface added there and forgotten here fails.
 
   ``target`` names the directory whose placement the key or crop describes:
   the world's for ``a``/``b``, its own for ``c``/``d``.
+
+A rostered directory reached through a symlink anywhere between the root and
+itself is never walked into: it is one occurrence, untouched as
+``symlinked-directory``, because what it holds may lie outside the pinned
+root, where a run would unlink it.
 
 Read-only: nothing here writes, and nothing resolves through the live root.
 Visibility for ``a``/``b`` is decided from the campaign's own ledgers under
@@ -140,14 +145,34 @@ class Occurrence:
 # ---- directories --------------------------------------------------------
 
 def _subdirs(d: Path) -> list[Path]:
-    """Real subdirectories of `d`, sorted; none for one that cannot be listed.
-    Symlinks are not followed: the inventory stays inside the tree."""
+    """Subdirectories of `d`, sorted; none for one that cannot be listed.
+
+    A symlinked one is listed too, so that a rostered directory reached
+    through it can be REPORTED (`_linked`): it is never planned. Listing
+    through a link is a read; the walk is a fixed depth, so a loop cannot
+    run away with it."""
     try:
         with os.scandir(d) as it:
-            names = [e.name for e in it if e.is_dir(follow_symlinks=False)]
+            names = [e.name for e in it if e.is_dir()]
     except OSError:
         return []
     return [d / n for n in sorted(names)]
+
+
+def _linked(root: Path, d: Path) -> bool:
+    """Whether any component between `root` and `d` (inclusive) is a
+    symlink -- or `d` is not under `root` at all. Such a directory may hold
+    files outside the pinned root, and a run would unlink them there (M4)."""
+    try:
+        parts = d.relative_to(root).parts
+    except ValueError:
+        return True
+    cur = root
+    for part in parts:
+        cur = cur / part
+        if cur.is_symlink():
+            return True
+    return False
 
 
 def _roots(root: Path) -> Iterator[tuple[str, Path]]:
@@ -194,14 +219,24 @@ def _dirs_of(surface: Surface, side: str, sroot: Path) -> Iterator[Path]:
     yield from (d for d in found if d.is_dir())
 
 
-def directories(root: Path) -> Iterator[tuple[Surface, str, Path]]:
-    """``(surface, scope, directory)`` for every rostered directory that
-    exists under `root`, world roots first, then campaigns, in name order."""
-    for side, sroot in _roots(Path(root)):
+def _walk(root: Path) -> Iterator[tuple[Surface, str, Path, bool]]:
+    """`directories`' walk, each directory with whether it is `_linked`."""
+    for side, sroot in _roots(root):
         scope = _scope(side, sroot)
         for surface in SURFACES.values():
             if side in surface.scopes:
-                yield from ((surface, scope, d) for d in _dirs_of(surface, side, sroot))
+                for d in _dirs_of(surface, side, sroot):
+                    yield surface, scope, d, _linked(root, d)
+
+
+def directories(root: Path) -> Iterator[tuple[Surface, str, Path]]:
+    """``(surface, scope, directory)`` for every rostered directory that
+    exists under `root`, world roots first, then campaigns, in name order.
+    A directory reached through a symlink is not one of them
+    (`occurrences` reports it as untouched)."""
+    for surface, scope, d, linked in _walk(Path(root)):
+        if not linked:
+            yield surface, scope, d
 
 
 # ---- legacy files -------------------------------------------------------
@@ -224,10 +259,13 @@ def _accepted(p: Path) -> bool:
 def _name_files(surface: Surface, scope: str, d: Path, name: str
                 ) -> tuple[list[Occurrence], set[Path]]:
     """The occurrences for logical `name` in `d`, and every file they cover."""
-    # `assets`' own selection, so the file placed is the file `path_in`
-    # serves today (M7) -- private helpers, called rather than restated.
-    sibs = set(assets._siblings(d, name, False))
-    chosen = assets._legacy_path(d, name, surface.supported_only)
+    # `assets._legacy_path`'s rule (M7): its sibling glob, newest by
+    # (mtime, name), `supported_only` where the directory's module reads so --
+    # over every file of the name EXCEPT a sidecar. `focus.json` globs as a
+    # file of `focus`, and is never anybody's picture.
+    sibs = {p for p in assets._siblings(d, name, False) if p.name not in SIDECARS}
+    pool = [p for p in sibs if _accepted(p)] if surface.supported_only else list(sibs)
+    chosen = max(pool, key=lambda p: (assets._mtime_ns(p), p.name)) if pool else None
 
     def occ(p: Path, why: str | None) -> Occurrence:
         return Occurrence(surface.kind, scope, d, name, p, untouched=why,
@@ -250,13 +288,12 @@ def _stems(files: list[Path]) -> list[str]:
 
 def _legacy(surface: Surface, scope: str, d: Path) -> tuple[list[Occurrence], set[str]]:
     """Every legacy file in `d` as an occurrence, and the names that have one."""
-    files = _files(d)
+    files = [p for p in _files(d) if p.name not in SIDECARS]
     if surface.kind == COVER:
         names = [covers.NAME]
         files = [p for p in files if p.name.rpartition(".")[0] == covers.NAME]
     else:
         names = [n for n in _stems(files) if assets.storable(n)]
-        files = [p for p in files if p.name not in SIDECARS]
     out: list[Occurrence] = []
     covered: set[Path] = set()
     held: set[str] = set()
@@ -281,13 +318,16 @@ def _json_dict(p: Path) -> dict:
     """A sidecar's mapping, ``{}`` for one missing or garbled."""
     try:
         got = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return {}
     return got if isinstance(got, dict) else {}
 
 
-def _keyed_sidecars(surface: Surface) -> tuple[str, ...]:
-    if surface.kind == _GREETINGS:
+def _keyed_sidecars(surface: Surface, scope: str) -> tuple[str, ...]:
+    """The key files of a directory. Subjects only in a WORLD greeting:
+    `image_subjects` is world-scoped, and nothing reads a campaign scope, so a
+    campaign greeting's `subjects.json` is not folded anywhere (M5)."""
+    if surface.kind == _GREETINGS and scope.startswith(f"{_WORLD}:"):
         return (assets.DESCRIPTIONS_FILE, image_subjects.SUBJECTS_FILE)
     return (assets.DESCRIPTIONS_FILE,)
 
@@ -296,7 +336,7 @@ def _same_dir(surface: Surface, scope: str, d: Path, held: set[str]) -> Iterator
     """(c) and (d) in `d`: keys and a crop beside placements of their own."""
     refs = image_refs.scan(d)
     bearing = {n for n, r in refs.items() if r.image is not None}
-    for sidecar in _keyed_sidecars(surface):
+    for sidecar in _keyed_sidecars(surface, scope):
         for key in sorted(_json_dict(d / sidecar)):
             if key in bearing and key not in held:
                 yield Occurrence(surface.kind, scope, d, key, None, metadata_only="c",
@@ -311,6 +351,7 @@ def _same_dir(surface: Surface, scope: str, d: Path, held: set[str]) -> Iterator
 @dataclass(frozen=True)
 class _Inherits:
     """What a campaign inherits, read under the pinned root."""
+    root: Path
     wroot: Path
     gone: frozenset[str]
     off: frozenset[str]
@@ -323,7 +364,7 @@ def _ledger(p: Path) -> frozenset[str] | None:
         return frozenset()
     try:
         got = json.loads(p.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         return None
     return frozenset(r for r in got if isinstance(r, str)) if isinstance(got, list) else None
 
@@ -340,7 +381,7 @@ def _inherits(root: Path, croot: Path) -> _Inherits | None:
     off = _ledger(croot / "detached.json")
     if gone is None or off is None:
         return None
-    return _Inherits(wroot, gone, off)
+    return _Inherits(root, wroot, gone, off)
 
 
 def _world_side(surface: Surface, d: Path, inh: _Inherits
@@ -367,6 +408,8 @@ def _inherited(surface: Surface, scope: str, d: Path, inh: _Inherits | None
     if side is None or inh is None:
         return
     wdir, prefix, record = side
+    if _linked(inh.root, wdir):
+        return              # the world side is reached through a symlink
     own = assets.names_in(d)[0]
     theirs = assets.names_in(wdir)[0] if wdir.is_dir() else set()
 
@@ -397,7 +440,12 @@ def occurrences(root: Path) -> Iterator[Occurrence]:
     by directory in `directories` order. Reads only; writes nothing."""
     root = Path(root)
     inherits: dict[Path, _Inherits | None] = {}
-    for surface, scope, d in directories(root):
+    for surface, scope, d, linked in _walk(root):
+        if linked:
+            yield Occurrence(surface.kind, scope, d, d.name, d,
+                             untouched="symlinked-directory",
+                             supported_only=surface.supported_only)
+            continue
         if surface.kind == COLLECTION:
             yield from _manifests(scope, d)
             continue
