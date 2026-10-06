@@ -854,10 +854,7 @@ def test_a_restored_temporal_pair_comes_back_without_a_connection(client):
     assert key in _restore_after_refresh(client, cid, key, "dismiss")
 
 
-def test_a_dismissed_model_only_finding_whose_record_moved_is_dropped(client):
-    """Kept only while its dismissal holds: once the record moves, the old
-    question is not the reader's any more, and the next persist drops it
-    rather than surfacing it."""
+def _dismissed_touched_closure(client) -> tuple[str, str]:
     cid, sid = _campaign(client)
     store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
                             "The map turned up in Saltmarch.", sid)
@@ -865,12 +862,44 @@ def test_a_dismissed_model_only_finding_whose_record_moved_is_dropped(client):
     reconcile.persist_proposals(cid, sweep, {CLOSE_MAP: _proposal(
         "close", status="closed", reason="The map was found.", evidence_scenes=[sid])})
     assert _dismiss(client, cid, CLOSE_MAP, {"decision": "dismiss"}).status_code == 200
-    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
-                            "Mara folded the map away.", sid)
+    return cid, sid
+
+
+def test_a_dismissed_model_only_finding_whose_record_moved_is_dropped(client):
+    """Kept only while its dismissal holds: once the record moves, the old
+    question is not the reader's any more. It is hidden at once -- a Ledger
+    hand edit starts no sweep, so a ``stale`` reading would put the set-aside
+    suggestion back on screen until the next refresh -- and the next persist
+    drops it."""
+    cid, _sid = _dismissed_touched_closure(client)
+    r = client.put(f"/api/campaigns/{cid}/ledger/threads/mara-s-map", json={
+        "title": "Mara's map", "status": "open", "beat": "Mara folded the map away."})
+    assert r.status_code == 200, r.text
+
+    assert CLOSE_MAP not in _listed(client, cid)
+    assert _apply(client, cid, CLOSE_MAP, {"op": "close"}).status_code != 200
+    assert store.plot.get(cid, "mara-s-map")["status"] == "open"
 
     _sweep(cid)
 
     assert CLOSE_MAP not in candidates.read(cid)["records"]
+    assert CLOSE_MAP not in _listed(client, cid)
+
+
+def test_a_restored_model_only_finding_reads_stale_once_its_record_moves(client):
+    """The dismissal is what hides a moved record: restored, the finding is the
+    reader's again, and a move under it reads ``stale`` like any finding."""
+    cid, sid = _dismissed_touched_closure(client)
+    (entry,) = _continuity(client, cid)["suppressions"]
+    r = client.delete(f"/api/campaigns/{cid}/continuity/suppressions/{entry['fingerprint']}")
+    assert r.status_code == 200, r.text
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "Mara folded the map away.", sid)
+
+    listed = _listed(client, cid)
+
+    assert CLOSE_MAP in listed
+    assert listed[CLOSE_MAP]["stale_reason"] == "records"
 
 
 def test_get_continuity_marks_suppressions_live(client):

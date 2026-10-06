@@ -6,7 +6,12 @@ Stored at ``<campaign>/continuity_candidates.json``::
      "basis":   {"embedding_space", "embedding_model", "identity_hashes", "scored",
                  "text_hashes"},
      "records": {"<candidate id>": {"kind", "refs", "fingerprint", "signals",
-                                    "proposal", "created"}}}
+                                    "proposal", "created", ["dismissed"]}}}
+
+`dismissed` is present only on a model-only finding the reader set aside
+(`review.settle`, §12.7): the fingerprint its dismissal was written under, so a
+verdict can tell "the reader's dismissal no longer covers these records" from
+"nobody ever looked at this" once the records move.
 
 `scored` (``{ref: generation}``) and `text_hashes` (``{ref: hash of the
 identity text with no space salt}``) are additive beyond §6's basis: the first
@@ -172,7 +177,7 @@ def _record(value) -> dict | None:
         return None
     if not isinstance(value.get("fingerprint"), str):
         return None
-    return {
+    out = {
         "kind": kind,
         "refs": list(value["refs"]),
         "fingerprint": value["fingerprint"],
@@ -180,6 +185,10 @@ def _record(value) -> dict | None:
         "proposal": _proposal(value.get("proposal")),
         "created": _text(value.get("created")),
     }
+    dismissed = _text(value.get("dismissed"))
+    if dismissed:
+        out["dismissed"] = dismissed
+    return out
 
 
 def _basis(value) -> dict:
@@ -254,3 +263,18 @@ def drop(cid: str, candidate_id: str) -> dict | None:
             return None
         _write(cid, data)
         return gone
+
+
+def mark_dismissed(cid: str, candidate_id: str, fingerprint: str) -> bool:
+    """Record on one cached finding the fingerprint it was dismissed under; True
+    when it was written. Same no-write cases as `drop`."""
+    with locks.campaign_lock(cid):
+        if malformed(cid):
+            return False
+        data = read(cid)
+        record = data["records"].get(candidate_id)
+        if record is None:
+            return False
+        record["dismissed"] = fingerprint
+        _write(cid, data)
+        return True

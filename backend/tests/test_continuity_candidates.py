@@ -263,6 +263,26 @@ def test_drop_on_an_absent_cache_creates_nothing(cid):
     assert not _file(cid).exists()
 
 
+def test_mark_dismissed_records_the_fingerprint_and_reads_it_back(cid):
+    """§12.7: a model-only finding set aside carries the fingerprint it was
+    dismissed under; a record never dismissed carries no such key, and one
+    that is not a string reads as never dismissed."""
+    _store(cid, {"d": _closure(), "e": _pair(dismissed=7)})
+    assert candidates.mark_dismissed(cid, "d", "fp2_life") is True
+    records = candidates.read(cid)["records"]
+    assert records["d"] == {**_closure(), "dismissed": "fp2_life"}
+    assert records["e"] == _pair()
+    assert candidates.mark_dismissed(cid, "missing", "fp") is False
+
+
+def test_mark_dismissed_on_a_malformed_or_absent_cache_writes_nothing(cid):
+    assert candidates.mark_dismissed(cid, "d", "fp") is False
+    assert not _file(cid).exists()
+    _file(cid).write_text("{ no", encoding="utf-8")
+    assert candidates.mark_dismissed(cid, "d", "fp") is False
+    assert _file(cid).read_text(encoding="utf-8") == "{ no"
+
+
 def test_records_projection_carries_ids_sorted(cid):
     _store(cid, {"zeta": _pair(), "alpha": _closure()})
     rows = candidates.records(cid)

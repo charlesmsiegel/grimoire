@@ -41,7 +41,9 @@ Todo's import graph; `review` would drag `undo`. So `pending` imports
 The GET shows `VISIBLE`; Todo counts ``live``; apply and dismiss accept
 ``live`` (and ``stale`` resubmitted against the current fingerprint); a persist
 keeps ``live``, ``settled`` and ``unknown``, and a `model_only` record while it
-reads ``suppressed`` -- a restore has nothing else to bring back.
+reads ``suppressed`` -- a restore has nothing else to bring back. Once such a
+record's records move under a dismissal that still stands (its ``dismissed``
+fingerprint), it reads ``gone``, never ``stale``.
 
 **Todo's cost rule** (§18.2). Todo calls `findings` and nothing else: three
 small JSON reads (the cache, continuity.json, the two ledgers plus events) and
@@ -264,6 +266,11 @@ def verdict(current: Current, record: dict) -> str:
         return "satisfied"
     if fp in current.suppressions:
         return "suppressed"
+    if record.get("dismissed") in current.suppressions:
+        # A model-only finding the reader set aside, whose records moved since:
+        # the dismissal still stands, so the old question is not surfaced as
+        # stale -- it is hidden, and the next persist drops it (§12.7).
+        return "gone"
     if settled(record):
         # Before the stale check: a declined model-only nomination was never
         # the reader's, so records moving under it must not surface it.
