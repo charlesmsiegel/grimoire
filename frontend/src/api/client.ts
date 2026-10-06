@@ -1500,10 +1500,14 @@ export const api = {
   removeAlias: (cid: string, ref: string) =>
     request<{ ok: boolean }>(
       "DELETE",
-      `/api/campaigns/${encodeSegment(cid)}/continuity/aliases?ref=${encodeURIComponent(ref)}`),
+      `/api/campaigns/${encodeSegment(cid)}/continuity/aliases?ref=${encodeURIComponent(ref)}`)
+      // An unmerge changes the rail's Ledger count.
+      .then(notifyShell),
   removeLink: (cid: string, lid: string) =>
     request<{ ok: boolean }>(
-      "DELETE", `/api/campaigns/${encodeSegment(cid)}/continuity/links/${encodeSegment(lid)}`),
+      "DELETE", `/api/campaigns/${encodeSegment(cid)}/continuity/links/${encodeSegment(lid)}`)
+      // An unmerge changes the rail's Ledger count.
+      .then(notifyShell),
   /** The relationship timeline (#63), optionally narrowed to one pair — both
    *  actor tokens or neither, since half a pair names no pair. `fresh` for the
    *  ledger's reason: this is re-read precisely when an absorb or an undo has

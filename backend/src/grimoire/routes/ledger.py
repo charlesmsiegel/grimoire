@@ -135,6 +135,46 @@ def _refuse_unsafe_delete(cid: str, ref: str, force: bool) -> None:
             "refs": merged})
 
 
+#: What a partial delete tells the reader, by the noun that landed. A thread or
+#: commitment delete is journalled, so Undo restores it; an event delete writes
+#: no journal row and an event is never merged, so its leftovers are links, and
+#: Reviewed links / merges lists each one as broken with Remove link.
+_PARTIAL_DELETE = {
+    "thread": "the thread was deleted, but its merges and links could not all be "
+              "removed ({error}); the delete can be undone",
+    "commitment": "the commitment was deleted, but its merges and links could not all "
+                  "be removed ({error}); the delete can be undone",
+    "event": "the event was deleted, but its links could not all be removed ({error}); "
+             "remove the rest from Reviewed links / merges",
+}
+
+
+def forget_or_partial(cid: str, ref: str, *, name: str, noun: str) -> None:
+    """Drop the merges and links naming a record whose delete has just landed,
+    or answer a 500 ``partial_delete`` that says the delete landed.
+
+    `_refuse_unsafe_delete` already refused a file it could not read, so what is
+    left is a disk that fails mid-write, or a file garbled under the hold. By
+    then the record is gone, and a bare server error would report that
+    completed write as a failure (spec §5.7). So the body names what landed and
+    how to finish.
+
+    The bump is explicit, and it is load-bearing. The activity middleware
+    stamps only a response below 300, and bumps on an unhandled raise; an
+    `HTTPException` becomes a response inside the middleware and reaches
+    neither. Without the bump a write that landed would leave the campaign's
+    token where it was, and a `POST /advance` expectation taken before the
+    delete would still pass (CLAUDE.md, "A campaign carries a write token").
+    """
+    try:
+        continuity_review.forget_ref(cid, ref, name=name)
+    except (OSError, continuity_doc.ContinuityError) as e:
+        store.revision.bump(cid)
+        raise HTTPException(status_code=500, detail={
+            "kind": "partial_delete", "landed": [noun],
+            "detail": _PARTIAL_DELETE[noun].format(error=type(e).__name__)}) from e
+
+
 # ------------------------------------------------------------- moving a record
 
 
@@ -266,7 +306,7 @@ def delete_thread(cid: str, pid: str, force: bool = False):
             store.plot.restore(cid, pid, None)
         # Under the same hold: the id is free the moment this returns, and a
         # thread recreated under it must not inherit this one's merges or links.
-        continuity_review.forget_ref(cid, f"thread:{pid}", name=title)
+        forget_or_partial(cid, f"thread:{pid}", name=title, noun="thread")
     return {"ok": True}
 
 
@@ -326,7 +366,7 @@ def delete_commitment(cid: str, mid: str, force: bool = False):
                                    field="commitment",
                                    label=_label(title, "commitment deleted")):
             store.commitments.restore(cid, mid, None)
-        continuity_review.forget_ref(cid, f"commitment:{mid}", name=title)
+        forget_or_partial(cid, f"commitment:{mid}", name=title, noun="commitment")
     return {"ok": True}
 
 

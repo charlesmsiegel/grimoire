@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { api, type ScheduledEvent } from "../api/client";
+import { api, ApiError, type ScheduledEvent } from "../api/client";
+import { errorText } from "../api/errors";
 import { CalendarDatePicker } from "./CalendarDatePicker";
 
 /** Scheduled events (#101): the dated things this campaign has planned, and
@@ -47,6 +48,14 @@ export function EventsPanel({ cid, refreshKey }: {
       await reload();
       return true;
     } catch (err: any) {
+      if (err instanceof ApiError && err.kind === "partial_delete") {
+        // The delete landed and only its link cleanup did not: the event is
+        // gone, so a row drawn from the old read would answer a second Delete
+        // with a 404. Re-read, and still say what is left to do.
+        await reload();
+        setError(errorText(err));
+        return false;
+      }
       setError(err.detail ?? String(err));
       return false;
     } finally {

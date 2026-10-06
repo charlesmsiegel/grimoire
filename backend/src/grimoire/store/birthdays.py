@@ -390,19 +390,22 @@ def crossed(provider, lo_fixed: int, hi_fixed: int, rows: list[dict]) -> list[di
     """
     if hi_fixed <= lo_fixed or not rows:
         return []
-    # `CalendarError` only for birthdate reads below. That is the failure of the *data*
-    # -- a birthdate string this calendar cannot parse -- and skipping the actor
-    # is the right answer to it. A `describe` that returns something other than a
-    # mapping with `friendly` in it is a broken provider, not a bad row, and it
-    # fails here for the same reason it already fails in `calendars.today_facts`:
-    # see `clock._holidays`, which draws the same line and says why.
+    # `_UNREADABLE` only for birthdate reads below. That is the failure of the
+    # *data* -- a birthdate string this calendar cannot parse, or one whose year
+    # is past the provider's range, which its arithmetic answers with
+    # `OverflowError` rather than `CalendarError` (the reason `_UNREADABLE`
+    # gives) -- and skipping the actor is the right answer to it. A `describe`
+    # that returns something other than a mapping with `friendly` in it is a
+    # broken provider, not a bad row, and it still fails here for the same
+    # reason it already fails in `calendars.today_facts`: see `clock._holidays`,
+    # which draws the same line and says why.
     born: list[tuple[dict, int]] = []
     for row in rows:
         try:
             born_fixed = _birth_fixed(provider, row["birth"], lo_fixed)
             if born_fixed is None:
                 continue
-        except calendars.CalendarError:
+        except _UNREADABLE:
             continue   # a birthdate this calendar cannot read is simply not tracked
         born.append((row, born_fixed))
     if not born:

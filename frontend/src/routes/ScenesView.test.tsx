@@ -601,7 +601,7 @@ test("a seeded open after a failed list survives Try again, and + New scene stil
   // (Decision 20). The release is one-way: clearing the error banner must not
   // re-hold a chooser the reader is already using, and a seed left over from
   // the handoff must never hide an ordinary open.
-  (api.listScenes as any).mockRejectedValue(new Error("down"));
+  (api.listScenes as any).mockRejectedValueOnce(new Error("down"));
   renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
   const chooser = await screen.findByTestId("scene-chooser");
   expect(within(chooser).getByTestId("after")).toHaveTextContent("null");
@@ -630,4 +630,22 @@ test("+ New scene during a held handoff opens the chooser unseeded", async () =>
   fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
   expect(within(await screen.findByTestId("scene-chooser")).getByTestId("seed"))
     .toHaveTextContent("null");
+});
+
+test("the list's Try again reads the list again", async () => {
+  // The banner says "look again", so its button has to: clearing the banner
+  // alone left the search tools over an empty list, with no read under way.
+  (api.listScenes as any).mockClear().mockRejectedValueOnce(new Error("offline"));
+  renderScenes();
+  expect(await screen.findByText("The scenes could not be read.", { exact: false }))
+    .toBeInTheDocument();
+  expect(api.listScenes).toHaveBeenCalledTimes(1);
+
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "003--third", title: "The third", date: "Day 41", place: "The weir" }),
+  ]);
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  expect(await screen.findByText("The third")).toBeInTheDocument();
+  expect(api.listScenes).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText(/the scenes could not be read/i)).not.toBeInTheDocument();
 });

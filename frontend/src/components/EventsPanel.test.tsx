@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { EventsPanel } from "./EventsPanel";
-import { api } from "../api/client";
+import { api, ApiError } from "../api/client";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -158,4 +158,23 @@ test("a rejected edit keeps the form open with what was typed", async () => {
   fireEvent.click(screen.getByText("Save"));
   expect(await screen.findByText("not a date in this calendar")).toBeInTheDocument();
   expect(screen.getByLabelText("Event name")).toHaveValue("Renamed");
+});
+
+const EVENT_PARTIAL = "the event was deleted, but its links could not all be removed "
+  + "(OSError); remove the rest from Reviewed links / merges";
+
+test("an event delete that landed but could not clear its links re-reads the events", async () => {
+  // The event is gone on the server; a row left from the old read would
+  // answer a second Delete with a 404.
+  vi.mocked(api.deleteCampaignEvent).mockRejectedValueOnce(new ApiError(
+    500, EVENT_PARTIAL, "partial_delete",
+    { kind: "partial_delete", landed: ["event"], detail: EVENT_PARTIAL }));
+  render(<EventsPanel cid="c" />);
+  await screen.findByText(/The coronation — 26 December 2026/);
+  vi.mocked(api.campaignEvents).mockResolvedValue(
+    { events: [FIRED], now: "2026-12-24", friendly: "24 December 2026" });
+  fireEvent.click(screen.getAllByText("Delete")[1]);
+  expect(await screen.findByText(EVENT_PARTIAL)).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByText(/The coronation/)).toBeNull());
+  expect(api.campaignEvents).toHaveBeenCalledTimes(2);
 });

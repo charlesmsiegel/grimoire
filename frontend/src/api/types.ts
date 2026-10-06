@@ -2228,6 +2228,15 @@ export type ReconcileResult = {
   continuity: "ok" | "malformed";
   follow_on: boolean;
 };
+/** A failed reconciliation run's `error` (`routes/continuity._reconcile_work`):
+ *  `saved` is whether its first persist landed, so the findings listed are this
+ *  sweep's, and `follow_on` whether it was the follow-on pass that failed. Read
+ *  as `Partial` by `failedNote`, since a refusal of another kind carries none
+ *  of it. */
+export type ReconcileRunError = {
+  kind: string; detail: string; status: number;
+  sweep: "full" | "incremental"; saved: boolean; follow_on: boolean;
+};
 export type ContinuityAliasRow = {
   ref: string; to: string; canonical: string; title: string; to_title: string;
   created: string; source: string; note: string; dangling: boolean; reason: string;

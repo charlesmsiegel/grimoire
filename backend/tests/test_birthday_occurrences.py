@@ -255,3 +255,16 @@ def test_gather_names_a_pc_without_scanning_images(monkeypatch, tmp_path):
     [row] = birthdays.occurrences(cid, _now_fixed(cid))
     assert row["name"] == "Seraphine"
     assert calls == []
+
+
+def test_crossed_skips_an_overflowing_birthdate(monkeypatch, tmp_path):
+    """A year past the provider's range raises `OverflowError` out of its
+    arithmetic, not `CalendarError`. That is a birthdate this calendar cannot
+    read, so `crossed` skips the one row rather than failing the advance."""
+    cid = _campaign(monkeypatch, tmp_path)
+    provider = _provider(cid)
+    lo = calendars.fixed_of(provider, "2026-05-08")
+    hi = calendars.fixed_of(provider, "2026-05-12")
+    rows = [{"name": "Winifred", "birth": "99999999999999999999-05-09"},
+            {"name": "Mara", "birth": "--05-11"}]
+    assert [r["name"] for r in birthdays.crossed(provider, lo, hi, rows)] == ["Mara"]

@@ -664,3 +664,59 @@ def test_delete_event_refused_when_links_unreadable(client, cid):
     r = client.delete(f"/api/campaigns/{cid}/events/{eid}")
     assert r.status_code == 409 and r.json()["kind"] == "malformed"
     assert eid in store.events.read(cid)
+
+
+# A delete whose continuity cascade fails after the record is gone (spec §5.7,
+# plan Decision 10): the delete landed, so the answer says so and how to finish,
+# and the write token still moves. The token assertion is the pin an
+# `HTTPException` answer would otherwise lose, because the activity middleware
+# stamps only below 300 and bumps only on an unhandled raise.
+
+from grimoire.store.continuity import review as continuity_review_module  # noqa: E402
+
+
+def _seed_linked(client, cid, noun):
+    """One record of `noun` and a reviewed link naming it; returns (id, link id)."""
+    (pid,) = _thread_ids(client, cid, "Mara's map")
+    mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                      json={"title": "Mara's oath"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/continuity/links",
+                    json={"a": f"thread:{pid}", "b": f"commitment:{mid}", "relation": "pays_off"})
+    assert r.status_code == 200, r.text
+    return (pid if noun == "thread" else mid), r.json()["link"]["id"]
+
+
+_DELETE_PATH = {"thread": "threads", "commitment": "commitments"}
+
+
+def _stored(cid, noun, rid):
+    return (store.plot if noun == "thread" else store.commitments).get(cid, rid)
+
+
+@pytest.mark.parametrize("noun", ["thread", "commitment"])
+def test_a_delete_whose_cascade_fails_moves_the_token(client, cid, monkeypatch, noun):
+    rid, _lid = _seed_linked(client, cid, noun)
+    before = store.revision.current(cid)
+
+    def fail(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(continuity_review_module, "forget_ref", fail)
+    r = client.delete(f"/api/campaigns/{cid}/ledger/{_DELETE_PATH[noun]}/{rid}")
+    assert r.status_code == 500, r.text
+    body = r.json()
+    assert body["kind"] == "partial_delete"
+    assert body["landed"] == [noun]
+    assert body["detail"] == (f"the {noun} was deleted, but its merges and links could not "
+                              "all be removed (OSError); the delete can be undone")
+    assert _stored(cid, noun, rid) is None
+    assert store.revision.current(cid) != before
+
+
+@pytest.mark.parametrize("noun", ["thread", "commitment"])
+def test_a_delete_whose_cascade_lands_answers_as_before(client, cid, noun):
+    rid, lid = _seed_linked(client, cid, noun)
+    r = client.delete(f"/api/campaigns/{cid}/ledger/{_DELETE_PATH[noun]}/{rid}")
+    assert r.status_code == 200, r.text
+    assert r.json() == {"ok": True}
+    assert continuity_doc.get_link(cid, lid) is None
