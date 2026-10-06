@@ -40,7 +40,7 @@ const PHONE_PX = 720;
  *  Main scrolls independently of the column. Both scroll independently of the
  *  header, which never moves. */
 export function PageShell(
-  { column, footer, children, columnLabel = "Context", className = "" }: {
+  { column, footer, children, columnLabel = "Context", className = "", dismissKey }: {
     column: ReactNode;
     /** Pinned to the foot of the column, outside its scroll port. */
     footer?: ReactNode;
@@ -49,6 +49,10 @@ export function PageShell(
      *  index rather than navigation should say so. */
     columnLabel?: string;
     className?: string;
+    /** Names the page's current pick when it is not the pathname. A change
+     *  closes the phone column, as a pathname change does; the same value on
+     *  a re-render (a filter) leaves it up. */
+    dismissKey?: string | null;
   },
 ) {
   // Two library sections in a row render the same component tree, so React
@@ -71,6 +75,9 @@ export function PageShell(
   // column row that navigates hands you the thing you asked for, and one that
   // only filters (the campaigns shelf's worlds) leaves the column up, because
   // you can see the filter working behind it and will probably pick another.
+  // A page whose pick lives in the query rather than the path passes the pick
+  // as `dismissKey`, so picking a record still closes the column while a
+  // filter keeps it up.
   //
   // `innerWidth` rather than `matchMedia` so the reading is the one the CSS
   // gets and jsdom needs no shim. Event-driven either way — no polling.
@@ -82,6 +89,7 @@ export function PageShell(
   }, []);
   const [showColumn, setShowColumn] = useState(false);
   useEffect(() => { setShowColumn(false); }, [pathname]);
+  useEffect(() => { setShowColumn(false); }, [dismissKey]);
 
   // Focus mode answers "what am I navigating" with "nothing, I am reading", so
   // the column goes with the rest of the chrome — and its phone toggle with it,
