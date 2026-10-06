@@ -1214,11 +1214,21 @@ def test_a_burst_of_adopters_coalesces_into_one_follow_on(client):
     assert run["result"]["follow_on"] is True
     requests = _reconcile_requests(held)
     assert len(requests) == 2
-    user = requests[1]["messages"][1]["content"]
-    assert TOUCHED in user
-    for title in (LEDGER_THREAD[1], RECOVER_THE_LEDGER["title"], "Mara's map"):
-        assert title in user, title
+    # The full first pass re-checks nothing as touched, so every touched block
+    # in the follow-on came from an adopter -- and each pended ref has one of
+    # its own. Titles alone would not do: two of the three also sit in the
+    # similarity pair, which is asked about whether or not either was touched.
+    assert _touched_ids(requests[0]) == []
+    assert sorted(_touched_ids(requests[1])) == [
+        LEDGER_THREAD[0], "mara-s-map", "recover-the-harbour-ledger"]
     assert client.app.state.runs.take_touched(runs.campaign_subject(cid)) == set()
+
+
+def _touched_ids(request: dict) -> list[str]:
+    """The record id of every touched re-check block in one reconcile prompt."""
+    blocks = _touched_in(request).split("\n\nCandidate ")
+    return [b.split("(plot thread): ", 1)[1].split(":", 1)[0]
+            for b in blocks if b.rstrip().endswith(TOUCHED)]
 
 
 def test_a_capped_sweep_says_so_in_its_run_and_log_row(client, monkeypatch):
