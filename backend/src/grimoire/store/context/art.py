@@ -366,11 +366,12 @@ def _record_candidates(cid: str, kind: str, rid: str) -> list[dict]:
     vid = _version(cid, kind, rid)
     if vid is None:
         return []
-    # One listing of the locked version: the names a base tier is shadowed by,
-    # and the image each placed name holds. The ids are what `candidates`
-    # dedupes on; nothing is read per candidate.
-    rows = overlay.list_images(cid, rid, vid, base=kind)
-    tiers = [(vid, overlay.read_descriptions(cid, rid, vid, base=kind), _ids_of(rows))]
+    # One listing of the locked version, handed back by the description sweep
+    # that was built from it: the names a base tier is shadowed by, and the
+    # image each placed name holds. The ids are what `candidates` dedupes on;
+    # nothing is read per candidate.
+    described, rows = overlay.read_descriptions_listed(cid, rid, vid, base=kind)
+    tiers = [(vid, described, _ids_of(rows))]
     bases = _base_pass_through(cid, kind, rid, vid)
     if bases:
         taken = {i["name"] for i in rows}
@@ -398,9 +399,10 @@ def _library_candidates(cid: str) -> list[dict]:
     the campaign's own uploads -- resolving against that directory would offer
     the narrator none of the world's art, however carefully it was described.
     """
-    ids = _ids_of(campaign_images.list_images(cid))
+    described, rows = campaign_images.read_descriptions_listed(cid)
+    ids = _ids_of(rows)
     out = []
-    for name, text in sorted(campaign_images.read_descriptions(cid).items()):
+    for name, text in sorted(described.items()):
         if not text.strip():
             continue
         out.append({"kind": LIBRARY, "id": "", "vid": "", "name": name,

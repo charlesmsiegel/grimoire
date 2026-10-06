@@ -71,7 +71,6 @@ def _scope(root: Path) -> str:
     return image_scopes.world_scope(root.name)
 
 
-
 def _slot_of(root: Path, item: _Item) -> tuple[Path, str] | None:
     """The catalog item's slot when it lies under `root` -- None for a remote
     URL, and for a picture placed in another world's root (R11)."""

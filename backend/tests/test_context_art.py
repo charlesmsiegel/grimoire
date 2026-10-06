@@ -699,6 +699,18 @@ def _art_png() -> bytes:
 
 # ---- one picture is offered once -----------------------------------------
 
+def _counted(monkeypatch, module, name):
+    calls = []
+    real = getattr(module, name)
+
+    def counted(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(module, name, counted)
+    return calls
+
+
 def _share_the_characters_picture(world):
     """The campaign library also holds the character's picture (the same
     bytes, so one image object and, by R4, one description)."""
@@ -752,20 +764,24 @@ def test_dedupe_is_deterministic_across_calls(world, sid):
     assert [art.candidates(camp, cast, world["loc"], []) for _ in range(3)] == [first] * 3
 
 
-def test_candidates_never_resolve_a_blob(world, sid, monkeypatch):
+def test_candidates_scan_each_record_once(world, sid, monkeypatch):
+    """The per-turn catalogue reads each in-scope record's placements once: the
+    description sweep hands back the listing it was built from, so `candidates`
+    never lists a record and then has the sweep list it again."""
     from grimoire.store import image_refs
     camp, char, vid = world["cid"], world["char"], world["vid"]
     _cast(camp, char, vid, sid)
     _share_the_characters_picture(world)
-    calls = []
-    real = image_refs.resolve_ref
-    monkeypatch.setattr(image_refs, "resolve_ref",
-                        lambda ref: calls.append(ref.name) or real(ref))
-    # What the listings themselves cost, with no dedupe on top.
-    overlay.list_images(camp, char, vid, base="characters")
-    overlay.list_images(camp, world["loc"], "default", base="locations")
-    campaign_images.list_images(camp)
-    listing_calls = len(calls)
-    calls.clear()
-    art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], world["loc"], [])
-    assert len(calls) <= 2 * listing_calls     # one read of each listing per record
+    cast = [{"kind": "characters", "id": char, "role": "npc"}]
+    with monkeypatch.context() as m:
+        # What the sweeps themselves cost, with nothing on top of them.
+        expected = _counted(m, image_refs, "scan")
+        overlay.read_descriptions(camp, char, vid, base="characters")
+        overlay.read_descriptions(camp, world["loc"], "default", base="locations")
+        campaign_images.read_descriptions(camp)
+    assert expected          # the guard is meaningless against a count of nothing
+    scans = _counted(monkeypatch, image_refs, "scan")
+    assert art.candidates(camp, cast, world["loc"], [])
+    assert len(scans) == len(expected)
+
+

@@ -1785,6 +1785,12 @@ def read_description(cid: str, aid: str, vid: str, name: str,
 
 def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters",
                       *, v: View | None = None) -> dict[str, str]:
+    """`read_descriptions_listed`' descriptions, for a caller that wants no rows."""
+    return read_descriptions_listed(cid, aid, vid, base, v=v)[0]
+
+
+def read_descriptions_listed(cid: str, aid: str, vid: str, base: str = "characters",
+                             *, v: View | None = None) -> tuple[dict[str, str], list[dict]]:
     """Every visible image's description for one version, by `read_description`'s
     per-image rule — but resolving the whole version in one pass.
 
@@ -1800,6 +1806,11 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters",
     One entry per image the overlay lists; an image nobody has reviewed is
     ABSENT rather than empty, so a caller can still tell "not reviewed" from
     "reviewed, nothing to say".
+
+    Returns the merged listing rows beside the text -- exactly what
+    `list_images` returns, off the same two halves -- so a caller that wants
+    both (the per-turn art catalogue, `base_versions`) reads each placement
+    once instead of listing the version and then having this list it again.
     """
     v = _view(cid, v)
     mine, inherited = _image_halves(cid, aid, vid, base, v)
@@ -1816,7 +1827,7 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters",
     if fall:
         out.update(image_descriptions.read_all(v.wroot, aid, vid, base, names=fall,
                                                ids=_row_ids(inherited)))
-    return dict(sorted(out.items()))
+    return dict(sorted(out.items())), sorted(mine + inherited, key=lambda i: i["name"])
 
 
 def set_description(cid: str, aid: str, vid: str, name: str, text: str,
@@ -2042,7 +2053,8 @@ def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict
     for vid in ordered:
         if vid in held:
             continue
-        images = list_images(cid, char_id, vid, v=v)   # tombstones applied, campaign file first
+        # Tombstones applied, campaign file first; one listing serves both.
+        described, images = read_descriptions_listed(cid, char_id, vid, v=v)
         if not images:
             continue
         out.append({
@@ -2051,7 +2063,7 @@ def base_versions(cid: str, char_id: str, *, v: View | None = None) -> list[dict
             "images": [i["name"] for i in images],
             "image_v": {i["name"]: i["v"] for i in images},
             "image_ids": {i["name"]: i["image_id"] for i in images if i.get("image_id")},
-            "image_descriptions": read_descriptions(cid, char_id, vid, v=v),
+            "image_descriptions": described,
         })
     return out
 
