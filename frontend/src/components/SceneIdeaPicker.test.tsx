@@ -736,6 +736,46 @@ test("saving a generated card sends its drivers and anchor", async () => {
     time_anchor: { ref: "event:the-coronation", relation: "before" } }));
 });
 
+test("a saved idea shows what it advances and what it is anchored to", async () => {
+  // The read derives labels and state for the saved provenance (§17); the row
+  // shows it as a generated card does (§16.4, §17.1), so a saved idea is not
+  // left saying nothing about why it was kept until it goes stale.
+  (api.listSceneIdeas as any).mockResolvedValue([{
+    ...SAVED, id: "the-bells", title: "Before the bells",
+    time_anchor: { ref: "event:the-coronation", kind: "event", relation: "before",
+                   native: "2026-05-12", label: "The coronation", friendly: "12 May 2026",
+                   state: "live" },
+    drivers: [
+      { ref: "thread:find-the-ledger", kind: "thread", action: "advance", label: "Mara's map",
+        state: "live" },
+      { ref: "commitment:salt-owed", kind: "commitment", action: "address",
+        label: "Mara's oath", state: "finished" },
+      // the anchor's own entry: the anchor line already says it
+      { ref: "event:the-coronation", kind: "event", action: "anchor",
+        label: "The coronation", state: "live" },
+    ],
+  }, { ...SAVED, id: "after-fair", title: "After the fair",
+       time_anchor: { ref: "event:saltmarch-fair", kind: "event", relation: "after",
+                      native: "2026-02-01", label: "Saltmarch fair", friendly: "1 Feb 2026",
+                      state: "finished" },
+       drivers: [] }]);
+  renderPicker({ suggestions: [] });
+  const card = (await screen.findByText("Before the bells")).closest("button")!;
+  const when = within(card).getByText("before The coronation");
+  const advances = within(card).getByText("Advances: Mara's map");
+  const addresses = within(card).getByText("Addresses: Mara's oath (resolved)");
+  for (const el of [when, advances, addresses]) expect(el.tagName).toBe("SPAN");
+  expect(when).toHaveClass("field-hint");
+  expect(advances).toHaveClass("chip", "on");
+  // a finished driver is still provenance, but no longer a live claim
+  expect(addresses).toHaveClass("chip");
+  expect(addresses).not.toHaveClass("on");
+  expect(within(card).queryByText(/Anchored to/)).toBeNull();
+  // an `after` anchor that has passed is what the idea was waiting for
+  const fair = screen.getByText("After the fair").closest("button")!;
+  expect(within(fair).getByText("after Saltmarch fair (passed)")).toBeInTheDocument();
+});
+
 test("stale ideas sit under a collapsed Stale group outside the budget", async () => {
   const STALE: SceneIdea = { ...SAVED, id: "the-bells", title: "Before the bells",
                              stale_reason: "The coronation has passed" };
