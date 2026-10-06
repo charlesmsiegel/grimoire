@@ -58,6 +58,11 @@ RELATIONS: dict[str, tuple[frozenset[str], frozenset[str], bool]] = {
                    frozenset({"thread", "commitment", "event"}), False),
 }
 
+#: §20's link-relation vocabulary, in the table's order: derived from it rather
+#: than restated, so the tuple the Story Graph and the client pin cannot drift
+#: from the rules a link is validated against.
+LINK_RELATIONS: tuple[str, ...] = tuple(RELATIONS)
+
 #: The record kinds an alias may join.
 ALIASABLE = ("thread", "commitment")
 
