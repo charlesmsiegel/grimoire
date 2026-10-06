@@ -3644,6 +3644,48 @@ a.column-back { text-decoration: none; }
   letter-spacing: 0.1em; text-transform: uppercase;
 }
 
+/* ---- the continuity review (capstone §12) ---- */
+/* Refresh sits in two places -- the column's Continuity review section and the
+   main pane's head -- because on a phone the column is behind a toggle and a
+   stale finding's only way forward is a Refresh. Both are the same quiet
+   button with its progress line under it. */
+.continuity-refresh { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.context-column .continuity-refresh { padding: 8px 16px 0; }
+.context-column .continuity-matching { padding: 0 16px; }
+.shelf-head .continuity-refresh { align-items: flex-end; text-align: right; max-width: 320px; }
+.continuity-error { color: var(--alert); margin: 0 0 12px; }
+/* One finding or one decided link per row: a button (or a row with its one
+   action), never a clickable <li>, so the keyboard reaches every one. */
+.continuity-list { list-style: none; margin: 0; padding: 0; max-width: 760px; }
+.continuity-list > li { border-bottom: 1px solid var(--line); }
+.continuity-list > li:last-child { border-bottom: 0; }
+.continuity-finding {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 3px;
+  width: 100%; min-height: 44px; padding: 10px 12px; text-align: left;
+  background: transparent; border: 0; border-left: 2px solid transparent;
+  color: var(--ink); cursor: pointer; font: inherit;
+  transition: background-color 140ms ease-out, border-color 140ms ease-out;
+}
+.continuity-finding:hover { background: var(--track); border-left-color: var(--accent); }
+.continuity-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  min-height: 44px; padding: 10px 12px;
+}
+.continuity-item-text { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; min-width: 0; }
+.continuity-item-title { color: var(--ink); font-size: 15px; overflow-wrap: anywhere; }
+.continuity-item-meta {
+  color: var(--muted); font-family: var(--fm); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+/* Visible words, not a glyph with a tooltip (Decision 25): "Records changed"
+   is the reason the finding's actions are off, so it is read, not hovered. */
+.continuity-stale {
+  display: inline-block; padding: 2px 6px; border: 1px solid var(--alert); border-radius: 3px;
+  color: var(--alert); font-family: var(--fm); font-size: 10px;
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+.chip.continuity-broken { background: transparent; color: var(--alert); border-color: var(--alert); cursor: default; }
+
 /* ---- editing a row by hand ---- */
 /* Until these controls the only writer of any of this was the absorb pass, so
    a thread the model never noticed had closed stayed open forever. The rules
