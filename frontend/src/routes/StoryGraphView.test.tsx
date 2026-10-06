@@ -175,6 +175,51 @@ test("clearing the arc filter pushes history, so Back brings the filter back", a
   expect(screen.getByText(/^Filtered to/)).toBeInTheDocument();
 });
 
+function renderWithHistory(entry: string) {
+  render(
+    <ShellPayloadProvider value={{ status: "ready", payload: SHELL, retry, cid: "c1" }}>
+      <MemoryRouter initialEntries={["/elsewhere", entry]} initialIndex={1}>
+        <Back />
+        <LocationProbe />
+        <Routes>
+          <Route path="/campaigns/:cid/graph" element={<StoryGraphView />} />
+          <Route path="/elsewhere" element={<p>elsewhere</p>} />
+        </Routes>
+      </MemoryRouter>
+    </ShellPayloadProvider>);
+  return screen.findByTestId("story-graph-drawing");
+}
+
+test.each([
+  ["the default Story lens, with no ?lens=", "/campaigns/c1/graph", "Story", "1"],
+  ["a lens the address names", "/campaigns/c1/graph?lens=cast", "Cast", "2"],
+])("choosing %s again, by button or hotkey, pushes no history", async (_, entry, label, key) => {
+  await renderWithHistory(entry);
+  const before = search();
+  fireEvent.click(within(column()).getByRole("button", { name: label }));
+  fireEvent.keyDown(window, { key });
+  expect(search()).toBe(before);
+
+  // One Back leaves the page: nothing was stacked over the entry it opened on.
+  fireEvent.click(screen.getByRole("button", { name: "back" }));
+  expect(screen.getByText("elsewhere")).toBeInTheDocument();
+});
+
+test("choosing a different lens still pushes exactly one entry", async () => {
+  await renderWithHistory("/campaigns/c1/graph");
+  fireEvent.click(within(column()).getByRole("button", { name: "Cast" }));
+  fireEvent.click(within(column()).getByRole("button", { name: "Cast" }));
+  fireEvent.keyDown(window, { key: "2" });
+  expect(param("lens")).toBe("cast");
+
+  fireEvent.click(screen.getByRole("button", { name: "back" }));
+  expect(screen.queryByText("elsewhere")).not.toBeInTheDocument();
+  expect(within(column()).getByRole("button", { name: "Story" }))
+    .toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(screen.getByRole("button", { name: "back" }));
+  expect(screen.getByText("elsewhere")).toBeInTheDocument();
+});
+
 test("show toggles add actors and locations; merged records and candidates stay hidden until shown",
      async () => {
   await ready();

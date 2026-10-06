@@ -71,16 +71,23 @@ export default function StoryGraphView() {
   const arc = arcNode && (arcNode.kind === "thread" || arcNode.kind === "commitment")
     && arcNode.merged_into === null ? arcNode.id : null;
 
+  // A write that leaves the address as it was navigates nowhere: react-router
+  // pushes even an identical search, and a stack of identical entries is a
+  // Back that appears to do nothing. Every query write gets this guard.
   const setQuery = useCallback((next: Record<string, string | null>, replace: boolean) => {
-    setParams((prev) => {
-      const q = new URLSearchParams(prev);
-      for (const [k, v] of Object.entries(next)) {
-        if (v === null) q.delete(k);
-        else q.set(k, v);
-      }
-      return q;
-    }, { replace });
-  }, [setParams]);
+    const q = new URLSearchParams(params);
+    for (const [k, v] of Object.entries(next)) {
+      if (v === null) q.delete(k);
+      else q.set(k, v);
+    }
+    if (q.toString() === params.toString()) return;
+    setParams(q, { replace });
+  }, [params, setParams]);
+  // The lens already shown is not a change, even when the address spells it
+  // differently (no `?lens=` reads as Story), so choosing it is a no-op too.
+  const chooseLens = (l: Lens) => {
+    if (l !== lens) setQuery({ lens: l }, false);
+  };
 
   // ---- the Show toggles: local, and reset to the lens's own on a lens change ----
   const [showState, setShowState] = useState<{ lens: Lens; show: Show } | null>(null);
@@ -109,7 +116,7 @@ export default function StoryGraphView() {
   useHotkeys([
     ...LENSES.map((l, i) => ({
       keys: String(i + 1), label: `${LENS_LABELS[l]} lens`, group: "STORY GRAPH",
-      run: () => setQuery({ lens: l }, false),
+      run: () => chooseLens(l),
     })),
     {
       keys: "escape", label: "Clear the selection", group: "STORY GRAPH", enabled: !!node,
@@ -138,7 +145,7 @@ export default function StoryGraphView() {
         {LENSES.map((l) => (
           <button type="button" key={l} aria-pressed={lens === l}
                   className={"column-row" + (lens === l ? " active" : "")}
-                  onClick={() => setQuery({ lens: l }, false)}>
+                  onClick={() => chooseLens(l)}>
             <span className="column-row-label">{LENS_LABELS[l]}</span>
           </button>
         ))}
