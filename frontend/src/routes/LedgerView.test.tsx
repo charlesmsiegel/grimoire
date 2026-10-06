@@ -1,33 +1,14 @@
-import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
-import LedgerView from "./LedgerView";
-import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
-import { PaletteProvider } from "../components/palette";
+import { act, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { agingLabel } from "../aging";
 
-vi.mock("../api/client", () => ({
-  api: {
-    getCampaign: vi.fn(),
-    campaignLedger: vi.fn(),
-    campaignChanges: vi.fn(),
-    campaignRelationshipHistory: vi.fn(),
-    ledgerCreateThread: vi.fn(), ledgerSaveThread: vi.fn(), ledgerDeleteThread: vi.fn(),
-    ledgerCreateCommitment: vi.fn(), ledgerSaveCommitment: vi.fn(),
-    ledgerDeleteCommitment: vi.fn(),
-    ledgerRecordFact: vi.fn(), ledgerSaveFact: vi.fn(), ledgerRetireFact: vi.fn(),
-    ledgerDeleteFact: vi.fn(),
-    ledgerSaveRelationship: vi.fn(), ledgerDeleteRelationship: vi.fn(),
-    ledgerSaveChronicleLine: vi.fn(),
-  },
-}));
-import { api } from "../api/client";
+vi.mock("../api/client", async () =>
+  (await import("../testkit/ledgerMocks")).ledgerApiMock());
+import { api, ApiError } from "../api/client";
+import { EMPTY_LEDGER, installLedgerMocks, renderLedger } from "../testkit/ledgerHarness";
 
 const scene = (id: string, title: string, date = "") => ({ id, title, date });
 
-const EMPTY = {
-  plot: [], commitments: [], facts: [], retired: [], relationships: [], chronicle: [],
-  stale_after_days: 30,
-};
+const EMPTY = EMPTY_LEDGER;
 
 /** Aging (#103) as the route returns it: computed at read time, never stored. */
 const ok = { state: "ok", days_since: 2, days_over: null, due_in: null };
@@ -57,20 +38,7 @@ const CHAIN = {
   ],
 };
 
-beforeEach(() => {
-  vi.clearAllMocks();
-  (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
-  (api.campaignLedger as any).mockResolvedValue(EMPTY);
-  (api.campaignChanges as any).mockResolvedValue([]);
-  (api.campaignRelationshipHistory as any).mockResolvedValue([]);
-  for (const k of ["ledgerCreateThread", "ledgerSaveThread", "ledgerDeleteThread",
-                   "ledgerCreateCommitment", "ledgerSaveCommitment", "ledgerDeleteCommitment",
-                   "ledgerRecordFact", "ledgerSaveFact", "ledgerRetireFact", "ledgerDeleteFact",
-                   "ledgerSaveRelationship", "ledgerDeleteRelationship",
-                   "ledgerSaveChronicleLine"]) {
-    (api as any)[k].mockResolvedValue({ ok: true, id: "new" });
-  }
-});
+beforeEach(() => { installLedgerMocks(); });
 
 /** The relationship timeline (#63) as the route returns it: newest first, with
  *  the standing each delta replaced. */
@@ -92,23 +60,8 @@ const STANDINGS = [
     scene: scene("004", "The Priory Door") },
 ];
 
-function renderLedger(entry = "/campaigns/run/ledger") {
-  return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <PaletteProvider>
-        <Hotkey />
-        <CommandPalette />
-        <Routes>
-          <Route path="/campaigns/:cid/ledger" element={<LedgerView />} />
-          <Route path="/campaigns/:cid" element={<div>the play view</div>} />
-        </Routes>
-      </PaletteProvider>
-    </MemoryRouter>,
-  );
-}
-function Hotkey() { usePaletteHotkey(); return null; }
 
-const column = () => within(screen.getByRole("complementary"));
+const column = () => within(screen.getByRole("complementary", { name: "Ledger sections" }));
 const rows = () => screen.getAllByRole("row").slice(1);   // minus the header row
 const cells = (row: HTMLElement) => within(row).getAllByRole("cell").map((c) => c.textContent);
 const rowFor = (text: RegExp) =>
@@ -553,7 +506,9 @@ test("a merged commitment names what was merged into it", async () => {
                     aliases: [{ ref: "commitment:mara-s-oath", title: "Mara's oath",
                                 status: "open" }] }],
   });
-  const note = await screen.findByText(/Merged: Mara's oath/);
+  // The merge note is a link now (to Reviewed links / merges), so the query
+  // finds the link and the whole note line is its container.
+  const note = (await screen.findByText(/Merged: Mara's oath/)).closest(".ledger-note")!;
   // aging · Merged · KIND · beat: the badge still leads, and the merge note
   // sits before the record's own parts.
   expect(note.textContent).toBe(
@@ -644,7 +599,7 @@ const BONDS = {
 async function at(section: RegExp, data: unknown) {
   (api.campaignLedger as any).mockResolvedValue(data);
   renderLedger();
-  await screen.findByRole("complementary");
+  await screen.findByRole("complementary", { name: "Ledger sections" });
   fireEvent.click(column().getByRole("button", { name: section }));
   await screen.findByRole("table");
 }
@@ -877,4 +832,137 @@ test("only one row editor is open at a time", async () => {
   await openEditor(factRow("f4"));
   await openEditor(factRow("f9"));
   expect(screen.getAllByRole("button", { name: "Save" })).toHaveLength(1);
+});
+
+// ------------------------------------------------ addresses (§12.1)
+//
+// The section and the row a reader is looking at are in the path, so a Todo
+// item, a Story Graph link or a closure applied from review can open the
+// ledger on exactly that row.
+
+/** Where the router says the page is. */
+const here = () => screen.getByTestId("here").textContent;
+
+let scrolled: Element[] = [];
+let scroll = vi.fn();
+beforeEach(() => {
+  scrolled = [];
+  // jsdom has no layout, and so no `scrollIntoView`; the view calls it
+  // optionally, and this records which row it was asked of.
+  scroll = vi.fn(function (this: Element) { scrolled.push(this); });
+  Element.prototype.scrollIntoView = scroll;
+});
+
+const highlighted = () => document.querySelectorAll("tr.highlighted");
+
+test("a section address opens that section", async () => {
+  (api.campaignLedger as any).mockResolvedValue(OWED);
+  renderLedger("/campaigns/run/ledger/commitments");
+  expect(await screen.findByRole("heading", { level: 1, name: "Commitments" }))
+    .toBeInTheDocument();
+  expect(await screen.findByText("Pay the Reeve")).toBeInTheDocument();
+});
+
+test("clicking a section changes the address", async () => {
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: /threads/i }));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/ledger/threads"));
+  // Standing facts is the bare ledger, not `/ledger/facts` (Decision 22).
+  fireEvent.click(column().getByRole("button", { name: /standing facts/i }));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/ledger"));
+});
+
+test("a row address highlights that row without opening its editor", async () => {
+  (api.campaignLedger as any).mockResolvedValue(THREADS);
+  renderLedger("/campaigns/run/ledger/threads/warehouse");
+  const row = await waitFor(() => rowFor(/Who fired the warehouse/));
+  await waitFor(() => expect(row).toHaveClass("highlighted"));
+  expect(row).toHaveAttribute("data-row-key", "warehouse");
+  expect(highlighted()).toHaveLength(1);
+  expect(scrolled).toEqual([row]);
+  expect(scroll).toHaveBeenCalledWith({ block: "center" });
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  expect(within(row).getByRole("button", { name: /^Edit / }))
+    .toHaveAttribute("aria-expanded", "false");
+});
+
+test("a row address with a slash in its id highlights that row", async () => {
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY,
+    plot: [{ ...THREADS.plot[0], id: "mara/map", title: "Mara's map" },
+           { ...THREADS.plot[0], id: "act:2", title: "The coronation" }],
+  });
+  renderLedger("/campaigns/run/ledger/threads/mara%2Fmap");
+  const row = await waitFor(() => rowFor(/Mara's map/));
+  await waitFor(() => expect(row).toHaveClass("highlighted"));
+  expect(rowFor(/The coronation/)).not.toHaveClass("highlighted");
+});
+
+test("an alias source's address highlights its canonical row", async () => {
+  (api.campaignLedger as any).mockResolvedValue({ ...EMPTY, plot: [MERGED_THREAD] });
+  renderLedger("/campaigns/run/ledger/threads/mara-s-map");
+  const row = await waitFor(() => rowFor(/Winifred's chart/));
+  await waitFor(() => expect(row).toHaveClass("highlighted"));
+});
+
+test("a row address to a closed thread shows and highlights it", async () => {
+  (api.campaignLedger as any).mockResolvedValue(THREADS);
+  renderLedger("/campaigns/run/ledger/threads/settled");
+  // Not on the first table: it is filtered out until the address reveals it.
+  await waitFor(() => expect(rowFor(/The debt, settled/)).toHaveClass("highlighted"));
+  expect(scrolled).toEqual([rowFor(/The debt, settled/)]);
+  expect(column().getByRole("checkbox", { name: /show retired and completed/i })).toBeChecked();
+  // Once, not for ever: the reader may turn it back off.
+  fireEvent.click(column().getByRole("checkbox", { name: /show retired and completed/i }));
+  await waitFor(() => expect(screen.queryByText("The debt, settled")).toBeNull());
+});
+
+test("re-renders do not re-scroll", async () => {
+  let release: (v: unknown) => void = () => {};
+  (api.ledgerSaveThread as any).mockReturnValue(new Promise((r) => { release = r; }));
+  // A new object per read, as the wire gives: the re-read must rebuild the
+  // table, or this would prove nothing about the effect that scrolls.
+  (api.campaignLedger as any).mockImplementation(() => Promise.resolve(structuredClone(THREADS)));
+  renderLedger("/campaigns/run/ledger/threads/warehouse");
+  const row = await waitFor(() => rowFor(/Who fired the warehouse/));
+  await waitFor(() => expect(row).toHaveClass("highlighted"));
+  // A busy toggle, then an epoch re-read of the whole ledger: neither is a new
+  // address, so neither may pull the page back to the row.
+  fireEvent.click(within(row).getByRole("button", { name: "Close" }));
+  await waitFor(() => expect(within(rowFor(/Who fired the warehouse/))
+    .getByRole("button", { name: "Close" })).toBeDisabled());
+  await act(async () => { release({ ok: true }); });
+  await waitFor(() => expect(api.campaignLedger).toHaveBeenCalledTimes(2));
+  expect(scroll).toHaveBeenCalledTimes(1);
+});
+
+test("an unknown section redirects to the facts", async () => {
+  (api.campaignLedger as any).mockResolvedValue(CHAIN);
+  renderLedger("/campaigns/run/ledger/nonsense");
+  await waitFor(() => expect(here()).toBe("/campaigns/run/ledger"));
+  expect(await screen.findByRole("heading", { level: 1, name: "Standing facts" }))
+    .toBeInTheDocument();
+});
+
+test("the Merged note links to Reviewed links / merges", async () => {
+  await at(/Threads/, { ...EMPTY, plot: [MERGED_THREAD] });
+  const link = await screen.findByRole("link", { name: "Merged: Mara's map" });
+  expect(link).toHaveAttribute("href", "/campaigns/run/ledger/continuity/reviewed");
+});
+
+test("a delete refused for merged records offers Delete anyway", async () => {
+  (api.ledgerDeleteThread as any).mockRejectedValueOnce(new ApiError(
+    409, "thread:warehouse has merged records", "has_merged_records",
+    { kind: "has_merged_records", detail: "thread:warehouse has merged records" }));
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  expect(await screen.findByText(
+    "This record has merged records: unmerge them first, or delete anyway"))
+    .toBeInTheDocument();
+  expect(api.ledgerDeleteThread).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Delete anyway" }));
+  await waitFor(() => expect(api.ledgerDeleteThread).toHaveBeenCalledTimes(2));
+  expect((api.ledgerDeleteThread as any).mock.calls[1]).toEqual(["run", "warehouse", true]);
 });

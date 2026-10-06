@@ -69,6 +69,16 @@ test("a campaign child lights its own row and not Overview", () => {
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/scenes/s1")).toEqual(["scenes"]);
 });
 
+test("a deep Ledger address still lights the Ledger row", () => {
+  // A regression pin rather than new behaviour: the Ledger's sections, groups
+  // and findings are addressable now (§12.1), and the rail's prefix test
+  // already accepts anything under `/ledger/`.
+  expect(activeIn(CAMPAIGN_ROWS,
+    "/campaigns/c1/ledger/continuity/overlaps/possible_duplicate-0123456789abcdef"))
+    .toEqual(["ledger"]);
+  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/ledger/threads/mara%2Fmap")).toEqual(["ledger"]);
+});
+
 test("rows whose pages do not exist yet go nowhere", () => {
   // Not a wish-list: this is what keeps the rail from offering a destination
   // that is not there. Each id gets a route in its own slice.

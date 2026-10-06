@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   api, type Config, type ConfigUpdate, type LLMConnection, type PromptLayoutSection,
   type SceneContext,
@@ -288,7 +288,16 @@ export default function ConfigView() {
   const [config, setConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [connections, setConnections] = useState<LLMConnection[]>([]);
-  const [section, setSection] = useState<SectionId>("storage");
+  // `?section=` opens one section from a link elsewhere -- Todo's embeddings
+  // chore lands on Embeddings. Anything that is not a section id is ignored
+  // and the page opens where it always has.
+  const asked = useSearchParams()[0].get("section");
+  const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? null;
+  const [section, setSection] = useState<SectionId>(askedSection ?? "storage");
+  // ...and a changed query is followed while the page stays mounted. Keyed on
+  // the asked id, so the reader's own clicks in the column are not undone by a
+  // re-render carrying the same query.
+  useEffect(() => { if (askedSection) setSection(askedSection); }, [askedSection]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);

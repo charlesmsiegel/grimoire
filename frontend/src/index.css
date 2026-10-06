@@ -3631,6 +3631,12 @@ a.column-back { text-decoration: none; }
 .ledger-table tr.retired td { opacity: 0.55; }
 .ledger-table tr.retired .ledger-what { text-decoration: line-through; }
 .ledger-table tr.complete .ledger-what { color: var(--muted); }
+/* The row an address named (§12.1): a Todo item, a Story Graph link or a
+   closure applied from review lands here. The column's active-row treatment
+   (a raised surface and an accent edge), so "this one" reads the same way
+   in both places, and the row keeps its place in the table's rhythm. */
+.ledger-table tr.highlighted td { background: var(--surface); }
+.ledger-table tr.highlighted td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
 .ledger-status {
   display: inline-block; margin-top: 5px; padding: 2px 6px;
   border: 1px solid var(--subtle); border-radius: 3px;

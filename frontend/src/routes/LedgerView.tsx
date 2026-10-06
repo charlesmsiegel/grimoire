@@ -1,11 +1,14 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Link, useParams } from "react-router-dom";
+import {
+  Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode,
+} from "react";
+import { Link, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
 import { agingLabel } from "../aging";
 import { errorText } from "../api/errors";
 import {
-  api, type Ledger, type PlotThread, type RecordChange, type RelationshipChange,
+  api, ApiError, type Ledger, type PlotThread, type RecordChange, type RelationshipChange,
   type RetiredFact, type StandingFact,
 } from "../api/client";
+import { ledgerHref, parseLedgerTail } from "../ledgerPaths";
 import { LedgerRowEditor, type Draft } from "../components/ledger/LedgerRowEditor";
 import {
   blankSpec, chronicleSpec, commitmentSpec, factSpec, relationshipSpec, threadSpec,
@@ -176,12 +179,25 @@ function joinNote(...parts: string[]): string {
 
 /** The merge note (capstone §12.5): what was folded into this row, which is
  *  otherwise invisible now that a merged-away record is not a row of its own.
- *  Plain text; linking it to where the merge was reviewed is a later slice's. */
-function merged(x: PlotThread): string {
-  return x.aliases?.length ? `Merged: ${x.aliases.map((a) => a.title).join(", ")}` : "";
+ *  A link to where merges are reviewed -- and undone -- in the continuity
+ *  review's Reviewed links / merges group. */
+function merged(cid: string, x: PlotThread): ReactNode {
+  if (!x.aliases?.length) return null;
+  return (
+    <Link to={ledgerHref(cid, { section: "continuity", group: "reviewed" })}>
+      {`Merged: ${x.aliases.map((a) => a.title).join(", ")}`}
+    </Link>
+  );
 }
 
-function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
+/** `joinNote` with the merge link between the lead and the rest, reading as
+ *  the same one line ("aging · Merged: … · beat") it was as plain text. */
+function noteWith(lead: string, link: ReactNode, rest: string): ReactNode {
+  if (!link) return joinNote(lead, rest);
+  return <>{lead && `${lead} · `}{link}{rest && ` · ${rest}`}</>;
+}
+
+function rowsFor(cid: string, section: SectionKey, ledger: Ledger, changes: RecordChange[],
                  standings: RelationshipChange[], showRetired: boolean): Row[] {
   if (section === "facts") return factRows(ledger, showRetired);
   // The aging badge (#103) leads the note on both sections: "overdue by 12
@@ -196,7 +212,7 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       key: t.id, mark: "▸", what: t.title, edit: threadSpec(t),
       status: t.status.toLowerCase() === "closed" ? "Closed" : undefined,
       complete: t.status.toLowerCase() === "closed",
-      note: joinNote(agingLabel(t.aging), merged(t), t.latest_beat),
+      note: noteWith(agingLabel(t.aging), merged(cid, t), t.latest_beat),
       // No `alert` here: a thread has no deadline, so it can only ever be
       // stale, and colouring a row for a state it cannot reach would imply the
       // section has an urgency it does not.
@@ -211,7 +227,8 @@ function rowsFor(section: SectionKey, ledger: Ledger, changes: RecordChange[],
       complete: ["fulfilled", "broken", "expired"].includes(c.status.toLowerCase()),
       alert: c.kind === "threat" || c.aging?.state === "overdue",
       what: c.title, edit: commitmentSpec(c),
-      note: joinNote(agingLabel(c.aging), merged(c), c.kind.toUpperCase(), c.latest_beat),
+      note: noteWith(agingLabel(c.aging), merged(cid, c),
+                     joinNote(c.kind.toUpperCase(), c.latest_beat)),
       asOf: c.due || "NO DEADLINE", scene: c.scene.title,
     }));
   if (section === "relationships")
@@ -291,9 +308,29 @@ const NOTHING: Record<SectionKey, string> = {
   timeline: "No scenes absorbed yet. The chronicle fills in as you end scenes.",
 };
 
+/** What the main pane is headed with while the continuity review is open.
+ *  The review itself is its own component; this page only routes to it. */
+const CONTINUITY_HEAD = {
+  label: "Continuity review", eyebrow: "POSSIBLE OVERLAPS AND CLOSURES",
+  columns: ["", "", "", ""] as [string, string, string, string],
+};
+
+/** The refusal a delete gets for a record others were merged into (§5.7). */
+const MERGED_DELETE = "This record has merged records: unmerge them first, or delete anyway";
+
 export default function LedgerView() {
   const { cid = "" } = useParams();
-  const [section, setSection] = useState<SectionKey>("facts");
+  const location = useLocation();
+  const navigate = useNavigate();
+  // The section and row are the address (§12.1), read off the RAW pathname:
+  // `useParams()["*"]` is decoded, and a row id holding a `/` is exactly what
+  // that loses. Segments: campaigns / <cid> / ledger / ...the tail.
+  const target = parseLedgerTail(
+    location.pathname.split("/").filter(Boolean).slice(3).join("/"));
+  const section = target?.section ?? "facts";
+  /** The ledger table on screen, or null while the continuity review is. */
+  const tableSection: SectionKey | null = section === "continuity" ? null : section;
+  const addressedRow = target && target.section !== "continuity" ? target.row ?? null : null;
   const [showRetired, setShowRetired] = useState(false);
   const [name, setName] = useState("");
   // Held with the campaign the rows came FROM, the way the panel this replaced
@@ -320,8 +357,10 @@ export default function LedgerView() {
   const [busy, setBusy] = useState(false);
   /** A refusal from the server, shown inside the editor it belongs to — a 409
    *  on a fact somebody else already retired is about that row, and at the top
-   *  of the page it would be about nothing in particular. */
-  const [writeError, setWriteError] = useState<string | null>(null);
+   *  of the page it would be about nothing in particular. `action` is the one
+   *  way forward a refusal can offer (Delete anyway). */
+  const [writeError, setWriteError] =
+    useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
   /** Bumped after every hand edit so the ledger, the change log and the
    *  relationship timeline are all re-read: one edit can move rows in three of
    *  them at once (a retired fact leaves `facts` and joins `retired`, and every
@@ -403,7 +442,8 @@ export default function LedgerView() {
    *  absorb wrote. A hand edit does not belong in it, because that log is
    *  about what the pass extracted.
    */
-  async function run(write: () => Promise<unknown>, thenClose = true) {
+  async function run(write: () => Promise<unknown>, thenClose = true,
+                     refused?: (err: unknown) => { label: string; run: () => void } | null) {
     // Single-flight: `busy` disables every control, but a keyboard submit that
     // beat the re-render would otherwise start a second write.
     if (busy) return;
@@ -414,7 +454,8 @@ export default function LedgerView() {
       if (thenClose) { setOpenRow(null); setCreating(null); }
       setEpoch((n) => n + 1);
     } catch (err: unknown) {
-      setWriteError(errorText(err));
+      const action = refused?.(err) ?? null;
+      setWriteError(action ? { text: MERGED_DELETE, action } : { text: errorText(err) });
     } finally {
       setBusy(false);
     }
@@ -489,14 +530,19 @@ export default function LedgerView() {
     });
   }
 
-  function remove(spec: EditSpec) {
+  /** Delete a record. A thread or commitment that others were merged into is
+   *  refused (`has_merged_records`): deleting it un-merges them, which the
+   *  reader should choose rather than stumble into, so the refusal offers
+   *  Delete anyway -- the same delete, forced (§5.7). */
+  function remove(spec: EditSpec, force = false) {
     void run(() => {
-      if (spec.kind === "thread") return api.ledgerDeleteThread(cid, spec.id);
-      if (spec.kind === "commitment") return api.ledgerDeleteCommitment(cid, spec.id);
+      if (spec.kind === "thread") return api.ledgerDeleteThread(cid, spec.id, force);
+      if (spec.kind === "commitment") return api.ledgerDeleteCommitment(cid, spec.id, force);
       if (spec.kind === "fact") return api.ledgerDeleteFact(cid, spec.id);
       return api.ledgerDeleteRelationship(cid, spec.pair?.a ?? "", spec.pair?.b ?? "",
                                           spec.kind === "bond");
-    });
+    }, true, (err) => (!force && err instanceof ApiError && err.kind === "has_merged_records"
+      ? { label: "Delete anyway", run: () => remove(spec, true) } : null));
   }
 
   /** The one-click ending for a kind of record: close a thread, mark a
@@ -520,10 +566,10 @@ export default function LedgerView() {
   const counts = useMemo(() => {
     if (!ledger) return null;
     const rows = (k: SectionKey) =>
-      rowsFor(k, ledger, changeRows ?? [], standingRows ?? [], showRetired).length;
+      rowsFor(cid, k, ledger, changeRows ?? [], standingRows ?? [], showRetired).length;
     return Object.fromEntries(SECTIONS.map((s) => [s.key, rows(s.key)])) as
       Record<SectionKey, number>;
-  }, [ledger, changeRows, standingRows, showRetired]);
+  }, [cid, ledger, changeRows, standingRows, showRetired]);
 
   /** What this page contributes to ⌘K: its seven sections, so "commitments" is
    *  a thing you can type from anywhere rather than a row you have to be here
@@ -532,16 +578,64 @@ export default function LedgerView() {
     SECTIONS.map((s) => ({
       id: `ledger:${s.key}`, group: "IN THIS CAMPAIGN", label: s.label,
       meta: `ledger · ${counts ? counts[s.key] : "…"}`,
-      run: () => setSection(s.key),
-    })), [counts]);
+      run: () => navigate(ledgerHref(cid, { section: s.key })),
+    })), [cid, counts, navigate]);
   usePaletteSource(paletteSource);
 
-  const current = SECTIONS.find((s) => s.key === section) ?? SECTIONS[0];
+  const current = tableSection
+    ? (SECTIONS.find((s) => s.key === tableSection) ?? SECTIONS[0]) : CONTINUITY_HEAD;
   // The two logs get no actions column at all rather than an empty one: a
   // column of blanks reads as a feature that failed to load.
-  const editable = section !== "standings" && section !== "changes";
-  const rows = ledger
-    ? rowsFor(section, ledger, changeRows ?? [], standingRows ?? [], showRetired) : [];
+  const editable = tableSection !== "standings" && tableSection !== "changes";
+  // Memoized, because the highlight below compares against it: rebuilt on
+  // every render, a busy toggle would look like a new table.
+  const rows = useMemo(() => (ledger && tableSection
+    ? rowsFor(cid, tableSection, ledger, changeRows ?? [], standingRows ?? [], showRetired)
+    : []), [cid, ledger, changeRows, standingRows, showRetired, tableSection]);
+
+  /** The row the address names, as the key it renders under. A thread or
+   *  commitment merged away is not a row of its own, so its address lands on
+   *  the canonical that names it in `aliases` (Decision 22). */
+  const rowKey = useMemo(() => {
+    if (!addressedRow || !ledger) return null;
+    if (tableSection !== "threads" && tableSection !== "commitments") return addressedRow;
+    const records: PlotThread[] = tableSection === "threads" ? ledger.plot : ledger.commitments;
+    if (records.some((x) => x.id === addressedRow)) return addressedRow;
+    const ref = `${tableSection === "threads" ? "thread" : "commitment"}:${addressedRow}`;
+    return records.find((x) => x.aliases?.some((a) => a.ref === ref))?.id ?? addressedRow;
+  }, [addressedRow, ledger, tableSection]);
+  const address = tableSection && addressedRow ? `${tableSection}/${addressedRow}` : null;
+
+  // An addressed row that exists but is filtered out -- a closed thread, a
+  // fulfilled commitment, a fact retired outright -- turns SHOW RETIRED on,
+  // once per address: a closure applied from review, or a link from the story
+  // graph, still lands on its row, and the reader can turn the toggle back off.
+  const revealedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!address || !rowKey || !ledger || !tableSection || revealedFor.current === address) return;
+    if (rows.some((r) => r.key === rowKey)) { revealedFor.current = address; return; }
+    const all = rowsFor(cid, tableSection, ledger, changeRows ?? [], standingRows ?? [], true);
+    if (all.some((r) => r.key === rowKey)) {
+      revealedFor.current = address;
+      setShowRetired(true);
+    }
+  }, [address, cid, rowKey, ledger, tableSection, rows, changeRows, standingRows]);
+
+  // Scrolled to ONCE per address. A re-render -- a busy toggle, an epoch
+  // re-read after a write -- is not the reader asking again, and pulling the
+  // page back to the row each time would fight whatever they scrolled to.
+  const tableRef = useRef<HTMLTableElement>(null);
+  const scrolledFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!address) { scrolledFor.current = null; return; }
+    if (scrolledFor.current === address || !rowKey) return;
+    const tr = [...(tableRef.current?.querySelectorAll("tr[data-row-key]") ?? [])]
+      .find((el) => el.getAttribute("data-row-key") === rowKey);
+    if (!tr) return;
+    scrolledFor.current = address;
+    // Optional: jsdom, and any engine without layout, has no scrollIntoView.
+    (tr as Partial<Pick<Element, "scrollIntoView">>).scrollIntoView?.({ block: "center" });
+  }, [address, rowKey, rows]);
 
   const column = (
     <>
@@ -554,7 +648,7 @@ export default function LedgerView() {
         {SECTIONS.map((s) => (
           <button key={s.key}
                   className={"column-row" + (section === s.key ? " active" : "")}
-                  onClick={() => setSection(s.key)}>
+                  onClick={() => navigate(ledgerHref(cid, { section: s.key }))}>
             <span className="column-row-label">{s.label}</span>
             {/* Undefined is "still reading" — a dash says so, where a 0 would
                 claim the section is empty. */}
@@ -568,7 +662,7 @@ export default function LedgerView() {
   // Narrowing the timeline is a read, not a view filter, so it belongs beside
   // the section rather than inside the table: the options are the pairs the
   // ledger currently carries, which is the only list of them the client has.
-  const footer = section === "standings" ? (
+  const footer = !tableSection ? undefined : tableSection === "standings" ? (
     <label className="ledger-toggle">
       <span>Pair</span>
       <select className="ledger-pair" value={pairId}
@@ -590,6 +684,10 @@ export default function LedgerView() {
     </label>
   );
 
+  // After every hook: an address naming no section or group is replaced with
+  // the bare ledger rather than rendered as an empty screen.
+  if (!target) return <Navigate replace to={ledgerHref(cid, { section: "facts" })} />;
+
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
@@ -601,31 +699,32 @@ export default function LedgerView() {
           {/* Only the four sections that hold records somebody can write. The
               timeline's rows belong to scenes, and the two logs record what
               happened — there is nothing to add to either by hand. */}
-          {NEW_IN[section] && (
+          {tableSection && NEW_IN[tableSection] && (
             <button className="subtle" type="button" disabled={busy || !!creating}
                     onClick={() => {
                       setOpenRow(null);
                       setWriteError(null);
-                      setCreating(blankSpec(NEW_IN[section]!));
+                      setCreating(blankSpec(NEW_IN[tableSection]!));
                     }}>
-              + New {NEW_LABEL[section]}
+              + New {NEW_LABEL[tableSection]}
             </button>
           )}
         </div>
 
         {creating && (
           <div className="ledger-create">
-            <div className="eyebrow">New {NEW_LABEL[section]}</div>
+            <div className="eyebrow">New {tableSection && NEW_LABEL[tableSection]}</div>
             <LedgerRowEditor fields={creating.fields} initial={creating.initial}
-                             busy={busy} error={writeError}
+                             busy={busy} error={writeError?.text}
+                             errorAction={writeError?.action}
                              onSave={(d) => save(creating, d)}
                              onCancel={() => { setCreating(null); setWriteError(null); }} />
           </div>
         )}
 
-        {ledger === null && <p className="column-empty">Reading the ledger…</p>}
+        {tableSection && ledger === null && <p className="column-empty">Reading the ledger…</p>}
 
-        {ledger !== null && rows.length === 0 && (
+        {tableSection && ledger !== null && rows.length === 0 && (
           <p className="empty-state">
             {/* A narrowed timeline with nothing in it is a different sentence
                 from a campaign that has recorded nothing: pointing the reader
@@ -634,7 +733,7 @@ export default function LedgerView() {
               {section === "standings" && pair
                 ? "Nothing has passed between these two yet. Pick Everyone to see "
                   + "the whole timeline."
-                : NOTHING[section]}
+                : NOTHING[tableSection]}
             </span>{" "}
             {!(section === "standings" && pair)
               && <Link to={`/campaigns/${cid}`}>Back to play →</Link>}
@@ -643,7 +742,7 @@ export default function LedgerView() {
 
         {rows.length > 0 && (
           <div className="ledger-table-wrap">
-            <table className="ledger-table">
+            <table className="ledger-table" ref={tableRef}>
               <colgroup>
                 <col className="ledger-col-id" />
                 <col />
@@ -653,11 +752,11 @@ export default function LedgerView() {
               </colgroup>
               <thead>
                 <tr>
-                  {current.columns.map((c, i) => (
+                  {current.columns.map((c) => (
                     // The mark column's heading is empty for six of the seven
                     // sections, and an empty <th> is a column with no name for
                     // a screen reader rather than one it can skip.
-                    <th key={i} scope="col">{c || <span className="sr-only">Row</span>}</th>
+                    <th key={c || "mark"} scope="col">{c || <span className="sr-only">Row</span>}</th>
                   ))}
                   {editable && <th scope="col"><span className="sr-only">Actions</span></th>}
                 </tr>
@@ -668,7 +767,9 @@ export default function LedgerView() {
                   const open = !!r.edit && openRow === key;
                   return (
                     <Fragment key={r.key}>
-                      <tr className={(r.retired ? "retired" : "") + (r.complete ? " complete" : "") + (open ? " editing" : "")}>
+                      <tr data-row-key={r.key}
+                          className={(r.retired ? "retired" : "") + (r.complete ? " complete" : "")
+                            + (open ? " editing" : "") + (r.key === rowKey ? " highlighted" : "")}>
                         <td className={"ledger-mark" + (r.alert ? " alert" : "")}>{r.mark}</td>
                         <td>
                           <div className="ledger-what">{r.what}</div>
@@ -716,7 +817,8 @@ export default function LedgerView() {
                           <td colSpan={5}>
                             <LedgerRowEditor
                               fields={r.edit.fields} initial={r.edit.initial}
-                              busy={busy} error={writeError}
+                              busy={busy} error={writeError?.text}
+                              errorAction={writeError?.action}
                               onSave={(d) => save(r.edit!, d)}
                               onCancel={() => { setOpenRow(null); setWriteError(null); }}
                               onDelete={r.edit.deletable ? () => remove(r.edit!) : undefined} />

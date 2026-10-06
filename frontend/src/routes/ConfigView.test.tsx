@@ -1,5 +1,5 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { Link, MemoryRouter } from "react-router-dom";
 import ConfigView from "./ConfigView";
 import { EMBEDDINGS_COPY } from "./embeddingsOn";
 
@@ -933,4 +933,39 @@ describe("sending post images (#377)", () => {
     expect(screen.queryByText(/not known to read images/i)).toBeNull();
     expect(screen.queryByText(/cannot read images/i)).toBeNull();
   });
+});
+
+// ---- ?section= (a link from elsewhere can open one section) ----------------
+//
+// The embeddings chore on Todo links to `/config?section=semantic`: "Semantic
+// matching is not configured" is only useful if it lands where it is fixed.
+
+function renderAt(entry: string) {
+  render(
+    <MemoryRouter initialEntries={[entry]}>
+      <ConfigView />
+      <Link to="/config?section=semantic">to embeddings</Link>
+    </MemoryRouter>,
+  );
+}
+
+test("?section=semantic opens Embeddings", async () => {
+  renderAt("/config?section=semantic");
+  expect(await screen.findByRole("heading", { level: 1, name: "Embeddings" }))
+    .toBeInTheDocument();
+  expect(await screen.findByText(EMBEDDINGS_COPY)).toBeInTheDocument();
+});
+
+test("an unknown section falls back to Storage", async () => {
+  renderAt("/config?section=nonsense");
+  expect(await screen.findByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
+  expect(await screen.findByLabelText(/storage location/i)).toBeInTheDocument();
+});
+
+test("a changed query follows", async () => {
+  renderAt("/config");
+  expect(await screen.findByRole("heading", { level: 1, name: "Storage" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("link", { name: "to embeddings" }));
+  expect(await screen.findByRole("heading", { level: 1, name: "Embeddings" }))
+    .toBeInTheDocument();
 });
