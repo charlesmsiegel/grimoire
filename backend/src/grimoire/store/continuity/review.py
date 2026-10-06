@@ -196,10 +196,16 @@ def _journal_link(cid: str, lid: str, label: str):
 
 
 def _validated_alias(cid: str, ref: str, to: str, *, replace: bool,
-                     accept_status_change: bool):
+                     accept_status_change: bool, replace_broken: bool = False):
     """Every refusal a merge makes, before anything is written. Returns what
     the write then needs: the ledgers, the live view before it, both standings
-    and the canonical the merge joins."""
+    and the canonical the merge joins.
+
+    `replace_broken` lets a merge replace a stored alias that does not resolve
+    (a dangling, wrong-type or cyclic hop): §26 leaves such a source its own
+    effective record, so the review offers it as one, and "already merged
+    elsewhere" would contradict the page. It is decided here, under the lock
+    the write holds, so an alias that came back to life is still refused."""
     sp, _ = _split(ref)
     tp, _ = _split(to)
     if ref == to:
@@ -216,7 +222,8 @@ def _validated_alias(cid: str, ref: str, to: str, *, replace: bool,
         raise RefusedError(409, "alias_cycle",
                       f"{reader_name(cid, to, start=True)} is already merged into "
                       f"{reader_name(cid, ref)}")
-    if ref in aliases and not replace:
+    if (ref in aliases and not replace
+            and not (replace_broken and ref not in effective.live_canon(cid, ledgers))):
         current = aliases[ref].get("to") if isinstance(aliases[ref], dict) else ""
         raise RefusedError(409, "alias_exists",
                       f"{reader_name(cid, ref, start=True)} is already merged elsewhere",
@@ -235,23 +242,26 @@ def _validated_alias(cid: str, ref: str, to: str, *, replace: bool,
 
 
 def validate_alias(cid: str, ref: str, to: str, *, replace: bool = False,
-                   accept_status_change: bool = False) -> dict:
+                   accept_status_change: bool = False,
+                   replace_broken: bool = False) -> dict:
     """Every refusal `create_alias` would make for merging `ref` into `to`,
     writing nothing. Answers ``{"source": standing, "canonical": {ref,
     **standing}}`` -- a standing is ``{status, kind, due}`` -- which is what an
     apply validates the due copy against before its first write (§22 step 6)."""
     with locks.campaign_lock(cid):
         return _validated_alias(cid, ref, to, replace=replace,
-                                accept_status_change=accept_status_change)[1]
+                                accept_status_change=accept_status_change,
+                                replace_broken=replace_broken)[1]
 
 
 def create_alias(cid: str, ref: str, to: str, *, replace: bool = False,
                  accept_status_change: bool = False, note: str = "",
-                 source: str = "manual") -> dict:
+                 source: str = "manual", replace_broken: bool = False) -> dict:
     """Merge `ref` into `to`: `ref` stops being its own effective record."""
     with locks.campaign_lock(cid):
         before, standings = _validated_alias(cid, ref, to, replace=replace,
-                                             accept_status_change=accept_status_change)
+                                             accept_status_change=accept_status_change,
+                                             replace_broken=replace_broken)
         mine, theirs = standings["source"], standings["canonical"]
         record = {"to": to, "created": paths.now_iso(), "source": source, "note": note}
         with _journal_alias(cid, ref,
@@ -616,7 +626,10 @@ def _plan_alias(cid: str, record: dict, body: dict) -> dict:
         raise RefusedError(400, "bad_canonical", "keep one of this finding's two records")
     source = next(ref for ref in record["refs"] if ref != canonical)
     accept = body.get("accept_status_change", False)
-    standings = validate_alias(cid, source, canonical, accept_status_change=accept)
+    # A source whose stored merge is broken is shown as its own record, so the
+    # review's merge replaces that alias rather than refusing it (§26).
+    standings = validate_alias(cid, source, canonical, accept_status_change=accept,
+                               replace_broken=True)
     plan: dict = {"alias": {"ref": source, "to": canonical, "accept": accept}}
     if body.get("copy_due"):
         due, theirs = standings["source"]["due"], standings["canonical"]

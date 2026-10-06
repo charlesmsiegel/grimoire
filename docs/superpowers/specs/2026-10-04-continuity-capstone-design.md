@@ -345,7 +345,7 @@ API semantics:
 - **Self-alias:** an alias to itself → 400; nothing is stored.
 - **Existence:** both source and target must exist physically at creation → 404 otherwise.
 - **Cycles:** the alias graph must be acyclic. Creating A -> B is rejected (409 `{kind:'alias_cycle'}`) if resolving B eventually reaches A.
-- **Replacing:** if the source is already aliased → 409 `{kind:'alias_exists', to}`, unless the request carries `replace: true`. A replace is one journalled row whose restore is the previous record.
+- **Replacing:** if the source is already aliased → 409 `{kind:'alias_exists', to}`, unless the request carries `replace: true`. A replace is one journalled row whose restore is the previous record. A review's apply carries no `replace`, but it replaces a source's stored alias that does not resolve (dangling, wrong-type or in a cycle): §26 leaves such a source its own effective record, so the review offers it as one, and refusing it as “already merged elsewhere” would contradict the page. A live alias is still refused. The check is made under the lock the write holds (Slice G final review; see §31). Pinned by `test_continuity_review_routes.py::test_applying_a_duplicate_replaces_the_sources_broken_merge` and `test_continuity_apply.py::test_replace_broken_still_refuses_a_live_merge`.
 - **Storage:** `to` is stored as given; existing chains are not flattened. `source` ∈ {`review`, `manual`}.
 - **Response:** lists any other sources that now resolve transitively to the new target, so the reviewer sees the full effect.
 - **Liveness mismatch:** if the source's liveness differs from the canonical's — an open/advanced thread into a closed one, an unresolved commitment into a resolved one, or the reverse — the merge is refused with 409 `{kind:'liveness_mismatch'}`, unless the request carries `accept_status_change: true`. The review UI shows, before apply, the source's status, kind and due that the canonical will override.
@@ -2747,6 +2747,7 @@ Slice G implementation deviations. Each was decided in the Slice G plan (`docs/s
 - **§28.10's cases are each held to a grader check that a counterexample trips**, with `continuity-reconcile.timid` for cases 4, 5 and 7 (Decision 14; §28.10, Appendix B).
 - **§25.4 binds what the capstone adds**; the shell's pre-capstone transcript read stays (Decision 17; §25.4).
 - **A blank `due` is dropped when a row is moved onto an existing commitment** — by an accepted `existing` or by an as-existing alternative — rather than kept because the key was present: on a row that would have opened a record `""` lifts nothing, and carried across it cleared the stored deadline (final code review, not a plan Decision; §10.2).
+- **A review's merge replaces a source's broken alias** — one whose hop does not resolve — in one journalled row whose undo restores it, rather than answering `alias_exists`; a live alias is still refused, and the manual route still needs `replace: true` (final code review, not a plan Decision; §5.1, §26).
 
 Slice G rulings. Every hand-off Slices A–F addressed to Slice G, or deferred, that Slice G does not close, with its reason (Decision 16). A deferred defect remains open for §33's correctness-defect channel; a parked feature — (f3)'s graph node families and (f5)'s wide-canvas virtualization — is parked by §33 and is not a correctness defect.
 
