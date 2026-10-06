@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { GraphNode, ShellPayload, StoryGraph } from "../api/types";
@@ -343,6 +344,41 @@ test("only one graph read across mount, lenses, toggles, arcs and nodes", async 
   expect(api.continuityGraph).toHaveBeenCalledTimes(1);
   // No shell read either: the name comes from what the rail already holds.
   expect(retry).not.toHaveBeenCalled();
+});
+
+test("under StrictMode the rehearsed mount joins the graph read rather than sending another",
+     async () => {
+  // `main.tsx` mounts under StrictMode, so the dev build runs the mount effect
+  // setup / cleanup / setup. The read is `fresh` (never shared), so without the
+  // join the rehearsal was a second uncapped projection the server computed
+  // only for the first answer to be dropped.
+  const strict = () => render(
+    <StrictMode>
+      <ShellPayloadProvider value={{ status: "ready", payload: SHELL, retry, cid: "c1" }}>
+        <MemoryRouter initialEntries={["/campaigns/c1/graph"]}>
+          <Routes>
+            <Route path="/campaigns/:cid/graph" element={<StoryGraphView />} />
+          </Routes>
+        </MemoryRouter>
+      </ShellPayloadProvider>
+    </StrictMode>);
+  const { unmount } = strict();
+  await screen.findByTestId("story-graph-drawing");
+  expect(api.continuityGraph).toHaveBeenCalledTimes(1);
+  for (const name of ["Cast", "Calendar", "Story"]) {
+    fireEvent.click(within(column()).getByRole("button", { name }));
+  }
+  fireEvent.click(within(column()).getByRole("checkbox", { name: "Actors" }));
+  fireEvent.click(nodeButton("event:the-coronation"));
+  await screen.findByTestId("story-graph-drawing");
+  expect(api.continuityGraph).toHaveBeenCalledTimes(1);
+  unmount();
+
+  // Only an in-flight read is joined: a later mount, after that one landed,
+  // reads afresh rather than being handed the answer it already drew.
+  strict();
+  await screen.findByTestId("story-graph-drawing");
+  expect(api.continuityGraph).toHaveBeenCalledTimes(2);
 });
 
 test("?lens= ?arc= ?node= are read from the address; unknown values fall back", async () => {

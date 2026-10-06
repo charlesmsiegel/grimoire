@@ -49,9 +49,27 @@ export default function StoryGraphView() {
   // ---- the read, held with the campaign it answered ----
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const [attempt, setAttempt] = useState(0);
+  // The read this mount has in flight, and what it was asked for. A re-run of
+  // the effect for the same campaign and attempt joins it instead of sending
+  // another -- which only StrictMode's rehearsed mount produces (setup /
+  // cleanup / setup in development), the same join App's config read and the
+  // shell hook make. The read is `fresh`, so the client would not share it:
+  // without this the rehearsal was a second uncapped projection, computed only
+  // for its answer to be dropped. Only an in-flight read is joined -- the entry
+  // goes once it settles -- so a later mount, a Retry or a campaign switch
+  // still reads afresh.
+  const inFlight = useRef<{ key: string; read: Promise<StoryGraph> } | null>(null);
   useEffect(() => {
     let live = true;
-    void api.continuityGraph(cid).then(
+    const key = `${cid}\n${attempt}`;
+    let entry = inFlight.current;
+    if (entry?.key !== key) {
+      const mine = { key, read: api.continuityGraph(cid) };
+      const done = () => { if (inFlight.current === mine) inFlight.current = null; };
+      void mine.read.then(done, done);
+      inFlight.current = entry = mine;
+    }
+    void entry.read.then(
       (graph) => { if (live) setLoaded({ cid, graph }); },
       () => { if (live) setLoaded({ cid, failed: true }); },
     );
