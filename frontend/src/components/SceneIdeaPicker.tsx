@@ -24,6 +24,13 @@ function finishedSuffix(r: { kind: DriverKind; state: "live" | "finished" }): st
   return r.state === "finished" ? ` (${FINISHED_WORDS[r.kind]})` : "";
 }
 
+/** A ref's name on a card or a saved row. A birthday's label is its actor's
+ *  bare name, so the line names the birthday, as the server's `stale_reason`
+ *  does: "after Mara (passed)" would read as a death notice. */
+function refName(r: { kind: DriverKind; label: string }): string {
+  return r.kind === "birthday" ? `${r.label}'s birthday` : r.label;
+}
+
 /** The generated half of the picker (suggestions/picks/nextDate/busy/error/
  *  suggest) and the typed `direction` both live in `NewSceneChooser` now, not
  *  here — this component only renders them. That is what makes **Back**
@@ -275,13 +282,13 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
               provenance, but drops `on` and says what it became. */}
           {i.time_anchor && (
             <span className="field-hint">
-              {`${i.time_anchor.relation} ${i.time_anchor.label}${finishedSuffix(i.time_anchor)}`}
+              {`${i.time_anchor.relation} ${refName(i.time_anchor)}${finishedSuffix(i.time_anchor)}`}
             </span>
           )}
           {(i.drivers ?? [])
             .filter((d) => !(d.action === "anchor" && d.ref === i.time_anchor?.ref)).map((d) => (
             <span className={d.state === "finished" ? "chip" : "chip on"} key={d.ref}>
-              {`${ACTION_LABELS[d.action]}: ${d.label}${finishedSuffix(d)}`}
+              {`${ACTION_LABELS[d.action]}: ${refName(d)}${finishedSuffix(d)}`}
             </span>
           ))}
           {i.stale_reason && <span className="field-hint">{i.stale_reason}</span>}
@@ -395,7 +402,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
                 one is invalid markup that the card would swallow the tap of. */}
             {s.time_anchor && (
               <span className="field-hint">
-                {[s.date_friendly, `${s.time_anchor.relation} ${s.time_anchor.label}`]
+                {[s.date_friendly, `${s.time_anchor.relation} ${refName(s.time_anchor)}`]
                   .filter(Boolean).join(" · ")}
               </span>
             )}
@@ -404,7 +411,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
                 event the card is about) is provenance like the rest. */}
             {(s.drivers ?? [])
               .filter((d) => !(d.action === "anchor" && d.ref === s.time_anchor?.ref)).map((d) => (
-              <span className="chip on" key={d.ref}>{`${ACTION_LABELS[d.action]}: ${d.label}`}</span>
+              <span className="chip on" key={d.ref}>{`${ACTION_LABELS[d.action]}: ${refName(d)}`}</span>
             ))}
             {(s.unmet_must ?? []).map((m) => (
               <span className="chip warn" key={`must:${m.ref}`}>
