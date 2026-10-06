@@ -176,17 +176,20 @@ def test_a_reviewed_empty_description_travels_with_a_promotion_too(pair):
 
 
 def test_a_promotion_cannot_overwrite_a_description_saved_while_it_ran(pair, monkeypatch):
-    """Promotion READS the resolved descriptions and writes them back a few
-    statements later. The sidecar lock serializes each write and does not span
-    that gap, so a save landing inside it was read past and then overwritten
-    with the stale snapshot -- losing text somebody had just written. A
+    """Promotion READS the world's legacy keys and carries them up a few
+    statements later (R5). The sidecar lock serializes each write and does not
+    span that gap, so a save landing inside it was read past and then masked by
+    the stale carried key -- losing text somebody had just written. A
     read-modify-write needs the lock the other writer takes."""
     wroot, camp, cid, vid = pair
-    assets.put_image(wroot, cid, vid, "avatar", b"png", "png")
-    image_descriptions.set_description(wroot, cid, vid, "avatar", "The world's portrait.")
+    # Distinct bytes: one picture is one object with one description. The
+    # portrait's text is a legacy world key, the case a promote carries.
+    assets.put_image(wroot, cid, vid, "avatar", b"png-avatar", "png")
+    image_descriptions.carry_legacy(assets.version_dir(wroot, cid, vid), "avatar",
+                                    "The world's portrait.")
 
     inside, done = threading.Event(), threading.Event()
-    real = overlay.read_descriptions
+    real = image_descriptions.legacy_text_in
 
     def slow_read(*a, **kw):
         out = real(*a, **kw)
@@ -194,7 +197,7 @@ def test_a_promotion_cannot_overwrite_a_description_saved_while_it_ran(pair, mon
         done.wait(5)
         return out
 
-    monkeypatch.setattr(overlay, "read_descriptions", slow_read)
+    monkeypatch.setattr(image_descriptions, "legacy_text_in", slow_read)
     promoting = threading.Thread(target=overlay.promote_image,
                                  args=(camp, cid, vid, "gallery_1"))
     promoting.start()
@@ -215,3 +218,163 @@ def test_a_promotion_cannot_overwrite_a_description_saved_while_it_ran(pair, mon
     assert overlay.read_description(camp, cid, vid, "avatar") == "The campaign's own words."
     # ...and the swap itself still happened: the demoted portrait keeps its own.
     assert overlay.read_description(camp, cid, vid, "gallery_1") == "The world's portrait."
+
+
+# ---- stage 2: a campaign edit of inherited art changes the shared image (D1) --
+
+def _vdir(root, cid, vid):
+    return assets.version_dir(root, cid, vid)
+
+
+def _object_text(root, cid, vid, name):
+    from grimoire.store import image_refs, image_store
+    ref = image_refs.read(_vdir(root, cid, vid), name)
+    return image_store.read(ref.image).raw.get("description")
+
+
+def test_campaign_edit_clears_exactly_the_named_keys(pair):
+    """R2/R3, Review Focus 2: the write lands on the object behind the visible
+    (world) placement and clears the key in the directory edited (campaign A)
+    and in the visible placement's directory (the world). Campaign B's key is
+    nobody's to clear: it keeps masking the shared text until migration."""
+    wroot, camp_a, cid, vid = pair
+    camp_b = campaigns.create_campaign("Winifred's Watch", wroot.name)
+    assets.put_image(wroot, cid, vid, "avatar", b"png-avatar", "png")
+    image_descriptions.carry_legacy(_vdir(wroot, cid, vid), "avatar", "W")
+    a_dir = _vdir(overlay.croot_of(camp_a), cid, vid)
+    b_dir = _vdir(overlay.croot_of(camp_b), cid, vid)
+    image_descriptions.carry_legacy(a_dir, "avatar", "C")
+    image_descriptions.carry_legacy(b_dir, "avatar", "B")
+
+    overlay.set_description(camp_a, cid, vid, "avatar", "New")
+
+    assert _object_text(wroot, cid, vid, "avatar") == "New"
+    assert image_descriptions.read(wroot, cid, vid, "avatar") == "New"
+    assert "avatar" not in image_descriptions.read_raw(_vdir(wroot, cid, vid))
+    assert overlay.read_description(camp_a, cid, vid, "avatar") == "New"
+    assert "avatar" not in image_descriptions.read_raw(a_dir)
+    assert overlay.read_description(camp_b, cid, vid, "avatar") == "B"
+    assert overlay.read_descriptions(camp_b, cid, vid)["avatar"] == "B"
+    assert image_descriptions.read_raw(b_dir)["avatar"] == "B"
+
+
+def test_campaign_legacy_override_masks_until_edited(pair):
+    """R1 from the campaign's side: its own legacy key for an inherited image
+    masks the shared object's text, in the per-image read and the sweep alike,
+    until an edit moves the text onto the object and clears it."""
+    wroot, camp, cid, vid = pair
+    cdir = _vdir(overlay.croot_of(camp), cid, vid)
+    image_descriptions.carry_legacy(cdir, "gallery_1", "C")
+    assert overlay.read_description(camp, cid, vid, "gallery_1") == "C"
+    assert overlay.read_descriptions(camp, cid, vid) == {"gallery_1": "C"}
+    assert image_descriptions.read(wroot, cid, vid, "gallery_1") == "The world's quay."
+
+    overlay.set_description(camp, cid, vid, "gallery_1", "New")
+    assert overlay.read_description(camp, cid, vid, "gallery_1") == "New"
+    assert overlay.read_descriptions(camp, cid, vid) == {"gallery_1": "New"}
+    assert image_descriptions.read(wroot, cid, vid, "gallery_1") == "New"
+    assert "gallery_1" not in image_descriptions.read_raw(cdir)
+
+
+def test_inherited_legacy_world_file_keeps_the_campaign_key(pair):
+    """No resolving world placement, so there is no object to write: the edit
+    is the campaign's legacy key, exactly as before stage 2, and the world's
+    own text stays its own."""
+    wroot, camp, cid, vid = pair
+    wdir = _vdir(wroot, cid, vid)
+    (wdir / "gallery_2.png").write_bytes(b"png-legacy-world")
+    image_descriptions.carry_legacy(wdir, "gallery_2", "The world's own words.")
+
+    overlay.set_description(camp, cid, vid, "gallery_2", "New")
+
+    cdir = _vdir(overlay.croot_of(camp), cid, vid)
+    assert image_descriptions.read_raw(cdir)["gallery_2"] == "New"
+    assert overlay.read_description(camp, cid, vid, "gallery_2") == "New"
+    assert image_descriptions.read_raw(wdir)["gallery_2"] == "The world's own words."
+    assert image_descriptions.read(wroot, cid, vid, "gallery_2") == "The world's own words."
+
+
+@pytest.mark.parametrize("world_file", ["placement", "legacy"])
+def test_promote_carries_a_world_legacy_text_as_a_campaign_key(pair, world_file):
+    """R5: the world's raw key is the one text a promote would otherwise lose
+    (after it, the campaign's slot answers by its own key or the object). It
+    travels as a campaign LEGACY key, and the shared object is not touched."""
+    wroot, camp, cid, vid = pair
+    wdir = _vdir(wroot, cid, vid)
+    if world_file == "legacy":
+        (wdir / "gallery_2.png").write_bytes(b"png-legacy-world")
+        name = "gallery_2"
+    else:
+        name = "gallery_1"          # the fixture's placement, object text set
+    image_descriptions.carry_legacy(wdir, name, "W")
+
+    overlay.promote_image(camp, cid, vid, name)
+
+    cdir = _vdir(overlay.croot_of(camp), cid, vid)
+    assert image_descriptions.read_raw(cdir)["avatar"] == "W"
+    assert overlay.read_description(camp, cid, vid, "avatar") == "W"
+    if world_file == "placement":
+        assert _object_text(wroot, cid, vid, "gallery_1") == "The world's quay."
+    else:
+        assert _object_text(overlay.croot_of(camp), cid, vid, "avatar") is None
+
+
+def test_promote_does_not_carry_object_text(pair):
+    """Text that came from the object is still the object's after the promote
+    (the campaign slot links the same image), so nothing is copied into a
+    campaign key -- a copy would only mask the next edit of the shared text."""
+    _wroot, camp, cid, vid = pair
+    overlay.promote_image(camp, cid, vid, "gallery_1")
+    cdir = _vdir(overlay.croot_of(camp), cid, vid)
+    assert "avatar" not in image_descriptions.read_raw(cdir)
+    assert "gallery_1" not in image_descriptions.read_raw(cdir)
+    assert overlay.read_description(camp, cid, vid, "avatar") == "The world's quay."
+
+
+def _counted(monkeypatch, module, name):
+    calls = []
+    real = getattr(module, name)
+
+    def counted(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(module, name, counted)
+    return calls
+
+
+def test_shadowed_rows_read_the_shared_description(pair, monkeypatch):
+    """A shadowed world copy carries the world's text -- here, the shared
+    object's -- read off the world listing's own ids: no placement is scanned
+    beyond what the listings themselves scan."""
+    from grimoire.store import image_refs
+    _wroot, camp, cid, vid = pair
+    assets.put_image(overlay.croot_of(camp), cid, vid, "gallery_1", b"png-other", "png")
+
+    with monkeypatch.context() as m:
+        m.setattr(image_descriptions, "read_all", lambda *a, **kw: {})
+        m.setattr(image_descriptions, "read_in", lambda *a, **kw: {})
+        baseline = _counted(m, image_refs, "scan")
+        overlay.shadowed_images(camp, cid, vid)
+    scans = _counted(monkeypatch, image_refs, "scan")
+    rows = overlay.shadowed_images(camp, cid, vid)
+    assert [(r["name"], r.get("description")) for r in rows] == [
+        ("gallery_1", "The world's quay.")]
+    assert len(scans) == len(baseline)
+
+
+def test_read_descriptions_scans_only_what_the_listing_scans(pair, monkeypatch):
+    """The per-turn sweep takes its names and ids from the overlay listing it
+    builds, so it reads no placement that listing did not."""
+    from grimoire.store import image_refs
+    _wroot, camp, cid, vid = pair
+    assets.put_image(overlay.croot_of(camp), cid, vid, "gallery_3", b"png-3", "png")
+    image_descriptions.set_description(overlay.croot_of(camp), cid, vid, "gallery_3", "Mine.")
+
+    with monkeypatch.context() as m:
+        listing = _counted(m, image_refs, "scan")
+        overlay.list_images(camp, cid, vid)
+    scans = _counted(monkeypatch, image_refs, "scan")
+    got = overlay.read_descriptions(camp, cid, vid)
+    assert got == {"gallery_1": "The world's quay.", "gallery_3": "Mine."}
+    assert len(scans) == len(listing)

@@ -754,12 +754,16 @@ def put_campaign_library_image_description(cid: str, name: str, body: ImageDescr
     _campaign_root_or_404(cid)
     if any(i["name"] == name and i["inherited"]
            for i in store.campaign_images.list_images(cid)):
-        # Inherited art is described in the WORLD's editor, where describing it
-        # once serves every campaign on that world -- the split the campaign
-        # backlog above already draws. 409 rather than 404: the image is right
-        # there, it is just not this scope's to describe.
-        raise HTTPException(status_code=409,
-                            detail="describe this image in its world")
+        # An inherited image whose world placement resolves is described on
+        # the shared image object (D1, R3): the store writes it. One the world
+        # holds as a LEGACY file has no object to share, so it is still
+        # described in the WORLD's editor -- the split the campaign backlog
+        # above already draws. 409 rather than 404: the image is right there,
+        # it is just not this scope's to describe.
+        wdir = store.campaign_images.world_dir(cid)
+        if wdir is None or store.image_descriptions.object_id_in(wdir, name) is None:
+            raise HTTPException(status_code=409,
+                                detail="describe this image in its world")
     try:
         store.campaign_images.set_description(cid, name, body.description)
     except store.image_descriptions.DescriptionTooLongError as exc:

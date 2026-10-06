@@ -15499,7 +15499,7 @@ def test_an_inherited_description_is_reported_to_the_campaign(client):
     assert row["description"] == "a rocky shore" and row["described"] is True
 
 
-def test_a_campaign_may_not_take_or_describe_a_world_name(client):
+def test_a_campaign_may_not_take_a_world_name_but_describes_the_shared_image(client):
     wid, cid = _world_and_campaign(client)
     client.put(f"/api/worlds/{wid}/images/coastline",
                files={"file": ("c.png", _lib_png(), "image/png")})
@@ -15509,10 +15509,13 @@ def test_a_campaign_may_not_take_or_describe_a_world_name(client):
                    files={"file": ("c.png", _lib_png(), "image/png")})
     assert r.status_code == 409
 
-    # and describing it belongs to the world, where it serves every campaign
+    # Describing it is D1 (R3): the world's placement resolves, so the text
+    # lands on the shared image object and serves every campaign on the world.
+    # (A world LEGACY file still answers 409: test_image_description_routes.)
     r = client.put(f"/api/campaigns/{cid}/images/coastline/description",
                    json={"description": "mine"})
-    assert r.status_code == 409
+    assert r.status_code == 200
+    assert store.world_images.read_descriptions(wid) == {"coastline": "mine"}
 
 
 def test_the_campaign_backlog_leaves_inherited_art_to_the_world(client):

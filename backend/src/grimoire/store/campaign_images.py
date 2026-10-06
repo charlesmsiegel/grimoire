@@ -157,6 +157,22 @@ def _world_image_path(cid: str, name: str) -> Path | None:
         return None
 
 
+def world_dir(cid: str) -> Path | None:
+    """The world library directory this campaign inherits from, or None when
+    it has no world (or the world is gone) -- ``_world_images``' tolerance.
+
+    Public for the campaign route's 409 pre-check (R3), which asks whether an
+    inherited image has a resolving world placement before calling the store.
+    """
+    wid = _world_of(cid)
+    if not wid:
+        return None
+    try:
+        return world_images.images_dir(wid)
+    except worlds_paths.WorldNotFound:
+        return None
+
+
 def _own_images(cid: str) -> list[dict]:
     """Just this campaign's own uploads -- what ``images_dir`` holds."""
     return image_library.listing(images_dir(cid))
@@ -288,35 +304,37 @@ def restore_image(cid: str, name: str) -> None:
 def read_descriptions(cid: str) -> dict[str, str]:
     """What each image this campaign can see depicts.
 
-    A union rather than a merge, and disjoint by construction: an inherited
-    image is described world-side and a campaign's own is described here, so no
-    name can be described twice. (The accidental collision is the one exception,
-    and the campaign's own wins there for the same reason its bytes do.)
+    By `overlay.read_description`'s rule, per name:
+
+    - **the campaign's own image**: R1 in its own directory -- its legacy key,
+      else the text on the object behind its placement. Never the world's: in
+      the accidental collision (a name the world later took too), the
+      campaign's bytes are what is served, and the world's sentence describes a
+      completely different picture. Handed to the narrator's art section as the
+      caption for bytes it does not describe, while `own_undescribed` called the
+      same image undescribed in the same breath.
+    - **an inherited image**: the campaign's own legacy key if it holds a
+      string (it masks the shared text until migration), else R1 in the
+      world's library directory.
+
+    Off the one merged listing and its ids: neither library is listed twice
+    and no placement is read that the listing did not already read.
     """
-    own_rows = _own_images(cid)
-    own_names = {i["name"] for i in own_rows}
-    # The listing's own ids go along: its placements are not read twice.
-    own = image_descriptions.read_in(
-        images_dir(cid), names=own_names,
+    rows = list_images(cid)
+    own_rows = [i for i in rows if not i["inherited"]]
+    inherited_rows = [i for i in rows if i["inherited"]]
+    # Inherited names go in WITHOUT an id: the campaign directory answers
+    # for them by its legacy key only.
+    out = image_descriptions.read_in(
+        images_dir(cid), names={i["name"] for i in rows},
         ids={i["name"]: i["image_id"] for i in own_rows if i.get("image_id")})
-    wid = _world_of(cid)
-    inherited: dict[str, str] = {}
-    if wid:
-        try:
-            inherited = world_images.read_descriptions(wid)
-        except (worlds_paths.WorldNotFound, OSError):
-            inherited = {}
-    # The world's half is filtered by NAME, not merged and overwritten. A
-    # dict update would only let the campaign win where it has actually
-    # written a description -- so an image the campaign owns and has never
-    # described would keep the world's sentence about a completely different
-    # picture, and hand it to the narrator's art section as the caption for
-    # bytes it does not describe. `own_undescribed` would call the same image
-    # undescribed in the same breath.
-    inherited = {n: t for n, t in inherited.items() if n not in own_names}
-    visible = {i["name"] for i in list_images(cid)}
-    return {name: text for name, text in {**inherited, **own}.items()
-            if name in visible}
+    fall = [i for i in inherited_rows if i["name"] not in out]
+    wdir = world_dir(cid) if fall else None
+    if wdir is not None:
+        out.update(image_descriptions.read_in(
+            wdir, names={i["name"] for i in fall},
+            ids={i["name"]: i["image_id"] for i in fall if i.get("image_id")}))
+    return out
 
 
 def own_undescribed(cid: str) -> list[dict]:
@@ -339,10 +357,17 @@ def own_undescribed(cid: str) -> list[dict]:
 
 
 def set_description(cid: str, name: str, text: str) -> None:
-    """Describe one of this campaign's OWN library images, under `campaign_lock`.
+    """Describe one library image this campaign can see, under `campaign_lock`.
 
-    Campaign-owned only: an inherited image is described in the world's editor,
-    which is where describing it once serves every campaign on that world.
+    - **Its own image**: on the object behind its placement, or its legacy key
+      (`image_descriptions.set_in`).
+    - **An inherited image whose world placement resolves** (D1, R3): on that
+      shared image object, so the world and every campaign on it show the edit,
+      and the name's legacy key is cleared in the world's library and in this
+      campaign's, so neither masks it.
+    - **An inherited legacy world file** has no object to share and is refused
+      (`ValueError`): it is still described in the world's editor. The route
+      answers that case 409 before it gets here.
 
     The sidecar is read-modify-written whole, so two unlocked writers describing
     DIFFERENT images lose one of the two sentences -- and what is lost is
@@ -357,8 +382,16 @@ def set_description(cid: str, name: str, text: str) -> None:
     with locks.campaign_lock(cid):
         # Listed inside the lock: computed outside it, the check could pass for
         # an image a concurrent delete had already taken away.
-        image_descriptions.set_in(images_dir(cid), name, text,
-                                  names={i["name"] for i in _own_images(cid)})
+        d = images_dir(cid)
+        rows = list_images(cid)
+        inherited = {i["name"] for i in rows if i["inherited"]}
+        if name in inherited:
+            wdir = world_dir(cid)
+            if wdir is not None and image_descriptions.object_id_in(wdir, name) is not None:
+                image_descriptions.set_in(wdir, name, text, names=inherited, also_clear=d)
+                return
+        image_descriptions.set_in(d, name, text,
+                                  names={i["name"] for i in rows if not i["inherited"]})
 
 
 def delete_image(cid: str, name: str) -> None:
