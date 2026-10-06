@@ -714,6 +714,28 @@ def test_a_delete_whose_cascade_fails_moves_the_token(client, cid, monkeypatch, 
 
 
 @pytest.mark.parametrize("noun", ["thread", "commitment"])
+def test_a_delete_whose_cascade_fails_is_logged_by_id(client, cid, monkeypatch, noun):
+    """The 500 is an `HTTPException`, so nothing upstream logs it: without a row
+    here the error store and the shareable log never hear that a delete left
+    continuity.json half cleaned. Ids only -- the record's title is narrative."""
+    rid, _lid = _seed_linked(client, cid, noun)
+
+    def fail(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(continuity_review_module, "forget_ref", fail)
+    r = client.delete(f"/api/campaigns/{cid}/ledger/{_DELETE_PATH[noun]}/{rid}")
+    assert r.status_code == 500, r.text
+    [row] = store.errors.summary(campaign=cid)["rows"]
+    assert row["level"] == "error" and row["kind"] == "OSError"
+    assert row["campaign"] == cid
+    assert f"{noun}:{rid}" in row["message"]
+    assert "Traceback" in row.get("trace", "")
+    for value in row.values():
+        assert "Mara" not in str(value)
+
+
+@pytest.mark.parametrize("noun", ["thread", "commitment"])
 def test_a_delete_whose_cascade_lands_answers_as_before(client, cid, noun):
     rid, lid = _seed_linked(client, cid, noun)
     r = client.delete(f"/api/campaigns/{cid}/ledger/{_DELETE_PATH[noun]}/{rid}")
