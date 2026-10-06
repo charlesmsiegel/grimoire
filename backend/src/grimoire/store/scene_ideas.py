@@ -6,7 +6,9 @@ picker that produced them. Stored at <campaign>/scene_ideas.json.
                    "pcless": bool,
                    "source": "llm" | "user",
                    "status": "active" | "used" | "dismissed",
-                   "created": "<iso stamp>", "used_scene": "<sid>" | ""}}
+                   "created": "<iso stamp>", "used_scene": "<sid>" | "",
+                   "drivers": [{"ref", "action"}],                  # optional
+                   "time_anchor": {"ref", "relation", "native"}}}   # optional
 
 The gap this fills. A generated scene idea was ephemeral: `POST
 /scene-suggestions` built a snapshot, asked the model for openings, handed them
@@ -48,6 +50,30 @@ so an idea whose scene was deleted names an id that may later belong to a
 different scene. Renames are followed (`repoint_scenes`, registered in
 `scene_refs.repoint`); deletions are not, deliberately, since the alternative
 is reviving a used idea whenever a scene is cleaned up.
+
+**Driver provenance** (continuity capstone §17). A generated card names the
+story drivers it serves and, optionally, the occurrence it is dated against;
+saving it keeps both, as `drivers` and `time_anchor`. Each is written only when
+non-empty, so a plain save writes the record it always wrote, and `_project`
+always returns both (`[]` and None for an idea that has none, or whose stored
+values were hand-edited into garbage).
+
+Validating them is `suggest`'s job too -- `suggest.idea_provenance` on write,
+the annotation in `suggest.validate_ideas` on read -- and for the same import
+reason as the references above, only stronger: deciding whether `thread:...`
+still exists, or `event:...` has fired, means reading continuity, and
+continuity reaches `scenes`. So this module checks shape only, and imports
+nothing it did not import before.
+
+A re-save of a standing idea UNIONS provenance rather than replacing it (§17,
+"Provenance is never thrown away"): new driver refs are appended by ref (the
+stored entry's action wins), and an absent `time_anchor` is filled while a
+present one is kept. An `anchor` entry is appended only when it names the
+anchor that is kept, so a record never claims two anchors. The union cannot
+canonicalize -- that needs continuity -- so a ref saved before a merge and its
+canonical saved after both stay in the file; the read is what shows one.
+Staleness is derived on every read and never stored, and reads never write
+this file.
 
 Mutators serialize on `locks.campaign_lock(cid)`: the file is rewritten whole,
 so two unlocked read-modify-writes lose one of them.
@@ -133,6 +159,61 @@ def _tokens(value) -> list[str]:
     return [v.strip() for v in value if isinstance(v, str) and v.strip()]
 
 
+def _drivers(value) -> list[dict]:
+    """Stored driver provenance as `[{ref, action}]`: a non-list is `[]`, and an
+    entry without a non-empty string `ref` and a string `action` is dropped.
+    Shape only -- whether the ref still names anything is `suggest`'s."""
+    if not isinstance(value, list):
+        return []
+    return [{"ref": e["ref"], "action": e["action"]} for e in value
+            if isinstance(e, dict) and isinstance(e.get("ref"), str) and e["ref"].strip()
+            and isinstance(e.get("action"), str)]
+
+
+def _anchor(value) -> dict | None:
+    """Stored `{ref, relation, native}`, or None unless all three are strings
+    and `ref` is not blank."""
+    if not isinstance(value, dict):
+        return None
+    ref, relation, native = value.get("ref"), value.get("relation"), value.get("native")
+    if not (isinstance(ref, str) and ref.strip() and isinstance(relation, str)
+            and isinstance(native, str)):
+        return None
+    return {"ref": ref, "relation": relation, "native": native}
+
+
+def _put_provenance(rec: dict, drivers: list[dict], time_anchor: dict | None) -> None:
+    """Set both fields, or remove each that is empty: an empty one is never
+    written, so a plain record stays exactly today's."""
+    for key, value in (("drivers", drivers), ("time_anchor", time_anchor)):
+        if value:
+            rec[key] = value
+        else:
+            rec.pop(key, None)
+
+
+def _union(rec: dict, drivers: list[dict], time_anchor: dict | None) -> bool:
+    """Fold a re-save's provenance into the standing record; True iff it changed.
+
+    The stored values are cleaned first, with `_project`'s filter: the file is
+    hand-editable, and a stored `"drivers": "x"` must not turn the re-save of
+    an idea that reads fine into a 500. A cleaned value counts as a change, so
+    what is written back is well-formed. Then new refs are appended by ref,
+    and an absent anchor is filled; an `anchor` entry joins only when it names
+    the anchor kept (Decision 18)."""
+    before = {k: rec[k] for k in ("drivers", "time_anchor") if k in rec}
+    kept = _anchor(rec.get("time_anchor")) or time_anchor
+    merged = _drivers(rec.get("drivers"))
+    for entry in drivers:
+        if entry["ref"] in {m["ref"] for m in merged}:
+            continue
+        if entry["action"] == "anchor" and (kept is None or entry["ref"] != kept["ref"]):
+            continue
+        merged.append(entry)
+    _put_provenance(rec, merged, kept)
+    return {k: rec[k] for k in ("drivers", "time_anchor") if k in rec} != before
+
+
 def _title_from(title: str, premise: str) -> str:
     """A saved idea's title, falling back to the head of its premise.
 
@@ -179,7 +260,8 @@ def _standing_match(data: dict, title: str, premise: str, pcless: bool) -> str:
 
 def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
         location: str = "", date: str = "", pcless: bool = False,
-        source: str = USER) -> str:
+        source: str = USER, *, drivers: list[dict] | None = None,
+        time_anchor: dict | None = None) -> str:
     """Save an idea and return its id.
 
     `source` says where it came from -- a generated card the reader kept
@@ -202,21 +284,31 @@ def add(cid: str, title: str, premise: str, cast: list[str] | None = None,
     offscreen idea that casts the PC not being an offscreen idea. It is part of
     the dedupe key rather than metadata around it: the two modes cast
     different people, so the same sentence saved for each is two ideas.
+
+    `drivers` and `time_anchor` are the card's provenance, already validated by
+    `suggest.idea_provenance`; here they are only shape-checked. On a standing
+    match they are unioned into the record (`_union`), and the file is written
+    only when that changed something -- all inside the one lock hold.
     """
     if source not in SOURCES:
         raise ValueError(f"unknown idea source: {source}")
     premise = premise.strip()
     title = _title_from(title, premise)
+    drivers, time_anchor = _drivers(drivers), _anchor(time_anchor)
     with locks.campaign_lock(cid):
         data = _read_ledger(cid)
         standing = _standing_match(data, title, premise, pcless)
         if standing:
+            if _union(data[standing], drivers, time_anchor):
+                _write(cid, data)
             return standing
         lid = paths.uniquify(paths.slugify(title), lambda c: c in data)
-        data[lid] = {"title": title, "premise": premise, "cast": _tokens(cast),
-                     "location": _field(location), "date": _field(date),
-                     "pcless": bool(pcless), "source": source, "status": ACTIVE,
-                     "created": paths.now_iso(), "used_scene": ""}
+        rec = {"title": title, "premise": premise, "cast": _tokens(cast),
+               "location": _field(location), "date": _field(date),
+               "pcless": bool(pcless), "source": source, "status": ACTIVE,
+               "created": paths.now_iso(), "used_scene": ""}
+        _put_provenance(rec, drivers, time_anchor)
+        data[lid] = rec
         _write(cid, data)
         return lid
 
@@ -291,7 +383,9 @@ def _project(lid: str, rec: dict) -> dict:
             "source": source if source in SOURCES else USER,
             "status": status if status in STATUSES else ACTIVE,
             "created": _field(rec.get("created")),
-            "used_scene": _field(rec.get("used_scene"))}
+            "used_scene": _field(rec.get("used_scene")),
+            "drivers": _drivers(rec.get("drivers")),
+            "time_anchor": _anchor(rec.get("time_anchor"))}
 
 
 def records(cid: str) -> list[dict]:

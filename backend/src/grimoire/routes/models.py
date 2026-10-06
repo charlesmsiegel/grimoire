@@ -1009,6 +1009,11 @@ class SceneIdeaCreate(BaseModel):
     # "greeting" is deliberately absent: those entries are composed from
     # played.json, never stored (see store/scene_ideas.py).
     source: Literal["llm", "user"] = "user"
+    #: A generated card's validated provenance (spec §17): `[{ref, action}]`
+    #: and `{ref, relation}`. Plain fields, re-validated on the way in by
+    #: `suggest.idea_provenance`, which never raises for a malformed shape.
+    drivers: list[dict] = []
+    time_anchor: dict | None = None
 
 
 class SceneIdeaStatus(BaseModel):

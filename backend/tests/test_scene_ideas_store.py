@@ -237,7 +237,8 @@ def test_a_hand_mangled_record_reads_as_defaults_rather_than_raising(monkeypatch
     assert [r["id"] for r in rows] == ["broken"]
     assert rows[0] == {"id": "broken", "title": "broken", "premise": "", "cast": [],
                        "location": "", "date": "", "pcless": True, "source": "user",
-                       "status": "active", "created": "", "used_scene": ""}
+                       "status": "active", "created": "", "used_scene": "",
+                       "drivers": [], "time_anchor": None}
 
 
 def test_a_ledger_of_the_wrong_shape_refuses_to_be_written_over(monkeypatch, tmp_path):
@@ -265,6 +266,106 @@ def test_repoint_steps_over_a_garbled_file(monkeypatch, tmp_path):
     scene_ideas.repoint_scenes(cid, {"a": "b"})   # must not raise
     _path(cid).write_text(json.dumps({"x": {"used_scene": ["a"]}}), encoding="utf-8")
     scene_ideas.repoint_scenes(cid, {"a": "b"})   # nor on an unhashable id
+
+
+# ---- driver provenance (continuity capstone, Slice E) -----------------------
+CORONATION = {"ref": "event:the-coronation", "relation": "before", "native": "2026-05-13"}
+
+
+def test_a_plain_save_writes_todays_record(monkeypatch, tmp_path):
+    """No provenance, no new keys: a plain save writes exactly the record it
+    always wrote, so nothing reading the file today sees a difference."""
+    cid = _campaign(monkeypatch, tmp_path)
+    lid = scene_ideas.add(cid, "The creditor", "A debt-collector arrives.")
+    stored = scene_ideas.read(cid)[lid]
+    assert "drivers" not in stored
+    assert "time_anchor" not in stored
+
+
+def test_provenance_is_stored_when_given(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    lid = scene_ideas.add(cid, "The creditor", "x",
+                          drivers=[{"ref": "thread:a", "action": "advance"}],
+                          time_anchor=CORONATION)
+    stored = scene_ideas.read(cid)[lid]
+    assert stored["drivers"] == [{"ref": "thread:a", "action": "advance"}]
+    assert stored["time_anchor"] == CORONATION
+    [row] = scene_ideas.records(cid)
+    assert (row["drivers"], row["time_anchor"]) == (stored["drivers"], CORONATION)
+
+
+def test_resave_unions_provenance(monkeypatch, tmp_path):
+    """§28.6: provenance is never thrown away. New refs are appended by ref
+    (the stored action wins), and an absent anchor is filled."""
+    cid = _campaign(monkeypatch, tmp_path)
+    first = scene_ideas.add(cid, "The creditor", "x",
+                            drivers=[{"ref": "thread:a", "action": "advance"}])
+    again = scene_ideas.add(cid, "The creditor", "x",
+                            drivers=[{"ref": "thread:a", "action": "close_candidate"},
+                                     {"ref": "commitment:b", "action": "address"}],
+                            time_anchor=CORONATION)
+    assert again == first
+    stored = scene_ideas.read(cid)[first]
+    assert stored["drivers"] == [{"ref": "thread:a", "action": "advance"},
+                                 {"ref": "commitment:b", "action": "address"}]
+    assert stored["time_anchor"] == CORONATION
+
+
+def test_resave_keeps_an_existing_anchor(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    lid = scene_ideas.add(cid, "The creditor", "x", time_anchor=CORONATION)
+    scene_ideas.add(cid, "The creditor", "x",
+                    time_anchor={"ref": "event:the-debt", "relation": "on",
+                                 "native": "2026-05-20"})
+    assert scene_ideas.read(cid)[lid]["time_anchor"] == CORONATION
+
+
+def test_resave_with_nothing_new_does_not_write(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    drivers = [{"ref": "thread:a", "action": "advance"}]
+    scene_ideas.add(cid, "The creditor", "x", drivers=drivers, time_anchor=CORONATION)
+    writes = []
+    real = scene_ideas._write
+
+    def counting(*args, **kwargs):
+        writes.append(args)
+        return real(*args, **kwargs)
+    monkeypatch.setattr(scene_ideas, "_write", counting)
+    scene_ideas.add(cid, "The creditor", "x", drivers=drivers, time_anchor=CORONATION)
+    scene_ideas.add(cid, "The creditor", "x")
+    assert writes == []
+
+
+def test_garbage_provenance_projects_as_empty(monkeypatch, tmp_path):
+    """Hand-edited garbage reads as no provenance, never as a 500."""
+    cid = _campaign(monkeypatch, tmp_path)
+    _path(cid).write_text(json.dumps({
+        "one": {"title": "One", "drivers": "x", "time_anchor": []},
+        "two": {"title": "Two", "drivers": [{"ref": 3}], "time_anchor": {"ref": ""}},
+    }), encoding="utf-8")
+    rows = {r["id"]: r for r in scene_ideas.records(cid)}
+    for lid in ("one", "two"):
+        assert (rows[lid]["drivers"], rows[lid]["time_anchor"]) == ([], None)
+
+
+def test_resave_over_garbage_provenance_writes_a_clean_record(monkeypatch, tmp_path):
+    """Decision 18: an idea that reads fine must not 500 on a re-save because
+    its stored provenance was hand-edited, and what is written back is
+    well-formed."""
+    cid = _campaign(monkeypatch, tmp_path)
+    lid = scene_ideas.add(cid, "The creditor", "x")
+    data = scene_ideas.read(cid)
+    data[lid]["drivers"] = "x"
+    data[lid]["time_anchor"] = "x"
+    _path(cid).write_text(json.dumps(data), encoding="utf-8")
+
+    again = scene_ideas.add(cid, "The creditor", "x",
+                            drivers=[{"ref": "thread:a", "action": "advance"}],
+                            time_anchor=CORONATION)
+    assert again == lid
+    stored = scene_ideas.read(cid)[lid]
+    assert stored["drivers"] == [{"ref": "thread:a", "action": "advance"}]
+    assert stored["time_anchor"] == CORONATION
 
 
 # ---- the composed greeting half ------------------------------------------
