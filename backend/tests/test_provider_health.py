@@ -404,6 +404,24 @@ def test_editing_a_connection_clears_the_verdict_its_old_settings_earned(client)
     assert client.get("/api/config").json()["health"]["state"] == "unknown"
 
 
+def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
+    """`prefill` is rev-neutral so the catalog survives a toggle, but a model
+    that refuses a trailing assistant message turns the dot red over the
+    switch -- and unticking it must be the fix the reader sees take."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeCatalog(health_error=LLMError("bad_response", "assistant prefill"))
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "prefill": True})
+    client.post("/api/llm-connections/openrouter/health")
+    rev = client.get("/api/llm-connections/openrouter").json()["rev"]
+
+    assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "error"
+
+    body = client.put("/api/llm-connections/openrouter", json={"prefill": False}).json()
+
+    assert body["health"]["state"] == "unknown"
+    assert body["rev"] == rev
+
+
 def test_a_connection_deleted_mid_update_is_still_a_404(client, monkeypatch):
     """Clearing the verdict added a step between the write and the read-back.
     Putting that step outside the `try` would turn "somebody deleted this while

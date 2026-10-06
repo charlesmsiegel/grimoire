@@ -517,6 +517,7 @@ def put_connection(id: str, body: ConnectionUpdate,
         stored = store.llm_connections.read_connection_raw(id)
         _check_preset_field(fields, stored.get("sampler_preset", ""))
         before = stored["rev"]
+        prefill_before = bool(stored.get("prefill"))
         store.llm_connections.update_connection(id, **fields)
         # An edit invalidates the verdict as surely as a delete does: the
         # failure on record was this connection's *previous* key, base URL or
@@ -529,7 +530,14 @@ def put_connection(id: str, body: ConnectionUpdate,
         # changed the sampler preset keeps the rev (`llm_connections
         # .SAMPLER_FIELDS`) -- the verdict is about the provider, which a
         # preset does not change.
-        if store.llm_connections.read_connection_raw(id)["rev"] != before:
+        #
+        # `prefill` is the one rev-neutral field that can earn a verdict: a
+        # model that refuses a trailing assistant message fails the call over
+        # the switch itself. It stays rev-neutral so the catalog survives the
+        # toggle, and clears the verdict here instead -- otherwise unticking it
+        # leaves the dot red until some later call happens to succeed.
+        after = store.llm_connections.read_connection_raw(id)
+        if after["rev"] != before or bool(after.get("prefill")) != prefill_before:
             registry.forget(id)
         # Inside the `try`, where it has always been: a connection deleted
         # between the write and this read is a 404, not a 500.
