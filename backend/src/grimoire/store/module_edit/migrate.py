@@ -425,7 +425,8 @@ def _campaign_locks():
 
     Known limit, pre-existing: the enumeration is a snapshot, so a campaign
     another process creates afterwards is not covered, and campaign deletion
-    takes no lock at all.
+    removes the tree without the lock (it holds it only to strip the
+    campaign's image scope, `image_scopes.strip_campaign`).
     """
     with locks.hold_all(c["id"] for c in campaigns_read.list_campaigns()):
         yield

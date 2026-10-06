@@ -33,8 +33,7 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
-from . import assets, atomic, characters, greeting_images, image_refs, image_store
-from .worlds import paths as worlds_paths
+from . import assets, atomic, characters, greeting_images, image_refs, image_scopes, image_store
 
 SUBJECTS_FILE = "subjects.json"
 _BASE = "greetings"
@@ -67,8 +66,9 @@ def _read_raw(root: Path, gid: str) -> dict:
 
 def _scope(root: Path) -> str:
     """This world's scope (R10): the id as the filesystem spells it, so a root
-    reached as `REALM` keeps its tags where `realm` does."""
-    return f"world:{worlds_paths.canonical_id(root.name)}"
+    reached as `REALM` keeps its tags where `realm` does. Spelled once, in
+    `image_scopes`, which strips and copies the same scope."""
+    return image_scopes.world_scope(root.name)
 
 
 def _slot_of(root: Path, item: _Item) -> tuple[Path, str] | None:

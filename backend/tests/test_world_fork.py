@@ -30,16 +30,20 @@ import shutil
 import pytest
 
 from grimoire.store import (
+    assets,
     atomic,
     characters,
     entities,
     greetings,
+    image_scopes,
+    image_store,
+    image_subjects,
     pcs,
     taglines,
     worlds,
 )
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.worlds import staging
+from grimoire.store.worlds import lifecycle, staging
 
 from .world_fixtures import PNG, seed_world, tree
 
@@ -576,3 +580,58 @@ def test_calendar_and_plotmap_travel(monkeypatch, tmp_path):
     assert (root / "plotmap.json").is_file()
     assert (root / "tags.md").read_text(encoding="utf-8") == \
         (worlds.world_root(wid) / "tags.md").read_text(encoding="utf-8")
+
+
+# ---- subject tags on the shared image object (Review Focus 4) ----
+
+def _tagged_world(monkeypatch, tmp_path):
+    """A world whose greeting picture is tagged on its object, so the tag lives
+    under `world:<wid>` and nowhere the copy of the directory would carry it."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    cid, vid = characters.create_character(root, "Seraphine", "main")
+    gid = greetings.create_greeting(root, "Opener", cid, vid, "body")
+    assets.put_image(root, gid, "default", "art_1", b"png-1", "png", base="greetings")
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid])
+    assert "art_1" not in image_subjects._read_raw(root, gid)   # on the object
+    return wid, cid, gid
+
+
+def test_forking_a_world_carries_its_tags(monkeypatch, tmp_path):
+    wid, cid, gid = _tagged_world(monkeypatch, tmp_path)
+
+    new = worlds.fork_world(wid, "Winifred")
+
+    new_root = worlds.world_root(new)
+    assert image_subjects.read_subjects(new_root, gid) == {"art_1": [cid]}
+    assert image_subjects.untagged(new_root) == []
+    raw = image_store.read(assets.image_id(new_root, gid, "default", "art_1",
+                                           base="greetings")).raw
+    assert raw["reviews"]["subjects"] == sorted([f"world:{wid}", f"world:{new}"])
+    # The source keeps its own, and the two are now independent.
+    image_subjects.set_image_subjects(new_root, gid, "art_1", [])
+    assert image_subjects.read_subjects(worlds.world_root(wid), gid) == {"art_1": [cid]}
+    assert image_subjects.read_subjects(new_root, gid) == {"art_1": []}
+
+
+def test_a_fork_whose_tag_copy_fails_is_still_published(monkeypatch, tmp_path):
+    """The copy is published and usable by the time the tags are copied, so a
+    failure there is logged and the fork returned -- it is only untagged."""
+    wid, _cid, gid = _tagged_world(monkeypatch, tmp_path)
+    rows = []
+
+    def explode(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(image_scopes, "copy_world", explode)
+    monkeypatch.setattr(lifecycle.logs, "record",
+                        lambda level, module, message, **kw: rows.append((level, message, kw)))
+
+    new = worlds.fork_world(wid, "Winifred")
+
+    assert {w["id"] for w in worlds.list_worlds()} == {wid, new}
+    assert image_subjects.read_subjects(worlds.world_root(new), gid) == {}
+    assert [r[0] for r in rows] == ["error"]
+    assert new in rows[0][1] and rows[0][2]["kind"] == "OSError"
+    assert _staging_is_empty()

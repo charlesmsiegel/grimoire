@@ -380,6 +380,14 @@ DOMAIN_MODULES: frozenset[str] = frozenset({
     # New module (#79), so it starts inside the exclusion rather than joining
     # the frozen `UNREVIEWED` backlog.
     "store.replay",
+    # A campaign's subject tags live on the shared image objects under
+    # `campaign:<cid>`, and `strip_campaign` / `copy_campaign` sweep every
+    # object to remove or copy that scope through `image_store.update` -- one
+    # hold across the sweep, so a tag written in the campaign cannot land
+    # between a delete's strip and the tree going, or a fork's copy. The
+    # unlocked `strip`/`copy` take no `cid` and run under their callers'
+    # holds. New module, so it starts inside the exclusion.
+    "store.image_scopes",
 })
 
 #: Modules deliberately outside the exclusion, with the reason. An entry here is
@@ -396,8 +404,9 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "an edit (a rename dropped by a `touch` that read the older "
         "frontmatter -- see `store.campaigns.read`). `delete_campaign` rmtrees "
         "a tree that a lock holder may be writing under -- "
-        "`module_edit._campaign_locks` already records 'campaign deletion "
-        "takes no lock at all' as a known limit of its all-campaign hold. "
+        "`module_edit._campaign_locks` records it as a known limit of its "
+        "all-campaign hold. (It takes the lock only for its image-scope strip, "
+        "`image_scopes.strip_campaign`; the `rmtree` stays outside it.) "
         "`ensure_campaign_slim` rewrites that same meta file and is unlocked "
         "for the same reason as the frontmatter writers above -- its META "
         "write, that is. Its TOMBSTONE phase is locked now: the world image "
