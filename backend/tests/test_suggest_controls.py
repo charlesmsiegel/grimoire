@@ -13,7 +13,8 @@ import json
 import pytest
 
 from grimoire.store import calendars, campaigns, suggest, worlds
-from grimoire.store.continuity import pressure
+from grimoire.store.continuity import doc as continuity_doc
+from grimoire.store.continuity import effective, pressure
 from grimoire.store.continuity.drivers import DRIVER_KINDS
 from grimoire.store.suggest import NO_CONTROLS, Controls
 
@@ -594,3 +595,109 @@ def test_raw_suggestions_shapes():
     assert suggest.raw_suggestions('[{"title": "T"}, 4]') == [{"title": "T"}, 4]
     assert suggest.raw_suggestions('{"suggestions": [{"title": "T"}]}') == [{"title": "T"}]
     assert suggest.raw_suggestions("42") == []
+
+
+# ---- Task 5: resolve_controls -----------------------------------------------
+#
+# Over `_claim_snap`'s hand-built capture: its index is the request-time driver
+# set, and its anchors are the only refs a time anchor may name.
+
+LEDGER = "thread:find-the-ledger"
+
+
+def _real_campaign(monkeypatch, tmp_path) -> str:
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    return campaigns.create_campaign("Run", worlds.create_world("Realm"))
+
+
+def test_resolve_controls_dedupes_and_orders(monkeypatch, tmp_path):
+    cid = _real_campaign(monkeypatch, tmp_path)
+    snap = _claim_snap(driver_index=[*_claim_snap()["driver_index"],
+                                     _driver(LEDGER, "ok", dormancy=2, label="Find the ledger")])
+    got = suggest.resolve_controls(
+        cid, snap, focus_refs=[f" {LEDGER} ", MAP, "", "  ", LEDGER, OATH],
+        avoid_refs=[CORONATION, CORONATION], must_refs=[OATH, OATH],
+        time_mode="anchor", time_anchor_ref=f" {EVE} ", time_anchor_relation="before")
+    # stripped, blanks dropped, de-duplicated in request order; focus loses
+    # what must already holds
+    assert got == Controls(focus=(LEDGER, MAP), avoid=(CORONATION,), must=(OATH,),
+                           time_mode="anchor", anchor=EVE, relation="before")
+
+    assert suggest.resolve_controls(cid, snap) == NO_CONTROLS
+    # a relation means nothing without an anchor
+    assert suggest.resolve_controls(cid, snap, time_mode="near",
+                                    time_anchor_relation="by") == Controls(time_mode="near")
+
+
+def test_resolve_controls_refusals_carry_their_reason(monkeypatch, tmp_path):
+    cid = _real_campaign(monkeypatch, tmp_path)
+    snap = _claim_snap()
+
+    def reason(**kw) -> tuple:
+        with pytest.raises(suggest.ControlsError) as caught:
+            suggest.resolve_controls(cid, snap, **kw)
+        e = caught.value
+        return e.status, e.kind, e.reason, e.refs
+
+    assert reason(must_refs=[MAP], avoid_refs=[MAP]) == (400, "bad_controls", "must_avoid", None)
+    assert reason(must_refs=[MAP, OATH, LEDGER, CHART])[2] == "must_cap"
+    assert reason(must_refs=[CORONATION])[2] == "must_kind"
+    assert reason(time_mode="anchor")[2] == "anchor_missing"
+    assert reason(time_mode="near", time_anchor_ref=CORONATION)[2] == "anchor_without_mode"
+    assert reason(time_mode="anchor", time_anchor_ref=MAP)[2] == "anchor_kind"
+    assert reason(time_mode="anchor", time_anchor_ref="event")[2] == "anchor_kind"
+    assert reason(time_mode="anchor", time_anchor_ref=MARA_JUNE,
+                  time_anchor_relation="after")[2] == "anchor_relation"
+    # every 400 is decided before staleness: a ghost does not mask one
+    assert reason(focus_refs=["thread:ghost"], must_refs=[CORONATION])[2] == "must_kind"
+    # the 409 names every ref the capture lacks, in request order
+    assert reason(focus_refs=["thread:ghost"], must_refs=["commitment:gone"],
+                  time_mode="anchor", time_anchor_ref=DEBT) == (
+        409, "stale_drivers", "", ["thread:ghost", "commitment:gone", DEBT])
+    # a month anchor missing from the capture is judged by its ref's shape
+    assert reason(time_mode="anchor", time_anchor_ref="birthday:characters:mara:month:2027-01",
+                  time_anchor_relation="by")[2] == "anchor_relation"
+    # `on` (or no relation) is what a month anchor takes
+    for relation in ("", "on"):
+        got = suggest.resolve_controls(cid, snap, time_mode="anchor", time_anchor_ref=MARA_JUNE,
+                                       time_anchor_relation=relation)
+        assert (got.anchor, got.relation) == (MARA_JUNE, relation)
+
+
+def test_resolve_controls_the_anchor_beats_avoid(monkeypatch, tmp_path):
+    cid = _real_campaign(monkeypatch, tmp_path)
+    got = suggest.resolve_controls(cid, _claim_snap(), focus_refs=[MAP, CORONATION],
+                                   avoid_refs=[CORONATION, MAP], time_mode="anchor",
+                                   time_anchor_ref=CORONATION)
+    # avoid loses the anchor (Decision 26); focus loses only what must and
+    # avoid still hold, so the anchor may stay a focus driver
+    assert got == Controls(focus=(CORONATION,), avoid=(MAP,), time_mode="anchor",
+                           anchor=CORONATION)
+
+
+def test_resolve_controls_follows_an_alias_over_a_garbled_ledger(monkeypatch, tmp_path):
+    cid = _real_campaign(monkeypatch, tmp_path)
+    continuity_doc.put_alias(cid, MAP, {"to": LEDGER, "created": "", "source": "manual",
+                                        "note": ""})
+    (campaigns.campaign_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
+    ledgers = effective.Ledgers.load(cid)
+    assert "plot" in ledgers.unreadable and ledgers.exists(LEDGER) is None
+    snap = _claim_snap(driver_index=[_driver(LEDGER, "ok", dormancy=0, label="Find the ledger")])
+    got = suggest.resolve_controls(cid, snap, focus_refs=[MAP])
+    assert got.focus == (LEDGER,)
+    # two spellings of one driver are one control
+    assert suggest.resolve_controls(cid, snap, focus_refs=[MAP, LEDGER]).focus == (LEDGER,)
+    with pytest.raises(suggest.ControlsError) as caught:
+        suggest.resolve_controls(cid, snap, must_refs=[MAP], avoid_refs=[LEDGER])
+    assert caught.value.reason == "must_avoid"
+
+
+def test_resolve_controls_canonicalization_falls_back_to_identity(monkeypatch, tmp_path):
+    cid = _real_campaign(monkeypatch, tmp_path)
+
+    def boom(*_a, **_k):
+        raise RuntimeError("the continuity doc is unreadable")
+    monkeypatch.setattr(effective, "live_canon", boom)
+    got = suggest.resolve_controls(cid, _claim_snap(), focus_refs=[MAP], must_refs=[OATH],
+                                   avoid_refs=[CORONATION])
+    assert got == Controls(focus=(MAP,), avoid=(CORONATION,), must=(OATH,))

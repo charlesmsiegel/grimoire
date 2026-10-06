@@ -982,6 +982,23 @@ class SceneIntent(BaseModel):
     offscreen: bool = False
 
 
+class SceneSuggestionsRequest(BaseModel):
+    """`POST /scene-suggestions`'s body (capstone spec §16.3). The first four
+    fields are the query parameters the route took before it had a body; the
+    rest are the Story Pressure controls `store.suggest.resolve_controls`
+    validates. `Literal`s, so an unknown mode or relation is a 422."""
+    after: str | None = None
+    offscreen: bool = False
+    direction: str = ""
+    rank: bool = True
+    focus_refs: list[str] = []
+    avoid_refs: list[str] = []
+    must_refs: list[str] = []
+    time_mode: Literal["auto", "near", "move", "anchor"] = "auto"
+    time_anchor_ref: str = ""
+    time_anchor_relation: Literal["", "before", "on", "after", "by"] = ""
+
+
 class SceneIdeaCreate(BaseModel):
     title: str = ""
     premise: str = ""
