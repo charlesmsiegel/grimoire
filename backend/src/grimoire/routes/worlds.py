@@ -211,6 +211,12 @@ def get_world_export(wid: str):
     try:
         store.world_bundle.write_bundle(wid, tmp)
         size = tmp.stat().st_size
+    except store.world_bundle.BundleError as exc:
+        # A world this grimoire cannot bundle (an image past the cap its own
+        # import holds a bundle to): the world's state, not a server fault,
+        # and the message names the picture to replace.
+        tmp.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise

@@ -32,6 +32,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -188,21 +189,21 @@ def scan(d: Path) -> dict[str, Ref]:
     return out
 
 
-def walk_ids(root: Path) -> set[str]:
-    """Every valid image id placed anywhere under `root`: the ``image`` of each
-    ``**/image-refs/*.json``, the promotion journal excluded.
+def walk(root: Path) -> Iterator[tuple[Path, Ref]]:
+    """Every valid placement under `root` that holds an image, as `(the
+    directory that owns it, its ref)`: the ``**/image-refs/*.json``, the
+    promotion journal excluded.
 
     Symlinks are not followed -- neither a linked directory nor a linked ref
     file -- because the caller (world bundle export) packs what this names into
     a file the user hands to somebody else, and a link must not reach past the
     tree it was asked about. Unreadable directories are skipped.
     """
-    out: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
         if Path(dirpath).name != REFS_DIR:
             continue
         dirnames[:] = []                    # nothing nests inside image-refs/
-        for fname in filenames:
+        for fname in sorted(filenames):
             if fname == JOURNAL or not fname.endswith(_SUFFIX):
                 continue
             stem = fname[: -len(_SUFFIX)]
@@ -211,8 +212,12 @@ def walk_ids(root: Path) -> set[str]:
                 continue
             ref = _read_file(path, stem)
             if ref is not None and ref.image is not None:
-                out.add(ref.image)
-    return out
+                yield Path(dirpath).parent, ref
+
+
+def walk_ids(root: Path) -> set[str]:
+    """Every valid image id placed anywhere under `root` (`walk`)."""
+    return {ref.image for _d, ref in walk(root) if ref.image is not None}
 
 
 def image_names(d: Path) -> set[str]:

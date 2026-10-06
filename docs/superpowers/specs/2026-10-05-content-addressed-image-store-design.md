@@ -1279,6 +1279,13 @@ before `px1` shipped, so the version stays `px1`:
   written before its image arrived kept (`_drop_if_placed`), and pruning the
   placement would make that stale file the campaign's picture again. Both
   stay: redundant data beats lost data.
+- **One blob cap on both sides of a bundle** (§10). Import refused a blob past
+  `fetch.MAX_BYTES` (100 MB), but record uploads stay uncapped (D2) and export
+  packed any blob, so the app could write a bundle its own import refuses.
+  `world_bundle.MAX_BUNDLE_BLOB_BYTES` (= `fetch.MAX_BYTES`) is now held by
+  both: export checks every blob it would pack before writing anything and
+  raises `BundleError` ("image too large to bundle: <record path>/<name>"),
+  which the export route answers with 422 and that message.
 - **A damaged blob is not served** (§6). `image_store.blob_intact` re-hashes
   a blob against its name, memoized on its stat signature under statcache's
   racy-window rule. `assets.path_in` treats a blob that fails it as not
