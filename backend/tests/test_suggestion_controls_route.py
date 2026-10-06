@@ -32,6 +32,7 @@ from grimoire.store.continuity import doc as continuity_doc
 from grimoire.store.continuity import drivers as continuity_drivers
 from grimoire.store.continuity import pressure
 from tests import draft_runs as drafts
+from tests import llm_fakes
 from tests.llm_fakes import FakeOpenRouterComplete
 from tests.test_suggest_store import _break_calendar
 
@@ -363,3 +364,102 @@ def test_routing_task_is_still_suggestions(client):
     _fake(client)
     assert _post(client, cid, json={"focus_refs": [MAP]}).status_code == 200
     assert [row.get("task") for row in usage.calls(campaign=cid)] == ["suggestions"]
+
+
+# ---- end to end: the layers agree (Task 12) ---------------------------------------
+# Each slice above proves one layer; these drive one request through all of
+# them -- cassette reply, parser, payload, save, ledger edit, saved-idea read --
+# so a seam that disagrees fails here rather than nowhere.
+
+DEBT = "thread:the-debt"
+
+
+def test_cassette_reply_with_drivers_parses(client):
+    cid = _campaign(client)
+    plot.set_movement(cid, "the-debt", "The debt", "open",
+                      "Seraphine has not said what the salt was for.", "001--gate")
+    fake = llm_fakes.from_cassette("campaign_flow")
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = _post(client, cid)
+    assert r.status_code == 200, r.text
+    [s] = r.json()["suggestions"]
+    assert s["title"] == "The ledger reopened"
+    assert s["drivers"] == [{"ref": DEBT, "kind": "thread", "action": "advance",
+                             "label": "The debt"}]
+    assert s["time_anchor"] is None
+    assert s["unmet_must"] == [] and s["avoided"] == []
+    assert fake.calls == 1
+
+
+def test_saved_card_round_trip_goes_stale_after_resolution(client):
+    cid = _campaign(client)
+    fake = _fake(client, json.dumps({"suggestions": [
+        {"title": "The oath kept", "premise": "Mara comes to the gate to keep her word.",
+         "cast": [], "location": "", "drivers": [{"ref": OATH, "action": "address"}]},
+        {"title": "The ledger room", "premise": "Dust and ink.", "cast": [], "location": ""},
+    ]}))
+    r = _post(client, cid, json={"must_refs": [OATH]})
+    assert r.status_code == 200, r.text
+    assert "Must-include drivers: commitment:mara-s-oath = Mara's oath." in _system(fake)
+    first = r.json()["suggestions"][0]
+    assert first["title"] == "The oath kept"
+    assert first["unmet_must"] == []
+
+    # what the picker's `asDraft` sends: refs and actions only, the anchor's
+    # own `anchor` entry left out, and `time_anchor` only when the card has one
+    draft = {"title": first["title"], "premise": first["premise"], "date": first["date"],
+             "cast": [], "location": "", "source": "llm", "pcless": False,
+             "drivers": [{"ref": d["ref"], "action": d["action"]}
+                         for d in first["drivers"] if d["action"] != "anchor"]}
+    if first["time_anchor"]:
+        draft["time_anchor"] = {"ref": first["time_anchor"]["ref"],
+                                "relation": first["time_anchor"]["relation"]}
+    saved = client.post(f"/api/campaigns/{cid}/scene-ideas", json=draft)
+    assert saved.status_code == 200, saved.text
+    lid = saved.json()["id"]
+
+    def idea() -> dict:
+        got = client.get(f"/api/campaigns/{cid}/scene-ideas?greetings=false")
+        assert got.status_code == 200, got.text
+        return {i["id"]: i for i in got.json()}[lid]
+
+    assert idea()["stale_reason"] == ""
+    assert idea()["drivers"] == [{"ref": OATH, "action": "address", "kind": "commitment",
+                                  "label": "Mara's oath", "state": "live"}]
+
+    resolved = client.put(f"/api/campaigns/{cid}/ledger/commitments/mara-s-oath",
+                          json={"status": "fulfilled"})
+    assert resolved.status_code == 200, resolved.text
+    row = idea()
+    assert row["stale_reason"] == "Every commitment it was about is resolved"
+    assert row["status"] == "active"
+    assert [d["state"] for d in row["drivers"]] == ["finished"]
+
+
+def test_opening_paths_make_no_model_call(client):
+    """§3.10, AC16: opening the chooser, reading saved ideas, and a refused
+    request each spend nothing. The one cassette entry never matches, so a
+    call that did reach the fake would raise `CassetteMiss` as well as count."""
+    cid = _campaign(client)
+    saved = client.post(f"/api/campaigns/{cid}/scene-ideas", json={
+        "title": "The crown", "premise": "Mara at the coronation.", "source": "llm",
+        "drivers": [{"ref": MAP, "action": "advance"}],
+        "time_anchor": {"ref": CORONATION, "relation": "on"}})
+    assert saved.status_code == 200, saved.text
+    fake = llm_fakes.from_entries([{"when": {"system_contains": "\x00no request matches"},
+                                    "reply": ""}])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+
+    read = client.get(f"/api/campaigns/{cid}/continuity/drivers")
+    assert read.status_code == 200
+    assert MAP in [d["ref"] for d in read.json()["drivers"]]
+    ideas = client.get(f"/api/campaigns/{cid}/scene-ideas")
+    assert ideas.status_code == 200
+    assert [i["time_anchor"]["ref"] for i in ideas.json() if i.get("time_anchor")] == [CORONATION]
+    refused = client.post(_url(cid), json={"focus_refs": ["thread:ghost"]})
+    assert refused.status_code == 409
+    assert refused.json()["kind"] == "stale_drivers"
+
+    assert fake.calls == 0
+    assert _runs(client, cid) == []
+    assert list(usage.calls(campaign=cid)) == []
