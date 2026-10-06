@@ -86,16 +86,19 @@ export function suggestionDraft(s: SceneSuggestion, nextDate: string,
  *
  *  `anchor_date` beats both (Decision 23). It is not a fossil: the server
  *  derives it on THIS read, and only for an idea anchored `on` an occurrence
- *  that is still live and dated (§17.1), so it is the anchor's current day --
- *  following a rescheduled event -- and `nextDate`, which is not anchor-aware,
- *  would contradict the reason the idea was saved for.
+ *  that is still live and dated (§17.1), so it is the anchor's current day,
+ *  and `nextDate`, which is not anchor-aware, would contradict the reason the
+ *  idea was saved for. An event moved to another day reads as dangling (§17),
+ *  so a rescheduled anchor supplies no `anchor_date`.
  *
  *  Without an `anchor_date`, an ANCHORED idea (`before`/`after`, or `on` an
  *  occurrence that has passed) gets an empty date, as `suggestionDraft` gives
  *  an anchored card with none: `nextDate` may sit on the wrong side of the
  *  event the idea's reason names, and the idea's own date is the fossil above.
- *  Only an un-anchored idea -- or a dangling one, which reads back with no
- *  `time_anchor` -- falls through to the inverted precedence. */
+ *  Only an un-anchored idea -- or a dangling one (its event deleted, or moved
+ *  to another day), which reads back with no `time_anchor` -- falls through to
+ *  the inverted precedence; a moved one's Stale hint names the new day
+ *  (§31, Slice G deviations). */
 export function savedDraft(idea: SceneIdea, nextDate: string, pcless: boolean): SceneDraft {
   const date = idea.anchor_date || (idea.time_anchor ? "" : nextDate || idea.date);
   return { source: "saved", lid: idea.id, title: idea.title, defaultTitle: idea.title,
