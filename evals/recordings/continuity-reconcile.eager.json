@@ -1,0 +1,9 @@
+{"decisions": [
+  {"candidate": "c1", "decision": "distinct", "from": "", "to": "", "reason": "Who bribes the harbourmaster is a separate question from who runs the smuggling.", "evidence_scenes": []},
+  {"candidate": "c2", "decision": "continuation", "from": "B", "to": "A", "reason": "What the debt to Mara costs Seraphine is a concrete question that grew out of her debts.", "evidence_scenes": []},
+  {"candidate": "c3", "decision": "pays_off", "from": "B", "to": "A", "reason": "Finding the ledger is what earns Mara her pay.", "evidence_scenes": []},
+  {"candidate": "c4", "decision": "close", "from": "", "to": "", "reason": "Mara followed the map to the cove it marks and found it.", "evidence_scenes": ["003--the-pier-at-dusk"]},
+  {"candidate": "c5", "decision": "close", "from": "", "to": "", "reason": "The chart has not come up since the docks, so it is done with.", "evidence_scenes": ["001--saltmarch-docks"]},
+  {"candidate": "c6", "decision": "fulfilled", "from": "", "to": "", "reason": "Mara put the ring back in Winifred's hand, as she swore.", "evidence_scenes": ["002--realm-road"]},
+  {"candidate": "c7", "decision": "fulfilled", "from": "", "to": "", "reason": "The fifth of May has passed, so Seraphine must have given the berth.", "evidence_scenes": ["001--saltmarch-docks"]}
+]}

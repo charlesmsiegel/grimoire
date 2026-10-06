@@ -5,7 +5,9 @@ a coarse instrument — a case with six checks fails if any one of them bites,
 so a check that silently stopped working would hide behind its neighbours.
 These tests pin each check separately, on the smallest input that isolates it.
 
-No store, no GRIMOIRE_HOME: the graders are pure.
+No store, no GRIMOIRE_HOME: the graders are pure. The one exception builds the
+continuity-reconcile case in a throwaway store, to tie this file's constants
+to it.
 """
 
 from __future__ import annotations
@@ -18,12 +20,13 @@ import pytest
 
 from grimoire import prompts
 from grimoire.store import absorb, scenes
+from grimoire.store.continuity import reconcile
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from evals import cases, graders, slop  # noqa: E402
+from evals import cases, graders, runner, slop  # noqa: E402
 
 TERSE = {"reply_words": 150, "blocks": 3, "paragraphs": 1,
          "speakers": 2, "blocks_per_speaker": 1}
@@ -521,6 +524,185 @@ def test_identity_reads_row_keys_as_the_app_does():
     """The app strips a "Row" label off a key (`identity.parse_output`), so
     the grader must not fail a reply the app would have read."""
     assert _identity(_identity_json({**_R1, "row": "Row r1"}, _R2, _R3)) == set()
+
+
+# ---------------------------------------------------------------- reconcile
+
+#: The continuity-reconcile case's seven candidates as the grader is handed
+#: them. `build_payload` keys candidates c1... in the order they are sent, so
+#: §28.10 case N is sent as ``c<N-1>``: c1 and c2 are thread pairs, c3 a cross
+#: pair (A the commitment, B the thread, as refs sort), c4 and c5 thread
+#: closures, c6 and c7 commitment resolutions.
+RECONCILE_VOCAB = {"c1": reconcile.DECISIONS["same_thread"],
+                   "c2": reconcile.DECISIONS["same_thread"],
+                   "c3": reconcile.DECISIONS["cross"],
+                   "c4": reconcile.DECISIONS["thread"],
+                   "c5": reconcile.DECISIONS["thread"],
+                   "c6": reconcile.DECISIONS["commitment"],
+                   "c7": reconcile.DECISIONS["commitment"]}
+RECONCILE_KNOWN = {"001--saltmarch-docks", "002--realm-road", "003--the-pier-at-dusk"}
+RECONCILE_EXPECTED = {
+    "c1": {"check": "distinct", "decisions": ("distinct",)},
+    "c2": {"check": "continuation", "decisions": ("continuation",),
+           "from": {"continuation": "B"}},
+    "c3": {"check": "cross_type", "decisions": ("pays_off", "related"),
+           "from": {"pays_off": "B"}},
+    "c4": {"check": "close", "decisions": ("close",)},
+    "c5": {"check": "keep_open", "decisions": ("keep_open",)},
+    "c6": {"check": "fulfilled", "decisions": ("fulfilled",)},
+    "c7": {"check": "unproven", "decisions": ("keep_open", "uncertain")},
+}
+
+_C = {
+    "c1": {"candidate": "c1", "decision": "distinct", "from": "", "to": "",
+           "reason": "Who bribes the harbourmaster is its own question.", "evidence_scenes": []},
+    "c2": {"candidate": "c2", "decision": "continuation", "from": "B", "to": "A",
+           "reason": "The debt to Mara grew out of Seraphine's debts.", "evidence_scenes": []},
+    "c3": {"candidate": "c3", "decision": "pays_off", "from": "B", "to": "A",
+           "reason": "Finding the ledger is what earns Mara her pay.", "evidence_scenes": []},
+    "c4": {"candidate": "c4", "decision": "close", "from": "", "to": "",
+           "reason": "The map led Mara to the cove.",
+           "evidence_scenes": ["003--the-pier-at-dusk"]},
+    "c5": {"candidate": "c5", "decision": "keep_open", "from": "", "to": "",
+           "reason": "Nothing shown answers the chart.", "evidence_scenes": []},
+    "c6": {"candidate": "c6", "decision": "fulfilled", "from": "", "to": "",
+           "reason": "Mara returned the ring as she swore.",
+           "evidence_scenes": ["002--realm-road"]},
+    "c7": {"candidate": "c7", "decision": "uncertain", "from": "", "to": "",
+           "reason": "Nothing shows whether the berth was given.", "evidence_scenes": []},
+}
+
+
+def _reconcile_json(*decisions: dict) -> str:
+    return json.dumps({"decisions": list(decisions)})
+
+
+def _reconcile(text: str) -> set[str]:
+    return failed(graders.grade_reconcile(text, RECONCILE_EXPECTED, RECONCILE_VOCAB,
+                                          RECONCILE_KNOWN))
+
+
+def _all(**over: dict) -> str:
+    return _reconcile_json(*({**_C[k], **over.get(k, {})} for k in _C))
+
+
+def test_reconcile_compliant_passes():
+    checks = graders.grade_reconcile(_all(), RECONCILE_EXPECTED, RECONCILE_VOCAB,
+                                     RECONCILE_KNOWN)
+    assert failed(checks) == set()
+    assert {c.name for c in checks} == {
+        "reconcile.json", "reconcile.shape", "reconcile.enum", "reconcile.covers",
+        "reconcile.evidence", "reconcile.distinct", "reconcile.continuation",
+        "reconcile.cross_type", "reconcile.close", "reconcile.keep_open",
+        "reconcile.fulfilled", "reconcile.unproven"}
+
+
+def test_reconcile_prose_fails_json_only():
+    """No object at all short-circuits: nothing else is reported."""
+    checks = graders.grade_reconcile("Mara's map looks finished to me.", RECONCILE_EXPECTED,
+                                     RECONCILE_VOCAB, RECONCILE_KNOWN)
+    assert [(c.name, c.ok) for c in checks] == [("reconcile.json", False)]
+
+
+def test_reconcile_cross_type_duplicate_fails_enum():
+    """Scored on the raw word: `parse_output` launders a cross-type
+    "duplicate" into "uncertain", which would make this check unfailable. It
+    is also the wrong verdict for the cross pair."""
+    assert _reconcile(_all(c3={"decision": "duplicate", "from": "A", "to": "B"})) == {
+        "reconcile.enum", "reconcile.cross_type"}
+    # A word no vocabulary holds, on an extra candidate nobody was sent.
+    extra = {"candidate": "c9", "decision": "merge", "reason": "Same business."}
+    assert _reconcile(_reconcile_json(*_C.values(), extra)) == {"reconcile.enum"}
+    assert _reconcile(_all(c7={"decision": None})) == {"reconcile.enum", "reconcile.unproven"}
+
+
+def test_reconcile_closure_without_evidence_fails_evidence():
+    """A status word needs a reason and a scene the prompt showed; the
+    verdict check reads the word alone, so the two failures stay separable."""
+    assert _reconcile(_all(c4={"evidence_scenes": []})) == {"reconcile.evidence"}
+    assert _reconcile(_all(c4={"evidence_scenes": ["999--nowhere"]})) == {
+        "reconcile.evidence"}
+    assert _reconcile(_all(c6={"reason": "  "})) == {"reconcile.evidence"}
+    assert _reconcile(_all(c6={"evidence_scenes": "002--realm-road"})) == {
+        "reconcile.evidence"}
+    # Any status word is held to it, on any candidate.
+    assert _reconcile(_all(c7={"decision": "broken", "evidence_scenes": []})) == {
+        "reconcile.evidence", "reconcile.unproven"}
+
+
+def test_reconcile_missing_candidate_fails_covers():
+    """A candidate with no decision is reported once, by covers: its own
+    verdict check is not reported beside it."""
+    checks = graders.grade_reconcile(
+        _reconcile_json(*(v for k, v in _C.items() if k != "c5")),
+        RECONCILE_EXPECTED, RECONCILE_VOCAB, RECONCILE_KNOWN)
+    assert failed(checks) == {"reconcile.covers"}
+    assert "reconcile.keep_open" not in {c.name for c in checks}
+
+
+def test_reconcile_bad_shape_fails_shape():
+    assert "reconcile.shape" in _reconcile('{"decisions": {"c1": "distinct"}}')
+    assert _reconcile(_reconcile_json(*_C.values(), {"candidate": 4, "decision": "x"})) == {
+        "reconcile.shape"}
+    # A directed word needs two different letters, A and B. The verdict
+    # reads ``from`` alone, so a right ``from`` with no ``to`` trips shape only.
+    assert _reconcile(_all(c2={"from": "B", "to": "B"})) == {"reconcile.shape"}
+    assert _reconcile(_all(c2={"from": "b", "to": " a "})) == set()
+    assert _reconcile(_all(c3={"from": "", "to": ""})) == {
+        "reconcile.shape", "reconcile.cross_type"}
+
+
+def test_reconcile_merged_pairs_fail_their_own_verdicts():
+    """The `merged` recording's shape: both duplicates carry valid letters,
+    so only the two verdict checks trip."""
+    merged = _all(c1={"decision": "duplicate", "from": "B", "to": "A"},
+                  c2={"decision": "duplicate", "from": "B", "to": "A"})
+    assert _reconcile(merged) == {"reconcile.distinct", "reconcile.continuation"}
+
+
+def test_reconcile_continuation_must_run_from_the_concrete_record():
+    assert _reconcile(_all(c2={"from": "A", "to": "B"})) == {"reconcile.continuation"}
+    # pays_off runs from the thread; "related" carries no direction.
+    assert _reconcile(_all(c3={"from": "A", "to": "B"})) == {"reconcile.cross_type"}
+    assert _reconcile(_all(c3={"decision": "related", "from": "", "to": ""})) == set()
+
+
+def test_reconcile_eager_lifecycle_fails_keep_open_and_unproven():
+    """The `eager` recording's shape: a closure and a resolution with
+    evidence, on the two candidates nothing settles."""
+    eager = _all(c5={"decision": "close", "evidence_scenes": ["001--saltmarch-docks"]},
+                 c7={"decision": "fulfilled", "evidence_scenes": ["001--saltmarch-docks"]})
+    assert _reconcile(eager) == {"reconcile.keep_open", "reconcile.unproven"}
+    assert _reconcile(_all(c7={"decision": "keep_open"})) == set()
+
+
+def test_reconcile_reads_candidate_keys_as_the_app_does():
+    """The app strips a "Candidate" label and case off a key
+    (`reconcile.parse_output`), and keeps the first answer a key gets."""
+    assert _reconcile(_all(c1={"candidate": "Candidate C1"}, c5={"candidate": " c5 "})) == set()
+    later = {**_C["c5"], "decision": "close", "evidence_scenes": ["001--saltmarch-docks"]}
+    assert _reconcile(_reconcile_json(*_C.values(), later)) == set()
+
+
+def test_reconcile_case_is_what_these_tests_grade_and_the_app_keeps(tmp_path, monkeypatch):
+    """The constants above are the case's own, and a reply the grader passes
+    is one the app keeps word for word: the compliant recording, parsed by
+    `reconcile.parse_output` against the payload the case built, downgrades
+    nothing to ``uncertain`` that it did not already say."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = cases.BY_ID["continuity-reconcile"]
+    ctx = runner.prepare(case)
+    assert ctx["vocab"] == RECONCILE_VOCAB
+    assert ctx["known"] == RECONCILE_KNOWN
+    assert ctx["expected"] == {k: {**v, "from": v.get("from", {})}
+                               for k, v in RECONCILE_EXPECTED.items()}
+
+    text = case.baseline.path(case.id).read_text(encoding="utf-8")
+    sent = json.loads(text)["decisions"]
+    kept = reconcile.parse_output(text, ctx["payload"])
+    by_key = {c["key"]: c["id"] for c in ctx["payload"]["candidates"]}
+    assert {d["candidate"]: kept[by_key[d["candidate"]]]["decision"] for d in sent} == {
+        d["candidate"]: d["decision"] for d in sent}
 
 
 # ----------------------------------------------------------- prompt contract

@@ -45,6 +45,7 @@ from grimoire.store import (
     characters,
     checks,
     chronicle,
+    clock,
     commitments,
     config,
     context,
@@ -65,7 +66,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.absorb import parse as absorb_parse
-from grimoire.store.continuity import identity
+from grimoire.store.continuity import canon, identity, pending, reconcile
 from grimoire.store.tracker import records as tracker_records
 from grimoire.store.tracker import walk as tracker_walk
 
@@ -962,6 +963,191 @@ def grade_continuity_identity(ctx: dict, output: str) -> list[Check]:
                                     ctx["kinds"])]
 
 
+# ----------------------------------------------- case 8: continuity reconcile
+
+# §28.10 cases 2-8, the reconciliation half. Each candidate is specified by
+# hand -- its kind, its refs, its signals -- rather than discovered: which
+# pairs a sweep finds is pinned by the reconcile tests, and this case asks
+# only what the model decides about a candidate once it is sent. Every
+# record's title and beats are spelled out here, once, with the scene each
+# beat lands in (an index into RECONCILE_SCENES).
+
+#: The scenes, in play order; the last is the one just played.
+RECONCILE_SCENES = (("Saltmarch docks", "Seraphine and Mara met on the Saltmarch docks."),
+                    ("Realm road", "Mara caught Winifred up on the Realm road."),
+                    ("The Pier at Dusk", "Mara followed her map along the pier at dusk."))
+#: The campaign date, and the due both resolution candidates passed.
+RECONCILE_NOW, RECONCILE_DUE = "2026-05-10", "2026-05-05"
+
+#: ref -> (title, commitment kind or "" for a thread, due, [(scene, beat)]).
+RECONCILE_RECORDS: dict[str, tuple[str, str, str, list[tuple[int, str]]]] = {
+    # case 2: the same topic, two distinct questions.
+    "thread:the-saltmarch-smuggling": (
+        "Who runs the Saltmarch smuggling", "", "",
+        [(0, "Seraphine would not say who pays for the night cargo.")]),
+    "thread:who-bribes-the-saltmarch-harbourmaster": (
+        "Who bribes the Saltmarch harbourmaster", "", "",
+        [(2, "Mara saw the harbourmaster pocket a purse after the night cargo landed.")]),
+    # case 3: a broad thread and the concrete question that grew out of it.
+    "thread:seraphines-debts": (
+        "Seraphine's debts", "", "",
+        [(0, "Seraphine owes money all along the Saltmarch waterfront.")]),
+    "thread:what-seraphines-debt-to-mara-costs-her": (
+        "What Seraphine's debt to Mara costs her", "", "",
+        [(1, "Mara told Seraphine the debt is due at the next tide.")]),
+    # case 4: a thread and a commitment about the same business.
+    "thread:find-the-ledger": (
+        "Find the ledger", "", "",
+        [(0, "Winifred learned the harbour ledger exists.")]),
+    "commitment:pay-mara-for-finding-the-ledger": (
+        "Pay Mara for finding the ledger", "promise", "",
+        [(1, "Winifred promised to pay Mara once the ledger turns up.")]),
+    # case 5: a thread whose last beats answer it, moved in the last scene.
+    "thread:maras-map": (
+        "Mara's map", "", "",
+        [(0, "Mara's map is torn, and nobody knows where it leads."),
+         (2, "Mara matched the torn corner; the map marks a cove past the pier."),
+         (2, "Mara walked to the cove the map marks and found it, as drawn.")]),
+    # case 6: an old thread nothing has answered.
+    "thread:winifreds-chart": (
+        "Winifred's chart", "", "",
+        [(0, "Winifred's chart shows a reef nobody has sailed past.")]),
+    # case 7: a passed due, and a beat showing the promise kept.
+    "commitment:maras-oath": (
+        "Mara's oath", "promise", RECONCILE_DUE,
+        [(0, "Mara swore to return Winifred's ring by the fifth of May."),
+         (1, "Mara put the ring back in Winifred's hand on the road, as she swore.")]),
+    # case 8: a passed due, and nothing shown about how it went.
+    "commitment:seraphines-berth": (
+        "Seraphine's berth for Winifred", "promise", RECONCILE_DUE,
+        [(0, "Seraphine promised Winifred a berth on a boat out by the fifth of May.")]),
+}
+
+
+def _reconcile_pair(lexical: float) -> dict:
+    return {"title_exact": False, "slug_equal": False, "lexical": lexical, "cosine": None,
+            "shared_actors": [], "shared_scenes": [], "shared_anchors": [], "via": "lexical"}
+
+
+_PAST_DUE = {"reason": "overdue", "in_days": -5, "via": "deadline"}
+
+#: The candidates in the order they are sent: (§28.10 case, kind, refs,
+#: signals, the vocabulary the case needs, the check that scores it, the
+#: words that pass it, and per directed word the ref its ``from`` must be).
+#: Pair refs are sorted, as discovery stores them, so a cross pair's A is the
+#: commitment.
+RECONCILE_CASES: tuple[tuple[int, str, tuple[str, ...], dict, str, str,
+                             tuple[str, ...], dict[str, str]], ...] = (
+    (2, "possible_duplicate",
+     ("thread:the-saltmarch-smuggling", "thread:who-bribes-the-saltmarch-harbourmaster"),
+     _reconcile_pair(0.42), "same_thread", "distinct", ("distinct",), {}),
+    (3, "possible_duplicate",
+     ("thread:seraphines-debts", "thread:what-seraphines-debt-to-mara-costs-her"),
+     _reconcile_pair(0.38), "same_thread", "continuation", ("continuation",),
+     {"continuation": "thread:what-seraphines-debt-to-mara-costs-her"}),
+    (4, "possible_relation",
+     ("commitment:pay-mara-for-finding-the-ledger", "thread:find-the-ledger"),
+     _reconcile_pair(0.35), "cross", "cross_type", ("pays_off", "related"),
+     {"pays_off": "thread:find-the-ledger"}),
+    (5, "possible_thread_closure", ("thread:maras-map",), {"reason": "touched"},
+     "thread", "close", ("close",), {}),
+    (6, "possible_thread_closure", ("thread:winifreds-chart",),
+     {"reason": "stale", "days_since": 75}, "thread", "keep_open", ("keep_open",), {}),
+    (7, "possible_commitment_resolution", ("commitment:maras-oath",), _PAST_DUE,
+     "commitment", "fulfilled", ("fulfilled",), {}),
+    (8, "possible_commitment_resolution", ("commitment:seraphines-berth",), _PAST_DUE,
+     "commitment", "unproven", ("keep_open", "uncertain"), {}),
+)
+
+
+def _seed_reconcile(cid: str, sids: list[str]) -> None:
+    for ref, (title, kind, due, beats) in RECONCILE_RECORDS.items():
+        rtype, _, rid = ref.partition(":")
+        for at, text in beats:
+            if rtype == "thread":
+                plot.set_movement(cid, rid, title, "open", text, sids[at])
+            else:
+                commitments.set_movement(cid, rid, title, kind, "open", due, text, sids[at])
+
+
+def build_continuity_reconcile() -> dict:
+    """Three scenes played, the last just now, and every record above seeded
+    beat by beat into its scenes; the clock stands five days past both dues.
+    The candidates are what `select` would hand `build_payload` -- id, kind,
+    refs, signals and the current fingerprint."""
+    wid, wroot, _ = _world_with_sera()
+    characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    pcs.create_pc(campaigns.campaign_root(cid), "Winifred", [],
+                  persona=pcs.blank_persona("Winifred"))
+    clock.advance(cid, to=RECONCILE_NOW)
+    sids = [scenes.create_scene(cid, title) for title, _ in RECONCILE_SCENES]
+    for sid, (_, line) in zip(sids, RECONCILE_SCENES, strict=True):
+        chronicle.absorb(cid, {"id": sid, "one_line": line, "cast": ["characters/mara"]})
+    _seed_reconcile(cid, sids)
+
+    current = pending.Current.load(cid)
+    picked = []
+    for _, kind, refs, signals, *_ in RECONCILE_CASES:
+        fp = pending.fingerprint(current, kind, list(refs))
+        assert fp is not None, refs
+        picked.append({"id": canon.candidate_id(kind, refs), "kind": kind, "refs": list(refs),
+                       "signals": dict(signals), "fingerprint": fp})
+    return {"cid": cid, "sids": sids, "candidates": picked}
+
+
+def _reconcile_prompt(ctx: dict) -> list[dict]:
+    """The sweep's prompt, through the production `build_payload` /
+    `build_prompt`, for the candidates `build` specified -- stored on `ctx`
+    with the vocabularies, known scenes and verdicts the grader reads."""
+    payload = reconcile.build_payload(ctx["cid"], ctx["candidates"])
+    sent = payload["candidates"]
+    # Every case is sent, in order, under the vocabulary it needs, with each
+    # record found (a record missing from the ledger renders as its bare ref).
+    assert [c["id"] for c in sent] == [c["id"] for c in ctx["candidates"]], sent
+    assert [c["vocabulary"] for c in sent] == [case[4] for case in RECONCILE_CASES], sent
+    assert all(r["line"] != r["ref"] for c in sent for r in c["records"]), sent
+    # Every scene is known evidence: the recordings cite them by id.
+    assert payload["known_scenes"] == sorted(ctx["sids"]), payload["known_scenes"]
+    ctx["payload"] = payload
+    ctx["vocab"] = {c["key"]: reconcile.DECISIONS[c["vocabulary"]] for c in sent}
+    ctx["known"] = set(payload["known_scenes"])
+    ctx["expected"] = {}
+    for cand, (_, _, _, _, _, check, words, froms) in zip(sent, RECONCILE_CASES, strict=True):
+        letters = {r["ref"]: r["letter"] for r in cand["records"]}
+        ctx["expected"][cand["key"]] = {
+            "check": check, "decisions": words,
+            "from": {word: letters[ref] for word, ref in froms.items()}}
+    return reconcile.build_prompt(payload)
+
+
+#: The system prompt's opener and its one phrase per decision rule (Task 5's
+#: needles): the quoted words alone also appear in the vocabulary lines, so
+#: they would survive deleting every rule.
+RECONCILE_RULES = {
+    "asks_reconcile": "You are reviewing a campaign's story ledger for records that "
+                      "may overlap or be finished",
+    "asks_duplicate_rule": '"duplicate" only when both records are the same question '
+                           "or obligation",
+    "asks_continuation_is_not_duplicate": 'a narrower or later question is "continuation" '
+                                          'or "subthread", not "duplicate"',
+    "asks_cross_never_duplicate": 'A thread and a commitment are never "duplicate"',
+    "asks_age_is_not_evidence": "Age alone is never evidence that a thread is finished",
+    "asks_deadline_is_not_evidence": "A passed deadline alone is never evidence that a "
+                                     "promise was kept or broken",
+    "asks_evidence_scene": "name at least one evidence scene id from the lines shown",
+    "asks_no_invented_date": "Do not invent a date",
+}
+
+
+def grade_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
+    words = sorted({w for vocab in reconcile.DECISIONS.values() for w in vocab})
+    prompt = graders.grade_prompt(
+        ctx["messages"], {f"asks_{w}": f'"{w}"' for w in words} | RECONCILE_RULES)
+    return [*prompt, *graders.grade_reconcile(output, ctx["expected"], ctx["vocab"],
+                                              ctx["known"])]
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1087,6 +1273,25 @@ CASES: tuple[Case, ...] = (
              # verdict for the row it was given on.
              Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
                        "json"))),
+    Case(id="continuity-reconcile",
+         hypothesis="the reconciliation sweep keeps a same-topic question distinct, "
+                    "reads a concrete question as a continuation, never merges a thread "
+                    "with a commitment, closes or resolves only on a shown beat, and "
+                    "keeps an old or overdue record open when nothing settles it",
+         build=build_continuity_reconcile,
+         prompt=_reconcile_prompt,
+         grade=grade_continuity_reconcile,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("reconcile.json",), "json"),
+             # Both pairs merged, each with valid letters, so shape and enum
+             # still pass: what trips is exactly the two pair verdicts.
+             Recording("merged", ("reconcile.distinct", "reconcile.continuation"), "json"),
+             # A closure and a resolution on the two candidates nothing
+             # settles, each citing a shown scene, so evidence still passes.
+             Recording("eager", ("reconcile.keep_open", "reconcile.unproven"), "json"),
+             # The right word on the answered thread, with no scene cited.
+             Recording("unfounded", ("reconcile.evidence",), "json"))),
 )
 
 BY_ID = {c.id: c for c in CASES}

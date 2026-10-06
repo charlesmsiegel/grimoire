@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is seven pass/fail
+This suite closes that. It is not an eval framework; it is eight pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -21,6 +21,7 @@ stake in:
 | `turn-taking` | with four NPCs cast and `speaker_turn_taking` on, the reply is carried by the nominated speaker rather than by whoever has been monologuing |
 | `natural-prose` | a reply contains none of the stock names or literal banned phrases the selected Natural Prose (Legacy) guide lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
 | `continuity-identity` | the identity resolver maps a reworded duplicate to the existing record and keeps a same-topic question and a concrete continuation new; a row is only ever offered records of its own type |
+| `continuity-reconcile` | the reconciliation sweep keeps a same-topic question distinct, reads a concrete question as a continuation of the broad one, never merges a thread with a commitment, closes a thread or resolves a commitment only on a shown beat, and keeps an old or overdue record open when nothing shown settles it |
 
 ## Running it
 
@@ -148,6 +149,20 @@ can fail `identity.enum`. Its row keys are the one thing read the app's way
 `identity.examine` offers each row, and through which clause, so a change to
 the similarity floors fails there rather than leaving the case asking about
 nothing.
+`continuity-reconcile` follows the same rule for the same reason:
+`reconcile.parse_output` reads a word outside a candidate's vocabulary, a
+direction the relation does not allow and a closure with no known evidence
+scene all as `uncertain`, so `reconcile.enum`, `reconcile.shape` and
+`reconcile.evidence` score the raw object, and only candidate keys are read the
+app's way (a `Candidate c1` key is one the app accepts). Its candidates are
+specified by hand, one per §28.10 case 2–8, and sent through the production
+`reconcile.build_payload` / `build_prompt`, which key them `c1`… in the order
+they are sent (so case 2 is `c1`). Its `prompt` asserts that each case is sent
+under the vocabulary it needs and that every scene is known evidence, so a
+change there fails at build rather than leaving a recording citing a scene the
+parser would refuse. A verdict check reads the decision word alone, and
+`reconcile.evidence` judges the citation, so "the wrong call" and "the right
+call, unfounded" stay separable.
 
 ## Recordings
 
@@ -159,7 +174,8 @@ nothing.
 - Every other variant is a permanent hand-authored counterexample
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
-  `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`)
+  `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`,
+  `eager`, `unfounded`)
   and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —
