@@ -1,4 +1,7 @@
 import json
+import textwrap
+
+import pytest
 
 from grimoire.store import (
     appearances,
@@ -7,8 +10,11 @@ from grimoire.store import (
     characters,
     chronicle,
     clock,
+    commitments,
     entities,
+    events,
     overlay,
+    pcs,
     playing,
     plot,
     scenes,
@@ -16,6 +22,9 @@ from grimoire.store import (
     taglines,
     worlds,
 )
+from grimoire.store.continuity import doc as continuity_doc
+from grimoire.store.continuity import drivers as continuity_drivers
+from grimoire.store.continuity import pressure
 
 
 def _world(monkeypatch, tmp_path):
@@ -671,3 +680,263 @@ def test_greeting_candidates_do_not_rank_past_bounded_recommendations(monkeypatc
     monkeypatch.setattr(overlay, "read_greeting", lambda *args: {"body": "Opening."})
 
     assert suggest.greeting_candidates("run", after="scene") == []
+
+
+# ---- the driver capture (continuity capstone, Slice E) ----------------------
+
+#: The intent prompt's snapshot keys: what `build_snapshot(drivers=False)`
+#: returns, exactly.
+TODAY_KEYS = {"now", "friendly", "notation", "holidays_today", "events_today", "upcoming",
+              "birthdays", "story_so_far", "open_threads", "cast", "available_locations"}
+
+MAP = "thread:mara-s-map"
+OATH = "commitment:mara-s-oath"
+
+#: A plugin whose constructor raises something that is not a CalendarError
+#: (copied from Slice B's `test_continuity_pressure`). Every abstract method is
+#: defined, so the RuntimeError -- not an abstract-class TypeError -- is what
+#: reaches the caller.
+_BROKEN_PROVIDER_SRC = textwrap.dedent(
+    """
+    from grimoire.store.calendars.base import CalendarProvider, register
+
+    class _BrokenProvider(CalendarProvider):
+        def __init__(self, config):
+            raise RuntimeError("this calendar plugin is broken")
+
+        def parse(self, native):
+            return 0
+
+        def format(self, fixed):
+            return ""
+
+        def describe(self, fixed):
+            return {}
+
+        def holidays(self, start_fixed, end_fixed):
+            return []
+
+        def months(self, year):
+            return []
+
+    register("broken-test-calendar", _BrokenProvider, "Broken Test Calendar")
+    """
+)
+
+
+def _rule(name, month, day):
+    return {"name": name, "month": month, "day": day}
+
+
+def _pressure_campaign(monkeypatch, tmp_path, *, calendar="gregorian", now="2026-05-10",
+                       holidays=(), secondary=None):
+    """A campaign whose calendar observes exactly `holidays` (`region=""`
+    switches the Gregorian holiday library off), its clock at `now`."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Run", wid, calendar=calendar)
+    root = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(root)
+    cfg["primary"] = {**cfg["primary"], "region": "", "custom_holidays": list(holidays)}
+    if secondary is not None:
+        cfg["secondary"] = secondary
+    calendars.write_calendar(root, cfg)
+    if now is not None:
+        clock.advance(cid, to=now)
+    return cid
+
+
+def _map(cid, scene="001--gate"):
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                      "The map turned up in Saltmarch.", scene)
+
+
+def _oath(cid, due="2026-05-14", scene="001--gate"):
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open", due,
+                             "Mara swore it at the gate.", scene)
+
+
+def _recorder(monkeypatch, module, name):
+    """Replace `module.name` with a delegating call counter."""
+    real, calls = getattr(module, name), []
+
+    def record(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real(*args, **kwargs)
+    monkeypatch.setattr(module, name, record)
+    return calls
+
+
+def test_snapshot_has_ids_commitments_timeline_and_index(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    eid = events.create(cid, "The coronation", "2026-05-13")
+
+    snap = suggest.build_snapshot(cid)
+    assert [t["ref"] for t in snap["open_threads"]] == [MAP]
+    oath = snap["commitments"][0]
+    assert oath["ref"] == OATH
+    assert {"id", "kind", "due", "latest_beat", "dormancy"} <= set(oath)
+    assert (oath["id"], oath["kind"], oath["due"]) == ("mara-s-oath", "promise", "2026-05-14")
+    assert oath["pressure"]["state"] == "due_soon"
+    assert oath["pressure"]["in_days"] == 4
+    timeline = {(i["kind"], i["ref"]) for i in snap["timeline"]}
+    assert ("event", f"event:{eid}") in timeline
+    assert ("deadline", OATH) in timeline
+    assert {MAP, OATH, f"event:{eid}"} <= {d["ref"] for d in snap["driver_index"]}
+
+
+def test_unchanged_keys_are_unchanged(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path, holidays=[_rule("Saltmarch Eve", "05", 10)])
+    sid = scenes.create_scene(cid, "One")
+    chronicle.absorb(cid, {"id": sid, "one_line": "Mara reached Saltmarch.", "summary": "",
+                           "keywords": [], "cast": [], "location": "Saltmarch",
+                           "date": "2026-05-09"})
+    overlay.create_entity(cid, "locations", "Saltmarch")
+    aid, _ = overlay.create_character(cid, "Mara")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "1985-05-12")
+    events.create(cid, "The coronation", "2026-05-10")
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "The map turned up.", sid)
+    _oath(cid)
+
+    a, b = suggest.build_snapshot(cid), suggest.build_snapshot(cid, drivers=False)
+    unchanged = ("now", "friendly", "notation", "holidays_today", "events_today", "birthdays",
+                 "story_so_far", "cast", "available_locations")
+    for k in unchanged:
+        assert b[k], k   # a comparison between blanks would prove nothing
+    assert {k: a[k] for k in unchanged} == {k: b[k] for k in unchanged}
+    assert len(a["open_threads"]) == len(b["open_threads"]) == 1
+    for row_a, row_b in zip(a["open_threads"], b["open_threads"], strict=True):
+        assert {k: row_a[k] for k in row_b} == row_b
+
+
+def test_intent_snapshot_does_no_driver_work(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    events.create(cid, "The coronation", "2026-05-13")
+    # Recorders that delegate, not raisers: the new reads sit inside broad
+    # catches, which would swallow an AssertionError and pass.
+    builds = _recorder(monkeypatch, pressure, "build")
+    snaps = _recorder(monkeypatch, continuity_drivers, "snapshot")
+    assert set(suggest.build_snapshot(cid, drivers=False)) == TODAY_KEYS
+    assert (len(builds), len(snaps)) == (0, 0)
+
+
+def test_timeline_and_index_share_one_pressure_read(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    events.create(cid, "The coronation", "2026-05-13")
+    builds = _recorder(monkeypatch, pressure, "build")
+    snaps = _recorder(monkeypatch, continuity_drivers, "snapshot")
+    snap = suggest.build_snapshot(cid)
+    assert len(builds) == 1
+    assert len(snaps) == 1
+    assert snap["timeline"] and snap["driver_index"]
+
+
+_HEBREW = {"provider": "hebrew", "region": "", "custom_holidays": [], "anchor": None}
+
+
+@pytest.mark.parametrize(("now", "holidays", "secondary", "event"), [
+    ("2026-05-10", [], None, "2026-05-13"),
+    ("2026-05-10", [_rule("Saltmarch Eve", "05", 12)], None, None),
+    ("2026-05-10", [_rule("Saltmarch Eve", "05", 12)], None, "2026-05-12"),
+    ("2026-09-01", [], _HEBREW, None),
+], ids=["event", "holiday", "event-and-holiday", "secondary-holiday"])
+def test_timeline_contains_what_sooner_picks(monkeypatch, tmp_path, now, holidays,
+                                             secondary, event):
+    cid = _pressure_campaign(monkeypatch, tmp_path, now=now, holidays=holidays,
+                             secondary=secondary)
+    if event:
+        events.create(cid, "The coronation", event)
+    pick = suggest.build_snapshot(cid, drivers=False)["upcoming"]
+    assert pick is not None
+    snap = suggest.build_snapshot(cid)
+    [match, *_] = [i for i in snap["timeline"]
+                   if i["label"] == pick["name"] and i["in_days"] == pick["in_days"]]
+    assert match["ref"] == snap["sooner_ref"]
+    if secondary is not None:
+        # the pick is the secondary calendar's: no primary observance exists
+        assert match["kind"] == "holiday"
+
+
+def test_no_pick_means_no_sooner_ref(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    assert suggest.build_snapshot(cid, drivers=False)["upcoming"] is None
+    assert suggest.build_snapshot(cid)["sooner_ref"] == ""
+
+
+def test_links_among_drivers(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "closed",
+                      "The chart was burned.", "001--gate")
+    continuity_doc.put_link(cid, "l-1", {"a": MAP, "b": OATH, "relation": "pays_off",
+                                         "created": "", "scene": "", "note": ""})
+    continuity_doc.put_link(cid, "l-2", {"a": "thread:winifred-s-chart", "b": OATH,
+                                         "relation": "pays_off", "created": "", "scene": "",
+                                         "note": ""})
+    snap = suggest.build_snapshot(cid)
+    assert "thread:winifred-s-chart" not in {d["ref"] for d in snap["driver_index"]}
+    assert snap["links"] == [{"id": "l-1", "a": MAP, "b": OATH, "relation": "pays_off"}]
+
+
+def test_commitment_dormancy_counts_scenes(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    sids = [scenes.create_scene(cid, name) for name in ("One", "Two", "Three")]
+    for sid in sids:
+        chronicle.absorb(cid, {"id": sid, "one_line": "", "summary": "", "keywords": [],
+                               "cast": [], "location": "", "date": "2026-05-09"})
+    _oath(cid, scene=sids[0])
+    eid = events.create(cid, "The coronation", "2026-05-13")
+    snap = suggest.build_snapshot(cid)
+    assert snap["commitments"][0]["dormancy"] == 2
+    index = {d["ref"]: d for d in snap["driver_index"]}
+    assert index[OATH]["dormancy"] == 2
+    assert index[f"event:{eid}"]["dormancy"] is None
+
+
+def test_snapshot_survives_a_raising_plugin(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    eid = events.create(cid, "The coronation", "2026-05-13")
+    plugins = tmp_path / "calendars"
+    plugins.mkdir(exist_ok=True)
+    (plugins / "broken_test.py").write_text(_BROKEN_PROVIDER_SRC, encoding="utf-8")
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "broken-test-calendar", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+
+    legacy = suggest.build_snapshot(cid, drivers=False)
+    snap = suggest.build_snapshot(cid)
+    for s in (legacy, snap):
+        assert s["notation"] == {"example": "", "months": []}
+        assert (s["friendly"], s["holidays_today"], s["events_today"], s["birthdays"]) == (
+            "", [], [], [])
+    assert snap["timeline"] and all(i["fixed"] is None for i in snap["timeline"])
+    assert [i["ref"] for i in snap["timeline"]] == [f"event:{eid}"]
+    assert snap["anchors"] == []
+    assert {MAP, OATH} <= {d["ref"] for d in snap["driver_index"]}
+
+
+def test_offscreen_keeps_a_pc_birthday_driver_but_never_its_cast_token(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    root = campaigns.campaign_root(cid)
+    wid, vid = pcs.create_pc(root, "Winifred", [], persona={
+        **pcs.blank_persona("Winifred"), "birthdate": "--05-12"})
+    sid = scenes.create_scene(cid, "One")
+    appearances.appear(cid, sid, "pcs", wid, vid, "player")
+
+    snap = suggest.build_snapshot(cid, offscreen=True)
+    births = [d for d in snap["driver_index"] if d["ref"].startswith(f"birthday:pcs:{wid}:")]
+    assert len(births) == 1
+    assert births[0]["dormancy"] is None
+    assert f"pcs:{wid}" not in {c["token"] for c in snap["cast"]}

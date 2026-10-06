@@ -6,11 +6,19 @@ scene-intent, the metadata implied by the user's own typed description).
 Assembly + prompt/parse only; the LLM call lives in the route (mirrors
 absorb/prompt.py) and the prompt text in templates/scene_suggestions/ and
 templates/scene_intent/.
+
+The suggestion snapshot consumes the continuity projections (capstone spec
+§15): the commitments, a dated timeline (`pressure.build`'s items), the driver
+index (`drivers.snapshot`'s drivers), its anchors and the reviewed links
+between drivers -- one pressure computation at one `now`, shared by the
+timeline and the index. `build_snapshot(drivers=False)` is the intent prompt's
+legacy shape: exactly the keys it always had, and no pressure or driver work.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 
 from .. import prompts
 from . import (
@@ -28,7 +36,8 @@ from . import (
 from .appearances import cast as appearances_cast
 from .appearances import paths as appearances_paths
 from .campaigns import paths as campaigns_paths
-from .continuity import effective
+from .continuity import drivers as continuity_drivers
+from .continuity import effective, pressure
 
 
 def _char_name(aroot, aid: str) -> str:
@@ -101,7 +110,153 @@ def _notation(primary: dict, now: str) -> dict:
     return {"example": example, "months": months if len(months) <= NOTATION_MONTH_LIMIT else []}
 
 
-def build_snapshot(cid: str, offscreen: bool = False) -> dict:
+def _blank_calendar_facts() -> dict:
+    return {"notation": {"example": "", "months": []}, "friendly": "", "holidays_today": [],
+            "upcoming": None, "events_today": [], "birthdays": []}
+
+
+def _calendar_facts(cid: str, croot, now: str, roster: list[dict]) -> dict:
+    """`{notation, friendly, holidays_today, upcoming, events_today, birthdays}`
+    at `now`, or every field blank when the calendar cannot answer.
+
+    The narrower catches inside are exactly what this block always absorbed.
+    The broad one around it is for what used to escape: a primary calendar is
+    resolved by every read here (`_notation`, `today_facts`, `day_facts`,
+    `birthdays.upcoming`), and a user plugin's constructor can raise anything,
+    which used to fail the whole snapshot -- and the route with it -- rather
+    than degrade the prompt to an undated one (capstone spec §26).
+    """
+    try:
+        return _calendar_reads(cid, croot, now, roster)
+    except Exception:  # noqa: BLE001 -- user calendar plugin code can raise anything; §26 degrades to undated
+        return _blank_calendar_facts()
+
+
+def _calendar_reads(cid: str, croot, now: str, roster: list[dict]) -> dict:
+    out = _blank_calendar_facts()
+    if now:
+        cal_cfg = calendars.read_calendar(croot)
+        out["notation"] = _notation(cal_cfg["primary"], now)
+        upcoming = None
+        try:
+            facts = calendars.today_facts(cal_cfg, now)
+            out["friendly"], out["holidays_today"], upcoming = (
+                facts["friendly"], facts["holidays_today"], facts["upcoming"])
+        except (calendars.CalendarError, KeyError):
+            pass
+        # The campaign's scheduled events (#101), merged into the same two
+        # fields the calendar's holidays feed — the same merge, through the same
+        # `sooner`, that the Today prompt section makes. A suggestion prompt that
+        # knew about the coronation while the scene block did not (or the other
+        # way round) is exactly the drift that reads as the model inventing
+        # things. `day_facts` is tolerant end to end, so no guard here.
+        scheduled = events.day_facts(cid, croot, now)
+        out["events_today"] = scheduled["events_today"]
+        out["upcoming"] = events.sooner(upcoming, scheduled["upcoming"])
+    out["birthdays"] = birthdays.upcoming(cid, now, roster, visible_characters=True)
+    return out
+
+
+#: The floor of the near-future window, in days: `near` asks for a date in
+#: `[now, now + max(warn_days, NEAR_MIN_DAYS)]` (spec §15), so a campaign that
+#: warns late, or not at all, still has a week to place a near scene in.
+NEAR_MIN_DAYS = 7
+
+#: A commitment's reading when no driver answers for it.
+_NO_READING = {"state": "ok", "in_days": None, "friendly": ""}
+
+#: The kinds whose timeline items `events.sooner` can pick: the Upcoming line
+#: merges the calendar's holidays and the campaign's scheduled events only.
+_SOONER_KINDS = frozenset({"event", "holiday"})
+
+
+def _dormancy_of(scene_ids: list[str]) -> Callable[[str], int]:
+    """Scenes since `last_scene`, over the chronicle's sorted scene ids."""
+    def dormancy(last_scene: str) -> int:
+        if last_scene and last_scene in scene_ids:
+            return len(scene_ids) - 1 - scene_ids.index(last_scene)
+        return len(scene_ids)  # unknown/missing last_scene (deleted or not-yet-absorbed scene) -> treat as maximally cold
+    return dormancy
+
+
+def _commitment_rows(cid: str) -> list[dict]:
+    try:
+        return effective.commitments_or_physical(cid)
+    except Exception:  # noqa: BLE001 -- garbled commitments.json costs the commitments, never the snapshot
+        return []
+
+
+def _pressure_of(cid: str, now: str) -> dict:
+    try:
+        return pressure.build(cid, now=now)
+    except Exception:  # noqa: BLE001 -- pressure is meant never to raise; if it does, the prompt loses its dates, not its drivers
+        return {"now": now, "friendly": "", "fixed": None, "items": []}
+
+
+def _near_days(croot) -> int:
+    try:
+        return max(calendars.warn_days(croot), NEAR_MIN_DAYS)
+    except Exception:  # noqa: BLE001 -- an unreadable calendar.json still gets the floor
+        return NEAR_MIN_DAYS
+
+
+def _links_among(index: list[dict]) -> list[dict]:
+    """`[{id, a, b, relation}]` rebuilt from each driver's own `links`, one per
+    link id, keeping only links whose two endpoints are both in `index`."""
+    refs = {d["ref"] for d in index}
+    out: list[dict] = []
+    seen: set[str] = set()
+    for d in index:
+        for link in d["links"]:
+            if link["id"] in seen:
+                continue
+            seen.add(link["id"])
+            if link["direction"] == "out":
+                a, b = d["ref"], link["other"]
+            elif link["direction"] == "in":
+                a, b = link["other"], d["ref"]
+            else:
+                a, b = sorted((d["ref"], link["other"]))
+            if a in refs and b in refs:
+                out.append({"id": link["id"], "a": a, "b": b, "relation": link["relation"]})
+    return out
+
+
+def _sooner_ref(timeline: list[dict], upcoming: dict | None) -> str:
+    """The timeline item `events.sooner` picked for the Upcoming line, or ""."""
+    if not upcoming:
+        return ""
+    return next((i["ref"] for i in timeline
+                 if i["kind"] in _SOONER_KINDS and i["label"] == upcoming["name"]
+                 and i["in_days"] == upcoming["in_days"]), "")
+
+
+def _driver_capture(cid: str, offscreen: bool, now: str, croot, open_threads: list[dict],
+                    dormancy: Callable[[str], int], upcoming: dict | None) -> dict:
+    """The snapshot's continuity half: commitments, timeline, driver index,
+    anchors, links, the near window and the Upcoming pick's ref. One
+    `pressure.build` feeds both the timeline and the index."""
+    p = _pressure_of(cid, now)
+    snap = continuity_drivers.snapshot(cid, offscreen, pressure_result=p)
+    by_ref = {d["ref"]: d for d in snap["drivers"]}
+    for t in open_threads:
+        t["ref"] = f"thread:{t['id']}"
+    commitments = [{**c, "ref": f"commitment:{c['id']}",
+                    "dormancy": dormancy(c.get("last_scene", ""))}
+                   for c in _commitment_rows(cid)]
+    for c in commitments:
+        found = by_ref.get(c["ref"])
+        c["pressure"] = dict(found["pressure"] if found else _NO_READING)
+    cold = {row["ref"]: row["dormancy"] for row in (*open_threads, *commitments)}
+    index = [{**d, "dormancy": (cold.get(d["ref"], dormancy(""))
+                                if d["kind"] in {"thread", "commitment"} else None)}
+             for d in snap["drivers"]]
+    return {"commitments": commitments, "timeline": p["items"], "driver_index": index,
+            "anchors": snap["anchors"], "links": _links_among(index), "fixed": p["fixed"],
+            "near_days": _near_days(croot), "sooner_ref": _sooner_ref(p["items"], upcoming)}
+
+
+def build_snapshot(cid: str, offscreen: bool = False, *, drivers: bool = True) -> dict:
     croot = campaigns_paths.campaign_root(cid)    # calendar.json is campaign-local
     aroot = appearances_paths.locked_actor_root(cid)    # roster actors are locked, so campaign-side
     roster = appearances_cast.roster(cid)
@@ -132,34 +287,11 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     except Exception:  # noqa: BLE001 — garbled chronicle.json
         scene_ids = []
 
-    def _dormancy(last_scene: str) -> int:
-        if last_scene and last_scene in scene_ids:
-            return len(scene_ids) - 1 - scene_ids.index(last_scene)
-        return len(scene_ids)  # unknown/missing last_scene (deleted or not-yet-absorbed scene) -> treat as maximally cold
-
+    _dormancy = _dormancy_of(scene_ids)
     for t in open_threads:
         t["dormancy"] = _dormancy(t.get("last_scene", ""))
 
-    friendly, holidays_today, upcoming = "", [], None
-    events_today: list[str] = []
-    notation = {"example": "", "months": []}
-    if now:
-        cal_cfg = calendars.read_calendar(croot)
-        notation = _notation(cal_cfg["primary"], now)
-        try:
-            facts = calendars.today_facts(cal_cfg, now)
-            friendly, holidays_today, upcoming = facts["friendly"], facts["holidays_today"], facts["upcoming"]
-        except (calendars.CalendarError, KeyError):
-            pass
-        # The campaign's scheduled events (#101), merged into the same two
-        # fields the calendar's holidays feed — the same merge, through the same
-        # `sooner`, that the Today prompt section makes. A suggestion prompt that
-        # knew about the coronation while the scene block did not (or the other
-        # way round) is exactly the drift that reads as the model inventing
-        # things. `day_facts` is tolerant end to end, so no guard here.
-        scheduled = events.day_facts(cid, croot, now)
-        events_today = scheduled["events_today"]
-        upcoming = events.sooner(upcoming, scheduled["upcoming"])
+    cal = _calendar_facts(cid, croot, now, roster)
 
     present = {_tok(ref) for ref in (recent[-1].get("cast") or [])} if recent else set()
     roster_tokens = {f"{a['kind']}:{a['id']}" for a in roster}
@@ -205,13 +337,16 @@ def build_snapshot(cid: str, offscreen: bool = False) -> dict:
     available_locations = [{"id": e["id"], "name": e.get("name", e["id"])}
                            for e in overlay.list_entities(cid, "locations")]
 
-    return {"now": now, "friendly": friendly, "notation": notation,
-            "holidays_today": holidays_today,
-            "events_today": events_today,
-            "upcoming": upcoming, "birthdays": birthdays.upcoming(
-                cid, now, roster, visible_characters=True),
-            "story_so_far": story_so_far, "open_threads": open_threads,
-            "cast": cast, "available_locations": available_locations}
+    out = {"now": now, "friendly": cal["friendly"], "notation": cal["notation"],
+           "holidays_today": cal["holidays_today"],
+           "events_today": cal["events_today"],
+           "upcoming": cal["upcoming"], "birthdays": cal["birthdays"],
+           "story_so_far": story_so_far, "open_threads": open_threads,
+           "cast": cast, "available_locations": available_locations}
+    if drivers:
+        out.update(_driver_capture(cid, offscreen, now, croot, open_threads, _dormancy,
+                                   cal["upcoming"]))
+    return out
 
 
 GREETING_EXCERPT = 300
