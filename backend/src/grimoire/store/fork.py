@@ -67,7 +67,7 @@ import json
 import logging
 import shutil
 
-from . import atomic, branch, cascade, locks, revision, scene_ids
+from . import atomic, branch, cascade, locks, replay, revision, scene_ids
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -712,4 +712,13 @@ def _cut_at(cid: str, sid: str, through: int, report: dict) -> dict:
     except Exception:
         log.warning("fork %s: could not prune the tracker of %s", cid, sid, exc_info=True)
         out["failed"].append(f"{sid}/tracker")
+    # The copied stored-rewrite record still holds the originals of the posts
+    # just cut; they leave with them, as after any cut. Fail-soft by contract
+    # (`rewrites.prune`). The copy's running replay, if any, keeps what it holds.
+    try:
+        held = replay.held(cid, sid)
+    except Exception:
+        log.warning("fork %s: could not read the replay backlog of %s", cid, sid, exc_info=True)
+    else:
+        regex_rewrites.prune(cid, sid, held=held)
     return out

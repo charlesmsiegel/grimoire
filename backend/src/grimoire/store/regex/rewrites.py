@@ -198,6 +198,31 @@ def carry(cid: str, sid: str, rid: str, before: str, after: str, *, skip: str = 
             _write(p, records)
 
 
+def copy_for_branch(cid: str, src_identity: str, dst_identity: str,
+                    rid_map: dict[str, str]) -> None:
+    """Copy scene `src_identity`'s records into a branch's file (play controls
+    III), each under the key its message has in the branch: a model reply's
+    response id is reissued there (`rid_map`), so `<rid>` and `<rid>#<part>`
+    keys follow it, while a `post_id` and every variant id are copied with
+    their messages unchanged. A key naming a response the branch does not
+    keep is left behind -- its message is not in the copy. The caller prunes
+    after the branch's cut, as any cut does. Writes nothing when nothing is
+    copied, and never creates a file for a source without one."""
+    with locks.campaign_lock(cid):
+        records = _read(path(cid, src_identity))
+        if not records:
+            return
+        out: dict[str, dict] = {}
+        for key, rec in records.items():
+            rid, sep, part = key.partition("#")
+            if rid in rid_map:
+                out[rid_map[rid] + sep + part] = dict(rec)
+            elif not sep:
+                out[key] = dict(rec)    # a post_id key, which the copy keeps
+        if out:
+            _write(path(cid, dst_identity), out)
+
+
 def forget(cid: str, sid: str, key: str) -> None:
     """Drop the record of `key`, if there is one. Writes nothing when there is
     none -- in particular, never creates the file."""

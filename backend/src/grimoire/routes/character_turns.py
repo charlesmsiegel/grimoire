@@ -1560,7 +1560,7 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
                     "actor_ref": record["actor_ref"],
                     # The reply as shown, which the live bubble grows from and a
                     # re-attached client rebuilds the same view with.
-                    **({"extend": {"seed": extend.old}} if extend is not None else {}),
+                    **({"extend": {"seed": extend.seed or extend.old}} if extend is not None else {}),
                 }
             }
         )
@@ -1677,7 +1677,9 @@ class ExtendPlan:
     own turn: `old`, except while the reply is still split into parts by a
     declined roll, when the prompt is the latest resume snapshot -- which
     already holds the earlier parts as history -- and `partial` is the last
-    part alone (plan-gate ruling 1)."""
+    part alone (plan-gate ruling 1). `partial` is in the prompt view, as any
+    history the model reads is; `seed` is the reply in the display view, which
+    the live bubble shows ahead of the continuation (`store/regex`)."""
 
     record: dict
     old: str
@@ -1687,6 +1689,7 @@ class ExtendPlan:
     settings: dict | None
     extends: str
     words: int | None
+    seed: str = ""
 
 
 _EXTEND_RETAINED = "The previous response was retained."
@@ -1734,16 +1737,39 @@ def _extend_target(cid: str, sid: str, rid: str) -> ExtendPlan:
     if active is None or active.get("status") != "complete":
         raise _refuse("variant_incomplete", "Only a completed reply can be continued.")
     parts = [m for m in messages if m.get("response_id") == rid and m.get("response_part")]
+    # The reply as the model is shown it (the prompt view, like any history it
+    # reads) and as the screen shows it (the display view, which the live
+    # bubble grows from); `old` stays the stored text the continuation joins.
+    shown = _extend_views(cid, messages, rid)
     if parts and record.get("resume_snapshot"):
         snapshot, composed = record["resume_snapshot"], "resume"
-        settings, partial = record.get("resume_settings"), parts[-1]["content"]
+        settings = record.get("resume_settings")
+        partial = shown["prompt"][-1] if shown["prompt"] else parts[-1]["content"]
     else:
         snapshot, composed = record["snapshot"], "primary"
-        settings, partial = record.get("settings"), record["content"]
+        settings = record.get("settings")
+        partial = "\n\n".join(shown["prompt"]) if shown["prompt"] else record["content"]
     return ExtendPlan(record=record, old=record["content"], partial=partial,
                       snapshot=snapshot, composed=composed, settings=settings,
                       extends=record["active_variant"],
-                      words=(settings or {}).get("words"))
+                      words=(settings or {}).get("words"),
+                      seed="\n\n".join(shown["display"]) if shown["display"] else record["content"])
+
+
+def _extend_views(cid: str, messages: list[dict], rid: str) -> dict[str, list[str]]:
+    """Each part of response `rid` in the `prompt` and `display` views, depth
+    counted over the whole transcript (`store/regex`). Empty lists when the
+    transcript holds no part of it."""
+    own = [i for i, m in enumerate(messages) if m.get("response_id") == rid]
+    if not own:
+        return {"prompt": [], "display": []}
+    lo = own[0]
+    out = {}
+    for phase in ("prompt", "display"):
+        window = store.regex.view.view(messages[lo:], cid=cid, phase=phase, offset=lo,
+                                       total=len(messages))
+        out[phase] = [window[i - lo].get("content", "") for i in own]
+    return out
 
 
 def _served_mode(messages, meter, conn) -> str:
@@ -1770,18 +1796,78 @@ def _accept_extend(cid, sid, rid, run, token, watcher, plan: ExtendPlan, mode: s
             # Its body is kept as reasoning, as the watcher would have kept it.
             raw, note = store.response_protocol.strip_preparation(raw)
         lead = raw[: len(raw) - len(raw.lstrip())]
-        text, issue, _rewrite = _normalise(cid, sid, plan.record, raw, connection)
+        text, issue, rewrite = _normalise(cid, sid, plan.record, raw, connection)
         if not text:
             return "replacement_incomplete", _EXTEND_RETAINED
         previous: dict = next(
             (v for v in plan.record["variants"] if v["id"] == plan.extends), {})
-        _land_variant(cid, sid, rid, plan.old + _extend_joiner(lead, text, mode) + text,
+        joiner = _extend_joiner(lead, text, mode)
+        _land_variant(cid, sid, rid, plan.old + joiner + text,
                       # The reply's handoff was decided when it was written; a
                       # continuation's own fence (if any) is not a second one.
                       handoff=previous.get("handoff"), issue=issue,
                       reasoning=watcher.reasoning + watcher.preparation_note + note,
-                      tracked=tracked, made_by=made_by, connection=connection)
+                      tracked=tracked, made_by=made_by, connection=connection,
+                      rewrite=_extend_rewrite(cid, sid, rid, plan, joiner, text, rewrite))
         return None
+
+
+def _extend_rewrite(cid, sid, rid, plan: ExtendPlan, joiner: str, text: str,
+                    rewrite: tuple[str, list[str]] | None) -> tuple[str, list[str]] | None:
+    """`(original, fired rule ids)` for the Keep writing variant `plan.old +
+    joiner + text`, or None when no part of it holds a stored rewrite.
+
+    The variant is one message (activating it folds the reply's parts), so its
+    record covers the whole text: each part of the reply it extends in its
+    recorded original where a record still describes that part for the
+    variant extended (`_extends_record`), then the joiner, then the
+    continuation before the store phase rewrote it (`rewrite`). Without it, a
+    continuation with nothing to rewrite would leave the reply's own record
+    describing the variant swiped away from, and Restore original gone from a
+    reply that still holds rewritten text. Called inside the accept's hold."""
+    olds, rules, changed = [plan.old], [], False
+    records = store.regex.rewrites.read_all(cid, sid)
+    if records:
+        parts = [m for m in store.scenes.read_scene(cid, sid)["messages"]
+                 if m.get("response_id") == rid]
+        if parts and "\n\n".join(m.get("content", "") for m in parts) == plan.old:
+            olds = []
+            for m in parts:
+                rec = _extends_record(m, parts[0], records, plan.extends)
+                olds.append(rec["original"] if rec else m.get("content", ""))
+                if rec:
+                    rules += rec.get("rules", [])
+                    changed = True
+    if rewrite:
+        rules += rewrite[1]
+        changed = True
+    if not changed:
+        return None
+    original = "\n\n".join(olds) + joiner + (rewrite[0] if rewrite else text)
+    return original, list(dict.fromkeys(rules))
+
+
+def _extends_record(message: dict, first: dict, records: dict[str, dict],
+                    variant: str) -> dict | None:
+    """The stored-rewrite record that still describes one part of the reply a
+    Keep writing run extends, or None -- the reading the scene read and Restore
+    use (`routes.scenes._record_for`), narrowed to the variant extended."""
+    rid = message.get("response_id") or ""
+
+    def describes(m: dict, rec: dict) -> bool:
+        return (rec.get("variant") in (None, variant)
+                and str(rec.get("stored", "")).strip() == str(m.get("content", "")).strip())
+
+    for key in store.regex.rewrites.candidates(message):
+        rec = records.get(key)
+        if (rec is None or not store.regex.rewrites.claims(message, key, rec)
+                or not describes(message, rec)):
+            continue
+        if (first is not message and key == rid and message.get("response_part")
+                and describes(first, rec)):
+            continue    # the first part owns its bare key on a tie
+        return rec
+    return None
 
 
 #: What may open a continuation that joins its reply with a space rather than a

@@ -35,6 +35,7 @@ from .appearances import paths as appearances_paths
 from .audit import baselines
 from .frontmatter import dump_frontmatter
 from .paths import now_iso, slugify, uniquify
+from .regex import rewrites as regex_rewrites
 from .scenes import identity as scenes_identity
 from .scenes import lifecycle as scenes_lifecycle
 from .scenes import paths as scenes_paths
@@ -203,6 +204,10 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
             # Appearances before the cut: the cut reads the player cast.
             appearances_paths.join_branch(cid, sid, new_sid, through)
             responses.clone_for_branch(cid, sid, new_sid, rid_map, locked)
+            # The store phase's records travel with the posts they describe,
+            # under the reissued response ids, so Restore original works in
+            # the sibling as it did in the source.
+            regex_rewrites.copy_for_branch(cid, src_ident, new_ident, rid_map)
             baselines.copy_baseline(cid, sid, new_sid)
             tracker_records.clone(cid, src_ident, new_ident, rid_map)
             # The scene's author's note, under the sibling's own identity
@@ -213,6 +218,8 @@ def branch_scene(cid: str, sid: str, through: int, *, title: str = "") -> str:
             if through < len(messages) - 1:
                 scenes_write.delete_from(cid, new_sid, through + 1)
                 tracker_walk.prune(cid, new_sid)
+                # The cut posts' originals leave with them, as after any cut.
+                regex_rewrites.prune(cid, new_sid)
             # Last: an appended roll entry is the one write the cleanup below
             # cannot take back.
             source_rolls = [e for e in rolls.read(cid) if e.get("scene") == sid]
@@ -235,12 +242,26 @@ def discard(cid: str, sid: str) -> None:
     Takes no lock of its own: it relies on its callers holding
     `locks.campaign_lock(cid)` -- `branch_scene`'s build hold and the replay
     door's hold both do -- so the delete lands inside the hold that built the
-    sibling and nothing can read the half-built scene in between."""
+    sibling and nothing can read the half-built scene in between.
+
+    The stored-rewrite file is dropped here, by the identity read before the
+    delete, since `delete_scene` cannot (`store.regex` imports `store.scenes`)."""
+    identity = None
+    try:
+        identity = scenes_identity.scene_identity(cid, sid)
+    except Exception:
+        log.warning("branch: could not read the identity of %s/%s", cid, sid, exc_info=True)
     try:
         scenes_lifecycle.delete_scene(cid, sid)
     except Exception:
         log.warning("branch: could not delete the half-built sibling %s/%s", cid, sid,
                     exc_info=True)
+    if identity:
+        try:
+            regex_rewrites.drop(cid, identity)
+        except Exception:
+            log.warning("branch: could not drop the stored rewrites of %s/%s", cid, sid,
+                        exc_info=True)
     try:
         baselines.drop_baseline(cid, sid)
     except Exception:
