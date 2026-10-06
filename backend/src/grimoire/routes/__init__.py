@@ -23,6 +23,8 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``authors_notes`` /campaigns/{cid}/authors-notes and a scene's author's note
   ``weather``     /campaigns/{cid}/weather
   ``mechanics``   rolls, roll proposals, checks, campaign module and sheets
+  ``maintenance`` /maintenance/images, the image store's migration and
+                  collection runs and their reports
   ``usage``       /usage/summary, /campaigns/{cid}/usage cost rollups, /pricing
   ``search``      /search, the keyword sweep over content and facts
   ``tracker``     /campaigns/{cid}/tracker, the scene state tracker
@@ -74,6 +76,7 @@ from . import (
     greetings,
     images,
     ledger,
+    maintenance,
     mechanics,
     models,
     modules,
@@ -176,7 +179,7 @@ def _compose(domain: APIRouter) -> None:
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
 for _domain in (config, modules, worlds, characters, world_images, images, greetings,
-                runs, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
+                runs, maintenance, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
                 campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
     _compose(_domain.router)
 

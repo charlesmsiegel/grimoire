@@ -304,6 +304,77 @@ export type DataDirInfo = {
   source: "env" | "custom" | "default";
   exists: boolean;
 };
+/** What an image-store migration reports, planned or done (stage 4, spec §11).
+ *  A dry run and a real run share this shape: `dry_run` says which, and the
+ *  "what it did" counters are zero in a dry run. `outcome` is how the pass
+ *  ended; `state` is only present on the minimal report a pass that raised
+ *  leaves behind. */
+export type ImageMigrationReport = {
+  kind: "image-migration";
+  run_id?: string;
+  mode?: "plan" | "migrate";
+  dry_run: boolean;
+  outcome: "done" | "cancelled" | "failed" | "root-changed";
+  state?: string;
+  error?: string | null;
+  stopped_at?: string | null;
+  legacy_files: number;
+  unique_images: number;
+  exact_duplicates: number;
+  pixel_variants: number;
+  bytes_before: number;
+  bytes_after: number;
+  bytes_reclaimed: number;
+  description_conflicts: number;
+  placed: number;
+  already_placed: number;
+  legacy_deleted: number;
+  /** Files left where they were, and why (`path` is store-relative). */
+  untouched: { path: string; reason: string }[];
+  skipped: { reason?: string; path?: string }[];
+  errors: { reason?: string; path?: string; error?: string }[];
+  format1_collections: unknown[];
+  collections_converted: unknown[];
+  collections_kept: unknown[];
+};
+/** One image the collector would delete: `blob` is the blob key, `bytes` what
+ *  deleting it frees (the blob only counts when every holder goes too). */
+export type ImageGcRow = { id: string | null; blob: string; bytes: number };
+/** An unreachable image that is not collectable yet. `collectable_at` is epoch
+ *  seconds, `null` when no date can be promised (unreadable sidecars). */
+export type ImageGcProtected = {
+  id: string | null; blob: string | null; why: string; collectable_at: number | null;
+};
+export type ImageGcBlocker = { path: string; reason: string };
+/** What the collector reports. `mode` `scan` is the dry run; `collect` the
+ *  deletion. `token` is single-use and only present when something is
+ *  collectable and nothing blocked the walk. Times are epoch seconds. */
+export type ImageGcReport = {
+  kind: "image-gc";
+  mode: "scan" | "collect";
+  run_id: string;
+  state: "complete" | "blocked" | "cancelled" | "refused" | "root-changed" | "failed"
+    | "running";
+  grace_days: number | null;
+  counts: {
+    placements: number; objects: number; blobs: number; unreferenced: number;
+    collectable: number; collectable_blobs: number; protected: number;
+  };
+  collectable: ImageGcRow[];
+  collectable_blobs: ImageGcRow[];
+  protected: ImageGcProtected[];
+  reclaimable_bytes: number;
+  blocking: ImageGcBlocker[];
+  unreadable_sidecars: string[];
+  clock_skew: { id: string | null; blob: string | null; what: string }[];
+  token: string | null;
+  token_expires_at: number | null;
+  deleted: { objects: string[]; blobs: string[]; bytes: number };
+  skipped: { id: string | null; blob: string | null; reason: string }[];
+  kept_blobs: { id: string; blob: string; reason: string }[];
+  error: string | null;
+};
+export type ImageMaintenanceReport = ImageMigrationReport | ImageGcReport;
 /** A file a sync client left behind when two devices wrote the same record
  *  (#35). `path` is relative to the store root, slash-separated. */
 export type StoreConflict = {

@@ -14,6 +14,7 @@ import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
 import { ModelRoutingPicker } from "../components/ModelRoutingPicker";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
 import { SamplerPresetEditor } from "../components/SamplerPresetEditor";
+import { ImageStoreCard } from "../components/ImageStoreCard";
 import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
@@ -590,6 +591,10 @@ export default function ConfigView() {
             {/* Remounted on a move: the notice describes one library, and the
                 pointer now names a different one. */}
             <StoreConflictNotice key={storeEpoch} />
+            {/* Remounted on a move too: a run the card is following belongs to
+                the library it started in, and a move is refused while one is
+                live, so what this shows after one is the new library's. */}
+            <ImageStoreCard key={`image-store-${storeEpoch}`} />
           </>
         )}
 

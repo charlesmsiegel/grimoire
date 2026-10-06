@@ -30,7 +30,7 @@ import {
   type Scene, type ResponseRecord, type ResponseSwipe, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
-  type DataDirInfo, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
+  type DataDirInfo, type ImageMaintenanceReport, type DivergedRecord, type Dossiers, type EntityDetail, type EntityKind,
   type EntityScope,
   type EntitySummary, type ErrorSummary, type GalleryImage, type Greeting, type GreetingDetail, type GreetingDraft,
   type GroupState, type HealthCheckResult,
@@ -1164,6 +1164,29 @@ export const api = {
    *  the operation nobody sees happen. */
   createBackup: () => request<BackupRun>("POST", "/api/backups"),
   createImageBackup: () => request<ImageBackupRun>("POST", "/api/backups/images"),
+  // The image store's migration and collection (stage 4). A start is a 202 with
+  // a run, `attempt` is its idempotency key, and the report -- read back by run
+  // id, which outlives the run's own record -- is the result. Cancel is the
+  // GLOBAL run cancel: these runs belong to the app, not to a world.
+  startImageMigration: (dry_run: boolean, attempt: string, signal?: AbortSignal) =>
+    request<{ run: RunHandle }>("POST", "/api/maintenance/images/migrate",
+                                { dry_run }, { attempt, signal }),
+  startImageGc: (body: { dry_run: boolean; token?: string }, attempt: string,
+                 signal?: AbortSignal) =>
+    request<{ run: RunHandle }>("POST", "/api/maintenance/images/gc", body,
+                                { attempt, signal }),
+  listGlobalRuns: (signal?: AbortSignal) =>
+    request<{ runs: RunHandle[] }>("GET", "/api/runs", undefined,
+                                   { fresh: true, signal }),
+  getGlobalRun: (id: string, signal?: AbortSignal) =>
+    request<{ run: RunHandle }>("GET", `/api/runs/${encodeSegment(id)}`, undefined,
+                                { fresh: true, signal }),
+  cancelGlobalRun: (id: string) =>
+    request<{ run: RunHandle }>("POST", `/api/runs/${encodeSegment(id)}/cancel`),
+  getImageMaintenanceReport: (runId: string, signal?: AbortSignal) =>
+    request<ImageMaintenanceReport>(
+      "GET", `/api/maintenance/images/reports/${encodeSegment(runId)}`, undefined,
+      { fresh: true, signal }),
   getDataDir: () => request<DataDirInfo>("GET", "/api/config/data-dir"),
   // `fresh`: the whole reason to ask is to see the store as it is *now* --
   // after a move, or after the user has been out to their file manager to
