@@ -2126,7 +2126,8 @@ export type ContinuityCandidates = {
   run: RunHandle | null;
   /** A display name for every scene id, actor ref and event ref mentioned. */
   names: Record<string, string>;
-  /** Every scene, newest first by play order. */
+  /** Every scene, newest first by play order -- for a finding's detail, so it
+   *  is empty when the cache holds no finding (the read skips the scene list). */
   scenes: { id: string; title: string }[];
   candidates: ContinuityCandidate[];
 };

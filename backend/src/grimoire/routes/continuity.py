@@ -314,9 +314,29 @@ def _live_reconcile(request: Request, cid: str) -> dict | None:
     return runs.run_payload(live[-1]) if live else None
 
 
+def _diagnostics(cid: str, ledgers: effective.Ledgers) -> dict:
+    return {**effective.diagnostics(cid, ledgers), "malformed": doc.malformed(cid),
+            "cache_malformed": candidates.malformed(cid)}
+
+
 @router.get("/campaigns/{cid}/continuity/candidates")
 def get_candidates(cid: str, request: Request):
     _campaign_or_404(cid)
+    cache = candidates.read(cid)
+    if not cache["records"]:
+        # Nothing cached -- no sweep yet, one that found nothing, or a cache
+        # that will not parse -- so there is nothing to join (Todo's cost rule,
+        # `pending.findings`). The Ledger mounts this read for every section
+        # and re-reads it on every write, so it answers without the pressure
+        # pass, the current view or the scene list: `scenes` and `names` exist
+        # to label findings, and only an open finding's detail reads them.
+        # What the top level says with no findings still answers.
+        with store.locks.best_effort_campaign_lock(cid):
+            ledgers = effective.Ledgers.load(cid)
+        return {"generated": cache["generated"], "matching": drivers.matching(),
+                "diagnostics": _diagnostics(cid, ledgers),
+                "run": _live_reconcile(request, cid), "names": {}, "scenes": [],
+                "candidates": []}
     # Outside the hold: the scene list, and pressure, which can run user
     # calendar-plugin code that §11.1 keeps out of every lock hold -- a slow
     # plugin must not hold up a save or an apply behind a read.
@@ -330,9 +350,7 @@ def get_candidates(cid: str, request: Request):
         found = [_candidate(current, key, record, verdict, titles, scene_ids, pressure)
                  for key, record, verdict in pending.findings(cid, current)
                  if verdict in pending.VISIBLE]
-    diagnostics = {**effective.diagnostics(cid, current.ledgers),
-                   "malformed": doc.malformed(cid),
-                   "cache_malformed": candidates.malformed(cid)}
+    diagnostics = _diagnostics(cid, current.ledgers)
     scenes = [{"id": r["id"], "title": titles[r["id"]]}
               for r in reversed(reconcile.play_order(rows or []))]
     return {"generated": candidates.read(cid)["generated"], "matching": drivers.matching(),
