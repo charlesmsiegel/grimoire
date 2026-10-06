@@ -772,13 +772,18 @@ def schedule_reconcile(app, cid: str, client: LLMClient, *, edits: list | None =
     A trigger that adopts a live sweep leaves its refs on the registry for that
     run to take after its pass (Decision 6). A run reserved fresh whose start
     raised has already been released by `runs.reservation`; a reservation that
-    raised left nothing to release; an adopted run is someone else's."""
+    raised left nothing to release; an adopted run is someone else's. A
+    reservation the store move refused comes back as None rather than raising,
+    and is logged as the skipped sweep it is (§26)."""
     if not AUTO_RECONCILE:
         return
     try:
         refs = set(touched) | _touched_refs(edits or [], progress or {})
         reserved = start_reconcile(app, cid, client, full=False, touched=tuple(sorted(refs)))
-        if reserved is not None and not reserved[1] and refs:
+        if reserved is None:
+            log.warning("skipped the continuity sweep for %s -- the storage location "
+                        "is being changed", cid)
+        elif not reserved[1] and refs:
             app.state.runs.pend_touched(runs.campaign_subject(cid), refs)
     except Exception as exc:  # noqa: BLE001 -- the save already landed; a sweep is never its failure
         log.warning("could not start the continuity sweep for %s -- %s", cid,

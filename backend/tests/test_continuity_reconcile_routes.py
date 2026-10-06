@@ -781,6 +781,26 @@ def test_schedule_reconcile_never_raises(client, monkeypatch, caplog):
     assert client.app.state.runs.for_subject(runs.campaign_subject(cid)) == []
 
 
+@pytest.mark.reconcile
+def test_a_sweep_refused_during_a_storage_move_is_logged(client, monkeypatch, caplog):
+    """§11.1, §26: a reservation the store move refuses is a skipped sweep, and
+    it is logged like any other start failure -- not dropped in silence because
+    the refusal comes back as ``None`` rather than raising."""
+    _wid, cid, _sid = _campaign(client)
+
+    def moving(*_a, **_k):
+        raise runs.StoreMovingError
+
+    monkeypatch.setattr(client.app.state.runs, "start_or_existing", moving)
+    with caplog.at_level(logging.WARNING, logger="grimoire"):
+        continuity_routes.schedule_reconcile(client.app, cid, from_entries([_entry(_reply())]))
+
+    assert [r for r in caplog.records
+            if r.levelno == logging.WARNING and r.name.startswith("grimoire")
+            and "continuity sweep" in r.getMessage() and cid in r.getMessage()]
+    assert client.app.state.runs.for_subject(runs.campaign_subject(cid)) == []
+
+
 # ------------------------------------------------------ End Scene's sweep
 #
 # `PUT /chronicle` hands every commit that completed in the request to
