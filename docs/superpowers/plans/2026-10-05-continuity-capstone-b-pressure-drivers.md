@@ -893,7 +893,7 @@ The identity law is only proven where something would fail if it broke. The froz
 | §21 `GET /continuity/drivers?offscreen=` | 7 |
 | §26 calendar unavailable; malformed continuity.json; dangling links | 5, 7 (Review Focus 1, 5); 6 (dangling links) |
 | §27 identity law; frozen sweep; verify_templates | 0 (pre-switch characterization), 2, 3, 4, 10 |
-| §28.5 pressure tests (Gregorian, Hebrew, fake provider, `sources`) | 5: holidays on all three; exact birthdays and event-versus-holiday ordering on all three (Hebrew via `test_hebrew_birthday_and_event_ordering`); yearless birthdays on Gregorian and Hebrew (Task 1), not on the fake provider, which has no `Y-M-D` native; month-only on all three (Hebrew at the `occurrences` level, Task 1). 6: due, D−1, `by`/`on`, `after` and earliest-wins on all three via the `cal` axis; the rest on Gregorian |
+| §28.5 pressure tests (Gregorian, Hebrew, fake provider, `sources`) | 5: holidays on all three; exact birthdays and event-versus-holiday ordering on all three (Hebrew via `test_hebrew_birthday_and_event_ordering`); yearless birthdays on Gregorian and Hebrew (Task 1), not on the fake provider, which has no `Y-M-D` native; month-only on all three (Hebrew at the `occurrences` level, Task 1). 6: due, free-text due, D−1, `by`/`on`, `after`, earliest-wins and the backwards clock on all three via the `cal` axis (free-text due and the backwards clock joined the axis at the final gate); yearless rows assert `age` None on Hebrew too; the state precedence table is the pure `state_of`, calendar-free; the rest on Gregorian |
 | §28.7 "owed counts canonical commitments" | 9 |
 
 **Deliberate deviations from the spec text:**
