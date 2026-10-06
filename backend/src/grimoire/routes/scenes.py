@@ -77,6 +77,7 @@ from .models import (
     SceneImportCommit,
     SceneIntent,
     SceneLocation,
+    SceneSuggestionsRequest,
 )
 from .streaming import StreamOutcome, _chat_stream
 
@@ -305,8 +306,10 @@ def _resolve_cast(cid: str, tokens: list[str], memo: dict[str, str] | None = Non
 
 @router.post("/campaigns/{cid}/scene-suggestions", status_code=202)
 @computes_only
-def post_scene_suggestions(cid: str, request: Request, after: str | None = None,
-                           offscreen: bool = False, direction: str = "", rank: bool = True,
+def post_scene_suggestions(cid: str, request: Request,
+                           body: SceneSuggestionsRequest | None = None,
+                           after: str | None = None, offscreen: bool = False,
+                           direction: str = "", rank: bool = True,
                            client: LLMClient = Depends(get_llm),
                            x_grimoire_attempt: str | None = Header(default=None)):
     """Start a set of drafted scene ideas. 202 and a run to poll.
@@ -314,46 +317,89 @@ def post_scene_suggestions(cid: str, request: Request, after: str | None = None,
     The ranking half of the prompt is built HERE, while the request is still
     there: it is the expensive read, but it is a read, and a campaign that
     cannot be read has to be refused as a 404 rather than as a run state.
+
+    The request is a JSON body (`SceneSuggestionsRequest`, capstone spec
+    §16.3). A body, when present, wins wholly. With none, the query parameters
+    build the request exactly as they always have -- they are deprecated, and
+    kept for one release so a client that predates the body keeps working.
+
+    Validation order (Decision 7), every refusal answered before a run is
+    reserved, since one raised inside the work would surface as a failed run:
+    404 for an unknown campaign; the connection (409 `missing_key` first, so a
+    reader with no connection hears that before anything else); the snapshot;
+    then `store.suggest.resolve_controls` against it -- every 400
+    `bad_controls`, then one 409 `stale_drivers`; then the greeting
+    candidates and the prompt. An unknown `time_mode` or relation is
+    FastAPI's 422. The snapshot and the resolved controls are captured by the
+    work, so the payload is parsed against exactly what the prompt showed.
     """
+    req = body if body is not None else SceneSuggestionsRequest(
+        after=after, offscreen=offscreen, direction=direction, rank=rank)
     try:
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     conn = _require_connection("suggestions", cid)
+    snapshot = store.suggest.build_snapshot(cid, offscreen=req.offscreen)
+    controls = _controls_or_refuse(cid, snapshot, req)
     # A refresh passes rank=false: re-ranking would reshuffle the greeting cards
     # under the user's cursor, and the ranking is the expensive half of the prompt.
-    candidates = store.suggest.greeting_candidates(cid, after, pcless=offscreen) if rank else []
-    messages = store.suggest.build_prompt(store.suggest.build_snapshot(cid, offscreen=offscreen),
-                                          candidates, offscreen=offscreen, direction=direction)
+    candidates = (store.suggest.greeting_candidates(cid, req.after, pcless=req.offscreen)
+                  if req.rank else [])
+    messages = store.suggest.build_prompt(snapshot, candidates, offscreen=req.offscreen,
+                                          direction=req.direction, controls=controls)
 
     async def work():
         return await draft_completion(
             client, conn, messages, "suggestions",
-            lambda text: _suggestions_payload(cid, text, candidates, offscreen),
+            lambda text: _suggestions_payload(cid, text, candidates, req.offscreen,
+                                              snapshot, controls),
             cid=cid)
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "suggestions",
                           x_grimoire_attempt, work)
 
 
-def _suggestions_payload(cid: str, text: str, candidates: list[dict],
-                         offscreen: bool) -> dict:
-    """The model's suggestions as the body this route has always returned.
+def _controls_or_refuse(cid: str, snapshot: dict,
+                        req: SceneSuggestionsRequest) -> store.suggest.Controls:
+    """The request's controls resolved against `snapshot`, or the refusal as
+    the HTTP answer: a 400 `{kind, detail, reason}` or a 409 `{kind, detail,
+    refs}` (spec §16.3)."""
+    try:
+        return store.suggest.resolve_controls(
+            cid, snapshot, focus_refs=req.focus_refs, avoid_refs=req.avoid_refs,
+            must_refs=req.must_refs, time_mode=req.time_mode,
+            time_anchor_ref=req.time_anchor_ref,
+            time_anchor_relation=req.time_anchor_relation)
+    except store.suggest.ControlsError as e:
+        raise HTTPException(e.status, detail={
+            "kind": e.kind, "detail": e.detail,
+            **({"reason": e.reason} if e.reason else {}),
+            **({"refs": e.refs} if e.refs is not None else {})}) from e
+
+
+def _suggestions_payload(cid: str, text: str, candidates: list[dict], offscreen: bool,
+                         snapshot: dict, controls: store.suggest.Controls) -> dict:
+    """The model's suggestions as the body this route has always returned,
+    each row now carrying its validated provenance (spec §15.2): the claimed
+    drivers, the time anchor, the date check and the constraint misses.
 
     Split from the route so the shape survives detachment unchanged: what a
     client receives is the same dict it received when this blocked, and only
-    where it reads it from moved.
+    where it reads it from moved. Parsed against `snapshot` and `controls`,
+    the route's own capture, so nothing here re-reads the drivers.
     """
     loc_names = {e["id"]: e.get("name", e["id"]) for e in store.overlay.list_entities(cid, "locations")}
     out = []
-    for s in store.suggest.parse_output(text, cid, offscreen=offscreen):
+    for s in store.suggest.parse_output(text, cid, offscreen=offscreen, snapshot=snapshot,
+                                        controls=controls):
         loc = {"id": s["location"], "name": loc_names.get(s["location"], s["location"])} if s["location"] else None
-        out.append({"title": s["title"], "premise": s["premise"], "date": s["date"],
-                    "cast": _resolve_cast(cid, s["cast"]), "location": loc})
+        out.append({**s, "cast": _resolve_cast(cid, s["cast"]), "location": loc})
     picks = (store.suggest.parse_greeting_picks(text, {c["id"] for c in candidates})
              if candidates else [])
     return {"suggestions": out, "greeting_picks": picks,
-            "next_date": store.suggest.parse_next_date(text, cid)}
+            "next_date": store.suggest.parse_next_date(text, cid, snapshot=snapshot,
+                                                       controls=controls)}
 
 
 @router.post("/campaigns/{cid}/scene-intent", status_code=202)
