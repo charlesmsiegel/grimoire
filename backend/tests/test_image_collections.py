@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import pytest
 from PIL import Image, PngImagePlugin
 
-from grimoire.store import assets, image_refs, image_store, locks, world_images, worlds
+from grimoire.store import assets, image_hash, image_refs, image_store, locks, world_images, worlds
 from grimoire.store import image_collection_imports as imports
 from grimoire.store import image_collections as collections
 from tests.collection_fixtures import format1, format2, member_name, write_manifest
@@ -29,17 +29,49 @@ def wid(monkeypatch, tmp_path):
     return worlds.create_world('Realm')
 
 
-def test_members_deduplicate_and_publication_is_source_free(wid):
+def test_publish_writes_format_2_with_ids(wid):
     first = collections.put_member(wid, png())
     assert collections.put_member(wid, png()) == first
     second = collections.put_member(wid, png('blue'))
+    assert image_hash.is_image_id(first) and image_hash.is_image_id(second)
     cid = uuid.uuid4().hex
-    collections.publish(wid, cid, [first, second])
-    assert collections.read(wid, cid) == {'format': 1, 'members': [first, second]}
-    assert len(world_images.list_images(wid)) == 2
+    assert collections.publish(wid, cid, [first, second]) == {'format': 2, 'members': [first, second]}
+    assert collections.read(wid, cid) == {'format': 2, 'members': [first, second]}
+    on_disk = json.loads(collections.manifest_path(wid, cid).read_text(encoding='utf-8'))
+    assert on_disk == {'format': 2, 'members': [first, second]}  # source-free
+    assert world_images.list_images(wid) == []
+    assert [r['image_id'] for r in collections.available(wid, cid)] == [first, second]
     assert collections.publish(wid, cid, [first, second]) == collections.read(wid, cid)
     with pytest.raises(collections.CollectionInvalidError):
         collections.publish(wid, cid, [second, first])
+
+
+def test_publish_refuses_a_member_that_does_not_resolve(wid):
+    present = collections.put_member(wid, png())
+    gone = collections.put_member(wid, png('blue'))
+    _blob(gone).unlink()
+    for members in ([present, gone], [present, _id(7)]):
+        cid = uuid.uuid4().hex
+        with pytest.raises(collections.CollectionInvalidError):
+            collections.publish(wid, cid, members)
+        assert not collections.manifest_path(wid, cid).exists()
+
+
+def test_a_published_manifest_is_immutable_across_formats(wid):
+    [name] = format1(wid, CID, png())
+    placed = assets.resolve(collections.image_directory(wid), name).image_id
+    before = collections.manifest_path(wid, CID).read_bytes()
+    # The same picture, by id, is still another manifest: format 1 stays.
+    with pytest.raises(collections.CollectionInvalidError, match='immutable'):
+        collections.publish(wid, CID, [placed])
+    assert collections.manifest_path(wid, CID).read_bytes() == before
+    ids = format2(wid, OTHER, png('blue'))
+    assert collections.publish(wid, OTHER, ids) == {'format': 2, 'members': ids}
+    with pytest.raises(collections.CollectionInvalidError, match='immutable'):
+        collections.publish(wid, OTHER, [collections.put_member(wid, png('green'))])
+    write_manifest(wid, THIRD, '{broken')
+    with pytest.raises(collections.CollectionInvalidError):
+        collections.publish(wid, THIRD, ids)
 
 
 def test_members_are_protected_through_world_image_store(wid):
@@ -51,7 +83,8 @@ def test_members_are_protected_through_world_image_store(wid):
     assert world_images.put_image(wid, name, png(), 'png') == 'png'
 
 
-@pytest.mark.parametrize('members', [[], ['../avatar'], ['https://example.test/image'], ['collection-image-x']])
+@pytest.mark.parametrize('members', [[], ['../avatar'], ['https://example.test/image'], ['collection-image-x'],
+                                     ['collection-image-' + '0' * 64]])
 def test_invalid_member_lists_are_refused(wid, members):
     with pytest.raises(collections.CollectionInvalidError):
         collections.publish(wid, uuid.uuid4().hex, members)
@@ -117,44 +150,22 @@ def png_dpi(dpi, color='red', note=None):
     return out.getvalue()
 
 
-def test_put_member_twice_same_bytes_ok(wid):
+def test_put_member_returns_an_id_and_places_nothing(wid):
     first = collections.put_member(wid, png_dpi(72))
-    assert collections.put_member(wid, png_dpi(72)) == first
+    assert image_hash.is_image_id(first)
+    assert image_store.read(first) is not None
+    # One picture is one member however its metadata differs: harvest
+    # deduplicates by pixel id, not by the bytes as received.
+    assert collections.put_member(wid, png_dpi(144, note='private note')) == first
     d = collections.image_directory(wid)
-    ref = image_refs.read(d, first)
-    assert ref is not None and ref.image
-    assert assets.resolve(d, first).image_id == ref.image
-    # The member is named for the bytes as received, not the stored blob's.
-    assert first == collections.MEMBER_PREFIX + hashlib.sha256(png_dpi(72)).hexdigest()
-    assert len(world_images.list_images(wid)) == 1
-
-
-def test_put_member_refuses_a_member_whose_placement_names_other_pixels(wid):
-    name = collections.put_member(wid, png())
-    d = collections.image_directory(wid)
-    other = image_store.ingest(png('blue'), 'png')
-    assets.link_in(d, name, other.id)
-    with pytest.raises(collections.CollectionInvalidError, match='has changed'):
-        collections.put_member(wid, png())
-
-
-def test_publish_with_ref_members(wid):
-    # Sanitising strips the tEXt chunk, so the stored blob's bytes differ from
-    # the received bytes the name hashes: the byte re-check must not apply.
-    received = png_dpi(144, note='private note')
-    name = collections.put_member(wid, received)
-    d = collections.image_directory(wid)
-    assert hashlib.sha256(assets.resolve(d, name).blob_path.read_bytes()).hexdigest() \
-        != name[len(collections.MEMBER_PREFIX):]
+    assert world_images.list_images(wid) == []
+    assert not d.exists() or not any(d.rglob('*'))
+    # Sanitised: the stored blob carries no tEXt chunk.
+    assert b'private note' not in _blob(first).read_bytes()
     cid = uuid.uuid4().hex
-    assert collections.publish(wid, cid, [name]) == {'format': 1, 'members': [name]}
+    collections.publish(wid, cid, [first])
     [member] = collections.available(wid, cid)
-    assert member['url'].endswith('?v=' + assets.resolve(d, name).blob_sha256)
-    # A ref-backed member whose blob has gone cannot be published.
-    other = collections.put_member(wid, png('blue'))
-    assets.resolve(d, other).blob_path.unlink()
-    with pytest.raises(collections.CollectionInvalidError):
-        collections.publish(wid, uuid.uuid4().hex, [other])
+    assert member['url'].endswith('?v=' + image_store.read(first).blob_sha256)
 
 
 def test_guard_write_compares_identity_for_ref_members(wid):
@@ -182,9 +193,6 @@ def test_a_member_name_is_not_fileable_over_other_pixels(wid):
         world_images.put_image(wid, name, png('blue'), 'png')
     assert assets.resolve(d, name) is None and world_images.image_path(wid, name) is None
     assert world_images.put_image(wid, name, png('red'), 'png') == 'png'
-    collections.publish(wid, uuid.uuid4().hex, [name])
-    # Same bytes as received under a member's name is the member's own write.
-    assert collections.put_member(wid, png('red')) == name
 
 
 def test_a_member_alias_in_other_case_is_refused_too(wid):
@@ -205,10 +213,8 @@ def _plant_legacy(wid, data):
 def test_legacy_member_rules_unchanged(wid):
     data = png()
     name, d = _plant_legacy(wid, data)
-    assert collections.put_member(wid, data) == name
-    assert image_refs.read(d, name) is None  # not migrated by a no-op put
     cid = uuid.uuid4().hex
-    collections.publish(wid, cid, [name])
+    write_manifest(wid, cid, {'format': 1, 'members': [name]})
     [member] = collections.available(wid, cid)
     assert member['url'].endswith('?v=' + assets.image_version(d / f'{name}.png'))
     collections.guard_write(wid, name, data)
@@ -216,12 +222,10 @@ def test_legacy_member_rules_unchanged(wid):
         collections.guard_write(wid, name, png('blue'))
     with pytest.raises(collections.ImageInCollectionError):
         collections.guard_write(wid, name)
-    # A legacy file that drifted from its name is neither re-adopted nor published.
+    # A legacy file that drifted from its name maps to no image.
     (d / f'{name}.png').write_bytes(png('green'))
     with pytest.raises(collections.CollectionInvalidError, match='has changed'):
-        collections.put_member(wid, data)
-    with pytest.raises(collections.CollectionInvalidError):
-        collections.publish(wid, uuid.uuid4().hex, [name])
+        collections.format1_member_id(wid, name)
 
 
 def _store_files():
@@ -240,15 +244,10 @@ def test_a_refused_overwrite_stores_nothing(wid):
 
 
 def test_put_member_refusal_stores_nothing(wid):
-    # A placement under the member's name that names other pixels, and bytes
-    # the store has never seen: refusing them must not leave them stored.
-    data = png()
-    name = collections.MEMBER_PREFIX + hashlib.sha256(data).hexdigest()
-    other = image_store.ingest(png('blue'), 'png').id
-    assets.link_in(collections.image_directory(wid), name, other)
+    collections.put_member(wid, png('blue'))
     before = _store_files()
     with pytest.raises(collections.CollectionInvalidError):
-        collections.put_member(wid, data)
+        collections.put_member(wid, b'\x89PNG\r\n\x1a\ntruncated')
     assert _store_files() == before
 
 
@@ -361,3 +360,15 @@ def test_member_index_is_canonical_decimal():
     assert [collections.member_index(n) for n in ('0', '7', '9999', '10000')] == [0, 7, 9999, 10000]
     for n in ('', '00', '01', '-1', '+1', '1.0', ' 1', '1 ', 'abc', '٢', '100000', '9' * 5000, '1\n'):
         assert collections.member_index(n) is None, n
+
+
+def test_validate_is_the_content_only_manifest_rule():
+    ids = [_id(1), _id(2)]
+    assert collections.validate({'format': 2, 'members': ids}) == {'format': 2, 'members': ids}
+    name = member_name(png())
+    assert collections.validate({'format': 1, 'members': [name]}) == {'format': 1, 'members': [name]}
+    for raw in ({'format': True, 'members': ids}, {'format': 2, 'members': [name]},
+                {'format': 2, 'members': ids, 'extra': 1}, [], {'format': 2, 'members': []}):
+        with pytest.raises(collections.CollectionInvalidError):
+            collections.validate(raw)
+    assert collections._validated is collections.validate  # the name world_bundle calls today

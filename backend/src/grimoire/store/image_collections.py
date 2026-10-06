@@ -5,10 +5,11 @@ to a separate temporary import journal. This keeps rendering and exports
 offline, while a future collection author can publish already-local members
 without implementing a downloader.
 
-Two manifest formats are read. Format 1 names world-library images
-(`collection-image-<sha256 of the received bytes>`), and its members are served
-under the library's URLs. Format 2 names image ids, so a member is its object
-and never a library file; member `n` is served at
+Two manifest formats are read, and only format 2 is written. Format 1 names
+world-library images (`collection-image-<sha256 of the received bytes>`), and
+its members are served under the library's URLs; an older grimoire wrote it.
+Format 2 names image ids, so a member is its object and never a library file
+(`put_member` places nothing); member `n` is served at
 `/api/worlds/{wid}/image-collections/{id}/members/{n}`. An index is never
 reused: a member whose picture is missing is skipped, and its own URL answers
 404 rather than another picture, because those URLs are cached immutable.
@@ -76,7 +77,10 @@ def manifest_path(wid: str, collection_id: str) -> Path:
     return directory(wid) / f"{collection_id}.json"
 
 
-def _validated(raw: object) -> dict:
+def validate(raw: object) -> dict:
+    """A manifest's content as `{"format": 1 | 2, "members": [...]}`, or
+    `CollectionInvalidError`: the one manifest rule, for the store and for a
+    bundle's manifests alike. Content only: no file is consulted."""
     # `type(...) is int`, so JSON `true` (which equals 1) is not a format.
     if (not isinstance(raw, dict) or set(raw) != {"format", "members"}
             or type(raw["format"]) is not int or raw["format"] not in _MEMBER_RULES):
@@ -91,12 +95,16 @@ def _validated(raw: object) -> dict:
     return {"format": fmt, "members": list(members)}
 
 
+#: The validator's earlier, private name, kept for callers not yet moved.
+_validated = validate
+
+
 def read(wid: str, collection_id: str) -> dict:
     """`{"format": 1 | 2, "members": [...]}`. Raises `FileNotFoundError` for no
     such collection, and `CollectionInvalidError` for one that does not read."""
     path = manifest_path(wid, collection_id)
     try:
-        return _validated(json.loads(path.read_text(encoding="utf-8")))
+        return validate(json.loads(path.read_text(encoding="utf-8")))
     except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise CollectionInvalidError("image collection manifest is unreadable") from exc
 
@@ -163,9 +171,10 @@ def member_path(wid: str, collection_id: str, index: int) -> Path | None:
     return None if found is None else found[0]
 
 
-def _journal_directory(wid: str) -> Path:
-    # The harvest journals' home; `image_collection_imports.job_path` builds
-    # the same path (that module imports this one, so it cannot be asked).
+def journal_directory(wid: str) -> Path:
+    """The harvest journals' home, the one spelling of it:
+    `image_collection_imports.job_path` builds its paths from this."""
+    directory(wid)  # prove world existence and id safety
     return paths.home() / ".cache" / "image-collection-imports" / wid
 
 
@@ -189,7 +198,7 @@ def has_format1(wid: str) -> bool:
                 return True
         except (CollectionInvalidError, OSError):
             return True
-    return any(not _is_format2_journal(p) for p in _journal_directory(wid).glob("*.json"))
+    return any(not _is_format2_journal(p) for p in journal_directory(wid).glob("*.json"))
 
 
 def referenced(wid: str, name: str) -> bool:
@@ -246,9 +255,9 @@ def check_member_name(wid: str, name: str, data: bytes) -> None:
     Only for a name no collection references yet: once published, `guard_write`
     is the rule, and it admits the same pixels under other metadata.
 
-    `publish` trusts a placement as the member's identity and skips the byte
-    hash, so the name must never be fileable over other pixels through the
-    ordinary write path. `put_member` links directly and is not subject to it.
+    Converting a format-1 harvest journal (`format1_member_id`) trusts a
+    placement as the member's identity and skips the byte hash, so the name
+    must never be fileable over other pixels through the ordinary write path.
 
     Inert while the world holds no format-1 state, as `guard_write` is.
     """
@@ -260,43 +269,50 @@ def check_member_name(wid: str, name: str, data: bytes) -> None:
 
 
 def put_member(wid: str, data: bytes) -> str:
+    """Ingest one harvested picture and return its image id. Validated as a
+    cover is; nothing is placed in the world library, so a member is its
+    object and the same pixels under other metadata are the same member."""
     image_library.validate_size(data)
     try:
         ext = covers.validate(data)
     except (covers.CoverInvalid, covers.CoverTooLarge) as exc:
         raise CollectionInvalidError(str(exc)) from exc
-    name = MEMBER_PREFIX + hashlib.sha256(data).hexdigest()
+    directory(wid)  # a member belongs to a world that exists
+    return image_store.ingest(data, ext).id
+
+
+def format1_member_id(wid: str, name: str) -> str:
+    """The image id a format-1 member name stands for: its library
+    placement's, or -- for a legacy file whose bytes still hash to the name,
+    the rule format-1 publication applied -- the id of those bytes, ingested.
+    Raises `CollectionInvalidError` for a name that maps to nothing or to
+    other bytes. Takes the collection lock (callers holding a job lock take
+    that first)."""
+    if not isinstance(name, str) or not _MEMBER.fullmatch(name):
+        raise CollectionInvalidError("invalid image collection members")
     with locks.image_collection_lock(wid):
-        d = image_directory(wid)
-        # Compared before anything is stored, so a refusal leaves no orphan
-        # object or blob behind. A member that matches is still ingested: that
-        # restores a blob gone missing and touches the object off GC.
         placed = _placed_image(wid, name)
         if placed is not None:
-            if placed != image_store.identify(data, ext):
-                raise CollectionInvalidError("stored collection member has changed")
-            image_store.ingest(data, ext)
-            return name
-        legacy = assets.path_in(d, name, supported_only=True)
-        if legacy is not None:
-            if legacy.read_bytes() != data:
-                raise CollectionInvalidError("stored collection member has changed")
-        else:
-            assets.link_in(d, name, image_store.ingest(data, ext).id)
-    return name
+            return placed
+        path = assets.path_in(image_directory(wid), name, supported_only=True)
+        if path is None:
+            raise CollectionInvalidError("collection member is missing")
+        data = path.read_bytes()
+        if hashlib.sha256(data).hexdigest() != name[len(MEMBER_PREFIX):]:
+            raise CollectionInvalidError("collection member has changed")
+        return image_store.ingest(data, path.suffix[1:].lower()).id
 
 
 def publish(wid: str, collection_id: str, members: list[str]) -> dict:
-    manifest = _validated({"format": 1, "members": members})
+    """Publish image ids as a format-2 manifest. Every member must resolve to
+    its picture, and a published manifest is immutable: one already there must
+    be this one, format and members alike."""
+    manifest = validate({"format": 2, "members": members})
     with locks.image_collection_lock(wid):
         target = manifest_path(wid, collection_id)
-        for name in members:
-            d = image_directory(wid)
-            if assets.resolve(d, name) is not None:
-                continue  # a placement is its own identity; its blob is sanitised
-            path = assets.path_in(d, name, supported_only=True)
-            if path is None or hashlib.sha256(path.read_bytes()).hexdigest() != name[len(MEMBER_PREFIX):]:
-                raise CollectionInvalidError("collection member is missing or has changed")
+        for image_id in manifest["members"]:
+            if _resolve_member(wid, 2, image_id) is None:
+                raise CollectionInvalidError("collection member is missing")
         if target.exists():
             if read(wid, collection_id) != manifest:
                 raise CollectionInvalidError("published image collections are immutable")
