@@ -153,3 +153,29 @@ worktree — the editable `backend/.venv` is pinned to this checkout). Progress 
 
 - Backend: `backend/.venv/Scripts/python.exe -m pytest backend -q`
 - Frontend (from `frontend/`): `npx vitest run` and `npx tsc -b`
+
+## Continuity capstone (2026-10)
+
+Spec: `specs/2026-10-04-continuity-capstone-design.md`. Plans, one per slice:
+`plans/2026-10-05-continuity-capstone-a-substrate.md`,
+`plans/2026-10-05-continuity-capstone-b-pressure-drivers.md`,
+`plans/2026-10-05-continuity-capstone-c-absorb-identity.md`,
+`plans/2026-10-05-continuity-capstone-d-reconcile-review.md`,
+`plans/2026-10-05-continuity-capstone-e-suggestion-control.md`,
+`plans/2026-10-05-continuity-capstone-f-story-graph.md` and
+`plans/2026-10-06-continuity-capstone-g-polish.md`.
+
+The capstone turned the umbrella's separate ledgers into one continuity substrate.
+Duplicate threads and commitments are merged, and records are linked, only through a
+reviewed, journalled and reversible step, and the play prompts read the canonical
+record rather than its aliases. An absorb checks each new thread or commitment against
+the plausible existing ones before treating it as new, and a separate reconciliation
+sweep proposes duplicates, continuations, closures and resolutions for review in the
+Ledger, never applying one by itself. Events, holidays, birthdays and deadlines carry
+provider-driven temporal pressure and become scene drivers; scene suggestions see those
+drivers, let the reader focus on, avoid or require them and choose a time anchor, and
+can be saved as scene ideas. The Story Graph draws that same substrate rather than a
+parallel model. The acceptance evidence for every criterion is the spec's Appendix B,
+held to the tree by `backend/tests/test_capstone_acceptance.py`.
+
+Continuity is parked (spec §33): further work here is correctness defects and small usability fixes; the next major investment is mechanics.

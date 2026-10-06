@@ -21,7 +21,12 @@ Reach, stated plainly:
   already proves a recording trips exactly its declared checks, so holding the
   mapping is all this half needs. Case 10's anchor-on clause names a compliant
   recording instead, because its date is derived and no reply can get it
-  wrong; that clause is replayed here to show the check is graded and passes.
+  wrong; that clause is replayed here to show the check is graded and passes;
+- AC19 cites no test: its evidence is `make check`, the replay and §31 Slice
+  G's gate bullet. The first two are the gate itself, so this module holds the
+  third, and the two completion records written with it: the bullet names
+  both final reviews, the spec's Status line says the capstone is implemented
+  and parked, and `PHASE-STATUS.md` carries the closing section.
 """
 
 from __future__ import annotations
@@ -38,6 +43,7 @@ from evals import cases as case_mod  # noqa: E402
 from evals import runner  # noqa: E402
 
 SPEC = REPO / "docs" / "superpowers" / "specs" / "2026-10-04-continuity-capstone-design.md"
+PHASE_STATUS = REPO / "docs" / "superpowers" / "PHASE-STATUS.md"
 TESTS = REPO / "backend" / "tests"
 HEADING = "# Appendix B. Acceptance evidence"
 CRITERIA = [f"AC{n}" for n in range(1, 20)] + ["§33"]
@@ -87,6 +93,24 @@ def test_every_criterion_has_a_row():
             continue
         cited = BACKEND.findall(evidence) + FRONTEND.findall(evidence) + EVAL.findall(evidence)
         assert cited, f"{name} cites no test or eval case"
+
+
+def test_ac19s_gate_bullet_and_the_completion_records_exist():
+    text = SPEC.read_text(encoding="utf-8")
+    start = text.find("\n### Slice G")
+    end = text.find("\n# 32.", start)
+    assert 0 <= start < end, "the spec has no §31 Slice G section before §32"
+    bullets = [line for line in text[start:end].splitlines() if line.startswith("- ")]
+    assert any("`/codex:review`" in line and "`/codex:adversarial-review`" in line
+               for line in bullets), "§31 Slice G has no gate bullet naming both final reviews"
+    status = next(line for line in text.splitlines() if line.startswith("**Status:**"))
+    assert "Ready for implementation planning" not in status
+    assert status.rstrip().endswith("Implemented in Slices A\u2013G (§31); acceptance evidence "
+                                     "in Appendix B; continuity is parked (§33).")
+    phase = PHASE_STATUS.read_text(encoding="utf-8")
+    assert "\n## Continuity capstone (2026-10)\n" in phase
+    assert ("Continuity is parked (spec §33): further work here is correctness defects and "
+            "small usability fixes; the next major investment is mechanics.") in phase
 
 
 def test_cited_backend_tests_exist():
