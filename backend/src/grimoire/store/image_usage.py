@@ -5,10 +5,10 @@ object's "Used in..." control. Every placement names its image
 (`image_refs`), so the answer is a walk: nothing is kept that could drift from
 the placements, and a deleted record takes its usage with it.
 
-This is an on-demand full walk of every world and campaign. Section 9 of the
-design (a rebuildable cache) is the escape hatch if profiling ever demands one;
-until then the walk costs one directory scan per image-bearing directory and
-reads no object and resolves no blob.
+This is an on-demand full walk of every world and campaign: `image_refs.walk`
+visits every directory of every one of them, whether or not it bears an image.
+Section 9 of the design (a rebuildable cache) is the escape hatch if profiling
+ever demands one; until then the walk reads no object and resolves no blob.
 
 Classification works from the directory that owns a placement. The roots are
 every directory directly under ``<home>/worlds`` and ``<home>/campaigns``,
@@ -118,8 +118,8 @@ def _add_record(out: dict[str, list[dict]], scope: str, rec: tuple[str, str, str
 
 def _scan_root(out: dict[str, list[dict]], is_world: bool, root: Path, image_id: str) -> None:
     if is_world:
-        ident = worlds_paths.canonical_id(root.name)
-        scope = image_scopes.world_scope(root.name)
+        ident = root.name        # from the directory listing: already canonical
+        scope = image_scopes.world_scope_of_dir(ident)
         library = root / "assets" / world_images.DIRNAME
     else:
         ident = root.name

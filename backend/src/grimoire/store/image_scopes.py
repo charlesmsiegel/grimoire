@@ -41,6 +41,13 @@ def world_scope(wid: str) -> str:
     return f"world:{worlds_paths.canonical_id(wid)}"
 
 
+def world_scope_of_dir(dirname: str) -> str:
+    """The scope of the world whose directory is named `dirname`, as a
+    directory listing spells it. That spelling is already the canonical one, so
+    this skips the listing `world_scope` makes to find it."""
+    return f"world:{dirname}"
+
+
 def campaign_scope(cid: str) -> str:
     """The scope of campaign `cid` (R10): the id as stored."""
     return f"campaign:{cid}"
