@@ -353,7 +353,9 @@ _FILL = {"sid": "s1", "rid": "r1", "gid": "g1", "eid": "e1", "kind": "locations"
          "lid": "l1", "run_id": "r1", "identity": "0"*32,
          # A fact id is `f<N>` (`facts._next_id`), not a slug — the ledger's
          # hand-edit routes take one.
-         "fid": "f1", "collection_id": "0" * 32}
+         "fid": "f1", "collection_id": "0" * 32,
+         # An author's-note character key is a full actor ref (play controls V).
+         "ref": "characters:c1"}
 
 
 # Enumerated from the OpenAPI schema, not from `router.routes`: the router is
