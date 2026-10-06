@@ -131,12 +131,15 @@ export function arcNeighbourhood(ix: GraphIndex, arc: string): Set<string> {
 }
 
 function lensKeeps(n: GraphNode, lens: Lens, show: Show): boolean {
+  // Merged records ADDS its nodes, as Actors does, on every lens: a merged
+  // node has no date, so Calendar's kinds and deadline rule would otherwise
+  // leave the checkbox live and doing nothing there (Task 10's "Not dated").
+  if (mergedInto(n) !== null) return show.merged;
   const kinds = PRESETS[lens].nodes;
   const shown = kinds.includes(n.kind)
     || (show.actors && ACTOR_KINDS.includes(n.kind))
     || (show.locations && n.kind === "location");
   if (!shown) return false;
-  if (mergedInto(n) !== null && !show.merged) return false;
   // §19.4: the Story lens is about what is still ahead.
   if (lens === "story" && n.kind === "event" && (n.status === "fired" || n.status === "passed")) {
     return false;
