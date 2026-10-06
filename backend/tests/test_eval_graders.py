@@ -542,9 +542,9 @@ RECONCILE_VOCAB = {"c1": reconcile.DECISIONS["same_thread"],
                    "c7": reconcile.DECISIONS["commitment"]}
 RECONCILE_KNOWN = {"001--saltmarch-docks", "002--realm-road", "003--the-pier-at-dusk"}
 RECONCILE_EXPECTED = {
-    "c1": {"check": "distinct", "decisions": ("distinct",)},
-    "c2": {"check": "continuation", "decisions": ("continuation",),
-           "from": {"continuation": "B"}},
+    "c1": {"check": "distinct", "decisions": ("distinct", "related")},
+    "c2": {"check": "continuation", "decisions": ("continuation", "subthread"),
+           "from": {"continuation": "B", "subthread": "B"}},
     "c3": {"check": "cross_type", "decisions": ("pays_off", "related"),
            "from": {"pays_off": "B"}},
     "c4": {"check": "close", "decisions": ("close",)},
@@ -665,6 +665,29 @@ def test_reconcile_continuation_must_run_from_the_concrete_record():
     # pays_off runs from the thread; "related" carries no direction.
     assert _reconcile(_all(c3={"from": "A", "to": "B"})) == {"reconcile.cross_type"}
     assert _reconcile(_all(c3={"decision": "related", "from": "", "to": ""})) == set()
+
+
+def test_reconcile_scores_every_unmerged_answer_the_prompt_allows(tmp_path, monkeypatch):
+    """The shipped prompt makes a narrower question "continuation" or
+    "subthread" with no rule between them, and "related" whenever two records
+    bear on each other -- the case-2 beats share the night cargo. §28.10's
+    point for cases 2 and 3 is that neither pair is merged, so the case's own
+    verdicts take every such answer, and the concrete record still has to be
+    the ``from`` of either directed word."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    ctx = runner.prepare(cases.BY_ID["continuity-reconcile"])
+
+    def grade(text: str) -> set[str]:
+        return failed(graders.grade_reconcile(text, ctx["expected"], ctx["vocab"],
+                                              ctx["known"]))
+
+    assert grade(_all(c1={"decision": "related"})) == set()
+    assert grade(_all(c2={"decision": "subthread", "from": "B", "to": "A"})) == set()
+    assert grade(_all(c2={"decision": "subthread", "from": "A", "to": "B"})) == {
+        "reconcile.continuation"}
+    assert grade(_all(c1={"decision": "duplicate", "from": "B", "to": "A"},
+                      c2={"decision": "duplicate", "from": "B", "to": "A"})) == {
+        "reconcile.distinct", "reconcile.continuation"}
 
 
 def test_reconcile_eager_lifecycle_fails_keep_open_and_unproven():

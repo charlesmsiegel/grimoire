@@ -1035,16 +1035,21 @@ _PAST_DUE = {"reason": "overdue", "in_days": -5, "via": "deadline"}
 #: signals, the vocabulary the case needs, the check that scores it, the
 #: words that pass it, and per directed word the ref its ``from`` must be).
 #: Pair refs are sorted, as discovery stores them, so a cross pair's A is the
-#: commitment.
+#: commitment. Cases 2 and 3 pass every answer that keeps the pair apart and
+#: that the system prompt supports: it calls a narrower question "continuation"
+#: or "subthread" with no rule between the two, and the case-2 beats both touch
+#: the night cargo, which the prompt's "related" covers. What §28.10 asks of
+#: them is that neither pair is merged.
 RECONCILE_CASES: tuple[tuple[int, str, tuple[str, ...], dict, str, str,
                              tuple[str, ...], dict[str, str]], ...] = (
     (2, "possible_duplicate",
      ("thread:the-saltmarch-smuggling", "thread:who-bribes-the-saltmarch-harbourmaster"),
-     _reconcile_pair(0.42), "same_thread", "distinct", ("distinct",), {}),
+     _reconcile_pair(0.42), "same_thread", "distinct", ("distinct", "related"), {}),
     (3, "possible_duplicate",
      ("thread:seraphines-debts", "thread:what-seraphines-debt-to-mara-costs-her"),
-     _reconcile_pair(0.38), "same_thread", "continuation", ("continuation",),
-     {"continuation": "thread:what-seraphines-debt-to-mara-costs-her"}),
+     _reconcile_pair(0.38), "same_thread", "continuation", ("continuation", "subthread"),
+     {"continuation": "thread:what-seraphines-debt-to-mara-costs-her",
+      "subthread": "thread:what-seraphines-debt-to-mara-costs-her"}),
     (4, "possible_relation",
      ("commitment:pay-mara-for-finding-the-ledger", "thread:find-the-ledger"),
      _reconcile_pair(0.35), "cross", "cross_type", ("pays_off", "related"),
