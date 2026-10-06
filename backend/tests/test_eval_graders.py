@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from grimoire import prompts
-from grimoire.store import absorb, scenes
+from grimoire.store import absorb, calendars, scenes, suggest
 from grimoire.store.continuity import reconcile
 
 REPO = Path(__file__).resolve().parents[2]
@@ -726,6 +726,198 @@ def test_reconcile_case_is_what_these_tests_grade_and_the_app_keeps(tmp_path, mo
     by_key = {c["key"]: c["id"] for c in ctx["payload"]["candidates"]}
     assert {d["candidate"]: kept[by_key[d["candidate"]]]["decision"] for d in sent} == {
         d["candidate"]: d["decision"] for d in sent}
+
+
+# --------------------------------------------------------- scene suggestions
+#
+# Pure over a hand-built snapshot and the real Gregorian provider: two focused
+# threads, a third unfocused one, and a batch anchor `before` the coronation,
+# ten days after NOW.
+
+GREG = calendars.get_provider({"provider": "gregorian", "region": "", "custom_holidays": [],
+                               "anchor": None})
+SUGGEST_NOW = "2026-05-10"
+MAP, LEDGER, DEBTS = "thread:maras-map", "thread:find-the-ledger", "thread:seraphines-debts"
+CORONATION = "event:the-coronation"
+CORONATION_DAY = "2026-05-20"
+
+
+def _suggest_driver(ref: str, label: str, state: str = "ok",
+                    in_days: int | None = None) -> dict:
+    return {"ref": ref, "kind": ref.split(":", 1)[0], "label": label, "summary": "",
+            "actors": [], "status": "", "time_anchors": [], "links": [], "dormancy": None,
+            "pressure": {"state": state, "in_days": in_days, "friendly": ""}}
+
+
+def _suggest_snapshot() -> dict:
+    fixed = calendars.fixed_of(GREG, CORONATION_DAY)
+    now = calendars.fixed_of(GREG, SUGGEST_NOW)
+    return {"now": SUGGEST_NOW, "fixed": now, "near_days": 7,
+            "open_threads": [{"ref": r, "aliases": []} for r in (MAP, LEDGER, DEBTS)],
+            "commitments": [], "timeline": [], "links": [],
+            "driver_index": [_suggest_driver(MAP, "Mara's map"),
+                             _suggest_driver(LEDGER, "Find the ledger"),
+                             _suggest_driver(DEBTS, "Seraphine's debts"),
+                             _suggest_driver(CORONATION, "The coronation", "upcoming", 10)],
+            "anchors": [{"ref": CORONATION, "kind": "event", "label": "The coronation",
+                         "native": CORONATION_DAY, "friendly": "20 May 2026",
+                         "fixed": fixed, "in_days": fixed - now, "precision": "exact"}]}
+
+
+SUGGEST_BEFORE = suggest.Controls(focus=(MAP, LEDGER), time_mode="anchor",
+                                  anchor=CORONATION, relation="before")
+SUGGEST_ON = suggest.Controls(time_mode="anchor", anchor=CORONATION, relation="on")
+
+
+def _suggestion(title: str, date, *drivers: tuple[str, str], anchor: str = CORONATION,
+                relation: str = "before") -> dict:
+    out = {"title": title, "premise": f"{title}, played out.", "cast": [], "location": "",
+           "drivers": [{"ref": r, "action": a} for r, a in drivers],
+           "time_anchor": {"ref": anchor, "relation": relation}}
+    if date is not None:
+        out["date"] = date
+    return out
+
+
+def _compliant(**dates: str) -> list[dict]:
+    return [_suggestion("Mara's map", dates.get("map", "2026-05-12"), (MAP, "advance")),
+            _suggestion("Find the ledger", dates.get("ledger", "2026-05-15"),
+                        (LEDGER, "advance")),
+            _suggestion("A quiet night at Saltmarch", dates.get("quiet", "2026-05-18"))]
+
+
+def _suggest(rows, controls=SUGGEST_BEFORE) -> set[str]:
+    text = json.dumps({"suggestions": rows})
+    return failed(graders.grade_scene_suggestions(text, _suggest_snapshot(), controls, GREG))
+
+
+def test_suggest_compliant_passes():
+    checks = graders.grade_scene_suggestions(json.dumps({"suggestions": _compliant()}),
+                                             _suggest_snapshot(), SUGGEST_BEFORE, GREG)
+    assert failed(checks) == set()
+    # `on_derived` is asked only of a batch anchored `on`
+    assert {c.name for c in checks} == {
+        "suggest.json", "suggest.known_refs", "suggest.anchor_known",
+        "suggest.focus_coverage", "suggest.distinct", "suggest.date_consistent"}
+    # a bare array is the app's tolerated deviation, and so the grader's
+    assert failed(graders.grade_scene_suggestions(
+        json.dumps(_compliant()), _suggest_snapshot(), SUGGEST_BEFORE, GREG)) == set()
+
+
+def test_suggest_prose_fails_json_only():
+    """Nothing decodes, or what decodes holds no suggestion: the rest is not
+    reported rather than failed."""
+    for text in ("Mara's map would make a fine scene.", '{"suggestions": []}'):
+        checks = graders.grade_scene_suggestions(text, _suggest_snapshot(),
+                                                 SUGGEST_BEFORE, GREG)
+        assert [(c.name, c.ok) for c in checks] == [("suggest.json", False)], text
+
+
+def test_suggest_unknown_ref_fails_known_refs():
+    """Scored raw: `claim` drops an unknown ref or a wrong action, so the
+    claimed set alone could never show the miss."""
+    rows = _compliant()
+    rows[0]["drivers"].append({"ref": "thread:maras-compass", "action": "advance"})
+    assert _suggest(rows) == {"suggest.known_refs"}
+    rows = _compliant()
+    rows[1]["drivers"].append({"ref": DEBTS, "action": "anchor"})     # wrong for a thread
+    assert _suggest(rows) == {"suggest.known_refs"}
+    rows = _compliant()
+    rows[2]["drivers"] = "thread:maras-map"                           # not a list
+    assert _suggest(rows) == {"suggest.known_refs"}
+
+
+def test_suggest_unknown_anchor_fails_anchor_known():
+    """The batch anchor overrides the model's, so nothing downstream sees the
+    invented one: only the raw reply can."""
+    rows = _compliant()
+    rows[2]["time_anchor"] = {"ref": "event:the-debt", "relation": "before"}
+    assert _suggest(rows) == {"suggest.anchor_known"}
+    rows = _compliant()
+    rows[0]["time_anchor"] = None                                     # absent is fine
+    del rows[1]["time_anchor"]
+    assert _suggest(rows) == set()
+
+
+def test_suggest_clone_fails_coverage_and_distinct():
+    clones = [_suggestion(f"Mara's map, take {n}", f"2026-05-1{n}", (MAP, "advance"))
+              for n in (2, 3, 4)]
+    assert _suggest(clones) == {"suggest.focus_coverage", "suggest.distinct"}
+    # one suggestion is no spread, whatever it claims
+    assert _suggest(_compliant()[:1]) == {"suggest.focus_coverage", "suggest.distinct"}
+    # differing claims under one casefolded title are still a clone
+    rows = _compliant()
+    rows[1]["title"] = "MARA'S MAP"
+    assert _suggest(rows) == {"suggest.distinct"}
+    # the batch anchor's auto-added entry does not make two claims differ
+    rows = [_suggestion("Mara's map", "2026-05-12", (MAP, "advance")),
+            _suggestion("Mara's map again", "2026-05-13", (MAP, "advance"),
+                        (CORONATION, "anchor"))]
+    assert "suggest.distinct" in _suggest(rows)
+
+
+def test_suggest_bad_date_fails_date_consistent():
+    """After D under `before` is rejected; so is no date at all, since a
+    `before` batch has nothing to derive one from."""
+    assert _suggest(_compliant(map="2026-05-22", ledger="2026-05-25",
+                               quiet="2026-05-20")) == {"suggest.date_consistent"}
+    rows = _compliant()
+    del rows[2]["date"]
+    assert _suggest(rows) == {"suggest.date_consistent"}
+    assert _suggest(_compliant(quiet="2026-05-09")) == {"suggest.date_consistent"}
+
+
+def test_suggest_friendly_form_fails_notation():
+    """The tolerant parser reads the date the way the prompt displays it, and
+    the anchor rule accepts the day it reads -- so only the raw string can say
+    it was not written in the calendar's own notation."""
+    snap = _suggest_snapshot()
+    n = suggest.normalize_date(GREG, SUGGEST_NOW, "12 May 2026")
+    assert suggest.check_date(GREG, snap, SUGGEST_BEFORE,
+                              {"ref": CORONATION, "relation": "before"}, n) == (
+        "2026-05-12", False)
+    assert _suggest(_compliant(map="12 May 2026")) == {"suggest.date_consistent"}
+
+
+def test_suggest_on_derives_whatever_the_model_wrote(monkeypatch):
+    """Under `on` the date is the anchor's own, so a wrong date, none and the
+    friendly form all pass -- and `on_derived` holds the derivation itself."""
+    rows = [_suggestion("Mara's map", "2026-05-12", (MAP, "advance"), relation="on"),
+            _suggestion("Find the ledger", None, (LEDGER, "advance"), relation="on"),
+            _suggestion("Seraphine's debts", "20 May 2026", (DEBTS, "advance"),
+                        relation="on")]
+    checks = graders.grade_scene_suggestions(json.dumps({"suggestions": rows}),
+                                             _suggest_snapshot(), SUGGEST_ON, GREG)
+    assert failed(checks) == set()
+    assert "suggest.on_derived" in {c.name for c in checks}
+
+    # A parser that kept the model's date instead of deriving one: the
+    # wrong date and the missing one both show.
+    monkeypatch.setattr(graders.suggest, "check_date",
+                        lambda _p, _s, _c, _a, date: (date, False))
+    assert _suggest(rows, SUGGEST_ON) == {"suggest.on_derived", "suggest.date_consistent"}
+
+
+@pytest.mark.parametrize("case_id,variant,dates", [
+    ("scene-suggestions", "compliant", [("5-Thaw-09", False), ("5-Thaw-12", False),
+                                        ("5-Thaw-15", False)]),
+    ("scene-suggestions", "bad-date", [("", True)] * 3),
+    ("scene-suggestions-anchor-on", "compliant", [("5-Thaw-17", False)] * 3),
+])
+def test_suggest_cases_grade_what_the_app_parses(tmp_path, monkeypatch, case_id, variant,
+                                                 dates):
+    """The recordings, read by the production `parse_output` against the
+    capture the case built: what the grader passes the app keeps, in the
+    plugin's own notation, and what it fails the app blanks as rejected."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = cases.BY_ID[case_id]
+    ctx = runner.prepare(case)
+    text = next(r for r in case.recordings if r.variant == variant).path(case_id).read_text(
+        encoding="utf-8")
+    rows = suggest.parse_output(text, ctx["cid"], snapshot=ctx["snapshot"],
+                                controls=ctx["controls"])
+    assert sorted((r["date"], r["date_rejected"]) for r in rows) == dates
+    assert all(r["time_anchor"]["ref"] == cases.SUGGEST_ANCHOR for r in rows)
 
 
 # ----------------------------------------------------------- prompt contract

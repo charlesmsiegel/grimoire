@@ -8,9 +8,11 @@ whole point: an eval that parses output its own way stops testing the app the
 moment the app's parser changes, and would have gone green through exactly the
 regression it exists to catch.
 
-The one place that rule is deliberately inverted is grade_absorb, which scores
+The first place that rule is deliberately inverted is grade_absorb, which scores
 the RAW object rather than parse_output's normalised result — see its docstring
 for why re-using the tolerant parser there would make the checks unfailable.
+The continuity graders and grade_scene_suggestions invert it the same way for
+the same reason, each for the checks its docstring names.
 
 Each grader returns a list of Check. A case passes when every check passes.
 """
@@ -19,8 +21,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from grimoire.store import absorb, fence, length_drift, scenes
-from grimoire.store.continuity import identity, reconcile
+from grimoire.store import absorb, fence, length_drift, scenes, suggest
+from grimoire.store.continuity import drivers, identity, reconcile
 
 from . import slop
 
@@ -491,6 +493,137 @@ def grade_reconcile(text: str, expected: dict[str, dict],
               f"status words without a reason and a known evidence scene: {unfounded}"),
     ] + [_reconcile_verdict(key, by_key[key], want)
          for key, want in expected.items() if key in by_key]
+
+
+# ----------------------------------------------------------- scene suggestions
+
+def _raw_driver_misses(entries: list[dict], kinds: dict[str, str]) -> list[str]:
+    """Every raw `drivers` entry that names no driver of the index, or an
+    action its kind does not take -- read as the model wrote it, so nothing
+    `claim` canonicalizes or drops is forgiven here."""
+    misses: list[str] = []
+    for n, entry in enumerate(entries, 1):
+        raw = entry.get("drivers", [])
+        if not isinstance(raw, list):
+            misses.append(f"suggestion {n}: drivers was {type(raw).__name__}")
+            continue
+        for e in raw:
+            ref = e.get("ref") if isinstance(e, dict) else None
+            action = e.get("action") if isinstance(e, dict) else None
+            allowed = drivers.ACTIONS_BY_KIND.get(kinds.get(ref, "") if isinstance(ref, str)
+                                                  else "", ())
+            if action not in allowed:
+                misses.append(f"suggestion {n}: {ref!r} as {action!r}")
+    return misses
+
+
+def _raw_anchor_misses(entries: list[dict], anchors: set[str]) -> list[str]:
+    misses: list[str] = []
+    for n, entry in enumerate(entries, 1):
+        raw = entry.get("time_anchor")
+        if raw is None:
+            continue
+        if not isinstance(raw, dict):
+            misses.append(f"suggestion {n}: time_anchor was {type(raw).__name__}")
+        elif "ref" in raw and not (isinstance(raw["ref"], str) and raw["ref"] in anchors):
+            misses.append(f"suggestion {n}: {raw['ref']!r}")
+    return misses
+
+
+def _notation_ok(provider, raw) -> bool:
+    """`raw` is a date the calendar itself writes: it round-trips its own
+    parse and format unchanged."""
+    if not isinstance(raw, str):
+        return False
+    try:
+        return provider.format(provider.parse(raw)) == raw
+    except Exception:  # noqa: BLE001 -- calendar plugin code can raise anything; unreadable is not its notation
+        return False
+
+
+def _date_misses(entries: list[dict], claims: list[dict], snapshot: dict, controls,
+                 provider) -> tuple[list[str], list[str]]:
+    """`(misses, checked dates)`: each date normalized the way the app reads
+    model text, then held to the anchor and time rules by the app's own
+    `check_date`. Outside an `on` batch the raw string must also be in the
+    calendar's own notation, which the tolerant normalizer would launder."""
+    on = bool(controls.anchor) and controls.relation == "on"
+    now = snapshot.get("now") or ""
+    misses: list[str] = []
+    checked: list[str] = []
+    for n, (entry, claimed) in enumerate(zip(entries, claims, strict=True), 1):
+        raw = entry.get("date", "")
+        normalized = suggest.normalize_date(provider, now, raw)
+        date, rejected = suggest.check_date(provider, snapshot, controls,
+                                            claimed["time_anchor"], normalized)
+        checked.append(date)
+        if rejected or not date:
+            misses.append(f"suggestion {n}: {raw!r} "
+                          + ("fails the anchor or time rule" if rejected else "is no date"))
+        elif not on and not _notation_ok(provider, raw):
+            misses.append(f"suggestion {n}: {raw!r} is not in the calendar's own notation")
+    return misses, checked
+
+
+def _on_derived(checked: list[str], snapshot: dict, controls, provider) -> Check:
+    option = next((a for a in snapshot.get("anchors", []) if a["ref"] == controls.anchor), {})
+    fixed = option.get("fixed")
+    try:
+        want = provider.format(fixed) if isinstance(fixed, int) else ""
+    except Exception:  # noqa: BLE001 -- calendar plugin code can raise anything
+        want = ""
+    wrong = [d for d in checked if d != want]
+    return Check("suggest.on_derived", bool(want) and not wrong,
+                 f"dates {wrong} are not the anchor's own {want!r}")
+
+
+def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> list[Check]:
+    """Do the suggestions spread the focus, cite only known drivers, and carry
+    dates the anchor rule accepts, in the calendar's own notation?
+
+    Pure: the snapshot, the controls and the calendar provider are handed in.
+    The reply is decoded by the app's `suggest.raw_suggestions`, a claim is
+    resolved by `suggest.claim` and a date judged by `suggest.check_date`.
+    Two checks score the RAW entry instead, as `grade_absorb` does and for its
+    reason: `known_refs` and `anchor_known`, because `claim` drops an unknown
+    ref and the batch anchor overrides the model's, so the claimed result
+    could never show either miss; and the notation half of `date_consistent`,
+    because the tolerant normalizer reads the friendly form too.
+    """
+    raw = suggest.raw_suggestions(text)
+    if not raw:
+        return [Check("suggest.json", False,
+                      "no suggestion list recoverable from the reply" if raw is None
+                      else "the reply decoded to no suggestions")]
+    entries = [e for e in raw if isinstance(e, dict)]
+    claims = [suggest.claim(e, snapshot, controls) for e in entries]
+    kinds = {d["ref"]: d["kind"] for d in snapshot.get("driver_index", [])}
+    anchors = {a["ref"] for a in snapshot.get("anchors", [])}
+    claimed = [{d["ref"] for d in c["drivers"]}
+               | ({c["time_anchor"]["ref"]} if c["time_anchor"] else set()) for c in claims]
+    uncovered = [r for r in controls.focus if not any(r in refs for refs in claimed)]
+    titles = [str(e.get("title", "")).strip().casefold() for e in entries]
+    served = [frozenset(d["ref"] for d in c["drivers"] if d["action"] != "anchor")
+              for c in claims]
+    unknown = _raw_driver_misses(entries, kinds)
+    invented = _raw_anchor_misses(entries, anchors)
+    bad_dates, checked = _date_misses(entries, claims, snapshot, controls, provider)
+    out = [
+        Check("suggest.json", True),
+        Check("suggest.known_refs", not unknown, f"unknown drivers or actions: {unknown}"),
+        Check("suggest.anchor_known", not invented,
+              f"time anchors outside the anchor options: {invented}"),
+        Check("suggest.focus_coverage", not uncovered,
+              f"focus drivers no suggestion claims: {uncovered}"),
+        Check("suggest.distinct",
+              len(entries) >= 2 and len(set(titles)) == len(titles) and len(set(served)) > 1,
+              f"{len(entries)} suggestions, titles {titles}, "
+              f"claims {[sorted(s) for s in served]}"),
+        Check("suggest.date_consistent", not bad_dates, f"dates: {bad_dates}"),
+    ]
+    if controls.anchor and controls.relation == "on":
+        out.append(_on_derived(checked, snapshot, controls, provider))
+    return out
 
 
 # ------------------------------------------------------------ prompt contract

@@ -1,0 +1,62 @@
+{
+  "suggestions": [
+    {
+      "title": "The torn corner",
+      "premise": "Mara spreads her torn map across a crate on the Saltmarch docks and asks for help matching the missing corner. Whatever it marks has to be found before the coronation closes the harbour.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-09",
+      "drivers": [
+        {
+          "ref": "thread:maras-map",
+          "action": "advance"
+        },
+        {
+          "ref": "thread:maras-compass",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    },
+    {
+      "title": "A ledger in the wrong hands",
+      "premise": "Seraphine Vale hears that the harbour ledger changed hands last night. With the coronation ten days off, whoever holds it can buy a seat at the ceremony.",
+      "cast": [
+        "characters:seraphine-vale"
+      ],
+      "location": "",
+      "date": "5-Thaw-12",
+      "drivers": [
+        {
+          "ref": "thread:find-the-ledger",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    },
+    {
+      "title": "Salt and quiet",
+      "premise": "A slack evening on the waterfront, with Seraphine and Mara sharing a bottle and nothing urgent between them. It is the last calm night before the city fills for the coronation.",
+      "cast": [
+        "characters:mara",
+        "characters:seraphine-vale"
+      ],
+      "location": "",
+      "date": "5-Thaw-15",
+      "drivers": [],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    }
+  ],
+  "next_date": "5-Thaw-09"
+}
