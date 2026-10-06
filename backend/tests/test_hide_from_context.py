@@ -209,6 +209,31 @@ def test_excluding_a_post_moves_every_digest():
     assert store.pending_reviews.watermark(flagged)["digest"] != store.pending_reviews.watermark(MSGS)["digest"]
 
 
+def test_covered_digest_reads_only_the_posts_in_context():
+    """The summary is folded from the in-context render, so a hidden post's
+    prose is not part of what it covers: rewriting it moves nothing."""
+    hidden = [MSGS[0], {**MSGS[1], "excluded": STAMP}]
+    swiped = [MSGS[0], {**MSGS[1], "content": "Something else.", "excluded": STAMP}]
+    digest = store.rolling_summary.covered_digest
+    assert digest(hidden, "Mara") == digest(swiped, "Mara") == digest(MSGS[:1], "Mara")
+    assert digest(hidden, "Mara") != digest(MSGS, "Mara")
+
+
+def test_activating_an_excluded_folded_response_keeps_the_summary(client):
+    from tests.test_responses import _fold, _summary, _two_turns_with_a_reroll
+    cid, sid, base, rid, old = _two_turns_with_a_reroll(client)
+    store.scenes.set_excluded(cid, sid, 3, True)
+    _fold(cid, sid, 4)
+    swiped = client.post(base + f"/responses/{rid}/variants/{old}/activate")
+    assert swiped.status_code == 200, swiped.text
+    kept = _summary(cid, sid)
+    assert (kept["summary"], kept["at"]) == ("Earlier.", 4)
+    messages = _messages(cid, sid)
+    assert messages[3]["content"] == "Second." and messages[3].get("excluded")
+    assert kept["digest"] == store.rolling_summary.covered_digest(
+        messages[:4], store.appearances.player_label(cid, sid))
+
+
 # --- the toggle route, and refusing a stale frozen prompt -------------------
 
 SYNTHETIC = [store.scenes.ROLL_SPEAKER, store.scenes.TRANSITION_SPEAKER, store.scenes.DIRECTOR_SPEAKER]

@@ -123,9 +123,14 @@ so it follows automatically.
 Toggling exclusion changes what a fold or review was built from, so the
 flag joins the digests that decide staleness: `rolling_summary.covered_digest`
 (also used by the scene-break check), `pending_reviews.watermark`, and
-`responses.transcript_hash`. Each hashes role, speaker and content today; each
-adds `excluded` when present, so an unflagged transcript hashes exactly as it
-did before (no spurious invalidation on upgrade). After a toggle the client asks
+`responses.transcript_hash`. Each hashes role, speaker and content today, and
+an unflagged transcript hashes exactly as it did before (no spurious
+invalidation on upgrade). The review watermark and the transcript hash add
+`excluded` when present. `covered_digest` hashes the in-context projection
+instead -- a hidden post is left out -- because the summary and the scene-break
+question are folded from that render: hiding or returning a post moves it, while
+swiping or rerolling an already-hidden one does not, and activating a variant of
+a hidden response inside the fold keeps the summary rather than resetting it. After a toggle the client asks
 for the follow-ups as it does after an edit (`askAfterPost`).
 
 ### 5. Exports keep everything, marked

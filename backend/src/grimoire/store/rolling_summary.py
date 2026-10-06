@@ -52,15 +52,15 @@ def covered_digest(messages: list[dict], player_label: str = "") -> str:
     deliberately out -- they do not reach the summary, and folding them in would
     invalidate a perfectly good summary every time a location line was stamped.
     """
-    # A post hidden from context drops out of the render, so the flag is part
-    # of what the summary was folded from -- appended only when present, so a
-    # transcript with no hidden post digests exactly as before (no stored
-    # summary is invalidated by the upgrade). Tested inline rather than through
-    # `scenes.serialize.is_excluded`: `scenes.write` imports this module, so
-    # importing `scenes` here would close a cycle.
-    canonical = [[m.get("role", ""), m.get("speaker") or "", m.get("content", ""),
-                  *([True] if m.get("excluded") else [])]
-                 for m in messages]
+    # A post hidden from context drops out of the render, so it drops out of
+    # the digest too: hiding or returning one moves it, and rewriting a hidden
+    # one (a swipe, a reroll) does not, since its prose never reached the
+    # summary. A transcript with no hidden post digests exactly as before, so
+    # no stored summary is invalidated by the upgrade. Tested inline rather
+    # than through `scenes.serialize.is_excluded`: `scenes.write` imports this
+    # module, so importing `scenes` here would close a cycle.
+    canonical = [[m.get("role", ""), m.get("speaker") or "", m.get("content", "")]
+                 for m in messages if not m.get("excluded")]
     return hashlib.sha256(
         json.dumps([canonical, player_label],
                    ensure_ascii=False).encode("utf-8")).hexdigest()

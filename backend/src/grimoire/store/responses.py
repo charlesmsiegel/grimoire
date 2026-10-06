@@ -615,14 +615,17 @@ def swipe_state(cid: str, sid: str, rid: str) -> dict:
     }
 
 
-def _invalidate(cid, sid, changed_at: int):
+def _invalidate(cid, sid, changed_at: int, *, in_context: bool = True):
     """Supersede what a change at message index `changed_at` made stale.
 
     The rolling summary folded the first `at` messages, so a change at or after
     that index leaves both the prose and its digest true -- a swipe on the
     trailing response is the common case, and resetting there forced a re-fold
-    from post 0. Only a change inside the fold throws it away. Rounds,
-    proposals and the scene-break check reset either way.
+    from post 0. Only a change inside the fold throws it away, and only to a
+    post `in_context`: a hidden post's prose never reached the summary, and
+    `rolling_summary.covered_digest` skips it, so the digest still decides if
+    anything else moved. Rounds, proposals and the scene-break check reset
+    either way.
     """
     data = _read(cid)
     scope = _scope(cid, sid, data)
@@ -632,7 +635,7 @@ def _invalidate(cid, sid, changed_at: int):
     _write(cid, data)
     proposals.supersede(cid, sid)
     covered = read.rolling_summary_fields(read.read_scene_meta(cid, sid))["at"]
-    if changed_at < covered:
+    if in_context and changed_at < covered:
         write.set_rolling_summary(cid, sid, "", 0, "")
     write.set_scene_break(cid, sid, 0, 0, 0)
 
@@ -674,7 +677,7 @@ def activate(cid: str, sid: str, rid: str, vid: str) -> None:
         for message in messages[index + 1 :]:
             if message.get("response_id"):
                 message["context_changed"] = True
-        _invalidate(cid, sid, index)
+        _invalidate(cid, sid, index, in_context=excluded is None)
         data = _read(cid)
         record = _scope(cid, sid, data)["responses"][rid]
         record.update(active_variant=vid, status="complete")
