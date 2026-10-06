@@ -126,3 +126,26 @@ test("a saved idea anchored on an upcoming occurrence uses the server anchor dat
   expect(savedDraft(IDEA, "2026-09-09", false).date).toBe("2026-09-09");
   expect(savedDraft(IDEA, "", false).date).toBe("2026-03-04");
 });
+
+const SAVED_BEFORE = { ref: "event:the-coronation", kind: "event" as const,
+                       relation: "before" as const, label: "The coronation",
+                       friendly: "12 May 2026", native: "2026-05-12", state: "live" as const };
+
+test("a saved anchored idea never borrows the batch's anchor-unaware nextDate", () => {
+  // the server sets anchor_date only for a live `on` anchor; a `before` idea
+  // whose next_date sits after The coronation must not be pre-filled with it
+  // (Decision 23), and its stored date is a fossil, so the reader picks
+  expect(savedDraft({ ...IDEA, time_anchor: SAVED_BEFORE, anchor_date: "" },
+                    "2026-09-09", false).date).toBe("");
+  // ...an `on` anchor whose occurrence has passed is the same case
+  expect(savedDraft({ ...IDEA, time_anchor: { ...SAVED_BEFORE, relation: "on",
+                                              state: "finished" }, anchor_date: "" },
+                    "2026-09-09", false).date).toBe("");
+  // a live `on` anchor's server date still wins
+  expect(savedDraft({ ...IDEA, time_anchor: { ...SAVED_BEFORE, relation: "on" },
+                      anchor_date: "2026-05-12" }, "2026-09-09", false).date)
+    .toBe("2026-05-12");
+  // an un-anchored (or dangling, which reads back as null) idea still borrows nextDate
+  expect(savedDraft({ ...IDEA, time_anchor: null }, "2026-09-09", false).date)
+    .toBe("2026-09-09");
+});
