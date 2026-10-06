@@ -1075,6 +1075,24 @@ def test_near_and_move_ask_for_no_date_in_an_undated_campaign(monkeypatch, tmp_p
     assert system == suggest.build_prompt(snap)[0]["content"]
 
 
+def test_a_dated_event_is_not_called_undated_when_the_campaign_has_no_present(
+        monkeypatch, tmp_path):
+    """With no clock and no chronicle date an event keeps its day (`fixed`,
+    `friendly`) and only loses its distance (`in_days`). The prompt may not
+    print its date and call it "undated" beside it, and the same event is an
+    anchor option -- so, as §19.2 rules for the graph, only a record with no
+    `fixed` reads "undated"."""
+    cid = _pressure_campaign(monkeypatch, tmp_path, now=None)
+    eid = events.create(cid, "The coronation", "2026-05-13")
+    snap = suggest.build_snapshot(cid)
+    assert snap["now"] == ""
+    assert f"event:{eid}" in {a["ref"] for a in snap["anchors"]}
+    user = suggest.build_prompt(snap, [])[1]["content"]
+    assert f"- 13 May 2026 (no current date; ok): event:{eid} = The coronation" in user
+    assert f"- event:{eid} = The coronation (event, ok, no current date)" in user
+    assert "undated" not in user
+
+
 def test_an_empty_campaign_keeps_todays_system_message(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     system = suggest.build_prompt(suggest.build_snapshot(cid))[0]["content"]

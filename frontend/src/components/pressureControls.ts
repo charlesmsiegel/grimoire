@@ -119,10 +119,12 @@ export function timeLabel(c: PressureControls): string {
 }
 
 /** The prompt's phrase for a distance from now (`suggest._when`), so a row
- *  never reads "in -3 days" or "in 1 days". */
-export function whenPhrase(inDays: number | null, precision?: string): string {
+ *  never reads "in -3 days" or "in 1 days". `dated` says the item has a fixed
+ *  day: with no present it has no distance, but it is not undated. */
+export function whenPhrase(inDays: number | null, precision?: string,
+                           dated = false): string {
   if (precision === "month") return "day unknown";
-  if (inDays === null) return "undated";
+  if (inDays === null) return dated ? "no current date" : "undated";
   if (inDays === 0) return "today";
   if (inDays > 0) return inDays === 1 ? "in 1 day" : `in ${inDays} days`;
   return inDays === -1 ? "1 day ago" : `${-inDays} days ago`;

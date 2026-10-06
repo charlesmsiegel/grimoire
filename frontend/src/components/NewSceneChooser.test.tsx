@@ -773,6 +773,19 @@ test("in an undated campaign, Stay near and Let time move are disabled and say w
   expect(screen.getByText(UNDATED_HINT)).toBeVisible();
 });
 
+test("in an undated campaign, a dated anchor shows its day and never reads undated", async () => {
+  (api.continuityDrivers as any).mockResolvedValue(
+    snapshot({ now: "", friendly: "", fixed: null,
+               anchors: [{ ...CORONATION, in_days: null }] }));
+  const { container } = renderChooser();
+  await pickerReady(container);
+  chooseTime("Choose anchor…");
+  await screen.findByRole("combobox", { name: "Anchor" });
+  expect(screen.getByRole("option", { name: "The coronation — 17 May 2026 (no current date)" }))
+    .toBeInTheDocument();
+  expect(screen.queryByRole("option", { name: /undated/ })).toBeNull();
+});
+
 test("in a dated campaign, Stay near and Let time move are offered", async () => {
   const { container } = renderChooser();
   await pickerReady(container);

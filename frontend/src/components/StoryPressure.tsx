@@ -99,7 +99,8 @@ export function StoryPressure({ snap, value, onChange, disabled, open, onToggle 
                     onChange={(e) => onChange(chooseAnchor(value, e.target.value, snap))}>
               {snap.anchors.map((a) => (
                 <option key={a.ref} value={a.ref}>
-                  {`${a.label} — ${a.friendly} (${whenPhrase(a.in_days, a.precision)})`}
+                  {`${a.label} — ${a.friendly} (${whenPhrase(a.in_days, a.precision,
+                                                          a.fixed !== null)})`}
                 </option>
               ))}
             </select>
