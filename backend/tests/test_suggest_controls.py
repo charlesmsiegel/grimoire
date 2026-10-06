@@ -352,12 +352,20 @@ def test_anchor_is_validated_and_auto_added():
     assert suggest.claim({"time_anchor": {"ref": MARA_JUNE, "relation": "before"}},
                          snap, NO_CONTROLS)["time_anchor"] == {"ref": MARA_JUNE,
                                                                "relation": "on"}
-    # an `anchor` entry naming anything but the kept time anchor is dropped
+    # every valid temporal pair is kept (§15.2 drops only unknown refs and
+    # invalid pairs): a passed or undated event is a driver, never an anchor,
+    # and claims through `drivers` alone; the time anchor is still auto-added
     stray = suggest.claim({"drivers": [{"ref": DEBT, "action": "anchor"},
                                        {"ref": EVE, "action": "anchor"}],
                            "time_anchor": {"ref": CORONATION, "relation": "on"}},
                           snap, NO_CONTROLS)
-    assert stray["drivers"] == [{"ref": CORONATION, "action": "anchor"}]
+    assert stray["drivers"] == [{"ref": DEBT, "action": "anchor"},
+                                {"ref": EVE, "action": "anchor"},
+                                {"ref": CORONATION, "action": "anchor"}]
+    for ref in (DEBT, MIDNIGHT, EVE):
+        alone = suggest.claim({"drivers": [{"ref": ref, "action": "anchor"}]}, snap, NO_CONTROLS)
+        assert alone["drivers"] == [{"ref": ref, "action": "anchor"}], ref
+        assert alone["time_anchor"] is None, ref
 
 
 def test_batch_anchor_forces_every_suggestion():
@@ -507,6 +515,20 @@ def test_month_only_birthday_on_keeps_only_its_month():
         "2026-06-20", False)
     assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-07-01") == ("", True)
     assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2027-06-20") == ("", True)
+    # the birthday month is the present one: a day of it already behind `now`
+    # fails the same lower bound `before` and `by` apply (§15.3)
+    may = "birthday:pcs:winifred:month:2026-05"
+    snap = _claim_snap(now="2026-05-20", anchors=[_anchor(may, label="Winifred")])
+    on = {"ref": may, "relation": "on"}
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-05-02") == ("", True)
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-05-20") == (
+        "2026-05-20", False)
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-05-31") == (
+        "2026-05-31", False)
+    # with no `now` the lower bound is skipped, as elsewhere
+    snap = _claim_snap(now="", anchors=[_anchor(may, label="Winifred")])
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-05-02") == (
+        "2026-05-02", False)
 
 
 def test_month_of_parses_refs():
@@ -543,6 +565,11 @@ def test_high_pressure_card_first():
     rows = [_row("ok", MAP), _row("eve", anchor=EVE), _row("overdue", OATH)]
     assert [r["title"] for r in suggest.order_cards(rows, snap, NO_CONTROLS)] == [
         "eve", "ok", "overdue"]
+    # a `today` holiday claimed through `drivers` alone, with no time anchor
+    claimed = suggest.claim({"drivers": [{"ref": EVE, "action": "anchor"}]}, snap, NO_CONTROLS)
+    rows = [{"title": "ok", "drivers": [{"ref": MAP, "action": "advance"}], "time_anchor": None},
+            {"title": "eve", **claimed}]
+    assert [r["title"] for r in suggest.order_cards(rows, snap, NO_CONTROLS)] == ["eve", "ok"]
     assert suggest.order_cards([], snap, NO_CONTROLS) == []
 
 

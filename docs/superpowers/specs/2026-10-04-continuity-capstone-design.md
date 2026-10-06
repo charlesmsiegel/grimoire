@@ -1540,7 +1540,7 @@ All comparisons use primary-provider fixed days. An anchor's time component is s
 | Relation | Rule |
 |---|---|
 | `on` | the date is **derived** from the anchor; the model's date is ignored |
-| `on`, month-only birthday | the model's date is kept only if its month key matches, otherwise blanked |
+| `on`, month-only birthday | the model's date is kept only if its month key matches and now ≤ d, otherwise blanked (the anchor month can be the present one) |
 | `before` | now ≤ d < D |
 | `by` | now ≤ d ≤ D |
 | `after` | D < d ≤ D + `RESOLVE_WINDOW_DAYS` |

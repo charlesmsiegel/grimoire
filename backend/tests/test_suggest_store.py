@@ -1190,6 +1190,43 @@ def test_month_only_on_against_a_real_campaign(monkeypatch, tmp_path):
     assert rows[0]["time_anchor"]["relation"] == "on"
 
 
+#: A plugin that constructs fine but whose `parse` is written the ordinary way
+#: -- split on "-" and int() the parts -- so model text it cannot read raises
+#: ValueError rather than CalendarError.
+_NAIVE_PROVIDER_SRC = _WIDE_PROVIDER_SRC.replace(
+    """        try:
+            y, m, d = str(native).split("-")
+            return int(y) * 400 + MONTHS.index(m) * 10 + int(d) - 1
+        except (ValueError, IndexError) as e:
+            raise CalendarError(f"bad wide date: {native!r}") from e
+""",
+    """        y, m, d = str(native).split("-")
+        return int(y) * 400 + MONTHS.index(m) * 10 + int(d) - 1
+""").replace('"wide-test-calendar", _WideProvider, "Wide Test Calendar"',
+             '"naive-test-calendar", _WideProvider, "Naive Test Calendar"')
+
+
+def test_a_plugin_parse_raising_on_model_text_is_no_date(monkeypatch, tmp_path):
+    assert "CalendarError(" not in _NAIVE_PROVIDER_SRC.split("def parse", 1)[1].split("def ", 1)[0]
+    cid = _campaign(monkeypatch, tmp_path)
+    plugins = tmp_path / "calendars"
+    plugins.mkdir(exist_ok=True)
+    (plugins / "naive_test.py").write_text(_NAIVE_PROVIDER_SRC, encoding="utf-8")
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "naive-test-calendar", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+    clock.advance(cid, to="5-M03-07", reason="setup")
+    snap = suggest.build_snapshot(cid)
+    text = _reply({"date": "next week"}, {"date": "5-M03-09"}, next_date="next week")
+    for kwargs in ({}, {"snapshot": snap}):
+        rows = suggest.parse_output(text, cid, **kwargs)
+        assert [(r["date"], r["date_rejected"]) for r in rows] == [
+            ("", False), ("5-M03-09", False)], kwargs
+        assert suggest.parse_next_date(text, cid, **kwargs) == "", kwargs
+
+
 def test_parse_survives_a_raising_plugin(monkeypatch, tmp_path):
     cid = _pressure_campaign(monkeypatch, tmp_path)
     _map(cid)
