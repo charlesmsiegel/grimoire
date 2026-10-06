@@ -513,6 +513,46 @@ def test_beats_are_capped_and_newest_last(cid):
     assert record["beats"] == [{"scene": sids[n], "text": f"Beat {n}."} for n in (2, 3, 4)]
 
 
+def test_a_pathologically_long_record_cannot_unbound_the_prompt(cid, s0):
+    """A ledger route stores a title, due or beat of any length, and a
+    chronicle line is hand-editable. Only counts bound the sweep's selection,
+    so a long note pasted as a beat would ride whole into the one shared call --
+    past the model's context, failing every candidate in it on every pass. Each
+    record shares `RECONCILE_RECORD_BYTES` (the identity resolver's bound for
+    the same records) and each scene line `RECONCILE_SCENE_LINE_BYTES`; the
+    letters still name the records back."""
+    huge = "harbour " * 25_000
+    clock.advance(cid, to="2026-05-10")
+    chronicle.absorb(cid, {"id": s0, "one_line": "Mara came ashore. " + huge})
+    _thread(cid, LEDGER, "Find the harbour ledger " + huge, "Mara heard of it.", s0)
+    _thread(cid, LEDGER, "Find the harbour ledger " + huge, huge, s0)
+    _thread(cid, MAP, "Recover the harbour ledger", "Winifred asked after it.", s0)
+    _commitment(cid, OATH, "Mara's oath " + huge, huge, s0, due=huge)
+    doc.put_link(cid, canon.link_id("pays_off", MAP, OATH),
+                 {"a": MAP, "b": OATH, "relation": "pays_off", "created": "", "scene": "",
+                  "note": ""})
+    event = "event:" + events.create(cid, "The coronation " + huge, "2026-05-13")
+    pair_key, pair = _record(cid, "possible_duplicate", [LEDGER, MAP],
+                             _pair_signals(title_exact=True))
+    when_key, when = _record(cid, "possible_relation", [OATH, event], _pair_signals())
+    _cache(cid, (pair_key, pair), (when_key, when))
+    payload = _payload(cid)
+    user = _user(payload)
+
+    assert len(payload["candidates"]) == 2
+    assert len(user.encode("utf-8")) < 12_000
+    assert "\nA (plot thread): find-the-ledger: Find the harbour ledger harbour" in user
+    assert "\nB (plot thread): mara-s-map: Recover the harbour ledger (open)\n" in user
+    assert f"  [{s0}] Winifred asked after it." in user
+    assert f"- {s0} — Mara came ashore. harbour" in user
+    assert "\nB: event: The coronation harbour" in user
+    assert " (2026-05-13)\nsignals:" in user
+    got = reconcile.parse_output(_reply(
+        {"candidate": "c1", "decision": "duplicate", "from": "A", "to": "B",
+         "reason": "Same ledger."}), payload)[pair_key]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", LEDGER, MAP)
+
+
 def test_no_transcript_text_is_sent(cid, s0):
     scenes.append_message(cid, s0, "user", "Seraphine whispered the lighthouse password.")
     scenes.append_message(cid, s0, "assistant", "Mara nodded and pocketed the brass key.")
