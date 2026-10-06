@@ -20,6 +20,7 @@ from grimoire.store import (
     image_store,
     image_subjects,
     locks,
+    logs,
     worlds,
 )
 
@@ -223,3 +224,133 @@ def test_deleting_a_campaign_strips_campaign_scope(home):
     raw = _raw(image_id)
     assert raw["associations"] == [_assoc("world:realm")]
     assert raw["reviews"] == {"subjects": ["world:realm"]}
+
+
+# ---- a delete that fails part-way (Codex review, P1) ----
+#
+# The tree is moved aside before the strip and put back if the strip fails, so
+# a failed delete never leaves a live record with its tags stripped.
+
+def _world_with_tag(home):
+    wid = worlds.create_world("Realm")
+    image_id = _object(b"png-1", [_assoc("world:realm")], ["world:realm"])
+    return wid, image_id
+
+
+def _campaign_with_tag(home):
+    wid = worlds.create_world("Realm")
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    image_id = _object(b"png-1", [_assoc(f"campaign:{cid}")], [f"campaign:{cid}"])
+    return cid, image_id
+
+
+def _staged(home):
+    base = worlds.staging.staging_root()
+    return sorted(p.name for p in base.iterdir()) if base.exists() else []
+
+
+def _record_spy(monkeypatch):
+    rows = []
+    monkeypatch.setattr(logs, "record", lambda *a, **k: rows.append((a, k)))
+    return rows
+
+
+def test_a_world_whose_final_rmtree_fails_is_still_deleted(home, monkeypatch):
+    wid, image_id = _world_with_tag(home)
+    rows = _record_spy(monkeypatch)
+
+    def refuse(path, *a, **k):
+        raise PermissionError(13, "read-only", str(path))
+
+    with monkeypatch.context() as m:
+        m.setattr(worlds.staging.shutil, "rmtree", refuse)
+        worlds.delete_world(wid)            # logged, not raised
+
+    assert not worlds.world_exists(wid)
+    assert worlds.list_worlds() == []
+    assert _raw(image_id)["associations"] == []
+    assert [a[0] for a, _k in rows] == ["error"]
+    assert "leftover" in rows[0][0][2]
+    # The leftover sits off the shelf: it is no world, takes no slug, and is
+    # not what a lookup of the old id resolves to.
+    assert len(_staged(home)) == 1
+    assert worlds.paths.canonical_id(wid) == wid
+    assert worlds.create_world("Realm") == "realm"
+
+
+def test_a_world_whose_strip_fails_is_put_back_with_its_tags(home, monkeypatch):
+    wid, image_id = _world_with_tag(home)
+
+    def boom(_wid):
+        raise OSError("disk")
+
+    monkeypatch.setattr(image_scopes, "strip_world", boom)
+    with pytest.raises(OSError, match="disk"):
+        worlds.delete_world(wid)
+
+    assert worlds.world_exists(wid)
+    assert [w["id"] for w in worlds.list_worlds()] == [wid]
+    assert _raw(image_id)["associations"] == [_assoc("world:realm")]
+    assert _staged(home) == []
+
+
+def test_a_world_that_cannot_be_moved_strips_nothing(home, monkeypatch):
+    wid, image_id = _world_with_tag(home)
+
+    def stuck(src, dst):
+        raise PermissionError(13, "locked", str(src))
+
+    with monkeypatch.context() as m, pytest.raises(PermissionError):
+        m.setattr(worlds.staging.os, "replace", stuck)
+        worlds.delete_world(wid)
+
+    assert worlds.world_exists(wid)
+    assert _raw(image_id)["associations"] == [_assoc("world:realm")]
+    assert _staged(home) == []
+
+
+def test_a_campaign_whose_final_rmtree_fails_is_still_deleted(home, monkeypatch):
+    cid, image_id = _campaign_with_tag(home)
+    rows = _record_spy(monkeypatch)
+
+    def refuse(path, *a, **k):
+        raise PermissionError(13, "read-only", str(path))
+
+    with monkeypatch.context() as m:
+        m.setattr(worlds.staging.shutil, "rmtree", refuse)
+        campaigns.delete_campaign(cid)
+
+    assert not campaigns.campaign_exists(cid)
+    assert [c["id"] for c in campaigns.list_campaigns()] == []
+    assert _raw(image_id)["associations"] == []
+    assert [a[0] for a, _k in rows] == ["error"]
+    assert len(_staged(home)) == 1
+
+
+def test_a_campaign_whose_strip_fails_is_put_back_with_its_tags(home, monkeypatch):
+    cid, image_id = _campaign_with_tag(home)
+
+    def busy(_cid):
+        raise locks.CampaignBusy(cid)
+
+    monkeypatch.setattr(image_scopes, "strip_campaign", busy)
+    with pytest.raises(locks.CampaignBusy):
+        campaigns.delete_campaign(cid)
+
+    assert campaigns.campaign_exists(cid)
+    assert _raw(image_id)["associations"] == [_assoc(f"campaign:{cid}")]
+    assert _staged(home) == []
+
+
+def test_a_campaign_that_cannot_be_moved_strips_nothing(home, monkeypatch):
+    cid, image_id = _campaign_with_tag(home)
+
+    def stuck(src, dst):
+        raise PermissionError(13, "locked", str(src))
+
+    with monkeypatch.context() as m, pytest.raises(PermissionError):
+        m.setattr(worlds.staging.os, "replace", stuck)
+        campaigns.delete_campaign(cid)
+
+    assert campaigns.campaign_exists(cid)
+    assert _raw(image_id)["associations"] == [_assoc(f"campaign:{cid}")]

@@ -676,10 +676,16 @@ about a story, so it stays scoped.
   else keeps the old text, as it always did.
 - **Delete strips a scope; fork copies it.** Both scopes follow their record's
   lifecycle in `image_scopes`, because a slug is reusable and the object
-  outlives the directory that held its tags. Deleting a world or campaign strips
-  its scope from every object, then removes the tree; a campaign delete takes
-  the campaign lock for the sweep, so it can be refused with 409 behind a long
-  hold. A strip that fails aborts the delete, which can be run again. A world
+  outlives the directory that held its tags. Deleting a world or campaign
+  first moves its tree aside into `.world-staging` by one rename, then strips
+  its scope from every object, then removes the moved-aside tree
+  (`worlds.staging.remove_published`). A move that fails strips nothing. A
+  strip that fails moves the tree back, with its tags intact, and the delete
+  can be run again. A removal that fails after both is logged rather than
+  raised: the record is gone and its tags are stripped, and the leftover stays
+  under `.world-staging`, which nothing sweeps. A campaign delete holds the
+  campaign lock across all three, so it can be refused with 409 behind a long
+  hold before anything moves. A world
   fork copies the source's scope onto the fork after it is published, best
   effort: a failure is logged and the fork stands without its tags. A campaign
   fork copies its scope too, and a fork that fails strips the new scope again.
@@ -702,6 +708,9 @@ Pinned by `test_a_local_legacy_key_wins_over_the_object`,
 `test_a_legacy_key_wins_until_retagged`,
 `test_an_unarrived_placement_beside_a_legacy_file_answers_from_the_sidecar`,
 `test_a_recreated_world_slug_starts_untagged`,
+`test_a_world_whose_strip_fails_is_put_back_with_its_tags`,
+`test_a_world_whose_final_rmtree_fails_is_still_deleted`,
+`test_a_world_that_cannot_be_moved_strips_nothing`,
 `test_forking_a_world_carries_its_tags`,
 `test_a_fork_whose_tag_copy_fails_is_still_published`,
 `test_a_failed_campaign_fork_leaves_no_scope` and

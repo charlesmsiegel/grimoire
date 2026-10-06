@@ -4,7 +4,6 @@ one-time migration of a full-copy campaign to the overlay layout."""
 from __future__ import annotations
 
 import filecmp
-import shutil
 from pathlib import Path
 
 from .. import (
@@ -32,6 +31,7 @@ from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
 from ..scenes import write as scenes_write
 from ..worlds import paths as worlds_paths
+from ..worlds import staging as worlds_staging
 from . import paths, read
 
 #: Campaign.md key marking the migration as decided but not finished deleting.
@@ -628,10 +628,17 @@ def delete_campaign(cid: str) -> None:
     if not paths.campaign_meta_path(cid).exists() or not worlds_paths.names_its_directory(root):
         raise paths.CampaignNotFound(cid)
     # The campaign's subject tags live on the shared image objects, which
-    # outlive this directory; stripped first, so a campaign created again
-    # under this slug starts untagged. `strip_campaign` takes this campaign's
-    # lock for the sweep, so a delete can now wait on -- and, past the
-    # timeout, be refused by -- a long hold on the campaign (R13). The
-    # `rmtree` itself stays outside the lock, as it always was.
-    image_scopes.strip_campaign(cid)
-    shutil.rmtree(root)
+    # outlive this directory; stripped, so a campaign created again under this
+    # slug starts untagged. `remove_published` moves the tree aside, strips,
+    # and moves it back if the strip fails, so a failed delete leaves the
+    # campaign with its tags, and one whose final `rmtree` fails still reads as
+    # deleted (Codex review, P1). The move and the strip share one hold of the
+    # campaign lock (`strip_campaign` re-enters it), so a lock holder's write
+    # cannot land in the gap and block the move back; a delete can therefore
+    # wait on -- and, past the timeout, be refused by -- a long hold on the
+    # campaign before anything has moved (R13). The `rmtree` of the moved-aside
+    # tree runs inside the hold too, which costs nothing: once the move lands
+    # there is no campaign left for another holder to write.
+    with locks.campaign_lock(cid):
+        worlds_staging.remove_published(
+            root, lambda: image_scopes.strip_campaign(cid), what=f"campaign {cid}")
