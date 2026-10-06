@@ -165,12 +165,13 @@ def test_undescribed_lists_every_surface_and_drops_reviewed_images(client, world
     cid, vid = _char(client, world)
     made = client.post(f"/api/worlds/{world}/pcs", json={"name": "Mara"}).json()
     pid, pvid = made["pc"], made["version"]
+    # Distinct bytes per image: one picture is one object with one description.
     client.put(f"/api/worlds/{world}/pcs/{pid}/versions/{pvid}/images/avatar",
-               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n-pc", "image/png")})
     eid = client.post(f"/api/worlds/{world}/locations",
                       json={"name": "Saltmarch Harbour"}).json()["id"]
     client.put(f"/api/worlds/{world}/locations/{eid}/images/gallery_1",
-               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n-loc", "image/png")})
 
     queue = client.get(f"/api/worlds/{world}/images/undescribed").json()
     assert {(i["kind"], i["id"], i["name"]) for i in queue} == {
@@ -277,8 +278,10 @@ def test_describing_a_library_image_survives_a_concurrent_sibling_write(client, 
     camp = client.post("/api/campaigns",
                        json={"name": "Saltmarch", "world": world}).json()["id"]
     for name in ("coastline", "the-inn"):
+        # Distinct bytes: one picture is one object with one description.
         client.put(f"/api/campaigns/{camp}/images/{name}",
-                   files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+                   files={"file": ("a.png", b"\x89PNG\r\n\x1a\n" + name.encode(),
+                                   "image/png")})
         client.put(f"/api/campaigns/{camp}/images/{name}/description",
                    json={"description": f"A picture of {name}."})
     assert store.image_descriptions.read_in(store.campaign_images.images_dir(camp)) == {
@@ -295,8 +298,10 @@ def test_deleting_a_library_image_takes_its_description_with_it(client, world):
     client.put(f"/api/campaigns/{camp}/images/coastline/description",
                json={"description": "A hand-drawn map."})
     client.delete(f"/api/campaigns/{camp}/images/coastline")
+    # Different art under the old name. (The same picture uploaded again IS
+    # described: its words live on its image object, one picture one text.)
     client.put(f"/api/campaigns/{camp}/images/coastline",
-               files={"file": ("b.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+               files={"file": ("b.png", b"\x89PNG\r\n\x1a\n-other", "image/png")})
     listing = client.get(f"/api/campaigns/{camp}/images").json()["images"]
     assert [(i["name"], i["description"], i["described"]) for i in listing] == [
         ("coastline", "", False)]
@@ -367,3 +372,19 @@ def test_the_library_refuses_the_name_the_backlog_route_owns(client, world):
                        files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
         assert r.status_code == 400
     assert client.get(f"/api/campaigns/{camp}/images").json()["images"] == []
+
+
+def test_description_put_over_the_cap_is_422(client, world):
+    """Too long is not "not found": the image is there, the text is refused."""
+    cid, vid = _char(client, world)
+    too_long = {"description": "x" * 4001}
+    r = client.put(f"/api/worlds/{world}/characters/{cid}/versions/{vid}/images/gallery_1"
+                   "/description", json=too_long)
+    assert r.status_code == 422
+    client.put(f"/api/worlds/{world}/images/coastline",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    r = client.put(f"/api/worlds/{world}/images/coastline/description", json=too_long)
+    assert r.status_code == 422
+    r = client.put(f"/api/worlds/{world}/images/coastline/description",
+                   json={"description": "x" * 4000})
+    assert r.status_code == 200

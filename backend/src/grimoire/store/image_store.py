@@ -58,6 +58,11 @@ MIME: dict[str, str] = {
 FORMAT = 1
 #: The most source URLs one object records; the oldest are kept.
 MAX_SOURCES = 20
+#: The longest description an image may carry: one cap for every way text
+#: reaches an object -- a description write (`image_descriptions.set_in`) and a
+#: bundle import (`world_bundle.MAX_IMPORTED_DESCRIPTION`) alike. Longer text is
+#: not a description of a picture.
+MAX_DESCRIPTION = 4000
 
 _SHA_RE = re.compile(r"[0-9a-f]{64}\Z")
 _EXT_ALIASES = {"jpeg": "jpg"}
@@ -176,17 +181,37 @@ def _load(path: Path, image_id: str) -> ImageObject | None:
     return _parse(raw, image_id)
 
 
+#: `read`'s own statcache pool (the "image_objects" pool). A describe-queue
+#: walk reads an object per placement; in the shared FIFO that would evict the
+#: card and entity hashes the sync sweeps rely on. Sized like the shared one.
+_OBJECT_POOL: dict = {}
+_OBJECT_MAX = statcache.MAX_ENTRIES
+
+
 def read(image_id: str) -> ImageObject | None:
     """The object, or None if it is absent, garbled or names another id.
 
-    Memoized on the sidecar's stat signature, so an unchanged sidecar is parsed
-    once. The returned `raw` is shared with that cache: copy before changing.
+    Memoized on the sidecar's stat signature, in this module's own pool
+    (`_OBJECT_POOL`), so an unchanged sidecar is parsed once. The returned
+    `raw` is shared with that cache: copy before changing.
     """
     if not image_hash.is_image_id(image_id):
         return None
     path = object_path(image_id)
     return statcache.memo("image_store.read", statcache.signature(path),
-                          lambda: _load(path, image_id))
+                          lambda: _load(path, image_id),
+                          pool=_OBJECT_POOL, max_entries=_OBJECT_MAX)
+
+
+def read_fresh(image_id: str) -> ImageObject | None:
+    """`read` without the cache: parsed from disk every time, remembered never.
+
+    For a whole-store sweep (every sidecar once, rarely): memoized, it would
+    cycle the object pool and leave nothing a hot path could reuse.
+    """
+    if not image_hash.is_image_id(image_id):
+        return None
+    return _load(object_path(image_id), image_id)
 
 
 def _dump(raw: dict) -> str:
@@ -570,13 +595,17 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
     return obj
 
 
-def update(image_id: str, change: Callable[[dict], dict | None]) -> None:
-    """Read-modify-write one sidecar under its stripe lock.
+def update(image_id: str, change: Callable[[dict], dict | None]) -> bool:
+    """Read-modify-write one sidecar under its stripe lock; True when it wrote.
 
     `change` gets a private copy of the sidecar and returns the new one, or
     None to write nothing. An absent or unreadable object is left alone and
     `change` is not called. Raises ValueError on a malformed id, or when
     `change` returns something that would not read back as this object.
+
+    False means nothing was written -- an absent object, or a callback that
+    returned None -- so a caller moving text off another file onto the object
+    drops the old copy only on True (`image_descriptions.set_in`).
 
     **The callback contract.** `change` runs under this object's stripe lock,
     so it must be a pure edit of the dict it is given. It must not call
@@ -591,17 +620,18 @@ def update(image_id: str, change: Callable[[dict], dict | None]) -> None:
     with locks.image_object_lock(image_id):
         obj = read(image_id)
         if obj is None:
-            return
+            return False
         _IN_UPDATE.active = True
         try:
             new = change(copy.deepcopy(obj.raw))
         finally:
             _IN_UPDATE.active = False
         if new is None:
-            return
+            return False
         if _parse(new, image_id) is None:
             raise ValueError("update would leave an unreadable image object")
         _write_sidecar(image_id, new)
+        return True
 
 
 def project(raw: dict, scope: str) -> dict:

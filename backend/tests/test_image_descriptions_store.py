@@ -1,14 +1,28 @@
+import json
 import threading
 
 import pytest
 
-from grimoire.store import assets, characters, entities, image_descriptions, image_refs
+from grimoire.store import (
+    assets,
+    campaign_images,
+    campaigns,
+    characters,
+    entities,
+    image_descriptions,
+    image_refs,
+    image_store,
+    world_images,
+    worlds,
+)
 
 
 def _chars(tmp_path, images=("avatar", "gallery_1")):
     cid, vid = characters.create_character(tmp_path, "Seraphine", "main")
     for name in images:
-        assets.put_image(tmp_path, cid, vid, name, b"png", "png")
+        # Distinct bytes per image: one picture is one object with one
+        # description, so two images sharing bytes would share their text.
+        assets.put_image(tmp_path, cid, vid, name, f"png-{name}".encode(), "png")
     return cid, vid
 
 
@@ -163,16 +177,25 @@ def test_catalog_lists_every_image_with_its_review_state(tmp_path):
     assert all(r["v"] and r["ext"] == "png" for r in rows)
 
 
-def test_catalog_reads_a_non_string_description_as_empty(tmp_path):
+def test_catalog_reads_a_non_string_description_as_absent(tmp_path):
     """Same tolerance `read_in` has, for the same reason: a hand-edited or
-    half-synced sidecar must not hand a list to a caller expecting text. The
-    key is still present, so the image is still *reviewed*."""
+    half-synced sidecar must not hand a list to a caller expecting text.
+
+    Under R1 a non-string legacy value is no text at all, so it masks nothing:
+    the image object's own description answers, and without one the image is
+    unreviewed -- the same answer the describe queue gives for it."""
     cid, vid = _chars(tmp_path, images=("avatar",))
     d = _dir_of(tmp_path, cid, vid)
     image_descriptions.path_in(d).write_text('{"avatar": ["not", "text"]}', encoding="utf-8")
     (row,) = image_descriptions.catalog(tmp_path, "characters")
     assert (row["id"], row["vid"], row["name"]) == (cid, vid, "avatar")
-    assert (row["described"], row["description"]) == (True, "")
+    assert (row["described"], row["description"]) == (False, "")
+    assert image_descriptions.undescribed(tmp_path) == [
+        {"id": cid, "vid": vid, "name": "avatar"}]
+
+    _describe_object(image_refs.read(d, "avatar").image, "In half-plate.")
+    (row,) = image_descriptions.catalog(tmp_path, "characters")
+    assert (row["described"], row["description"]) == (True, "In half-plate.")
 
 
 def test_catalog_empty_when_no_base_dir(tmp_path):
@@ -457,3 +480,295 @@ def test_names_in_is_list_ins_stem_set(tmp_path):
     names, found = assets.names_in(d, image_descriptions.DESCRIPTIONS_FILE)
     assert names == {i["name"] for i in assets.list_in(d)}
     assert found is True
+
+
+# --- Descriptions on the image object (stage 2) ------------------------------
+#
+# R1: a string legacy key in the directory wins; otherwise the object's
+# `description`; otherwise undescribed. R2: a write goes to the object behind a
+# resolving placement once `image_store.update` confirms it, and only then is
+# the legacy key dropped; otherwise the legacy key takes it, as before.
+
+
+def _object_text(d, name):
+    return image_store.read(image_refs.read(d, name).image).raw.get("description")
+
+
+def _describe_object(image_id, text):
+    assert image_store.update(image_id, lambda raw: {**raw, "description": text})
+
+
+def _legacy_keys(d, mapping):
+    d.mkdir(parents=True, exist_ok=True)
+    image_descriptions.path_in(d).write_text(json.dumps(mapping), encoding="utf-8")
+
+
+def test_a_placement_description_lives_on_the_object(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-1", "png")
+    image_descriptions.set_in(d, "avatar", "A grey arch")
+    assert _object_text(d, "avatar") == "A grey arch"
+    assert "avatar" not in image_descriptions.read_raw(d)
+    assert image_descriptions.text_in(d, "avatar") == "A grey arch"
+    assert image_descriptions.read_in(d) == {"avatar": "A grey arch"}
+
+
+def test_a_shared_picture_shows_one_description_everywhere(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    dirs = []
+    for world in ("Realm", "Saltmarch"):
+        root = worlds.world_root(worlds.create_world(world))
+        cid, vid = characters.create_character(root, "Mara", "main")
+        assets.put_image(root, cid, vid, "avatar", b"png-shared", "png")
+        dirs.append(assets.version_dir(root, cid, vid))
+    image_descriptions.set_in(dirs[0], "avatar", "Mara at the gate.")
+    assert image_descriptions.text_in(dirs[1], "avatar") == "Mara at the gate."
+    assert image_descriptions.read_in(dirs[1]) == {"avatar": "Mara at the gate."}
+
+
+def test_a_local_legacy_key_wins_over_the_object(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-2", "png")
+    _legacy_keys(d, {"avatar": "Old"})
+    _describe_object(image_refs.read(d, "avatar").image, "New")
+    assert image_descriptions.text_in(d, "avatar") == "Old"
+    assert image_descriptions.legacy_text_in(d, "avatar") == "Old"
+    image_descriptions.set_in(d, "avatar", "Newer")
+    assert image_descriptions.text_in(d, "avatar") == "Newer"
+    assert "avatar" not in image_descriptions.read_raw(d)
+
+
+def test_text_in_takes_the_callers_id_or_none(tmp_path):
+    """`known_id`: a string reads that object and no placement; None reads no
+    object at all (a legacy row); a non-string legacy value counts as absent."""
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-ids", "png")
+    iid = image_refs.read(d, "avatar").image
+    _describe_object(iid, "On the object")
+    assert image_descriptions.text_in(d, "avatar", known_id=iid) == "On the object"
+    assert image_descriptions.text_in(d, "avatar", known_id=None) is None
+    _legacy_keys(d, {"avatar": ["not", "text"]})
+    assert image_descriptions.text_in(d, "avatar") == "On the object"
+    assert image_descriptions.legacy_text_in(d, "avatar") is None
+
+
+def test_reviewed_empty_on_the_object_is_described(tmp_path):
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.set_in(d, "avatar", "")
+    assert _object_text(d, "avatar") == ""
+    assert image_descriptions.undescribed(tmp_path) == [
+        {"id": cid, "vid": vid, "name": "gallery_1"}]
+    rows = {r["name"]: r for r in image_descriptions.catalog(tmp_path)}
+    assert (rows["avatar"]["described"], rows["avatar"]["description"]) == (True, "")
+    assert (rows["gallery_1"]["described"], rows["gallery_1"]["description"]) == (False, "")
+
+
+def test_an_unarrived_placement_with_a_legacy_file_writes_the_legacy_key(tmp_path):
+    d = tmp_path / "v"
+    d.mkdir()
+    (d / "avatar.png").write_bytes(b"png-legacy")
+    image_refs.write(d, "avatar", "px1-" + "ab" * 32)        # its object never arrived
+    image_descriptions.set_in(d, "avatar", "Waiting on a sync.")
+    assert image_descriptions.read_raw(d) == {"avatar": "Waiting on a sync."}
+    assert image_descriptions.text_in(d, "avatar") == "Waiting on a sync."
+
+
+def test_an_unconfirmed_object_write_keeps_the_text_on_the_legacy_key(tmp_path, monkeypatch):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-3", "png")
+    _legacy_keys(d, {"avatar": "Old"})
+    monkeypatch.setattr(image_store, "update", lambda image_id, change: False)
+    image_descriptions.set_in(d, "avatar", "New")
+    assert image_descriptions.read_raw(d) == {"avatar": "New"}       # replaced, not lost
+    assert image_descriptions.text_in(d, "avatar") == "New"
+    assert _object_text(d, "avatar") is None
+
+
+def test_an_object_deleted_before_update_keeps_the_text(tmp_path, monkeypatch):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-4", "png")
+    real = image_descriptions.object_id_in
+
+    def then_gone(dd, name):
+        iid = real(dd, name)
+        image_store.object_path(iid).unlink()
+        return iid
+
+    monkeypatch.setattr(image_descriptions, "object_id_in", then_gone)
+    image_descriptions.set_in(d, "avatar", "Kept anyway.")
+    assert image_descriptions.read_raw(d) == {"avatar": "Kept anyway."}
+
+
+def test_description_too_long_is_its_own_error(tmp_path):
+    assert issubclass(image_descriptions.DescriptionTooLongError, ValueError)
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-5", "png")
+    with pytest.raises(image_descriptions.DescriptionTooLongError):
+        image_descriptions.set_in(d, "avatar", "x" * 4001)
+    with pytest.raises(ValueError) as unknown:
+        image_descriptions.set_in(d, "nope", "x")
+    assert not isinstance(unknown.value, image_descriptions.DescriptionTooLongError)
+
+
+def test_set_in_refuses_an_overlong_description(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-6", "png")
+    with pytest.raises(ValueError):
+        image_descriptions.set_in(d, "avatar", "x" * (image_store.MAX_DESCRIPTION + 1))
+    assert image_descriptions.text_in(d, "avatar") is None
+    image_descriptions.set_in(d, "avatar", "x" * image_store.MAX_DESCRIPTION)
+    assert image_descriptions.text_in(d, "avatar") == "x" * 4000
+
+
+def test_set_in_clears_the_also_clear_directory(tmp_path, monkeypatch):
+    d, visible = tmp_path / "campaign", tmp_path / "world"
+    assets.put_in(d, "avatar", b"png-7", "png")
+    _legacy_keys(visible, {"avatar": "Old", "gallery_1": "Other"})
+    image_descriptions.set_in(d, "avatar", "New", also_clear=visible)
+    assert image_descriptions.read_raw(visible) == {"gallery_1": "Other"}
+
+    _legacy_keys(visible, {"avatar": "Old"})
+    monkeypatch.setattr(image_store, "update", lambda image_id, change: False)
+    image_descriptions.set_in(d, "avatar", "Newer", also_clear=visible)
+    assert image_descriptions.read_raw(visible) == {"avatar": "Old"}     # a legacy write
+    assert image_descriptions.read_raw(d) == {"avatar": "Newer"}
+
+
+def test_carry_legacy_writes_only_the_key(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-8", "png")
+    _legacy_keys(d, {"gallery_1": "Other"})
+    image_descriptions.carry_legacy(d, "avatar", "Carried")
+    assert image_descriptions.read_raw(d) == {"avatar": "Carried", "gallery_1": "Other"}
+    assert _object_text(d, "avatar") is None
+
+
+def test_object_id_in_answers_only_for_a_resolving_placement(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-9", "png")
+    assert image_descriptions.object_id_in(d, "avatar") == image_refs.read(d, "avatar").image
+    image_refs.write(d, "gallery_1", "px1-" + "cd" * 32)       # unarrived
+    assert image_descriptions.object_id_in(d, "gallery_1") is None
+    assert image_descriptions.object_id_in(d, "nope") is None
+
+
+def test_described_names_reads_an_object_only_without_a_legacy_key(tmp_path, monkeypatch):
+    d = tmp_path / "v"
+    for n in ("avatar", "gallery_1", "gallery_2"):
+        assets.put_in(d, n, f"png-dn-{n}".encode(), "png")
+    ids = {n: image_refs.read(d, n).image for n in ("avatar", "gallery_1", "gallery_2")}
+    _describe_object(ids["gallery_1"], "On the object")
+    _legacy_keys(d, {"avatar": "Legacy"})
+    rows = [{"name": n, "image_id": ids[n]} for n in ids] + [{"name": "map"}]
+    read = []
+    real = image_store.read
+    monkeypatch.setattr(image_store, "read", lambda i: read.append(i) or real(i))
+    assert image_descriptions.described_names(d, rows) == {"avatar", "gallery_1"}
+    assert sorted(read) == sorted([ids["gallery_1"], ids["gallery_2"]])
+
+
+# R12: a replaced picture sheds a stale caption -- only when the slot held a
+# known, different identity and the new object already says something.
+
+def test_put_in_drops_a_stale_caption_when_a_different_described_picture_replaces_it(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-old", "png")
+    _legacy_keys(d, {"avatar": "Old caption"})
+    new = image_store.ingest(b"png-new", "png")
+    _describe_object(new.id, "New caption")
+    assets.put_in(d, "avatar", b"png-new", "png")
+    assert "avatar" not in image_descriptions.read_raw(d)
+    assert image_descriptions.text_in(d, "avatar") == "New caption"
+
+
+def test_put_in_over_a_different_legacy_file_drops_a_stale_caption(tmp_path):
+    d = tmp_path / "v"
+    d.mkdir()
+    (d / "avatar.png").write_bytes(b"png-legacy-old")
+    _legacy_keys(d, {"avatar": "Old caption"})
+    new = image_store.ingest(b"png-legacy-new", "png")
+    _describe_object(new.id, "New caption")
+    assets.put_in(d, "avatar", b"png-legacy-new", "png")
+    assert image_descriptions.text_in(d, "avatar") == "New caption"
+
+
+def test_an_undescribed_new_picture_keeps_the_old_key(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-old-2", "png")
+    _legacy_keys(d, {"avatar": "Old caption"})
+    assets.put_in(d, "avatar", b"png-new-2", "png")
+    assert image_descriptions.read_raw(d) == {"avatar": "Old caption"}
+
+
+def test_a_first_placement_keeps_its_legacy_key(tmp_path):
+    d = tmp_path / "v"
+    d.mkdir()
+    (d / "map.png").write_bytes(b"png-map")
+    _legacy_keys(d, {"map": "K"})
+    obj = image_store.ingest(b"png-map", "png")
+    _describe_object(obj.id, "Another world's words.")
+    assets.put_in(d, "map", b"png-map", "png")
+    assert image_refs.read(d, "map").image == obj.id
+    assert image_descriptions.text_in(d, "map") == "K"
+
+
+def test_link_in_onto_an_empty_slot_keeps_a_carried_key(tmp_path):
+    d = tmp_path / "v"
+    obj = image_store.ingest(b"png-carry", "png")
+    _describe_object(obj.id, "Shared")
+    image_descriptions.carry_legacy(d, "avatar", "Carried")
+    assets.link_in(d, "avatar", obj.id)
+    assert image_descriptions.text_in(d, "avatar") == "Carried"
+
+
+def test_link_in_over_a_different_placement_drops_a_stale_caption(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-link-old", "png")
+    _legacy_keys(d, {"avatar": "Old caption"})
+    new = image_store.ingest(b"png-link-new", "png")
+    _describe_object(new.id, "New caption")
+    assets.link_in(d, "avatar", new.id)
+    assert image_descriptions.text_in(d, "avatar") == "New caption"
+
+
+def test_backlogs_never_resolve_blobs(tmp_path, monkeypatch):
+    """Every backlog counts an object-described placement as described, off the
+    placements' own ids, without resolving a single blob."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    rid, vid = characters.create_character(root, "Winifred", "main")
+    for n in ("avatar", "gallery_1", "gallery_2"):
+        assets.put_image(root, rid, vid, n, f"png-bl-{n}".encode(), "png")
+    vdir = assets.version_dir(root, rid, vid)
+    image_descriptions.set_in(vdir, "avatar", "On the object.")
+    _legacy_keys(vdir, {"gallery_1": "Legacy."})
+    for n in ("coastline", "harbour"):
+        world_images.put_image(wid, n, f"png-wl-{n}".encode(), "png")
+        campaign_images.put_image(cid, f"c-{n}", f"png-cl-{n}".encode(), "png")
+    world_images.set_description(wid, "coastline", "A grey coast.")
+    campaign_images.set_description(cid, "c-coastline", "A grey coast, closer.")
+
+    def no_resolving(ref):
+        raise AssertionError("a backlog resolved a blob")
+
+    monkeypatch.setattr(image_refs, "resolve_ref", no_resolving)
+    assert image_descriptions.undescribed(root) == [
+        {"id": rid, "vid": vid, "name": "gallery_2"}]
+    assert image_descriptions.undescribed_count(root) == 1
+    assert image_descriptions.has_undescribed(root) is True
+    assert world_images.undescribed(wid) == [{"name": "harbour"}]
+    assert world_images.undescribed_count(wid) == 1
+    assert world_images.has_undescribed(wid) is True
+    assert campaign_images.own_undescribed(cid) == [{"name": "c-harbour"}]
+
+    _describe_object(image_refs.read(vdir, "gallery_2").image, "")
+    _describe_object(image_refs.read(world_images.images_dir(wid), "harbour").image, "")
+    _describe_object(image_refs.read(campaign_images.images_dir(cid), "c-harbour").image, "")
+    assert image_descriptions.undescribed_count(root) == 0
+    assert image_descriptions.has_undescribed(root) is False
+    assert world_images.undescribed(wid) == []
+    assert world_images.has_undescribed(wid) is False
+    assert campaign_images.own_undescribed(cid) == []

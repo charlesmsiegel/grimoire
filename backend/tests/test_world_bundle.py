@@ -579,10 +579,11 @@ def test_image_descriptions_survive_a_round_trip(monkeypatch, tmp_path):
     wid = worlds.create_world("Realm")
     wroot = worlds.world_root(wid)
     cid, vid = characters.create_character(wroot, "Seraphine", "main")
-    assets.put_image(wroot, cid, vid, "gallery_1", b"\x89PNG\r\n\x1a\n", "png")
+    # Distinct bytes: one picture is one object with one description.
+    assets.put_image(wroot, cid, vid, "gallery_1", b"\x89PNG\r\n\x1a\n-1", "png")
     image_descriptions.set_description(wroot, cid, vid, "gallery_1", "A grey quay at dusk.")
     # ...and the reviewed-empty marker, which is a decision and not an absence
-    assets.put_image(wroot, cid, vid, "gallery_2", b"\x89PNG\r\n\x1a\n", "png")
+    assets.put_image(wroot, cid, vid, "gallery_2", b"\x89PNG\r\n\x1a\n-2", "png")
     image_descriptions.set_description(wroot, cid, vid, "gallery_2", "")
 
     imported = world_bundle.import_bundle(_export(wid, tmp_path))

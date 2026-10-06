@@ -462,6 +462,47 @@ def test_update_missing_object_is_noop():
     assert calls == []
 
 
+def test_update_reports_whether_it_wrote():
+    obj = image_store.ingest(_png(_img()), "png")
+    assert image_store.update(obj.id, lambda raw: {**raw, "description": "x"}) is True
+    assert image_store.read(obj.id).raw["description"] == "x"
+    # An absent object: nothing written, and the caller can tell.
+    assert image_store.update("px1-" + "0" * 64, lambda raw: raw) is False
+    # A callback that declines: nothing written either.
+    assert image_store.update(obj.id, lambda raw: None) is False
+
+
+def test_read_memoizes_in_its_own_pool():
+    """A backlog walk reads an object per placement; in the shared statcache
+    that would evict the card and entity hashes the sync sweeps rely on."""
+    from grimoire.store import statcache
+
+    obj = image_store.ingest(_png(_img()), "png")
+    os.utime(image_store.object_path(obj.id), ns=(1, 1))     # outside the racy window
+    image_store._OBJECT_POOL.clear()
+    assert image_store.read(obj.id) == obj
+    assert any(k[0] == "image_store.read" for k in image_store._OBJECT_POOL)
+    assert not any(k[0] == "image_store.read" for k in statcache._cache)
+
+
+def test_read_fresh_bypasses_the_cache(monkeypatch):
+    from grimoire.store import statcache
+
+    obj = image_store.ingest(_png(_img()), "png")
+
+    def no_memo(*a, **kw):
+        raise AssertionError("read_fresh consulted the cache")
+
+    monkeypatch.setattr(statcache, "memo", no_memo)
+    assert image_store.read_fresh(obj.id) == obj
+    assert image_store.read_fresh("px1-" + "0" * 64) is None
+    assert image_store.read_fresh("not-an-id") is None
+
+
+def test_one_description_cap():
+    assert image_store.MAX_DESCRIPTION == 4000
+
+
 def test_project_filters_scope():
     raw = {
         "format": 1, "id": "px1-" + "a" * 64, "identity": "pixels",

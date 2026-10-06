@@ -618,6 +618,10 @@ def put_world_entity_image_description(wid: str, kind: str, eid: str, name: str,
     try:
         store.image_descriptions.set_description(root, eid, "default", name,
                                                  body.description, base=kind)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # `from None`: the strict-write ValueError is this module's own
         # implementation detail, and chaining it onto the 404 says nothing a
@@ -635,6 +639,10 @@ def put_campaign_entity_image_description(cid: str, kind: str, eid: str, name: s
         # gate is the overlay union, so a thin campaign can describe art whose
         # bytes it still inherits without diverging the art itself.
         store.overlay.set_description(cid, eid, "default", name, body.description, base=kind)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # `from None`: the strict-write ValueError is this module's own
         # implementation detail, and chaining it onto the 404 says nothing a

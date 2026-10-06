@@ -244,6 +244,25 @@ def test_images_undescribed_reflects_the_worlds_gallery(client, campaign):
     assert _shell(client, campaign)["campaign"]["images_undescribed"] == 1
 
 
+def test_shell_undescribed_count_drops_after_describing_a_placement(client, campaign):
+    """The description lands on the image object rather than in the version's
+    sidecar, and the badge's walk reads it there."""
+    wid = _shell(client, campaign)["campaign"]["world"]
+    chid = client.post(f"/api/worlds/{wid}/characters",
+                       json={"name": "Winifred"}).json()["character"]
+    vid = client.get(f"/api/worlds/{wid}/characters/{chid}").json()["meta"]["default_version"]
+    root = store.worlds.paths.world_root(wid)
+    store.assets.put_image(root, chid, vid, "gallery_1", _png(), "png")
+    assert _shell(client, campaign)["campaign"]["images_undescribed"] == 1
+
+    r = client.put(f"/api/worlds/{wid}/characters/{chid}/versions/{vid}/images/gallery_1"
+                   "/description", json={"description": "Winifred at the quay."})
+    assert r.status_code == 200
+    vdir = store.assets.version_dir(root, chid, vid)
+    assert "gallery_1" not in store.image_descriptions.read_raw(vdir)
+    assert _shell(client, campaign)["campaign"]["images_undescribed"] == 0
+
+
 def test_world_id_travels_alongside_its_name(client, campaign):
     """`world_name` alone is a label; the hub needs the id to link at the
     world's own pages, so it rides beside it the way `CampaignMeta` pairs

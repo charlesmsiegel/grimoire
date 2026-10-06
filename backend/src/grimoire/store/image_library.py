@@ -125,6 +125,28 @@ def addressable(name: str) -> bool:
             and not any(c in UNADDRESSABLE for c in name))
 
 
+def backlog_rows(d: Path) -> list[dict]:
+    """``[{"name", "image_id"?}, ...]`` for every addressable name in `d`, for
+    a describe backlog (`image_descriptions.described_names`).
+
+    Not ``listing``: that resolves every placement to its blob for an ``ext``
+    and a ``v`` a backlog never shows, and the backlogs feed ``/api/shell`` on
+    every navigation. This is ``assets.names_in`` -- one directory read, the
+    placements' own ids, no blob -- filtered by the same ``addressable``. The
+    price is ``names_in``'s: mid-sync, a placement whose object or blob has not
+    arrived is a row here before ``listing`` shows it.
+    """
+    names, _found, refs = assets.names_in(d, with_refs=True)
+    rows = []
+    for name in sorted(names):
+        if not addressable(name):
+            continue
+        ref = refs.get(name)
+        image_id = ref.image if ref is not None else None
+        rows.append({"name": name, "image_id": image_id} if image_id else {"name": name})
+    return rows
+
+
 def listing(d: Path) -> list[dict]:
     """``[{"name", "ext", "v"}, ...]`` for every image a post could link to.
 

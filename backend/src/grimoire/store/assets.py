@@ -26,6 +26,7 @@ import threading
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
+from typing import Literal, overload
 
 from . import atomic, image_hash, image_refs, image_store, statcache
 from .paths import safe_id
@@ -415,6 +416,40 @@ def _drop_if_placed(d: Path, name: str, image_id: str,
         _drop_snapshotted(stale)
 
 
+def _sheds_caption(d: Path, name: str, old: image_refs.Ref | None,
+                   supported_only: bool, image_id: str) -> bool:
+    """Whether placing `image_id` as `name` should drop the name's legacy
+    description key (stage-2 ruling R12): the slot held a KNOWN, DIFFERENT
+    picture, and the new one's object already carries a string description.
+
+    Known means the old placement names an image, or -- with none -- a legacy
+    file sits under the name whose identity (`image_store.identify`, the test
+    `characters._legacy_identity` makes) can be read. A first placement, an
+    adoption of the same picture, and a promote's `link_in` onto an empty slot
+    (whose key R5 carried just before) keep the key: there the key is either
+    about this very picture or the only text the reader can see.
+
+    Cheapest question first, so an ordinary upload with no key costs one small
+    read; a legacy file is decoded only when everything else says drop.
+    Called before the placement is written: the legacy file is about to go.
+    """
+    if name not in _read_sidecar(d, DESCRIPTIONS_FILE):
+        return False
+    obj = image_store.read(image_id)
+    if obj is None or not isinstance(obj.raw.get("description"), str):
+        return False
+    if old is not None and old.image is not None:
+        return old.image != image_id
+    legacy = _legacy_path(d, name, supported_only)
+    if legacy is None:
+        return False
+    try:
+        held = image_store.identify(legacy.read_bytes(), legacy.suffix)
+    except (OSError, ValueError):
+        return False            # unreadable: not a known identity
+    return held != image_id
+
+
 def _place(d: Path, name: str, image_id: str, *, keep_focus: bool,
            supported_only: bool) -> None:
     """Publish placement `name` -> `image_id`, then drop the legacy siblings.
@@ -424,13 +459,18 @@ def _place(d: Path, name: str, image_id: str, *, keep_focus: bool,
     no image -- and the unlinks only once the placement resolves
     (`_drop_if_placed`). `keep_focus` keeps the old placement's focus;
     otherwise a focus survives only when the placement already held this very
-    image. Caller holds `_image_lock(d, name)`.
+    image. A replaced picture sheds a stale caption (`_sheds_caption`), in the
+    same operation and only once the new placement is written. Caller holds
+    `_image_lock(d, name)`.
     """
     stale = _snapshot_siblings(d, name, supported_only)
     old = image_refs.read(d, name)
+    shed = _sheds_caption(d, name, old, supported_only, image_id)
     focus = (old.focus if old is not None and (keep_focus or old.image == image_id)
              else None)
     image_refs.write(d, name, image_id, focus=focus)
+    if shed:
+        drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
     _drop_if_placed(d, name, image_id, stale)
 
 
@@ -649,7 +689,18 @@ def image_path(root: Path, cid: str, vid: str, name: str, base: str = "character
     return p
 
 
-def names_in(d: Path, also: str = "") -> tuple[set[str], bool]:
+@overload
+def names_in(d: Path, also: str = "", *,
+             with_refs: Literal[False] = False) -> tuple[set[str], bool]: ...
+
+
+@overload
+def names_in(d: Path, also: str = "", *,
+             with_refs: Literal[True]) -> tuple[set[str], bool, dict[str, image_refs.Ref]]: ...
+
+
+def names_in(d: Path, also: str = "", *, with_refs: bool = False
+             ) -> tuple[set[str], bool] | tuple[set[str], bool, dict[str, image_refs.Ref]]:
     """Every logical image NAME in `d`: the legacy stems plus every placement
     that holds an image -- `list_in`'s name set, and nothing else.
 
@@ -675,6 +726,10 @@ def names_in(d: Path, also: str = "") -> tuple[set[str], bool]:
     statting it separately doubles the traversals on a sweep over every version
     folder in the store. Returns (names, whether `also` was present); with no
     `also`, the flag is always False.
+
+    `with_refs` adds a third item: the placements (`image_refs.scan`, image-less
+    overrides included) from the scan this already makes, so a backlog walk
+    that needs each name's image id never scans the placements a second time.
     """
     out: set[str] = set()
     found = False
@@ -692,9 +747,10 @@ def names_in(d: Path, also: str = "") -> tuple[set[str], bool]:
                 if stem and e.is_file() and _norm_ext("." + ext) and _addressable_name(stem):
                     out.add(stem)
     except OSError:
-        return set(), False
-    out.update(n for n in image_refs.image_names(d) if _addressable_name(n))
-    return out, found
+        return (set(), False, {}) if with_refs else (set(), False)
+    refs = image_refs.scan(d)
+    out.update(n for n, r in refs.items() if r.image is not None and _addressable_name(n))
+    return (out, found, refs) if with_refs else (out, found)
 
 
 def list_in(d: Path) -> list[dict]:

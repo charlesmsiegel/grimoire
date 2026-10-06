@@ -9,6 +9,7 @@ from grimoire.store import (
     assets,
     campaign_images,
     campaigns,
+    image_descriptions,
     image_library,
     image_refs,
     overlay,
@@ -360,9 +361,10 @@ def test_an_inherited_image_is_versioned_by_the_file_that_backs_it(cid, wid):
 
 
 def test_descriptions_come_from_whichever_side_owns_the_image(cid, wid):
-    world_images.put_image(wid, "coastline", _png(), "png")
+    # Distinct pictures: one picture is one object with one description.
+    world_images.put_image(wid, "coastline", _png(color=(10, 20, 30)), "png")
     world_images.set_description(wid, "coastline", "a rocky shore")
-    campaign_images.put_image(cid, "handout", _png(), "png")
+    campaign_images.put_image(cid, "handout", _png(color=(40, 50, 60)), "png")
     campaign_images.set_description(cid, "handout", "the party's map")
 
     assert campaign_images.read_descriptions(cid) == {
@@ -380,9 +382,10 @@ def test_a_campaign_may_not_describe_an_inherited_image(cid, wid):
 def test_the_campaign_backlog_is_its_own_images_only(cid, wid):
     """Inherited art belongs to the world's queue. Reusing the merged listing
     here would re-offer every world image in every campaign's queue."""
-    world_images.put_image(wid, "coastline", _png(), "png")
-    campaign_images.put_image(cid, "handout", _png(), "png")
-    campaign_images.put_image(cid, "sketch", _png(), "png")
+    # Distinct pictures: one picture is one object with one description.
+    world_images.put_image(wid, "coastline", _png(color=(10, 20, 30)), "png")
+    campaign_images.put_image(cid, "handout", _png(color=(40, 50, 60)), "png")
+    campaign_images.put_image(cid, "sketch", _png(color=(70, 80, 90)), "png")
 
     assert [i["name"] for i in campaign_images.own_undescribed(cid)] == [
         "handout", "sketch"]
@@ -481,3 +484,15 @@ def test_a_campaign_whose_meta_cannot_be_read_does_not_report_a_silent_delete(ci
 
     with pytest.raises(OSError):
         campaign_images.list_images(cid)
+
+
+def test_a_campaign_library_image_described_through_set_in_leaves_the_queue(cid):
+    """B1, campaign side: the text is on the object, and `own_undescribed`
+    reads it there."""
+    campaign_images.put_image(cid, "sketch", _png(color=(70, 80, 90)), "png")
+    assert campaign_images.own_undescribed(cid) == [{"name": "sketch"}]
+    campaign_images.set_description(cid, "sketch", "A charcoal sketch.")
+    d = campaign_images.images_dir(cid)
+    assert "sketch" not in image_descriptions.read_raw(d)
+    assert campaign_images.own_undescribed(cid) == []
+    assert campaign_images.read_descriptions(cid) == {"sketch": "A charcoal sketch."}
