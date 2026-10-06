@@ -98,6 +98,44 @@ def describe(cid: str, ref: str, ledgers: effective.Ledgers | None = None) -> st
         return ref
 
 
+def _kind_word(ref) -> str:
+    """The kind a ref names, as a word -- "record" for one that names none."""
+    prefix = ref.split(":", 1)[0] if isinstance(ref, str) else ""
+    return prefix if prefix in _LEDGER_FILE else "record"
+
+
+def reader_name(cid: str, ref, ledgers: effective.Ledgers | None = None, *,
+                start: bool = False) -> str:
+    """A record's name in a journal label or a refusal: `describe`'s, or --
+    where that could only answer with the ref -- the kind in words (§30: no
+    store token reaches a reader). The server's counterpart of the review's
+    `recordName`: a record whose ledger will not read "cannot be read right
+    now" (it may well exist), one the ledger reads without is "a missing
+    thread", and one that is there with no name is "an untitled thread".
+    `describe` itself still answers with the ref, because the review's titles
+    are compared against it to tell those apart. `start` capitalises a
+    fallback that opens a sentence; a real title is never recased. Never
+    raises."""
+    try:
+        title = describe(cid, ref, ledgers) if isinstance(ref, str) and ref else ""
+        if title and title != ref:
+            return title
+        word = _kind_word(ref)
+        if ledgers is None:
+            ledgers = effective.Ledgers.load(cid)
+        known = ledgers.exists(ref) if word != "record" else False
+        article = "an" if word == "event" else "a"
+        if known is None:
+            text = f"{article} {word} that cannot be read right now"
+        elif known:
+            text = f"an untitled {word}"
+        else:
+            text = f"a missing {word}"
+    except Exception:  # noqa: BLE001 -- a label must never be the thing that fails
+        text = "a missing record"
+    return text[:1].upper() + text[1:] if start else text
+
+
 def _split(ref) -> tuple[str, str]:
     try:
         return canon.split_ref(ref)
@@ -120,7 +158,7 @@ def _require_readable(ledgers: effective.Ledgers, *prefixes: str) -> None:
 def _require_exists(ledgers: effective.Ledgers, cid: str, *refs: str) -> None:
     for ref in refs:
         if ledgers.exists(ref) is False:
-            raise RefusedError(404, "not_found", f"{describe(cid, ref)} does not exist")
+            raise RefusedError(404, "not_found", f"That {_kind_word(ref)} does not exist")
 
 
 def _record(ledgers: effective.Ledgers, ref: str) -> dict:
@@ -171,11 +209,12 @@ def _validated_alias(cid: str, ref: str, to: str, *, replace: bool,
     aliases = doc.read(cid)["aliases"]
     if doc.reaches(aliases, to, ref):
         raise RefusedError(409, "alias_cycle",
-                      f"{describe(cid, to)} is already merged into {describe(cid, ref)}")
+                      f"{reader_name(cid, to, start=True)} is already merged into "
+                      f"{reader_name(cid, ref)}")
     if ref in aliases and not replace:
         current = aliases[ref].get("to") if isinstance(aliases[ref], dict) else ""
         raise RefusedError(409, "alias_exists",
-                      f"{describe(cid, ref)} is already merged elsewhere",
+                      f"{reader_name(cid, ref, start=True)} is already merged elsewhere",
                       {"to": current if isinstance(current, str) else ""})
     before = effective.live_canon(cid, ledgers)
     canonical = before.get(to, to)
@@ -184,8 +223,8 @@ def _validated_alias(cid: str, ref: str, to: str, *, replace: bool,
     if (effective.is_live(sp, mine["status"]) != effective.is_live(sp, theirs["status"])
             and not accept_status_change):
         raise RefusedError(409, "liveness_mismatch",
-                      f"{describe(cid, ref)} is {mine['status']} but "
-                      f"{describe(cid, canonical)} is {theirs['status']}",
+                      f"{reader_name(cid, ref, start=True)} is {mine['status']} but "
+                      f"{reader_name(cid, canonical)} is {theirs['status']}",
                       standings)
     return before, standings
 
@@ -211,7 +250,8 @@ def create_alias(cid: str, ref: str, to: str, *, replace: bool = False,
         mine, theirs = standings["source"], standings["canonical"]
         record = {"to": to, "created": paths.now_iso(), "source": source, "note": note}
         with _journal_alias(cid, ref,
-                            f"{describe(cid, ref)} → merged into {describe(cid, to)}"):
+                            f"{reader_name(cid, ref, start=True)} → merged into "
+                            f"{reader_name(cid, to)}"):
             doc.put_alias(cid, ref, record)
         after = effective.live_canon(cid, effective.Ledgers.load(cid))
         affected = sorted(s for s in after
@@ -232,11 +272,12 @@ def remove_alias(cid: str, ref: str) -> dict:
         _require_wellformed(cid, {"aliases"})
         aliases = doc.read(cid)["aliases"]
         if ref not in aliases:
-            raise RefusedError(404, "not_found", f"{describe(cid, ref)} is not merged")
+            raise RefusedError(404, "not_found",
+                               f"{reader_name(cid, ref, start=True)} is not merged")
         record = aliases[ref]
         to = record.get("to") if isinstance(record, dict) else ""
-        with _journal_alias(cid, ref, f"{describe(cid, ref)} — unmerged from "
-                                      f"{describe(cid, to if isinstance(to, str) else '')}"):
+        with _journal_alias(cid, ref, f"{reader_name(cid, ref, start=True)} — unmerged from "
+                                      f"{reader_name(cid, to)}"):
             doc.drop_alias(cid, ref)
         return {"ok": True}
 
@@ -273,8 +314,8 @@ def create_link(cid: str, a: str, b: str, relation: str, *, scene: str = "",
             raise RefusedError(409, "link_exists", "that link already exists", {"id": lid})
         record = {"a": ca, "b": cb, "relation": relation, "created": paths.now_iso(),
                   "scene": scene, "note": note}
-        with _journal_link(cid, lid, f"{describe(cid, ca)} {_relation_words(relation)} "
-                                     f"{describe(cid, cb)}"):
+        with _journal_link(cid, lid, f"{reader_name(cid, ca, start=True)} "
+                                     f"{_relation_words(relation)} {reader_name(cid, cb)}"):
             doc.put_link(cid, lid, record)
         return {"link": {"id": lid, **record}, "given": {"a": a, "b": b}}
 
@@ -284,11 +325,9 @@ def _link_label(cid: str, record) -> str:
     if not isinstance(record, dict):
         return "link"
 
-    def part(value) -> str:
-        return describe(cid, value) if isinstance(value, str) else "?"
-
-    return " ".join((part(record.get("a")), _relation_words(record.get("relation")),
-                     part(record.get("b"))))
+    return " ".join((reader_name(cid, record.get("a"), start=True),
+                     _relation_words(record.get("relation")),
+                     reader_name(cid, record.get("b"))))
 
 
 def remove_link(cid: str, lid: str) -> dict:
@@ -352,9 +391,9 @@ def merged_edit_targets(cid: str, edits: list) -> list[dict]:
         label = edit.get("label")
         out.append({"index": index, "id": rid,
                     "label": label if isinstance(label, str) and label
-                    else describe(cid, source, ledgers),
+                    else reader_name(cid, source, ledgers),
                     "source": source, "canonical": canonical,
-                    "canonical_title": describe(cid, canonical, ledgers)})
+                    "canonical_title": reader_name(cid, canonical, ledgers)})
     return out
 
 
@@ -365,13 +404,14 @@ def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
     event ids are slugs that become free on delete, and a recreated record of
     the same name would otherwise inherit the dead one's merges and links.
     `name` is the deleted record's display name, which `describe` can no longer
-    read once the record is gone.
+    read once the record is gone; every other end is named by `reader_name`, so
+    an end that was already missing reads as "a missing event", never its ref.
 
     Only the sections that can name `ref` must be readable: an event can be the
     end of a link but never part of a merge, so a malformed ``aliases`` section
     does not stop an event's links from being removed."""
-    def label_of(other: str) -> str:
-        return name if other == ref and name else describe(cid, other)
+    def label_of(other, start: bool = False) -> str:
+        return name if other == ref and name else reader_name(cid, other, start=start)
 
     with locks.campaign_lock(cid):
         try:
@@ -387,8 +427,7 @@ def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
             to = record.get("to") if isinstance(record, dict) else None
             if src != ref and to != ref:
                 continue
-            label = (f"{label_of(src)} → merged into "
-                     f"{label_of(to) if isinstance(to, str) and to else '?'}"
+            label = (f"{label_of(src, start=True)} → merged into {label_of(to)}"
                      " — removed with deleted record")
             with _journal_alias(cid, src, label):
                 doc.drop_alias(cid, src)
@@ -396,8 +435,7 @@ def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
         for lid, record in sorted(data["links"].items()):
             if not isinstance(record, dict) or ref not in (record.get("a"), record.get("b")):
                 continue
-            parts = [label_of(record[k]) if isinstance(record.get(k), str) else "?"
-                     for k in ("a", "b")]
+            parts = [label_of(record.get("a"), start=True), label_of(record.get("b"))]
             rel = _relation_words(record.get("relation"))
             with _journal_link(cid, lid,
                                f"{parts[0]} {rel} {parts[1]} — removed with deleted record"):

@@ -410,7 +410,7 @@ def _copy_due(cid: str, checked: dict, plan: dict) -> None:
     """The explicit due copy (§5.1): its own journalled ledger row, before the
     merge, through the ledger's helper."""
     canonical = plan["alias"]["to"]
-    source = review.describe(cid, plan["alias"]["ref"], checked["current"].ledgers)
+    source = review.reader_name(cid, plan["alias"]["ref"], checked["current"].ledgers)
     move_label = (f"{pending.label(checked['current'], [canonical])} — "
                   f"due copied from {source}")
     ledger_routes.move_commitment(cid, plan["target"], due=plan["copy_due"],
