@@ -306,6 +306,46 @@ def test_a_prompt_rule_change_makes_the_rolling_summary_stale(client, review_sce
     assert client.get(url).json()["stale"] is True
 
 
+def test_an_append_that_moves_a_depth_rule_over_the_summary_makes_it_stale(client, review_scene):
+    """Depth counts from the newest message of the whole transcript, so an
+    append moves every covered post one deeper. A depth-bounded prompt rule
+    that now changes a covered post means the summary describes text the
+    model is no longer shown -- stale, like any other change to that view."""
+    cid, sid = review_scene
+    reply(cid, sid, "Hello, my secret friend.", speaker="Aese")
+    put_rules(client, f"/api/campaigns/{cid}/regex",
+              {"name": "Deep secrets", "pattern": r"secret ", "replacement": "",
+               "min_depth": 2})
+    url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("They met; a secret was shared.")
+    assert client.post(url + "?force=true").json()["refreshed"] is True
+    assert client.get(url).json()["stale"] is False
+
+    # One post on: the reply sits at depth 1, which the rule does not reach.
+    store.scenes.append_message(cid, sid, "user", "We sit.")
+    assert client.get(url).json()["stale"] is False
+    # Another: the reply is at depth 2 now, and the rule strips it there.
+    store.scenes.append_message(cid, sid, "user", "We wait.")
+    assert client.get(url).json()["stale"] is True
+
+
+def test_a_depth_rule_that_changes_no_covered_post_leaves_the_summary_current(
+        client, review_scene):
+    cid, sid = review_scene
+    reply(cid, sid, "Hello, traveller.", speaker="Aese")
+    put_rules(client, f"/api/campaigns/{cid}/regex",
+              {"name": "Deep secrets", "pattern": r"secret ", "replacement": "",
+               "min_depth": 2})
+    url = f"/api/campaigns/{cid}/scenes/{sid}/rolling-summary"
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeOpenRouterComplete("They met.")
+    assert client.post(url + "?force=true").json()["refreshed"] is True
+    for text in ("We sit.", "We wait.", "We go."):
+        store.scenes.append_message(cid, sid, "user", text)
+    assert client.get(url).json()["stale"] is False
+
+
 def test_scene_break_prompt_uses_view(client, review_scene):
     cid, sid = review_scene
     reply(cid, sid, "<think>a secret plan</think>Hello, traveller.", speaker="Aese")
