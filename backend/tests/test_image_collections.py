@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
@@ -7,7 +8,13 @@ import pytest
 from PIL import Image, PngImagePlugin
 
 from grimoire.store import assets, image_refs, image_store, locks, world_images, worlds
+from grimoire.store import image_collection_imports as imports
 from grimoire.store import image_collections as collections
+from tests.collection_fixtures import format1, format2, member_name, write_manifest
+
+CID = '0123456789abcdef0123456789abcdef'
+OTHER = 'fedcba9876543210fedcba9876543210'
+THIRD = 'aaaaaaaaaaaaaaaabbbbbbbbbbbbbbbb'
 
 
 def png(color='red'):
@@ -36,8 +43,7 @@ def test_members_deduplicate_and_publication_is_source_free(wid):
 
 
 def test_members_are_protected_through_world_image_store(wid):
-    name = collections.put_member(wid, png())
-    collections.publish(wid, uuid.uuid4().hex, [name])
+    [name] = format1(wid, CID, png())
     with pytest.raises(collections.ImageInCollectionError):
         world_images.delete_image(wid, name)
     with pytest.raises(collections.ImageInCollectionError):
@@ -62,9 +68,8 @@ def test_duplicate_members_and_invalid_ids_are_refused(wid):
 
 
 def test_missing_files_are_omitted_and_corruption_does_not_unlock_members(wid):
-    name = collections.put_member(wid, png())
-    cid = uuid.uuid4().hex
-    collections.publish(wid, cid, [name])
+    cid = CID
+    [name] = format1(wid, cid, png())
     world_images.image_path(wid, name).unlink()
     assert collections.available(wid, cid) == []
     path = worlds.world_root(wid) / 'assets' / 'image-collections' / f'{cid}.json'
@@ -88,8 +93,7 @@ def test_two_publishers_cannot_change_an_accepted_collection(wid):
 
 
 def test_case_aliases_cannot_mutate_members(wid):
-    name = collections.put_member(wid, png())
-    collections.publish(wid, uuid.uuid4().hex, [name])
+    [name] = format1(wid, CID, png())
     with pytest.raises(collections.ImageInCollectionError):
         world_images.put_image(wid, name.upper(), png('blue'), 'png')
     with pytest.raises(collections.ImageInCollectionError):
@@ -154,8 +158,7 @@ def test_publish_with_ref_members(wid):
 
 
 def test_guard_write_compares_identity_for_ref_members(wid):
-    name = collections.put_member(wid, png_dpi(72))
-    collections.publish(wid, uuid.uuid4().hex, [name])
+    [name] = format1(wid, CID, png_dpi(72))
     collections.guard_write(wid, name, png_dpi(72))
     collections.guard_write(wid, name, png_dpi(144))  # same pixels, other metadata
     with pytest.raises(collections.ImageInCollectionError):
@@ -172,6 +175,7 @@ def test_guard_write_compares_identity_for_ref_members(wid):
 
 
 def test_a_member_name_is_not_fileable_over_other_pixels(wid):
+    format1(wid, OTHER, png('green'))  # the guard is on only beside format-1 state
     name = collections.MEMBER_PREFIX + hashlib.sha256(png('red')).hexdigest()
     d = collections.image_directory(wid)
     with pytest.raises(collections.CollectionInvalidError):
@@ -184,6 +188,7 @@ def test_a_member_name_is_not_fileable_over_other_pixels(wid):
 
 
 def test_a_member_alias_in_other_case_is_refused_too(wid):
+    format1(wid, OTHER, png('green'))
     name = collections.MEMBER_PREFIX + hashlib.sha256(png('red')).hexdigest()
     with pytest.raises(collections.CollectionInvalidError):
         world_images.put_image(wid, name.upper(), png('blue'), 'png')
@@ -225,8 +230,7 @@ def _store_files():
 
 
 def test_a_refused_overwrite_stores_nothing(wid):
-    name = collections.put_member(wid, png())
-    collections.publish(wid, uuid.uuid4().hex, [name])
+    [name] = format1(wid, CID, png())
     before = _store_files()
     with pytest.raises(collections.ImageInCollectionError):
         collections.guard_write(wid, name, png('blue'))
@@ -246,3 +250,108 @@ def test_put_member_refusal_stores_nothing(wid):
     with pytest.raises(collections.CollectionInvalidError):
         collections.put_member(wid, data)
     assert _store_files() == before
+
+
+# ---- format 2: members named by image id -----------------------------------
+
+def _id(n):
+    return f'px1-{n:064x}'
+
+
+def _blob(image_id):
+    return image_refs.resolve_ref(image_refs.Ref(name='', image=image_id, focus=None)).blob_path
+
+
+@pytest.mark.parametrize('raw', [
+    {'format': 3, 'members': [_id(1)]},
+    {'format': True, 'members': [_id(1)]},
+    {'format': '2', 'members': [_id(1)]},
+    {'format': 2, 'members': ['collection-image-' + '0' * 64]},
+    {'format': 2, 'members': [_id(1), _id(1)]},
+    {'format': 2, 'members': [_id(n) for n in range(10001)]},
+], ids=['format-3', 'true', 'string-2', 'not-an-id', 'duplicates', '10001-members'])
+def test_read_accepts_both_formats_and_refuses_others(wid, raw):
+    names = format1(wid, CID, png())
+    assert collections.read(wid, CID) == {'format': 1, 'members': names}
+    ids = format2(wid, OTHER, png('blue'), png('green'))
+    assert collections.read(wid, OTHER) == {'format': 2, 'members': ids}
+    write_manifest(wid, THIRD, {'format': 2, 'members': [_id(n) for n in range(10000)]})
+    assert len(collections.read(wid, THIRD)['members']) == 10000
+    write_manifest(wid, THIRD, raw)
+    with pytest.raises(collections.CollectionInvalidError):
+        collections.read(wid, THIRD)
+
+
+def test_available_keeps_indices_stable_when_a_member_is_missing(wid):
+    ids = format2(wid, CID, png('red'), png('blue'), png('green'))
+    _blob(ids[1]).unlink()
+    rows = collections.available(wid, CID)
+    assert [r['index'] for r in rows] == [0, 2]
+    assert [r['image_id'] for r in rows] == [ids[0], ids[2]]
+    for row, image_id in zip(rows, (ids[0], ids[2]), strict=True):
+        resolved = image_refs.resolve_ref(image_refs.Ref(name='', image=image_id, focus=None))
+        assert row['path'] == resolved.blob_path
+        assert row['url'] == (f'/api/worlds/{wid}/image-collections/{CID}/members/'
+                              f"{row['index']}?v={resolved.blob_sha256}")
+        assert row['url'] == collections.member_url(wid, CID, row['index'], resolved.blob_sha256)
+    assert collections.member_path(wid, CID, 1) is None
+    assert collections.member_path(wid, CID, 2) == _blob(ids[2])
+    for index in (-1, 3, 10 ** 9):
+        assert collections.member_path(wid, CID, index) is None
+
+
+def test_format_1_rows_keep_library_urls_and_indices(wid):
+    names = format1(wid, CID, png('red'), png('blue'))
+    world_images.image_path(wid, names[0]).unlink()
+    [row] = collections.available(wid, CID)
+    d = collections.image_directory(wid)
+    assert row['index'] == 1
+    assert row['url'] == f'/api/worlds/{wid}/images/{names[1]}?v={assets.resolve(d, names[1]).blob_sha256}'
+    assert collections.member_path(wid, CID, 1) == world_images.image_path(wid, names[1])
+    assert collections.member_path(wid, CID, 0) is None
+
+
+def test_format_2_manifests_never_guard_library_names(wid):
+    format1(wid, CID, png('red'))  # format-1 state, so the guard is live
+    ids = format2(wid, OTHER, png('blue'))
+    assert collections.has_format1(wid)
+    # A library name spelled like a format-2 member is no member of anything.
+    assert not collections.referenced(wid, ids[0])
+    assert world_images.put_image(wid, ids[0], png('green'), 'png') == 'png'
+    world_images.delete_image(wid, ids[0])
+    # Nor does a format-2 manifest make an ordinary library write fail.
+    assert world_images.put_image(wid, 'harbour', png('blue'), 'png') == 'png'
+    world_images.delete_image(wid, 'harbour')
+
+
+def test_format_1_members_stay_guarded_beside_format_2(wid):
+    [name] = format1(wid, CID, png('red'))
+    format2(wid, OTHER, png('blue'))
+    assert collections.referenced(wid, name)
+    with pytest.raises(collections.ImageInCollectionError):
+        world_images.put_image(wid, name, png('blue'), 'png')
+    with pytest.raises(collections.ImageInCollectionError):
+        world_images.delete_image(wid, name)
+    assert world_images.put_image(wid, name, png('red'), 'png') == 'png'
+
+
+def _journal(wid, raw):
+    path = imports.job_path(wid, 'a' * 64)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw if isinstance(raw, str) else json.dumps(raw), encoding='utf-8')
+
+
+def test_has_format1_fails_closed(wid):
+    assert not collections.has_format1(wid)
+    format2(wid, OTHER, png('blue'))
+    assert not collections.has_format1(wid)
+    _journal(wid, {'format': 2, 'members': []})
+    assert not collections.has_format1(wid)
+    for raw in ('{broken', {'format': 1, 'members': []}, {'format': True}, [], {'format': '2'}):
+        _journal(wid, raw)
+        assert collections.has_format1(wid), raw
+    _journal(wid, {'format': 2, 'members': []})
+    write_manifest(wid, CID, {'format': 9, 'members': []})
+    assert collections.has_format1(wid)
+    write_manifest(wid, CID, {'format': 1, 'members': [member_name(png())]})
+    assert collections.has_format1(wid)

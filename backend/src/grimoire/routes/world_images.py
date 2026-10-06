@@ -20,6 +20,8 @@ The 404s are hand-rolled. There is no world equivalent of
 
 from __future__ import annotations
 
+import re
+
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
 from starlette.responses import JSONResponse
 
@@ -39,6 +41,8 @@ from .models import ImageDescription
 
 router = APIRouter()
 
+_MEMBER_INDEX = re.compile(r"[0-9]+")
+
 
 def _world_or_404(wid: str) -> str:
     """Prove the world is there, or 404. Returns the id for call-site brevity."""
@@ -47,16 +51,23 @@ def _world_or_404(wid: str) -> str:
     return wid
 
 
-def _collection_members_or_404(wid: str, collection_id: str) -> list[dict]:
+def _collection_or_404(wid: str, collection_id: str, call):
+    """`call(wid, collection_id)` with the collection's store errors as HTTP:
+    no such world or collection, or an id that is not one, is a 404; a
+    manifest that does not read is a 500, since it is there and broken."""
     _world_or_404(wid)
     try:
-        members = store.image_collections.available(wid, collection_id)
+        return call(wid, collection_id)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="image collection not found") from None
     except store.image_collections.CollectionIdError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from None
     except store.image_collections.CollectionInvalidError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from None
+
+
+def _collection_members_or_404(wid: str, collection_id: str) -> list[dict]:
+    members = _collection_or_404(wid, collection_id, store.image_collections.available)
     if not members:
         raise HTTPException(status_code=404, detail="image collection has no available images")
     return members
@@ -64,8 +75,13 @@ def _collection_members_or_404(wid: str, collection_id: str) -> list[dict]:
 
 @router.get("/worlds/{wid}/image-collections/{collection_id}")
 def get_world_image_collection(wid: str, collection_id: str):
+    """The available members' URLs, in the manifest's own format: a format-1
+    collection keeps the world library's URLs (so every subject key, to-do
+    entry and export rule built on them holds), a format-2 one lists its
+    member-by-index URLs."""
+    fmt = _collection_or_404(wid, collection_id, store.image_collections.read)["format"]
     members = _collection_members_or_404(wid, collection_id)
-    return JSONResponse({"format": 1, "id": collection_id,
+    return JSONResponse({"format": fmt, "id": collection_id,
                          "members": [m["url"] for m in members]},
                         headers={"Cache-Control": "no-cache"})
 
@@ -74,6 +90,22 @@ def get_world_image_collection(wid: str, collection_id: str):
 def get_world_image_collection_fallback(wid: str, collection_id: str, request: Request):
     members = _collection_members_or_404(wid, collection_id)
     return _serve_image_file(members[0]["path"], request)
+
+
+@router.get("/worlds/{wid}/image-collections/{collection_id}/members/{n}")
+def get_world_image_collection_member(wid: str, collection_id: str, n: str, request: Request):
+    """Member `n` (0-based), in either format. `n` is a string so that `-1`,
+    `abc` and an index past the end are all the same 404 rather than a 422;
+    a member whose picture is missing is a 404 too, never another member."""
+    # ASCII digits only (`str.isdigit` and `int` accept other scripts' digits),
+    # and no longer than the largest index, so `int` never sees a huge string.
+    if not _MEMBER_INDEX.fullmatch(n) or len(n) > len(str(store.image_collections.MAX_MEMBERS)):
+        raise HTTPException(status_code=404, detail="image collection member not found")
+    path = _collection_or_404(wid, collection_id,
+                              lambda w, c: store.image_collections.member_path(w, c, int(n)))
+    if path is None:
+        raise HTTPException(status_code=404, detail="image collection member not found")
+    return _serve_image_file(path, request)
 
 
 # ---- the world's cover (store/covers.py) -----------------------------------

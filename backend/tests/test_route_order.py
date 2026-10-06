@@ -353,3 +353,19 @@ def test_the_refusal_reads_the_domain_router_not_the_aggregate(monkeypatch):
     routes._compose(plain)
     last = aggregate.routes[-1]
     assert (last.original_router is plain) if routes._NESTED else (last is plain.routes[0])
+
+
+def test_the_collection_member_route_and_fallback_never_shadow_each_other():
+    """Format-2 members are served by index beside the collection's first-member
+    fallback. Neither pattern may claim the other's URLs, in either order."""
+    member = "/api/worlds/{wid}/image-collections/{collection_id}/members/{n}"
+    fallback = "/api/worlds/{wid}/image-collections/{collection_id}/image"
+    table = _table()
+    gets = [p for m, p in table if "GET" in m]
+    assert member in gets and fallback in gets
+    for a, b in ((member, fallback), (fallback, member)):
+        assert not _generalizes(a, b) and not _intersects(a, b)
+    # Nothing registered before either one claims its URLs.
+    for path in (member, fallback):
+        earlier = gets[:gets.index(path)]
+        assert not [p for p in earlier if _generalizes(p, path)], path
