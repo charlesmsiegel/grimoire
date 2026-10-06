@@ -770,6 +770,25 @@ def test_a_case_variant_image_refs_folder_aborts(root):
     assert _sidecar(hidden).is_file() and _sidecar(orphan).is_file()
 
 
+def test_a_record_named_image_refs_is_not_a_placement_folder(root):
+    """Only a folder below an `assets` component holds placements. A record
+    whose own slug is `image-refs` (or a case variant of it) is a markdown
+    folder like any other, and parsing it as placements would block every
+    collection for good."""
+    kept, orphan = _obj(1), _obj(2)
+    _place(root, kept)
+    lore = root / "worlds" / "realm" / "lore"
+    for slug in ("image-refs", "Image-Refs"):
+        (lore / slug).mkdir(parents=True)
+        (lore / slug / "entry.md").write_text("# Saltmarch\n", encoding="utf-8")
+    _scan(root, now=T)
+    report = _scan(root, now=LATER)
+    assert report["state"] != "blocked" and report["blocking"] == []
+    assert report["token"] is not None
+    ids = {row["id"] for row in report["collectable"]}
+    assert orphan.id in ids and kept.id not in ids
+
+
 def test_an_unarrived_object_keeps_every_orphan_blob(root):
     gone = _obj(1)
     os.unlink(_sidecar(gone))                     # an orphan blob, old enough

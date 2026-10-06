@@ -367,6 +367,10 @@ def walk_strict(root: Path) -> Iterator[tuple[Path, str]]:
     filesystem reads its placements, and skipping it would collect them. A missing `root` holds
     nothing. Nothing is followed, written or cached.
 
+    A folder of either name counts only below an ``assets`` component
+    (`_under_assets`), which is where every writer puts one: a record whose
+    slug happens to be ``image-refs`` holds no placements and blocks nothing.
+
     A generator: the error surfaces when iteration reaches the bad entry, so
     a caller treats the walk as all-or-nothing.
     """
@@ -375,6 +379,8 @@ def walk_strict(root: Path) -> Iterator[tuple[Path, str]]:
         return
     folded = _fold(REFS_DIR)
     for d, entries in strict_dirs(root):
+        if not _under_assets(root, d):
+            continue
         if d.name != REFS_DIR:
             if _fold(d.name) == folded:
                 # One folder to a case-insensitive reader, which serves its
@@ -384,6 +390,27 @@ def walk_strict(root: Path) -> Iterator[tuple[Path, str]]:
         for e in entries:
             for image_id in _strict_entry(e):
                 yield Path(e.path), image_id
+
+
+#: The path component every record image directory sits under
+#: (`assets.version_dir`, the libraries, covers and collections alike).
+_ASSETS_DIR = "assets"
+
+
+def _under_assets(root: Path, d: Path) -> bool:
+    """Whether `d` is where a placement folder can be: an ``assets`` component
+    lies between `root` and it -- `backups._is_image_selected`'s rule. A
+    record whose own slug is ``image-refs`` (a lore entry's folder, say) is
+    not a placement folder, and parsing its files as placements would block
+    collection for good. The component is compared case-folded, so a folder a
+    case-insensitive reader serves as ``assets`` still counts: the fold only
+    widens what is treated as a root, which fails safe."""
+    try:
+        parts = d.relative_to(root).parts
+    except ValueError:
+        return False
+    target = _fold(_ASSETS_DIR)
+    return any(_fold(p) == target for p in parts[:-1])
 
 
 def _strict_root(root: Path) -> bool:
