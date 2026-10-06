@@ -95,9 +95,6 @@ def validate(raw: object) -> dict:
     return {"format": fmt, "members": list(members)}
 
 
-#: The validator's earlier, private name, kept for callers not yet moved.
-_validated = validate
-
 
 def read(wid: str, collection_id: str) -> dict:
     """`{"format": 1 | 2, "members": [...]}`. Raises `FileNotFoundError` for no

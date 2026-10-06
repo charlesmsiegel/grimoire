@@ -321,7 +321,7 @@ def _strict_manifest(data: bytes) -> dict:
     """`data` as the store reads a manifest: strict UTF-8, then the store's own
     rule. Raises `ValueError` (a `CollectionInvalidError`, a JSON error or a
     `UnicodeDecodeError`) or `RecursionError` for one that does not read."""
-    return image_collections._validated(json.loads(data.decode("utf-8")))
+    return image_collections.validate(json.loads(data.decode("utf-8")))
 
 
 def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]:
