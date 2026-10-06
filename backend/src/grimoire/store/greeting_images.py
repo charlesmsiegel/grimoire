@@ -2,9 +2,15 @@
 
 Ownership describes where bytes live, not who appears in them. Keep the old
 asset-name identity for a greeting's own art; other pictures use their URL,
-with local cache parameters removed. Assignments remain per greeting, so an
-image reused by two greetings does not silently change both. No remote bytes
-are fetched here. Collections contribute each available member independently.
+with local cache parameters removed. No remote bytes are fetched here.
+Collections contribute each available member independently.
+
+Where an assignment is kept is `image_subjects`' business, and this module
+only tells it where each key's picture is (`catalog_with_slots`): a picture
+placed in this world is answered on its image object, so tagging it in one
+greeting tags it in every greeting of the world that shows it; a remote URL,
+a picture placed in another world, or legacy art with no placement keeps a
+per-greeting answer in that greeting's sidecar.
 """
 
 from __future__ import annotations
@@ -96,6 +102,20 @@ def _record_path(root: Path, slot: _Slot) -> Path | None:
         return None
 
 
+def _record_file(root: Path, slot: _Slot) -> tuple[tuple[Path, str], str | None] | None:
+    """`(the slot's dir and name, its image id)` when the slot holds something
+    servable -- the id None for a legacy file -- else None.
+
+    The placement is resolved ONCE, here: a resolving one answers with its own
+    id; only one that does not falls back to the legacy file rule
+    (`_record_path`), so a catalog never asks the same placement twice."""
+    d, name = _record_dir(root, slot)
+    placed = assets.resolve(d, name)
+    if placed is not None:
+        return (d, name), placed.image_id
+    return ((d, name), None) if _record_path(root, slot) is not None else None
+
+
 def _library_dir(root: Path) -> Path:
     """The world image library's directory under `root` (`world_images.images_dir`,
     for a root already in hand)."""
@@ -156,11 +176,14 @@ def _collection_members(url: str) -> list[str]:
 
 
 #: Where a catalog key's tags can be kept, beside its entry: ``("slot", (dir,
-#: name))`` for a key whose picture is a slot in some record's image directory
-#: (the greeting's own art, or a local reference the route names), None for one
-#: with no slot (a remote URL). Tagged, because a key may later name an image
-#: object directly rather than through a slot.
-Target = tuple[Literal["slot"], tuple[Path, str]] | None
+#: name), image_id)`` for a key whose picture is a slot in some record's image
+#: directory (the greeting's own art, or a local reference the route names),
+#: None for one with no slot (a remote URL). `image_id` is the image the slot's
+#: placement resolved to while the catalog was built, None when it did not
+#: resolve (legacy art, or a placement whose object or blob has not arrived) --
+#: carried so a reader never reads that placement a second time. Tagged,
+#: because a key may later name an image object directly rather than a slot.
+Target = tuple[Literal["slot"], tuple[Path, str], str | None] | None
 
 
 def catalog(root: Path, gid: str) -> dict[str, dict]:
@@ -182,15 +205,17 @@ def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
 
     A local reference's slot is the one its existence check already found
     (`_record`), so this reads each referenced record once, as `catalog`
-    always has. The slot may lie in ANOTHER world's root -- a reference names
-    the world it serves from -- and a caller that keeps something per world
-    has to check which root it is under.
+    always has, and resolves its placement once (`_record_file`). Own art's
+    image id is the listing's own. The slot may lie in ANOTHER world's root --
+    a reference names the world it serves from -- and a caller that keeps
+    something per world has to check which root it is under.
     """
     out: dict[str, tuple[dict, Target]] = {}
     rows = assets.list_images(root, gid, "default", base="greetings")
     if rows:    # `list_images` answering at all proves `gid` safe
         own = assets.version_dir(root, gid, "default", base="greetings")
-        out = {image["name"]: ({}, ("slot", (own, image["name"]))) for image in rows}
+        out = {image["name"]: ({}, ("slot", (own, image["name"]), image.get("image_id")))
+               for image in rows}
     try:
         sig = statcache.signature(root / "greetings" / f"{gid}.md") if safe_id(gid) else None
         refs = statcache.memo("greeting_image_refs", sig, lambda: _references(root, gid),
@@ -201,11 +226,13 @@ def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
         for source in _collection_members(url):
             key = image_key(root, gid, source)
             if source.startswith("/api/worlds/"):
+                if not key.startswith("/"):
+                    continue    # this greeting's own art, listed above
                 record = _record(root, source)
-                if record is None or _record_path(*record) is None:
-                    continue
-                if key.startswith("/"):
-                    out[key] = ({"url": key}, ("slot", _record_dir(*record)))
+                found = _record_file(*record) if record is not None else None
+                if found is not None:
+                    slot, image_id = found
+                    out[key] = ({"url": key}, ("slot", slot, image_id))
             elif urlsplit(source).scheme in ("http", "https") and urlsplit(source).netloc:
                 out[key] = ({"url": key}, None)
     return out

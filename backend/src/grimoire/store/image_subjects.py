@@ -81,18 +81,21 @@ def _slot_of(root: Path, item: _Item) -> tuple[Path, str] | None:
     return (d, name) if d.is_relative_to(root) else None
 
 
-def _placement_of(root: Path, item: _Item) -> tuple[Path, str] | None:
-    """`_slot_of`, and only when its placement RESOLVES (object and blob): the
-    write side's question, as `image_descriptions.object_id_in` is for text."""
+def _id_of(root: Path, item: _Item) -> str | None:
+    """The image the item's slot resolved to while the catalog was built, when
+    that slot is this world's (`_slot_of`). The read side's question: carried
+    by the catalog, so no placement is read a second time and no blob is
+    resolved."""
+    target = item[1]
+    return target[2] if target is not None and _slot_of(root, item) is not None else None
+
+
+def _placement_of(root: Path, item: _Item) -> image_refs.ResolvedImage | None:
+    """The placement behind `_slot_of`, resolved NOW (object and blob) -- the
+    write side's question, as `image_descriptions.object_id_in` is for text:
+    only a picture that is there may have its object written."""
     slot = _slot_of(root, item)
-    return slot if slot is not None and assets.resolve(*slot) is not None else None
-
-
-def _placed_id(slot: tuple[Path, str] | None) -> str | None:
-    """The image id the slot's placement holds, or None. Reads the placement,
-    never the blob."""
-    ref = image_refs.read(*slot) if slot is not None else None
-    return ref.image if ref is not None else None
+    return assets.resolve(*slot) if slot is not None else None
 
 
 def _is_ours(a: object, scope: str) -> bool:
@@ -136,13 +139,14 @@ def _answers(root: Path, gid: str, items: dict[str, _Item],
              scope: _Scope) -> tuple[dict, dict[str, list[str]]]:
     """`(the sidecar as stored, key -> its object's subjects)` for one
     greeting's catalog. An object is read only for a key the sidecar does not
-    hold (R1), off its placement and never its blob."""
+    hold (R1), by the id the catalog carries: no placement is read again and
+    no blob is resolved."""
     raw = _read_raw(root, gid)
     objects: dict[str, list[str]] = {}
     for key, item in items.items():
         if key in raw:
             continue
-        image_id = _placed_id(_slot_of(root, item))
+        image_id = _id_of(root, item)
         subjects = _object_subjects(image_id, scope()) if image_id is not None else None
         if subjects is not None:
             objects[key] = subjects
@@ -235,8 +239,8 @@ def set_image_subjects(root: Path, gid: str, name: str, cids: list[str]) -> None
         items = greeting_images.catalog_with_slots(root, gid)
         if name not in items:
             raise ValueError(f"unknown image: {name}")
-        image_id = _placed_id(_placement_of(root, items[name]))
-        if image_id is not None and image_store.update(image_id, _tagged(_scope(root), cids)):
+        placed = _placement_of(root, items[name])
+        if placed is not None and image_store.update(placed.image_id, _tagged(_scope(root), cids)):
             # Object first, key second: a failure between the two leaves the
             # old key answering (R1), never nothing. Strict, as
             # `image_descriptions._clear_legacy` is: a key left behind masks

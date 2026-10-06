@@ -19,8 +19,7 @@ activated or recalled, and the campaign's own image library, which belongs to
 no record and is always in scope.
 
 Cost therefore scales with the SCENE for the record half — a handful of small
-JSON reads, the same order as `image_subjects.appearances`, which the store
-already treats as cheap.
+JSON reads per record in scope.
 
 The library is the exception, and it is stated rather than hidden: it has no
 record to be in scope through, so it is included whole -- and it is the
