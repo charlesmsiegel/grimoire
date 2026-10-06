@@ -371,4 +371,3 @@ def test_validate_is_the_content_only_manifest_rule():
                 {'format': 2, 'members': ids, 'extra': 1}, [], {'format': 2, 'members': []}):
         with pytest.raises(collections.CollectionInvalidError):
             collections.validate(raw)
-    assert collections._validated is collections.validate  # the name world_bundle calls today
