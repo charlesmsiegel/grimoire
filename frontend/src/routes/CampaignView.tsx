@@ -795,6 +795,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // The two manual tasks in flight, from the strip or the inspector, keyed
   // `${origin}:${cid}/${sid}:${task}` -- so the same task is never started
   // twice from two surfaces, and a run in one scene never holds another's.
+  // Bumped by an `opener` quick reply: the cast panel expands and focuses its
+  // opener prompt (see `CastPanel`'s `openerRequest`).
+  const [openerRequest, setOpenerRequest] = useState(0);
   const [taskBusy, setTaskBusy] = useState<Record<string, true>>({});
   const markTask = useCallback((key: string, on: boolean) => {
     setTaskBusy((cur) => {
@@ -3603,6 +3606,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       case "task":
         if (r.task) void runQuickTask(r.task);
         return;
+      case "opener":
+        setOpenerRequest((n) => n + 1);
+        return;
       default:
         return;
     }
@@ -4592,11 +4598,15 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   const editingAny = editing !== null;
   const responseDisabled = busy || rolling || sceneLocked || editingAny || renamesInFlight > 0;
+  // The empty-scene cast panel's mount condition, which is also when a quick
+  // reply may open the opener generator inside it.
+  const openerOffered = !!activeId && landedScene?.cid === cid && landedScene.sid === activeId
+    && messages.length === 0;
   // What decides each quick reply: the guards of the controls they stand for.
   const quickCtx: QuickReplyContext = {
     busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
     moduleKnown: moduleBound !== null, pcless: activePcless, ready,
-    openerOffered: false, taskRunning,
+    openerOffered, taskRunning,
   };
 
   // The ledger's arrows, worked out once for the row, the keys and the gesture.
@@ -5323,11 +5333,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               that unmounted as soon as the posts came in. `landedScene`
               rather than `loaded`, so a rename from the panel's own date field
               does not remount it -- see there. */}
-          {activeId && landedScene?.cid === cid && landedScene.sid === activeId
-            && messages.length === 0 && (
+          {activeId && openerOffered && (
             <CastPanel
               cid={cid}
               sid={activeId}
+              openerRequest={openerRequest}
               ready={ready}
               onSeeded={() => refreshAndAsk(activeId)}
               onSceneRenamed={sceneRenamed}

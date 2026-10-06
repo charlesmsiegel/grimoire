@@ -11,7 +11,7 @@ const generatedCount = (cast: OpenerSpeaker[]) => cast.filter((actor) => actor.r
 /** The "Generate an opener" block: stream a first post for an empty scene,
  *  then adopt it or keep it as a greeting. Split out of `CastPanel`. */
 export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, characters, onSeeded,
-                                 onError }: {
+                                 onError, focusRequest = 0 }: {
   cid: string;
   sid: string;
   /** An LLM connection is configured; without one there is nothing to call. */
@@ -35,8 +35,20 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, chara
   /** Raw, not stringified: the panel above renders it, and `kind` is what
    *  tells it the model could not be reached at all (#210). */
   onError: (err: unknown) => void;
+  /** Bumped to focus the prompt (a composer quick reply asked for the opener
+   *  generator). Compared with the last one handled, which starts at the mount
+   *  value, so mounting never steals focus. */
+  focusRequest?: number;
 }) {
   const [prompt, setPrompt] = useState("");
+  const promptRef = useRef<HTMLInputElement>(null);
+  const focusedRequest = useRef(focusRequest);
+  useEffect(() => {
+    if (focusRequest > focusedRequest.current) {
+      focusedRequest.current = focusRequest;
+      promptRef.current?.focus();
+    }
+  }, [focusRequest]);
   const [opener, setOpener] = useState("");
   const [parts, setParts] = useState<OpenerContribution[]>([]);
   const [snapshot, setSnapshot] = useState<OpenerSpeaker[]>([]);
@@ -182,7 +194,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, chara
         </>
       )}
       <div className="picker">
-        <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
+        <input ref={promptRef} type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                value={prompt} onChange={(e) => setPrompt(e.target.value)} />
         <button className="primary" onClick={() => void generate()} disabled={!ready || busy || !prompt.trim()}>
           {busy ? "…" : "Generate"}

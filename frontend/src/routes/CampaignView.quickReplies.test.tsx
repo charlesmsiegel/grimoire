@@ -337,3 +337,41 @@ test("next_scene opens the scene chooser", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Next scene" }));
   expect(await screen.findByTestId("scene-chooser")).toBeInTheDocument();
 });
+
+// ---- the opener generator ----
+
+const OPENER: QuickReply = { id: "q7", label: "Write opener", kind: "opener" };
+
+test("opener opens the generator on an empty scene", async () => {
+  withPosts([]);
+  offer(OPENER);
+  renderCampaign();
+  const panel = await screen.findByTestId("cast-panel");
+  expect(panel).toHaveAttribute("data-opener-request", "0");
+  const button = await screen.findByRole("button", { name: "Write opener" });
+  expect(button).toHaveAttribute("title", "Open the opener generator");
+  fireEvent.click(button);
+  await waitFor(() => expect(screen.getByTestId("cast-panel")).toHaveAttribute("data-opener-request", "1"));
+});
+
+test("opener is absent on a scene with posts", async () => {
+  withPosts();
+  offer(OPENER, LOOK);
+  renderCampaign();
+  await screen.findByText("a reply");
+  await screen.findByRole("button", { name: "Look around" });
+  expect(screen.queryByRole("button", { name: "Write opener" })).toBeNull();
+});
+
+test("opener waits for a connection", async () => {
+  withPosts([]);
+  offer(OPENER);
+  render(
+    <RunRegistryProvider>
+      <MemoryRouter initialEntries={["/campaigns/run/scenes/s1"]}>
+        {withPalette(playRoutes(false))}
+      </MemoryRouter>
+    </RunRegistryProvider>);
+  await screen.findByTestId("cast-panel");
+  expect(await screen.findByRole("button", { name: "Write opener" })).toBeDisabled();
+});

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type Actor, type CharacterSummary, type PCSummary, type RosterEntry } from "../api/client";
 import { ErrorNote } from "./ErrorNote";
 import { OpenerComposer } from "./OpenerComposer";
@@ -20,7 +20,7 @@ import { SuggestedCast } from "./SuggestedCast";
  *  banner of this one's to borrow. */
 export function CastPanel({
   cid, sid, ready, onSeeded, onSceneRenamed, initialPrompt, greeting, pcless, sceneLocked,
-  onRenaming,
+  onRenaming, openerRequest = 0,
 }: {
   cid: string;
   sid: string;
@@ -39,7 +39,27 @@ export function CastPanel({
    *  new turns while one is pending: until the PUT answers, the scene's id is
    *  in doubt, and a turn handed the old one writes nowhere (#95). */
   onRenaming?: (active: boolean) => void;
+  /** Bumped by a composer quick reply asking for the opener generator: the
+   *  panel expands and the opener prompt takes focus. A count rather than a
+   *  flag, so asking twice works; compared with the last request handled, which
+   *  starts at the value the panel mounted with, so a request made before this
+   *  panel existed does nothing. */
+  openerRequest?: number;
 }) {
+  // Controlled, so a request can open it; the reader's own toggle still wins
+  // every other time.
+  const [open, setOpen] = useState(true);
+  const handledRequest = useRef(openerRequest);
+  // Open in the SAME render that carries the request, not an effect later: the
+  // prompt is focused from an effect, and focusing inside a closed <details>
+  // goes nowhere.
+  const opening = openerRequest > handledRequest.current;
+  useEffect(() => {
+    if (openerRequest > handledRequest.current) {
+      handledRequest.current = openerRequest;
+      setOpen(true);
+    }
+  }, [openerRequest]);
   const [cast, setCast] = useState<Actor[]>([]);
   const [chars, setChars] = useState<CharacterSummary[]>([]);
   const [pcs, setPCs] = useState<PCSummary[]>([]);
@@ -86,7 +106,8 @@ export function CastPanel({
   }
 
   return (
-    <details className="cast-panel" open>
+    <details className="cast-panel" open={open || opening}
+             onToggle={(e) => setOpen(e.currentTarget.open)}>
       <summary>Cast &amp; scene setup</summary>
       <div className="panel-body">
         {error != null && <div className="banner"><ErrorNote err={error} /></div>}
@@ -128,7 +149,8 @@ export function CastPanel({
         <SuggestedCast cid={cid} sid={sid} cast={cast} nameOf={nameOf} onCast={reloadCast} />
 
         <OpenerComposer cid={cid} sid={sid} ready={ready} initialPrompt={initialPrompt}
-                        greeting={greeting} characters={chars} onSeeded={onSeeded} onError={setError} />
+                        greeting={greeting} characters={chars} onSeeded={onSeeded} onError={setError}
+                        focusRequest={openerRequest} />
       </div>
     </details>
   );
