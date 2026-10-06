@@ -46,7 +46,11 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
   // A save and a reload can both be in flight; only the newest may render.
   const ticket = useRef(0);
 
-  const charRef = ref || (npcs[0] ? `characters:${npcs[0].id}` : "");
+  // The pick holds only while its character is still cast: moving to a scene
+  // without them would otherwise leave the form loading and saving an absent
+  // character's note under a picker showing someone else (codex review, #458).
+  const picked = npcs.some((a) => `characters:${a.id}` === ref);
+  const charRef = picked ? ref : (npcs[0] ? `characters:${npcs[0].id}` : "");
 
   const stored = useCallback((data: AuthorsNotes | null): AuthorsNote => {
     if (!data) return BLANK;

@@ -113,6 +113,31 @@ describe("AuthorsNotesPanel", () => {
       "c", "characters:winifred", { text: "Winifred whispers.", depth: 4, every: 1 }));
   });
 
+  it("drops a picked character the new cast no longer has", async () => {
+    mocked.getAuthorsNotes.mockResolvedValue({
+      ...EMPTY,
+      characters: { "characters:winifred": { text: "Winifred whispers.", depth: 1, every: 1 } },
+    });
+    const { rerender } = render(
+      <AuthorsNotesPanel cid="c" sid="s" cast={CAST} next={null} onSaved={vi.fn()} />);
+    await screen.findByLabelText("Author's note");
+    fireEvent.click(screen.getByRole("tab", { name: "Character" }));
+    fireEvent.change(screen.getByLabelText("Character"), { target: { value: "characters:winifred" } });
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Author's note").value)
+      .toBe("Winifred whispers.");
+    // Winifred is not in the next scene's cast: the form is Mara's now, and a
+    // save writes Mara's note rather than the absent character's.
+    rerender(<AuthorsNotesPanel cid="c" sid="s" cast={CAST.filter((a) => a.id !== "winifred")}
+                                next={null} onSaved={vi.fn()} />);
+    expect(screen.getByLabelText<HTMLSelectElement>("Character").value).toBe("characters:mara");
+    const box = screen.getByLabelText<HTMLTextAreaElement>("Author's note");
+    expect(box.value).toBe("");
+    fireEvent.change(box, { target: { value: "Mara listens." } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(mocked.setCharacterAuthorsNote).toHaveBeenCalledWith(
+      "c", "characters:mara", { text: "Mara listens.", depth: 4, every: 1 }));
+  });
+
   it("lists which notes apply next turn, a character's when they speak", async () => {
     renderPanel(vi.fn(), NEXT);
     await screen.findByLabelText("Author's note");
