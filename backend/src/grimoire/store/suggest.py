@@ -1606,14 +1606,20 @@ def _cast_of(entry: dict, ids: tuple, offscreen: bool) -> list[str]:
             if isinstance(raw_cast, list) else [])
 
 
+def is_card(entry) -> bool:
+    """Is this raw entry one `parse_output` keeps -- an object with a title and
+    a premise? Shared with the eval grader, so it judges the cards the player
+    is shown rather than every entry the reply holds."""
+    return (isinstance(entry, dict) and bool(str(entry.get("title", "")).strip())
+            and bool(str(entry.get("premise", "")).strip()))
+
+
 def _card(entry, ctx: dict) -> dict | None:
     """One parsed suggestion with its validated provenance (spec §15.2), or
-    None when it has no title or premise."""
-    if not isinstance(entry, dict):
+    None when `is_card` says the app does not keep it."""
+    if not is_card(entry):
         return None
     title, premise = str(entry.get("title", "")).strip(), str(entry.get("premise", "")).strip()
-    if not title or not premise:
-        return None
     snap, controls, provider = ctx["snapshot"], ctx["controls"], ctx["provider"]
     claimed = claim(entry, snap, controls)
     date = normalize_date(provider, snap.get("now") or "", entry.get("date", ""))
