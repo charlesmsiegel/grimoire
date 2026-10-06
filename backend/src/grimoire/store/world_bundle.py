@@ -78,8 +78,9 @@ local id, one the bundle carries no picture for is dropped, and a manifest left
 with no members is removed. A bundle is written as format 3 only when it packs
 a format-2 manifest, so a world without one stays importable by an older
 grimoire; a bundle of format 1 or 2 carries format-1 manifests only, and is
-still refused for any other. Every manifest an export packs is validated first
-with the store's own rule, so an export never writes one its import refuses.
+still refused for any other. An export validates, with the store's own rule,
+every manifest the import would refuse -- any that parses as a JSON object and
+does not say format 1 -- so it never writes one its import refuses.
 """
 
 from __future__ import annotations
@@ -316,13 +317,23 @@ def _is_manifest(rel: list[str]) -> bool:
             and _fold(rel[2]).endswith(".json"))
 
 
-def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]:
-    """Every collection manifest among the packed world files, validated by the
-    store's own rule, as `(path relative to root, manifest)`.
+def _strict_manifest(data: bytes) -> dict:
+    """`data` as the store reads a manifest: strict UTF-8, then the store's own
+    rule. Raises `ValueError` (a `CollectionInvalidError`, a JSON error or a
+    `UnicodeDecodeError`) or `RecursionError` for one that does not read."""
+    return image_collections._validated(json.loads(data.decode("utf-8")))
 
-    `BundleError` names the first that does not read, before anything is
-    written: an export never packs a manifest its own import refuses. A
-    manifest that vanished since the walk is not part of the world any more."""
+
+def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]:
+    """Every format-2 collection manifest among the packed world files,
+    validated by the store's own rule, as `(path relative to root, manifest)`.
+
+    Validated exactly where the import would refuse (`_check_collections`): a
+    file that does not parse as a JSON object, or that says format 1, is
+    packed unchecked, as the import takes it unchecked. Anything else must
+    read, or `BundleError` names it before anything is written -- so an export
+    never packs a manifest its own import refuses. A manifest that vanished
+    since the walk is not part of the world any more."""
     out = []
     for e in world:
         rel = e.arc.split("/")[1:]
@@ -330,18 +341,32 @@ def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]
             continue
         where = "/".join(rel)
         try:
-            text = e.src.read_text(encoding="utf-8")
+            data = e.src.read_bytes()
         except FileNotFoundError:
             continue
-        except (OSError, UnicodeDecodeError) as exc:
-            raise BundleError(f"invalid collection manifest: {where}: {exc}") from exc
+        except OSError as exc:
+            raise BundleError(f"unreadable collection manifest: {where}: {exc}") from exc
+        if not _checked_by_import(data):
+            continue
         try:
-            manifest = image_collections._validated(json.loads(text))
+            manifest = _strict_manifest(data)
         except (ValueError, RecursionError) as exc:
-            # `CollectionInvalidError` is a `ValueError`, as is a JSON error.
             raise BundleError(f"invalid collection manifest: {where}: {exc}") from exc
         out.append((where, manifest))
     return out
+
+
+def _checked_by_import(data: bytes) -> bool:
+    """Does `_check_collections` hold this manifest to a rule? Not when it is no
+    JSON object (parsed as the import parses it) or says format 1."""
+    try:
+        raw = json.loads(data)
+    except (ValueError, RecursionError):
+        return False
+    if not isinstance(raw, dict):
+        return False
+    fmt = raw.get("format")
+    return not (type(fmt) is int and fmt == 1)
 
 
 def _manifest_ids(collections: list[tuple[str, dict]]) -> set[str]:
@@ -589,8 +614,9 @@ def _check_collections(z: zipfile.ZipFile, members: _Members, bundle_fmt: int) -
         # the same directory.
         if not _is_manifest(ziputil.member_parts(info.filename)[1:]):
             continue
+        data = _read_member(z, info, MAX_COLLECTION_MANIFEST_BYTES)
         try:
-            raw = json.loads(_read_member(z, info, MAX_COLLECTION_MANIFEST_BYTES))
+            raw = json.loads(data)
         except (ValueError, RecursionError):
             continue
         if not isinstance(raw, dict):
@@ -598,9 +624,12 @@ def _check_collections(z: zipfile.ZipFile, members: _Members, bundle_fmt: int) -
         fmt = raw.get("format")
         if type(fmt) is int and fmt in allowed:
             if fmt == 2:
+                # Strictly, as the store and `_contain_manifests` read it: a
+                # UTF-16 or BOM manifest `json.loads(bytes)` accepts would
+                # otherwise pass here and then skip containment.
                 try:
-                    image_collections._validated(raw)
-                except image_collections.CollectionInvalidError as e:
+                    _strict_manifest(data)
+                except (ValueError, RecursionError) as e:
                     raise BundleError(
                         f"invalid collection manifest: {info.filename}: {e}") from e
             continue
@@ -816,7 +845,7 @@ def _contain_manifest(path: Path, id_map: dict[str, str],
     """One staged manifest, held to `_contain_manifests`'s rule; returns
     (members dropped, 1 if it was removed else 0)."""
     try:
-        manifest = image_collections._validated(json.loads(path.read_text(encoding="utf-8")))
+        manifest = _strict_manifest(path.read_bytes())
     except (ValueError, RecursionError):
         return 0, 0
     if manifest["format"] != 2:
