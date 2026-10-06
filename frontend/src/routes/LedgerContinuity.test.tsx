@@ -1248,12 +1248,66 @@ describe("the finding detail", () => {
 
   test("any other refusal shows its text", async () => {
     (api.applyCandidate as any).mockRejectedValueOnce(
-      new ApiError(500, "the finding was only partly applied", "partial_apply", {}));
+      new ApiError(500, "the finding could not be applied", "io", {}));
     renderLedger(at(PAIR));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
-    expect(await (await sidebar()).findByText("the finding was only partly applied"))
+    expect(await (await sidebar()).findByText("the finding could not be applied"))
       .toBeInTheDocument();
     expect(screen.getByTestId("here")).toHaveTextContent(at(PAIR));
+  });
+
+  /** The Ledger on CLOSE_ME with The coronation open, re-read as closed. */
+  const closing = async () => {
+    const thread = (status: string) => ({
+      ...EMPTY_LEDGER,
+      plot: [{ id: "the-coronation", title: "The coronation", status, last_scene: "",
+               latest_beat: "", scene: scene("", ""), aliases: [] }],
+    });
+    (api.campaignLedger as any).mockResolvedValue(thread("open"));
+    renderLedger(at(CLOSE_ME));
+    await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
+      .toHaveTextContent("1"));
+    (api.campaignLedger as any).mockResolvedValue(thread("closed"));
+    (api.continuityCandidates as any).mockResolvedValue(
+      { ...DETAIL, candidates: DETAIL.candidates.filter((c) => c.id !== CLOSE_ME.id) });
+    return {
+      ledgerReads: (api.campaignLedger as any).mock.calls.length,
+      candidateReads: (api.continuityCandidates as any).mock.calls.length,
+    };
+  };
+
+  test.each([
+    ["partial_apply", "the finding was only partly applied: status landed (OSError)"],
+    ["partial_dismiss", "the finding was set aside but could not be removed from the review cache"],
+  ])("a %s 500 is a write that landed: it re-reads and keeps the server's sentence",
+     async (kind, text) => {
+    // §22: the 500 names parts that landed, so drawing the finding from the
+    // old read would leave it actionable after the thread already closed, and
+    // a second click would only draw a 409.
+    const err = new ApiError(500, text, kind, { kind, detail: text, landed: ["status"] });
+    if (kind === "partial_apply") (api.applyCandidate as any).mockRejectedValueOnce(err);
+    else (api.dismissCandidate as any).mockRejectedValueOnce(err);
+    const before = await closing();
+    if (kind === "partial_apply") {
+      fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
+      fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    } else {
+      fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep open" }));
+    }
+    expect(await main().findByText(text)).toBeInTheDocument();
+    await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+      .toBeGreaterThan(before.ledgerReads));
+    await waitFor(() => expect((api.continuityCandidates as any).mock.calls.length)
+      .toBeGreaterThan(before.candidateReads));
+    // Keep open leaves the thread open; only the close moves the count.
+    if (kind === "partial_apply") {
+      await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
+        .toHaveTextContent("0"));
+    }
+    expect(screen.getByTestId("here"))
+      .toHaveTextContent(/^\/campaigns\/run\/ledger\/continuity\/closures$/);
+    expect(screen.queryByRole("button", { name: "Close thread" })).toBeNull();
+    expect(main().getByText(text)).toBeInTheDocument();
   });
 
   test("cross-type pairs never offer a merge", async () => {

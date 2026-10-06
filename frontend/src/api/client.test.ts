@@ -2744,6 +2744,34 @@ test("removeAlias and removeLink tell the shell", async () => {
   off();
 });
 
+test("a continuity apply or dismiss answered partial_* still tells the shell", async () => {
+  // §22: a `partial_apply` / `partial_dismiss` 500 names parts that landed --
+  // a thread closed, a finding set aside -- so the rail's Ledger tail and
+  // Todo's continuity chore move as on a success. Any other refusal changed
+  // nothing.
+  const spy = vi.fn();
+  const off = onShellChanged(spy);
+  const failing = (body: object) => vi.fn().mockResolvedValue(
+    { ok: false, status: 500, json: async () => body }) as any;
+  globalThis.fetch = failing({ kind: "partial_apply", landed: ["status"],
+                               detail: "the finding was only partly applied" });
+  await expect(api.applyCandidate("run", "possible_thread_closure-01", { op: "close" }))
+    .rejects.toMatchObject({ kind: "partial_apply" });
+  expect(spy).toHaveBeenCalledTimes(1);
+  globalThis.fetch = failing({ kind: "partial_dismiss", landed: ["suppression"],
+                               detail: "the finding was set aside" });
+  await expect(api.dismissCandidate("run", "possible_thread_closure-01", "dismiss"))
+    .rejects.toMatchObject({ kind: "partial_dismiss" });
+  expect(spy).toHaveBeenCalledTimes(2);
+  globalThis.fetch = failing({ kind: "io", detail: "the finding could not be set aside" });
+  await expect(api.dismissCandidate("run", "possible_thread_closure-01", "dismiss"))
+    .rejects.toMatchObject({ kind: "io" });
+  await expect(api.applyCandidate("run", "possible_thread_closure-01", { op: "close" }))
+    .rejects.toMatchObject({ kind: "io" });
+  expect(spy).toHaveBeenCalledTimes(2);
+  off();
+});
+
 test("a failed reconcile run's body has a type", () => {
   // Type-level: only tsc can fail this line, since vitest erases types.
   const e: Partial<ReconcileRunError> = { saved: true, follow_on: false };
