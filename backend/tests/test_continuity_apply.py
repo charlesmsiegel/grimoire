@@ -179,6 +179,83 @@ def test_move_commitment_with_a_beat_keeps_the_later_scene(cid):
     assert (after["status"], after["last_scene"]) == ("broken", "005--x")
 
 
+def _one_write_only(monkeypatch, module):
+    """Let `module._write` land once; any further write in the same move raises,
+    as a disk that fails mid-sequence would."""
+    real, calls = module._write, []
+
+    def budgeted(cid, data):
+        calls.append(cid)
+        if len(calls) > 1:
+            raise OSError("the disk failed between two writes")
+        real(cid, data)
+
+    monkeypatch.setattr(module, "_write", budgeted)
+    return calls
+
+
+def test_a_closure_that_keeps_the_later_scene_is_one_write(cid, monkeypatch):
+    """§12.4: the closure lands whole or not at all. Filing the beat under the
+    earlier evidence scene and then putting ``last_scene`` forward again as a
+    second write left a window where the record had moved backwards with no
+    journal row, and the caller was told nothing landed."""
+    plot.set_movement(cid, "mara-s-map", "", "", "", "005--x")
+    rows = len(journal.read(cid))
+    calls = _one_write_only(monkeypatch, plot)
+    with locks.campaign_lock(cid):
+        ledger_routes.move_thread(cid, "mara-s-map", status="closed",
+                                  beat="Mara burned the map.", scene="003--y",
+                                  keep_later_scene=True, label="Mara's map — closed")
+    after = plot.get(cid, "mara-s-map")
+    assert len(calls) == 1
+    assert after["beats"][-1] == {"scene": "003--y", "text": "Mara burned the map."}
+    assert (after["status"], after["last_scene"]) == ("closed", "005--x")
+    assert len(journal.read(cid)) == rows + 1
+
+
+def test_a_commitment_closure_that_keeps_the_later_scene_is_one_write(cid, monkeypatch):
+    commitments.set_movement(cid, "mara-s-oath", "", "", "", None, "", "005--x")
+    rows = len(journal.read(cid))
+    calls = _one_write_only(monkeypatch, commitments)
+    with locks.campaign_lock(cid):
+        ledger_routes.move_commitment(cid, "mara-s-oath", status="broken",
+                                      beat="She broke it.", scene="003--y",
+                                      keep_later_scene=True, label="broken")
+    after = commitments.get(cid, "mara-s-oath")
+    assert len(calls) == 1
+    assert after["beats"][-1] == {"scene": "003--y", "text": "She broke it."}
+    assert (after["status"], after["last_scene"]) == ("broken", "005--x")
+    assert len(journal.read(cid)) == rows + 1
+
+
+@pytest.mark.parametrize("kind", ["thread", "commitment"])
+def test_a_closure_whose_write_fails_lands_nothing(cid, monkeypatch, kind):
+    """The one write failing leaves the record file and the journal exactly as
+    they were -- nothing half-landed for Undo to miss."""
+    module = plot if kind == "thread" else commitments
+    if kind == "thread":
+        plot.set_movement(cid, "mara-s-map", "", "", "", "005--x")
+    else:
+        commitments.set_movement(cid, "mara-s-oath", "", "", "", None, "", "005--x")
+    name = "plot.json" if kind == "thread" else "commitments.json"
+    before, rows = _files(cid)[name], journal.read(cid)
+
+    def fail(cid, data):
+        raise OSError("disk")
+
+    monkeypatch.setattr(module, "_write", fail)
+    with locks.campaign_lock(cid), pytest.raises(OSError):
+        if kind == "thread":
+            ledger_routes.move_thread(cid, "mara-s-map", status="closed", beat="done",
+                                      scene="003--y", keep_later_scene=True, label="t")
+        else:
+            ledger_routes.move_commitment(cid, "mara-s-oath", status="broken",
+                                          beat="done", scene="003--y",
+                                          keep_later_scene=True, label="t")
+    assert _files(cid)[name] == before
+    assert journal.read(cid) == rows
+
+
 # ------------------------------------------------------------- validate_alias
 
 
