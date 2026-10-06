@@ -712,6 +712,30 @@ def test_bundle_object_projection_has_no_sources(monkeypatch, tmp_path):
     assert projected["blob"] == image_store.read(avatar).raw["blob"]
 
 
+def test_export_projects_the_canonical_world_scope(monkeypatch, tmp_path):
+    """R10: a tag lives under `world:<canonical id>`, so an export requested
+    under another spelling of the id (`REALM` for `realm` on a case-insensitive
+    filesystem) still carries it. Simulated by canonicalizing the variant."""
+    _home(monkeypatch, tmp_path)
+    wid, _shared, avatar = _placed_realm()
+    mine = {"kind": "character", "relation": "subject", "scope": f"world:{wid}",
+            "id": "seraphine"}
+    image_store.update(avatar, lambda raw: {
+        **raw, "associations": [mine], "reviews": {"subjects": [f"world:{wid}"]}})
+    variant = wid.upper()
+    monkeypatch.setattr(worlds.paths, "canonical_id",
+                        lambda w: wid if w == variant else w)
+    monkeypatch.setattr(worlds.paths, "world_root",
+                        lambda w, _real=worlds.paths.world_root: _real(wid if w == variant else w))
+    monkeypatch.setattr(worlds.paths, "world_meta_path",
+                        lambda w, _real=worlds.paths.world_meta_path:
+                        _real(wid if w == variant else w))
+    with zipfile.ZipFile(_export(variant, tmp_path)) as z:
+        projected = json.loads(z.read(f"image-store/objects/{avatar[4:6]}/{avatar}.json"))
+    assert projected["associations"] == [mine]
+    assert projected["reviews"] == {"subjects": [f"world:{wid}"]}
+
+
 def test_export_skips_an_unresolvable_placement(monkeypatch, tmp_path):
     """A ref naming an object the store does not hold still exports -- the
     world is not refused for it, the ref simply carries no dependency."""

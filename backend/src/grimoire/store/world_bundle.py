@@ -82,7 +82,7 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import assets, atomic, fetch, image_refs, image_store, logs, ziputil
+from . import assets, atomic, fetch, image_refs, image_scopes, image_store, logs, ziputil
 from .frontmatter import parse_frontmatter
 from .paths import ensure_home, now_iso, safe_id, slugify, uniquify
 from .worlds import paths as worlds_paths
@@ -350,7 +350,7 @@ def _image_entries(root: Path, wid: str) -> list[_Entry]:
     instead, through the import's own containment of an id the bundle does not
     carry.
     """
-    scope = f"world:{wid}"
+    scope = image_scopes.world_scope(wid)
     out = []
     for image_id in sorted(image_refs.walk_ids(root)):
         obj = image_store.read(image_id)
@@ -686,7 +686,7 @@ def _merge_metadata(metas: list[tuple[str, _ObjectMeta]], wid: str) -> None:
     descriptions and tags, not the world -- so it is reported, not returned as
     a failed import the caller would retry into a duplicate.
     """
-    scope = f"world:{wid}"
+    scope = image_scopes.world_scope(wid)
     for local_id, meta in metas:
         try:
             image_store.merge_projection(local_id, _projection(meta, scope), scope)

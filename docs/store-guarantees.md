@@ -501,9 +501,10 @@ about a story, so it stays scoped.
 - **Subjects are scoped (R10).** A tag is an association on the object under a
   scope, `world:<canonical id>` or `campaign:<cid>`, plus the scope's entry in
   `reviews.subjects`. Both spellings are made in one place,
-  `image_scopes.world_scope` and `campaign_scope`. Tagging a picture in one
-  greeting tags it in every placement of it in that world, and in no other
-  world. A remote reference, a reference to a picture placed in another world
+  `image_scopes.world_scope` and `campaign_scope`, with one derived shortcut for
+  a name a directory listing already spelled, `world_scope_of_dir`. Tagging a
+  picture in one greeting tags it in every placement of it in that world, and in
+  no other world. A remote reference, a reference to a picture placed in another world
   (R11) and a legacy name keep their tag in the greeting's `subjects.json`.
 - **The legacy sidecar is read first (R1).** `descriptions.json` and
   `subjects.json` are what a name said before the object held it. For one
@@ -540,14 +541,14 @@ about a story, so it stays scoped.
   fork copies the source's scope onto the fork after it is published, best
   effort: a failure is logged and the fork stands without its tags. A campaign
   fork copies its scope too, and a fork that fails strips the new scope again.
-  The sweeps read objects without caching them and call `update` only for an
-  object with something to change.
+  The sweeps call `update` only for an object with something to change.
 - **Usage is derived (R6).** `GET /api/images/{id}/usage` is an on-demand full
   walk of every world and campaign, answered by `image_usage.find` from the
   placements. Nothing records an inverse, so nothing can drift, and an image
   placed nowhere, or an id that is not one, gets an empty answer or a 400, never
   a 404.
-- **The hot paths resolve no blob.** The shell badge, the to-do counts and the
+- **The hot paths add no blob resolution beyond the listing they already
+  make.** The shell badge, the to-do counts and the
   per-turn art catalogue count a placement-backed image as described from the
   object text, reading an object only for a name with no legacy key and using
   the ids the caller's listing already read.
