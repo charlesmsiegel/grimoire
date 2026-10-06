@@ -40,7 +40,8 @@ Todo's import graph; `review` would drag `undo`. So `pending` imports
 
 The GET shows `VISIBLE`; Todo counts ``live``; apply and dismiss accept
 ``live`` (and ``stale`` resubmitted against the current fingerprint); a persist
-keeps ``live``, ``settled`` and ``unknown``.
+keeps ``live``, ``settled`` and ``unknown``, and a `model_only` record while it
+reads ``suppressed`` -- a restore has nothing else to bring back.
 
 **Todo's cost rule** (§18.2). Todo calls `findings` and nothing else: three
 small JSON reads (the cache, continuity.json, the two ledgers plus events) and
@@ -226,6 +227,14 @@ def satisfied(current: Current, kind: str, refs: list[str]) -> bool:
     ref = refs[0]
     rec = current.records.get(ref)
     return rec is not None and not effective.is_live(_prefix(ref), rec.get("status"))
+
+
+def model_only(record: dict) -> bool:
+    """A nomination no sweep persists on its own (Decision 9): a touched
+    lifecycle re-check, which only an incremental sweep makes, or a temporal
+    pair, which lands only with the model's proposal. Being cached is its only
+    way back, so a dismissal keeps it cached rather than dropping it (§12.7)."""
+    return (record.get("signals") or {}).get("reason") == "touched" or is_temporal(record)
 
 
 def settled(record: dict) -> bool:

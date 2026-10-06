@@ -723,12 +723,15 @@ def _same_basis(a: dict, b: dict) -> bool:
 def _keep(current: pending.Current, records: dict[str, dict]) -> tuple[dict[str, dict], int]:
     """The records a persist keeps, and how many of them are ``live``. A
     record no normalization foresaw reads ``gone``, as `pending.findings`
-    reads it."""
+    reads it. A model-only record the reader set aside is kept while its
+    dismissal holds: no sweep re-finds it, so a restore (§12.7) brings back
+    only what is still cached. Once its records move the dismissal no longer
+    covers it, it reads ``stale`` like any record, and this drops it."""
     kept: dict[str, dict] = {}
     live = 0
     for key, record in records.items():
         verdict = _soft(pending.verdict, "gone", current, record)
-        if verdict in _KEPT:
+        if verdict in _KEPT or (verdict == "suppressed" and pending.model_only(record)):
             kept[key] = record
             live += verdict == "live"
     return kept, live
