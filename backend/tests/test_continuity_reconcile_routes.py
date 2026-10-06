@@ -207,6 +207,108 @@ def test_an_undecodable_reply_fails_the_run_and_keeps_candidates(client):
     assert _records(cid)[PAIR]["proposal"] is None
 
 
+# ------------------------------------------ whether a failed run saved anything
+#
+# A failed run's `error.saved` says whether persist 1 landed -- whether the
+# deterministic findings this sweep made are the ones the section now lists.
+# The Refresh note is chosen from it (§26): "basic findings are listed" is true
+# only when it is.
+
+
+def test_a_failed_model_call_says_the_findings_were_saved(client):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    _install(client, from_entries([{"when": {"system_contains": SYSTEM},
+                                     "error": {"kind": "network",
+                                               "message": "connection reset"}}]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "failed", run
+    assert run["error"]["saved"] is True
+
+
+def test_an_undecodable_reply_says_the_findings_were_saved(client):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    _install(client, from_entries([_entry("I think they are the same.")]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["error"]["kind"] == "undecodable"
+    assert run["error"]["saved"] is True
+
+
+@pytest.mark.parametrize("exc, kind", [(OSError("disk full"), "io"),
+                                       (store.locks.StoreBusy("x", "campaign"), "busy")])
+def test_a_persist_1_failure_says_nothing_was_saved(client, monkeypatch, exc, kind):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    monkeypatch.setattr(continuity_routes, "_PERSIST_ATTEMPTS", 1)
+
+    def refuse(*_args, **_kwargs):
+        raise exc
+
+    monkeypatch.setattr(continuity_routes.reconcile, "persist_found", refuse)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "failed", run
+    assert (run["error"]["kind"], run["error"]["saved"]) == (kind, False)
+    assert _cache_bytes(cid) is None
+
+
+def test_a_persist_2_failure_says_the_findings_were_saved(client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    _install(client, from_entries([_entry(_reply(_duplicate()))]))
+
+    def refuse(*_args, **_kwargs):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(continuity_routes.reconcile, "persist_proposals", refuse)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert (run["error"]["kind"], run["error"]["saved"]) == ("io", True)
+    assert PAIR in _records(cid)
+
+
+def test_an_unexpected_failure_after_persist_1_says_the_findings_were_saved(
+        client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("select broke")
+
+    monkeypatch.setattr(continuity_routes.reconcile, "select", boom)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert (run["error"]["kind"], run["error"]["saved"]) == ("run_failed", True)
+    assert PAIR in _records(cid)
+
+
+def test_an_unexpected_failure_before_persist_1_says_nothing_was_saved(
+        client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("discovery broke")
+
+    monkeypatch.setattr(continuity_routes.reconcile, "discover", boom)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert (run["error"]["kind"], run["error"]["saved"]) == ("run_failed", False)
+    assert _cache_bytes(cid) is None
+
+
 def _bytes(path) -> bytes | None:
     return path.read_bytes() if path.exists() else None
 
@@ -380,12 +482,16 @@ def _reconcile_row(cid: str) -> dict:
     return rows[-1]
 
 
-def _assert_malformed(run: dict) -> None:
+def _assert_malformed(run: dict, *, saved: bool = False) -> None:
     assert run["state"] == "failed", run
     error = run["error"]
     assert (error["kind"], error["status"], error["sweep"]) == ("malformed", 409, "full")
     assert "continuity.json" in error["detail"]
     assert run["result"]["continuity"] == "malformed"
+    # Refused before persist 1, nothing this sweep found was saved; refused at
+    # persist 2, the findings stand and only the proposals were lost.
+    assert error["saved"] is saved
+    assert ("nothing this sweep found was saved" in error["detail"]) is not saved
 
 
 def test_proposals_refused_by_a_malformed_continuity_file_fail_the_run(client):
@@ -406,7 +512,7 @@ def test_proposals_refused_by_a_malformed_continuity_file_fail_the_run(client):
 
     run = _settled(client, cid, resp)
 
-    _assert_malformed(run)
+    _assert_malformed(run, saved=True)
     assert _cache_bytes(cid) == before
     assert _reconcile_row(cid)["continuity"] == "malformed"
 

@@ -2172,7 +2172,7 @@ Todo and shell badge reads must not perform embedding calls or full transcript r
 | Embedding cache corrupt | Existing vectors.py miss/re-embed behavior |
 | Embedding width mismatch | Off-width vectors forgotten and re-embedded (§9.4) |
 | Identity resolver LLM fails / undecodable | Stage first-pass rows; identity block `failed`; rows carry hints and alternatives; no hidden data loss |
-| Reconciliation LLM fails / undecodable | Deterministic candidates persist (first persist already landed); run `failed`; wrap-up succeeds |
+| Reconciliation LLM fails / undecodable | Deterministic candidates persist (first persist already landed); run `failed` with `error.saved: true`; wrap-up succeeds |
 | Reconcile run cannot be reserved | Save response unaffected; logged; next End Scene or refresh catches up |
 | continuity.json malformed | Read enhancements omit per section; mutators refuse overwrite; `malformed` reported |
 | candidate cache malformed | Treat as empty/rebuildable; no campaign failure |
@@ -2536,7 +2536,7 @@ Slice D implementation deviations. Each was decided in the Slice D plan (`docs/s
 - **The apply body is a `dict`, not a `BaseModel`** (Decision 15; §21), because the flat body's `from` key cannot be declared without `Field(alias=...)`, which the pydantic guard forbids.
 - **`copy_due` is honoured inside apply**, as a separate journalled write through `routes/ledger.py` (Decision 16), instead of a second client PUT (§5.1).
 - **Dismiss refuses a stale finding** unless the optional `expect_fingerprint` it gains (beyond §21's `{decision}`) equals the current fingerprint (Decision 17; §12.9, §22).
-- **Additive response fields** (Decisions 23, 24): the candidates read adds `beats`, `due`, `stale_reason`, `names`, `scenes` and `run`; `GET /continuity` suppressions add `live` and `titles`; a reconcile run's result carries `follow_on` and `continuity`, and a failed run's `error` carries `sweep`.
+- **Additive response fields** (Decisions 23, 24): the candidates read adds `beats`, `due`, `stale_reason`, `names`, `scenes` and `run`; `GET /continuity` suppressions add `live` and `titles`; a reconcile run's result carries `follow_on` and `continuity`, and a failed run's `error` carries `sweep` and `saved` (whether persist 1 landed). Refresh chooses its failure note from `saved`: “basic findings are listed” only when it is true; a refused start, or a run that failed before persist 1 landed (`busy`, `io`, `malformed`), says nothing it found was saved; a failure that says neither says only that the refresh did not finish. A `malformed` refusal at persist 2 says the model's suggestions were not saved.
 - **A review staged before a merge is refused at save** with 409 `edits_target_merged`, not re-staged (Decision 19; Slice C deviation 12).
 - **The Todo live filter also reads events.json**, for temporal link ids and event sides, beyond §18.2's "three small JSON reads" (Decision 1, through `pending.Current`). It still does no involvement, chronicle, calendar or embedding work.
 - **`unpriced`'s fix adopts `/config?section=pricing`** (§18.1's "may"; plan-gate resolution 13).

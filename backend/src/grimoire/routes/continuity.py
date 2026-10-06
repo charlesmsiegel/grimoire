@@ -80,6 +80,8 @@ _KIND = "continuity-reconcile"
 _TOUCHED_PREFIX = {"plot": "thread", "commitment": "commitment"}
 _UNDECODABLE = "the reconciliation check returned no readable answer"
 _MALFORMED = "continuity.json is malformed; nothing this sweep found was saved"
+#: The same refusal at persist 2, when persist 1's findings already stand.
+_MALFORMED_PROPOSALS = "continuity.json is malformed; the model's suggestions were not saved"
 #: Every decision word once, in vocabulary order: the log row counts each.
 _WORDS = tuple(dict.fromkeys(w for words in reconcile.DECISIONS.values() for w in words))
 
@@ -523,25 +525,26 @@ def _failed(result: dict, error: dict) -> dict:
     return {"state": "failed", "error": {**error, "sweep": result["sweep"]}, "result": result}
 
 
-def _malformed(result: dict) -> dict:
+def _malformed(result: dict, detail: str = _MALFORMED) -> dict:
     """continuity.json is malformed, so the cache was left as it is (Decision
-    2): the pass saved nothing, and the run says so rather than landing."""
+    2): the persist saved nothing, and the run says so rather than landing."""
     result["continuity"] = "malformed"
-    return _failed(result, {"kind": "malformed", "detail": _MALFORMED, "status": 409})
+    return _failed(result, {"kind": "malformed", "detail": detail, "status": 409})
 
 
-def _stopped(persisted: dict, result: dict) -> dict | None:
+def _stopped(persisted: dict, result: dict, malformed: str = _MALFORMED) -> dict | None:
     """The outcome a persist ends the pass with, or None to carry on: a
     failed write fails the run, a stopped or forgotten run is ``cancelled``, a
-    persist refused by a malformed continuity.json fails the run, and a
-    superseded run or a deleted campaign lands with nothing more to do."""
+    persist refused by a malformed continuity.json fails the run (`malformed`
+    is what that refusal says it lost), and a superseded run or a deleted
+    campaign lands with nothing more to do."""
     if persisted.get("error"):
         return _failed(result, persisted["error"])
     result.update(candidates=persisted["candidates"], superseded=persisted["superseded"])
     if persisted["cancelled"]:
         return {"state": "cancelled", "result": result}
     if persisted.get("continuity") == "malformed":
-        return _malformed(result)
+        return _malformed(result, malformed)
     if persisted["superseded"] or persisted["gone"]:
         return {"state": "landed", "result": result}
     return None
@@ -579,7 +582,8 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     result.update(llm="ok", adjudicated=len(proposals))
     second = await _persist(run, lambda: reconcile.persist_proposals(
         cid, sweep, proposals, stillborn=stillborn))
-    return _stopped(second, result) or {"state": "landed", "result": result}, proposals
+    return (_stopped(second, result, _MALFORMED_PROPOSALS)
+            or {"state": "landed", "result": result}), proposals
 
 
 def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -> None:
@@ -601,8 +605,10 @@ def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -
 
 
 async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
-                      touched: tuple[str, ...]) -> dict:
-    """Steps 1-7 of one pass (§11.1), as the run's outcome."""
+                      touched: tuple[str, ...], progress: dict) -> dict:
+    """Steps 1-7 of one pass (§11.1), as the run's outcome. Sets
+    ``progress["saved"]`` once persist 1 has landed: from then on the section
+    lists what this sweep found, whatever the rest of the run does (§26)."""
     sweep = await run_in_threadpool(reconcile.discover, cid,
                                     stamp=reconcile.generation(run.id),
                                     full=full, touched=touched)
@@ -619,6 +625,7 @@ async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
                                                                     stillborn=stillborn))
         outcome = _stopped(first, result)
     if outcome is None:
+        progress["saved"] = True
         outcome, proposals = await _adjudicate(run, cid, client, sweep, result, stillborn)
     if outcome["state"] != "cancelled":
         _log_pass(cid, sweep, result, proposals)
@@ -630,7 +637,7 @@ def _take_touched(app, cid: str) -> set[str]:
 
 
 async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
-                  touched: tuple[str, ...]) -> dict:
+                  touched: tuple[str, ...], progress: dict) -> dict:
     """The pass, then one more for the refs adopters left (Decision 6).
 
     An incremental pass starts by taking what earlier adopters left. A full one
@@ -642,14 +649,16 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     `sweep` (a Refresh that absorbed an End Scene still reads ``full``) with
     `follow_on` and the last pass's counts."""
     refs = set(touched) if full else set(touched) | _take_touched(app, cid)
-    outcome = await _sweep_pass(run, cid, client, full=full, touched=tuple(sorted(refs)))
+    outcome = await _sweep_pass(run, cid, client, full=full, touched=tuple(sorted(refs)),
+                                progress=progress)
     if outcome["state"] != "landed" or run.cancel_requested or run.forgotten:
         return outcome
     more = _take_touched(app, cid)
     if not more:
         return outcome
     first = outcome["result"]["sweep"]
-    follow = await _sweep_pass(run, cid, client, full=False, touched=tuple(sorted(more)))
+    follow = await _sweep_pass(run, cid, client, full=False, touched=tuple(sorted(more)),
+                               progress=progress)
     out = {**follow, "result": {**(follow.get("result") or {}), "sweep": first,
                                 "follow_on": True}}
     if follow.get("error"):
@@ -660,14 +669,24 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
 async def _reconcile_work(app, run, cid: str, client: LLMClient, *, full: bool,
                           touched: tuple[str, ...]) -> dict:
     """The run's work: `_passes`, with an unexpected failure reported as the
-    runner would report it plus the sweep it was, for `_failed`'s reason."""
+    runner would report it plus the sweep it was, for `_failed`'s reason.
+
+    Every failed outcome's `error` also carries `saved`: whether persist 1
+    landed, so the findings listed are this sweep's. The kind alone cannot say
+    it -- `busy`, `io` and `malformed` each come from either persist -- and the
+    Refresh note must not claim findings a refused persist never wrote."""
+    progress = {"saved": False}
     try:
-        return await _passes(app, run, cid, client, full=full, touched=touched)
+        outcome = await _passes(app, run, cid, client, full=full, touched=touched,
+                                progress=progress)
     except Exception as exc:  # the runner's own boundary, plus the sweep a polling client needs
         log.exception("continuity sweep %s failed", run.id)
-        return {"state": "failed",
-                "error": {"kind": "run_failed", "detail": str(exc) or type(exc).__name__,
-                          "status": 500, "sweep": "full" if full else "incremental"}}
+        outcome = {"state": "failed",
+                   "error": {"kind": "run_failed", "detail": str(exc) or type(exc).__name__,
+                             "status": 500, "sweep": "full" if full else "incremental"}}
+    if outcome["state"] == "failed":
+        outcome["error"] = {**outcome["error"], "saved": progress["saved"]}
+    return outcome
 
 
 def start_reconcile(app, cid: str, client: LLMClient, *, full: bool,
