@@ -18,7 +18,8 @@ continuity.json (`doc`). So every byte here is rebuildable, and that decides
 both halves of the IO the opposite way from `doc`:
 
 - `read` is tolerant all the way down. An unparseable file reads as empty; a
-  record of the wrong shape is skipped while its neighbours are kept; a nested
+  record of the wrong shape (a pair naming one ref twice among them) is
+  skipped while its neighbours are kept; a nested
   field of the wrong type is normalized (``signals`` to ``{}``, a ``signals``
   value that is not standard JSON -- inf, NaN -- dropped, a ``proposal`` that
   does not fit to ``None``) so every consumer downstream can index a record
@@ -107,7 +108,9 @@ def _refs_fit(kind: str, refs) -> bool:
     prefixes = [s[0] for s in split if s is not None]
     if kind in _LIFECYCLE_PREFIX:
         return prefixes == [_LIFECYCLE_PREFIX[kind]]
-    if len(prefixes) != 2:
+    # A pair is two records: one ref twice is no finding, and kept it would
+    # reach an alias plan with no record to merge away.
+    if len(prefixes) != 2 or refs[0] == refs[1]:
         return False
     if kind == "possible_duplicate":
         return prefixes[0] == prefixes[1] and {prefixes[0]} in _PAIR_PREFIXES[kind]

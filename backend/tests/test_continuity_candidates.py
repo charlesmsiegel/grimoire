@@ -138,6 +138,19 @@ def test_malformed_records_are_skipped_others_kept(cid):
     assert list(candidates.read(cid)["records"]) == ["d"]
 
 
+def test_a_pair_naming_one_record_twice_is_skipped(cid):
+    """A pair is two records: one ref twice (a hand edit, a garbled sync) is
+    not a finding, and kept would reach an alias plan with no source."""
+    _store(cid, {
+        "dup-t": _pair(refs=["thread:maras-map", "thread:maras-map"]),
+        "dup-c": _pair(refs=["commitment:maras-oath", "commitment:maras-oath"]),
+        "rel-c": _pair(kind="possible_relation",
+                       refs=["commitment:maras-oath", "commitment:maras-oath"]),
+        "d": _pair(),
+    })
+    assert list(candidates.read(cid)["records"]) == ["d"]
+
+
 def test_valid_record_shapes_of_every_kind_are_kept(cid):
     _store(cid, {
         "dup-c": _pair(refs=["commitment:maras-oath", "commitment:winifreds-vow"]),

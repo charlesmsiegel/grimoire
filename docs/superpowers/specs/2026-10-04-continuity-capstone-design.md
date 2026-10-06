@@ -510,7 +510,7 @@ Shape:
 
 The candidate cache is not itself journalled. Applying a reviewed operation writes the durable source store and/or continuity.json, which is journalled.
 
-If the candidate file is malformed, ignore it. Reconciliation can rebuild it.
+If the candidate file is malformed, ignore it. Reconciliation can rebuild it. A single record that does not fit its kind -- refs of the wrong type or count, or a pair naming one record twice -- is ignored alone, its neighbours kept: it is listed nowhere, counted by no chore, and applying or dismissing it is refused as no longer pending.
 
 A candidate-cache write moves the campaign's revision token:
 
