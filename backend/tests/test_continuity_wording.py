@@ -1,10 +1,11 @@
 """§30: the words the continuity surfaces use, and the ones they never do.
 
-Three pins. The journal's relation words cover every link relation and read as
+Four pins. The journal's relation words cover every link relation and read as
 a sentence. No source a reader can see -- any non-test file under the backend
 package or the frontend's `src/`, and the README -- uses a phrase §30 avoids;
 the scan is the whole tree rather than a list of capstone files, because a list
-would miss the next surface. And each phrase §30 prefers is held to the surface
+would miss the next surface. Because it is the whole tree, the avoid list holds
+§30's four phrases and their rewordings and nothing else, and a pin says so. And each phrase §30 prefers is held to the surface
 that shows it, so rewording that surface away from §30 fails by name ("Merged
 into" also appears in older files, so "somewhere in the source" never would).
 """
@@ -35,10 +36,25 @@ def _sources() -> list[Path]:
 #: The files the avoid-list guard reads.
 SOURCES: list[Path] = _sources()
 
-#: §30's avoided phrases, lower-cased, with the forms a rewording would reach.
-AVOIDED = ("ai detected", "detected duplicate", "duplicate detected", "continuity score",
-           "health score", "broken campaign", "embedding required", "embeddings required",
-           "continuity disabled")
+#: §30's four avoided phrases (Global Constraints, verbatim).
+SECTION_30_AVOIDED = {"AI detected duplicate", "Continuity score", "Broken campaign",
+                      "Embedding required"}
+
+#: What the avoid-list guard scans for, lower-cased, each mapped to the §30 phrase
+#: it stands for: the phrase itself, or a rewording that makes the same claim.
+#: Nothing §30 does not name goes here. The scan is the whole app, not the
+#: continuity surfaces, so a phrase that is merely continuity-flavoured ("health
+#: score") would fail an unrelated page, such as a mechanics module's HP display.
+AVOIDED: dict[str, str] = {
+    "ai detected duplicate": "AI detected duplicate",
+    "detected duplicate": "AI detected duplicate",  # the same certainty, unattributed
+    "duplicate detected": "AI detected duplicate",  # the same certainty, reordered
+    "continuity score": "Continuity score",
+    "continuity health score": "Continuity score",  # the form §2's non-goals name
+    "broken campaign": "Broken campaign",
+    "embedding required": "Embedding required",
+    "embeddings required": "Embedding required",  # the plural
+}
 
 #: §30's preferred phrases, each held to the surface that shows it.
 PREFERRED: dict[str, tuple[str, ...]] = {
@@ -71,6 +87,16 @@ def test_relation_words_cover_every_relation():
     for relation in ("before", "on", "after", "by"):
         assert review.RELATION_WORDS[relation] == "is due " + relation
     assert review._relation_words("same_as") == "is linked to"
+
+
+def test_the_avoid_list_is_section_30s_phrases_and_their_rewordings():
+    """Every scanned phrase answers to one of §30's four, and each of the four is
+    scanned for as written, so the list can neither drop a phrase nor grow one
+    §30 does not name."""
+    assert set(AVOIDED.values()) == SECTION_30_AVOIDED
+    for source in SECTION_30_AVOIDED:
+        assert AVOIDED[source.lower()] == source
+    assert all(phrase == phrase.lower() for phrase in AVOIDED)
 
 
 def test_no_continuity_surface_uses_a_phrase_section_30_avoids():
