@@ -5165,7 +5165,7 @@ def _edit_store_phase(cid: str, sid: str, target: dict, content: str, *,
     stored = content
     if key and role and not restore:
         stored, fired = store.regex.view.store_phase(
-            content, cid=cid, role=role, connection=target.get("connection") or "")
+            content, cid=cid, role=role, connection=store.regex.view.connection_of(target))
     return key, content, stored, fired
 
 

@@ -332,6 +332,11 @@ def _parse_messages(body: str, players: frozenset[str]) -> list[dict]:
             try:
                 candidate = json.loads(identity.group(1))
                 metadata = {k: v for k, v in candidate.items() if k in RESPONSE_METADATA}
+                # A connection id is a key every regex reader looks rule lists
+                # up by: anything a hand edit left there but a non-empty string
+                # reads as no connection, not as an unhashable key.
+                if not (isinstance(metadata.get("connection"), str) and metadata["connection"]):
+                    metadata.pop("connection", None)
                 content = content[identity.end():]
             except (ValueError, AttributeError):
                 pass

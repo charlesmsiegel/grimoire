@@ -673,3 +673,25 @@ def test_a_retcon_of_a_player_post_is_rewritten_like_an_edit(client):
     assert r.status_code == 200, r.text
     assert messages(client, cid, sid)[0]["content"] == "Wait… what?"
     assert records(client, cid, sid)[post["post_id"]]["original"] == "Wait... what?"
+
+
+def test_a_hand_mangled_connection_reads_as_none(client):
+    """`connection` names the connection that served a post, and every reader
+    keys rule lists by it. A hand edit or a sync conflict can leave anything
+    there; anything but a non-empty string reads as no connection, rather than
+    an unhashable key that fails every read of the scene."""
+    cid, sid = seed(client)
+    put_rules(client, cid, {**ELLIPSIS, "rewrite_stored": False, "applies": ["display"]})
+    store.scenes.append_reply(cid, sid, [
+        {"speaker": "Mara", "content": "One...", "connection": ["x"]},
+        {"speaker": "Mara", "content": "Two...", "connection": {"id": "x"}},
+        {"speaker": "Mara", "content": "Three...", "connection": 7}])
+    raw = store.scenes.read_scene(cid, sid)["messages"]
+    assert [m.get("connection") for m in raw] == [None, None, None]
+    shown = messages(client, cid, sid)
+    assert [m["shown"] for m in shown] == ["One…", "Two…", "Three…"]
+    # A caller holding such a message itself is no worse off.
+    out = store.regex.view.view([{"role": "assistant", "speaker": "Mara",
+                                  "content": "Four...", "connection": ["x"]}],
+                                cid=cid, phase="display")
+    assert out[0]["content"] == "Four…"
