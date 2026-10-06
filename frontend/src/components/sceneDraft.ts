@@ -56,10 +56,17 @@ export function greetingDraft(g: Availability, nextDate: string, pcless: boolean
            date: nextDate, location: g.location ?? "", pcless };
 }
 
+/** A generated card. Its own date wins, and `nextDate` is the fallback --
+ *  except for an ANCHORED card, which never borrows it (Decision 23).
+ *  `nextDate` is the model's "if none is used" estimate and knows nothing of
+ *  the anchor, so a card that reads "before The coronation" with its date
+ *  blanked (no date, or one the anchor check rejected) would otherwise be
+ *  pre-filled with a date that may sit after the very event its reason names.
+ *  An empty date leaves the confirm form to the reader instead. */
 export function suggestionDraft(s: SceneSuggestion, nextDate: string,
                                 pcless: boolean): SceneDraft {
   return { source: "generated", title: s.title, defaultTitle: s.title,
-           date: s.date || nextDate, location: s.location?.id ?? "",
+           date: s.date || (s.time_anchor ? "" : nextDate), location: s.location?.id ?? "",
            pcless, premise: s.premise, cast: narrowCast(s.cast) };
 }
 
@@ -75,10 +82,17 @@ export function suggestionDraft(s: SceneSuggestion, nextDate: string,
  *  current moment without complaint (it reports `advanced: false` and moves
  *  on), so preferring the stored one would quietly pre-fill the confirm form
  *  with a date before the scene it follows — and the reader has to notice, in
- *  a field they did not fill in, to avoid it. */
+ *  a field they did not fill in, to avoid it.
+ *
+ *  `anchor_date` beats both (Decision 23). It is not a fossil: the server
+ *  derives it on THIS read, and only for an idea anchored `on` an occurrence
+ *  that is still live and dated (§17.1), so it is the anchor's current day --
+ *  following a rescheduled event -- and `nextDate`, which is not anchor-aware,
+ *  would contradict the reason the idea was saved for. Absent or "" falls
+ *  through to the precedence above. */
 export function savedDraft(idea: SceneIdea, nextDate: string, pcless: boolean): SceneDraft {
   return { source: "saved", lid: idea.id, title: idea.title, defaultTitle: idea.title,
-           date: nextDate || idea.date, location: idea.location?.id ?? "",
+           date: idea.anchor_date || nextDate || idea.date, location: idea.location?.id ?? "",
            pcless, premise: idea.premise, cast: narrowCast(idea.cast) };
 }
 

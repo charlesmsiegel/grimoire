@@ -239,9 +239,12 @@ export default function CampaignHub() {
     // `greetings=false`: the composed greeting half parses the frontmatter of
     // every greeting in the campaign, and this card offers written-down ideas
     // rather than a way into the greeting map -- which the picker already is.
+    // A stale idea is still active -- the picker's Stale group offers it --
+    // but this card answers "what is worth playing now", and an idea whose
+    // anchor has passed or whose threads have all closed is not that.
     api.listSceneIdeas(cid, false)
       .then((rows) => {
-        if (live) setIdeas(rows.filter((i) => i.status === "active"));
+        if (live) setIdeas(rows.filter((i) => i.status === "active" && !i.stale_reason));
       })
       .catch(() => { if (live) setIdeasFailed(true); });
     return () => { live = false; };
