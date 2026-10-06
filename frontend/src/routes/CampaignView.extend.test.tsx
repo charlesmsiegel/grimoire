@@ -152,3 +152,28 @@ test("keep writing has no key of its own", async () => {
   fireEvent.keyDown(window, { key: "?" });
   expect(screen.queryByText(/Keep writing/)).toBeNull();
 });
+
+test("a re-attached Keep writing run rebuilds its bubble from the seed", async () => {
+  // Gate 10: the seed rides the run's buffered `response_start`, so a client
+  // that reloads mid-run (an empty registry, the attemptless lookup) draws the
+  // same bubble the sending client drew -- the old reply with the stream
+  // growing after it, and the target row hidden behind it.
+  playing();
+  reads();
+  (api.findRun as any).mockResolvedValue(
+    { run: { id: "r-extend", attempt_id: "someone-elses", state: "running", next_index: 0 } });
+  (api.attachRun as any).mockImplementation(
+    async (_c: string, _s: string, _r: string, _from: number, onEvent: (e: ChatEvent) => void) => {
+      onEvent({ response_start: { id: "response-b", speaker: "Mara", actor_ref: "characters:mara",
+                                  extend: { seed: "The accepted response." } } });
+      onEvent({ delta: "Then more." });
+      await new Promise(() => {});
+    });
+  renderCampaign();
+  const bubble = await screen.findByText("The accepted response. Then more.");
+  expect(bubble.closest(".streaming-response")).not.toBeNull();
+  expect(screen.queryByText("The accepted response.")).toBeNull();
+  expect(screen.getByText("The first answer.")).toBeInTheDocument();
+  expect((api.attachRun as any).mock.calls[0][2]).toBe("r-extend");
+  expect(api.extendResponse).not.toHaveBeenCalled();
+});
