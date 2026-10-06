@@ -652,6 +652,45 @@ def test_record_pressure_is_the_driver_reading(monkeypatch, tmp_path):
     assert _by_id(g)[MAP]["pressure"] is None
 
 
+def test_a_campaign_with_no_present_keeps_a_records_own_date(monkeypatch, tmp_path):
+    """No clock and no dated chronicle: pressure has no present, so no
+    deadline item (§13.5) -- but a live commitment's parseable due and an
+    event's date are still days on the primary calendar. Only `in_days` and
+    pressure need a present; `fixed` does not. A free-text due is still no
+    deadline, and a resolved commitment still carries none, exactly as in a
+    dated campaign."""
+    cid = _campaign(monkeypatch, tmp_path, now=None)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _oath(cid, "mara-s-oath", "Mara's oath", s1, due="2026-05-20")
+    _oath(cid, "winifred-s-debt", "Winifred's debt", s1, due="before the harvest moon")
+    _oath(cid, "seraphine-s-vow", "Seraphine's vow", s1, due="2026-05-22")
+    commitments.set_movement(cid, "seraphine-s-vow", "", "promise", "fulfilled", None, "", s1)
+    assert events.create(cid, "The coronation", "2026-05-13") == "the-coronation"
+    p = pressure.build(cid)
+    assert (p["now"], p["fixed"]) == ("", None)   # the control: no present
+    assert [i for i in p["items"] if i["kind"] == "deadline"] == []
+
+    g = graph.build(cid)
+    assert g["now"] == {"native": "", "friendly": "", "fixed": None}
+    nodes = _by_id(g)
+    oath = nodes[OATH]
+    assert (oath["due"], oath["native"], oath["fixed"], oath["in_days"]) == (
+        "2026-05-20", "2026-05-20", F(cid, "2026-05-20"), None)
+    assert oath["friendly"] == calendars.friendly(_provider(cid), "2026-05-20")
+    # The chooser's reading, which has no present to measure against either.
+    assert oath["pressure"]["in_days"] is None
+    debt = nodes["commitment:winifred-s-debt"]
+    assert (debt["due"], debt["native"], debt["fixed"], debt["in_days"]) == (
+        "before the harvest moon", "", None, None)
+    vow = nodes[VOW]
+    assert (vow["status"], vow["native"], vow["fixed"], vow["in_days"]) == (
+        "fulfilled", "", None, None)
+    coronation = nodes[CORONATION]
+    assert (coronation["native"], coronation["fixed"], coronation["in_days"],
+            coronation["status"]) == ("2026-05-13", F(cid, "2026-05-13"), None, "scheduled")
+    assert g["omitted"] == []
+
+
 def test_a_garbled_plot_costs_only_threads(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     (s1,) = _scenes(cid, "Saltmarch harbour")
