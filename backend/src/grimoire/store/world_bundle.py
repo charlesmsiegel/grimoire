@@ -131,6 +131,9 @@ MAX_IMPORTED_DESCRIPTION = 4000
 # against a hostile archive filling the disk, not a policy on world size.
 MAX_MEMBERS = 100_000
 MAX_UNCOMPRESSED = 8 * 1024 * 1024 * 1024
+# The largest bundle the import route takes. Here rather than in the route so
+# that export can hold its own output to it (`_check_written`).
+MAX_BUNDLE_BYTES = 4 * 1024 * 1024 * 1024
 
 # What is worth deflating on the way out: anything textual. Getting this wrong
 # costs CPU, nothing else. Deliberately NOT the same set as the one the import
@@ -211,29 +214,98 @@ def write_bundle(wid: str, dest: Path) -> None:
     manifest = {"format": FORMAT, "kind": "world", "world_id": wid,
                 "name": meta.get("name", wid), "app_version": app_version(),
                 "exported": now_iso()}
-
-    with zipfile.ZipFile(dest, "w") as z:
-        z.writestr(MANIFEST_NAME, json.dumps(manifest, indent=2) + "\n",
-                   compress_type=zipfile.ZIP_DEFLATED)
-        for p in sorted(root.rglob("*")):
-            try:
-                if (atomic.is_write_temp(p) or image_refs.is_transient(p)
-                        or p.is_symlink() or not p.is_file()):
+    entries = [_Entry(MANIFEST_NAME, compress=zipfile.ZIP_DEFLATED,
+                      data=(json.dumps(manifest, indent=2) + "\n").encode("utf-8")),
+               *_world_entries(root), *_image_entries(root, wid)]
+    _check_whole(entries)
+    try:
+        with zipfile.ZipFile(dest, "w") as z:
+            for e in entries:
+                if e.data is not None or e.src is None:
+                    z.writestr(e.arc, e.data or b"", compress_type=e.compress)
                     continue
-            except OSError:
-                continue                                    # vanished mid-walk
-            arc = f"{WORLD_PREFIX}/{p.relative_to(root).as_posix()}"
-            compress = (zipfile.ZIP_DEFLATED if p.suffix.lower() in _COMPRESSIBLE
-                        else zipfile.ZIP_STORED)
-            try:
-                z.write(p, arc, compress_type=compress)
-            except FileNotFoundError:
-                continue                                    # deleted mid-walk
-        _pack_images(z, root, wid)
+                try:
+                    z.write(e.src, e.arc, compress_type=e.compress)
+                except FileNotFoundError:
+                    continue                    # deleted or collected mid-walk
+        _check_written(dest)
+    except BaseException:
+        # `dest` never keeps a bundle the import would refuse, nor half of one.
+        dest.unlink(missing_ok=True)
+        raise
+
+
+@dataclass(frozen=True)
+class _Entry:
+    """One member `write_bundle` will write: a file copied from `src`, or
+    `data` written as is."""
+    arc: str
+    compress: int = zipfile.ZIP_STORED
+    src: Path | None = None
+    data: bytes | None = None
+    size: int = 0
+
+    def __post_init__(self) -> None:
+        if self.data is not None:
+            object.__setattr__(self, "size", len(self.data))
+
+
+def _world_entries(root: Path) -> list[_Entry]:
+    """Every file of the world tree the bundle carries, with its size now.
+
+    ``store.atomic``'s in-flight temps, promotion journals and symlinks are
+    left out (see `write_bundle`), and a file that vanishes mid-walk is not
+    part of the world any more."""
+    out = []
+    for p in sorted(root.rglob("*")):
+        try:
+            if (atomic.is_write_temp(p) or image_refs.is_transient(p)
+                    or p.is_symlink() or not p.is_file()):
+                continue
+            size = p.stat().st_size
+        except OSError:
+            continue                                        # vanished mid-walk
+        compress = (zipfile.ZIP_DEFLATED if p.suffix.lower() in _COMPRESSIBLE
+                    else zipfile.ZIP_STORED)
+        out.append(_Entry(f"{WORLD_PREFIX}/{p.relative_to(root).as_posix()}",
+                          compress, src=p, size=size))
+    return out
+
+
+def _check_whole(entries: list[_Entry]) -> None:
+    """`BundleError` for a bundle the import's whole-archive caps would refuse
+    (`ziputil.scan`'s member count and expanded size, and the object metadata
+    caps), asked of the planned members before anything is written."""
+    if len(entries) > MAX_MEMBERS:
+        raise BundleError(f"world too large to bundle: {len(entries)} files "
+                          f"(a bundle holds at most {MAX_MEMBERS})")
+    total = sum(e.size for e in entries)
+    if total > MAX_UNCOMPRESSED:
+        raise BundleError(f"world too large to bundle: {total} bytes "
+                          f"(a bundle expands to at most {MAX_UNCOMPRESSED})")
+    objects = [e for e in entries if e.arc.startswith(f"{STORE_PREFIX}/objects/")]
+    if (sum(e.size for e in objects) > MAX_OBJECT_BYTES
+            or any(e.size > MAX_OBJECT_MEMBER_BYTES for e in objects)):
+        raise BundleError("world too large to bundle: its image metadata is "
+                          "past what a bundle carries")
+
+
+def _check_written(dest: Path) -> None:
+    """`BundleError` for a written archive the import would refuse: larger than
+    the import route takes (`MAX_BUNDLE_BYTES`), which is only known once it is
+    written, or -- a file that grew since it was planned -- past the caps
+    `_check_whole` asked."""
+    size = dest.stat().st_size
+    if size > MAX_BUNDLE_BYTES:
+        raise BundleError(f"bundle too large to import: {size} bytes "
+                          f"(an import takes up to {MAX_BUNDLE_BYTES})")
+    with zipfile.ZipFile(dest) as z:
+        ziputil.scan(z, max_members=MAX_MEMBERS,
+                     max_uncompressed=MAX_UNCOMPRESSED, err=BundleError)
 
 
 def _packable_blob(obj: image_store.ImageObject) -> Path | None:
-    """The blob `_pack_images` would pack for `obj`, or None when it skips it
+    """The blob `_image_entries` would pack for `obj`, or None when it skips it
     (missing, not a regular file, or a symlink)."""
     blob = image_store.blob_path(obj.blob_sha256, obj.ext)
     try:
@@ -257,38 +329,47 @@ def _check_blob_sizes(root: Path) -> None:
             size = blob.stat().st_size
         except OSError:
             continue                                        # collected mid-walk
-        if size > MAX_BUNDLE_BLOB_BYTES:
+        if size > MAX_BUNDLE_BLOB_BYTES and image_store.blob_intact(blob):
             where = d.relative_to(root).as_posix()
             raise BundleError(
                 f"image too large to bundle: {where}/{ref.name} ({size} bytes; "
                 f"a bundle carries images up to {MAX_BUNDLE_BLOB_BYTES} bytes)")
 
 
-def _pack_images(z: zipfile.ZipFile, root: Path, wid: str) -> None:
-    """Add the blob and the projected object of every image a placement under
+def _image_entries(root: Path, wid: str) -> list[_Entry]:
+    """The blob and the projected object of every image a placement under
     `root` names -- once each, however many placements share it.
 
     An id that does not resolve (no object, or its blob missing) is skipped:
     the world still exports, and that ref simply travels without a picture,
     exactly as unresolvable as it already was here. A blob that is a symlink is
-    skipped for the reason the world walk skips one.
+    skipped for the reason the world walk skips one. So is a blob whose bytes
+    no longer match its name (`image_store.blob_intact`): the import would
+    refuse the whole bundle over it, and its placement arrives image-less
+    instead, through the import's own containment of an id the bundle does not
+    carry.
     """
     scope = f"world:{wid}"
+    out = []
     for image_id in sorted(image_refs.walk_ids(root)):
         obj = image_store.read(image_id)
         blob = _packable_blob(obj) if obj is not None else None
         if obj is None or blob is None:
             continue
+        if not image_store.blob_intact(blob):
+            logs.record("warning", __name__,
+                        "image blob does not match its name; left out of the bundle",
+                        kind="bundle_image_skipped", blob=obj.blob_sha256)
+            continue
         sha = obj.blob_sha256
-        try:
-            z.write(blob, f"{STORE_PREFIX}/blobs/{sha[:2]}/{sha}.{obj.ext}",
-                    compress_type=zipfile.ZIP_STORED)
-        except FileNotFoundError:
-            continue                                        # collected mid-walk
         projected = image_store.project(obj.raw, scope)
-        z.writestr(f"{STORE_PREFIX}/objects/{image_id[4:6]}/{image_id}.json",
-                   json.dumps(projected, indent=2, sort_keys=True) + "\n",
-                   compress_type=zipfile.ZIP_DEFLATED)
+        out.append(_Entry(f"{STORE_PREFIX}/blobs/{sha[:2]}/{sha}.{obj.ext}",
+                          src=blob, size=obj.size))
+        out.append(_Entry(f"{STORE_PREFIX}/objects/{image_id[4:6]}/{image_id}.json",
+                          zipfile.ZIP_DEFLATED,
+                          data=(json.dumps(projected, indent=2, sort_keys=True)
+                                + "\n").encode("utf-8")))
+    return out
 
 
 # ---- import ----

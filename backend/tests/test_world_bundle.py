@@ -921,6 +921,89 @@ def test_export_refuses_an_image_import_would_refuse(monkeypatch, tmp_path):
     assert not dest.exists()                     # nothing written
 
 
+# ---- export never writes a bundle its import refuses ----
+
+def test_export_skips_a_damaged_blob_and_the_bundle_imports(monkeypatch, tmp_path):
+    """A blob whose bytes no longer match its name would be refused by import
+    ("does not match its name"), so export leaves it out exactly as it leaves
+    out an id that does not resolve: its placement arrives image-less, and
+    nothing else is lost."""
+    _home(monkeypatch, tmp_path)
+    wid, shared, avatar = _placed_realm()
+    obj = image_store.read(avatar)
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    blob.write_bytes(bytes(blob.stat().st_size))            # damaged in place
+    rows = []
+    real = world_bundle.logs.record
+    monkeypatch.setattr(world_bundle.logs, "record",
+                        lambda *a, **k: rows.append(k) or real(*a, **k))
+
+    bundle = _export(wid, tmp_path)
+
+    blobs, objects = _store_members(bundle)
+    assert not any(obj.blob_sha256 in b for b in blobs)
+    assert not any(avatar in o for o in objects)
+    assert len(blobs) == len(objects) == 1                   # the shared picture
+    assert any(k.get("kind") == "bundle_image_skipped" for k in rows)
+    new = world_bundle.import_bundle(bundle)
+    root = worlds.world_root(new)
+    assert "avatar" not in {n for _d, n in _ref_dirs(root)}  # the slot is absent
+    assert assets.image_path(root, "seraphine", "default", "avatar") is None
+    assert (root / "characters" / "seraphine" / "character.md").exists()  # the record came
+    assert image_refs.read(root / "assets", "cover").image == shared
+    assert image_refs.read(root / "assets" / "images", "coastline").image == shared
+    assert assets.resolve(root / "assets", "cover") is not None
+
+
+def _plain_world():
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    cid, vid = characters.create_character(root, "Seraphine", "default")
+    assets.put_image(root, cid, vid, "avatar", _pixels(1), "png")
+    return wid
+
+
+@pytest.mark.parametrize("cap, value", [
+    ("MAX_UNCOMPRESSED", 64),          # the members' bytes
+    ("MAX_MEMBERS", 2),                # the members' count
+    ("MAX_OBJECT_BYTES", 8),           # every projected object together
+    ("MAX_OBJECT_MEMBER_BYTES", 8),    # one projected object
+])
+def test_export_refuses_a_world_import_would_refuse_whole(monkeypatch, tmp_path, cap, value):
+    """Checked before the archive is opened: a refused export writes nothing."""
+    _home(monkeypatch, tmp_path)
+    wid = _plain_world()
+    monkeypatch.setattr(world_bundle, cap, value)
+    dest = tmp_path / "out" / "bundle.zip"
+    dest.parent.mkdir()
+    with pytest.raises(world_bundle.BundleError):
+        world_bundle.write_bundle(wid, dest)
+    assert not dest.exists()
+
+
+def test_export_removes_an_archive_past_the_import_cap(monkeypatch, tmp_path):
+    """The archive's own size is only known once written: one past the cap
+    the import route takes is removed, never left at `dest`."""
+    _home(monkeypatch, tmp_path)
+    wid = _plain_world()
+    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BYTES", 256)
+    dest = tmp_path / "bundle.zip"
+    with pytest.raises(world_bundle.BundleError, match="too large to import"):
+        world_bundle.write_bundle(wid, dest)
+    assert not dest.exists()
+
+
+def test_a_bundle_under_every_cap_exports_and_imports(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = _plain_world()
+    bundle = _export(wid, tmp_path)
+    with zipfile.ZipFile(bundle) as z:
+        infos = z.infolist()
+    monkeypatch.setattr(world_bundle, "MAX_MEMBERS", len(infos))
+    monkeypatch.setattr(world_bundle, "MAX_UNCOMPRESSED", sum(i.file_size for i in infos))
+    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BYTES", bundle.stat().st_size)
+    assert world_bundle.import_bundle(_export(wid, tmp_path, "again")) != wid
+
 def test_a_bundle_at_the_cap_exports_and_imports(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid, shared, avatar = _placed_realm()

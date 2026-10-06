@@ -1286,6 +1286,15 @@ before `px1` shipped, so the version stays `px1`:
   both: export checks every blob it would pack before writing anything and
   raises `BundleError` ("image too large to bundle: <record path>/<name>"),
   which the export route answers with 422 and that message.
+- **Export never writes a bundle its import refuses** (§10). The members are
+  planned before the archive is opened and held to the import's whole-bundle
+  caps (`MAX_MEMBERS`, `MAX_UNCOMPRESSED`, the object metadata caps). Once
+  written, the archive is held to `MAX_BUNDLE_BYTES`, the import route's
+  upload cap, now defined beside the others. It is also re-scanned as the
+  import scans it. Any refusal removes `dest` rather than leaving part of a
+  bundle there. A blob that fails `image_store.blob_intact` is left out like
+  an id that does not resolve, and logged (`bundle_image_skipped`). Its
+  placement then arrives image-less through the import's own containment.
 - **A damaged blob is not served** (§6). `image_store.blob_intact` re-hashes
   a blob against its name, memoized on its stat signature under statcache's
   racy-window rule. `assets.path_in` treats a blob that fails it as not
