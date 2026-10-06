@@ -1435,7 +1435,8 @@ export const SceneInspector = memo(function SceneInspector({
             {breakBusy === `${cid}/${sid}` ? "Asking…" : "Ask now"}
           </button>
           {breakState?.key === `${cid}/${sid}` && breakState.data.verdict === "yes" && (
-            <button onClick={dismissBreak} disabled={breakBusy === `${cid}/${sid}`}>
+            <button onClick={dismissBreak}
+                    disabled={breakBusy === `${cid}/${sid}` || !!stripTasks?.scene_break}>
               Not here
             </button>
           )}

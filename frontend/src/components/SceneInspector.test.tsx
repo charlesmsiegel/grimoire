@@ -2414,6 +2414,15 @@ test("a task the strip is running disables its manual button", async () => {
   expect(screen.getByRole("button", { name: /refresh now/i })).toBeEnabled();
 });
 
+test("Not here is held while the strip has a scene-break question out", async () => {
+  // Dismissing under a strip-started question would let that question land
+  // afterwards and raise the prompt the player just turned down.
+  (api.getSceneBreak as any).mockResolvedValue(BREAK_YES);
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} stripTasks={{ scene_break: true }} /></MemoryRouter>);
+  expect(await screen.findByRole("button", { name: /not here/i })).toBeDisabled();
+});
+
 test("its manual buttons report themselves busy", async () => {
   const onTaskBusy = vi.fn();
   render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
