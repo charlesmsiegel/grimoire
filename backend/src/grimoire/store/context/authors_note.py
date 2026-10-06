@@ -25,6 +25,9 @@ the `depth`-th most recent one, clamped to the start, and `0` means after the
 last post. The point is then snapped back to the start of a player post (the
 start of a run of them), or to the very start when there is none, so a note
 always sits on a projected-message boundary and never splits a merged run.
+A scene with no player posts (an offscreen scene) has no such start, so there
+any depth above 0 lands at the very start of the history, the first thing the
+packer trims.
 Notes at one point go campaign, scene, character.
 
 **How it reaches the model.** Each note renders through

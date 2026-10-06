@@ -138,7 +138,9 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
               {" "}turns
             </label>
             <div className="field-hint">
-              Depth is posts from the end; 0 = after the last post. Empty text clears the note.
+              Depth is posts from the end; 0 = after the last post. In a scene with no player
+              posts (an offscreen scene), any depth above 0 puts the note at the start of the
+              history, the first thing trimmed. Empty text clears the note.
             </div>
             <div className="form-actions">
               <button type="button" disabled={busy || !notes}

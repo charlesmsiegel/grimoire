@@ -295,8 +295,10 @@ Message assembly (code-side, mirrored from `context/assemble.py`):
    own call only -- each as its own system message, never merged and never
    labelled. It is inserted into the projected history before the `depth`-th
    most recent in-context post (0 = after the last), snapped back to the start
-   of a player post. Cadence is `every`, counted over the scene's player posts
-   plus director notes. Openers have no history, so theirs (every-turn notes
+   of a player post. A scene with no player posts (an offscreen scene) has no
+   such start, so there a note with depth > 0 lands at the very start of the
+   history, the first thing trimmed. Cadence is `every`, counted over the
+   scene's player posts plus director notes. Openers have no history, so theirs (every-turn notes
    only) follow the opener prompt.
 3. Director turn only: the note as a user message — the player's text, or
    `scene/director_note.j2` when blank. Opener only: the (substituted)
