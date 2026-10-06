@@ -1170,6 +1170,8 @@ There is never a canonical choice across types.
 
 A merge (Keep A / Keep B) creates an alias only. It goes through the §5.1 liveness check: a 409 `liveness_mismatch` surfaces as a confirmation (“Merging will hide an open thread behind a closed one”) that resubmits with `accept_status_change: true`. It also offers the explicit due copy.
 
+Its confirmation shows the merge's full effect (§5.1's Response; Slice G final review). The apply answers `affected: [{ref, name}]`, the other records that now resolve to the kept one, each named by `review.reader_name`. The line names them by that name, never by ref: “Merged Mara's map into Winifred's chart; Seraphine's letter now follows it too.” With several, it reads “… and … now follow it too”; with none, it is “Merged Mara's map into Winifred's chart.” as before. Pinned by `test_continuity_review_routes.py::test_applying_a_duplicate_names_the_other_records_that_now_follow` and `LedgerContinuity.test.tsx` “a merge names the other records that now follow the kept one”.
+
 A temporal `possible_relation` offers Accept (with a before/on/after/by select defaulted to the proposal), Related, and Dismiss.
 
 ## 12.4 Closure review actions
@@ -2170,6 +2172,7 @@ Aliases are deleted by `?ref=`, because refs contain `:` and model-written plot 
 - `op` ∈ alias | link | close | keep_open | resolve.
 - `test_pydantic_guard` forbids `Field`, validators and unions, so every field is a plain optional value, validated in the handler.
 - `expect_fingerprint` defaults to the candidate's cached fingerprint.
+- A landed apply answers `{ok, applied: [<part>…]}`, plus the parts it wrote: `alias` and `affected` (§12.3) and, where only the source had a due, `dues` for a merge; `link` for a link.
 
 All campaign mutations take `campaign_lock`. Refusals use the established shape `HTTPException(409, detail={"kind": ..., "detail": ...})`.
 

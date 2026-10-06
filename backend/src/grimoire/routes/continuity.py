@@ -457,6 +457,11 @@ def _apply_plan(cid: str, key: str, checked: dict, plan: dict, landed: list[str]
                                    replace_broken=True)
         landed.append("alias")
         out["alias"] = made["alias"]
+        # §5.1's Response: the other records that now resolve to the kept one,
+        # titled, because the review names them and words no ref (§30).
+        out["affected"] = [{"ref": ref, "name": review.reader_name(
+                               cid, ref, checked["current"].ledgers)}
+                           for ref in made["affected"]]
         if "dues" in made:
             out["dues"] = made["dues"]
     if "link" in plan:

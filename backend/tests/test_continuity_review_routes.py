@@ -511,6 +511,37 @@ def test_applying_a_duplicate_writes_an_alias_only(client):
     assert written[-1]["kind"] == "continuity_alias"
 
 
+def test_applying_a_duplicate_names_the_other_records_that_now_follow(client):
+    """§5.1's Response, through §12.3: a record already merged into the source
+    now resolves to the kept one, and the apply says so, titled, so the review
+    can tell the reader the merge's whole effect."""
+    cid, sid = _campaign(client)
+    _threads(cid, sid)
+    store.plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open",
+                            "Winifred lost the chart.", sid)
+    chart = "thread:winifred-s-chart"
+    r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
+                    json={"ref": chart, "to": RECOVER})
+    assert r.status_code == 200, r.text
+    _sweep(cid)
+    assert PAIR in candidates.read(cid)["records"]
+
+    r = _apply(client, cid, PAIR, {"op": "alias", "canonical": LEDGER})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["affected"] == [{"ref": chart, "name": "Winifred's chart"}]
+    assert effective.live_canon(cid)[chart] == LEDGER
+
+
+def test_applying_a_lone_duplicate_names_nothing_else(client):
+    cid, _sid = _seeded(client)
+
+    r = _apply(client, cid, PAIR, {"op": "alias", "canonical": LEDGER})
+
+    assert r.status_code == 200, r.text
+    assert r.json()["affected"] == []
+
+
 def test_applying_a_duplicate_replaces_the_sources_broken_merge(client):
     """§26: a merge whose target is gone leaves the source its own record, so
     the review offers it as a duplicate -- and keeping the other record has to

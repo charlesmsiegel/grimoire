@@ -2308,6 +2308,14 @@ export type ContinuityApply = {
   accept_status_change?: boolean;
   expect_fingerprint?: string;
 };
+/** What a landed apply answers. `affected` comes with a merge only: the other
+ *  records that now resolve to the kept one (§5.1's Response), each with the
+ *  name the review shows for it, so no ref is worded on the client. */
+export type ContinuityApplied = {
+  ok: boolean;
+  applied: string[];
+  affected?: { ref: string; name: string }[];
+};
 /** A reconciliation run's result (`routes/continuity._blank_result`). */
 export type ReconcileResult = {
   sweep: "full" | "incremental";

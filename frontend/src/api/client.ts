@@ -36,7 +36,7 @@ import {
   type GroupState, type HealthCheckResult,
   type CommitmentSave, type CompositionRow,
   type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
-  type ReconcileResult,
+  type ContinuityApplied, type ReconcileResult,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
@@ -1514,7 +1514,7 @@ export const api = {
    *  the rail count what is pending -- on a `partial_apply` 500 too, whose
    *  landed parts move them all the same. */
   applyCandidate: (cid: string, id: string, body: ContinuityApply) =>
-    request<{ ok: boolean; applied: string[] }>(
+    request<ContinuityApplied>(
       "POST",
       `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/apply`,
       body).then(notifyShell, notifyShellOnLanded(["partial_apply"])),
