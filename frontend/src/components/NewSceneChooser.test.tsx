@@ -963,3 +963,30 @@ test("a refused ref spelled differently is still cleared", async () => {
   await regenerate();
   expect(JSON.stringify(lastOptions())).not.toContain("thread:mara-s-map");
 });
+
+test("a failed re-read after a stale refusal resets what it can no longer show", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  choose("Mara's oath", "Avoid");
+  chooseTime("Stay near current date");
+  // A refusal naming a spelling the chooser does not hold clears nothing, and
+  // the re-read that would have pruned the held refs fails.
+  (api.sceneSuggestions as any).mockRejectedValueOnce(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:find-the-ledger"] }));
+  (api.continuityDrivers as any).mockRejectedValue(new Error("offline"));
+  await regenerate();
+  await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(container.querySelector("details.story-pressure")).toBeNull());
+  // Hidden controls send nothing...
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "" });
+  await regenerate();
+  expect(lastOptions()).toEqual(expect.objectContaining({
+    focus_refs: [], avoid_refs: [], must_refs: [], time_mode: "auto",
+    time_anchor_ref: "", time_anchor_relation: "",
+  }));
+  // ...and the reader is told what was reset.
+  expect(await screen.findByText(/Story pressure could not be read/))
+    .toHaveTextContent(/Mara's map.*Mara's oath/);
+});
