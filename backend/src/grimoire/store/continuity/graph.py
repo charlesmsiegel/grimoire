@@ -661,24 +661,35 @@ def _idea_edges(ref: str, idea: dict, live: dict[str, str],
                 node_ids: Collection[str]) -> list[dict]:
     """Decision 12: `serves` to each stored driver's live canonical and
     `anchored_to` the stored anchor, each only when its target is a node; one
-    edge per target, the first stored entry winning."""
+    edge per target, the first stored entry winning. `scene_ideas` keeps any
+    string action or relation a hand edit left, so one outside §20's closed
+    vocabulary draws nothing rather than reaching the wire as a typed union."""
     served: dict[str, str] = {}
     for d in idea.get("drivers") or ():
         target = live.get(d["ref"], d["ref"])
-        if target in node_ids:
+        if target in node_ids and d["action"] in drivers.DRIVER_ACTIONS:
             served.setdefault(target, d["action"])
     edges = [_edge("serves", ref, target, relation=action) for target, action in served.items()]
-    anchor = idea.get("time_anchor")
-    if isinstance(anchor, dict) and anchor.get("ref") in node_ids:
-        edges.append(_edge("anchored_to", ref, anchor["ref"], relation=anchor.get("relation")))
+    anchor = _known_anchor(idea.get("time_anchor"))
+    if anchor is not None and anchor["ref"] in node_ids:
+        edges.append(_edge("anchored_to", ref, anchor["ref"], relation=anchor["relation"]))
     return edges
+
+
+def _known_anchor(anchor: Any) -> dict | None:
+    """The stored anchor, or None when its relation is outside
+    `pending.TEMPORAL_RELATIONS` (the wire's `AnchorRelation`)."""
+    if isinstance(anchor, dict) and anchor.get("relation") in pending.TEMPORAL_RELATIONS:
+        return anchor
+    return None
 
 
 def _idea_parts(files: dict, temporal: dict, live: dict[str, str],
                 node_ids: Collection[str], omitted: set[str]) -> tuple[list, list]:
     """Active saved ideas only (Decision 6): a used idea is already a scene on
     the spine, and a dismissed one is the reader's own "no". An idea keeps its
-    stored `time_anchor` even when the anchor has no node to draw to."""
+    stored `time_anchor` even when the anchor has no node to draw to, and loses
+    it only to a relation outside the vocabulary (`_known_anchor`)."""
     nodes, edges = [], []
     for idea in files["ideas"]:
         if not isinstance(idea, dict) or idea.get("status") != scene_ideas.ACTIVE:
@@ -686,7 +697,8 @@ def _idea_parts(files: dict, temporal: dict, live: dict[str, str],
         ref = f"idea:{idea['id']}"
         nodes.append({"id": ref, "kind": "idea", "label": idea["title"],
                       "premise": idea["premise"], "source": idea["source"],
-                      "pcless": idea["pcless"], "time_anchor": idea.get("time_anchor"),
+                      "pcless": idea["pcless"],
+                      "time_anchor": _known_anchor(idea.get("time_anchor")),
                       **_dated(temporal, fieldtext.text(idea.get("date")), omitted)})
         edges += _idea_edges(ref, idea, live, node_ids)
     return nodes, edges

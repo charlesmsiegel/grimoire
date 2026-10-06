@@ -26,6 +26,7 @@ from grimoire.store import (
     plot,
     relationships,
     scene_ideas,
+    suggest,
 )
 from grimoire.store.continuity import (
     candidates,
@@ -817,6 +818,36 @@ def test_ideas_serve_canonical_drivers_and_anchor_to_nodes(monkeypatch, tmp_path
     [anchored] = _edges(g, "anchored_to")
     assert (anchored["from"], anchored["to"], anchored["relation"]) == (
         idea, CORONATION, "on")
+
+
+def test_a_hand_edited_action_or_relation_outside_the_vocabulary_draws_nothing(
+        monkeypatch, tmp_path):
+    """`scene_ideas` keeps any string action/relation; the wire's `serves` and
+    `anchored_to` relations (and the node's `time_anchor`) are §20's closed
+    unions, so a word outside them is dropped rather than passed through."""
+    assert pending.TEMPORAL_RELATIONS == suggest.ANCHOR_RELATIONS
+    cid = _campaign(monkeypatch, tmp_path)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s1)
+    events.create(cid, "The coronation", "2026-05-13")
+    lid = scene_ideas.add(
+        cid, "Saltmarch harbour", "Mara takes the map to the harbour.",
+        drivers=[{"ref": MAP, "action": "advance"},
+                 {"ref": CHART, "action": "advance"}],
+        time_anchor={"ref": CORONATION, "relation": "on", "native": "2026-05-13"})
+    data = json.loads(scene_ideas._path(cid).read_text(encoding="utf-8"))
+    data[lid]["drivers"][0]["action"] = "frobnicate"
+    data[lid]["time_anchor"]["relation"] = "sideways"
+    scene_ideas._path(cid).write_text(json.dumps(data), encoding="utf-8")
+    idea = f"idea:{lid}"
+
+    g = graph.build(cid)
+    serves = [e for e in _edges(g, "serves") if e["from"] == idea]
+    assert [(e["to"], e["relation"]) for e in serves] == [(CHART, "advance")]
+    assert _edges(g, "anchored_to") == []
+    assert _by_id(g)[idea]["time_anchor"] is None
+    assert g["omitted"] == []
 
 
 def test_an_anchor_beyond_the_horizon_keeps_its_record_but_draws_no_edge(
