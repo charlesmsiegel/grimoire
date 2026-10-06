@@ -127,7 +127,7 @@ export function useContinuityReview(cid: string, epoch: number,
   const [sweep, setSweep] = useState<"refresh" | "follow" | null>(null);
   const [refreshNote, setRefreshNote] = useState<string | null>(null);
   /** The current records a 409 said a finding has, by candidate id, laid over
-   *  the read until the next write or switch. */
+   *  the read until the next write (any epoch move) or switch. */
   const [overrides, setOverrides] = useState<Record<string, Current>>({});
   /** Findings whose cited evidence a 409 said has moved, by candidate id. */
   const [moved, setMoved] = useState<Record<string, true>>({});
@@ -146,6 +146,15 @@ export function useContinuityReview(cid: string, epoch: number,
     setMoved({});
     return () => { ctl.abort(); };
   }, [cid]);
+
+  // What a 409 laid over the read holds until the page's next write, and a
+  // Ledger hand edit is one: it moves the epoch without passing `wrote()`, and
+  // the re-read it causes is what the finding must show -- stale again, say,
+  // rather than the 409's records under a fingerprint already superseded.
+  useEffect(() => {
+    setOverrides({});
+    setMoved({});
+  }, [epoch]);
 
   const reread = useCallback(() => setNonce((n) => n + 1), []);
 

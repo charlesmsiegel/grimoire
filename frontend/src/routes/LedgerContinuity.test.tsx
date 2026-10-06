@@ -10,7 +10,7 @@ import type {
   CandidateRecord, ContinuityCandidate, ContinuityCandidates, ContinuityState,
 } from "../api/client";
 import LedgerView from "./LedgerView";
-import { DECISION_LABELS } from "../components/continuity/labels";
+import { DECISION_LABELS, STALE_SENTENCES } from "../components/continuity/labels";
 import {
   EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, Here, installLedgerMocks, renderLedger,
 } from "../testkit/ledgerHarness";
@@ -1085,6 +1085,37 @@ describe("the finding detail", () => {
     expect(applied()[1][2]).toEqual({
       op: "alias", canonical: CHART_D.ref, expect_fingerprint: "fp-now",
     });
+  });
+
+  test("a hand edit ends what a stale 409 laid over the finding", async () => {
+    // The 409's records hold only until the page's next write -- a hand edit
+    // in the table is one too, and its re-read is what the finding shows.
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+      409, "Records have changed since this was found.", "stale_candidate", {
+        kind: "stale_candidate", reason: "records",
+        current: { fingerprint: "fp-now", records: [MAP_D, CHART_D] },
+      }));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    expect(aside().getByRole("button", { name: "Keep Winifred's chart" })).toBeEnabled();
+    // Mara's map is closed by hand: the next read finds the pair stale again.
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL,
+      candidates: [{ ...PAIR, fingerprint: "fp-later", stale: true, stale_reason: "records",
+                     records: [{ ...MAP_D, status: "closed" }, CHART_D] }],
+    });
+    fireEvent.click(column().getByRole("button", { name: /^threads/i }));
+    fireEvent.click(await screen.findByRole("button", { name: /\+ New thread/ }));
+    fireEvent.change(await screen.findByLabelText("Thread"),
+      { target: { value: "Saltmarch tolls" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(api.ledgerCreateThread).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(3));
+    fireEvent.click(groupRow(/possible overlaps/i));
+    fireEvent.click(await main().findByRole("button", { name: /^mara's map \/ winifred's chart/i }));
+    expect(await (await sidebar()).findByText(STALE_SENTENCES.records)).toBeInTheDocument();
+    expect(aside().getByRole("button", { name: "Keep Winifred's chart" })).toBeDisabled();
   });
 
   test("an evidence 409 keeps the actions disabled and offers Refresh", async () => {
