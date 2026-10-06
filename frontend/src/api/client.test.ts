@@ -1,7 +1,7 @@
 import { api, ApiError, invalidateConfigCache, RefreshRefused } from "./client";
-import { onCampaignsChanged, onConfigChanged } from "../appEvents";
+import { onCampaignsChanged, onConfigChanged, onShellChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
-import type { DriverLink, GraphEdge, LinkRelation, StoryGraph } from "./types";
+import type { DriverLink, GraphEdge, LinkRelation, ReconcileRunError, StoryGraph } from "./types";
 import { THUMB_REV } from "./thumbs";
 
 test("referenced image subjects send the full URL in the body rather than a route segment", async () => {
@@ -2699,4 +2699,28 @@ test("an edge's relation is typed by its kind, and a driver link's is a LinkRela
                       to: "scene:s1", source: "structural", relation: null,
                       candidate_id: null })).toBeNull();
   expect([d, bad]).toEqual(["pays_off", "not_a_relation"]);
+});
+
+test("removeAlias and removeLink tell the shell", async () => {
+  // An unmerge puts the merged record back on the Ledger, so the rail's
+  // Ledger count moves without the pathname moving.
+  const spy = vi.fn();
+  const off = onShellChanged(spy);
+  globalThis.fetch = vi.fn().mockResolvedValue(jsonOk({ ok: true })) as any;
+  await api.removeAlias("run", "thread:mara-s-map");
+  expect(spy).toHaveBeenCalledTimes(1);
+  await api.removeLink("run", "l1");
+  expect(spy).toHaveBeenCalledTimes(2);
+  globalThis.fetch = vi.fn().mockResolvedValue(
+    { ok: false, status: 409, json: async () => ({ detail: "busy", kind: "busy" }) }) as any;
+  await expect(api.removeAlias("run", "thread:mara-s-map")).rejects.toThrow();
+  await expect(api.removeLink("run", "l1")).rejects.toThrow();
+  expect(spy).toHaveBeenCalledTimes(2);
+  off();
+});
+
+test("a failed reconcile run's body has a type", () => {
+  // Type-level: only tsc can fail this line, since vitest erases types.
+  const e: Partial<ReconcileRunError> = { saved: true, follow_on: false };
+  expect(e.follow_on).toBe(false);
 });

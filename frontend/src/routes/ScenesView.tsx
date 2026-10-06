@@ -92,6 +92,9 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   /** The rail's shell read, only when it is about this campaign. */
   const { payload: shell, failed: shellFailed, retry: retryShell } = useCampaignShell(cid);
   const [failed, setFailed] = useState(false);
+  /** Bumped by the list banner's Try again, so the list is read again rather
+   *  than the banner merely cleared over an empty page. */
+  const [reload, setReload] = useState(0);
   /** Why the last delete did not happen, or null. Separate from `failed`,
    *  which means the LIST could not be read: one says "look again", the other
    *  says "that scene is busy" over a list that is perfectly fine. */
@@ -143,7 +146,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
       setMeta(m); setScenes(sc);
     }).catch(() => { if (live) setFailed(true); });
     return () => { live = false; };
-  }, [cid]);
+  }, [cid, reload]);
 
   // What each scene cost, fetched after the list rather than with it, and
   // dropped silently on failure: a row with no figure is the honest rendering
@@ -329,7 +332,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
           // the same way: one means "look again", the other "start writing".
           <div className="banner error-banner">
             The scenes could not be read.{" "}
-            <button className="subtle" onClick={() => setFailed(false)}>Try again</button>
+            <button className="subtle" onClick={() => setReload((n) => n + 1)}>Try again</button>
           </div>
         )}
 

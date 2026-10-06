@@ -28,8 +28,8 @@ from .. import store
 from ..llm import LLMClient
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
-from ..store.continuity import review as continuity_review
 from . import characters as character_routes
+from . import ledger as ledger_routes
 from . import runs
 from .common import (
     PC_HISTORY_MISSES,
@@ -462,7 +462,9 @@ def delete_campaign_event(cid: str, eid: str):
     event is never part of a merge, so only an unreadable ``links`` section can
     stop that cleanup -- and then the delete is refused before anything is
     written, like a thread's: once the id is free, a link nobody could remove
-    would attach to whatever is created under it next.
+    would attach to whatever is created under it next. A disk that fails after
+    the delete landed answers `ledger.forget_or_partial`'s ``partial_delete``,
+    which says the event is gone and where to remove what is left.
     """
     _campaign_root_or_404(cid)
     with store.locks.campaign_lock(cid):
@@ -483,7 +485,7 @@ def delete_campaign_event(cid: str, eid: str):
         # that actually landed as an error.
         with contextlib.suppress(store.notices.NoticeError):
             store.notices.forget_event(cid, eid)
-        continuity_review.forget_ref(cid, f"event:{eid}", name=name)
+        ledger_routes.forget_or_partial(cid, f"event:{eid}", name=name, noun="event")
     return {"ok": True}
 
 

@@ -209,3 +209,36 @@ def test_an_event_can_be_re_dated_through_the_route(client):
                       json={"date": "2026-06-10"}).status_code == 200
     row = _events(client, cid)[0]
     assert row["date"] == "2026-06-10" and row["passed"] is False
+
+
+def test_an_event_delete_whose_cascade_fails_moves_the_token(client, monkeypatch):
+    """The event is gone when its link cleanup fails (spec §5.7, plan Decision
+    10): a 500 that says so and where to finish, never a bare server error, and
+    a write token that still moves. An event delete writes no journal row, so
+    the sentence points at Reviewed links / merges rather than at Undo."""
+    from grimoire.store.continuity import review as continuity_review
+
+    cid = _campaign(client)
+    mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
+                      json={"title": "Mara's oath"}).json()["id"]
+    eid = client.post(f"/api/campaigns/{cid}/events",
+                      json={"name": "The coronation", "date": "2026-05-09"}).json()["id"]
+    r = client.post(f"/api/campaigns/{cid}/continuity/links",
+                    json={"a": f"commitment:{mid}", "b": f"event:{eid}", "relation": "by"})
+    assert r.status_code == 200, r.text
+    before = store.revision.current(cid)
+
+    def fail(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(continuity_review, "forget_ref", fail)
+    r = client.delete(f"/api/campaigns/{cid}/events/{eid}")
+    assert r.status_code == 500, r.text
+    body = r.json()
+    assert body["kind"] == "partial_delete"
+    assert body["landed"] == ["event"]
+    assert body["detail"] == ("the event was deleted, but its links could not all be removed "
+                              "(OSError); remove the rest from Reviewed links / merges")
+    assert "undone" not in body["detail"]
+    assert eid not in store.events.read(cid)
+    assert store.revision.current(cid) != before

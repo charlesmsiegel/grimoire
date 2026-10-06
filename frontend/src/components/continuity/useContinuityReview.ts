@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, ApiError, RefreshRefused, type CandidateRecord, type ContinuityCandidates, type ContinuityState,
+  type ReconcileRunError,
 } from "../../api/client";
 import type { RunHandle } from "../../api/stream";
 import type { ContinuityGroup } from "../../api/types";
@@ -57,7 +58,8 @@ export const FOLLOW_ON_NOTE =
  *  neither. */
 export function failedNote(err: unknown): string {
   if (err instanceof RefreshRefused) return NOT_SAVED_NOTE;
-  const body = err instanceof ApiError ? err.body : undefined;
+  const body = err instanceof ApiError
+    ? err.body as Partial<ReconcileRunError> | undefined : undefined;
   // A first pass another generation superseded landed without saving, so
   // only a saved first pass makes the findings on screen this run's.
   if (body?.follow_on === true && body?.saved === true) return FOLLOW_ON_NOTE;

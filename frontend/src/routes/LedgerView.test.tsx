@@ -1026,3 +1026,38 @@ test("a delete refused for merged records offers Delete anyway", async () => {
   await waitFor(() => expect(api.ledgerDeleteThread).toHaveBeenCalledTimes(2));
   expect((api.ledgerDeleteThread as any).mock.calls[1]).toEqual(["run", "warehouse", true]);
 });
+
+const THREAD_PARTIAL = "the thread was deleted, but its merges and links could not all be "
+  + "removed (OSError); the delete can be undone";
+
+test("a delete that landed but could not clear its links re-reads the ledger", async () => {
+  // The thread is gone on the server, so a row drawn from the pre-delete read
+  // would answer a second Delete with a 404. Re-read, and still say what
+  // happened.
+  (api.ledgerDeleteThread as any).mockRejectedValueOnce(new ApiError(
+    500, THREAD_PARTIAL, "partial_delete",
+    { kind: "partial_delete", landed: ["thread"], detail: THREAD_PARTIAL }));
+  await at(/Threads/, THREADS);
+  (api.campaignLedger as any).mockResolvedValue({ ...THREADS, plot: THREADS.plot.slice(1) });
+  await openEditor(rowFor(/Who fired the warehouse/));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  expect(await screen.findByText(THREAD_PARTIAL)).toBeInTheDocument();
+  await waitFor(() => expect(screen.queryByText(/Who fired the warehouse/)).toBeNull());
+  expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+  expect(api.campaignLedger).toHaveBeenCalledTimes(2);
+});
+
+test("a delete refused for another reason leaves the row and reads nothing again", async () => {
+  (api.ledgerDeleteThread as any).mockRejectedValueOnce(new ApiError(
+    409, "continuity.json cannot be read", "malformed",
+    { kind: "malformed", detail: "continuity.json cannot be read" }));
+  await at(/Threads/, THREADS);
+  await openEditor(rowFor(/Who fired the warehouse/));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Delete" }));
+  expect(await screen.findByText("continuity.json cannot be read")).toBeInTheDocument();
+  expect(rowFor(/Who fired the warehouse/)).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
+  expect(api.campaignLedger).toHaveBeenCalledTimes(1);
+});

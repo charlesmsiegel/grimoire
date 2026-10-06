@@ -356,9 +356,12 @@ export default function LedgerView() {
   /** A refusal from the server, shown inside the editor it belongs to — a 409
    *  on a fact somebody else already retired is about that row, and at the top
    *  of the page it would be about nothing in particular. `action` is the one
-   *  way forward a refusal can offer (Delete anyway). */
+   *  way forward a refusal can offer (Delete anyway). `page` marks the one
+   *  refusal whose editor is gone by the time it shows -- a delete that landed
+   *  but could not clear its links -- so it is drawn above the table instead. */
   const [writeError, setWriteError] =
-    useState<{ text: string; action?: { label: string; run: () => void } } | null>(null);
+    useState<{ text: string; action?: { label: string; run: () => void };
+               page?: boolean } | null>(null);
   /** Bumped after every hand edit so the ledger, the change log and the
    *  relationship timeline are all re-read: one edit can move rows in three of
    *  them at once (a retired fact leaves `facts` and joins `retired`, and every
@@ -460,6 +463,16 @@ export default function LedgerView() {
       if (thenClose) { setOpenRow(null); setCreating(null); }
       setEpoch((n) => n + 1);
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.kind === "partial_delete") {
+        // The delete landed and only its continuity cleanup did not: the row
+        // is gone on the server, so drawing it from the old read would let a
+        // second Delete answer 404. Re-read as a success does, and say what
+        // is left to do.
+        setOpenRow(null);
+        setEpoch((n) => n + 1);
+        setWriteError({ text: errorText(err), page: true });
+        return;
+      }
       const action = refused?.(err) ?? null;
       setWriteError(action ? { text: MERGED_DELETE, action } : { text: errorText(err) });
     } finally {
@@ -752,6 +765,10 @@ export default function LedgerView() {
                              onSave={(d) => save(creating, d)}
                              onCancel={() => { setCreating(null); setWriteError(null); }} />
           </div>
+        )}
+
+        {writeError?.page && (
+          <p className="ledger-editor-error" role="status">{writeError.text}</p>
         )}
 
         {tableSection && ledger === null && <p className="column-empty">Reading the ledger…</p>}
