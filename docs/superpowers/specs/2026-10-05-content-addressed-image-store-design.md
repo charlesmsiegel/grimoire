@@ -1709,8 +1709,10 @@ tests touches the frozen campaign.
   and nothing reads a campaign scope), so they stay as they were. A key is
   deleted by compare-and-delete, only while it still equals the value folded,
   and otherwise the fold runs again (at most four times). (d) deletes
-  `focus.json` under the avatar's name lock and folds nothing, and only while
-  the file still holds the value that was carried; (b) writes the image-less
+  `focus.json` under the avatar's name lock and folds nothing, whatever value
+  the file holds, because the placement's focus is authoritative (the check that
+  the file still holds the value carried belongs to an (a) migration that moved
+  a crop onto a placement, `_move_focus`, and not to (d)); (b) writes the image-less
   override and then deletes `focus.json`, under the campaign lock and the
   avatar's name lock, only when no avatar placement exists there. A sidecar that
   is itself a symlink is never read, rewritten or deleted. Crash states are
@@ -1746,7 +1748,10 @@ tests touches the frozen campaign.
   files when it can and ignores them when it cannot, and raises on an unparseable
   non-temp file, an unknown `format`, any walk error, any symlink under a root
   and **a folder whose folded name is `image-refs` but is spelled otherwise**
-  (`Image-Refs/`, which a case-insensitive volume would have shown). Manifests
+  (`Image-Refs/`, which a case-insensitive volume would have shown). A folder of
+  either spelling counts only below an `assets` path component, where every
+  writer puts one (`backups._is_image_selected`'s rule), so a record whose own
+  slug is `image-refs` blocks nothing. Manifests
   and harvest journals are walked as strictly, staged work dirs under
   `.world-staging` and `.module-staging` are roots, and so are the migration work
   map's **pending** entries (ingested, not yet verified). Entries are pruned on
@@ -1800,7 +1805,8 @@ tests touches the frozen campaign.
   cancelled; blocking paths and `maintenance_elsewhere` are shown verbatim. Known
   limits: only a **running** run is rediscovered, so a scan that finished while
   the page was away has lost its token from view and needs a rescan; a
-  rediscovered migration shows as "Migrating" without saying dry or real;
+  rediscovered run shows the neutral "An image-store run is in progress…"
+  without saying migration or collection, dry or real;
   `X-Grimoire-Attempt` is optional on both start routes and minted when absent,
   as everywhere else.
 - **M17, recorded.** `.cache` syncs, which corrects stage 3's C13, hence the
@@ -1852,3 +1858,13 @@ Known limits, kept on purpose:
   run, which fails safe and can be noisy.
 - **One id per object across decoders** (stage 1) still means a second device can
   mint a duplicate object; collection reclaims it only once nothing places it.
+- **The M3 hold is per process.** `runs.maintenance_excluded` refuses a fork,
+  delete, export or backup only inside the process that runs the maintenance.
+  The proclock excludes maintenance from maintenance, not a tree operation from
+  it, so a second grimoire process on the same machine can still fork or delete
+  a world or campaign while a migration or collection runs in the first.
+- **Case variants are checked for `image-refs` only.** Collection refuses to
+  run where a placement folder's name is a case variant of `image-refs`, since a
+  case-insensitive file system would read it as the real one; it makes no such
+  check for `image-collections`, so a manifest under a case-variant name of that
+  folder is not counted as a reference.

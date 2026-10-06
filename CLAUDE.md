@@ -260,7 +260,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Twenty-nine handlers** start detached runs, in five classes:
+subscriber. **Thirty-one handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
@@ -682,7 +682,7 @@ would answer neither question.
   places any more is deleted by **collection**: both are maintenance runs
   started from Settings, Storage, Image store, never at startup, and neither is
   ever pointed at the frozen campaign's `home/`. Collection fails closed
-  (a root it cannot parse, a link, an object whose placement has not arrived,
+  (a root it cannot parse, a link, a placement whose object has not arrived,
   anything younger than its grace period) and needs the token of a scan.
   Neither module appears in `store/locks.py`'s domain lists, because the guard
   surveys by `cid` and each takes a root; the migration's campaign writes take
