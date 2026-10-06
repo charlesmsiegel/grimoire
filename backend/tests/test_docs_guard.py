@@ -399,6 +399,34 @@ def test_store_guarantees_names_the_image_store_locks():
     assert not gone, f"store/locks.py no longer defines: {gone}"
 
 
+def test_store_guarantees_names_the_striped_name_and_sidecar_locks():
+    """Stage 4's two striped families, by the names `store/locks.py` gives
+    them -- and those names must still be there. The image store section states
+    the order they sit in (campaign, collection, name, sidecar, ingest/GC,
+    object stripe), so a lock renamed away would leave that order describing
+    nothing."""
+    from grimoire.store import locks
+
+    section = _section(_read(GUARANTEES), "The image store")
+    names = ("image_name_lock", "image_sidecar_lock", "IMAGE_NAME_STRIPES")
+    missing = [n for n in names if n not in section]
+    assert not missing, f"the image store section does not name: {missing}"
+    gone = [n for n in names if not hasattr(locks, n)]
+    assert not gone, f"store/locks.py no longer defines: {gone}"
+
+
+def test_store_guarantees_names_the_maintenance_modules():
+    """Stage 4's migration, collector and report modules are named by the image
+    store section, and all of them still exist. The section is where a reader is
+    sent to learn what a garbage collection promises; a module renamed away
+    would leave that promise attached to nothing."""
+    section = _section(_read(GUARANTEES), "The image store")
+    for name in ("image_migration", "image_gc", "image_surfaces",
+                 "maintenance_reports"):
+        assert name in section, f"the image store section does not name {name}"
+        assert (SRC / "store" / f"{name}.py").is_file(), f"store/{name}.py is gone"
+
+
 def test_store_guarantees_names_the_collection_locks():
     """Stage 3's two collection locks, by the names `store/locks.py` gives them
     -- and those names must still be there. The image store section states
@@ -505,6 +533,25 @@ def test_claude_md_names_every_tracker_route_that_starts_a_run():
     assert not missing, (
         f"CLAUDE.md's Detached runs section does not name these handlers, each of "
         f"which starts a `tracker-update` run as the work its request asked for: {missing}"
+    )
+
+
+def test_claude_md_names_every_run_class():
+    """`CLAUDE.md`'s "Detached runs" section describes the run classes, and a
+    class added to `runs.RunClass` without a word there is a kind of run the
+    section's handler count and its exclusion rules silently leave out. It was
+    "four classes" in prose while a fifth was being written; this is what makes
+    the section's list follow the type rather than a memory of it."""
+    import typing
+
+    from grimoire.routes import runs
+
+    classes = typing.get_args(runs.RunClass)
+    assert classes, "runs.RunClass has no members -- the lookup is stale"
+    section = _section(_read(CLAUDE), "Detached runs")
+    missing = [c for c in classes if f"`{c}`" not in section]
+    assert not missing, (
+        f"CLAUDE.md's Detached runs section does not name these run classes: {missing}"
     )
 
 

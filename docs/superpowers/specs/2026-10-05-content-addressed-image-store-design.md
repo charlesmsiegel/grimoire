@@ -1531,6 +1531,10 @@ they refine §10, and where they differ from the text above, they win.
   are cached immutable. It converts or retires leftover format-1 harvest
   journals, which hold the C4 guard on. Journals live in `.cache`, which sync
   excludes, so one device's GC cannot see another device's in-flight journals.
+  *Corrected in stage 4 (M17): `.cache` is NOT excluded from sync, so a
+  journal, a sighting file and the maintenance marker all travel. What does
+  not travel is a lock, and what a device's `.cache` entry means on another
+  device is decided by keying it to the device that wrote it.*
   *Beside this: an import that drops a member id its bundle does not carry
   shifts the indices of every later member (C9).*
 
@@ -1546,3 +1550,305 @@ Rulings made while implementing:
   manifest an older build published, and which has since lost a member, does
   not reconcile. An accepted format-1 journal whose manifest is gone is
   converted before it is refused. Stage 4's journal retirement covers both.
+
+### Stage-4 amendments
+
+Stage 4 is migration (section 11) and collection (section 12). M1 to M17 were
+decided before the plan, and the rulings after them came from review of the
+implementation. Together they refine sections 11 and 12, and where they differ
+from the text above, they win. Every name in them is invented (Seraphine, Mara,
+Winifred, Saltmarch); nothing here describes a real library, and none of the
+tests touches the frozen campaign.
+
+- **M1, the `maintenance` run class.** `runs.RunClass` gains `"maintenance"`.
+  Its exclusion key is the constant `"global\x00image-maintenance"` whatever
+  the subject, so it refuses only another maintenance run, never a global run
+  of another class. It is neither notifying nor attachable.
+  `runs.run_maintenance(app, kind, attempt, work_sync)` reserves it: a second
+  start answers 409 `run_in_flight`, and a data-dir move in progress answers
+  409 `busy`. `work_sync(run)` runs through `anyio.to_thread.run_sync` with the
+  await **shielded**, so the run stays live, keeps its exclusion and holds off
+  data-dir moves until the thread returns. Cancellation is cooperative through
+  `run.cancel_requested`, and `abandon_on_cancel` is never used. The work
+  writes its report in its own `finally`; the lifespan sets `cancel_requested`
+  on every live maintenance run before it cancels the task group. The routes
+  that reserve are `def`, not `async def`, by the portal rule.
+- **M2, reports.** Each run atomically writes
+  `.cache/image-store/reports/<run id>.json` and returns the same report as its
+  result. A run id is validated against `^[0-9a-f]{32}$` before it is joined to
+  a path. Reports older than 30 days are pruned when the next one is written. A
+  dry run and a real run produce one shape. A run whose work raised before it
+  reported leaves a minimal failed report that names the exception's class and
+  never its message, since a message can carry a path.
+- **M3, exclusion from tree operations.** `runs.maintenance_excluded(app)` is a
+  registry hold shaped like `hold_still`. World fork, world delete, campaign
+  delete, campaign fork, bundle export (while the bundle is built, not while it
+  streams), **both manual backups** (`post_backup`, `post_image_backup`) and the
+  scheduled-backup ticker hold it for their whole operation; it lives in routes
+  and the ticker, never in store modules. Both directions refuse: a hold in
+  force makes a maintenance start answer 409 `busy`, and a live maintenance run
+  makes a hold answer 409 `maintenance_running` (the ticker skips its turn and
+  logs it). A synced marker, `.cache/image-store/maintenance.json`, holds
+  `{device, run, heartbeat}`; a separate timer thread refreshes it every 30 s
+  for the run's whole life, and a device that finds another device's marker
+  younger than 5 minutes refuses to start with 409 `maintenance_elsewhere`.
+  **A second process on the same machine is refused by a different mechanism:**
+  a `proclock` lock on `(root, "image-maintenance", "run")`, taken without
+  waiting and held for the run, answers the same `maintenance_elsewhere`. The
+  marker cannot do it, because both processes carry one device key. The device
+  id is machine-local, in `proclock.lock_dir()` and never under the store, and
+  the key used everywhere is `sha256(device id + "\0" + pinned root)`, so a
+  synced `.cache` never hands one device another's key.
+- **M4, the store root is pinned.** A run captures `root = paths.home().resolve()`
+  when it is reserved (inside the reservation, so it matches the marker), builds
+  every path from it, and verifies through `object_path(..., root=root)` and
+  `blob_path(..., root=root)` with a re-hash, never through `path_in`. It
+  asserts the live root equals the pinned one before and after ingest, after
+  verify, and before every destructive step; a mismatch stops the run with a
+  report entry and deletes nothing after that point. **A flip can still leave
+  one stray write in the other tree** (an ingest or an `update` that resolved
+  the live root before the check), but never a delete: every delete is
+  preceded by a check, and a placement is written only once its object and blob
+  are found under the pinned root.
+- **M5, locks.** Two process-scoped striped families,
+  `locks.image_name_lock(d, name)` (domain `image-names`) and
+  `locks.image_sidecar_lock(d, filename)` (domain `image-sidecars`), each with
+  `IMAGE_NAME_STRIPES = 256` stripes. One lock instance exists per
+  `(store key, domain, stripe)`. **The stripe key is store-relative and
+  versioned** (this amends the original "resolved d"): a directory inside the
+  store keys as `store:` plus its case-normalised path relative to the resolved
+  root, and one outside as `abs:` plus its absolute path, so two processes that
+  spell the root differently on a case-insensitive volume still meet. The key
+  hashes that with the case-folded name, so case aliases share a lock. The
+  domain strings carry the scheme (`image-names-v1-256`,
+  `image-sidecars-v1-256`), so changing the hash can never let two builds
+  think they exclude each other. The order is campaign, then
+  `image_collection_job_lock`, then `image_collection_lock`, then name, then
+  sidecar, then ingest/GC, then the object stripe. A caller holding several
+  takes one family's stripes sorted and deduplicated, all up front
+  (`_image_locks_held`, `sidecar_locks_held`; `set_in` takes the edited
+  directory's and the fallback or also-clear directory's sidecars together). A
+  nested heal of a stranded promotion never waits: `_locks_if_free` treats a
+  busy lock and an `OSError` alike as not free, and the heal is skipped until
+  the next scan. Contention past `LOCK_TIMEOUT` raises `StoreBusy`, whose
+  message no longer says "another process". The multi-step callers that can now
+  stop part-way were each checked safe to re-run (`copy_slots`,
+  `sync._copy_tree`, `overlay.copy_record_dir_down`,
+  `characters._replace_gallery`, bundle containment).
+  **Writers refuse while an unfinished promotion journal names their slot.**
+  `put_in`, `link_in`, `delete_in`, `write_focus` and `copy_slots` call
+  `_recover_before_write` under their name lock; when the non-blocking recovery
+  could not finish a journal that names the slot (or the avatar it swaps with),
+  they raise `OSError("an earlier promotion is still unfinished; retry")`
+  instead of writing over it. Without that, a collector could see a journal's
+  only copy of an avatar become unreferenced.
+- **M6, surfaces.** `store/image_surfaces.py` builds the roster from the code's
+  own path builders, for world and campaign roots: `assets.version_dir` per
+  base (`characters`, `pcs`, every `entities.ENTITY_KINDS`, `greetings`), the
+  library and cover directories, and collection manifests. It adds
+  **metadata-only occurrences**: (a) a campaign description key for an inherited
+  image the overlay would show (not tombstoned, not hidden, campaign not
+  detached); (b) a campaign bare `focus.json` over a visible inherited avatar;
+  (c) a description or subject key whose name has an image-bearing placement in
+  the same directory and no legacy file of its own; (d) a `focus.json` beside an
+  avatar placement. `test_image_surfaces.py` asserts the source roster equals
+  the test roster. **The inventory reports a symlinked or unreadable
+  directory and never walks into it or unlinks inside it**; an entry whose
+  `is_dir()` raises is reported on its own and the rest of its listing stands.
+  A sidecar (`descriptions.json`, `subjects.json`, `focus.json`) is never a
+  legacy picture of the name `descriptions` and so on.
+- **M7, planning.** The dry run and the real run share one plan, and the dry run
+  writes nothing but its report. A legacy file is selected the way the live
+  code selects it (newest by mtime and name over the name's non-sidecar
+  siblings; `supported_only` for library and cover directories). Other
+  extensions and other siblings are left and reported. Each file is sanitised
+  in memory, hashed, and decoded once per distinct sanitised stream; one that
+  does not sniff or decode is left and reported. Names are compared case-folded
+  against both existing placements and legacy names, and for any alias set with
+  more than one member **nothing is placed**: everything is left and reported
+  (this replaces section 11's "place the one that sorts first"). Groups are by
+  pixel id; a new object's retained blob is the one with most placements, then
+  the smaller file, then the lowest byte hash, and an existing object's blob is
+  never replaced. A cancel during planning leaves an empty plan, not a partial
+  one. The pending entries live in `.cache/image-store/migration/map.json`.
+- **M8, writing one occurrence.** Per file: `_recover_promotion(d)` first (every
+  writer, section 8); re-read and re-hash, then ingest **outside** every lock,
+  and record a `(dev, ino, size, mtime_ns)` snapshot; then, under the campaign
+  lock where there is one, then `image_collection_lock(wid)` for a world-library
+  occurrence, then the name lock, re-check the snapshot. **An image-bearing
+  placement is never overwritten**, resolving or not: the legacy file is deleted
+  only when its bytes `identify` to the placement's id **and** that placement
+  resolves under the pinned root, and otherwise both stay and the report says
+  "legacy differs from placement" or "placement not yet available". With no
+  placement, the placement is written atomically with its focus. Verify
+  (object, blob re-hash, focus read-back), then an identity-checked unlink of
+  exactly the hashed file, then its legacy thumbnails (`thumbs.legacy_keys`,
+  every bucket and both encoders, from the pre-delete stat), then
+  `revision.bump(cid)` under each written campaign's lock. **A linked
+  `image-refs/` directory, or a linked placement file, is never written
+  through**: the slot is reported `symlinked-directory` and the legacy file
+  kept, because a placement landing outside the pinned root would leave the
+  legacy file's deletion with nothing behind it.
+- **M9, folding metadata** happens only after the target placement verified, under
+  that directory's `descriptions.json` and `subjects.json` sidecar locks held
+  from the read through the delete, with values re-read at fold time. Texts
+  considered are the object's `description`, its `description_conflicts` and the
+  key, by section 11.D's rules; conflicts are never dropped except by the
+  describe queue. **`description_conflicts` is capped at 20 and a fold past the
+  cap keeps the key** (reported `conflicts-capped`) rather than dropping any
+  text. A non-string key, or one over `MAX_DESCRIPTION`, stays and is reported.
+  A folded text's provenance can read `"object"` rather than its original
+  `dir/name` label, because a text folded first becomes the object's own
+  description and is listed from there if a later key conflicts; the text is
+  never lost. Subjects are unioned per scope with any disagreement reported,
+  and a key pointing across worlds (R11) is not folded. **A same-world URL
+  subject key in a greeting's `subjects.json`** (a library or record URL, not a
+  bare name) **is kept, not folded**, and counted as `url_subject_keys_kept`:
+  resolving it needs the live root's greeting catalog. **A campaign greeting's
+  `subjects.json` keys are not folded at all** (`image_subjects` is world-only
+  and nothing reads a campaign scope), so they stay as they were. A key is
+  deleted by compare-and-delete, only while it still equals the value folded,
+  and otherwise the fold runs again (at most four times). (d) deletes
+  `focus.json` under the avatar's name lock and folds nothing, and only while
+  the file still holds the value that was carried; (b) writes the image-less
+  override and then deletes `focus.json`, under the campaign lock and the
+  avatar's name lock, only when no avatar placement exists there. A sidecar that
+  is itself a symlink is never read, rewritten or deleted. Crash states are
+  legacy only, both, or new only, and a rerun is idempotent.
+- **M10, collections and journals.** A format-1 manifest converts to format 2
+  only when every member is a library placement that resolves under the pinned
+  root, or a legacy member file whose `sha256` matches its name and which the
+  run placed; a manifest that cannot (a missing member, an unplaced member, two
+  members sharing one picture) stays format 1 and is reported. Conversion keeps
+  member order and indices and **keeps the members' library placements**, so
+  library URLs keep working. Every greeting `subjects.json` key naming a
+  converted member's library URL is rewritten in the same step, through
+  `catalog_with_slots` targets: to the member URL for a cross-world key, or
+  folded into the object for a same-world key; a settle pass over every
+  format-2 manifest finishes a rewrite a stopped run left half done. Convertible
+  harvest journals are converted, and only an unaccepted, unmappable one is
+  retired, renamed to `<job>.json.retired` (outside the `*.json` glob). An
+  accepted journal, one that does not parse and one whose read failed with a
+  plain `OSError` are kept. `has_format1` and GC read the raw journal
+  directory, which tolerates a deleted world. The `guard_write` code stays.
+- **M11, conflicts in the describe queue.** The record, world-library and
+  campaign-library queues add `conflicts: [{text, from}]` to a row that has any.
+  `image_descriptions.set_in`'s object write clears `description_conflicts` in
+  the same `update`, so **any save clears the list** (including "No
+  description"), and choosing a text in the queue only fills the box. A write
+  that falls back to a legacy key leaves them. `world_bundle`'s fill-when-absent
+  and `merge_projection` count a non-empty conflict list as "has a description",
+  and `assets._sheds_caption` (R12) does not: a conflicted object counts as
+  undescribed there.
+- **M12, roots.** `image_refs.walk_strict(root)` parses every regular file in
+  every `image-refs/` folder whatever its stem (a sync-conflict copy is a root),
+  takes ids from `.promote.json` journals before and after, parses atomic temp
+  files when it can and ignores them when it cannot, and raises on an unparseable
+  non-temp file, an unknown `format`, any walk error, any symlink under a root
+  and **a folder whose folded name is `image-refs` but is spelled otherwise**
+  (`Image-Refs/`, which a case-insensitive volume would have shown). Manifests
+  and harvest journals are walked as strictly, staged work dirs under
+  `.world-staging` and `.module-staging` are roots, and so are the migration work
+  map's **pending** entries (ingested, not yet verified). Entries are pruned on
+  verify and the map is deleted when a run completes.
+- **M13, candidates.** An object is collectable only when it is unreachable from
+  every root, its sidecar and blob mtimes are past the grace period, this
+  device's first unreachable sighting of it is at least a grace period old, and
+  it was seen unreachable again on a later scan. Sightings live in
+  `.cache/image-store/gc/<device key>.json`, keyed by device so a synced `.cache`
+  never lets one device's sighting count for another, and reset when the object
+  is seen reachable. A future mtime or sighting is never collectable and is
+  flagged as clock skew. The grace period is 30 days by default and nothing
+  below 7 is accepted. This replaces section 12's `.cache/image-store/gc.json`.
+  **Accepted residual risk:** a device offline longer than the grace period can
+  bring back a placement whose image was already collected.
+- **M14, blobs.** A blob is deleted only when no surviving readable sidecar names
+  it: a `blob -> holders` map is built over every file in `objects/` (a
+  sync-conflict copy of a sidecar counts) and rebuilt under the lock for each
+  batch. An unreadable sidecar keeps every blob and is reported. **A reachable
+  id with no readable sidecar** (a placement synced in before its object) is
+  treated the same: every orphan blob is kept that run and the ids are reported
+  as `unarrived_objects`, and a store whose `objects/` is missing while `blobs/`
+  exists blocks outright. An orphan blob is a candidate under the same grace and
+  sighting rules, a shared blob is excluded from the reclaimable bytes, and a
+  blob-index entry is deleted only if it names the collected id.
+- **M15, deleting.** Nothing is deleted when any root fails to parse, a staged
+  work dir is younger than an hour, the root changes, or **`.cache` (or its
+  `image-store`, `gc`, `blob-index` or `thumbs` folder) is a link**; the report
+  names each blocking path. The token comes from a persisted dry-run report on
+  this device, `{token, ids, blobs, root, device, scanned_at, grace_days,
+  run_id}`; it is single-use and valid for 24 hours, and a report that synced in
+  from another device is refused. It is validated read-only and then claimed by
+  an atomic rename, so a refused token is never consumed, and **a token is spent
+  even when its collection then stops**: a blocked or cancelled collection needs
+  a new scan. `collect(token)` deletes at most that report's collectable ids,
+  intersected with a fresh strict re-walk done outside the lock, in batches of up
+  to 100 objects or 2 seconds per hold of `image_ingest_gc_lock()`, each object
+  under its stripe, re-checking mtime, root, reachability and refcount, then
+  deleting the sidecar, then (refcount permitting) the blob, its index entry and
+  its thumbnails. **A deleted row is reported as it happens**, right after each
+  unlink, so a stop mid-object loses no row; an object's row carries its sidecar
+  bytes and the blob has its own. **Cache cleanup (the index entry, thumbnails)
+  is best effort**: a failure there goes in `cache_cleanup` and never stops the
+  run, though a root change still does. Nothing outside `image-store/` is
+  deleted apart from those cache entries.
+- **M16, UI.** Settings, Storage, an "Image store" card. Check runs a dry-run
+  migration and Migrate runs the real one after a confirm. "Find unused images"
+  runs a dry-run collection and the report shows what is collectable now and what
+  becomes collectable on which date; "Delete N unused images" carries the token,
+  after a confirm. A live run is rediscovered by listing `/api/runs` and can be
+  cancelled; blocking paths and `maintenance_elsewhere` are shown verbatim. Known
+  limits: only a **running** run is rediscovered, so a scan that finished while
+  the page was away has lost its token from view and needs a rescan; a
+  rediscovered migration shows as "Migrating" without saying dry or real;
+  `X-Grimoire-Attempt` is optional on both start routes and minted when absent,
+  as everywhere else.
+- **M17, recorded.** `.cache` syncs, which corrects stage 3's C13, hence the
+  device-keyed GC state (M13) and the maintenance marker (M3). Maintenance never
+  runs at startup. The frozen campaign is never migrated: no test passes its
+  `home/` to migrate or collect.
+
+Rulings made while implementing:
+
+- **The lock-domain guard cannot classify either module.** The Global
+  Constraint said `image_migration` goes in `locks.DOMAIN_MODULES` and
+  `image_gc` in `OUTSIDE_DOMAIN`. `test_lock_domain_guard` surveys modules by
+  their public `cid`-taking mutators, and neither module has one: both
+  entry points take a pinned **root**, so a declaration is a phantom the guard
+  fails on. Neither is classified. What holds instead: every campaign write the
+  migration makes takes `campaign_lock(cid)` (through one helper the lock-order
+  guard can see) and bumps `revision`, and `image_gc` writes no campaign state
+  and takes no campaign lock at all.
+- **There is no CLI.** A separate process could race the server's in-process
+  state, and the proclock (M3) exists to refuse a second one, not to invite it.
+- **Test isolation.** A test that moved `GRIMOIRE_HOME` once reached a
+  container's default store, so the session fixture also patches
+  `paths.pointer_path` to a throwaway file, and `_run` in the migration tests
+  refuses a root that is not the test's own. Destructive tests assert that nothing
+  outside `tmp_path` changed.
+
+Known limits, kept on purpose:
+
+- **Thumbnails.** A legacy file's thumbnail entry is removed after it migrates
+  and a collected blob's with the blob, both best effort. An entry either misses
+  stays in `.cache/thumbs`, unreferenced, and the revision sweep (older
+  generations only) does not reach it. An object collected after its blob was
+  already gone still has its thumbnails removed.
+- **Late reads.** Catalog reads (`greeting_images.catalog_with_slots`, journal
+  `_read`) resolve other worlds through the live root; each is reached only after
+  a root guard, and the window between that guard and the read is the same one
+  every live-root call has. Journal conversion and work-map writes sit under
+  `.cache` and carry no root guard of their own.
+- **A linked legacy file** (as opposed to a linked directory) is left and
+  reported, and a lone symlinked legacy file with nothing else around it is not
+  reported at all. A verified-pair decision is made before the linked check, which
+  affects only whether a metadata key is kept.
+- **A (c) key stays** when every file of its name was left untouched: the
+  inventory then has no occurrence to fold it through. That keeps a key and
+  never deletes one.
+- **Refcount and device races.** The blob refcount is rebuilt per batch, not per
+  object; a sidecar a sync client delivers mid-batch is the accepted residual
+  risk. A stray non-JSON file inside an `objects/` shard keeps every blob that
+  run, which fails safe and can be noisy.
+- **One id per object across decoders** (stage 1) still means a second device can
+  mint a duplicate object; collection reclaims it only once nothing places it.

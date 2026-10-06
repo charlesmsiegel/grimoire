@@ -235,6 +235,7 @@ a stale field; refusing would cost the turn.
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
 | `locks.image_object_lock(image_id)`, `locks.image_ingest_gc_lock()` | the image store | leaves; see [The image store](#the-image-store) |
+| `locks.image_name_lock(d, name)`, `locks.image_sidecar_lock(d, filename)` | one image slot in one directory; one `descriptions.json` or `subjects.json` | striped, process-scoped, and taken **after** the campaign and collection locks and **before** the leaves above; see [Image locks](#image-locks-and-the-order-they-are-taken-in) |
 | `locks.image_collection_job_lock(wid, job)`, `locks.image_collection_lock(wid)` | one harvest journal; one world's collection manifests and library-name checks | taken in that order, and before any image lock; see [Collections](#collections-members-by-id) |
 
 The backup lock's exclusion is the interesting one: an archive of a hundred
@@ -252,6 +253,15 @@ module-edit — raises that lock's subclass of `locks.StoreBusy` after
 what is busy, so the failure is retryable rather than a wedged server. (The two
 non-blocking variants above never raise — they report with a boolean instead,
 which is the whole point of them.)
+
+The image store's locks are the other shape of the same thing. The name and
+sidecar stripes raise the base `StoreBusy` itself, worded "this image is busy;
+try again in a moment", and the one handler answers 409 for it too. A
+maintenance start that the store cannot take answers its own 409s: `busy` (a
+tree operation or a data-dir move holds the store), `run_in_flight` (a
+maintenance run is already live), `maintenance_elsewhere` (another process or
+device is running one) and, for the tree operation refused *by* a run,
+`maintenance_running`; see [Maintenance runs](#maintenance-runs).
 
 `LOCK_TIMEOUT` is longer than any legitimate hold but is not a proof: a module
 migration over a large library on a synced or removable filesystem can exceed
@@ -390,13 +400,17 @@ engineering reason it cannot be fixed at this layer.
 **Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets.py`,
 `store/image_descriptions.py`, `store/image_subjects.py`,
 `store/image_scopes.py`, `store/image_usage.py`,
-`store/image_collections.py`, `store/image_collection_imports.py` ·
+`store/image_collections.py`, `store/image_collection_imports.py`,
+`store/image_surfaces.py`, `store/image_migration.py`, `store/image_gc.py`,
+`store/maintenance_reports.py` ·
 **Spec:** [the content-addressed image store](superpowers/specs/2026-10-05-content-addressed-image-store-design.md) ·
 **Tests:** `test_image_store.py`, `test_image_refs.py`, `test_assets_store.py`,
 `test_image_surfaces.py`, `test_image_descriptions_store.py`,
 `test_image_subjects_store.py`, `test_image_scopes.py`, `test_image_usage.py`,
 `test_image_collections.py`, `test_image_collection_imports.py`,
-`test_image_collection_routes.py`
+`test_image_collection_routes.py`, `test_image_name_locks.py`,
+`test_image_migration_plan.py`, `test_image_migration_run.py`,
+`test_image_gc.py`, `test_maintenance_runs.py`, `test_maintenance_routes.py`
 
 A picture's bytes are kept once, under `<home>/assets/image-store/`, and
 everything that shows one holds a small placement naming it. Two kinds of file
@@ -447,24 +461,67 @@ lossless WebP does not turn it into a WebP
 the release note for anyone used to the old behaviour: **re-uploading the same
 picture in another format keeps the first-ingested format.**
 
-### Two leaf locks
+### Image locks, and the order they are taken in
 
 | Lock | Scope | Notes |
 |---|---|---|
-| `locks.image_object_lock(image_id)` | read-modify-write of one object sidecar | one of `IMAGE_OBJECT_STRIPES` stripes keyed by the id's first byte, so the set of lock files is bounded; two objects on one stripe wait on each other, which costs time and never an update |
+| `locks.image_name_lock(d, name)` | one image slot in one directory (an avatar, a gallery picture, a library name) | one of `IMAGE_NAME_STRIPES` (256) stripes; the keys of two spellings that differ only by case share a stripe |
+| `locks.image_sidecar_lock(d, filename)` | one `descriptions.json` or `subjects.json` in one directory | its own family of the same stripe count, so a name and a sidecar never wait on each other by accident |
+| `locks.image_object_lock(image_id)` | read-modify-write of one object sidecar | one of `IMAGE_OBJECT_STRIPES` stripes keyed by the id's first byte; two objects on one stripe wait on each other, which costs time and never an update |
 | `locks.image_ingest_gc_lock()` | the whole store | held across ingest's find-or-create (blob publish, sidecar write, mtime touch), so a garbage collector that deletes under it cannot interleave with an ingest |
 
-Both are process-scoped like the campaign lock and keyed by the live store
-root (`test_image_locks_are_keyed_per_store`). The order is the ingest lock and
-then a stripe, never the reverse, and **both are leaves**: either may be taken
-while a campaign lock is held, and nothing acquires a campaign lock while
-holding one. No AST guard holds that rule; `store/locks.py` states it beside
-the code and `image_store` is the only module that takes them. The one place
-a caller's code runs under a stripe is an `image_store.update` callback, and
-it may not call back into the store: `ingest`, `update` and `identify` raise
-`RuntimeError` from inside one (`test_update_callback_may_not_reenter_the_store`). Contention
-raises the base `StoreBusy`, which the same handler turns into a 409. No
-collector exists yet, so for now the second lock only serializes ingests.
+**The order is** campaign, then `image_collection_job_lock`, then
+`image_collection_lock`, then name, then sidecar, then the ingest/GC lock, then
+an object stripe, never the reverse. All of them are process-scoped like the
+campaign lock and keyed by the live store root
+(`test_image_locks_are_keyed_per_store`). The two striped families also take a
+file lock under `proclock.lock_dir()`, so a second grimoire process on the same
+machine serializes on a stripe too
+(`test_two_instances_serialize_across_the_file_lock`,
+`test_a_second_process_waits_for_the_stripe`).
+
+**Striping.** A stripe is chosen by hashing the directory and the case-folded
+name, and the directory is taken **relative to the resolved store root** (an
+absolute path only for a directory outside it), so two processes that spell the
+root differently, as on a case-insensitive volume, still meet
+(`test_a_directory_keys_relative_to_the_store_root`). The scheme is part of the
+lock's domain string, so a build that changed the hash could not share a lock
+with one that had not (`test_the_stripe_scheme_is_in_the_lock_domain`). Two
+slots on one stripe wait on each other: that costs time and never a write, and
+the file count is bounded.
+
+**Holding several.** `assets._image_locks_held` takes a family's stripes sorted
+and deduplicated, all up front; `set_in` takes the sidecar stripes of the edited
+directory and of the fallback directory together, sorted. Forcing every stripe
+to collide does not deadlock (`test_forced_stripe_collisions_do_not_deadlock`).
+A heal of a stranded promotion reached while a name is already held is
+**non-blocking**: it takes what is free and otherwise skips until the next scan
+(`test_a_nested_heal_never_waits`).
+
+**A writer refuses over an unfinished promotion.** Promotion writes a journal
+before it swaps an avatar, and a reader's recovery finishes it. A writer that
+finds a journal still standing for its slot, after that recovery could not take
+the lock, raises `OSError` ("an earlier promotion is still unfinished; retry")
+rather than write over it, because the journal may hold the only copy of an
+avatar the collector would otherwise see as unreferenced
+(`test_a_writer_never_writes_over_a_journal_its_recovery_skipped`,
+`test_copy_slots_never_writes_over_a_skipped_journal`). `assets.delete_in` can
+therefore now raise in that rare state, and its callers already treat an
+`OSError` as retryable.
+
+**Callers that can now stop part-way** (a stripe timing out between two of
+their steps) were each checked safe to re-run: `copy_slots`, `sync._copy_tree`,
+`overlay.copy_record_dir_down`, `characters._replace_gallery` and bundle
+containment (`test_each_multi_step_caller_is_safe_to_rerun_after_store_busy`).
+
+The ingest lock and the stripe are leaves relative to the campaign lock: either
+may be taken while a campaign lock is held, and nothing acquires a campaign lock
+while holding one of them. No AST guard holds that rule; `store/locks.py`
+states it beside the code. The one place a caller's code runs under an object
+stripe is an `image_store.update` callback, and it may not call back into the
+store: `ingest`, `update` and `identify` raise `RuntimeError` from inside one
+(`test_update_callback_may_not_reenter_the_store`). The collector deletes under
+the ingest lock and then each object's stripe, which is ingest's own order.
 
 ### Collections: members by id
 
@@ -511,9 +568,10 @@ counts as format 1). A world holding both formats guards its format-1 names
 and never lets its format-2 manifest fail a library write
 (`test_format_2_manifests_never_guard_library_names`,
 `test_format_1_members_stay_guarded_beside_format_2`,
-`test_has_format1_fails_closed`). Nothing converts a journal but `sample()` and
-`accept()`, so a leftover format-1 journal keeps the guard on until stage 4
-removes the guard code.
+`test_has_format1_fails_closed`). Reading a journal through `sample()` or
+`accept()` converts it, and the migration converts or retires the rest (see
+[Migration](#migration-legacy-files-into-the-store)); until a world has none
+left, the guard stays on. The guard code itself stays.
 
 **Harvest journals hold ids.** A new journal is format 2 and `accept` publishes
 format 2. A format-1 journal in flight across the upgrade is converted when it
@@ -649,6 +707,172 @@ Pinned by `test_a_local_legacy_key_wins_over_the_object`,
 `test_a_failed_campaign_fork_leaves_no_scope` and
 `test_usage_is_empty_for_an_unknown_id`.
 
+### Migration: legacy files into the store
+
+**Modules:** `store/image_surfaces.py`, `store/image_migration.py`
+
+Pictures written before the store are legacy files in record directories.
+Migration moves each into the store and leaves a placement, **on request, from
+Settings, never at startup**. It is the `migrate` kind of a maintenance run
+(see [Maintenance runs](#maintenance-runs)); a check run is a dry run that plans
+everything and writes only its report, and it has the same shape as a real one
+(`test_a_dry_run_writes_nothing_and_has_the_real_runs_shape`).
+
+**What it promises.**
+
+- **The only working copy is never deleted.** A legacy file is unlinked only
+  after its placement was written and verified (the placement resolves to the
+  object, the object to a blob under the pinned root, the blob re-hashes), and
+  only if the file still has the identity that was hashed. A crash leaves
+  legacy only, both, or the new form only, and a rerun finishes it
+  (`test_crash_before_ref_write_leaves_legacy_only`,
+  `test_crash_after_ref_write_leaves_both_and_rerun_cleans`,
+  `test_crash_after_cleanup_is_new_only`,
+  `test_a_file_changed_after_hashing_is_skipped`).
+- **An existing placement is never overwritten.** A legacy file beside a
+  placement of a different picture stays and is reported
+  (`test_a_legacy_file_differing_from_an_existing_placement_is_kept_and_reported`).
+- **It works on one root.** The root is captured when the run is reserved and
+  every path is built from it. If the live root changes, the run stops and
+  deletes nothing more (`test_a_root_flip_deletes_nothing_in_either_root`). A
+  flip can leave a stray write in the *other* tree, from a call that had
+  already resolved the live root, but never a delete.
+- **It never goes through a link.** A symlinked directory, a symlinked
+  `image-refs/` folder, a symlinked placement or a symlinked sidecar is
+  reported and left, and nothing is written or unlinked behind it
+  (`test_a_symlinked_placement_is_never_written_through`). The inventory
+  reports a directory it cannot read or whose type it cannot tell, and never
+  walks into it.
+- **Names that differ only by case are left alone**, all of them and reported,
+  since placing one would alias the other.
+- **Metadata is folded only after its target verified**, under the directory's
+  sidecar locks, and a key is deleted only if it still holds the value folded.
+  Several differing descriptions become `description_conflicts` on the object
+  (capped at twenty; a fold past the cap keeps the key), and the describe queue
+  offers each as a choice. A saved description clears them.
+- **Collections convert without moving anything a reader has cached.** A
+  format-1 manifest becomes format 2 only when every member resolves, keeping
+  its members' order and indices and its library placements, and greeting
+  subject keys that named a member's library URL are rewritten with it
+  (`test_format_1_manifest_converts_keeping_indices_library_urls_and_tags`).
+  Harvest journals are converted, or retired only when unaccepted and
+  unmappable.
+
+**What it does not do.**
+
+- **It does not fold every key.** A same-world URL key in a greeting's
+  `subjects.json` is kept (counted as `url_subject_keys_kept`), and so is every
+  key in a *campaign* greeting's `subjects.json`: nothing reads a campaign
+  scope there. A key it cannot confirm on the object also stays.
+- **A folded description's provenance can read "object"** rather than the file
+  it came from; the text itself is never lost.
+- **It leaves what it cannot place**: a file that does not decode, a second
+  file of a name, an unsupported extension, a member whose bytes disagree with
+  its name. Each is in the report with its path.
+- **A thumbnail it misses stays in the cache.** Removing a migrated file's
+  entries is best effort.
+- **It is not in the campaign lock domain's survey.** Every campaign write it
+  makes takes `campaign_lock(cid)` and bumps the campaign's token, but the
+  domain guard surveys modules by their public `cid`-taking mutators and
+  `run(root)` has none, so neither this module nor the collector is in
+  `DOMAIN_MODULES` or `OUTSIDE_DOMAIN`; a declaration for either would be a
+  phantom the guard rejects.
+
+### Garbage collection
+
+**Module:** `store/image_gc.py`
+
+Deleting a placement deletes only the placement. An object and its blob go only
+when the collector, run from Settings as the `gc` kind of a maintenance run,
+finds them unreferenced for long enough. A run is a **scan** (a dry run) or a
+**collection** (which needs the scan's token), and it **fails closed**: when it
+cannot be sure what is reachable it deletes nothing.
+
+- **Roots are strict.** Every file in every `image-refs/` folder counts, whatever
+  it is called, so a sync client's conflict copy of a placement keeps its image
+  (`test_a_sync_conflict_copy_of_a_placement_is_a_root`); so do promotion
+  journals, format-2 manifests, harvest journals, the migration's pending work
+  and staged world and module trees. An unreadable directory, an unparseable
+  file, an unknown format, a symlink or a folder spelled `Image-Refs` stops the
+  run, naming the path
+  (`test_an_unreadable_dir_an_unknown_format_and_a_symlink_abort`). A staged
+  tree younger than an hour, or a `.cache` that is a link, stops it too.
+- **A candidate is old and seen twice.** It must be unreachable, with sidecar
+  and blob both older than the **grace period** (30 days by default, never
+  below 7), and **sighted unreachable** by this device at least a grace period
+  ago and again on a later scan; being seen reachable resets the clock
+  (`test_collectable_only_after_grace_old_first_sighting_and_a_second_scan`).
+  A time in the future is never collectable and is reported as clock skew.
+  Sightings are kept per device in `.cache/image-store/gc/`, which travels with
+  a synced store, so one is keyed to the device that made it.
+- **A blob goes only when nothing names it.** The **refcount** is every
+  readable sidecar's blob, rebuilt under the lock; a blob another object still
+  names survives
+  (`test_a_shared_blob_survives_its_unreachable_object`), an unreadable sidecar
+  keeps every blob, and so does a placement whose object has not arrived yet
+  (`test_an_unarrived_object_keeps_every_orphan_blob`). An orphan blob (named by
+  no sidecar) is a candidate under the same rules.
+- **The token.** A collection takes the token a scan on this device issued. It
+  is single-use, good for 24 hours, bound to its device and root, and a report
+  that synced in from another device is refused
+  (`test_a_token_is_single_use_device_bound_and_expires`). It is spent even if
+  the collection then stops, so a stopped one needs a new scan.
+- **Deletion is ordered against ingest.** Batches run under the ingest lock and
+  then each object's stripe, re-checking mtime, root, reachability and refcount,
+  and delete the sidecar before the blob
+  (`test_a_concurrent_ingest_is_never_left_dangling`). It deletes nothing
+  outside `image-store/` apart from the matching cache entries.
+- **Reporting.** Each deletion is written to the report as it happens, so a
+  stop part-way loses no row. Removing a blob's index entry and thumbnails is
+  best effort and recorded in the report, never a reason to stop.
+
+**What it does not promise.** A device that stays offline longer than the grace
+period can bring back a placement whose image the collector has already
+deleted: the grace period is the bound, and nothing here can see an offline
+device. The refcount is rebuilt per batch, so a sidecar a sync client delivers
+mid-batch is a residual risk. A stray non-JSON file inside an `objects/` shard
+keeps every blob until it is removed, which is safe and can be noisy.
+
+### Maintenance runs
+
+**Modules:** `routes/runs.py`, `routes/runner.py`, `routes/maintenance.py`,
+`store/maintenance_reports.py`
+
+Migration and collection are the `maintenance` run class, started from
+Settings, Storage, Image store (`POST /api/maintenance/images/migrate` and
+`.../gc`, both answering 202). They differ from every other run in what they
+exclude.
+
+- **One at a time, and not against a tree operation.** A maintenance run holds
+  its own key, so a second start answers 409 `run_in_flight`
+  (`test_maintenance_has_its_own_key_and_refuses_a_second_start`) and no other
+  run is refused by it. In both directions with it: world fork, world delete,
+  campaign delete, campaign fork, bundle export, **both manual backups** and the
+  scheduled backup each hold `runs.maintenance_excluded` for their whole
+  operation, a live run refuses them with 409 `maintenance_running`, and a held
+  one refuses a start with 409 `busy`; the backup ticker skips its turn and logs
+  it. The data-dir move is refused while any run is live
+  (`test_a_data_dir_move_fork_delete_and_export_are_refused_while_maintenance_runs`).
+- **One process, one device.** A second process on the same machine is refused
+  by a `proclock` lock held for the run
+  (`test_another_process_on_this_machine_refuses_a_start`), and a run on another
+  device sharing a synced store is refused while its marker,
+  `.cache/image-store/maintenance.json`, has a heartbeat under five minutes old
+  (`test_another_devices_live_marker_refuses_a_start`); both answer
+  `maintenance_elsewhere`. The marker is refreshed every 30 seconds by its own
+  thread. The device id is machine-local, outside the store, so a copied
+  `.cache` never shares one.
+- **Cancel and shutdown wait.** The work runs in a thread whose await is
+  shielded; cancellation is a flag the work reads between items, and the run
+  stays live, with its exclusions held, until the thread returns. Shutdown sets
+  the flag on every live run first. The report is written in the work's
+  `finally`, so a cancelled or failed run still leaves one
+  (`test_cancel_waits_for_the_thread_and_still_reports`).
+- **Reports.** `.cache/image-store/reports/<run id>.json`, 30 days, one shape
+  for a dry and a real run. A report holds counts and relative paths, and a
+  path can carry a name; it is a file under `.cache`, never committed.
+  Maintenance never runs on its own.
+
 ### What it does not promise
 
 - **Devices on different versions.** A build from before the store writes a
@@ -661,9 +885,12 @@ Pinned by `test_a_local_legacy_key_wins_over_the_object`,
   index is current, since an index hit never decodes, but on a miss a second
   device can mint a second object for the same file. The cost is a duplicate,
   never two different pictures merged under one id.
-- **Nothing is collected yet.** Deleting a placement never deletes an object or
-  a blob, so an image nothing places any more stays on disk until a collector
-  is built.
+- **Nothing is collected unless someone asks.** Deleting a placement never
+  deletes an object or a blob. They go only when the person starts a collection
+  from Settings, after a scan, and only once they are past the grace period and
+  were seen unreferenced twice; see [Garbage
+  collection](#garbage-collection). Until then an unreferenced image stays on
+  disk.
 - **A description is global, so it travels.** A world's bundle carries the
   description of every picture that world holds, including text written while
   the picture was placed in another world. The same sharing means a text typed
@@ -674,12 +901,14 @@ Pinned by `test_a_local_legacy_key_wins_over_the_object`,
 - **`delete_world` takes no lock.** A tag written between the strip and the
   removal survives on the object. It is rare, and running the delete again
   clears it.
-- **Two journal edges stay open until stage 4.** An unaccepted format-1
-  journal whose manifest an older build published, and which has since lost a
-  member, does not reconcile. An accepted format-1 journal whose manifest is
-  gone is converted before it is refused. Stage 4's journal retirement covers
-  both, and migration there must keep every member's index, including the
-  missing ones.
+- **Two journal edges close only when migration has run.** An unaccepted
+  format-1 journal whose manifest an older build published, and which has since
+  lost a member, does not reconcile until the migration retires it; an accepted
+  format-1 journal whose manifest is gone is converted before it is refused
+  until the migration keeps or retires it. Conversion keeps every member's
+  index, including a missing member's.
+- **A migration that cannot place a file leaves it.** The report names it. The
+  image stays served as a legacy file, and a later run tries again.
 - **Usage is not cached.** Each request walks every world and campaign, so it
   costs the size of the library and is asked for only when someone opens the
   control.
@@ -729,6 +958,9 @@ Collected, so that nothing here has to be inferred from an absence.
 - **Nothing across devices**, and nothing across OS users.
 - **No mixed-version image writes, and no cross-decoder JPEG identity.** See
   [The image store](#the-image-store).
+- **No automatic image maintenance, and no collection of an image a device
+  outside the grace period still holds.** See [Garbage
+  collection](#garbage-collection).
 - **No background watcher.** The rebuilt app runs no resident machinery;
   conflict detection is on demand, and nothing notices an external write until
   something reads the file.
@@ -750,5 +982,6 @@ Collected, so that nothing here has to be inferred from an absence.
 | the memo that makes external writes visible | `backend/src/grimoire/store/statcache.py` |
 | what the campaign write token is, and is not | `backend/src/grimoire/store/revision.py` |
 | how an image is stored, placed and resolved | `backend/src/grimoire/store/image_store.py`, `image_refs.py`, `assets.py` |
+| how legacy images migrate, and how unused ones are collected | `backend/src/grimoire/store/image_migration.py`, `image_gc.py`, `routes/maintenance.py` |
 | the rules, as tests | `backend/tests/test_atomic_guard.py`, `test_lock_domain_guard.py`, `test_lock_order_guard.py` |
 | designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md`, `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md` |
