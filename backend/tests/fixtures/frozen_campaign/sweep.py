@@ -222,6 +222,10 @@ def _campaign(out: dict, cid: str) -> None:
         out[f"suggest.build_prompt[{cid}/offscreen={o}]"] = _or_error(
             lambda o=o: store.suggest.build_prompt(
                 store.suggest.build_snapshot(cid, offscreen=o), offscreen=o))
+        # The intent prompt renders the same snapshot, and is promised
+        # unchanged whatever the suggestion snapshot gains (capstone §15).
+        out[f"suggest.build_intent_prompt[{cid}/offscreen={o}]"] = _or_error(
+            lambda o=o: store.suggest.build_intent_prompt(cid, "the morning after", offscreen=o))
 
     for ch in out[f"overlay.list_characters[{cid}]"]:
         out[f"dossiers.read[{cid}/{ch['id']}]"] = store.dossiers.read(croot, ch["id"])
