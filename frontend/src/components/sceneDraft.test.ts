@@ -99,3 +99,30 @@ test("a saved draft drops cast entries whose kind is neither characters nor pcs"
     { kind: "npc-faction", id: "ghoul", name: "Ghoul" }] }, "", false);
   expect(d).toMatchObject({ cast: [{ kind: "characters", id: "mara", name: "Mara" }] });
 });
+
+const ANCHOR = { ref: "event:the-coronation", kind: "event" as const, relation: "on" as const,
+                 label: "The coronation", friendly: "12 May 2026", in_days: 9 };
+
+test("an anchored suggestion never borrows nextDate", () => {
+  // nextDate is not anchor-aware: a card that says "before The coronation"
+  // must not be pre-filled with a date that may sit after it (Decision 23)
+  expect(suggestionDraft({ ...S, date: "", time_anchor: ANCHOR }, "2026-09-09", false).date)
+    .toBe("");
+  // its own (validated) date still wins
+  expect(suggestionDraft({ ...S, date: "2026-05-12", time_anchor: ANCHOR }, "2026-09-09", false)
+    .date).toBe("2026-05-12");
+  // and an unanchored card keeps today's fallback
+  expect(suggestionDraft({ ...S, date: "", time_anchor: null }, "2026-09-09", false).date)
+    .toBe("2026-09-09");
+});
+
+test("a saved idea anchored on an upcoming occurrence uses the server anchor date", () => {
+  // the server hands back the anchor's date only while it is live, dated and
+  // `on` -- so it is this minute's answer, not a fossil, and beats nextDate
+  expect(savedDraft({ ...IDEA, anchor_date: "2026-05-12" }, "2026-09-09", false).date)
+    .toBe("2026-05-12");
+  // no anchor date: today's inverted precedence
+  expect(savedDraft({ ...IDEA, anchor_date: "" }, "2026-09-09", false).date).toBe("2026-09-09");
+  expect(savedDraft(IDEA, "2026-09-09", false).date).toBe("2026-09-09");
+  expect(savedDraft(IDEA, "", false).date).toBe("2026-03-04");
+});

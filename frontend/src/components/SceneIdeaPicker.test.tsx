@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SceneIdeaPicker } from "./SceneIdeaPicker";
 import type { SceneIdea, SceneSuggestion } from "../api/client";
@@ -46,6 +46,7 @@ type StateOverrides = Partial<{
   nextDate: string;
   busy: boolean;
   error: unknown;
+  controlled: boolean;
   suggest: (direction: string) => void;
   onPicked: (draft: any, warning?: string) => void;
   onCancel: () => void;
@@ -68,6 +69,7 @@ function Wrapper(props: StateOverrides) {
                      nextDate={props.nextDate ?? "2026-01-01"}
                      busy={props.busy ?? false}
                      error={props.error ?? null}
+                     controlled={props.controlled ?? false}
                      suggest={props.suggest ?? vi.fn()}
                      onPicked={props.onPicked ?? vi.fn()}
                      onCancel={props.onCancel ?? vi.fn()} />
@@ -596,4 +598,119 @@ test("greeting cards identify direct and same-phase recommendations", async () =
   await screen.findByText("Next");
   expect(screen.getByText("next in story")).toBeInTheDocument();
   expect(screen.getByText("optional in this phase")).toBeInTheDocument();
+});
+
+// ---- validated reasons on generated cards (§28.9) ----
+
+const CORONATION = {
+  ref: "event:the-coronation", kind: "event" as const, relation: "before" as const,
+  label: "The coronation", friendly: "12 May 2026", in_days: 9,
+};
+const REASONED: SceneSuggestion = {
+  ...SUGGESTION, title: "Before the bells", date: "2026-05-11",
+  date_friendly: "12 May 2026", time_anchor: CORONATION,
+  drivers: [
+    { ref: "thread:find-the-ledger", kind: "thread", action: "advance", label: "Mara's map" },
+    { ref: "commitment:salt-owed", kind: "commitment", action: "address", label: "Mara's oath" },
+    // the anchor's own entry: the dated line above already says it
+    { ref: "event:the-coronation", kind: "event", action: "anchor", label: "The coronation" },
+  ],
+};
+
+test("a generated card shows its validated reasons", async () => {
+  renderPicker({ suggestions: [REASONED] });
+  const title = await screen.findByText("Before the bells");
+  const card = title.closest("button")!;
+  const when = screen.getByText("12 May 2026 · before The coronation");
+  const advances = screen.getByText("Advances: Mara's map");
+  const addresses = screen.getByText("Addresses: Mara's oath");
+  // every chip sits inside the card, and none is itself a control: the card
+  // is the button
+  for (const el of [when, advances, addresses]) {
+    expect(el.tagName).toBe("SPAN");
+    expect(el.closest("button")).toBe(card);
+  }
+  expect(when).toHaveClass("field-hint");
+  expect(advances).toHaveClass("chip", "on");
+  // the anchor entry is not repeated as a chip
+  expect(screen.queryByText(/Anchored to/)).toBeNull();
+});
+
+test("constraint misses show warning chips", async () => {
+  renderPicker({ suggestions: [{
+    ...SUGGESTION,
+    unmet_must: [{ ref: "thread:find-the-ledger", label: "Mara's map" }],
+    avoided: [{ ref: "commitment:salt-owed", label: "Mara's oath" }],
+  }] });
+  const unmet = await screen.findByText("Doesn't claim to address Mara's map");
+  const avoided = screen.getByText("Claims to address Mara's oath (avoided)");
+  for (const el of [unmet, avoided]) {
+    expect(el.tagName).toBe("SPAN");
+    expect(el).toHaveClass("chip", "warn");
+  }
+});
+
+test("a rejected date says so", async () => {
+  renderPicker({ suggestions: [
+    { ...SUGGESTION, title: "Anchored", date: "", date_rejected: true,
+      time_anchor: CORONATION },
+    { ...SUGGESTION, title: "Unanchored", date: "", date_rejected: true },
+  ] });
+  const anchored = (await screen.findByText("Anchored")).closest("button")!;
+  const unanchored = screen.getByText("Unanchored").closest("button")!;
+  expect(within(anchored).getByText("date not consistent with anchor")).toBeInTheDocument();
+  expect(within(unanchored).getByText("date not consistent with the time setting"))
+    .toBeInTheDocument();
+  expect(within(anchored).queryByText(/time setting/)).toBeNull();
+});
+
+test("every generated suggestion shows while controls produced the batch", async () => {
+  (api.availableGreetings as any).mockResolvedValue(
+    [1, 2, 3].map((n) => (
+      { id: `g${n}`, name: `Greeting ${n}`, available: true, reasons: [], unlocked: false })));
+  renderPicker({
+    controlled: true, picks: ["g1", "g2"],
+    suggestions: [1, 2, 3, 4, 5].map((n) => ({ ...SUGGESTION, title: `Idea ${n}` })),
+  });
+  expect(await screen.findByText("Greeting 1")).toBeInTheDocument();
+  for (const n of [1, 2, 3, 4, 5]) expect(screen.getByText(`Idea ${n}`)).toBeInTheDocument();
+});
+
+test("saving a generated card sends its drivers and anchor", async () => {
+  renderPicker({ suggestions: [REASONED] });
+  fireEvent.click(await screen.findByRole("button", { name: "Save Before the bells" }));
+  await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith("c", {
+    pcless: false, title: "Before the bells", premise: "A debt-collector arrives.",
+    date: "2026-05-11", cast: ["characters:mara"], location: "saltmarch", source: "llm",
+    drivers: [{ ref: "thread:find-the-ledger", action: "advance" },
+              { ref: "commitment:salt-owed", action: "address" }],
+    time_anchor: { ref: "event:the-coronation", relation: "before" } }));
+});
+
+test("stale ideas sit under a collapsed Stale group outside the budget", async () => {
+  const STALE: SceneIdea = { ...SAVED, id: "the-bells", title: "Before the bells",
+                             stale_reason: "The coronation has passed" };
+  (api.listSceneIdeas as any).mockResolvedValue([
+    STALE,
+    ...[1, 2, 3, 4, 5].map((n) => ({ ...SAVED, id: `idea-${n}`, title: `Idea ${n}` })),
+  ]);
+  const { onPicked } = renderPicker();
+  await screen.findByText("Idea 1");
+  // the budget counts live ideas only: the stale one neither takes a slot
+  // nor joins the count
+  expect(screen.getByRole("button", { name: /show all 5 saved/i })).toBeInTheDocument();
+  const toggle = screen.getByRole("button", { name: "Stale (1)" });
+  expect(toggle).toHaveAttribute("aria-expanded", "false");
+  expect(screen.queryByText("Before the bells")).toBeNull();
+  expect(screen.queryByText("The coronation has passed")).toBeNull();
+
+  fireEvent.click(toggle);
+  expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const card = screen.getByText("Before the bells").closest("button")!;
+  expect(within(card).getByText("The coronation has passed")).toBeInTheDocument();
+  // stale is a reading, not a verdict: the idea is still pickable and dismissable
+  expect(screen.getByRole("button", { name: "Dismiss Before the bells" })).toBeInTheDocument();
+  fireEvent.click(card);
+  expect(onPicked).toHaveBeenCalledWith(expect.objectContaining({
+    source: "saved", lid: "the-bells", title: "Before the bells" }));
 });

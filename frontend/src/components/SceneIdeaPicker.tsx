@@ -3,6 +3,7 @@ import { api, type Availability, type SceneIdea, type SceneIdeaDraft,
          type SceneSuggestion } from "../api/client";
 import { errorText } from "../api/errors";
 import { ErrorNote } from "./ErrorNote";
+import { ACTION_LABELS } from "./pressureControls";
 import { customDraft, greetingDraft, savedDraft, suggestionDraft,
          type SceneDraft } from "./sceneDraft";
 import type { SceneSuggestionsState } from "./useSceneSuggestions";
@@ -38,11 +39,17 @@ const SAVED_SLOTS = 4;
  *  `storyPressure` is the chooser's Story Pressure disclosure and
  *  `pressureNote` its note, rendered under Direction because they steer the
  *  same group. All of it is optional: a picker rendered without them is
- *  today's. */
+ *  today's.
+ *
+ *  `controlled` says the batch on screen was asked for with an active control.
+ *  The reader then sees every card it returned rather than the 2 + 2 slice
+ *  (§16.4): they steered the batch, so trimming it would hide the cards they
+ *  asked for. It follows the batch, not the controls, so an unsent edit never
+ *  re-slices what is already showing (Decision 22). */
 export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDirectionChange,
                                   asked, suggestions, picks, nextDate, busy, error: genError,
                                   suggest, onPicked, onCancel, storyPressure, pressureNote,
-                                  held = false, stale = false }: {
+                                  held = false, stale = false, controlled = false }: {
   cid: string;
   afterSid: string | null;
   ready: boolean;
@@ -65,6 +72,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
   const [saved, setSaved] = useState<SceneIdea[]>([]);
   const [showDismissed, setShowDismissed] = useState(false);
   const [showAll, setShowAll] = useState(false);
+  const [showStale, setShowStale] = useState(false);
   // Which generated cards this session has already saved. The saved copy also
   // appears under Saved on the next read, so without this the same idea can be
   // filed twice with two ids and no way to tell them apart.
@@ -120,11 +128,19 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
 
   const active = saved.filter((i) => i.status === "active");
   const dismissed = saved.filter((i) => i.status === "dismissed");
+  // Stale is a reading the server derives on every read (§17.1) -- an anchor
+  // that passed or moved, or nothing it was about still open -- not a status
+  // anybody set. So a stale idea stays active and pickable, but it waits behind
+  // its own toggle instead of spending one of the slots below: the reader
+  // still decides, and nothing is destroyed. (`staleIdeas`, because `stale`
+  // is already the prop for a stale-drivers refusal.)
+  const live = active.filter((i) => !i.stale_reason);
+  const staleIdeas = active.filter((i) => !!i.stale_reason);
   // The ledger is unbounded — nothing prunes it, and a long campaign
   // accumulates — so it gets a slot budget like the other groups rather than
   // pushing greetings and generated cards off the bottom of the modal. The
   // server orders newest first, so what shows is what was saved most recently.
-  const shownActive = showAll ? active : active.slice(0, SAVED_SLOTS);
+  const shownLive = showAll ? live : live.slice(0, SAVED_SLOTS);
 
   // `pcless` LAST, so an `idea` cannot carry a mode that contradicts the one
   // this picker is running in -- the mode decides which cast tokens the server
@@ -159,7 +175,9 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
     .filter((g): g is Availability => g !== undefined);
   const orderedGreetings = picked.length ? picked : greetings;
   const greetingCards = rankPending ? [] : orderedGreetings.slice(0, wantGenerated ? 2 : 4);
-  const generatedCards = (suggestions ?? []).slice(0, 4 - (rankPending ? 2 : greetingCards.length));
+  const generatedCards = controlled
+    ? (suggestions ?? [])
+    : (suggestions ?? []).slice(0, 4 - (rankPending ? 2 : greetingCards.length));
 
   // Read at EMIT time, not at click time: the date estimate arrives with the
   // suggestions, and an extraction call can easily outlast it. Without the ref
@@ -208,9 +226,41 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
    *  the card was rendered from. The server re-validates them anyway, and will
    *  again on every read. */
   function asDraft(s: SceneSuggestion): SceneIdeaDraft {
-    return { title: s.title, premise: s.premise, date: s.date ?? "",
-             cast: s.cast.map((c) => `${c.kind}:${c.id}`),
-             location: s.location?.id ?? "", source: "llm" };
+    const draft: SceneIdeaDraft = { title: s.title, premise: s.premise, date: s.date ?? "",
+                                    cast: s.cast.map((c) => `${c.kind}:${c.id}`),
+                                    location: s.location?.id ?? "", source: "llm" };
+    // Provenance, as refs and actions only: the server re-validates both and
+    // derives labels and staleness on every read (§17). The anchor's own
+    // `anchor` entry is not sent -- `time_anchor` already says it, and the
+    // write would drop a second one. Both keys are omitted when empty, so a
+    // card that claims nothing saves exactly today's body.
+    const drivers = (s.drivers ?? []).filter((d) => d.action !== "anchor")
+      .map(({ ref, action }) => ({ ref, action }));
+    if (drivers.length) draft.drivers = drivers;
+    if (s.time_anchor) {
+      draft.time_anchor = { ref: s.time_anchor.ref, relation: s.time_anchor.relation };
+    }
+    return draft;
+  }
+
+  /** A saved idea's row: the card that picks it, and its dismiss. Shared by the
+   *  live list and the Stale group, which differ only in the reason line. */
+  function savedRow(i: SceneIdea) {
+    return (
+      <div className="chooser-row" key={i.id}>
+        <button className="chooser-card" disabled={inferring}
+                onClick={() => onPicked(savedDraft(i, latestDate.current, pcless))}>
+          <span className="chooser-card-title">{i.title}</span>
+          <span className="chooser-card-premise">{i.premise}</span>
+          <span className="field-hint">
+            {i.cast.map((c) => c.name).join(", ")}{i.location ? ` · ${i.location.name}` : ""}
+          </span>
+          {i.stale_reason && <span className="field-hint">{i.stale_reason}</span>}
+        </button>
+        <button className="subtle" aria-label={`Dismiss ${i.title}`}
+                onClick={() => setStatus(i.id, "dismissed")}>×</button>
+      </div>
+    );
   }
 
   const shown = error ?? genError;
@@ -222,25 +272,19 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       {active.length === 0 && (
         <div className="field-hint">Nothing saved yet — Save keeps an idea for another day.</div>
       )}
-      {shownActive.map((i) => (
-        <div className="chooser-row" key={i.id}>
-          <button className="chooser-card" disabled={inferring}
-                  onClick={() => onPicked(savedDraft(i, latestDate.current, pcless))}>
-            <span className="chooser-card-title">{i.title}</span>
-            <span className="chooser-card-premise">{i.premise}</span>
-            <span className="field-hint">
-              {i.cast.map((c) => c.name).join(", ")}{i.location ? ` · ${i.location.name}` : ""}
-            </span>
-          </button>
-          <button className="subtle" aria-label={`Dismiss ${i.title}`}
-                  onClick={() => setStatus(i.id, "dismissed")}>×</button>
-        </div>
-      ))}
-      {active.length > SAVED_SLOTS && (
+      {shownLive.map(savedRow)}
+      {live.length > SAVED_SLOTS && (
         <button className="subtle" onClick={() => setShowAll((v) => !v)}>
-          {showAll ? "Show fewer" : `Show all ${active.length} saved`}
+          {showAll ? "Show fewer" : `Show all ${live.length} saved`}
         </button>
       )}
+      {staleIdeas.length > 0 && (
+        <button className="subtle" aria-expanded={showStale}
+                onClick={() => setShowStale((v) => !v)}>
+          {`Stale (${staleIdeas.length})`}
+        </button>
+      )}
+      {showStale && staleIdeas.map(savedRow)}
       {dismissed.length > 0 && (
         <button className="subtle" onClick={() => setShowDismissed((v) => !v)}>
           {showDismissed ? "Hide dismissed" : `Show dismissed (${dismissed.length})`}
@@ -317,6 +361,34 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
             <span className="field-hint">
               {s.cast.map((c) => c.name).join(", ")}{s.location ? ` · ${s.location.name}` : ""}
             </span>
+            {/* Why this card, as the server validated it (§16.4). Spans, never
+                buttons: the card is itself the button, and a control nested in
+                one is invalid markup that the card would swallow the tap of. */}
+            {s.time_anchor && (
+              <span className="field-hint">
+                {[s.date_friendly, `${s.time_anchor.relation} ${s.time_anchor.label}`]
+                  .filter(Boolean).join(" · ")}
+              </span>
+            )}
+            {(s.drivers ?? []).filter((d) => d.action !== "anchor").map((d) => (
+              <span className="chip on" key={d.ref}>{`${ACTION_LABELS[d.action]}: ${d.label}`}</span>
+            ))}
+            {(s.unmet_must ?? []).map((m) => (
+              <span className="chip warn" key={`must:${m.ref}`}>
+                {`Doesn't claim to address ${m.label}`}
+              </span>
+            ))}
+            {(s.avoided ?? []).map((a) => (
+              <span className="chip warn" key={`avoid:${a.ref}`}>
+                {`Claims to address ${a.label} (avoided)`}
+              </span>
+            ))}
+            {s.date_rejected && (
+              <span className="field-hint">
+                {s.time_anchor ? "date not consistent with anchor"
+                               : "date not consistent with the time setting"}
+              </span>
+            )}
           </button>
           {/* The whole point of the ledger: Regenerate used to be the only way
               past a card, and it threw away everything it replaced. The label

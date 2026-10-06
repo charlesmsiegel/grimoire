@@ -635,6 +635,30 @@ test("play next offers saved ideas and spends nothing to do it", async () => {
   expect((api as any).sceneSuggestions).toBeUndefined();
 });
 
+test("play next skips stale ideas", async () => {
+  // A stale idea stays active -- the picker's Stale group still offers it --
+  // but the front door's offer is what is worth playing now.
+  const idea = (id: string, title: string, stale_reason?: string) => ({
+    id, title, premise: "", status: "active", source: "llm", date: "", cast: [],
+    location: null, pcless: false, created: "", used_scene: "",
+    ...(stale_reason === undefined ? {} : { stale_reason }) });
+  (api.listSceneIdeas as any).mockResolvedValue([
+    idea("i1", "Before the bells", "The coronation has passed"),
+    idea("i2", "Mara's map", ""),
+    idea("i3", "Saltmarch Eve"),
+  ]);
+  renderHub();
+
+  const card = (await screen.findByRole("heading", { name: "Play next" }))
+    .closest("section")!;
+  expect(await within(card).findByText("Mara's map")).toBeInTheDocument();
+  expect(within(card).getByText("Saltmarch Eve")).toBeInTheDocument();
+  expect(within(card).queryByText("Before the bells")).not.toBeInTheDocument();
+  // the tail counts only what the card offers
+  expect(card.querySelector(".hub-card-tail")).toHaveTextContent(/^2$/);
+  expect((api as any).sceneSuggestions).toBeUndefined();
+});
+
 /** The Scenes card, by the heading it renders. */
 const scenesCard = () =>
   within(screen.getByText("Scenes").closest(".hub-card") as HTMLElement);
