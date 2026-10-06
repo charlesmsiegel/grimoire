@@ -528,6 +528,37 @@ def test_a_first_beat_in_a_deleted_scene_opens_nothing(monkeypatch, tmp_path):
     assert not [e for e in g["edges"] if f"scene:{s1}" in (e["from"], e["to"])]
 
 
+def test_opened_in_follows_play_order_not_save_order(monkeypatch, tmp_path):
+    # Two pending reviews can be saved in either order, so a record's stored
+    # beats need not be in play order; a merge must not move the opening.
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2, s3 = _scenes(cid, "Saltmarch harbour", "Mara's map", "Winifred's chart")
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara's map, later.", s2)
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara's map, earlier.", s1)
+
+    g = graph.build(cid)
+    assert _from(g, MAP, "opened_in") == {f"scene:{s1}"}
+    assert _from(g, MAP, "advanced_in") == {f"scene:{s2}"}
+
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s3)
+    review.create_alias(cid, CHART, MAP)
+    g = graph.build(cid)
+    assert _from(g, MAP, "opened_in") == {f"scene:{s1}"}
+    assert _from(g, MAP, "advanced_in") == {f"scene:{s2}", f"scene:{s3}"}
+
+
+def test_a_play_order_first_beat_in_a_deleted_scene_opens_nothing(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2 = _scenes(cid, "Saltmarch harbour", "Mara's map")
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara's map, later.", s2)
+    plot.set_movement(cid, "mara-s-map", "Mara's map", "open", "Mara's map, earlier.", s1)
+    store.scenes.delete_scene(cid, s1)
+
+    g = graph.build(cid)
+    assert _from(g, MAP, "opened_in") == set()
+    assert _from(g, MAP, "advanced_in") == {f"scene:{s2}"}
+
+
 def test_an_alias_source_is_a_merged_node_with_a_merged_into_edge(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     s1, s2, s3 = _scenes(cid, "Saltmarch harbour", "Mara's map", "Winifred's chart")

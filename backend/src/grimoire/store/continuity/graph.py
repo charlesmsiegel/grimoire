@@ -471,11 +471,14 @@ def _merged_nodes(kind: str, ref: str, rec: dict) -> tuple[list, list]:
 def _movements(kind: str, ref: str, rec: dict, listed: set[str]) -> list[dict]:
     """Decision 8: `opened_in` the first merged beat's scene; the moved kind
     to every other beat scene; the done kind to `last_scene` once not live.
-    Only listed scenes are targets, and a first beat in a deleted scene opens
-    nothing rather than moving the opening to the next beat."""
+    "First" is first in play order, not in the order the beats were saved, so
+    an unmerged record agrees with a merged one and creating an alias never
+    moves the opening. Only listed scenes are targets, and a play-order-first
+    beat in a deleted scene opens nothing rather than moving the opening to
+    the next beat."""
     opened, moved, done = _MOVEMENTS[kind]
-    scenes = [fieldtext.text(b.get("scene")) for b in rec.get("beats") or ()
-              if isinstance(b, dict)]
+    beats = [b for b in rec.get("beats") or () if isinstance(b, dict)]
+    scenes = [fieldtext.text(b.get("scene")) for b in effective.play_ordered(beats)]
     edges = []
     first = scenes[0] if scenes else ""
     if first in listed:
