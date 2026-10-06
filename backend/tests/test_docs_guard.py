@@ -42,6 +42,8 @@ prose (which is why the pages here avoid writing one), and a screenshot whose
 
 from __future__ import annotations
 
+import ast
+import importlib
 import itertools
 import pathlib
 import re
@@ -444,6 +446,13 @@ def _section(text: str, heading: str) -> str:
     return text[start:] if end < 0 else text[start:end]
 
 
+def _is_route(fn: ast.FunctionDef) -> bool:
+    """A handler: a function decorated with `@router.<method>(...)`."""
+    return any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+               and isinstance(d.func.value, ast.Name) and d.func.value.id == "router"
+               for d in fn.decorator_list)
+
+
 def test_claude_md_names_every_tracker_route_that_starts_a_run():
     """The one `CLAUDE.md` claim held here: a tracker route whose request IS a
     `tracker-update` run -- Retry, re-run from here -- is a handler that starts
@@ -455,22 +464,15 @@ def test_claude_md_names_every_tracker_route_that_starts_a_run():
     request. A route found here by its call to `schedule*` -- not by a list --
     so a third such route fails until the section names it.
     """
-    import ast
-
     tree = ast.parse((SRC / "routes" / "tracker.py").read_text(encoding="utf-8"))
     starters = {"schedule", "schedule_response", "schedule_untracked"}
-
-    def is_route(fn: ast.FunctionDef) -> bool:
-        return any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
-                   and isinstance(d.func.value, ast.Name) and d.func.value.id == "router"
-                   for d in fn.decorator_list)
 
     def starts(fn: ast.FunctionDef) -> bool:
         return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                    and n.func.id in starters for n in ast.walk(fn))
 
     routes = sorted(fn.name for fn in tree.body
-                    if isinstance(fn, ast.FunctionDef) and is_route(fn) and starts(fn))
+                    if isinstance(fn, ast.FunctionDef) and _is_route(fn) and starts(fn))
     assert routes, "found no tracker route that schedules an update -- the walk is stale"
     section = _section(_read(CLAUDE), "Detached runs")
     missing = [name for name in routes if f"`{name}`" not in section]
@@ -609,3 +611,67 @@ def test_llm_capture_doc_names_every_continuity_task():
     text = (ROOT / "docs" / "incoming-llm-capture.md").read_text(encoding="utf-8")
     for task in routing.route_by_key("continuity").tasks:
         assert f"`{task}`" in text, task
+
+
+_RECONCILE_STARTERS = frozenset({"start_reconcile", "schedule_reconcile"})
+
+
+def _starts_reconcile(fn: ast.FunctionDef) -> bool:
+    """Whether `fn` calls a reconcile starter, bare or through a module."""
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        name = (callee.id if isinstance(callee, ast.Name)
+                else callee.attr if isinstance(callee, ast.Attribute) else "")
+        if name in _RECONCILE_STARTERS:
+            return True
+    return False
+
+
+def test_claude_md_names_every_handler_that_starts_a_reconcile_sweep():
+    """A route that starts the continuity sweep -- End Scene's save, the
+    explicit Refresh -- is a handler that starts a detached run, so "Detached
+    runs" names it. Found by its call to a starter, not by a list, so a third
+    trigger fails here until the section names it."""
+    found = set()
+    for path in sorted((SRC / "routes").glob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        found |= {fn.name for fn in tree.body
+                  if isinstance(fn, ast.FunctionDef) and _is_route(fn) and _starts_reconcile(fn)}
+    assert found, "found no route that starts a reconcile sweep -- the walk is stale"
+    section = _section(_read(CLAUDE), "Detached runs")
+    missing = sorted(name for name in found if f"`{name}`" not in section)
+    assert not missing, (
+        f"CLAUDE.md's Detached runs section does not name these handlers, each of "
+        f"which starts a continuity reconcile run: {missing}"
+    )
+
+
+TEMPLATES = ROOT / "templates"
+_BUILDER = re.compile(r"`store/([A-Za-z0-9_/]+)\.py:([A-Za-z_][A-Za-z0-9_]*)`")
+
+
+def test_templates_readme_names_real_builders():
+    """Each `store/<path>.py:<fn>` the templates README says a family mirrors is
+    a function that exists -- a renamed builder would otherwise leave the
+    section pointing a reader at nothing."""
+    cited = _BUILDER.findall(_read(TEMPLATES / "README.md"))
+    assert cited, "templates/README.md cites no builder -- the pattern is stale"
+    missing = [f"store/{path}.py:{fn}" for path, fn in cited
+               if not hasattr(importlib.import_module("grimoire.store." + path.replace("/", ".")), fn)]
+    assert not missing, f"templates/README.md cites builders that do not exist: {missing}"
+
+
+def test_templates_readme_documents_every_continuity_family():
+    """Every `templates/continuity_*/` family has its own section in the
+    templates README (capstone spec §23), so a third family fails here until it
+    is documented."""
+    families = sorted(d.name for d in TEMPLATES.iterdir()
+                      if d.is_dir() and d.name.startswith("continuity_"))
+    assert families, "found no continuity_* template family -- the walk is stale"
+    headings = [line for line in _read(TEMPLATES / "README.md").splitlines()
+                if line.startswith("### ")]
+    missing = [f for f in families
+               if not any(h.startswith(f"### `{f}/`") for h in headings)]
+    assert not missing, f"templates/README.md has no section for: {missing}"

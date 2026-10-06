@@ -139,6 +139,19 @@ continue the instruction sentence-style; keep it when editing. The two driver
 addenda render every enum (action words, relations, high-pressure states) from
 `view`, never as literals, so the vocabulary has one source in Python.
 
+Reply shape: ONLY `{"suggestions": [{"title", "premise", "cast": ["<kind>:<id>"],
+"location": "<id>" | "", "date"?, "drivers"?: [{"ref", "action"}],
+"time_anchor"?: {"ref", "relation"}}], "next_date"?, "greeting_picks"?:
+["<greeting id>"]}`, where each optional key is asked for only by the addendum
+that adds it. Parsed by `suggest.parse_output`, `parse_greeting_picks` and
+`parse_next_date` through `suggest.raw_suggestions` (a bare top-level array is
+accepted as the list); an entry with no title or premise is dropped
+(`suggest.is_card`), and every id, driver, anchor and date is validated against
+the snapshot the prompt was rendered from. An undecodable reply is no
+suggestions, no greeting picks and no next date, not a failed run. The replies
+are captured at Debug level like every other LLM response, under the existing
+Settings disclosure.
+
 ### `scene_intent/` — POST /campaigns/{cid}/scene-intent
 Mirrors `store/suggest.py:build_intent_prompt`. Messages: system, user.
 `user.j2` includes `scene_suggestions/user.j2` verbatim, so it takes that
