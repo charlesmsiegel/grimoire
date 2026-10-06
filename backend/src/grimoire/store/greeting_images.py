@@ -8,9 +8,12 @@ Collections contribute each available member independently.
 Where an assignment is kept is `image_subjects`' business, and this module
 only tells it where each key's picture is (`catalog_with_slots`): a picture
 placed in this world is answered on its image object, so tagging it in one
-greeting tags it in every greeting of the world that shows it; a remote URL,
-a picture placed in another world, or legacy art with no placement keeps a
-per-greeting answer in that greeting's sidecar.
+greeting tags it in every greeting of the world that shows it. A per-greeting
+answer in that greeting's sidecar is kept for everything else: a remote URL,
+a picture placed in another world, legacy art with no placement, a placement
+whose object or blob has not arrived (the legacy file of the same name beside
+it is the picture shown), and an answer whose object write was not confirmed
+(R8). A sidecar answer, while present, wins over the object's.
 """
 
 from __future__ import annotations
@@ -108,8 +111,14 @@ def _record_file(root: Path, slot: _Slot) -> tuple[tuple[Path, str], str | None]
 
     The placement is resolved ONCE, here: a resolving one answers with its own
     id; only one that does not falls back to the legacy file rule
-    (`_record_path`), so a catalog never asks the same placement twice."""
+    (`_record_path`), so a catalog never asks the same placement twice.
+
+    A record's directory first finishes any interrupted promotion, as
+    `image_path` would have: resolving mid-swap would hand back the picture
+    the slot is about to stop holding. The world library has no promotions."""
     d, name = _record_dir(root, slot)
+    if slot[0] != "images":
+        assets.recover_promotion(d)
     placed = assets.resolve(d, name)
     if placed is not None:
         return (d, name), placed.image_id

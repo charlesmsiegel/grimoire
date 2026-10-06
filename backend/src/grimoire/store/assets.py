@@ -1548,6 +1548,15 @@ def recover_promotions_in(d: Path) -> None:
             _recover_promotion(Path(dirpath).parent)
 
 
+def recover_promotion(d: Path) -> None:
+    """Finish or discard an interrupted promotion in record image directory
+    `d` (`_recover_promotion`), for a caller about to read a placement there
+    without going through `image_path` or a listing, which both do this
+    first. Reads no placement unless a journal is present; never raises,
+    never waits."""
+    _recover_promotion(d)
+
+
 def _recover_promotion(d: Path) -> None:
     """Finish or discard the promotion journal in `d`, if there is one.
 

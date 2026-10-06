@@ -662,3 +662,32 @@ def test_an_unarrived_placement_beside_a_legacy_file_answers_from_the_sidecar(tm
     assert image_subjects.read_subjects(root, gid) == {"art_1": [mara]}
     raw = image_store.read(image_id).raw
     assert [a["id"] for a in raw["associations"]] == [cid]
+
+
+def test_a_reference_into_a_half_promoted_record_rolls_the_promotion_forward(tmp_path, monkeypatch):
+    """A promote crashed mid-swap: the journal is there, the avatar already
+    holds the post-state, the promoted slot still the pre-state. A greeting
+    referencing that slot must see the picture the slot ends up with -- the
+    catalog finishes the promotion before resolving it, as `image_path` does
+    -- so the answer lands on THAT object, not on the one leaving."""
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    d = assets.version_dir(root, cid, vid)
+    assets.put_image(root, cid, vid, assets.AVATAR, b"avatar-art", "png")
+    assets.put_image(root, cid, vid, "gallery_1", b"gallery-art", "png")
+    a = assets.image_id(root, cid, vid, assets.AVATAR)
+    g = assets.image_id(root, cid, vid, "gallery_1")
+    image_refs.write_journal(d, {"name": "gallery_1",
+                                 "pre": {"avatar": a, "gallery_1": g},
+                                 "post": {"avatar": g, "gallery_1": a},
+                                 "desc": {"avatar": None, "gallery_1": None}})
+    image_refs.write(d, assets.AVATAR, g)          # the swap's first write landed; then the crash
+    url = f"/api/worlds/{root.name}/characters/{cid}/versions/{vid}/images/gallery_1"
+    gid = _greeting_with(root, cid, vid, {}, body=f"![Art]({url})")
+
+    image_subjects.set_image_subjects(root, gid, url, [cid])
+
+    assert "reviews" not in image_store.read(g).raw
+    assert image_store.read(a).raw["reviews"] == {"subjects": ["world:realm"]}
+    assert image_refs.read_journal(d) is None
+    assert image_refs.read(d, "gallery_1").image == a
+    assert image_subjects.read_subjects(root, gid) == {url: [cid]}
