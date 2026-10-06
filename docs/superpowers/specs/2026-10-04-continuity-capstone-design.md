@@ -1856,7 +1856,7 @@ It has no tail, and `GET /api/shell` gains no field. `rail.test.ts` adds `/campa
 
 **Main.** Main holds the drawing in a horizontally scrolling pane, and the selected node's detail **below** the drawing, outside it.
 
-**URL state.** `?lens=`, `?arc=` and `?node=` live in the URL. An unknown lens reads as Story, an `?arc=` that names no canonical thread or commitment as no filter, and a `?node=` that names no node as no selection. A lens or arc change pushes a history entry; a node pick replaces it. The Show toggles are local state, and each lens restores its own defaults (Slice F plan, Decision 19).
+**URL state.** `?lens=`, `?arc=` and `?node=` live in the URL. An unknown lens reads as Story, an `?arc=` that names no canonical thread or commitment as no filter, and a `?node=` that names no node as no selection. A lens or arc change pushes a history entry; a node pick replaces it. Choosing the lens already shown, or any write that leaves the query string as it was, navigates nowhere, so Back is never spent on an identical entry. The Show toggles are local state, and each lens restores its own defaults (Slice F plan, Decision 19).
 
 **Phone column.** `PageShell` gains an optional `dismissKey`: when its value changes, the phone column closes, as it already does on a pathname change. An Arcs row changes only `?node=`, so the page passes `` `${node}#${pick}` ``, where `pick` counts every Arcs-row and node click. Re-tapping the selected row therefore still closes the sheet over the detail, while Lens and Show rows (filters) keep it up (Slice F plan, Decision 22).
 
