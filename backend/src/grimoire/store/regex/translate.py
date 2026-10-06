@@ -385,6 +385,11 @@ class _Lexer:
                     raise _UntranslatableError("a quantifier on a surrogate pair without u "
                                    "(JavaScript repeats only its second half)")
                 cp = 0x10000 + ((cp - 0xD800) << 10) + (int(low.group(1), 16) - 0xDC00)
+                # Under u the pair is one letter to JavaScript, and `i` folds it
+                # (U+10400 matches U+10428); without u it compares the halves as
+                # code units and folds neither, so only then is it a letter.
+                if self.u:
+                    self.char(cp)
                 return f"\\U{cp:08X}", cp
         if 0xD800 <= cp <= 0xDFFF:
             raise _UntranslatableError(f"the lone surrogate \\u{m.group(0)}")
