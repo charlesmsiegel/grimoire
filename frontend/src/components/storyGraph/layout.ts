@@ -90,6 +90,20 @@ function future(inDays: number): Slot {
   return { kind: "future", rank: inDays, tie: "", head: whenPhrase(inDays) };
 }
 
+/** An event's, holiday's or birthday's slot right of Now: by `in_days`, or,
+ *  in a campaign with no present (where no node has an `in_days`), by
+ *  `fixed`, headed by its date -- a day the calendar can name is never filed
+ *  as Undated. The two never meet in one payload, since `in_days` is null for
+ *  a node with a `fixed` only when `now.fixed` is, and the distinct `tie`
+ *  keeps their columns apart regardless. */
+function temporal(n: { fixed: number | null; in_days: number | null; friendly: string;
+                       native: string }): Slot {
+  if (n.in_days !== null) return n.in_days >= 0 ? future(n.in_days) : UNDATED;
+  return n.fixed === null
+    ? UNDATED
+    : { kind: "future", rank: n.fixed, tie: "fixed", head: n.friendly || n.native };
+}
+
 function x(col: number): number {
   return PAD + col * COL;
 }
@@ -117,10 +131,10 @@ function playSlot(n: GraphNode, ix: GraphIndex, scenes: Map<string, Slot>,
       return scenes.get(n.id) ?? UNPLACED;
     case "event":
       if (isReached(n)) return bucket("reached", "Reached");
-      return n.in_days !== null && n.in_days >= 0 ? future(n.in_days) : UNDATED;
+      return temporal(n);
     case "holiday":
     case "birthday":
-      return n.in_days !== null && n.in_days >= 0 ? future(n.in_days) : UNDATED;
+      return temporal(n);
     case "idea":
       // Keyed on `fixed`, which orders exactly as `in_days` does and still
       // answers when the present is unknown.
@@ -130,6 +144,8 @@ function playSlot(n: GraphNode, ix: GraphIndex, scenes: Map<string, Slot>,
             head: n.in_days === null ? n.friendly : whenPhrase(n.in_days) };
     case "thread":
     case "commitment": {
+      // Only a deadline known to be ahead leaves the lane's scene, and that
+      // needs a present: with none, a dated commitment keeps its scene.
       if (n.kind === "commitment" && n.in_days !== null && n.in_days >= 0) {
         return future(n.in_days);
       }

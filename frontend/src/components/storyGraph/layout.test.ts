@@ -357,6 +357,50 @@ describe("layout: the calendar axis", () => {
   });
 });
 
+/** The payload of a campaign with no present (no clock, no dated chronicle):
+ *  `now` is blank, nothing has an `in_days`, and pressure dated no holiday or
+ *  birthday -- but a record that carries its own date still has `fixed`. */
+function noPresent(): StoryGraph {
+  const g = graphFixture();
+  g.now = { native: "", friendly: "", fixed: null };
+  g.nodes = g.nodes
+    .filter((n) => n.kind !== "holiday" && n.kind !== "birthday")
+    .map((n): GraphNode => ("in_days" in n ? { ...n, in_days: null } : n));
+  return g;
+}
+
+describe("layout: a campaign with no present", () => {
+  it("dated records are placed on the calendar axis by fixed", () => {
+    const { at, lay, colOf, view } = draw("calendar", { g: noPresent() });
+    expect(view.nodes.map((n) => n.id)).toEqual(expect.arrayContaining([OATH, CORONATION]));
+    for (const id of [OATH, CORONATION, S1]) {
+      expect(colOf(id).kind).toBe("day");
+    }
+    expect(colOf(OATH).head).toBe("14 March 1200");
+    expect(colOf(CORONATION).head).toBe("13 March 1200");
+    expect(at(CORONATION).x).toBeLessThan(at(OATH).x);
+    expect(at(S1).x).toBeLessThan(at(CORONATION).x);
+    // The free-text event is the only thing that is undated.
+    expect(colOf(FAIR).kind).toBe("undated");
+    expect(lay.columns.some((c) => c.kind === "not-dated")).toBe(false);
+    expect(lay.nowX).toBeNull();
+  });
+
+  it("an unfired dated event sits right of Now by fixed on the play axis, not in Undated", () => {
+    const { column, colOf, at } = draw("story", { g: noPresent() });
+    const now = column("now");
+    const coronation = colOf(CORONATION);
+    expect(coronation.kind).toBe("future");
+    expect(coronation.head).toBe("13 March 1200");
+    expect(coronation.index).toBeGreaterThan(now.index);
+    expect(colOf(FAIR).kind).toBe("undated");
+    expect(coronation.index).toBeLessThan(colOf(FAIR).index);
+    // A commitment's "still ahead" needs a present: it keeps its scene lane.
+    expect(colOf(OATH).kind).toBe("scene");
+    expect(at(OATH).x).toBeLessThan(at(CORONATION).x);
+  });
+});
+
 describe("layout: purity and geometry", () => {
   it("the layout is a function of its inputs", () => {
     for (const lens of LENSES) {

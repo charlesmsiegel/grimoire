@@ -26,9 +26,10 @@ code that can do anything, including wait -- must never run under that hold
   best-effort reader, and refusing would turn a read into an error.
 - (C) `_names` and `_assemble`, outside again: the roster summaries that label
   actors and locations, then the per-row `calendars.fixed_of` /
-  `calendars.friendly` on scene, event and idea dates (plugin code, so never
-  inside `_files`
-  beside the lists they derive from), then one private builder per family.
+  `calendars.friendly` on scene, event and idea dates and on a live
+  commitment's due that no deadline item dates (plugin code, so never inside
+  `_files` beside the lists they derive from), then one private builder per
+  family.
 
 **Play order is the sorted scene ids**, `timeline.build`'s rule: the scene id
 grammar puts the number first so lexicographic filename order equals play
@@ -500,13 +501,41 @@ def _item_dated(item: dict) -> dict:
             "in_days": _int_or_none(item.get("in_days"))}
 
 
-def _deadline(temporal: dict, ref: str) -> dict:
+def _deadline(temporal: dict, ref: str, rec: dict) -> dict:
     """A commitment's dated fields from its own deadline item: the pressure
-    item whose subject it is and whose relation is not `after` (at most one)."""
+    item whose subject it is and whose relation is not `after` (at most one).
+    With no item, a live commitment's own parseable `due` (`_own_due`)."""
     for item in _items(temporal):
         if item.get("subject") == ref and item.get("relation") != "after":
             return _item_dated(item)
-    return dict(_UNDATED)
+    return _own_due(temporal, rec)
+
+
+def _labels_of(provider, fixed: int) -> tuple[str, str]:
+    return provider.format(fixed), provider.describe(fixed)["friendly"]
+
+
+def _own_due(temporal: dict, rec: dict) -> dict:
+    """A live commitment's `due` as the day a `deadline` item would name, with
+    `in_days` null. Pressure needs a present to make a deadline item at all
+    (§13.5), so a campaign with no clock has none -- but a parseable due is
+    still a day on the primary calendar, and dropping it would file a dated
+    record as having no deadline. Where a present exists a live parseable due
+    already has its item, so this reaches only a campaign with no present (or a
+    deadline source that failed), and a dated payload is unchanged. Free text
+    and a resolved record stay undated, as they do there. The labels are
+    pressure's own (`format` / `describe` of the fixed day), softened per row
+    like `_dated`; phase C, so the plugin code runs outside the hold."""
+    provider, due = temporal["provider"], fieldtext.text(rec.get("due"))
+    if provider is None or not due or not effective.is_live("commitment", rec.get("status")):
+        return dict(_UNDATED)
+    soft: set[str] = set()   # `part=None` records nothing: free text is data
+    fixed = _int_or_none(_attempt(soft, None, calendars.fixed_of, None, provider, due))
+    if fixed is None:
+        return dict(_UNDATED)
+    native, friendly = _attempt(soft, None, _labels_of, ("", ""), provider, fixed)
+    return {"native": fieldtext.text(native) or due, "friendly": fieldtext.text(friendly),
+            "fixed": fixed, "in_days": None}
 
 
 def _record_node(kind: str, ref: str, rec: dict, temporal: dict,
@@ -524,7 +553,7 @@ def _record_node(kind: str, ref: str, rec: dict, temporal: dict,
             "focusable": driver is not None, "findings": []}
     if kind == "commitment":
         node.update(commitment_kind=fieldtext.text(rec.get("kind")),
-                    due=fieldtext.text(rec.get("due")), **_deadline(temporal, ref))
+                    due=fieldtext.text(rec.get("due")), **_deadline(temporal, ref, rec))
     return node
 
 
