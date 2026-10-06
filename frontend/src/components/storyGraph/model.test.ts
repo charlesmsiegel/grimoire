@@ -106,6 +106,27 @@ describe("lens presets", () => {
     expect(edgeIds("story", { ...NONE, candidates: true })).toContain("cand-map-oath");
   });
 
+  it("Merged records adds merged nodes on every lens, Calendar included", () => {
+    // A merged commitment as graph.py emits one: no deadline, so `native` is "".
+    const g = graphFixture();
+    const debt = g.nodes.find((n) => n.id === DEBT);
+    if (debt?.kind !== "commitment") throw new Error("fixture");
+    const vow = "commitment:winifred-s-vow";
+    g.nodes.push({ ...debt, id: vow, label: "Winifred's vow", merged_into: OATH,
+                   commitment_kind: "", due: "", latest_beat: "", pressure: null,
+                   focusable: false });
+    const { ids } = setup(g);
+    for (const lens of LENSES) {
+      const on = { ...PRESETS[lens].show, merged: true };
+      const off = { ...PRESETS[lens].show, merged: false };
+      expect([lens, ids(lens, on)]).toEqual([lens, expect.arrayContaining([CHART, vow])]);
+      expect(ids(lens, off)).not.toContain(CHART);
+      expect(ids(lens, off)).not.toContain(vow);
+    }
+    expect(ids("calendar", { ...NONE, merged: true })).toContain(CHART);
+    expect(ids("calendar", NONE)).not.toContain(CHART);
+  });
+
   it("unchecking Actors in Cast removes the actors", () => {
     const { view, ids } = setup();
     expect(PRESETS.cast.nodes).not.toContain("character");
