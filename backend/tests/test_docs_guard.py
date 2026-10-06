@@ -437,6 +437,49 @@ def test_store_guarantees_names_every_public_atomic_writer():
     )
 
 
+def _section(text: str, heading: str) -> str:
+    """The body of the `## heading` section, up to the next `## `."""
+    start = text.index(f"## {heading}")
+    end = text.find("\n## ", start + 1)
+    return text[start:] if end < 0 else text[start:end]
+
+
+def test_claude_md_names_every_tracker_route_that_starts_a_run():
+    """The one `CLAUDE.md` claim held here: a tracker route whose request IS a
+    `tracker-update` run -- Retry, re-run from here -- is a handler that starts
+    a detached run, so "Detached runs" names it.
+
+    The background-class bullet once explained `tracker-update` away as a
+    follow-up a landed write schedules, which is true of a turn and a
+    greeting-opened scene and false of the two tracker routes that start one on
+    request. A route found here by its call to `schedule*` -- not by a list --
+    so a third such route fails until the section names it.
+    """
+    import ast
+
+    tree = ast.parse((SRC / "routes" / "tracker.py").read_text(encoding="utf-8"))
+    starters = {"schedule", "schedule_response", "schedule_untracked"}
+
+    def is_route(fn: ast.FunctionDef) -> bool:
+        return any(isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute)
+                   and isinstance(d.func.value, ast.Name) and d.func.value.id == "router"
+                   for d in fn.decorator_list)
+
+    def starts(fn: ast.FunctionDef) -> bool:
+        return any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                   and n.func.id in starters for n in ast.walk(fn))
+
+    routes = sorted(fn.name for fn in tree.body
+                    if isinstance(fn, ast.FunctionDef) and is_route(fn) and starts(fn))
+    assert routes, "found no tracker route that schedules an update -- the walk is stale"
+    section = _section(_read(CLAUDE), "Detached runs")
+    missing = [name for name in routes if f"`{name}`" not in section]
+    assert not missing, (
+        f"CLAUDE.md's Detached runs section does not name these handlers, each of "
+        f"which starts a `tracker-update` run as the work its request asked for: {missing}"
+    )
+
+
 def test_no_orphan_images():
     """No capture under `docs/` that nothing references.
 

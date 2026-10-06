@@ -294,11 +294,13 @@ subscriber. **Twenty-five handlers** start detached runs, in four classes:
   incremental sweep once a commit has completed in its request (a fresh save or
   a journalled resume, never the idempotent replay), and the save's answer does
   not wait on it or depend on it. `post_reconcile` is the explicit full sweep,
-  `@computes_only`, answering **202**. The class's other members are not in the
-  count, because each is a follow-up a write schedules once it has landed
-  rather than the work its request asked for: a landed turn's rolling summary
-  and scene-break check (below), and the tracker's `tracker-update`, which a
-  turn or a greeting-opened scene schedules after its posts are written.
+  `@computes_only`, answering **202**. Two more start the tracker's
+  `tracker-update` on request: `post_tracker_retry` runs one post's update
+  again, and `post_tracker_rerun_from` schedules that post's and every tracked
+  post's after it. The class's other runs are outside the count: a landed
+  turn's rolling summary and scene-break check (below), and the
+  `tracker-update` that a turn, `post_start_from_greeting` or `post_first_post`
+  schedules after its posts are written.
 
 - The run registry lives on **`app.state.runs`**, not at module scope: a
   `TestClient` builds an app per test, and module state would leak runs between
