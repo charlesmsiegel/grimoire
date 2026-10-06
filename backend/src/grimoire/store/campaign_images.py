@@ -302,6 +302,11 @@ def restore_image(cid: str, name: str) -> None:
 
 
 def read_descriptions(cid: str) -> dict[str, str]:
+    """`read_descriptions_listed`' descriptions, for a caller that wants no rows."""
+    return read_descriptions_listed(cid)[0]
+
+
+def read_descriptions_listed(cid: str) -> tuple[dict[str, str], list[dict]]:
     """What each image this campaign can see depicts.
 
     By `overlay.read_description`'s rule, per name:
@@ -319,6 +324,9 @@ def read_descriptions(cid: str) -> dict[str, str]:
 
     Off the one merged listing and its ids: neither library is listed twice
     and no placement is read that the listing did not already read.
+
+    Returns that merged listing (`list_images`' rows) beside the text, so a
+    caller wanting both reads the library once.
     """
     rows = list_images(cid)
     own_rows = [i for i in rows if not i["inherited"]]
@@ -334,7 +342,7 @@ def read_descriptions(cid: str) -> dict[str, str]:
         out.update(image_descriptions.read_in(
             wdir, names={i["name"] for i in fall},
             ids={i["name"]: i["image_id"] for i in fall if i.get("image_id")}))
-    return out
+    return out, rows
 
 
 def own_undescribed(cid: str) -> list[dict]:
