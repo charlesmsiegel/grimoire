@@ -27,6 +27,7 @@ from grimoire.main import create_app
 from grimoire.routes import todo
 from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
+from tests.collection_fixtures import format1
 
 
 @pytest.fixture
@@ -194,10 +195,8 @@ def test_collection_members_are_individually_reviewed_and_deduplicated(client, c
     _cid, wid = campaign
     root = store.worlds.world_root(wid)
     owner, vid = store.characters.create_character(root, "Seraphine", "default")
-    first = store.image_collections.put_member(wid, _png())
-    second = store.image_collections.put_member(wid, _png("white"))
     collection = "a" * 32
-    store.image_collections.publish(wid, collection, [first, second])
+    first, second = format1(wid, collection, _png(), _png("white"))
     url = f"/api/worlds/{wid}/images/{first}"
     gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid,
         f"![Art](/api/worlds/{wid}/image-collections/{collection}/image)\n![Again]({url}?v=old)")

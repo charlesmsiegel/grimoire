@@ -40,6 +40,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.context import art
+from tests.collection_fixtures import format1
 
 IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 REMOTE = "https://example.invalid/the-gala.png"
@@ -214,8 +215,7 @@ def _cover(scope: str) -> Surface:
 
 
 def _collection_upload(client, ids):
-    name = image_collections.put_member(ids["wid"], ids["png"])
-    image_collections.publish(ids["wid"], COLLECTION, [name])
+    [name] = format1(ids["wid"], COLLECTION, ids["png"])
     placed = assets.resolve(image_collections.image_directory(ids["wid"]), name)
     return _Stored({"name": name, "image_id": placed.image_id if placed else None})
 
