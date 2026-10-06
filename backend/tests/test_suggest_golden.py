@@ -36,3 +36,13 @@ def test_the_intent_prompt_is_pinned(monkeypatch, tmp_path):
 def test_the_golden_file_has_every_variant(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     assert set(_golden()) == set(suggest_golden.variants())
+
+
+def test_the_golden_renders_the_today_lines():
+    """Task 2 lifts the calendar block (`today_facts`, `day_facts`, `sooner`)
+    into one helper; a pin that never rendered `holidays_today` or
+    `events_today` would pass a refactor that dropped either."""
+    golden = _golden()
+    users = [m["content"] for k, msgs in golden.items() if k.startswith("intent/")
+             for m in msgs if m["role"] == "user"]
+    assert any(" Today: " in u and " Scheduled today: " in u for u in users)

@@ -16,7 +16,9 @@ Two kinds of input:
 - `intent_campaigns()`: real campaigns, because the intent prompt renders the
   whole snapshot `build_snapshot` reads out of a store -- the Upcoming line's
   merge of a holiday and an event (`events.sooner`, ties to the holiday) is the
-  part most at risk, and only a store exercises it.
+  part most at risk, and only a store exercises it. `today` puts a holiday and
+  an event on the clock date itself, so the "Today:" and "Scheduled today:"
+  branches are pinned too.
 
 Run as `python -m tests.suggest_golden` from `backend/` to rewrite the file.
 That is for a DELIBERATE change to one of these prompts, reviewed as such --
@@ -143,8 +145,15 @@ def intent_campaigns() -> dict[str, tuple[str, bool]]:
 
     hebrew = _campaign(wid, "Realm hebrew", calendar="hebrew", now="5786-Kislev-24")
 
+    # A holiday and an event ON the clock date, so the "Today:" and "Scheduled
+    # today:" branches render -- nothing above lands on the date itself.
+    today = _campaign(wid, "Saltmarch today", holidays=(
+        {"name": "Saltmarch Eve", "month": "05", "day": 10},))
+    events.create(today, "The coronation", "2026-05-10")
+    events.create(today, "The debt", "2026-05-20")
+
     return {"gregorian": (greg, False), "gregorian-offscreen": (greg, True),
-            "tie": (tie, False), "hebrew": (hebrew, False)}
+            "tie": (tie, False), "hebrew": (hebrew, False), "today": (today, False)}
 
 
 def variants() -> dict[str, list[dict]]:
