@@ -120,7 +120,7 @@ def test_leap_only_birthdays_never_invent_a_day_hebrew_common_year(monkeypatch, 
     assert (row["precision"], row["month_key"]) == ("month", "Adar")
     characters.set_birthdate(root, aid, "--Adar2-14")
     [row] = _occ(cid)
-    assert (row["precision"], row["in_days"]) == ("yearless", 24)
+    assert (row["precision"], row["in_days"], row["age"]) == ("yearless", 24, None)
 
 
 def test_leap_only_birthdays_never_invent_a_day_hebrew_leap_year(monkeypatch, tmp_path):
@@ -130,7 +130,7 @@ def test_leap_only_birthdays_never_invent_a_day_hebrew_leap_year(monkeypatch, tm
     assert _occ(cid) == []   # the same literal match, the other way (an Open Question)
     characters.set_birthdate(root, aid, "--Adar-14")
     [row] = _occ(cid)
-    assert (row["precision"], row["in_days"]) == ("yearless", 24)
+    assert (row["precision"], row["in_days"], row["age"]) == ("yearless", 24, None)
     characters.set_birthdate(root, aid, "--Adar1")
     [row] = _occ(cid)
     assert row["precision"] == "month"

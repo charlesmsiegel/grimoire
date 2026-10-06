@@ -664,10 +664,10 @@ def test_a_parseable_due_is_a_deadline(cal):
     assert item["precision"] == "exact"
 
 
-def test_free_text_due_is_not_arithmetic(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path, warn=7)
+def test_free_text_due_is_not_arithmetic(cal):
+    cid = cal.cid
     _commitment(cid, due="before the bells stop")
-    vow = _commitment(cid, due="2026-05-14", mid="seraphine-s-vow", title="Seraphine's vow")
+    vow = _commitment(cid, due=cal.due, mid="seraphine-s-vow", title="Seraphine's vow")
     assert _deadlines(cid, OATH) == []
     [item] = _deadlines(cid, vow)
     assert (item["kind"], item["in_days"]) == ("deadline", 4)
@@ -826,25 +826,29 @@ def test_a_link_to_a_reached_event_is_overdue(monkeypatch, tmp_path):
     assert (item["kind"], item["state"], item["in_days"]) == ("linked_deadline", "overdue", -2)
 
 
-def test_backwards_clock_keeps_a_fired_event_reached(monkeypatch, tmp_path):
-    cid = _campaign(monkeypatch, tmp_path, warn=7)
-    events.create(cid, "The coronation", "2026-05-20")
+def test_backwards_clock_keeps_a_fired_event_reached(cal):
+    cid = cal.cid
+    provider = _provider(cid)
+    now, day = F(cid, cal.now), F(cid, cal.date)
+    events.create(cid, "The coronation", cal.date)
     _commitment(cid)
     _link(cid, "l1", OATH, CORONATION, "before")
-    clock.advance(cid, to="2026-05-21")
-    clock.advance(cid, to="2026-05-15", reason="correction")
-    assert clock.now(cid) == "2026-05-15"
+    clock.advance(cid, to=provider.format(day + 1))
+    corrected = provider.format(now + 5)
+    clock.advance(cid, to=corrected, reason="correction")
+    assert clock.now(cid) == corrected
     assert events.get(cid, "the-coronation")["fired"] is not None
 
     assert [i for i in _items(cid, "event") if i["ref"] == CORONATION] == []
     [item] = _deadlines(cid, OATH)
     assert (item["kind"], item["state"]) == ("linked_deadline", "overdue")
-    assert item["in_days"] == F(cid, "2026-05-19") - F(cid, "2026-05-15") > 0
+    assert item["in_days"] == day - 1 - (now + 5) > 0
 
-    _commitment(cid, due="2026-05-17")
+    due = provider.format(now + 7)
+    _commitment(cid, due=due)
     [item] = _deadlines(cid, OATH)
     assert (item["kind"], item["state"], item["due_text"]) == (
-        "linked_deadline", "overdue", "2026-05-17")
+        "linked_deadline", "overdue", due)
 
 
 def test_a_redated_fired_event_outranks_an_earlier_due(monkeypatch, tmp_path):
