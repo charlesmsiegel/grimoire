@@ -301,6 +301,69 @@ test("a followed sweep that fails still re-reads", async () => {
   expect(api.continuityCandidates).toHaveBeenCalledTimes(2);
 });
 
+const RUNNING = (id: string) => ({ id, attempt_id: null, state: "running", next_index: 0 });
+
+test("a refresh's own second pass, seen running by its re-read, is not followed", async () => {
+  // After an adopted incremental pass the loop re-reads and starts pass 2 at
+  // once, so that read can come back naming pass 2's own run. Following it
+  // would take the latch from the Refresh, which would then hand it back on
+  // landing while the follow is still polling -- room for a third reconcile.
+  const second = deferred<typeof RESULT>();
+  let inPass2 = false;
+  (api.reconcileContinuity as any)
+    .mockResolvedValueOnce({ ...RESULT, sweep: "incremental" })
+    .mockImplementationOnce(() => { inPass2 = true; return second.promise; });
+  (api.continuityCandidates as any).mockImplementation(async () =>
+    (inPass2 ? { ...FINDINGS, run: RUNNING("r2") } : FINDINGS));
+  (api.awaitCampaignRun as any).mockReturnValue(new Promise(() => {}));
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: "Refresh continuity review" }));
+  await waitFor(() => expect(api.reconcileContinuity).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+  expect(api.awaitCampaignRun).not.toHaveBeenCalled();
+  expect(column().getByText("Refreshing…")).toBeInTheDocument();
+  expect(column().getByRole("button", { name: "Refresh continuity review" })).toBeDisabled();
+  inPass2 = false;
+  await act(async () => { second.resolve({ ...RESULT, sweep: "full" }); });
+  await waitFor(() => expect(column().getByRole("button", {
+    name: "Refresh continuity review" })).toBeEnabled());
+  expect(api.awaitCampaignRun).not.toHaveBeenCalled();
+  expect(api.reconcileContinuity).toHaveBeenCalledTimes(2);
+});
+
+test("re-reads while a sweep is followed do not follow it again", async () => {
+  const followed = deferred<unknown>();
+  let running = true;
+  (api.continuityCandidates as any).mockImplementation(async () =>
+    (running ? { ...EMPTY_CANDIDATES, run: RUNNING("r1") } : FINDINGS));
+  (api.awaitCampaignRun as any).mockReturnValue(followed.promise);
+  (api.campaignLedger as any).mockResolvedValue({
+    ...EMPTY_LEDGER,
+    plot: [{ id: "the-coronation", title: "The coronation", status: "open",
+             last_scene: "", latest_beat: "", scene: scene("", "") }],
+  });
+  renderLedger("/campaigns/run/ledger/threads");
+  expect(await column().findByText("A continuity sweep is running.")).toBeInTheDocument();
+  expect(api.awaitCampaignRun).toHaveBeenCalledTimes(1);
+  // Two hand edits: two epoch bumps, each re-reading a candidates list that
+  // still names the running sweep.
+  fireEvent.click(await screen.findByRole("button", { name: /^close$/i }));
+  await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+  fireEvent.click(await screen.findByRole("button", { name: /^close$/i }));
+  await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(3));
+  expect(api.awaitCampaignRun).toHaveBeenCalledTimes(1);
+  expect(column().getByRole("button", { name: "Refresh continuity review" })).toBeDisabled();
+  running = false;
+  await act(async () => {
+    followed.resolve({ id: "r1", attempt_id: null, state: "landed", next_index: 0 });
+  });
+  await waitFor(() => expect(column().getByRole("button", {
+    name: "Refresh continuity review" })).toBeEnabled());
+  expect(column().queryByText("A continuity sweep is running.")).toBeNull();
+  expect(api.awaitCampaignRun).toHaveBeenCalledTimes(1);
+  expect(api.reconcileContinuity).not.toHaveBeenCalled();
+});
+
 /** The Ledger with a way to switch campaign while staying mounted -- the
  *  route is not keyed on `cid`, so this is what a switch really is. */
 function SwitchTo({ to }: { to: string }) {
