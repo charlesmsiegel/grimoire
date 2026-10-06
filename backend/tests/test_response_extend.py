@@ -4,13 +4,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from grimoire import content_parts, routes, store
+from grimoire import content_parts, llm, routes, store
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
-from grimoire.routes import character_turns
+from grimoire.routes import character_turns, common
 from grimoire.routes import runs as runs_mod
 from grimoire.store import response_protocol
-from tests.llm_fakes import FakeLLM
+from tests.llm_fakes import FakeLLM, ScriptedProvider
 from tests.test_character_turns import seed
 from tests.test_response_controls_routes import _answer
 from tests.test_runs_routes import _events
@@ -57,10 +57,11 @@ def test_extend_instruction_without_words_or_steer():
 
 
 def test_strip_preparation_removes_only_a_leading_fence():
-    assert response_protocol.strip_preparation("```perception\nnotes\n```\nThen.") == "Then."
-    assert response_protocol.strip_preparation(" and left.") == " and left."
+    assert response_protocol.strip_preparation("```perception\nnotes\n```\nThen.") == (
+        "Then.", "\n\n[Perception preparation]\nnotes\n")
+    assert response_protocol.strip_preparation(" and left.") == (" and left.", "")
     assert response_protocol.strip_preparation("\n\nThen ```perception\n```") == (
-        "\n\nThen ```perception\n```")
+        "\n\nThen ```perception\n```", "")
 
 
 def test_is_trailing_skips_synthetic_lines():
@@ -168,6 +169,35 @@ def test_instruction_extend_strips_a_leading_perception_fence(client):
     assert after["content"] == "Original.\n\nThen she left."
     assert "She notes the door." in store.responses.get(
         cid, sid, rid, private=True)["variants"][-1]["reasoning"]
+
+
+def test_a_prefill_primary_failing_over_to_an_instruction_fallback_strips_its_fence(client):
+    """Only this path reaches `_accept_extend`'s strip: the watcher ran with
+    perception off for the prefill primary, and the instruction fallback that
+    answered was asked for a reply, so it may open with a perception fence."""
+    cid, sid = seed(client)
+    _prefill_on(client)
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    rid = _answer(client, base)
+    backup = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Saltmarch Backup",
+        "base_url": "https://example.test/v1", "model": "vendor/unknown"}).json()["id"]
+    client.put("/api/config", json={"fallback_connection_id": backup})
+    primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
+    fallback = ScriptedProvider(chunks=(
+        "```perception\nShe notes", " the door.\n```\n", "Then she left." + _HANDOFF))
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
+                           fallback=common._fallback_connection)
+    client.app.dependency_overrides[routes.get_llm] = lambda: facade
+    result = client.post(base + f"/responses/{rid}/extend", json={})
+    assert result.status_code == 200 and "error" not in result.text, result.text
+    assert primary.requests[0]["messages"][-1] == {"role": "assistant", "content": "Original."}
+    assert fallback.requests[0]["messages"][-1]["role"] == "user"
+    after = store.responses.get(cid, sid, rid)
+    assert after["content"] == "Original.\n\nThen she left."
+    assert after["variants"][-1]["made_by"]["mode"] == "instruction"
+    private = store.responses.get(cid, sid, rid, private=True)["variants"][-1]
+    assert "[Perception preparation]\nShe notes the door." in private["reasoning"]
 
 
 def test_extend_continues_the_trimmed_transcript_prose(client):

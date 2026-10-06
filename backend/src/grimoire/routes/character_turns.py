@@ -1763,11 +1763,12 @@ def _accept_extend(cid, sid, rid, run, token, watcher, plan: ExtendPlan, mode: s
             return "replacement_incomplete", _EXTEND_RETAINED
         if watcher.roll.complete or watcher.roll.truncated:
             return "extend_roll_refused", _EXTEND_ROLL
-        raw = watcher.narration
+        raw, note = watcher.narration, ""
         if mode == "instruction":
             # A watcher started for a prefill expected no fence; the fallback
             # that answered was asked for a reply, and may have written one.
-            raw = store.response_protocol.strip_preparation(raw)
+            # Its body is kept as reasoning, as the watcher would have kept it.
+            raw, note = store.response_protocol.strip_preparation(raw)
         lead = raw[: len(raw) - len(raw.lstrip())]
         text, issue, _rewrite = _normalise(cid, sid, plan.record, raw, connection)
         if not text:
@@ -1778,7 +1779,7 @@ def _accept_extend(cid, sid, rid, run, token, watcher, plan: ExtendPlan, mode: s
                       # The reply's handoff was decided when it was written; a
                       # continuation's own fence (if any) is not a second one.
                       handoff=previous.get("handoff"), issue=issue,
-                      reasoning=watcher.reasoning + watcher.preparation_note,
+                      reasoning=watcher.reasoning + watcher.preparation_note + note,
                       tracked=tracked, made_by=made_by, connection=connection)
         return None
 

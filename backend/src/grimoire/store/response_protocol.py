@@ -91,16 +91,24 @@ class _PreparationPrefix:
         return out
 
 
-def strip_preparation(text: str) -> str:
-    """`text` without one leading perception fence, as a watcher with
-    perception on would have streamed it; a no-op for text that has none.
+def preparation_note(body: str) -> str:
+    """The reasoning note a perception body is kept as -- `""` for none."""
+    return "\n\n[Perception preparation]\n" + body if body else ""
+
+
+def strip_preparation(text: str) -> tuple[str, str]:
+    """`(prose, note)`: `text` without one leading perception fence, as a
+    watcher with perception on would have streamed it, and the fence's body as
+    the `preparation_note` that watcher would have kept; `(text, "")` for text
+    that has none.
 
     For a reply whose watcher ran with perception OFF but whose model wrote a
     fence anyway -- a "Keep writing" prefill that failed over to an instruction
     route. The prose keeps its leading whitespace, which is what says how a
     continuation joins the reply before it."""
     parser = _PreparationPrefix(True)
-    return parser.feed(text) + parser.finish()
+    prose = parser.feed(text) + parser.finish()
+    return prose, preparation_note(parser.body)
 
 
 class ResponseWatcher:
@@ -167,7 +175,7 @@ class ResponseWatcher:
     def preparation_note(self):
         # The existing reasoning artifact keeps this inspectable without adding
         # private preparation to the post or conversation history.
-        return "\n\n[Perception preparation]\n" + self.preparation.body if self.preparation.body else ""
+        return preparation_note(self.preparation.body)
 
     @property
     def narration(self):
