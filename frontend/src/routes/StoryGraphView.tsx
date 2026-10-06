@@ -28,6 +28,7 @@ import { api } from "../api/client";
 import type { StoryGraph } from "../api/types";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePublishShellContext } from "../components/ShellStatus";
+import { NodeDetail } from "../components/storyGraph/NodeDetail";
 import { StoryGraphDrawing } from "../components/storyGraph/StoryGraphDrawing";
 import { layout } from "../components/storyGraph/layout";
 import {
@@ -204,10 +205,9 @@ export default function StoryGraphView() {
                                  onSelect={select} />
             </div>
             {selected && (
-              <section className="sg-detail" aria-label={`Selected: ${selected.label}`}
-                       ref={detailRef}>
-                <h3>{selected.label}</h3>
-              </section>
+              <NodeDetail ref={detailRef} cid={cid} graph={graph} ix={ix} node={selected}
+                          arc={arc} onSelect={select}
+                          onArc={(next) => setQuery({ arc: next }, false)} />
             )}
           </>
         )}

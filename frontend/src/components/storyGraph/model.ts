@@ -210,6 +210,16 @@ export const RELATION_PHRASE: Record<LinkRelation, { out: string; in: string }> 
   related_to: { out: "Related to", in: "Related to" },
 };
 
+/** What an idea's anchor was, when its moment has no node any more (past, or
+ *  beyond pressure's horizon): named by its prefix, never by the ref itself. */
+export const ANCHOR_NOUN: Readonly<Partial<Record<string, string>>> = {
+  event: "an event", birthday: "a birthday", holiday: "a holiday",
+};
+
+export function anchorNoun(ref: string): string {
+  return ANCHOR_NOUN[splitRef(ref)[0]] ?? "a date";
+}
+
 /** The finding kinds a node carries alone: one ref, so never an edge. */
 const LIFECYCLE = new Set(["possible_thread_closure", "possible_commitment_resolution"]);
 

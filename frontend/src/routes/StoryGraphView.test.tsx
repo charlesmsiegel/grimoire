@@ -2,7 +2,11 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { GraphNode, ShellPayload, StoryGraph } from "../api/types";
-import { accessibleName, indexGraph, statusOf } from "../components/storyGraph/model";
+import { sanitizeSeed } from "../components/pressureControls";
+import {
+  FINDING_PHRASE, RELATION_PHRASE, STATE_WORDS, accessibleName, indexGraph, statusOf,
+} from "../components/storyGraph/model";
+import { GROUP_OF, ledgerHref } from "../ledgerPaths";
 import { ShellPayloadProvider } from "../shell/ShellPayloadContext";
 import { activeHotkeys } from "../shortcuts/registry";
 import { graphFixture } from "../testkit/storyGraph";
@@ -431,4 +435,358 @@ test("node boxes are fixed-height and overlays let taps through", () => {
   expect(declares(node, "overflow")).toBe("hidden");
   expect(declares(bodiesOf(css, ".sg-now").join(";"), "pointer-events")).toBe("none");
   expect(declares(bodiesOf(css, ".sg-col-head").join(";"), "pointer-events")).toBe("none");
+});
+
+// ---- node detail (Task 13) ----
+
+const detail = (label: string) => screen.getByRole("region", { name: `Selected: ${label}` });
+const actions = (label: string) =>
+  within(detail(label)).getByRole("complementary", { name: "Node actions" });
+/** A `.side-section` of `scope`, found by its `<h4>`, or null. */
+function sideSection(scope: HTMLElement, heading: string): HTMLElement | null {
+  const h = within(scope).queryAllByRole("heading", { level: 4 })
+    .find((x) => x.textContent === heading);
+  return (h?.closest(".side-section") as HTMLElement | null) ?? null;
+}
+const section = (scope: HTMLElement, heading: string) => {
+  const s = sideSection(scope, heading);
+  if (!s) throw new Error(`no ${heading} section`);
+  return s;
+};
+/** A fact's value in the detail's main column, by its term. */
+function fact(scope: HTMLElement, term: string): string {
+  const dt = [...scope.querySelectorAll("dt")].find((x) => x.textContent === term);
+  if (!dt) throw new Error(`no ${term} fact`);
+  return dt.nextElementSibling?.textContent ?? "";
+}
+const chip = (scope: HTMLElement, name: string) => {
+  const b = within(scope).getByRole("button", { name });
+  expect(b).toHaveClass("chip");
+  return b;
+};
+/** A side section's rows, as read: one string per `<li>`. */
+const entries = (scope: HTMLElement) =>
+  [...scope.querySelectorAll("li")].map((li) => (li.textContent ?? "").replace(/\s+/g, " ").trim());
+const at = (id: string) => `/campaigns/c1/graph?node=${encodeURIComponent(id)}`;
+const probe = () => screen.getByTestId("probe").textContent ?? "";
+/** A detail's text never shows an internal token: no underscore, no ref, no
+ *  scene filename. */
+function noTokens(d: HTMLElement) {
+  const text = d.textContent ?? "";
+  expect(text).not.toContain("_");
+  for (const n of FIX.nodes) expect(text).not.toContain(n.id);
+  expect(text).not.toMatch(/\d{3}--/);
+}
+
+test("a thread's detail shows title, merges, status, latest beat, scenes, actors, pressure, links and findings",
+     async () => {
+  await ready(at("thread:mara-s-map"));
+  const d = detail("Mara's map");
+  expect(within(d).getByRole("heading", { level: 3, name: "Mara's map" })).toBeInTheDocument();
+  chip(section(d, "Merged"), "Winifred's chart");
+  expect(fact(d, "Status")).toBe("open");
+  expect(fact(d, "Latest beat")).toBe("Mara unrolled the map on the harbour wall.");
+  expect(fact(d, "Pressure")).toBe(STATE_WORDS.ok);
+  const scenes = section(d, "Scenes");
+  expect(entries(scenes)).toEqual(["opened Saltmarch harbour", "advanced Winifred's chart"]);
+  chip(scenes, "Saltmarch harbour");
+  const involves = section(d, "Involves");
+  chip(involves, "Mara");
+  chip(involves, "Seraphine");
+  const links = section(d, "Links");
+  expect(links).toHaveTextContent(RELATION_PHRASE.continues.out);
+  chip(links, "Mara's first map");
+  const findings = section(d, "Findings");
+  expect(findings).toHaveTextContent(FINDING_PHRASE.possible_relation);
+  expect(findings).toHaveTextContent(FINDING_PHRASE.possible_thread_closure);
+  noTokens(d);
+});
+
+test("a commitment's detail shows its kind, due and a dated pressure line", async () => {
+  await ready(at("commitment:mara-s-oath"));
+  const d = detail("Mara's oath");
+  expect(fact(d, "Kind")).toBe("promise");
+  expect(fact(d, "Due")).toBe("before Saltmarch Eve is out");
+  expect(fact(d, "Pressure")).toBe(`${STATE_WORDS.due_soon}, in 4 days, 14 March 1200`);
+  const links = section(d, "Links");
+  expect(links).toHaveTextContent(RELATION_PHRASE.by.out);
+  chip(links, "The coronation");
+  expect(entries(section(d, "Scenes"))).toEqual(["opened Mara's flashback"]);
+  noTokens(d);
+});
+
+test("a pair finding names the record it pairs with", async () => {
+  await ready(at("thread:mara-s-map"));
+  const d = detail("Mara's map");
+  const findings = section(d, "Findings");
+  expect(findings).toHaveTextContent(`${FINDING_PHRASE.possible_relation} with`);
+  expect(FINDING_PHRASE.possible_relation).toBe("Possible relation");
+  noTokens(d);
+  fireEvent.click(chip(findings, "Mara's oath"));
+  expect(param("node")).toBe("commitment:mara-s-oath");
+});
+
+test("Focus next scene sends the drivers handoff", async () => {
+  await ready(at("thread:mara-s-map"));
+  fireEvent.click(within(actions("Mara's map")).getByRole("button", { name: "Focus next scene" }));
+  expect(probe()).toBe('{"chooser":{"drivers":{"thread:mara-s-map":"focus"}}}');
+});
+
+test("Anchor next scene sends the anchor handoff", async () => {
+  await ready(at("event:the-coronation"));
+  fireEvent.click(within(actions("The coronation"))
+    .getByRole("button", { name: "Anchor next scene" }));
+  expect(probe()).toBe('{"chooser":{"anchor":{"ref":"event:the-coronation","relation":"on"}}}');
+});
+
+test("Focus is disabled on a closed thread and absent on a merged record", async () => {
+  const first = await ready(at("thread:mara/s:map"));
+  const focus = within(actions("Mara's first map"))
+    .getByRole("button", { name: "Focus next scene" });
+  expect(focus).toBeDisabled();
+  const hint = within(actions("Mara's first map")).getByText(
+    "Only an open thread or an unresolved commitment can steer the next scene.");
+  expect(hint).toHaveClass("field-hint");
+  expect(hint).toBeVisible();
+  first.unmount();
+
+  await ready(at("thread:winifred-s-chart"));
+  expect(within(detail("Winifred's chart")).queryByRole("button", { name: "Focus next scene" }))
+    .not.toBeInTheDocument();
+  fireEvent.click(chip(detail("Winifred's chart"), "Merged into Mara's map"));
+  expect(param("node")).toBe("thread:mara-s-map");
+});
+
+test("Anchor is disabled on a fired event", async () => {
+  await ready(at("event:the-harbour-bell"));
+  const a = actions("The harbour bell");
+  expect(within(a).getByRole("button", { name: "Anchor next scene" })).toBeDisabled();
+  expect(within(a).getByText("Only an upcoming dated moment can anchor the next scene."))
+    .toHaveClass("field-hint");
+});
+
+test("the sent state is one sanitizeSeed accepts", async () => {
+  const first = await ready(at("thread:mara-s-map"));
+  fireEvent.click(within(actions("Mara's map")).getByRole("button", { name: "Focus next scene" }));
+  expect(sanitizeSeed(JSON.parse(probe()))).not.toBeNull();
+  first.unmount();
+
+  await ready(at("holiday:739000:Saltmarch Eve"));
+  fireEvent.click(within(actions("Saltmarch Eve"))
+    .getByRole("button", { name: "Anchor next scene" }));
+  expect(sanitizeSeed(JSON.parse(probe()))).not.toBeNull();
+});
+
+test("Open ledger entry links to the record's ledger row", async () => {
+  for (const [id, label, row] of [
+    ["thread:mara-s-map", "Mara's map", "mara-s-map"],
+    ["thread:winifred-s-chart", "Winifred's chart", "winifred-s-chart"],
+    ["thread:mara/s:map", "Mara's first map", "mara/s:map"],
+  ] as const) {
+    const r = await ready(at(id));
+    expect(within(actions(label)).getByRole("link", { name: "Open ledger entry" }))
+      .toHaveAttribute("href", ledgerHref("c1", { section: "threads", row }));
+    r.unmount();
+  }
+  await ready(at("commitment:mara-s-oath"));
+  expect(within(actions("Mara's oath")).getByRole("link", { name: "Open ledger entry" }))
+    .toHaveAttribute("href", ledgerHref("c1", { section: "commitments", row: "mara-s-oath" }));
+});
+
+test("a finding links to its review address", async () => {
+  await ready(at("thread:mara-s-map"));
+  const hrefs = within(section(detail("Mara's map"), "Findings"))
+    .getAllByRole("link", { name: "Review this finding" })
+    .map((a) => a.getAttribute("href"));
+  expect(hrefs).toEqual([
+    ledgerHref("c1", { section: "continuity", group: GROUP_OF.possible_relation,
+                       candidate: "cand-map-oath" }),
+    ledgerHref("c1", { section: "continuity", group: GROUP_OF.possible_thread_closure,
+                       candidate: "cand-map-closure" }),
+  ]);
+});
+
+test("Filter to this arc sets ?arc= and narrows the drawing; Show the whole graph clears it",
+     async () => {
+  await ready(at("thread:mara-s-map"));
+  expect(nodeButton("thread:saltmarch-toll")).toBeInTheDocument();
+  fireEvent.click(within(actions("Mara's map")).getByRole("button", { name: "Filter to this arc" }));
+  expect(param("arc")).toBe("thread:mara-s-map");
+  expect(queryNode("thread:saltmarch-toll")).not.toBeInTheDocument();
+  fireEvent.click(within(actions("Mara's map"))
+    .getByRole("button", { name: "Show the whole graph" }));
+  expect(param("arc")).toBeNull();
+  expect(nodeButton("thread:saltmarch-toll")).toBeInTheDocument();
+  expect(within(actions("Mara's map")).getByRole("button", { name: "Filter to this arc" }))
+    .toBeInTheDocument();
+});
+
+test("Filter to this arc on a merged record filters to its canonical", async () => {
+  await ready(at("thread:winifred-s-chart"));
+  fireEvent.click(within(actions("Winifred's chart"))
+    .getByRole("button", { name: "Filter to this arc" }));
+  expect(param("arc")).toBe("thread:mara-s-map");
+  expect(search()).toContain("arc=thread%3Amara-s-map");
+  expect(queryNode("thread:saltmarch-toll")).not.toBeInTheDocument();
+  const clear = within(actions("Winifred's chart"))
+    .getByRole("button", { name: "Show the whole graph" });
+  fireEvent.click(clear);
+  expect(param("arc")).toBeNull();
+  expect(nodeButton("thread:saltmarch-toll")).toBeInTheDocument();
+});
+
+test('a stale reading shows its state and no false "undated"', async () => {
+  const g = graphFixture();
+  const map = g.nodes.find((n) => n.id === "thread:mara-s-map")!;
+  if (map.kind !== "thread") throw new Error("fixture moved");
+  map.pressure = { state: "stale", in_days: null, friendly: "" };
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  await ready(at("thread:mara-s-map"));
+  const d = detail("Mara's map");
+  expect(fact(d, "Pressure")).toContain(STATE_WORDS.stale);
+  expect(d.textContent).not.toContain("undated");
+});
+
+test("a lifecycle finding shows on the node in the Continuity lens", async () => {
+  await ready("/campaigns/c1/graph?lens=continuity");
+  const b = nodeButton("thread:mara-s-map");
+  expect(b.getAttribute("aria-label")).toContain("May be finished");
+  expect(b.querySelector(".sg-node-status")?.textContent).toContain("May be finished");
+});
+
+test("an actor with no birthday node shows no Birthday section", async () => {
+  const actors = FIX.nodes.filter((n) => n.kind === "character" || n.kind === "pc");
+  const named = new Set(FIX.nodes.flatMap((n) => (n.kind === "birthday" ? [n.actor] : [])));
+  const without = actors.find((n) => !named.has(n.id))!;
+  const withOne = actors.find((n) => named.has(n.id))!;
+  expect(without).toBeDefined();
+  expect(withOne).toBeDefined();
+
+  const first = await ready(at(without.id));
+  expect(sideSection(detail(without.label), "Birthday")).toBeNull();
+  first.unmount();
+  await ready(at(withOne.id));
+  expect(sideSection(detail(withOne.label), "Birthday")).not.toBeNull();
+});
+
+test("a chip selects the record it names", async () => {
+  await ready(at("scene:001--saltmarch-harbour"));
+  fireEvent.click(chip(section(detail("Saltmarch harbour"), "Cast"), "Mara"));
+  expect(search()).toContain("node=characters%3Amara");
+  expect(detail("Mara")).toBeInTheDocument();
+});
+
+test("actor, scene, event, idea and location details show their sections", async () => {
+  // Actor: scenes, related active drivers, relationships, an upcoming birthday.
+  let r = await ready(at("characters:mara"));
+  let d = detail("Mara");
+  expect(entries(section(d, "Scenes"))).toEqual(["Saltmarch harbour", "Mara's flashback"]);
+  const drivers = section(d, "Active drivers");
+  chip(drivers, "Mara's map");
+  chip(drivers, "Mara's oath");
+  const rel = section(d, "Relationships");
+  chip(rel, "Seraphine");
+  expect(rel).toHaveTextContent("trust 3");
+  expect(rel).toHaveTextContent("affection 4");
+  expect(rel).toHaveTextContent("tension 1");
+  expect(rel).toHaveTextContent("Owes her a map.");
+  chip(rel, "Winifred");
+  expect(rel).toHaveTextContent("rival");
+  chip(rel, "Mara's flashback");
+  chip(section(d, "Birthday"), "Mara's birthday");
+  noTokens(d);
+  r.unmount();
+
+  // Scene: cast, where, when, what moved here, and a way into it.
+  r = await ready(at("scene:001--saltmarch-harbour"));
+  d = detail("Saltmarch harbour");
+  chip(section(d, "Cast"), "Seraphine");
+  chip(section(d, "Where"), "Saltmarch harbour");
+  expect(section(d, "When")).toHaveTextContent("2 March 1200");
+  expect(entries(section(d, "Moved here"))).toEqual(["opened Mara's map", "opened Mara's first map"]);
+  expect(within(d).getByRole("link", { name: "Open scene" }))
+    .toHaveAttribute("href", "/campaigns/c1/scenes/001--saltmarch-harbour");
+  noTokens(d);
+  r.unmount();
+
+  // Event: its date, in-days, status, linked records and findings.
+  r = await ready(at("event:the-coronation"));
+  d = detail("The coronation");
+  expect(fact(d, "Date")).toBe("13 March 1200");
+  expect(fact(d, "When")).toBe("in 3 days");
+  expect(fact(d, "Status")).toBe("scheduled");
+  const linked = section(d, "Linked");
+  expect(linked).toHaveTextContent(RELATION_PHRASE.by.in);
+  chip(linked, "Mara's oath");
+  chip(linked, "The harbour meeting");
+  expect(within(actions("The coronation")).getByRole("button", { name: "Anchor next scene" }))
+    .toBeEnabled();
+  noTokens(d);
+  r.unmount();
+
+  // Birthday: an undated month-precision occurrence and whose it is.
+  r = await ready(at("birthday:characters:mara:month:1200-3"));
+  d = detail("Mara's birthday");
+  expect(fact(d, "Date")).toBe("Undated");
+  expect(fact(d, "When")).toBe("day unknown");
+  expect(fact(d, "Whose")).toBe("Mara");
+  chip(section(d, "Linked"), "Mara");
+  noTokens(d);
+  r.unmount();
+
+  // Idea: premise, date, what it serves (with its status) and its anchor.
+  r = await ready(at("idea:the-harbour-meeting"));
+  d = detail("The harbour meeting");
+  expect(fact(d, "Premise")).toBe("Mara meets Seraphine at the harbour before the coronation.");
+  expect(fact(d, "Date")).toBe("11 March 1200");
+  const serves = section(d, "Serves");
+  chip(serves, "Mara's map");
+  expect(serves).toHaveTextContent(statusOf(byId("thread:mara-s-map"), IX));
+  const anchor = section(d, "Anchored to");
+  expect(anchor).toHaveTextContent(RELATION_PHRASE.before.out);
+  chip(anchor, "The coronation");
+  noTokens(d);
+  r.unmount();
+
+  // Location: the scenes set there.
+  await ready(at("locations:saltmarch-harbour"));
+  d = detail("Saltmarch harbour");
+  chip(section(d, "Scenes"), "Saltmarch harbour");
+  noTokens(d);
+});
+
+test("an idea anchored to a moment with no node names it without its ref", async () => {
+  const g = graphFixture();
+  const letter = g.nodes.find((n) => n.id === "idea:winifred-s-letter")!;
+  if (letter.kind !== "idea") throw new Error("fixture moved");
+  letter.time_anchor = { ref: "birthday:characters:winifred:exact:1200-05-01", relation: "on",
+                         native: "1200-05-01" };
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  const first = await ready(at("idea:winifred-s-letter"));
+  let anchor = section(detail("Winifred's letter"), "Anchored to");
+  expect(anchor).toHaveTextContent("a birthday");
+  expect(anchor).toHaveTextContent("1200-05-01");
+  expect(anchor.textContent).not.toContain("characters:winifred");
+  expect(within(anchor).queryByRole("button")).toBeNull();
+  first.unmount();
+
+  letter.time_anchor = { ref: "holiday:739090:Realm Day", relation: "after", native: "" };
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  await ready(at("idea:winifred-s-letter"));
+  anchor = section(detail("Winifred's letter"), "Anchored to");
+  expect(anchor).toHaveTextContent("a holiday");
+  expect(anchor).toHaveTextContent("no longer upcoming");
+  expect(anchor.textContent).not.toContain("739090");
+});
+
+test("a bond whose scene was deleted says so, never the filename", async () => {
+  const g = graphFixture();
+  const bond = g.edges.find((e) => e.kind === "bond")!;
+  if (bond.kind !== "bond") throw new Error("fixture moved");
+  bond.since_scene = "009--saltmarch-gone";
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  await ready(at("characters:winifred"));
+  const rel = section(detail("Winifred"), "Relationships");
+  expect(rel).toHaveTextContent("a deleted scene");
+  expect(rel.textContent).not.toContain("009--");
 });
