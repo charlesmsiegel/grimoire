@@ -762,6 +762,20 @@ class _Exec:
     #: Set by each write to a record's files inside `_campaign_write`, and read
     #: in its ``finally``: a step stopped part-way after a write still bumps.
     wrote: bool = False
+    #: On-disk bytes of the legacy files this run deleted.
+    deleted_bytes: int = 0
+    #: image id -> the blob bytes this run's ingest added for a picture the
+    #: plan found no object for; the plan's `bytes_after`, as it happened.
+    added_bytes: dict[str, int] = field(default_factory=dict)
+    #: stream -> sanitized size, built on the first ingest that needs it.
+    stream_sizes: dict[str, int] = field(default_factory=dict)
+
+    def bytes_reclaimed(self) -> int:
+        """What the run freed, by the plan's arithmetic (legacy bytes gone,
+        less the blobs that replaced them) over what actually happened rather
+        than what was planned (Codex review, P2d). Never below zero: a run
+        stopped after an ingest and before any delete freed nothing."""
+        return max(0, self.deleted_bytes - sum(self.added_bytes.values()))
 
     @property
     def root(self) -> Path:
@@ -976,6 +990,7 @@ def _item(ex: _Exec, item: Item) -> None:
     _pend(ex, item.image_id, rel)
     # Outside every lock: the decode is the slow part (M8.2).
     obj = image_store.ingest(data, occ.path.suffix)
+    _count_added(ex, item, obj.blob_sha256)
     ex.guard("after-ingest")
     if obj.id != item.image_id:
         ex.skip(occ.path, "identity-changed")
@@ -989,6 +1004,17 @@ def _item(ex: _Exec, item: Item) -> None:
     # Not in a `finally`: a process that dies mid-item leaves the entry, and
     # with it the object it ingested, a GC root until a run completes.
     _unpend(ex, item.image_id, rel)
+
+
+def _count_added(ex: _Exec, item: Item, blob: str) -> None:
+    """Record the blob a new picture's first ingest added, once per picture,
+    mirroring how the plan counted `bytes_after`."""
+    g = ex.plan.groups.get(item.image_id)
+    if g is None or g.existing or item.image_id in ex.added_bytes:
+        return
+    if not ex.stream_sizes:
+        ex.stream_sizes = {i.stream: i.size for i in ex.plan.items}
+    ex.added_bytes[item.image_id] = ex.stream_sizes.get(blob, item.size)
 
 
 def _placement_for(ex: _Exec, item: Item) -> tuple[bool, int | None, bool] | None:
@@ -1045,6 +1071,7 @@ def _place_and_clean(ex: _Exec, item: Item, blob: str) -> bool:
     _unpend(ex, item.image_id, rel)
     if _unlink_same(ex, occ.path, item.stat):
         ex.out["legacy_deleted"] += 1
+        ex.deleted_bytes += item.raw_size
         written = True
         _drop_thumbs(ex, rel, now)
     if occ.name == assets.AVATAR:
@@ -1512,6 +1539,10 @@ def _journals(ex: _Exec) -> None:
         if image_surfaces.linked(ex.root, d):
             continue
         for p in sorted(d.glob("*.json")):
+            # Asked between journals like between files: a cancel leaves the
+            # rest exactly as they were, and the work map for the rerun.
+            if _stopped(ex):
+                return
             _attempt(ex, p, partial(_journal, ex, wid, p))
 
 
@@ -1588,6 +1619,10 @@ def _execute(ex: _Exec) -> None:
     if ex.out["outcome"] != DONE or _stopped(ex):
         return
     _attempt(ex, None, partial(_journals, ex))
+    # A cancel while the journals settled is a cancelled run, so the work map
+    # stays: its entries are roots until a run completes (Codex review, P2c).
+    if ex.out["outcome"] != DONE or _stopped(ex):
+        return
     ex.guard("before-map-delete")
     if not image_surfaces.linked(ex.root, work_map_path(ex.root)):
         work_map_path(ex.root).unlink(missing_ok=True)
@@ -1633,6 +1668,9 @@ def run(root: Path, *, dry_run: bool, cancel: Callable[[], bool] | None = None) 
                 _execute(ex)
             finally:
                 fields["campaigns_written"] = len(ex.written)
+                # A real run reports what it freed; a dry run, the plan's
+                # figure, which `report(p)` carries.
+                fields["bytes_reclaimed"] = ex.bytes_reclaimed()
         fields["url_subject_keys_kept"] = _url_keys_kept(root)
     except _RootChangedError as exc:
         fields["outcome"], fields["stopped_at"] = ROOT_CHANGED, exc.step

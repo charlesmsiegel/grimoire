@@ -324,6 +324,7 @@ export type ImageMigrationReport = {
   pixel_variants: number;
   bytes_before: number;
   bytes_after: number;
+  /** The plan's figure on a dry run; on a real run, what it actually freed. */
   bytes_reclaimed: number;
   description_conflicts: number;
   placed: number;

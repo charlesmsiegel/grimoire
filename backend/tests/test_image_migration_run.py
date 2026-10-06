@@ -763,6 +763,29 @@ def test_journals_convert_or_retire_out_of_the_glob():
     assert _json(stays)["format"] == 1
 
 
+def test_a_cancel_while_journals_settle_keeps_the_rest_and_the_map():
+    """Codex review, P2c: the journal pass is asked between journals, and a
+    cancel there is a cancelled run -- the work map stays and the journals not
+    yet reached are untouched."""
+    wid, _wroot, _char, wchar = _world()
+    _legacy(wchar, "avatar.png", _png(1))
+    journals = [format1_journal(wid, f"https://example.test/{n}", n * 32,
+                                [image_collections.MEMBER_PREFIX + n * 64])
+                for n in ("a", "b", "c")]
+    before = {p: p.read_bytes() for p in journals}
+
+    def cancel() -> bool:
+        return any(not p.exists() for p in journals)
+
+    rep = _run(cancel=cancel)
+
+    assert rep["outcome"] == "cancelled"
+    assert rep["journals"]["retired"] == 1
+    assert sum(not p.exists() for p in journals) == 1
+    assert all(p.read_bytes() == before[p] for p in journals if p.exists())
+    assert image_migration.work_map_path(_root()).exists()
+
+
 # ---- sidecars, the work map, reports ---------------------------------------------------------
 
 def test_emptied_sidecars_are_deleted():
@@ -892,6 +915,32 @@ def test_a_cancelled_run_still_reports():
 
     assert rep["outcome"] == "cancelled" and rep["placed"] == 1
     assert first.exists() != second.exists()
+
+
+def test_a_real_run_reports_the_bytes_it_freed_not_the_plan():
+    """Codex review, P2d: three copies of one picture plan to free two of them.
+    A run stopped after the first is placed freed one copy's bytes less the
+    blob that replaced it -- fewer than planned -- and a whole run frees what
+    was planned."""
+    _wid, _wroot, _char, wchar = _world()
+    copies = [_legacy(wchar, f"{n}.png", _png(1)) for n in ("avatar", "gallery_1", "gallery_2")]
+    planned = _run(dry_run=True)["bytes_reclaimed"]
+    assert planned > 0
+
+    def cancel() -> bool:
+        return sum(not p.exists() for p in copies) >= 1
+
+    partial = _run(cancel=cancel)
+
+    assert partial["outcome"] == "cancelled" and partial["legacy_deleted"] == 1
+    assert partial["bytes_reclaimed"] < planned
+    assert partial["bytes_reclaimed"] == max(0, len(_png(1)) - len(image_store.blob_path(
+        image_store.read_fresh(_id(_png(1))).blob_sha256, "png").read_bytes()))
+
+    rest = _run()
+    assert rest["outcome"] == "done" and rest["legacy_deleted"] == 2
+    # The blob was already there, so the rerun frees both remaining copies whole.
+    assert rest["bytes_reclaimed"] == 2 * len(_png(1))
 
 
 @pytest.mark.parametrize("linked", ["refs-folder", "ref-file"])
