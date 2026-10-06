@@ -1043,13 +1043,20 @@ def _play_key(row: dict) -> tuple:
     return (1, parsed["number"], "", row["id"])
 
 
+def play_order(rows: list[dict]) -> list[dict]:
+    """`scenes_read.list_scenes` rows (newest-updated first) in play order --
+    what the prompt's recent window and the candidates read's scene list are
+    both ordered by."""
+    return sorted(rows, key=_play_key)
+
+
 def _live_scenes(cid: str) -> list[str]:
     """The scenes that exist, in play order -- the set persist 1's
     `pending.evidence_ok` checks a proposal against, so nothing outside it is
     shown as evidence. Empty when the scene list cannot be read."""
     none: list[dict] = []
     rows = _soft(scenes_read.list_scenes, none, cid)
-    return [row["id"] for row in sorted(rows, key=_play_key)]
+    return [row["id"] for row in play_order(rows)]
 
 
 class _Context:

@@ -623,7 +623,10 @@ would answer neither question.
   migration is the one part of a module edit that writes a campaign's *own*
   file rather than what it inherits. A write answered **non-2xx** stamps for
   itself too, since the middleware only sees success: `proposals.project` is
-  reached by a recovery that heals a transcript and then answers 409. A route
+  reached by a recovery that heals a transcript and then answers 409, and a
+  continuity review apply or dismiss that an I/O error stops after one of its
+  writes landed answers 500 naming the parts that did (`partial_apply`,
+  `partial_dismiss` in `routes/continuity.py`). A route
   that mutates a *different*
   campaign than the one in its path says so with `@leaves_campaign_unchanged`
   (`POST /fork`, whose source is never written to) — otherwise a fork would
