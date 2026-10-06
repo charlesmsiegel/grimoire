@@ -59,6 +59,9 @@ export type ContinuityReview = {
   wrote(): void;
   /** Show a finding as a `409 stale_candidate` says it is now (§12.9). */
   applyCurrent(id: string, current: Current): void;
+  /** A `409 stale_candidate` said an evidence scene moved: the finding stays
+   *  disabled, whatever a re-read says, until a Refresh or a write. */
+  evidenceMoved(id: string): void;
 };
 
 /** The sweep a run ended with, landed or failed. A failed reconcile copies its
@@ -71,6 +74,14 @@ function sweepOf(outcome: { result?: { sweep?: string }; error?: unknown }): str
     return typeof sweep === "string" ? sweep : undefined;
   }
   return undefined;
+}
+
+/** `map` without `id`, or `map` itself when it has none (no re-render). */
+function without<T>(map: Record<string, T>, id: string): Record<string, T> {
+  if (!(id in map)) return map;
+  const rest = { ...map };
+  delete rest[id];
+  return rest;
 }
 
 export function useContinuityReview(cid: string, epoch: number,
@@ -87,6 +98,8 @@ export function useContinuityReview(cid: string, epoch: number,
   /** The current records a 409 said a finding has, by candidate id, laid over
    *  the read until the next write or switch. */
   const [overrides, setOverrides] = useState<Record<string, Current>>({});
+  /** Findings whose cited evidence a 409 said has moved, by candidate id. */
+  const [moved, setMoved] = useState<Record<string, true>>({});
 
   const control = useRef<AbortController | null>(null);
   /** The sweep in hand, single-flight across Refresh and follow. */
@@ -99,6 +112,7 @@ export function useContinuityReview(cid: string, epoch: number,
     setSweep(null);
     setRefreshNote(null);
     setOverrides({});
+    setMoved({});
     return () => { ctl.abort(); };
   }, [cid]);
 
@@ -161,6 +175,11 @@ export function useContinuityReview(cid: string, epoch: number,
           ? (outcome.result.llm === "off" ? NO_MODEL_NOTE : null)
           : `${FAILED_NOTE} ${errorText(outcome.error)}`);
         // Landed or failed alike: persist 1 lands before the model is asked.
+        // What a 409 laid over the last read is the sweep's to answer now: it
+        // re-found each finding against the records as they are, and voided
+        // any proposal whose evidence moved.
+        setOverrides({});
+        setMoved({});
         reread();
         if (sweepOf(outcome) !== "incremental") break;
       }
@@ -173,18 +192,26 @@ export function useContinuityReview(cid: string, epoch: number,
 
   const wrote = useCallback(() => {
     setOverrides({});
+    setMoved({});
     onWrote();
   }, [onWrote]);
 
   const applyCurrent = useCallback((id: string, current: Current) => {
     setOverrides((o) => ({ ...o, [id]: current }));
+    setMoved((m) => without(m, id));
+  }, []);
+
+  const evidenceMoved = useCallback((id: string) => {
+    setMoved((m) => ({ ...m, [id]: true }));
+    setOverrides((o) => without(o, id));
   }, []);
 
   const rawCandidates = cands && cands.cid === cid ? cands.data : null;
   const state = cont && cont.cid === cid ? cont.data : null;
 
   const candidates = useMemo((): ContinuityCandidates | null | "failed" => {
-    if (!rawCandidates || rawCandidates === "failed" || !Object.keys(overrides).length) {
+    if (!rawCandidates || rawCandidates === "failed"
+        || (!Object.keys(overrides).length && !Object.keys(moved).length)) {
       return rawCandidates;
     }
     // A 409 that carried the records as they are now: the detail re-renders
@@ -194,7 +221,12 @@ export function useContinuityReview(cid: string, epoch: number,
     // write re-reads.
     return {
       ...rawCandidates,
+      // An evidence 409 is the other way round: the fingerprint still holds,
+      // but the proposal cites a scene that is gone, and only a Refresh
+      // re-asks it -- so the finding stays disabled even if a re-read raced
+      // the rename and still calls it fresh.
       candidates: rawCandidates.candidates.map((c) => {
+        if (moved[c.id]) return { ...c, stale: true, stale_reason: "evidence" as const };
         const o = overrides[c.id];
         return o
           ? { ...c, fingerprint: o.fingerprint, records: o.records, stale: false,
@@ -202,7 +234,7 @@ export function useContinuityReview(cid: string, epoch: number,
           : c;
       }),
     };
-  }, [rawCandidates, overrides]);
+  }, [rawCandidates, overrides, moved]);
 
   const counts = useMemo((): Record<ContinuityGroup, number | null> => {
     const found = candidates && candidates !== "failed" ? candidates.candidates : null;
@@ -226,6 +258,6 @@ export function useContinuityReview(cid: string, epoch: number,
   return {
     candidates, state, counts,
     refreshing: sweep !== null, following: sweep === "follow",
-    refreshNote, refresh, reread, wrote, applyCurrent,
+    refreshNote, refresh, reread, wrote, applyCurrent, evidenceMoved,
   };
 }

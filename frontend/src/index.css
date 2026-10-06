@@ -3685,6 +3685,36 @@ a.column-back { text-decoration: none; }
   letter-spacing: 0.1em; text-transform: uppercase;
 }
 .chip.continuity-broken { background: transparent; color: var(--alert); border-color: var(--alert); cursor: default; }
+/* The finding detail (§12.2): the list/detail pattern's .detail-view, with the
+   records and why they were found in main, and the actions in the sidebar.
+   Actions stack, one per line, because their names carry the records' titles
+   ("Mara's map continues Winifred's chart") and would not fit side by side. */
+.continuity-back { margin-bottom: 8px; }
+.continuity-record { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.continuity-record:last-of-type { border-bottom: 0; }
+.continuity-record-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.continuity-record .field-hint { margin: 6px 0 0; }
+.continuity-beats { margin: 8px 0 0; padding-left: 18px; line-height: 1.5; }
+.continuity-beats li + li { margin-top: 4px; }
+.continuity-signals, .continuity-proposal { margin-top: 16px; }
+.continuity-signals h4 {
+  margin: 0 0 6px; font-family: var(--fm); font-size: 10px;
+  text-transform: uppercase; letter-spacing: 0.16em; color: var(--muted);
+}
+.continuity-signals ul { margin: 0; padding-left: 18px; line-height: 1.5; }
+.continuity-proposal-label { margin: 0 0 4px; color: var(--ink); }
+.continuity-evidence { margin: 6px 0 0; }
+.detail-sidebar .continuity-actions { flex-direction: column; align-items: stretch; }
+.continuity-stale-note { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.continuity-stale-note p { margin: 0; color: var(--alert); }
+.continuity-due { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.continuity-form { display: flex; flex-direction: column; gap: 8px; }
+.continuity-form textarea, .continuity-form select { width: 100%; box-sizing: border-box; }
+.continuity-form label { display: flex; flex-direction: column; gap: 4px; }
+.continuity-form .form-actions { margin-top: 0; }
+.continuity-error p { margin: 0 0 8px; }
+.continuity-note, .continuity-confirm { margin: 0 0 12px; }
+.continuity-note { color: var(--muted); }
 
 /* ---- editing a row by hand ---- */
 /* Until these controls the only writer of any of this was the absorb pass, so

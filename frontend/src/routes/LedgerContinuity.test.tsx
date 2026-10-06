@@ -600,3 +600,467 @@ test("an empty group says so", async () => {
   renderLedger("/campaigns/run/ledger/continuity/closures");
   expect(await main().findByText(/nothing here may be finished/i)).toBeInTheDocument();
 });
+
+// ---- the finding detail (Task 17, §12.2–§12.4, §28.9) ----------------------
+
+/** Every scene, actor and event the detail fixtures mention, named. */
+const NAMES = {
+  "001--realm-road": "Realm road",
+  "002--saltmarch-eve": "Saltmarch Eve",
+  "characters:mara": "Mara",
+  "event:the-coronation": "The coronation",
+};
+const SCENES = [
+  { id: "002--saltmarch-eve", title: "Saltmarch Eve" },
+  { id: "001--realm-road", title: "Realm road" },
+];
+
+// A model-written plot id holding a "/" (Review Focus 1).
+const MAP_D = record("thread:mara/map", "Mara's map", {
+  last_scene: { id: "001--realm-road", title: "Realm road" },
+  latest_beat: "Mara unrolled the map.",
+  beats: [{ scene: "001--realm-road", text: "Mara unrolled the map." }],
+});
+const CHART_D = record("thread:winifred-s-chart", "Winifred's chart", {
+  beats: [{ scene: "002--saltmarch-eve", text: "Winifred marked the shoals." }],
+});
+const SER_OATH = record("commitment:seraphine-s-oath", "Seraphine's oath");
+const OATH_DUE = record("commitment:mara-s-oath", "Mara's oath", { due: "Saltmarch Eve" });
+const EVENT = record("event:the-coronation", "The coronation", { due: "Saltmarch Eve" });
+
+const PAIR = finding("possible_duplicate-aaaaaaaaaaaaaaaa", "possible_duplicate", "overlaps",
+                     [MAP_D, CHART_D], {
+  signals: { title_exact: false, slug_equal: true, lexical: 0.7, cosine: 0.8123,
+             shared_actors: ["characters:mara"], shared_scenes: ["001--realm-road"],
+             shared_anchors: ["event:the-coronation"], via: "slug" },
+  proposal: { decision: "duplicate", from: MAP_D.ref, to: CHART_D.ref, relation: "",
+              status: "", reason: "Both follow the one chart.",
+              evidence_scenes: ["002--saltmarch-eve"] },
+});
+const OATHS = finding("possible_duplicate-bbbbbbbbbbbbbbbb", "possible_duplicate", "overlaps",
+                      [OATH_DUE, SER_OATH]);
+const CROSS = finding("possible_relation-cccccccccccccccc", "possible_relation", "overlaps",
+                      [OATH, MAP_D]);
+const TEMPORAL = finding("possible_relation-dddddddddddddddd", "possible_relation",
+                         "overlaps", [OATH, EVENT], {
+  signals: { reason: "temporal", in_days: 4 },
+  proposal: { decision: "before", from: OATH.ref, to: EVENT.ref, relation: "before",
+              status: "", reason: "The oath is owed before the crowning.",
+              evidence_scenes: [] },
+});
+const CLOSE_ME = finding("possible_thread_closure-eeeeeeeeeeeeeeee",
+                         "possible_thread_closure", "closures", [CORONATION], {
+  signals: { reason: "stale", days_since: 40 },
+  proposal: { decision: "close", from: "", to: "", relation: "", status: "",
+              reason: "The crown was placed.", evidence_scenes: ["001--realm-road"] },
+});
+const RESOLVE_ME = finding("possible_commitment_resolution-ffffffffffffffff",
+                           "possible_commitment_resolution", "resolutions", [OATH]);
+
+const DETAIL: ContinuityCandidates = {
+  ...EMPTY_CANDIDATES, names: NAMES, scenes: SCENES,
+  candidates: [PAIR, OATHS, CROSS, TEMPORAL, CLOSE_ME, RESOLVE_ME, OVERLAP],
+};
+
+const at = (c: ContinuityCandidate) =>
+  `/campaigns/run/ledger/continuity/${c.group}/${c.id}`;
+const aside = () => within(screen.getByRole("complementary", { name: "Finding actions" }));
+/** The sidebar, once the detail has rendered it. */
+const sidebar = async () =>
+  within(await screen.findByRole("complementary", { name: "Finding actions" }));
+const applied = () => (api.applyCandidate as any).mock.calls;
+
+describe("the finding detail", () => {
+  beforeEach(() => {
+    (api.continuityCandidates as any).mockResolvedValue(DETAIL);
+  });
+
+  test("a candidate opens a read-only detail", async () => {
+    renderLedger("/campaigns/run/ledger/continuity/overlaps");
+    fireEvent.click(await main().findByRole("button", {
+      name: /^mara's map \/ winifred's chart.*same business \(merge\)$/i }));
+    expect(screen.getByTestId("here")).toHaveTextContent(at(PAIR));
+    expect(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(document.querySelector("textarea")).toBeNull();
+    const m = main();
+    expect(m.getByRole("heading", { level: 3 })).toBeInTheDocument();
+    expect(m.getByRole("link", { name: "Mara's map" })).toBeInTheDocument();
+    expect(m.getByRole("link", { name: "Winifred's chart" })).toBeInTheDocument();
+    expect(m.getByText("Mara unrolled the map.")).toBeInTheDocument();
+    expect(m.getByText("Same slug")).toBeInTheDocument();
+    expect(m.queryByText("Same title")).toBeNull();
+    expect(m.getByText("Shared characters: Mara")).toBeInTheDocument();
+    expect(m.getByText("Shared dates: The coronation")).toBeInTheDocument();
+    expect(m.getByText("Shared scenes: 1")).toBeInTheDocument();
+    expect(m.getByText("Meaning overlap 0.81 — a discovery signal, not confidence"))
+      .toBeInTheDocument();
+    expect(m.getByText("Suggested: same business (merge)")).toBeInTheDocument();
+    expect(m.getByText("Both follow the one chart.")).toBeInTheDocument();
+    // Evidence scenes navigate to the scene.
+    expect(m.getAllByRole("link", { name: "Saltmarch Eve" })[0])
+      .toHaveAttribute("href", "/campaigns/run/scenes/002--saltmarch-eve");
+    // The sidebar carries the metadata too.
+    expect(aside().getByText("Possible overlap")).toBeInTheDocument();
+    // "‹ All findings" goes back to the list.
+    fireEvent.click(m.getByRole("button", { name: "‹ All findings" }));
+    expect(screen.getByTestId("here"))
+      .toHaveTextContent(/^\/campaigns\/run\/ledger\/continuity\/overlaps$/);
+  });
+
+  test("apply requires an explicit action", async () => {
+    renderLedger(at(PAIR));
+    expect(await (await sidebar()).findByRole("button", { name: "Keep Mara's map" })).toBeEnabled();
+    expect(api.applyCandidate).not.toHaveBeenCalled();
+    expect(api.dismissCandidate).not.toHaveBeenCalled();
+  });
+
+  test("the canonical side is selectable", async () => {
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0]).toEqual(["run", PAIR.id, {
+      op: "alias", canonical: "thread:winifred-s-chart", expect_fingerprint: PAIR.fingerprint,
+    }]);
+    renderLedger(at(PAIR));
+    const sides = await screen.findAllByRole("button", { name: "Keep Mara's map" });
+    fireEvent.click(sides[sides.length - 1]);
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(2));
+    expect(applied()[1][2]).toEqual({
+      op: "alias", canonical: "thread:mara/map", expect_fingerprint: PAIR.fingerprint,
+    });
+  });
+
+  test("thread pairs offer continues and subthread both ways", async () => {
+    renderLedger(at(PAIR));
+    const a = await (await sidebar()).findByRole("button", { name: "Mara's map continues Winifred's chart" });
+    expect(aside().getByRole("button", { name: "Winifred's chart continues Mara's map" }))
+      .toBeInTheDocument();
+    expect(aside().getByRole("button", { name: "Mara's map is a subthread of Winifred's chart" }))
+      .toBeInTheDocument();
+    expect(aside().getByRole("button", { name: "Winifred's chart is a subthread of Mara's map" }))
+      .toBeInTheDocument();
+    fireEvent.click(a);
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).toEqual({
+      op: "link", from: MAP_D.ref, to: CHART_D.ref, relation: "continues",
+      expect_fingerprint: PAIR.fingerprint,
+    });
+  });
+
+  test("a liveness mismatch confirmation resubmits with the flag", async () => {
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+      409, "Mara's map is open but Winifred's chart is closed", "liveness_mismatch", {
+        kind: "liveness_mismatch", detail: "Mara's map is open but Winifred's chart is closed",
+        source: { status: "open", kind: "", due: "" },
+        canonical: { ref: CHART_D.ref, status: "closed", kind: "", due: "" },
+      }));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await screen.findByText(/Merging will hide an open thread behind a closed one/))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Merge anyway" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(2));
+    expect(applied()[1][2]).toEqual({
+      op: "alias", canonical: CHART_D.ref, expect_fingerprint: PAIR.fingerprint,
+      accept_status_change: true,
+    });
+  });
+
+  test("the due copy is sent when ticked", async () => {
+    renderLedger(at(OATHS));
+    const box = await (await sidebar()).findByRole("checkbox", {
+      name: "Also copy the due date “Saltmarch Eve” to Seraphine's oath" });
+    fireEvent.click(box);
+    fireEvent.click(aside().getByRole("button", { name: "Keep Seraphine's oath" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).toEqual({
+      op: "alias", canonical: SER_OATH.ref, copy_due: true,
+      expect_fingerprint: OATHS.fingerprint,
+    });
+  });
+
+  test("the due copy is not sent when the kept record is the one with the due", async () => {
+    renderLedger(at(OATHS));
+    fireEvent.click(await (await sidebar()).findByRole("checkbox", { name: /Also copy the due date/ }));
+    fireEvent.click(aside().getByRole("button", { name: "Keep Mara's oath" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).not.toHaveProperty("copy_due");
+  });
+
+  test("a closure reveals its form and sends the beat with its evidence scene", async () => {
+    renderLedger(at(CLOSE_ME));
+    const close = await (await sidebar()).findByRole("button", { name: "Close thread" });
+    expect(screen.queryByRole("textbox", { name: "Closing beat" })).toBeNull();
+    fireEvent.click(close);
+    const beat = screen.getByRole("textbox", { name: "Closing beat" });
+    const select = screen.getByRole("combobox", { name: "Evidence scene" });
+    // Defaulted to the proposal's first evidence scene; options newest first.
+    expect(select).toHaveValue("001--realm-road");
+    const options = within(select).getAllByRole("option").map((o) => o.textContent);
+    expect(options.filter((t) => t !== "No scene")).toEqual(["Saltmarch Eve", "Realm road"]);
+    expect(api.applyCandidate).not.toHaveBeenCalled();
+    fireEvent.change(beat, { target: { value: "The crown is placed." } });
+    fireEvent.change(select, { target: { value: "002--saltmarch-eve" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).toEqual({
+      op: "close", beat: "The crown is placed.", scene: "002--saltmarch-eve",
+      expect_fingerprint: CLOSE_ME.fingerprint,
+    });
+  });
+
+  test("a closure with no beat sends no scene, and a beat needs a scene", async () => {
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, candidates: [{ ...CLOSE_ME, proposal: null }] });
+    renderLedger(at(CLOSE_ME));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
+    const select = screen.getByRole("combobox", { name: "Evidence scene" });
+    expect((select as HTMLSelectElement).value).toBe("");
+    fireEvent.change(screen.getByRole("textbox", { name: "Closing beat" }),
+                     { target: { value: "The crown is placed." } });
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    fireEvent.change(screen.getByRole("textbox", { name: "Closing beat" }),
+                     { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).toEqual({ op: "close", expect_fingerprint: CLOSE_ME.fingerprint });
+  });
+
+  test("a resolution sends its status, and Cancel closes the form", async () => {
+    renderLedger(at(RESOLVE_ME));
+    for (const name of ["Fulfilled", "Broken", "Expired", "Keep open", "Dismiss finding"]) {
+      expect(await (await sidebar()).findByRole("button", { name })).toBeInTheDocument();
+    }
+    fireEvent.click(aside().getByRole("button", { name: "Broken" }));
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("textbox", { name: "Closing beat" })).toBeNull();
+    fireEvent.click(aside().getByRole("button", { name: "Broken" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).toEqual({
+      op: "resolve", status: "broken", expect_fingerprint: RESOLVE_ME.fingerprint,
+    });
+  });
+
+  test("keep open and dismiss set the finding aside", async () => {
+    renderLedger(at(CLOSE_ME));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep open" }));
+    await waitFor(() => expect(api.dismissCandidate).toHaveBeenCalledWith(
+      "run", CLOSE_ME.id, "keep_open", CLOSE_ME.fingerprint));
+    renderLedger(at(PAIR));
+    const dismiss = await screen.findAllByRole("button", { name: "Dismiss" });
+    fireEvent.click(dismiss[dismiss.length - 1]);
+    await waitFor(() => expect(api.dismissCandidate).toHaveBeenCalledWith(
+      "run", PAIR.id, "dismiss", PAIR.fingerprint));
+    expect(api.applyCandidate).not.toHaveBeenCalled();
+  });
+
+  test("a temporal pair accepts with a relation defaulted to the proposal", async () => {
+    renderLedger(at(TEMPORAL));
+    const accept = await (await sidebar()).findByRole("button", { name: "Accept" });
+    expect(aside().getByRole("button", { name: "Related" })).toBeInTheDocument();
+    expect(aside().queryByRole("button", { name: /^Keep|Pays off/ })).toBeNull();
+    expect(screen.queryByRole("combobox", { name: "Relation" })).toBeNull();
+    fireEvent.click(accept);
+    const relation = screen.getByRole("combobox", { name: "Relation" });
+    expect(relation).toHaveValue("before");
+    fireEvent.change(relation, { target: { value: "by" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    expect(applied()[0][2]).toEqual({
+      op: "link", from: OATH.ref, to: EVENT.ref, relation: "by",
+      expect_fingerprint: TEMPORAL.fingerprint,
+    });
+  });
+
+  test("a stale 409 re-renders current records and does not start a run", async () => {
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+      409, "Records have changed since this was found.", "stale_candidate", {
+        kind: "stale_candidate", detail: "Records have changed since this was found.",
+        reason: "records",
+        current: { fingerprint: "fp-now",
+                   records: [{ ...MAP_D, title: "Mara's sea map" }, CHART_D] },
+      }));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await main().findByRole("link", { name: "Mara's sea map" })).toBeInTheDocument();
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    expect(api.reconcileContinuity).not.toHaveBeenCalled();
+    const again = aside().getByRole("button", { name: "Keep Winifred's chart" });
+    expect(again).toBeEnabled();
+    expect(aside().getByRole("button", { name: "Keep Mara's sea map" })).toBeEnabled();
+    fireEvent.click(again);
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(2));
+    expect(applied()[1][2]).toEqual({
+      op: "alias", canonical: CHART_D.ref, expect_fingerprint: "fp-now",
+    });
+  });
+
+  test("an evidence 409 keeps the actions disabled and offers Refresh", async () => {
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+      409, "Records have changed since this was found.", "stale_candidate", {
+        kind: "stale_candidate", reason: "evidence",
+        current: { fingerprint: PAIR.fingerprint, records: [MAP_D, CHART_D] },
+      }));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await (await sidebar()).findByText(
+      "An evidence scene has been renamed or removed since this was found."))
+      .toBeInTheDocument();
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    expect(aside().getByRole("button", { name: "Keep Winifred's chart" })).toBeDisabled();
+    expect(aside().getByRole("button", { name: "Dismiss" })).toBeDisabled();
+    expect(api.reconcileContinuity).not.toHaveBeenCalled();
+    const refresh = aside().getByRole("button", { name: "Refresh" });
+    expect(refresh).toBeEnabled();
+    fireEvent.click(refresh);
+    await waitFor(() => expect(api.reconcileContinuity).toHaveBeenCalledTimes(1));
+  });
+
+  test("a 409 with a malformed current body falls back to a re-read", async () => {
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+      409, "Records have changed since this was found.", "stale_candidate", {
+        kind: "stale_candidate", reason: "records", current: { fingerprint: 7 },
+      }));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    expect(api.reconcileContinuity).not.toHaveBeenCalled();
+    // Nothing was laid over the read: the finding is as the re-read says.
+    expect(main().getByRole("link", { name: "Mara's map" })).toBeInTheDocument();
+    fireEvent.click(aside().getByRole("button", { name: "Keep Winifred's chart" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(2));
+    expect(applied()[1][2]).toHaveProperty("expect_fingerprint", PAIR.fingerprint);
+  });
+
+  test("a successful apply returns to the group list", async () => {
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    await waitFor(() => expect(screen.getByTestId("here"))
+      .toHaveTextContent(/^\/campaigns\/run\/ledger\/continuity\/overlaps$/));
+    expect(await main().findByText("Merged Mara's map into Winifred's chart."))
+      .toBeInTheDocument();
+    expect(screen.queryByRole("complementary", { name: "Finding actions" })).toBeNull();
+    // A write re-reads the ledger and the review (one epoch).
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    // Opening another finding clears the confirmation.
+    fireEvent.click(main().getByRole("button", { name: /mara's oath \/ seraphine's oath/i }));
+    expect(main().queryByText("Merged Mara's map into Winifred's chart.")).toBeNull();
+  });
+
+  test("a successful dismiss returns to the group list", async () => {
+    renderLedger(at(CLOSE_ME));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Dismiss finding" }));
+    await waitFor(() => expect(screen.getByTestId("here"))
+      .toHaveTextContent(/^\/campaigns\/run\/ledger\/continuity\/closures$/));
+    expect(await main().findByText(/^Dismissed/)).toBeInTheDocument();
+  });
+
+  test("a deep link does not claim not-pending while reading", async () => {
+    (api.continuityCandidates as any).mockReturnValue(new Promise(() => {}));
+    renderLedger(at(PAIR));
+    expect(await main().findByText("Reading the findings…")).toBeInTheDocument();
+    expect(screen.queryByText("This finding is no longer pending.")).toBeNull();
+  });
+
+  test("an address to a finding that is not pending shows its group", async () => {
+    renderLedger("/campaigns/run/ledger/continuity/overlaps/possible_duplicate-9999999999999999");
+    expect(await main().findByText("This finding is no longer pending.")).toBeInTheDocument();
+    expect(main().getByRole("button", { name: /^mara's map \/ winifred's chart.*same business \(merge\)$/i }))
+      .toBeInTheDocument();
+  });
+
+  test("commitment pairs never offer continues", async () => {
+    renderLedger(at(OATHS));
+    expect(await (await sidebar()).findByRole("button", { name: "Keep Mara's oath" })).toBeInTheDocument();
+    expect(aside().getByRole("button", { name: "Keep Seraphine's oath" })).toBeInTheDocument();
+    expect(aside().getByRole("button", { name: "Related" })).toBeInTheDocument();
+    expect(aside().queryByRole("button", { name: /continues|subthread/ })).toBeNull();
+  });
+
+  test("record titles link to their ledger rows, and no raw id is shown", async () => {
+    renderLedger(at(PAIR));
+    const chart = await main().findByRole("link", { name: "Winifred's chart" });
+    expect(chart).toHaveAttribute("href", "/campaigns/run/ledger/threads/winifred-s-chart");
+    expect(chart).toHaveClass("chip");
+    expect(main().getByRole("link", { name: "Mara's map" }))
+      .toHaveAttribute("href", "/campaigns/run/ledger/threads/mara%2Fmap");
+    for (const link of main().getAllByRole("link", { name: "Realm road" })) {
+      expect(link).toHaveAttribute("href", "/campaigns/run/scenes/001--realm-road");
+    }
+    expect(main().queryAllByText(/^\d{3}--/)).toHaveLength(0);
+    expect(main().queryAllByText(/^characters:/)).toHaveLength(0);
+    // A ref is `<type>:<id>`, with no space after the colon; the "Shared
+    // characters: Mara" label is not one.
+    expect(screen.getByRole("main").textContent).not.toMatch(/\d{3}--|characters:\S|event:\S/);
+    fireEvent.click(chart);
+    expect(screen.getByTestId("here"))
+      .toHaveTextContent("/campaigns/run/ledger/threads/winifred-s-chart");
+  });
+
+  test("deep links open the right group and candidate", async () => {
+    renderLedger(at(CLOSE_ME));
+    expect(await (await sidebar()).findByRole("button", { name: "Close thread" })).toBeInTheDocument();
+    expect(main().getByRole("heading", { name: "Possible closures" })).toBeInTheDocument();
+    expect(main().getByRole("link", { name: "The coronation" }))
+      .toHaveAttribute("href", "/campaigns/run/ledger/threads/the-coronation");
+    expect(groupRow(/possible closures/i)).toHaveClass("active");
+  });
+
+  test("an apply answered not_found shows the finding is no longer pending", async () => {
+    (api.applyCandidate as any).mockRejectedValueOnce(
+      new ApiError(404, "This finding is no longer pending.", "not_found",
+                   { kind: "not_found" }));
+    (api.continuityCandidates as any)
+      .mockResolvedValueOnce(DETAIL)
+      .mockResolvedValue({ ...DETAIL, candidates: DETAIL.candidates.filter((c) => c !== PAIR) });
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await main().findByText("This finding is no longer pending.")).toBeInTheDocument();
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("complementary", { name: "Finding actions" })).toBeNull();
+    expect(main().getByRole("button", { name: /mara's oath \/ seraphine's oath/i }))
+      .toBeInTheDocument();
+    expect(api.reconcileContinuity).not.toHaveBeenCalled();
+  });
+
+  test("any other refusal shows its text", async () => {
+    (api.applyCandidate as any).mockRejectedValueOnce(
+      new ApiError(500, "the finding was only partly applied", "partial_apply", {}));
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await (await sidebar()).findByText("the finding was only partly applied"))
+      .toBeInTheDocument();
+    expect(screen.getByTestId("here")).toHaveTextContent(at(PAIR));
+  });
+
+  test("cross-type pairs never offer a merge", async () => {
+    renderLedger(at(CROSS));
+    const pays = await (await sidebar()).findByRole("button", { name: "Pays off" });
+    expect(aside().queryByRole("button", { name: /^Keep/ })).toBeNull();
+    expect(aside().queryByRole("button", { name: /continues|subthread/ })).toBeNull();
+    expect(aside().getByRole("button", { name: "Related" })).toBeInTheDocument();
+    expect(aside().getByRole("button", { name: "Dismiss" })).toBeInTheDocument();
+    fireEvent.click(pays);
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    // Thread → commitment, whichever side the finding listed first (§5.3).
+    expect(applied()[0][2]).toEqual({
+      op: "link", from: MAP_D.ref, to: OATH.ref, relation: "pays_off",
+      expect_fingerprint: CROSS.fingerprint,
+    });
+  });
+
+  test("stale findings disable every action", async () => {
+    renderLedger(at(OVERLAP));
+    expect(await (await sidebar()).findByText("Records have changed since this was found."))
+      .toBeInTheDocument();
+    const buttons = aside().getAllByRole("button");
+    const actions = buttons.filter((b) => b.textContent !== "Refresh");
+    expect(actions.length).toBeGreaterThanOrEqual(8);
+    for (const b of actions) expect(b).toBeDisabled();
+    expect(aside().getByRole("button", { name: "Refresh" })).toBeEnabled();
+    expect(api.applyCandidate).not.toHaveBeenCalled();
+  });
+});

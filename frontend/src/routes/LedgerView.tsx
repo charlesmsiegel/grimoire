@@ -713,7 +713,11 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
-        {activeGroup && <ContinuityReview cid={cid} group={activeGroup} review={review} />}
+        {activeGroup && (
+          <ContinuityReview cid={cid} group={activeGroup} review={review}
+                            candidate={target?.section === "continuity"
+                              ? target.candidate : undefined} />
+        )}
         {tableSection && <div className="shelf-head">
           <div>
             <div className="eyebrow">{current.eyebrow}</div>

@@ -8,17 +8,24 @@
  *  which is a Refresh. Leaving it only in the hidden column would leave the
  *  reader looking at a finding they can neither act on nor update.
  *
- *  A finding is a button that addresses it; nothing here acts on one. The
- *  detail and its explicit actions are the next pane in.
+ *  A finding in the list is a button that addresses it; nothing in the list
+ *  acts on one. Its address opens `CandidateDetail`, read-only, whose explicit
+ *  actions land here: this pane sends them, reads what a refusal means
+ *  (`ApiError.kind`), and on a 2xx returns to the group with one line saying
+ *  what was done (Decision 24).
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../../api/errors";
-import type { ContinuityCandidate, ContinuityGroup } from "../../api/types";
+import type {
+  ContinuityApply, ContinuityCandidate, ContinuityGroup,
+} from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
+import { CandidateDetail, type DetailError } from "./CandidateDetail";
 import { DismissedGroup } from "./DismissedGroup";
 import {
-  GROUP_LABELS, KIND_PHRASES, MATCHING_LINES, proposalLabel, STALE_TEXT,
+  GROUP_LABELS, isLive, KIND_PHRASES, LIVENESS_SENTENCES, MATCHING_LINES, proposalLabel,
+  RELATION_PHRASES, STALE_TEXT,
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
 import type { ContinuityReview as Review } from "./useContinuityReview";
@@ -113,11 +120,74 @@ function FindingList(
   );
 }
 
+/** What a refusal carries, read structurally (`api/errors.ts`'s rule): the
+ *  view meets an `ApiError`, but nothing here needs the class. */
+function refusal(err: unknown): { kind?: string; body: Record<string, unknown> } {
+  if (typeof err !== "object" || err === null) return { body: {} };
+  const { kind, body } = err as { kind?: unknown; body?: unknown };
+  return {
+    kind: typeof kind === "string" ? kind : undefined,
+    body: typeof body === "object" && body !== null ? body as Record<string, unknown> : {},
+  };
+}
+
+/** Decision 21's sentence for a `409 liveness_mismatch`, from the standings
+ *  its body carries; null when the body does not say. */
+function livenessSentence(body: Record<string, unknown>): string | null {
+  const { source, canonical } = body as {
+    source?: { status?: unknown }; canonical?: { ref?: unknown; status?: unknown };
+  };
+  const ref = typeof canonical?.ref === "string" ? canonical.ref : "";
+  const type = ref.slice(0, Math.max(ref.indexOf(":"), 0));
+  if (type !== "thread" && type !== "commitment") return null;
+  if (typeof source?.status !== "string" || typeof canonical?.status !== "string") return null;
+  const mine = isLive(type, source.status);
+  if (mine === isLive(type, canonical.status)) return null;
+  return LIVENESS_SENTENCES[type][mine ? "sourceLive" : "canonicalLive"];
+}
+
+/** The one line a landed action leaves behind (Decision 24). */
+function confirmation(c: ContinuityCandidate, body: ContinuityApply | "dismiss" | "keep_open"):
+    string {
+  const title = (ref?: string) =>
+    c.records.find((r) => r.ref === ref)?.title || "the record";
+  const first = c.records[0]?.title || "The record";
+  if (body === "dismiss") return "Dismissed the finding.";
+  if (body === "keep_open") return `Kept ${first} open.`;
+  if (body.op === "alias") {
+    const source = c.records.find((r) => r.ref !== body.canonical);
+    return `Merged ${title(source?.ref)} into ${title(body.canonical)}.`;
+  }
+  if (body.op === "link") {
+    const phrase = (RELATION_PHRASES[body.relation ?? ""] ?? body.relation ?? "").toLowerCase();
+    return `Linked ${title(body.from)}: ${phrase} ${title(body.to)}.`;
+  }
+  if (body.op === "close") return `Closed ${first}.`;
+  return `Marked ${first} ${body.status ?? "resolved"}.`;
+}
+
 export function ContinuityReview(
-  { cid, group, review }: { cid: string; group: ContinuityGroup; review: Review },
+  { cid, group, candidate, review }: {
+    cid: string; group: ContinuityGroup; candidate?: string; review: Review;
+  },
 ) {
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** A refusal of an action on the open finding. */
+  const [detailError, setDetailError] = useState<DetailError | null>(null);
+  /** Findings an action was told are no longer pending (404), held with the
+   *  campaign they came from; a re-read may not have caught up yet. */
+  const [gone, setGone] = useState<{ cid: string; ids: string[] }>({ cid, ids: [] });
+  /** The line a landed action leaves on its group's list. */
+  const [done, setDone] = useState<{ cid: string; group: ContinuityGroup; text: string } | null>(
+    null);
+
+  // Opening a finding (or another one) starts it clean.
+  useEffect(() => {
+    setDetailError(null);
+    if (candidate) setDone(null);
+  }, [candidate]);
 
   /** One reviewed or dismissed write, then the shared re-read (one epoch). */
   async function perform(write: () => Promise<unknown>) {
@@ -133,6 +203,70 @@ export function ContinuityReview(
       setBusy(false);
     }
   }
+
+  /** One action on the open finding: on a 2xx, back to its group with a
+   *  confirmation; otherwise whatever the refusal means. */
+  async function decide(c: ContinuityCandidate, write: () => Promise<unknown>,
+                        said: ContinuityApply | "dismiss" | "keep_open") {
+    if (busy) return;
+    setBusy(true);
+    setDetailError(null);
+    try {
+      await write();
+      review.wrote();
+      setDone({ cid, group: c.group, text: confirmation(c, said) });
+      navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
+    } catch (err: unknown) {
+      refused(c, err, said);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function apply(c: ContinuityCandidate, body: ContinuityApply) {
+    void decide(c, () => api.applyCandidate(cid, c.id, body), body);
+  }
+
+  function refused(c: ContinuityCandidate, err: unknown,
+                   said: ContinuityApply | "dismiss" | "keep_open") {
+    const { kind, body } = refusal(err);
+    if (kind === "liveness_mismatch" && typeof said === "object") {
+      setDetailError({
+        text: `${livenessSentence(body) ?? errorText(err)}.`,
+        action: { label: "Merge anyway",
+                  run: () => apply(c, { ...said, accept_status_change: true }) },
+      });
+    } else if (kind === "stale_candidate") {
+      // Never a run (§12.9): a re-read, and the records as they are now.
+      if (body.reason === "evidence") {
+        review.evidenceMoved(c.id);
+      } else {
+        const current = api.staleCurrent(err);
+        if (current) {
+          review.applyCurrent(c.id, current);
+          setDetailError({ text: "Records have changed since this was found. They are "
+            + "shown as they are now; act again if the finding still holds." });
+        }
+      }
+      review.reread();
+    } else if (kind === "not_found") {
+      setGone((g) => ({ cid, ids: [...(g.cid === cid ? g.ids : []), c.id] }));
+      review.reread();
+    } else {
+      setDetailError({ text: errorText(err) });
+    }
+  }
+
+  const findings = group === "overlaps" || group === "closures" || group === "resolutions"
+    ? group : null;
+  const read = review.candidates && review.candidates !== "failed" ? review.candidates : null;
+  const goneHere = gone.cid === cid ? gone.ids : [];
+  const open = findings && candidate && read && !goneHere.includes(candidate)
+    ? read.candidates.find((c) => c.id === candidate) ?? null
+    : null;
+  // Only once a read has settled: a deep link from Todo never flashes it.
+  const missing = !!(findings && candidate && read && !open);
+  const said = done && done.cid === cid && done.group === group && !candidate ? done.text : null;
 
   return (
     <>
@@ -153,8 +287,26 @@ export function ContinuityReview(
                         onRestore={(fp) => {
                           void perform(() => api.restoreSuppression(cid, fp));
                         }} />
+      ) : open && read ? (
+        <CandidateDetail key={open.id} cid={cid} candidate={open} names={read.names}
+                         scenes={read.scenes} busy={busy} refreshing={review.refreshing}
+                         error={detailError}
+                         onApply={(body) => apply(open, body)}
+                         onDismiss={(decision) => {
+                           void decide(open, () => api.dismissCandidate(
+                             cid, open.id, decision, open.fingerprint), decision);
+                         }}
+                         onBack={() => navigate(ledgerHref(cid, {
+                           section: "continuity", group }))}
+                         onRefresh={() => { void review.refresh(); }} />
       ) : (
-        <FindingList cid={cid} group={group} review={review} />
+        <>
+          {missing && <p className="continuity-note" role="status">
+            This finding is no longer pending.
+          </p>}
+          {said && <p className="continuity-confirm" role="status">{said}</p>}
+          <FindingList cid={cid} group={group} review={review} />
+        </>
       )}
     </>
   );

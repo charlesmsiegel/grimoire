@@ -92,3 +92,36 @@ export const SUPPRESSION_LABELS: Record<string, string> = {
   dismiss: "Dismissed",
   keep_open: "Kept open",
 };
+
+/** Why a finding's actions are off (§12.2): its records moved since the sweep
+ *  found it, or a scene its proposal cites was renamed or removed. Either way
+ *  a Refresh is the way forward. */
+export const STALE_SENTENCES: Record<"records" | "evidence", string> = {
+  records: "Records have changed since this was found.",
+  evidence: "An evidence scene has been renamed or removed since this was found.",
+};
+
+/** What a merge across liveness would hide (Decision 21), by the type of the
+ *  two records and by which side is still live: `source` is the record merged
+ *  away, and it is the one that disappears behind the kept one. */
+export const LIVENESS_SENTENCES: Record<"thread" | "commitment",
+                                       { sourceLive: string; canonicalLive: string }> = {
+  thread: {
+    sourceLive: "Merging will hide an open thread behind a closed one",
+    canonicalLive: "Merging will hide a closed thread behind an open one",
+  },
+  commitment: {
+    sourceLive: "Merging will hide an unresolved commitment behind a resolved one",
+    canonicalLive: "Merging will hide a resolved commitment behind an unresolved one",
+  },
+};
+
+/** The statuses a commitment is resolved by (`store/commitments.RESOLVED`). */
+const RESOLVED = ["fulfilled", "broken", "expired"];
+
+/** Still open / still owed -- `effective.is_live`, the predicate the server's
+ *  liveness check compares. */
+export function isLive(type: "thread" | "commitment", status: string): boolean {
+  const s = status.toLowerCase();
+  return type === "thread" ? s !== "closed" : !RESOLVED.includes(s);
+}
