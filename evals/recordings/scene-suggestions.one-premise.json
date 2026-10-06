@@ -1,0 +1,56 @@
+{
+  "suggestions": [
+    {
+      "title": "The torn corner",
+      "premise": "Mara spreads her torn map across a crate on the Saltmarch docks and asks for help matching the missing corner. Whatever it marks has to be found before the coronation closes the harbour.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-09",
+      "drivers": [
+        {
+          "ref": "thread:maras-map",
+          "action": "advance"
+        },
+        {
+          "ref": "thread:find-the-ledger",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    },
+    {
+      "title": "The torn corner, by lamplight",
+      "premise": "Mara spreads her torn map across a crate on the Saltmarch docks and asks for help matching the missing corner. Whatever it marks has to be found before the coronation closes the harbour.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-10",
+      "drivers": [],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    },
+    {
+      "title": "The torn corner, at dawn",
+      "premise": "Mara spreads her torn map across a crate on the Saltmarch docks and asks for help matching the missing corner. Whatever it marks has to be found before the coronation closes the harbour.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-11",
+      "drivers": [],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    }
+  ],
+  "next_date": "5-Thaw-09"
+}

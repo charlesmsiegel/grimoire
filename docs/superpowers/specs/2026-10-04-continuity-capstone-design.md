@@ -2555,6 +2555,8 @@ At minimum:
 
 There is no scene-suggestion eval case today. Add a `scene-suggestions` case and grader for cases 9–10.
 
+Case 9 is graded on the premises and the spread themselves, not only on titles and claim sets: `suggest.distinct` also fails two kept cards whose premises share at least half their combined words (casefolded, by word), and `suggest.focus_spread` fails a batch of two or more cards whose two or more covered focus refs are all claimed by one card (a focus ref no card claims is `suggest.focus_coverage`'s miss alone). A batch whose cards differ only in title and claims, or that puts both focus drivers on one card beside premise-only filler, is the clone the case names (Slice G final review).
+
 The case-to-check table lives in Appendix B: each of the ten cases names its eval case, its grader check and the counterexample recording that trips that check, and `test_capstone_acceptance.py` holds the table to `evals/cases.py`. Cases 2–8 share one eval case, `continuity-reconcile`, whose first four counterexamples never tripped `reconcile.cross_type`, `reconcile.close` or `reconcile.fulfilled`, so a grader that stopped scoring cases 4, 5 and 7 would have stayed green. The `continuity-reconcile.timid` counterexample trips exactly those three (Slice G plan, Decision 14).
 
 ---
@@ -2959,7 +2961,7 @@ Each acceptance criterion (§32) and the stopping rule (§33), with the tests an
 | AC19 | The gate passes, and both final reviews ran or were stood in for | `make check` (every target, frontend typecheck and template verification included); `evals/run.py` (every recording scores as declared); §31 Slice G's gate bullet, which records both final reviews and who stood in for them (Slice G plan, Task 8) |
 | §33 | The capstone stops at its spec: no kind, node, edge or control beyond it | `test_continuity_candidates.py::test_kinds_are_the_four_in_spec_order`; `test_continuity_graph.py::test_graph_tuples_are_pinned`; `test_suggest_controls.py::test_controls_tuples_are_pinned`; the stopping-rule review over the whole capstone (Slice G plan, Task 8) |
 
-Each of §28.10's ten cases, held to the grader check that scores it and the counterexample recording that trips that check. `test_evals.py::test_recording_scores_as_declared` proves each recording trips exactly the checks it declares, and `test_capstone_acceptance.py` holds this table to those declarations. Where a row names two eval cases, its three columns list the clauses in the same order, separated by `;`.
+Each of §28.10's ten cases, held to the grader check that scores it and the counterexample recording that trips that check. `test_evals.py::test_recording_scores_as_declared` proves each recording trips exactly the checks it declares, and `test_capstone_acceptance.py` holds this table to those declarations. Where a row has two clauses — two eval cases, or two counterexamples of one — its three columns list them in the same order, separated by `;`.
 
 | §28.10 case | Eval case | Check | Tripped by |
 |---|---|---|---|
@@ -2971,5 +2973,5 @@ Each of §28.10's ten cases, held to the grader check that scores it and the cou
 | 6 | `continuity-reconcile` | `reconcile.keep_open` | `eager` |
 | 7 | `continuity-reconcile` | `reconcile.fulfilled` | `timid` |
 | 8 | `continuity-reconcile` | `reconcile.unproven` | `eager` |
-| 9 | `scene-suggestions` | `suggest.focus_coverage`, `suggest.distinct` | `cloned` |
+| 9 | `scene-suggestions`; `scene-suggestions` | `suggest.focus_coverage`, `suggest.distinct`; `suggest.distinct`, `suggest.focus_spread` | `cloned`; `one-premise` |
 | 10 | `scene-suggestions`; `scene-suggestions-anchor-on` | `suggest.date_consistent`; `suggest.on_derived` | `bad-date`; `compliant` (an “on” batch's date is derived from its anchor, so no reply can get it wrong: the compliant recording, graded in a custom calendar, is the evidence) |
