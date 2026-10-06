@@ -2101,6 +2101,11 @@ async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, wh
             continuity_identity.examine, cid, sid, parsed, prepared.facts,
             embed_deadline=continuity_similarity.deadline(budget.remaining()))
         block["matching"] = exam.matching
+        if exam.proposed == 0:
+            # Every row moves a stored record or was dropped: nothing was
+            # proposed-new (§10.2), so this is the empty extraction's skip --
+            # nothing embedded, nothing to rewrite, and (§29) no log row.
+            return parsed, block
         await _resolve_identity(cid, sid, client, conn, why, exam, budget, block)
     except Abandoned:
         raise

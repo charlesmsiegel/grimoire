@@ -213,6 +213,27 @@ def test_an_absorb_proposing_no_records_skips_identity_with_matching_set(client,
     assert body["identity"]["matching"] == "basic"
 
 
+def test_an_absorb_that_only_moves_stored_records_proposes_none_and_logs_no_row(client, scene):
+    """§10.2: a row whose explicit id names a stored record is not
+    proposed-new, so an absorb whose rows all do proposes nothing -- the
+    same phase block as an empty extraction, and (§29) no log row."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    fake = _llm(client, _extraction(plot=[{"id": LEDGER_THREAD[0], "beat": "Mara looked again.",
+                                          "status": "advanced"}]))
+
+    body = _absorb(client, cid, sid)
+
+    assert identity_requests(fake) == []
+    assert body["identity"]["status"] == "skipped"
+    assert body["identity"]["reason"] == "no new records proposed"
+    assert body["identity"]["attempted"] is False
+    assert body["identity"]["counts"] == {}
+    assert body["identity"]["matching"] == "basic"
+    assert [r for r in store.logs.scan(level="info", campaign=cid)
+            if r.get("message") == "continuity identity check"] == []
+
+
 def test_identity_matching_agrees_with_get_continuity(client, scene, monkeypatch):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
