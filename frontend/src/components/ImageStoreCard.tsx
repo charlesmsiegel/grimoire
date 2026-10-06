@@ -14,20 +14,22 @@ const POLL_MS = 1000;
  *  past this the run is left to be rediscovered by the next visit. */
 const POLL_MISSES = 6;
 
-type What = "check" | "migrate" | "find" | "delete";
+type What = "check" | "migrate" | "find" | "delete" | "other";
 const WORKING: Record<What, string> = {
   check: "Checking legacy images…",
   migrate: "Migrating legacy images…",
   find: "Looking for unused images…",
   delete: "Deleting unused images…",
+  other: "An image-store run is in progress…",
 };
 
-/** What a rediscovered run is, from the kind the server recorded: a `migrate`
- *  is a migration (the dry run and the real one share a kind, so a found run
- *  is shown as the real one -- the stronger claim is the safer one to make
- *  about work that may already be changing files), a `gc` is a collection. */
-function whatOf(run: RunHandle): What {
-  return run.kind === "gc" ? "find" : "migrate";
+/** A rediscovered run is described neutrally. The kind the server recorded says
+ *  migrate or gc, but not whether it is the dry run or the real one -- a found
+ *  `gc` may be a deletion, and a found `migrate` may be changing files -- so
+ *  only a run this card started itself, which knows its mode, gets specific
+ *  wording. */
+function whatOf(_run: RunHandle): What {
+  return "other";
 }
 
 function plural(n: number, one: string, many: string): string {
@@ -129,9 +131,11 @@ export function ImageStoreCard() {
 
   async function begin(what: What, start: (attempt: string) => Promise<{ run: RunHandle }>) {
     setError(null);
-    setReport(null);
     try {
       const { run } = await start(newAttemptId());
+      // Only now: a start the server refused (busy, elsewhere) leaves the last
+      // report on screen, and with it a scan's unspent token.
+      setReport(null);
       await follow(run, what);
     } catch (err) {
       if (!mounted.current) return;
@@ -141,7 +145,10 @@ export function ImageStoreCard() {
         // saying so.
         const { runs } = await api.listGlobalRuns().catch(() => ({ runs: [] as RunHandle[] }));
         const found = runs.find((r) => r.cls === "maintenance" && r.state === "running");
-        if (found && mounted.current) void follow(found, whatOf(found));
+        if (found && mounted.current) {
+          setError(null);
+          void follow(found, whatOf(found));
+        }
       }
     }
   }
