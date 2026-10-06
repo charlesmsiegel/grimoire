@@ -166,9 +166,29 @@ function livenessSentence(body: Record<string, unknown>): string | null {
   return LIVENESS_SENTENCES[type][mine ? "sourceLive" : "canonicalLive"];
 }
 
-/** The one line a landed action leaves behind (Decision 24). */
+/** The names of the other records a landed merge carried with it (§5.1's
+ *  Response), read structurally: a dismiss answers without them. */
+function followers(answer: unknown): string[] {
+  const affected = typeof answer === "object" && answer !== null
+    ? (answer as { affected?: unknown }).affected : undefined;
+  if (!Array.isArray(affected)) return [];
+  return affected.flatMap((a: unknown) => {
+    const name = typeof a === "object" && a !== null ? (a as { name?: unknown }).name : undefined;
+    return typeof name === "string" && name ? [name] : [];
+  });
+}
+
+/** "A", "A and B", "A, B and C". */
+function andList(names: string[]): string {
+  return names.length < 2 ? names.join("")
+    : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+/** The one line a landed action leaves behind (Decision 24). A merge names the
+ *  other records that now resolve to the kept one too, so the reader sees its
+ *  whole effect (§5.1). */
 function confirmation(c: ContinuityCandidate, body: ContinuityApply | "dismiss" | "keep_open",
-                      unreadable: string[]): string {
+                      unreadable: string[], others: string[] = []): string {
   const named = (r: CandidateRecord | undefined) => (r ? candidateName(r, unreadable) : "");
   const title = (ref?: string) => named(c.records.find((r) => r.ref === ref)) || "the record";
   const first = named(c.records[0]) || "the record";
@@ -176,7 +196,9 @@ function confirmation(c: ContinuityCandidate, body: ContinuityApply | "dismiss" 
   if (body === "keep_open") return `Kept ${first} open.`;
   if (body.op === "alias") {
     const source = c.records.find((r) => r.ref !== body.canonical);
-    return `Merged ${title(source?.ref)} into ${title(body.canonical)}.`;
+    const merged = `Merged ${title(source?.ref)} into ${title(body.canonical)}`;
+    if (!others.length) return `${merged}.`;
+    return `${merged}; ${andList(others)} now ${others.length > 1 ? "follow" : "follows"} it too.`;
   }
   if (body.op === "link") {
     const phrase = (RELATION_PHRASES[body.relation ?? ""] ?? body.relation ?? "").toLowerCase();
@@ -238,12 +260,12 @@ export function ContinuityReview(
     setBusy(true);
     setDetailError(null);
     try {
-      await write();
+      const answer = await write();
       if (openRef.current.cid !== cid) return;
       review.wrote();
       if (openRef.current.candidate !== c.id) return;
       setDone({ cid, group: c.group, text: confirmation(c, said, review.candidates && review.candidates !== "failed"
-        ? review.candidates.diagnostics.unreadable : []) });
+        ? review.candidates.diagnostics.unreadable : [], followers(answer)) });
       navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
     } catch (err: unknown) {
       if (openRef.current.cid === cid) refused(c, err, said);

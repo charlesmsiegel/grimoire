@@ -1345,6 +1345,33 @@ describe("the finding detail", () => {
     expect(main().queryByText("Merged Mara's map into Winifred's chart.")).toBeNull();
   });
 
+  test("a merge names the other records that now follow the kept one", async () => {
+    // §5.1's Response: a record already merged into the source resolves to
+    // the kept record now, and the confirmation says so -- titled, no ref.
+    (api.applyCandidate as any).mockResolvedValueOnce({
+      ok: true, applied: ["alias", "cache"],
+      affected: [{ ref: "thread:seraphine-s-letter", name: "Seraphine's letter" }],
+    });
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await main().findByText(
+      "Merged Mara's map into Winifred's chart; Seraphine's letter now follows it too."))
+      .toBeInTheDocument();
+    expect(main().queryByText(/thread:/)).toBeNull();
+  });
+
+  test("a merge that carries several others names them all", async () => {
+    (api.applyCandidate as any).mockResolvedValueOnce({
+      ok: true, applied: ["alias", "cache"],
+      affected: [{ ref: "thread:seraphine-s-letter", name: "Seraphine's letter" },
+                 { ref: "thread:saltmarch-debt", name: "The Saltmarch debt" }],
+    });
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    expect(await main().findByText("Merged Mara's map into Winifred's chart; "
+      + "Seraphine's letter and The Saltmarch debt now follow it too.")).toBeInTheDocument();
+  });
+
   test("a successful dismiss returns to the group list", async () => {
     renderLedger(at(CLOSE_ME));
     fireEvent.click(await (await sidebar()).findByRole("button", { name: "Dismiss finding" }));
