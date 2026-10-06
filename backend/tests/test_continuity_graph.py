@@ -18,10 +18,13 @@ from grimoire.store import (
     calendars,
     campaigns,
     chronicle,
+    clock,
     commitments,
+    events,
     overlay,
     plot,
     relationships,
+    scene_ideas,
 )
 from grimoire.store.continuity import (
     canon,
@@ -37,10 +40,12 @@ from grimoire.store.scenes import paths as scenes_paths
 from tests.test_continuity_pressure import (
     _BROKEN_PROVIDER_SRC,
     F,
+    _actor,
     _campaign,
     _plugin,
     _primary,
     _provider,
+    _rule,
 )
 
 #: A plugin that loads but cannot read a date: `__init__` succeeds, so
@@ -654,3 +659,215 @@ def test_a_garbled_plot_costs_only_threads(monkeypatch, tmp_path):
     assert _from(g, OATH, "opened_in") == {f"scene:{s1}"}
     assert "plot" in g["omitted"]
     assert [n["id"] for n in _scene_nodes(g)] == [f"scene:{s1}"]
+
+
+# ---- dated nodes and ideas --------------------------------------------------
+
+
+CORONATION = "event:the-coronation"
+
+
+def _hand_event(cid: str, eid: str, name: str, date: str) -> None:
+    """An unfired event written straight into events.json, as a hand edit
+    would: `events.create` normalizes a date and would refuse "midsummer"."""
+    p = campaigns.campaign_root(cid) / "events.json"
+    data = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+    data[eid] = {"name": name, "date": date, "note": "", "fired": None}
+    p.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _event_campaign(monkeypatch, tmp_path, **kw) -> str:
+    """The clock starts at 05-01 (a blank clock's first advance fires nothing),
+    an event on 05-05 fires on the advance to 05-10, then the coronation is
+    scheduled for 05-13, one unfired event is dated behind the clock (passed)
+    and one is free text (undated)."""
+    cid = _campaign(monkeypatch, tmp_path, now="2026-05-01", **kw)
+    fired = events.create(cid, "Saltmarch Eve", "2026-05-05")
+    clock.advance(cid, to="2026-05-10")
+    assert events.get(cid, fired)["fired"] is not None   # the control: it fired
+    assert events.create(cid, "The coronation", "2026-05-13") == "the-coronation"
+    _hand_event(cid, "mara-s-oath", "Mara's oath", "2026-05-02")
+    _hand_event(cid, "winifred-s-chart", "Winifred's chart", "midsummer")
+    return cid
+
+
+def _of_kind(g: dict, *kinds: str) -> list[dict]:
+    return [n for n in g["nodes"] if n["kind"] in kinds]
+
+
+def test_events_are_all_listed_with_their_status(monkeypatch, tmp_path):
+    cid = _event_campaign(monkeypatch, tmp_path)
+
+    g = graph.build(cid)
+    statuses = {n["id"]: n["status"] for n in _of_kind(g, "event")}
+    assert statuses == {"event:saltmarch-eve": "fired", CORONATION: "scheduled",
+                        "event:mara-s-oath": "passed", "event:winifred-s-chart": "undated"}
+    # The fired event is a node though it is no pressure item.
+    assert "event:saltmarch-eve" not in {i["ref"] for i in pressure.build(cid)["items"]}
+    nodes = _by_id(g)
+    coronation = nodes[CORONATION]
+    assert (coronation["label"], coronation["native"], coronation["findings"]) == (
+        "The coronation", "2026-05-13", [])
+    assert coronation["friendly"] == calendars.friendly(_provider(cid), "2026-05-13")
+    assert coronation["pressure"]["in_days"] == 3
+    assert nodes["event:saltmarch-eve"]["pressure"] is None
+    assert g["omitted"] == []
+
+
+def test_dated_nodes_carry_fixed_and_in_days_undated_null(monkeypatch, tmp_path):
+    cid = _event_campaign(monkeypatch, tmp_path)
+    dated = scene_ideas.add(cid, "Mara's map", "Mara reads the map.", date="2026-05-12")
+    undated = scene_ideas.add(cid, "Winifred's chart", "Winifred redraws the chart.")
+
+    g = graph.build(cid)
+    nodes = _by_id(g)
+    coronation = nodes[CORONATION]
+    assert coronation["fixed"] == F(cid, "2026-05-13") and coronation["in_days"] == 3
+    idea = nodes[f"idea:{dated}"]
+    assert (idea["native"], idea["fixed"], idea["in_days"]) == (
+        "2026-05-12", F(cid, "2026-05-12"), 2)
+    for ref in (f"idea:{undated}", "event:winifred-s-chart"):
+        assert (nodes[ref]["fixed"], nodes[ref]["in_days"]) == (None, None), ref
+    assert nodes["event:winifred-s-chart"]["native"] == "midsummer"
+    # An undated row is data: per-row softening records no part.
+    assert g["omitted"] == []
+
+
+def test_holidays_and_birthdays_come_from_pressure_items(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, holidays=[_rule("Saltmarch Eve", "05", 12)])
+    mara = _actor(cid, "Mara", "--05-11")
+
+    g = graph.build(cid)
+    expected = {i["ref"] for i in pressure.build(cid)["items"]
+                if i["kind"] in ("holiday", "birthday")}
+    assert expected
+    assert {n["id"] for n in _of_kind(g, "holiday", "birthday")} == expected
+    [holiday] = _of_kind(g, "holiday")
+    assert (holiday["label"], holiday["fixed"], holiday["in_days"]) == (
+        "Saltmarch Eve", F(cid, "2026-05-12"), 2)
+    assert holiday["pressure"]["in_days"] == 2 and holiday["anchorable"] is True
+    [birthday] = _of_kind(g, "birthday")
+    assert (birthday["actor"], birthday["precision"], birthday["age"]) == (
+        f"characters:{mara}", "yearless", None)
+    assert (birthday["label"], birthday["in_days"]) == ("Mara", 1)
+    assert _pairs(g, "birthday_of") == {(birthday["id"], f"characters:{mara}")}
+    actor = _by_id(g)[f"characters:{mara}"]
+    assert (actor["kind"], actor["label"]) == ("character", "Mara")
+
+
+def test_anchorable_is_exactly_the_chooser_anchor_set(monkeypatch, tmp_path):
+    cid = _event_campaign(monkeypatch, tmp_path,
+                          holidays=[_rule("Saltmarch Eve", "05", 12)])
+    _actor(cid, "Mara", "--05-11")
+
+    g = graph.build(cid)
+    anchorable = {n["id"] for n in g["nodes"] if n.get("anchorable")}
+    chooser = {a["ref"] for a in drivers.snapshot(cid)["anchors"]}
+    assert anchorable == chooser
+    assert CORONATION in anchorable
+    assert {"holiday", "birthday"} <= {_by_id(g)[r]["kind"] for r in anchorable}
+    for ref in ("event:saltmarch-eve", "event:winifred-s-chart", "event:mara-s-oath"):
+        assert _by_id(g)[ref]["anchorable"] is False, ref
+
+
+def test_only_active_ideas_are_nodes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    active = scene_ideas.add(cid, "Mara's map", "Mara reads the map.", pcless=True)
+    used = scene_ideas.add(cid, "Winifred's chart", "Winifred redraws the chart.")
+    dismissed = scene_ideas.add(cid, "The coronation", "Seraphine is crowned.")
+    scene_ideas.mark_used(cid, used, s1)
+    scene_ideas.set_status(cid, dismissed, scene_ideas.DISMISSED)
+
+    g = graph.build(cid)
+    [idea] = _of_kind(g, "idea")
+    assert idea["id"] == f"idea:{active}"
+    assert (idea["label"], idea["premise"], idea["source"], idea["pcless"]) == (
+        "Mara's map", "Mara reads the map.", "user", True)
+    assert idea["time_anchor"] is None
+    assert (idea["native"], idea["fixed"], idea["in_days"]) == ("", None, None)
+
+
+def test_ideas_serve_canonical_drivers_and_anchor_to_nodes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s1)
+    review.create_alias(cid, CHART, MAP)
+    events.create(cid, "The coronation", "2026-05-13")
+    lid = scene_ideas.add(
+        cid, "Saltmarch harbour", "Mara takes the map to the harbour.",
+        drivers=[{"ref": CHART, "action": "advance"},
+                 {"ref": "thread:gone", "action": "advance"},
+                 {"ref": MAP, "action": "close_candidate"}],
+        time_anchor={"ref": CORONATION, "relation": "on", "native": "2026-05-13"})
+    idea = f"idea:{lid}"
+
+    g = graph.build(cid)
+    serves = [e for e in _edges(g, "serves") if e["from"] == idea]
+    # Canonicalized through the live canon, deduped by target, first entry wins.
+    assert [(e["to"], e["relation"]) for e in serves] == [(MAP, "advance")]
+    assert serves[0]["id"] == graph.edge_id("serves", idea, MAP)
+    assert not [e for e in g["edges"] if "thread:gone" in (e["from"], e["to"])]
+    [anchored] = _edges(g, "anchored_to")
+    assert (anchored["from"], anchored["to"], anchored["relation"]) == (
+        idea, CORONATION, "on")
+
+
+def test_an_anchor_beyond_the_horizon_keeps_its_record_but_draws_no_edge(
+        monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara = _actor(cid, "Mara", "1990-07-01")
+    anchor = {"ref": f"birthday:characters:{mara}:{F(cid, '2026-07-01')}",
+              "relation": "on", "native": "2026-07-01"}
+    lid = scene_ideas.add(cid, "Mara's map", "Mara reads the map.", time_anchor=anchor)
+
+    g = graph.build(cid)
+    assert _edges(g, "anchored_to") == []
+    assert _of_kind(g, "birthday") == []
+    assert _by_id(g)[f"idea:{lid}"]["time_anchor"] == anchor
+
+
+def test_a_garbled_ideas_file_costs_only_ideas(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    scene_ideas._path(cid).write_text("[1]", encoding="utf-8")
+
+    g = graph.build(cid)
+    assert _of_kind(g, "idea") == []
+    assert g["omitted"] == ["scene_ideas"]
+    assert [n["id"] for n in _scene_nodes(g)] == [f"scene:{s1}"]
+
+
+def test_a_raising_plugin_leaves_events_and_ideas_undated(monkeypatch, tmp_path):
+    cid = _event_campaign(monkeypatch, tmp_path,
+                          holidays=[_rule("Saltmarch Eve", "05", 12)])
+    lid = scene_ideas.add(cid, "Mara's map", "Mara reads the map.", date="2026-05-12")
+    _plugin(tmp_path, "broken_test", _BROKEN_PROVIDER_SRC)
+    _primary(cid, "broken-test-calendar")
+
+    g = graph.build(cid)
+    assert "calendar" in g["omitted"]
+    assert _of_kind(g, "holiday", "birthday") == []
+    for ref in (CORONATION, f"idea:{lid}"):
+        assert (_by_id(g)[ref]["fixed"], _by_id(g)[ref]["in_days"]) == (None, None), ref
+    assert not [n for n in g["nodes"] if n.get("anchorable")]
+
+
+def test_a_raising_event_list_falls_back_to_undated_events(monkeypatch, tmp_path):
+    cid = _event_campaign(monkeypatch, tmp_path)
+    real = events.list_events
+
+    def list_events(cid, provider=None, now_fixed=None):
+        if provider is not None:
+            raise RuntimeError("this calendar plugin cannot date an event")
+        return real(cid, provider, now_fixed)
+
+    monkeypatch.setattr(events, "list_events", list_events)
+    g = graph.build(cid)
+    assert g["omitted"] == ["calendar"]
+    statuses = {n["id"]: n["status"] for n in _of_kind(g, "event")}
+    # Nothing is dated by guesswork: only the fire stamp survives.
+    assert statuses == {"event:saltmarch-eve": "fired", CORONATION: "undated",
+                        "event:mara-s-oath": "undated", "event:winifred-s-chart": "undated"}
+    assert _by_id(g)[CORONATION]["fixed"] is None
