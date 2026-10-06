@@ -115,7 +115,7 @@ Plus **metadata-only occurrences**:
    - re-check the snapshot;
    - **if an image-bearing placement exists** (resolving or not), never overwrite it. The legacy file is deleted only when its current bytes `identify` to the placement's id **and** that placement resolves under `root` after step 2's ingest. Otherwise both stay and "legacy differs from placement" (or "placement not yet available") is reported.
    - **otherwise**, write the placement atomically, with focus;
-   - then verify: the placement resolves to the intended object, which resolves to the intended blob; the blob re-hashes; `path_in` returns it; focus reads back;
+   - then verify: the placement resolves to the intended object, which resolves to the intended blob; the blob at `blob_path(root, …)` exists and re-hashes (never `path_in`, which reads the live root); focus reads back;
    - then identity-check-unlink exactly the hashed file;
    - then delete its legacy thumbnails, with keys computed from its relative path and pre-delete stat for every bucket and both encoders.
 4. Bump `revision.bump(cid)` for each campaign written, under its lock.
