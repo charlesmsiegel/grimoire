@@ -2401,8 +2401,8 @@ Add synthetic cases using the established placeholder names. Each case ships a `
 At minimum:
 
 1. Same obligation, different wording → identity resolver selects existing.
-2. Same topic, distinct plot questions → distinct.
-3. Broad thread and concrete continuation → continuation, not duplicate.
+2. Same topic, distinct plot questions → not merged (distinct or related).
+3. Broad thread and concrete continuation → continuation (or subthread) from the concrete record, not duplicate.
 4. Thread and commitment about the same incident → pays_off/related, never duplicate.
 5. Thread whose accumulated beats clearly answer its question → close.
 6. Old but unresolved thread → keep_open.
@@ -2551,6 +2551,7 @@ Slice D implementation deviations. Each was decided in the Slice D plan (`docs/s
 - **Model-only nominations are filtered by verdict before adjudication**, and a cached temporal finding is retracted once the temporal source was read and no longer nominates it (Decisions 8, 11). §11.1 step 3 and §11.3 are kept; this is recorded because §6.2 and §11.1 say nothing about retracting a pair kind.
 - **Dismiss writes the suppression before dropping the cache record**, and a dismiss that fails after the suppression landed answers 500 `partial_dismiss` and bumps the revision itself; an apply stopped the same way answers 500 `partial_apply` naming what landed (Decisions 16, 17). This orders §22's "suppression/cache cleanup" step internally.
 - **An empty candidate cache answers the candidates read without the join**: with no cached record (no sweep yet, one that found nothing, or a cache that will not parse) the read does no pressure pass, no current view and no scene list, and answers `names: {}` and `scenes: []` beside the usual `generated`, `matching`, `diagnostics` and `run`. `names` and `scenes` exist to label findings and only an open finding's detail reads them, while the Ledger mounts this read for every section and re-reads it on every write (the cost rule §18.3 holds Todo to, applied to the review read).
+- **§28.10 cases 2 and 3 are graded as "not merged"**, not by a single word: `reconcile.distinct` accepts `distinct` or `related` for case 2, and `reconcile.continuation` accepts `continuation` or `subthread` for case 3, each with the concrete record as `from`. The shipped system prompt offers `related` for two questions that bear on each other, which two same-topic plot questions do by construction, and names `continuation` and `subthread` with no rule between them, so a single word would fail answers the prompt treats as correct. What both cases claim is the not-duplicate half: a `duplicate` still fails each, and a `subthread` from the broad record still fails case 3 (Task 18; slice ledger, Task 18 review fix).
 
 ### Slice E — scene suggestion control
 

@@ -1245,8 +1245,8 @@ Backend paths are relative to `backend/src/grimoire/`, tests to `backend/tests/`
   - `reconcile.enum`: every raw decision is in its candidate's vocabulary;
   - `reconcile.covers`;
   - `reconcile.evidence`: every `close`/`fulfilled`/`broken`/`expired` has a non-empty reason and a known scene;
-  - `reconcile.distinct` (case 2, `c2` → `distinct`);
-  - `reconcile.continuation` (case 3, `c3` → `continuation` with `from` = the concrete record);
+  - `reconcile.distinct` (case 2, `c2` → `distinct` or `related`; deviation 26);
+  - `reconcile.continuation` (case 3, `c3` → `continuation` or `subthread` with `from` = the concrete record; deviation 26);
   - `reconcile.cross_type` (case 4, `c4` → `pays_off` or `related`);
   - `reconcile.close` (case 5, `c5` → `close`);
   - `reconcile.keep_open` (case 6, `c6` → `keep_open`);
@@ -1372,6 +1372,7 @@ Backend paths are relative to `backend/src/grimoire/`, tests to `backend/tests/`
 23. The writer guard's `FORBIDDEN` also covers the public mutators of `events` and `scene_ideas`, beyond §11.6's list, because §11.5 names events.json and scene ideas among what reconciliation never changes (Task 11).
 24. Model-only nominations are filtered by verdict before adjudication. A cached temporal finding is retracted once the temporal source was read and no longer nominates it (Decisions 8 and 11). §11.1 step 3 and §11.3 are kept, not changed; this is recorded because §6.2 and §11.1 say nothing about retracting a pair kind.
 25. Dismiss writes the suppression before dropping the cache record, and a dismiss that fails after the suppression landed answers 500 `partial_dismiss` and bumps the revision itself (Decisions 16 and 17). This orders §22's "suppression/cache cleanup" step internally.
+26. §28.10 cases 2 and 3 are graded as "not merged" rather than by one word (Task 18, amended by the slice ledger's Task 18 review fix): `reconcile.distinct` accepts `distinct` or `related` for c2, and `reconcile.continuation` accepts `continuation` or `subthread` for c3, each with the concrete record as `from`. The system prompt offers `related` for questions that bear on each other and names `continuation` and `subthread` with no rule between them; a `duplicate` still fails both checks.
 
 **Open questions (none block execution):**
 
