@@ -36,7 +36,7 @@ from . import (
     image_collections,
     image_hash,
     image_refs,
-    image_subjects,
+    image_scopes,
     paths,
     pcs,
     world_images,
@@ -119,11 +119,11 @@ def _add_record(out: dict[str, list[dict]], scope: str, rec: tuple[str, str, str
 def _scan_root(out: dict[str, list[dict]], is_world: bool, root: Path, image_id: str) -> None:
     if is_world:
         ident = worlds_paths.canonical_id(root.name)
-        scope = image_subjects.world_scope(root)
+        scope = image_scopes.world_scope(root.name)
         library = root / "assets" / world_images.DIRNAME
     else:
         ident = root.name
-        scope = f"campaign:{root.name}"
+        scope = image_scopes.campaign_scope(root.name)
         library = root / "assets" / campaign_images.DIRNAME
     for d, ref in image_refs.walk(root):
         if ref.image != image_id:
