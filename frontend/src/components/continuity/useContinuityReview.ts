@@ -38,10 +38,12 @@ export const NO_MODEL_NOTE =
 export const FAILED_NOTE = "The model check did not finish — basic findings are listed.";
 /** A sweep that saved nothing: the start was refused, or persist 1 was. */
 export const NOT_SAVED_NOTE = "The refresh did not finish — nothing it found was saved.";
-/** A failure that does not say which of the two it was. */
-export const UNFINISHED_NOTE = "The refresh did not finish.";
+/** A failure that does not say which of the two it was -- a run reaped or a
+ *  server restarted before it was read back may well have landed, so this
+ *  claims neither that it finished nor that it did not. */
+export const UNFINISHED_NOTE = "The refresh's outcome could not be read back.";
 /** The pass a run adds for refs End Scene left failed, after the first
- *  pass landed: the first pass's findings stand, and its model check ran. */
+ *  pass landed and saved: the first pass's findings stand. */
 export const FOLLOW_ON_NOTE =
   "The follow-on pass did not finish — the first pass's findings are listed.";
 
@@ -56,7 +58,9 @@ export const FOLLOW_ON_NOTE =
 export function failedNote(err: unknown): string {
   if (err instanceof RefreshRefused) return NOT_SAVED_NOTE;
   const body = err instanceof ApiError ? err.body : undefined;
-  if (body?.follow_on === true) return FOLLOW_ON_NOTE;
+  // A first pass another generation superseded landed without saving, so
+  // only a saved first pass makes the findings on screen this run's.
+  if (body?.follow_on === true && body?.saved === true) return FOLLOW_ON_NOTE;
   if (body?.saved === true) return FAILED_NOTE;
   if (body?.saved === false) return NOT_SAVED_NOTE;
   return UNFINISHED_NOTE;

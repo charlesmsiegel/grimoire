@@ -278,12 +278,17 @@ test.each([
     502, "connection reset", "network", { kind: "network", sweep: "full", saved: true }),
    "The model check did not finish — basic findings are listed.", "connection reset"],
   ["a run that could not be followed", new TypeError("Failed to fetch"),
-   "The refresh did not finish.", "TypeError: Failed to fetch"],
+   "The refresh's outcome could not be read back.", "TypeError: Failed to fetch"],
   // A poll's 404 has the shape a refusal would, but the run had started.
   ["a run reaped before it was read back", new ApiError(
     404, "no such run for this subject", "run_gone",
     { kind: "run_gone", detail: "no such run for this subject" }),
-   "The refresh did not finish.", "no such run for this subject"],
+   "The refresh's outcome could not be read back.", "no such run for this subject"],
+  // A first pass another generation superseded saved nothing of this run's,
+  // so a failed follow-on pass cannot credit "the first pass's findings".
+  ["a follow-on pass that failed after a superseded first pass", new ApiError(
+    500, "disk full", "io", { kind: "io", sweep: "full", saved: false, follow_on: true }),
+   "The refresh did not finish — nothing it found was saved.", "disk full"],
   ["a follow-on pass that failed", new ApiError(
     409, "continuity.json is malformed; nothing the follow-on pass found was saved",
     "malformed", { kind: "malformed", sweep: "full", saved: true, follow_on: true }),
