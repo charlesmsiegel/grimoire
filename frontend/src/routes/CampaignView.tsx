@@ -11,7 +11,7 @@ import {
   type CampaignBudget,
   type IncomingRef,
   type SceneUsage,
-  type TrackerSummary, type UsagePostBucket,
+  type TrackerSummary, type UsagePostBucket, type QuickReply,
 } from "../api/client";
 import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -57,6 +57,8 @@ import DossierColumn from "../components/play/DossierColumn";
 import Conditions from "../components/play/Conditions";
 import GroupPanel from "../components/play/GroupPanel";
 import ReplyChips from "../components/play/ReplyChips";
+import { QuickReplyStrip } from "../components/QuickReplyStrip";
+import type { QuickReplyContext } from "../components/quickReplies";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { StreamingMarkdown } from "../components/play/StreamingMarkdown";
@@ -776,6 +778,24 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // the dice button renders on `true` only, so a control never appears and then
   // vanishes a moment later once the read lands.
   const [moduleBound, setModuleBound] = useState<boolean | null>(null);
+  // The composer's quick replies: the campaign's effective set (world replies
+  // with the campaign's layered on), read per campaign. Tagged with the
+  // campaign it was read for, so a set still on screen across a campaign
+  // switch is never offered for the new one.
+  const [quickSet, setQuickSet] = useState<{ cid: string; replies: QuickReply[] } | null>(null);
+  // What the last quick reply has to say -- a declined fold, a failed roll --
+  // scoped to the scene it was tapped in.
+  const [quickNotice, setQuickNotice] =
+    useState<{ cid: string; sid: string; text: string } | null>(null);
+  useEffect(() => {
+    let live = true;
+    api.getEffectiveQuickReplies(cid)
+      .then((b) => { if (live) setQuickSet({ cid, replies: b.replies }); })
+      // A set that cannot be read is a strip that is not there, not a page
+      // that is broken.
+      .catch(() => { if (live) setQuickSet({ cid, replies: [] }); });
+    return () => { live = false; };
+  }, [cid]);
   const streamRef = useRef<HTMLDivElement>(null);
   /** The scene inspector, which used to be a permanently-open third column.
    *
@@ -3317,13 +3337,6 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   async function send(speakerRef?: string) {
     if (busy || rolling || renamesInFlight) return;
-    // A new prompt supersedes a failed reroll: whatever Retry would have
-    // repeated, the player has moved on from it.
-    rerollToRetryRef.current = null;
-    // a new turn supersedes any pending proposal durably on the backend —
-    // clear the chip optimistically rather than wait for the re-fetch. Ordered,
-    // so a read issued before this send cannot put the chip back afterwards.
-    setProposalNow(null);
     const content = input.trim();
     let id = activeId;
     if (!id) {
@@ -3359,6 +3372,28 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // the player just spoke: put them back at the tail even if they had
     // scrolled up into older history to re-read something
     atBottomRef.current = true;
+    await sendText(id, content, directing, true, speakerRef);
+  }
+
+  /** One turn's worth of text, sent to scene `id` -- the body of `send` from
+   *  the point the composer has been read. Takes the text and the turn kind as
+   *  arguments, so a quick reply can send without writing composer state first:
+   *  it never reads or clears `input`, so a draft survives a quick reply.
+   *
+   *  `recover` is whether a failed turn hands `content` back to the composer
+   *  (and arms the durable copy). True for what the player typed; false for a
+   *  quick reply, whose canned text is re-tappable and would otherwise land in
+   *  the box -- and flip its mode -- on a failure. The one-shot response
+   *  targets are consumed exactly as Send consumes them. */
+  async function sendText(id: string, content: string, director: boolean, recover: boolean,
+                          speakerRef?: string) {
+    // A new prompt supersedes a failed reroll: whatever Retry would have
+    // repeated, the player has moved on from it.
+    rerollToRetryRef.current = null;
+    // a new turn supersedes any pending proposal durably on the backend —
+    // clear the chip optimistically rather than wait for the re-fetch. Ordered,
+    // so a read issued before this send cannot put the chip back afterwards.
+    setProposalNow(null);
     // Ephemeral turns are never stored: a director note — asked for in Direct
     // mode, or the only kind of turn an offscreen scene has — or, in any scene
     // and either mode, an empty send meaning "next NPC round".
@@ -3391,19 +3426,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // own generation and rendered beside the NEXT turn's reply, claiming to
     // have steered something it never saw. Every send now states what note is
     // in force, and for a Speak post that statement is "none".
-    const note = directing && content ? { cid, sid: id, text: content } : null;
+    const note = director && content ? { cid, sid: id, text: content } : null;
     // Trailing argument only when a chip named a speaker, so every other send
     // is the same call it always was.
     const speakerArg: [] | [string] = speakerRef ? [speakerRef] : [];
-    if (directing || !content) {
+    if (director || !content) {
       try {
         const landed = await runStream(id,
           (onEvent, signal, attempt, onIndex) =>
-            api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
-                     signal, attempt, onIndex, directing, ...speakerArg),
+            api.chat(cid, id, content, onEvent, pendingResponse ?? undefined,
+                     signal, attempt, onIndex, director, ...speakerArg),
           // An empty send has nothing to give back — it is the "next NPC round"
           // fast path, not words anyone typed.
-          content ? () => recoverPrompt(cid, id, content, true) : undefined,
+          content && recover ? () => recoverPrompt(cid, id, content, true) : undefined,
           false, "", true, note);
         if (landed) setPendingResponse(null);
       } finally {
@@ -3430,12 +3465,64 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       (onEvent, signal, attempt, onIndex) =>
         // The trailing `false` is `director`: this is the branch that POSTS, so
         // it is the one send that can never be a note.
-        api.chat(cid, id!, content, onEvent, pendingResponse ?? undefined,
+        api.chat(cid, id, content, onEvent, pendingResponse ?? undefined,
                  signal, attempt, onIndex, false, ...speakerArg),
-      () => recoverPrompt(cid, id!, content), false,
+      recover ? () => recoverPrompt(cid, id, content) : undefined, false,
       // The words the player typed, held until the outcome proves them durable.
-      content);
+      recover ? content : "");
     if (landed) setPendingResponse(null);
+  }
+
+  /** A quick reply's send: the canned text, as the player or as a director
+   *  note, through the same path Send takes -- but the composer is neither read
+   *  nor cleared, and a failure does not hand the text back (it is still on the
+   *  button). The guard is Send's own. */
+  async function sendQuick(text: string, director: boolean) {
+    if (!activeId || busy || rolling || renamesInFlight || !text.trim()) return;
+    atBottomRef.current = true;
+    await sendText(activeId, text.trim(), director, false);
+  }
+
+  /** A quick reply's insert: the canned text into the composer, to edit and
+   *  send. An empty box takes it and the reply's turn kind; a draft of the same
+   *  kind gets it appended after a blank line. A draft of the OTHER kind keeps
+   *  the box -- one composer carries one mode -- so the text waits exactly as a
+   *  recovered prompt does, behind the existing held-draft notice, and comes
+   *  back when the box is cleared. If something recovered is already waiting
+   *  for this scene, the insert is refused instead: parking over it would
+   *  drop words the player wrote. */
+  function insertQuick(text: string, director: boolean) {
+    if (!activeId) return;
+    if (!input.trim()) {
+      setInput(text);
+      setDirectMode(director);
+      return;
+    }
+    if (director === directing) {
+      setInput((cur) => `${cur.trimEnd()}\n\n${text}`);
+      return;
+    }
+    const key = parkKey(cid, activeId);
+    if (parkedPrompts.current.has(key)) {
+      setQuickNotice({ cid, sid: activeId,
+        text: `${director ? "🎬 note" : "post"} not inserted · clear the box first` });
+      return;
+    }
+    parkedPrompts.current.set(key, { text, director });
+    setParkedTick((n) => n + 1);
+  }
+
+  function runQuickReply(r: QuickReply) {
+    setQuickNotice(null);
+    switch (r.kind) {
+      case "send":
+      case "direct":
+        if (r.mode === "insert") insertQuick(r.text ?? "", r.kind === "direct");
+        else void sendQuick(r.text ?? "", r.kind === "direct");
+        return;
+      default:
+        return;
+    }
   }
 
   async function saveEdit() {
@@ -4407,6 +4494,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
 
   const editingAny = editing !== null;
   const responseDisabled = busy || rolling || sceneLocked || editingAny || renamesInFlight > 0;
+  // What decides each quick reply: the guards of the controls they stand for.
+  const quickCtx: QuickReplyContext = {
+    busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
+    moduleKnown: moduleBound !== null, pcless: activePcless, ready,
+    openerOffered: false, taskRunning: () => false,
+  };
 
   // The ledger's arrows, worked out once for the row, the keys and the gesture.
   // Shown with two complete variants to tour, or one that can be generated from
@@ -5474,6 +5567,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
             {selectedActor && (
               <span className="composer-notice">Still your turn · dossier open</span>
             )}
+            {quickNotice && quickNotice.cid === cid && quickNotice.sid === activeId && (
+              <span className="composer-notice" role="status">{quickNotice.text}</span>
+            )}
             <button type="button" className="composer-link"
                     aria-expanded={showInspector}
                     onClick={() => setShowInspector((v) => !v)}>
@@ -5491,6 +5587,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                 setGroup(next);
               }}
               onClose={() => setShowGroup(false)} />
+          )}
+          {activeId && quickSet?.cid === cid && (
+            <QuickReplyStrip replies={quickSet.replies} ctx={quickCtx} onRun={runQuickReply} />
           )}
           <div className="inputbar">
             {/* Dice are a mechanics affordance: both the popover's tabs lead to
