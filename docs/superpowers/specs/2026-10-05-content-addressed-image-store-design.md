@@ -160,7 +160,7 @@ the bytes that get stored.
 | PNG | IHDR, PLTE, tRNS, IDAT, IEND, colour chunks (iCCP, gAMA, cHRM, sRGB, cICP), the animation chunks (acTL, fcTL, fdAT), sBIT and pHYs | text chunks (tEXt, zTXt, iTXt — including card `chara`/`ccv3`) and other ancillary chunks |
 | JPEG | SOI, APP0 JFIF (rebuilt with no thumbnail), APP2 ICC, APP14 Adobe, every coding segment | XMP and other APP1 data, APP13 IPTC, COM, JFXX and other APP0 |
 | WebP | allowlist only: VP8, VP8L, VP8X, ALPH, ANIM, ANMF, ICCP | every other chunk, including EXIF and XMP (the VP8X flags are rewritten) |
-| GIF | NETSCAPE loop extension, everything structural | comment extensions, other application extensions (including XMP) |
+| GIF | allowlist only: the Graphic Control Extension (its four bytes), a NETSCAPE2.0 / ANIMEXTS1.0 loop extension (its last loop sub-block only), everything structural | every other extension, sub-blocks and all: comment, plain text, other application extensions (including XMP), unknown labels |
 
 Orientation is the one piece of metadata that is kept:
 
@@ -1266,6 +1266,14 @@ before `px1` shipped, so the version stays `px1`:
   showing.
 - **`update()` callbacks may not call back into the store** (§9); a
   thread-local latch enforces it.
+- **GIF extensions are an allowlist** (§1.1). Readers skip extensions they do
+  not know and sub-blocks past the ones they read, so a kept unknown label (or
+  Plain Text, which no browser draws) carried private bytes under the identity
+  of a clean upload. Now only the Graphic Control Extension (rebuilt as its
+  four bytes; a shorter one is unparsed) and a loop application extension
+  (rebuilt as its last loop sub-block, the one browsers honour; dropped when it
+  has none) are kept. `gif_loop_after_image` uses the same loop test, so the
+  late-loop case sees exactly what is kept. Pinned ids did not move.
 - **A damaged blob is not served** (§6). `image_store.blob_intact` re-hashes
   a blob against its name, memoized on its stat signature under statcache's
   racy-window rule. `assets.path_in` treats a blob that fails it as not

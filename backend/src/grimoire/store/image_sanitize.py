@@ -20,9 +20,11 @@ dropped whole, unread. Pillow concatenates them, but parses from the first, so
 an identity computed on either side of sanitizing agrees.
 
 What is kept is allowlisted, never the reverse: a PNG keeps `_PNG_KEEP`, a WebP
-`_WEBP_KEEP` (and, inside each animation frame, only its frame data), and a
-JPEG's JFIF header is rebuilt with its density but without the thumbnail it
-may embed -- a second picture, which need not be this one.
+`_WEBP_KEEP` (and, inside each animation frame, only its frame data), a GIF
+only its graphic control and loop extensions, each rebuilt to the bytes a
+reader takes from it (`_gif_extension`), and a JPEG's JFIF header is rebuilt
+with its density but without the thumbnail it may embed -- a second picture,
+which need not be this one.
 
 Two properties the callers rely on:
 
@@ -372,18 +374,69 @@ def _gif_sub_blocks(raw: bytes, pos: int) -> int:
             return pos
 
 
-def _gif_extension(raw: bytes, pos: int) -> tuple[bool, int]:
-    """(kept, offset past it) for the extension block at `pos`."""
+def _gif_blocks(raw: bytes, pos: int) -> tuple[list[bytes], int]:
+    """The payloads of the sub-block chain at `pos`, and the offset past its
+    terminator."""
+    blocks: list[bytes] = []
+    n = len(raw)
+    while True:
+        if pos >= n:
+            raise _UnparsedError("truncated sub-blocks")
+        size = raw[pos]
+        if pos + 1 + size > n:
+            raise _UnparsedError("sub-block overruns file")
+        if size == 0:
+            return blocks, pos + 1
+        blocks.append(raw[pos + 1:pos + 1 + size])
+        pos += 1 + size
+
+
+def _gif_extension(raw: bytes, pos: int) -> tuple[bytes, int]:
+    """(what is kept of the extension block at `pos`, offset past it).
+
+    Kept is an allowlist of two, each rebuilt to the bytes a reader takes from
+    it, because every reader skips the rest -- sub-blocks after the ones it
+    reads, and whole extensions it does not know -- and anything skipped is a
+    place for private bytes to ride along under the identity of a clean
+    upload of the same picture:
+
+    - the Graphic Control Extension (0xF9): its first four bytes (disposal,
+      delay, transparency), which is all Pillow and the browsers read. One
+      shorter than that is read differently by each (a browser reads on into
+      the next sub-block), so it is not guessed at: the container is
+      unparsed;
+    - a loop application extension (`_GIF_KEEP_APPS`): its identifier and its
+      loop count alone. Browsers read every sub-block and the last loop
+      count wins; Pillow reads only the first sub-block. Keeping only the
+      last loop sub-block, as ``01 <count>``, makes them agree. One with no
+      loop sub-block plays nothing and is dropped.
+
+    Everything else -- a Comment (0xFE), Plain Text (0x01, which no browser
+    draws), any other application extension and any unknown label -- is
+    dropped whole, sub-blocks and all. `gif_loop_after_image` reads this same
+    answer, so the late-loop check sees exactly what is kept."""
     if pos + 2 > len(raw):
         raise _UnparsedError("truncated extension")
     label = raw[pos + 1]
-    end = _gif_sub_blocks(raw, pos + 2)
-    if label == 0xFE:
-        return False, end
+    blocks, end = _gif_blocks(raw, pos + 2)
+    if label == 0xF9:
+        if not blocks or len(blocks[0]) < 4:
+            raise _UnparsedError("short graphic control extension")
+        return b"\x21\xf9\x04" + blocks[0][:4] + b"\x00", end
     if label == 0xFF:
-        size = raw[pos + 2]
-        return raw[pos + 3:pos + 3 + size] in _GIF_KEEP_APPS, end
-    return True, end
+        return _gif_loop(blocks) or b"", end
+    return b"", end
+
+
+def _gif_loop(blocks: list[bytes]) -> bytes | None:
+    """An application extension's sub-blocks rebuilt as the loop extension
+    `_gif_extension` keeps, or None when they are not one."""
+    if not blocks or blocks[0] not in _GIF_KEEP_APPS:
+        return None
+    loops = [b for b in blocks[1:] if len(b) >= 3 and b[0] & 7 == 1]
+    if not loops:
+        return None
+    return b"\x21\xff\x0b" + blocks[0] + b"\x03\x01" + loops[-1][1:3] + b"\x00"
 
 
 def _gif_image_end(raw: bytes, pos: int) -> int:
@@ -427,10 +480,16 @@ def gif_loop_after_image(data: bytes) -> bool:
                 seen_image = True
                 pos = _gif_image_end(data, pos)
             elif block == 0x21:
-                if (seen_image and pos + 3 <= n and data[pos + 1] == 0xFF
-                        and data[pos + 3:pos + 3 + data[pos + 2]] in _GIF_KEEP_APPS):
+                # The sanitizer's own test for a loop extension (`_gif_loop`),
+                # so this sees exactly what sanitizing keeps; walked without
+                # its other checks, so a block it would refuse does not end
+                # the walk early.
+                if pos + 2 > n:
+                    return False
+                blocks, end = _gif_blocks(data, pos + 2)
+                if seen_image and data[pos + 1] == 0xFF and _gif_loop(blocks) is not None:
                     return True
-                pos = _gif_extension(data, pos)[1]
+                pos = end
             else:
                 return False            # the trailer, or a block that is not one
     except _UnparsedError:
@@ -448,12 +507,12 @@ def _gif(raw: bytes) -> bytes:
             out.append(b"\x3b")
             return b"".join(out)
         if block == 0x21:
-            keep, end = _gif_extension(raw, pos)
+            kept, end = _gif_extension(raw, pos)
         elif block == 0x2C:
-            keep, end = True, _gif_image_end(raw, pos)
+            end = _gif_image_end(raw, pos)
+            kept = raw[pos:end]
         else:
             raise _UnparsedError("unknown block")
-        if keep:
-            out.append(raw[pos:end])
+        out.append(kept)
         pos = end
     raise _UnparsedError("no trailer")
