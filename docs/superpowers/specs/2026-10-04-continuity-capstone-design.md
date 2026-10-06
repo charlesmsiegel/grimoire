@@ -1692,7 +1692,7 @@ On read:
 - canonicalize;
 - classify each **stored** ref as:
   - `live`;
-  - `finished`: thread closed, commitment resolved, or occurrence past or fired;
+  - `finished`: thread closed, commitment resolved, or occurrence past or fired — except that an event on today's date is `live` whether or not it fired, by §13.5's own-day carve-out (reaching the day fires it, and an idea anchored on it is still for today, as a holiday or birthday occurrence on today is);
   - `dangling`: the record is gone, or an event anchor's stored `native` differs from the event's current date;
 - return live and finished refs, each with a `state`, and drop dangling refs from the returned list;
 - derive `stale_reason` from the stored refs **before** anything is dropped.
@@ -1710,7 +1710,7 @@ Do not add a stored “stale” status.
 `stale_reason: "" | "<human-readable reason>"` is non-empty iff the idea stored at least one driver ref or a time anchor, **and** one of the following holds:
 
 - **No stored ref is live.** Reason: “Every thread it was about is closed”, “Every commitment it was about is resolved”, or “Its drivers no longer exist”.
-- **The anchor is past.** Its relation is before/by/on and the anchor occurrence is past or fired. Reason: “<anchor> has passed”.
+- **The anchor is past.** Its relation is before/by/on and the anchor occurrence is past or fired (never on its own day, above). Reason: “<anchor> has passed”, where a birthday anchor reads “<actor>'s birthday has passed”.
 - **The anchor moved.** It is dangling because it was rescheduled. Reason: “<event> moved to <friendly>”.
 
 Holiday and birthday anchors are occurrence refs (§4). A past occurrence is past, even though the holiday recurs.

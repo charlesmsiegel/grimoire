@@ -856,9 +856,9 @@ def validate_ideas(cid: str, ideas: list[dict]) -> list[dict]:
       stored entry, and its action, wins): the file can hold a source and its
       canonical, since `scene_ideas` cannot canonicalize, and the read shows one;
     - each ref is classified `live`, `finished` (thread closed, commitment
-      resolved, event fired or passed, occurrence behind now) or `dangling`
-      (record gone, or an event anchor whose stored day is no longer the
-      event's: "moved"). Dangling refs are not returned, but `stale_reason` is
+      resolved, event passed or fired on a day that is not today, occurrence
+      behind now) or `dangling` (record gone, or an event anchor whose stored
+      day is no longer the event's: "moved"). Dangling refs are not returned, but `stale_reason` is
       derived from every stored ref BEFORE they go: a moved anchor, then a
       `before`/`by`/`on` anchor that has passed, then no stored ref live (a
       finished `after` anchor counts as live -- its passing is what the idea
@@ -1127,7 +1127,11 @@ def _event_reading(ref: str, ctx: _IdeaContext, native: str) -> dict:
         return _reading("event", label, "dangling", friendly or day, moved=True)
     fired = isinstance(rec.get("fired"), dict) and bool(rec["fired"])
     passed = fixed is not None and ctx.now_fixed is not None and fixed < ctx.now_fixed
-    return _reading("event", label, "finished" if fired or passed else "live", friendly,
+    # §13.5's own-day carve-out: reaching the day fires the event, and an idea
+    # anchored on it is still for today, as a holiday or birthday on today is.
+    today = fixed is not None and fixed == ctx.now_fixed
+    finished = passed or (fired and not today)
+    return _reading("event", label, "finished" if finished else "live", friendly,
                     day if fixed is not None else "")
 
 
@@ -1213,7 +1217,11 @@ def _stale_reason(anchor: dict | None, reading: dict | None, states: dict[str, d
         if reading["moved"]:
             return f"{reading['label']} moved to {reading['friendly']}"
         if anchor["relation"] in _PASSING_RELATIONS and reading["state"] == "finished":
-            return f"{reading['label']} has passed"
+            # The chip's label is a birthday's bare actor name; the sentence
+            # names the birthday, or it reads as a death notice.
+            subject = (f"{reading['label']}'s birthday" if reading["kind"] == "birthday"
+                       else reading["label"])
+            return f"{subject} has passed"
     if not states or any(r["state"] == "live" for r in states.values()):
         return ""
     remaining = {r["kind"] for r in states.values() if r["state"] != "dangling"}
