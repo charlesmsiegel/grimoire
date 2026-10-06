@@ -673,6 +673,30 @@ def test_misrouted_identity_reports_itself_and_leaves_absorb_standing(client, sc
     assert edit["identity_check"]["status"] == "hint_only"
 
 
+def test_with_no_identity_connection_nothing_is_sent_to_the_embeddings_provider(
+        client, scene, monkeypatch):
+    """§10.4: with no connection the step runs deterministic neighbours only.
+    The resolver can never run, so embedding the proposed rows and their
+    neighbours would send campaign prose to the provider, on the extraction's
+    critical path, for a check nobody can make."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    double = _configure_embeddings(monkeypatch, FakeEmbeddings())
+    _keyless(client)
+    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER)
+
+    body = _absorb(client, cid, sid)
+
+    assert identity_requests(fake) == []
+    assert double.calls == []
+    block = body["identity"]
+    assert (block["status"], block["fallback"]) == ("failed", "")
+    assert "key" in (block["reason"] or "").lower()
+    [edit] = _plot_edits(body)
+    assert edit["identity_check"]["status"] == "hint_only"
+    assert edit["identity_check"]["candidates"]
+
+
 # ------------------------------------------------------------- saving
 
 
