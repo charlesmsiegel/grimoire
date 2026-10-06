@@ -51,18 +51,23 @@ Both are started from Settings → Storage. Each runs as a single detached run a
 - Reports older than 30 days are pruned when the next one is written.
 - A dry run and a real run produce the same shape (§11).
 
-**M3. Operations refused while maintenance runs.**
-- Each operation below checks `runs.maintenance_live(app)` under the registry lock:
-  - `fork_world`, `delete_world`, `delete_campaign` and campaign fork answer 409 `maintenance_running`;
-  - bundle export answers 409;
-  - the scheduled backup skips its turn and logs it.
-- A synced marker, `.cache/image-store/maintenance.json`, holds `{device, run, heartbeat}` and is refreshed every 30 s. A device that finds a marker whose heartbeat is younger than 5 minutes, written by another device, refuses to start maintenance (409 `maintenance_elsewhere`). The device id is a random id kept in `paths.home()/.cache/device-id`; it is local and never committed.
+**M3. Mutual exclusion with tree operations.**
+- **The hold:** `runs.maintenance_excluded(app)` is a registry hold, shaped like `hold_still`. The routes for world fork, world delete, campaign delete, campaign fork and bundle export hold it for their whole operation, and so does the scheduled-backup ticker. It lives in the routes and the ticker, never in store modules.
+- **Both directions:**
+  - while a hold is active, reserving a maintenance run is refused (409 `busy`);
+  - while a maintenance run is live, taking a hold is refused (409 `maintenance_running`). The backup ticker skips its turn and logs it instead.
+- **The marker:** a synced file, `.cache/image-store/maintenance.json`, holds `{device, run, heartbeat}`.
+  - A **separate timer thread** refreshes it every 30 s for the run's whole lifetime, independent of item boundaries.
+  - A device that finds a marker from another device with a heartbeat younger than 5 minutes refuses to start (409 `maintenance_elsewhere`).
+- **The device id** is machine-local: it lives in the proclock lock directory (`proclock.lock_dir()`), never under the store. The device key used everywhere is `sha256(device id + "\0" + pinned root)`, so a synced `.cache` never shares one.
 
 ### Store root
 
 **M4. The store root is pinned.**
-- A run captures `root = paths.home().resolve()` when it starts, and builds every path from `root`. That includes object and blob paths, through `image_store`'s path builders taking an explicit root, which this task adds.
-- Before every destructive step (a legacy unlink, a key delete, a sidecar or blob unlink), the run asserts that `paths.home().resolve() == root`. On a mismatch it stops and records a report entry; nothing is deleted after that point.
+- **Capture:** a run captures `root = paths.home().resolve()` when it starts.
+- **Paths:** it builds every path from `root`. That includes verify, which reads the object at `object_path(root, id)` and the blob at `blob_path(root, …)`, re-hashes that file, and reads the placement in `d` under `root`, rather than going through `path_in` or `read` on the live root.
+- **Checks:** the run asserts `paths.home().resolve() == root` before ingest, after ingest, after verify, and before every destructive step (a legacy unlink, a key delete, a sidecar or blob unlink).
+- **On a mismatch:** the run stops and records a report entry. Nothing is deleted after that point.
 
 ### Locks
 
@@ -106,9 +111,9 @@ Plus **metadata-only occurrences**:
 **M8. Writing one occurrence.**
 1. `_recover_promotion(d)` first, as spec §8 requires of every writer.
 2. Re-read the exact file and re-hash its sanitized bytes; ingest them. This is done **outside** the campaign lock, so turns are never kept waiting behind decodes. Record a `(dev, ino, size, mtime_ns)` snapshot.
-3. Under the campaign lock (where there is one), then the name lock:
+3. Under the campaign lock (where there is one), then `image_collection_lock(wid)` for a world-library occurrence, then the name lock:
    - re-check the snapshot;
-   - **if an image-bearing placement exists** (resolving or not), never overwrite it. The legacy file is deleted only when its current bytes `identify` to the placement's id. Otherwise both stay and "legacy differs from placement" is reported.
+   - **if an image-bearing placement exists** (resolving or not), never overwrite it. The legacy file is deleted only when its current bytes `identify` to the placement's id **and** that placement resolves under `root` after step 2's ingest. Otherwise both stay and "legacy differs from placement" (or "placement not yet available") is reported.
    - **otherwise**, write the placement atomically, with focus;
    - then verify: the placement resolves to the intended object, which resolves to the intended blob; the blob re-hashes; `path_in` returns it; focus reads back;
    - then identity-check-unlink exactly the hashed file;
@@ -125,6 +130,9 @@ Plus **metadata-only occurrences**:
 - **Subjects:** unioned per scope, and any disagreement is reported. Keys that point across worlds (stage-2 R11) are not folded.
 - **Deleting a key** is compare-and-delete: only if it still equals the value folded; otherwise the fold runs again.
 - **Metadata-only occurrences** (M6 a–d) fold only into a target whose placement has verified. If the target was left untouched, the key stays.
+- **Focus:**
+  - (d) a `focus.json` beside an avatar placement: the placement's focus is authoritative. Delete `focus.json` under the AVATAR name lock and fold nothing.
+  - (b) a campaign bare `focus.json` over a visible inherited avatar: write the image-less override and delete `focus.json`. Do this under the campaign lock plus the campaign directory's AVATAR name lock, and only when no avatar placement already exists there.
 
 Crash states are legacy-only, both, or new-only. A rerun is idempotent.
 
@@ -260,7 +268,7 @@ Sighting details:
   - `backend/src/grimoire/routes/runs.py`: `RunClass`, `exclusion_key`, `run_maintenance`, `maintenance_live`
   - `backend/src/grimoire/runner.py`: the shielded thread await, and setting cancel on shutdown
   - `backend/src/grimoire/main.py`: lifespan shutdown
-  - the M3 refusals in `store/worlds/lifecycle.py`, `store/campaigns/lifecycle.py`, `store/fork.py`, the bundle export route and `backups.run_scheduled`
+  - the M3 hold in the routes for world fork, world delete, campaign delete, campaign fork and bundle export, and in the scheduled-backup ticker (`main.py`)
   - `frontend/src/api/stream.ts`: the `RunHandle.cls` union
 - Create: `backend/src/grimoire/store/maintenance_reports.py` (`write`, `read`, `prune`, `device_id`, the `marker` heartbeat helpers)
 - Test: `backend/tests/test_maintenance_runs.py`
@@ -269,6 +277,9 @@ Sighting details:
   - `test_maintenance_has_its_own_key_and_refuses_a_second_start`.
   - `test_maintenance_does_not_refuse_a_model_refresh`.
   - `test_a_data_dir_move_fork_delete_and_export_are_refused_while_maintenance_runs`.
+  - `test_maintenance_is_refused_while_a_fork_or_export_holds_the_exclusion` (the other order of arrival).
+  - `test_the_device_id_is_machine_local_and_differs_when_cache_is_copied`.
+  - `test_the_heartbeat_refreshes_during_a_long_step`.
   - `test_cancel_waits_for_the_thread_and_still_reports`.
   - `test_shutdown_sets_cancel_and_waits`.
   - `test_the_exclusion_holds_until_the_thread_returns`.
@@ -344,7 +355,9 @@ Sighting details:
 
 - [ ] **Step 1: Write the failing tests.**
   - `test_migration_places_verifies_folds_and_cleans`.
-  - Crash and root safety: `test_crash_before_ref_write_leaves_legacy_only`, `test_crash_after_ref_write_leaves_both_and_rerun_cleans`, `test_crash_after_cleanup_is_new_only`, `test_a_root_flip_deletes_nothing_in_either_root`.
+  - Crash and root safety: `test_crash_before_ref_write_leaves_legacy_only`, `test_crash_after_ref_write_leaves_both_and_rerun_cleans`, `test_crash_after_cleanup_is_new_only`, `test_a_root_flip_deletes_nothing_in_either_root`, `test_a_flip_and_flip_back_between_ingest_and_delete_deletes_nothing`.
+  - `test_world_library_migration_takes_the_collection_lock`.
+  - `test_focus_beside_a_placement_is_dropped_not_folded` and `test_campaign_bare_focus_becomes_an_override_under_the_avatar_lock`.
   - Existing data is never overwritten: `test_a_legacy_file_differing_from_an_existing_placement_is_kept_and_reported`, `test_an_existing_unarrived_placement_is_never_overwritten`.
   - Concurrent changes: `test_a_file_changed_after_hashing_is_skipped`, `test_an_edit_during_the_fold_is_not_lost` (descriptions and subjects), `test_a_concurrent_upload_during_migration_is_kept`.
   - `test_rerun_is_idempotent_and_keeps_existing_conflicts`.
