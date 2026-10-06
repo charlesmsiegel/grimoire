@@ -29,6 +29,7 @@ from grimoire.store import (
 from grimoire.store.continuity import drivers as continuity_drivers
 from grimoire.store.continuity import effective, pressure, review
 from tests.test_suggest_store import (
+    _NAIVE_PROVIDER_SRC,
     _break_calendar,
     _map,
     _oath,
@@ -508,6 +509,34 @@ def test_a_damaged_read_never_hides_ideas(client, monkeypatch, tmp_path):
                                        "state": "live"}
     assert fallback["drivers"] == [{"ref": CORONATION, "action": "anchor", "kind": "event",
                                     "label": CORONATION, "state": "live"}]
+
+
+def test_a_plugin_parse_raising_never_hides_ideas(client, monkeypatch, tmp_path):
+    """Decision 17 and §24/§26 under a plugin that constructs fine but whose
+    `parse` raises something other than CalendarError: a stored date it cannot
+    read blanks rather than emptying the saved list, and a dated save still
+    lands, undated."""
+    cid = _campaign(monkeypatch, tmp_path)
+    mapped = _save(cid, "Mapped", [_d(MAP, "advance")], date="2026-05-12")
+    plugins = tmp_path / "calendars"
+    plugins.mkdir(exist_ok=True)
+    (plugins / "naive_test.py").write_text(_NAIVE_PROVIDER_SRC, encoding="utf-8")
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "naive-test-calendar", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+
+    rows = _get(client, cid)
+    assert set(rows) == {mapped}
+    assert rows[mapped]["date"] == ""
+
+    r = client.post(f"/api/campaigns/{cid}/scene-ideas", json={
+        "title": "Seraphine's errand", "premise": "P", "date": "2026-05-12"})
+    assert r.status_code == 200, r.text
+    lid = r.json()["id"]
+    assert scene_ideas.read(cid)[lid]["date"] == ""
+    assert set(_get(client, cid)) == {mapped, lid}
 
 
 def test_reads_never_write(client, monkeypatch, tmp_path):

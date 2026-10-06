@@ -770,6 +770,8 @@ def date_normalizer(cid: str, tolerant: bool = False):
                 return calendars.normalize(provider, s)
             except calendars.CalendarError:
                 return ""
+            except Exception:  # noqa: BLE001 -- user calendar plugin code can raise anything; a stored date it cannot read is no date (§24, §26)
+                return ""
         return strict
     anchor = clock.now(cid)
     return lambda s: normalize_date(provider, anchor, s)
