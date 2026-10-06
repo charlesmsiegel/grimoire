@@ -609,7 +609,12 @@ export default function LedgerView() {
     const ref = `${tableSection === "threads" ? "thread" : "commitment"}:${addressedRow}`;
     return records.find((x) => x.aliases?.some((a) => a.ref === ref))?.id ?? addressedRow;
   }, [addressedRow, ledger, tableSection]);
-  const address = tableSection && addressedRow ? `${tableSection}/${addressedRow}` : null;
+  // Keyed on the campaign too: the route is not keyed on `cid`, so a switch to
+  // another campaign's `threads/x` keeps this mounted, and a key without the
+  // campaign would take that campaign's row for one already revealed and
+  // scrolled to. The cid is a slug, so it cannot hold the `/` that separates.
+  const address = tableSection && addressedRow
+    ? `${cid}/${tableSection}/${addressedRow}` : null;
 
   // An addressed row that exists but is filtered out -- a closed thread, a
   // fulfilled commitment, a fact retired outright -- turns SHOW RETIRED on,

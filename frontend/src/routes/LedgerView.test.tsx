@@ -1,10 +1,12 @@
-import { act, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 import { agingLabel } from "../aging";
 
 vi.mock("../api/client", async () =>
   (await import("../testkit/ledgerMocks")).ledgerApiMock());
 import { api, ApiError } from "../api/client";
-import { EMPTY_LEDGER, installLedgerMocks, renderLedger } from "../testkit/ledgerHarness";
+import LedgerView from "./LedgerView";
+import { EMPTY_LEDGER, Here, installLedgerMocks, renderLedger } from "../testkit/ledgerHarness";
 
 const scene = (id: string, title: string, date = "") => ({ id, title, date });
 
@@ -934,6 +936,64 @@ test("re-renders do not re-scroll", async () => {
   await act(async () => { release({ ok: true }); });
   await waitFor(() => expect(api.campaignLedger).toHaveBeenCalledTimes(2));
   expect(scroll).toHaveBeenCalledTimes(1);
+});
+
+/** The ledger with a button that moves the SAME mounted page to `to` -- the
+ *  route is not keyed on `cid`, so a campaign switch is a re-render, not a
+ *  remount, and that is the case these tests need. */
+function renderLedgerThenGo(from: string, to: string) {
+  function Go() {
+    const navigate = useNavigate();
+    return <button onClick={() => navigate(to)}>go</button>;
+  }
+  return render(
+    <MemoryRouter initialEntries={[from]}>
+      <Go />
+      <Here />
+      <Routes>
+        <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+/** Two campaigns holding a thread under the same id: open in the first, and
+ *  as `second` says in the other. */
+function twoCampaigns(second: "open" | "closed") {
+  const thread = (cid: string, status: string) => ({
+    ...EMPTY,
+    plot: [{ ...THREADS.plot[0] },
+           { ...THREADS.plot[1], status, title: `The debt, in ${cid}` }],
+  });
+  (api.campaignLedger as any).mockImplementation((cid: string) => Promise.resolve(
+    cid === "run" ? thread("run", "open") : thread("tide", second)));
+}
+
+test("the same address in another campaign reveals its closed row", async () => {
+  twoCampaigns("closed");
+  renderLedgerThenGo("/campaigns/run/ledger/threads/settled",
+                     "/campaigns/tide/ledger/threads/settled");
+  await waitFor(() => expect(rowFor(/The debt, in run/)).toHaveClass("highlighted"));
+  const toggle = () => column().getByRole("checkbox", { name: /show retired and completed/i });
+  expect(toggle()).not.toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: "go" }));
+  await waitFor(() => expect(here()).toBe("/campaigns/tide/ledger/threads/settled"));
+  // Handled once per CAMPAIGN's address: this is a row nobody has been shown.
+  await waitFor(() => expect(rowFor(/The debt, in tide/)).toHaveClass("highlighted"));
+  expect(toggle()).toBeChecked();
+  expect(scrolled[scrolled.length - 1]).toBe(rowFor(/The debt, in tide/));
+});
+
+test("the same address in another campaign scrolls to its row", async () => {
+  twoCampaigns("open");
+  renderLedgerThenGo("/campaigns/run/ledger/threads/settled",
+                     "/campaigns/tide/ledger/threads/settled");
+  await waitFor(() => expect(rowFor(/The debt, in run/)).toHaveClass("highlighted"));
+  expect(scrolled).toEqual([rowFor(/The debt, in run/)]);
+  fireEvent.click(screen.getByRole("button", { name: "go" }));
+  await waitFor(() => expect(rowFor(/The debt, in tide/)).toHaveClass("highlighted"));
+  await waitFor(() => expect(scroll).toHaveBeenCalledTimes(2));
+  expect(scrolled[1]).toBe(rowFor(/The debt, in tide/));
 });
 
 test("an unknown section redirects to the facts", async () => {
