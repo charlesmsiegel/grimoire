@@ -17,6 +17,12 @@ reused: a member whose picture is missing is skipped, and its own URL answers
 `guard_write` and `check_member_name` protect format-1 names only, so they act
 only while the world holds format-1 state (`has_format1`), failing closed on a
 manifest or harvest journal that does not read.
+
+The member index in a URL is canonical ASCII decimal, parsed only by
+`member_index`, so one picture has one URL. `validate(raw)` is the public,
+content-only manifest rule (world bundles call it), and `journal_directory(wid)`
+is the single spelling of where a world's harvest journals live. Locks are taken
+in the order job, then collection, then any image lock.
 """
 
 from __future__ import annotations

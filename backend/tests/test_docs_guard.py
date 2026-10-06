@@ -399,6 +399,21 @@ def test_store_guarantees_names_the_image_store_locks():
     assert not gone, f"store/locks.py no longer defines: {gone}"
 
 
+def test_store_guarantees_names_the_collection_locks():
+    """Stage 3's two collection locks, by the names `store/locks.py` gives them
+    -- and those names must still be there. The image store section states
+    their order (job, then collection, then any image lock), so a lock renamed
+    away would leave that order describing nothing."""
+    from grimoire.store import locks
+
+    section = _section(_read(GUARANTEES), "The image store")
+    names = ("image_collection_lock", "image_collection_job_lock")
+    missing = [n for n in names if n not in section]
+    assert not missing, f"the image store section does not name: {missing}"
+    gone = [n for n in names if not hasattr(locks, n)]
+    assert not gone, f"store/locks.py no longer defines: {gone}"
+
+
 def test_store_guarantees_names_the_shared_metadata_modules():
     """Stage 2's two modules -- the scope lifecycle and the derived usage walk --
     are named by the image store section, and both still exist. The section

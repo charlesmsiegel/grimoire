@@ -14,6 +14,11 @@ maps to nothing refuses the journal. The one exception is an accepted journal
 whose format-1 manifest is already published: that manifest is authoritative,
 so the journal is left as it is and reconciles against its names, even when a
 member's file has since gone.
+
+Two edges are known and left for stage 4's journal retirement: an unaccepted
+format-1 journal whose manifest an older build published, and which has since
+lost a member, does not reconcile; and an accepted format-1 journal whose
+manifest is gone is converted before it is refused.
 """
 
 from __future__ import annotations
