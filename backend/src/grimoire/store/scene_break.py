@@ -135,7 +135,13 @@ def evaluate(messages: list[dict], location_history: list[str],
     at = min(max(0, watermark.get("at", 0)), total)
     seen_locs = min(max(0, watermark.get("locs", 0)), locs)
     seen_times = min(max(0, watermark.get("times", 0)), times)
-    posts = total - at
+    # Posts hidden from context are in no prompt, so they earn no length: a
+    # span of only hidden posts would ask about nothing, and hidden posts
+    # padding a short visible run would buy a signal the story did not. Tested
+    # inline rather than through `scenes.serialize.is_excluded` for
+    # `rolling_summary.covered_digest`'s reason: `scenes.write` imports this
+    # module, so importing `scenes` here would close a cycle.
+    posts = sum(1 for m in messages[at:] if not m.get("excluded"))
     moved = locs - seen_locs
     advanced = times - seen_times
 

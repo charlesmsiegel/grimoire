@@ -232,6 +232,27 @@ def test_force_does_not_pay_to_judge_a_span_of_hidden_posts(client):
     assert llm.calls == 1
 
 
+def test_hidden_posts_neither_reach_nor_inflate_the_automatic_gate(client):
+    """The automatic gate counts posts in context: a span that is all hidden
+    asks about nothing, and hidden posts padding a short visible run must not
+    buy the length signal the visible posts alone have not earned."""
+    _key(client)
+    llm = _use(client, _judge(YES))
+    cid, sid = _scene(client, posts=40)
+    for i in range(40):
+        store.scenes.set_excluded(cid, sid, i, True)
+    body = _post(client, cid, sid)
+    assert body["asked"] is False and body["posts"] == 0 and body["due"] is False
+    for i in range(20):                                     # 20 visible, 20 hidden
+        store.scenes.set_excluded(cid, sid, i, False)
+    body = _post(client, cid, sid)
+    assert body["asked"] is False and body["posts"] == 20 and body["due"] is False
+    assert llm.calls == 0
+    for i in range(20, 40):                                 # the control: 40 visible
+        store.scenes.set_excluded(cid, sid, i, False)
+    assert _post(client, cid, sid)["asked"] is True and llm.calls == 1
+
+
 def test_a_missing_connection_is_refused_before_the_gate_is_consulted(client):
     """A 409 that only appeared once a scene happened to be due would be
     indistinguishable, on the client, from the quiet no-op that is this route's
