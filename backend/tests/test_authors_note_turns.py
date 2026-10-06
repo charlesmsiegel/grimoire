@@ -9,9 +9,11 @@ from PIL import Image
 from grimoire import content_parts as cp
 from grimoire import prompts, routes, store
 from grimoire.store import (
+    appearances,
     authors_notes,
     campaign_images,
     campaigns,
+    characters,
     config,
     context,
     scenes,
@@ -313,9 +315,14 @@ def test_no_configured_notes_no_row(monkeypatch, tmp_path):
 
 
 def test_a_note_row_without_history_goes_before_post_history(monkeypatch, tmp_path):
-    _, cid, sid = _campaign(monkeypatch, tmp_path)
+    wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    # A cast NPC with post-history instructions, so the row the note must
+    # precede is actually rendered.
+    card = characters.blank_card("Seraphine")
+    card["data"].update(description="d", post_history_instructions="STAY IN CHARACTER")
+    characters.create_character(worlds.world_root(wid), "Seraphine", "default", card)
+    appearances.appear(cid, sid, "characters", "seraphine", "default", "npc")
     authors_notes.set_campaign(cid, {"text": TEXT, "depth": 0, "every": 3})
     ids = [r["id"] for r in context.context_sections(cid, sid)]
-    assert "authors_note" in ids and "history" not in ids
-    if "post_history" in ids:
-        assert ids.index("authors_note") == ids.index("post_history") - 1
+    assert "authors_note" in ids and "history" not in ids and "post_history" in ids
+    assert ids.index("authors_note") == ids.index("post_history") - 1
