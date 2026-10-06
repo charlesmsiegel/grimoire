@@ -1829,6 +1829,8 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
       world's directory and in this campaign's (`image_descriptions.set_in`'s
       `also_clear`), so neither masks the edit. Another campaign's key is not
       this edit's to clear: it keeps masking the shared text until migration.
+      A write the image store does not confirm falls back to THIS campaign's
+      legacy key (`fallback_dir`), never the world's.
     - **Anything else** -- the campaign's own art, or inherited art the world
       holds as a legacy file with no object to share -- lands campaign-side,
       as it always has: on the object behind a campaign placement, or as the
@@ -1868,9 +1870,11 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
         if any(i["name"] == name for i in inherited):
             wdir = assets.version_dir(v.wroot, aid, vid, base)
             if image_descriptions.object_id_in(wdir, name) is not None:
-                image_descriptions.set_in(
-                    wdir, name, text, names=union,
-                    also_clear=assets.version_dir(v.croot, aid, vid, base))
+                # Unconfirmed, the text falls back to the CAMPAIGN's key: the
+                # directory edited, not the world's (R2/R8).
+                cdir = assets.version_dir(v.croot, aid, vid, base)
+                image_descriptions.set_in(wdir, name, text, names=union,
+                                          also_clear=cdir, fallback_dir=cdir)
                 return
         image_descriptions.set_description(v.croot, aid, vid, name, text, base, names=union)
 

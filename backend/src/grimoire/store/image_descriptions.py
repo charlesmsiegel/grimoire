@@ -281,7 +281,7 @@ def write_in(d: Path, descriptions: dict[str, str], names: set[str] | None = Non
 
 
 def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
-           also_clear: Path | None = None) -> None:
+           also_clear: Path | None = None, fallback_dir: Path | None = None) -> None:
     """Describe one image of `d` (R2).
 
     A name whose placement resolves is described on its image object, and
@@ -289,7 +289,11 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
     dropped here and in `also_clear` (the visible placement's directory, when a
     caller edits through another one). Anything else -- the write not
     confirmed, a placement whose object has not arrived, a name with no
-    placement -- writes the legacy key, exactly as before.
+    placement -- writes the legacy key, exactly as before: `fallback_dir`'s
+    when given, else `d`'s. A caller describing the visible placement of
+    ANOTHER directory (a campaign editing inherited art) names its own
+    directory there, so text it could not put on the object lands where it
+    was edited (R2/R8) rather than in the directory it merely reads through.
 
     The key being written still has to name a real image (`ValueError`);
     `names` overrides what "real" means — see `read_in`. Text over
@@ -319,7 +323,7 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
             if also_clear is not None and also_clear != d:
                 _clear_legacy(also_clear, name)
             return
-        _write_legacy(d, name, text)
+        _write_legacy(d if fallback_dir is None else fallback_dir, name, text)
 
 
 def _clear_legacy(d: Path, name: str) -> None:

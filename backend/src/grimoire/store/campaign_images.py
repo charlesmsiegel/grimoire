@@ -364,7 +364,8 @@ def set_description(cid: str, name: str, text: str) -> None:
     - **An inherited image whose world placement resolves** (D1, R3): on that
       shared image object, so the world and every campaign on it show the edit,
       and the name's legacy key is cleared in the world's library and in this
-      campaign's, so neither masks it.
+      campaign's, so neither masks it. A write the image store does not
+      confirm falls back to this campaign's own legacy key, never the world's.
     - **An inherited legacy world file** has no object to share and is refused
       (`ValueError`): it is still described in the world's editor. The route
       answers that case 409 before it gets here.
@@ -388,7 +389,9 @@ def set_description(cid: str, name: str, text: str) -> None:
         if name in inherited:
             wdir = world_dir(cid)
             if wdir is not None and image_descriptions.object_id_in(wdir, name) is not None:
-                image_descriptions.set_in(wdir, name, text, names=inherited, also_clear=d)
+                # Unconfirmed, it falls back to the campaign's own key (R2/R8).
+                image_descriptions.set_in(wdir, name, text, names=inherited,
+                                          also_clear=d, fallback_dir=d)
                 return
         image_descriptions.set_in(d, name, text,
                                   names={i["name"] for i in rows if not i["inherited"]})
