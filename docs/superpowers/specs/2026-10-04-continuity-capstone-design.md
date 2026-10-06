@@ -1733,7 +1733,7 @@ Read details (Slice E plan, Decision 17):
 - **Canonical on read.** Each stored ref is mapped through `live_canon`, returned under its canonical ref with the canonical record's label and state, and de-duplicated, the first stored entry winning. The file keeps both spellings.
 - **Labels are derived on read**, since §17 stores none: a thread's or commitment's canonical title; an event's current name; a holiday's name from its ref (a shortened name's digest shown as `…`); a birthday's actor's current name; else the ref's id.
 - **`anchor_date`** is added to each read: the anchor's date when its relation is `on` and the anchor is live and dated, else `""`. It is the server-supplied anchor date of §17.1.
-- A **deleted** anchor is dropped from the read without making the idea stale on its own.
+- A **deleted** anchor is dropped from the read; the idea is stale only when no other stored ref is live (an anchor-only idea then reads “Its drivers no longer exist”) (Decision 17).
 
 Reads never rewrite scene_ideas.json.
 
