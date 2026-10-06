@@ -150,9 +150,14 @@ def _require_wellformed(cid: str, sections: set[str]) -> None:
 
 
 def _require_readable(ledgers: effective.Ledgers, *prefixes: str) -> None:
-    bad = sorted({_LEDGER_FILE[p] for p in prefixes} & set(ledgers.unreadable))
+    """Refuse while a named kind's ledger will not read. The refusal names the
+    records in words -- "threads", never "plot", the stem of the file that
+    holds them (§30: no store token reaches a reader)."""
+    unreadable = set(ledgers.unreadable)
+    bad = [f"{p}s" for p in _LEDGER_FILE if p in prefixes and _LEDGER_FILE[p] in unreadable]
     if bad:
-        raise RefusedError(409, "unreadable", f"{', '.join(bad)} cannot be read right now")
+        words = bad[0] if len(bad) == 1 else f"{', '.join(bad[:-1])} and {bad[-1]}"
+        raise RefusedError(409, "unreadable", f"{words} cannot be read right now")
 
 
 def _require_exists(ledgers: effective.Ledgers, cid: str, *refs: str) -> None:

@@ -400,6 +400,7 @@ def test_an_unreadable_ledger_is_refused_not_hidden(cid):
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     refused = _refused(_check, cid, key)
     assert (refused.status, refused.kind) == (409, "unreadable")
+    assert refused.detail == "threads cannot be read right now"
 
 
 # ---------------------------------------------------------------- plan_apply
