@@ -720,6 +720,23 @@ def test_events_are_all_listed_with_their_status(monkeypatch, tmp_path):
     assert g["omitted"] == []
 
 
+def test_an_event_fired_today_carries_its_own_day_and_today_pressure(monkeypatch, tmp_path):
+    """Reaching the day fires an event, but the day is still the present
+    (§13.5's own-day carve-out): the node says `fired` and also `in_days == 0`
+    with the driver's `today` reading, which is what keeps the client from
+    filing it under "Reached" while the chooser offers it as an anchor."""
+    cid = _event_campaign(monkeypatch, tmp_path)
+    clock.advance(cid, to="2026-05-13")
+    assert events.get(cid, "the-coronation")["fired"] is not None   # the control
+
+    node = _by_id(graph.build(cid))[CORONATION]
+    assert (node["status"], node["in_days"], node["anchorable"]) == ("fired", 0, True)
+    assert node["pressure"]["state"] == "today"
+    snap = drivers.snapshot(cid)
+    assert CORONATION in {d["ref"] for d in snap["drivers"]}
+    assert CORONATION in {a["ref"] for a in snap["anchors"]}
+
+
 def test_dated_nodes_carry_fixed_and_in_days_undated_null(monkeypatch, tmp_path):
     cid = _event_campaign(monkeypatch, tmp_path)
     dated = scene_ideas.add(cid, "Mara's map", "Mara reads the map.", date="2026-05-12")

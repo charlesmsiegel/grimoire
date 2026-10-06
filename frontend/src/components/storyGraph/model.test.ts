@@ -1,6 +1,6 @@
 import type { EdgeKind, GraphNode, NodeKind, StoryGraph } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
-import { graphFixture } from "../../testkit/storyGraph";
+import { graphFixture, NOW_FIXED } from "../../testkit/storyGraph";
 import { sanitizeSeed } from "../pressureControls";
 import {
   accessibleName, arcNeighbourhood, arcRows, FINDING_PHRASE, indexGraph, isLens, KIND_NOUN,
@@ -212,6 +212,19 @@ describe("lens presets", () => {
     expect(ids("story")).not.toContain(FAIR);
     expect(ids("calendar")).toEqual(expect.arrayContaining([BELL, FAIR]));
     expect(ids("continuity")).toEqual(expect.arrayContaining([BELL, FAIR]));
+  });
+
+  it("an event fired today is still the present, so Story keeps it (§13.5 own day)", () => {
+    // Reaching the day fires the event, and its driver still reads `today`:
+    // the chooser lists it as a live driver and an anchor, so Story does too.
+    const g = graphFixture();
+    g.nodes = g.nodes.map((n) => (n.id === CORONATION && n.kind === "event"
+      ? { ...n, status: "fired" as const, in_days: 0, fixed: NOW_FIXED,
+          pressure: { state: "today" as const, in_days: 0, friendly: n.friendly } }
+      : n));
+    const { ids } = setup(g);
+    expect(ids("story")).toContain(CORONATION);
+    expect(ids("story")).not.toContain(BELL);
   });
 
   it("an edge shows only when both ends do", () => {

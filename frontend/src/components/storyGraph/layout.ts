@@ -17,7 +17,7 @@
  *  A leaf: no React. */
 import type { GraphEdge, GraphNode, NodeKind, StoryGraph } from "../../api/types";
 import { whenPhrase } from "../pressureControls";
-import { arcRows, type GraphIndex } from "./model";
+import { arcRows, isReached, type GraphIndex } from "./model";
 
 /* Geometry, to be tuned against real campaigns later. NODE_H is the 44px
  * touch target, and a node button is exactly that tall, so it never grows
@@ -116,7 +116,7 @@ function playSlot(n: GraphNode, ix: GraphIndex, scenes: Map<string, Slot>,
     case "scene":
       return scenes.get(n.id) ?? UNPLACED;
     case "event":
-      if (n.status === "fired" || n.status === "passed") return bucket("reached", "Reached");
+      if (isReached(n)) return bucket("reached", "Reached");
       return n.in_days !== null && n.in_days >= 0 ? future(n.in_days) : UNDATED;
     case "holiday":
     case "birthday":

@@ -1949,7 +1949,7 @@ The default **Story** lens is play-order oriented, not a force-directed hairball
   - then active saved ideas, dated ones by `in_days` and undated ones in a trailing “Unscheduled” column.
 - **Lanes:** thread and commitment nodes and arcs sit in lanes connected to the scenes that moved them.
 - **Density:** actors and locations are secondary nodes, toggled to reduce density.
-- **Fired events:** fired or passed events are not on the Story spine. They appear in the Calendar lens and in node detail.
+- **Fired events:** fired or passed events are not on the Story spine. They appear in the Calendar lens and in node detail. An event on today's date is the exception, by §13.5's own-day carve-out: reaching the day fires it, but its driver still reads `today` and the chooser still offers it as an anchor, so a fired event with `in_days == 0` stays on Story, right of Now.
 
 The **Calendar** lens places scenes by their opening date's `fixed`, and puts Now at `now.fixed`.
 
@@ -1958,7 +1958,7 @@ The **Calendar** lens places scenes by their opening date's `fixed`, and puts No
 - The **play axis** serves Story, Cast and Continuity. Left to right:
   - a leading **“Not in a scene”** column, for a node with no visible scene column (an arc in a view that shows no scene, an actor with no appearance);
   - the scenes in play order, one column each, headed by ordinal (“Scene 1”, …). An ordinal stays true under an arc filter that hides the scenes between;
-  - **“Reached”**, for fired and passed events on the play axis: the Continuity lens, or an arc filter whose link neighbours include one (on any play lens, Story included). The Story preset drops them and Cast shows no events;
+  - **“Reached”**, for fired and passed events on the play axis, except one on its own day (`in_days == 0`), which takes its temporal slot right of Now (above): the Continuity lens, or an arc filter whose link neighbours include one (on any play lens, Story included). The Story preset drops them and Cast shows no events;
   - **Now**, which holds only its marker, so the marker never runs through a button;
   - the temporal slots right of Now by `in_days` (upcoming events, holidays, birthdays, and deadlines still ahead);
   - **“Undated”**, for unfired events and birthdays whose `fixed` is null (an undated non-idea node);

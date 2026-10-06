@@ -293,6 +293,24 @@ describe("layout: an arc filter", () => {
   });
 });
 
+describe("layout: an event fired today", () => {
+  it("sits right of Now on its own day, never under Reached (§13.5 own day)", () => {
+    const g = graphFixture();
+    g.nodes = g.nodes.map((n) => (n.id === CORONATION && n.kind === "event"
+      ? { ...n, status: "fired" as const, in_days: 0, fixed: NOW_FIXED,
+          pressure: { state: "today" as const, in_days: 0, friendly: n.friendly } }
+      : n));
+    for (const lens of ["story", "continuity"] as const) {
+      const { lay, colOf } = draw(lens, { g });
+      const col = colOf(CORONATION);
+      expect(col.kind).toBe("future");
+      const now = lay.columns.find((c) => c.kind === "now");
+      expect(now).toBeDefined();
+      expect(col.index).toBeGreaterThan(now!.index);
+    }
+  });
+});
+
 describe("layout: the calendar axis", () => {
   it("actors on the Calendar lens go in People and places, not Undated", () => {
     const show = { ...PRESETS.calendar.show, actors: true, locations: true };
