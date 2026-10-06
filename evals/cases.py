@@ -39,6 +39,7 @@ from pathlib import Path
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
+    authors_notes,
     campaigns,
     characters,
     checks,
@@ -625,12 +626,54 @@ def build_turn_taking() -> dict:
     # checks by luck.
     config.write_config(speaker_turn_taking="on")
 
+    # Author's notes (play controls V): a campaign note every call carries, and
+    # a character note only Seraphine's own call may -- hosted here because a
+    # several-NPC scene is where a character's note can leak into somebody
+    # else's call. No macros in either, so the render below is the sent text.
+    authors_notes.set_campaign(cid, {"text": _CAMPAIGN_NOTE, "depth": 4, "every": 1})
+    authors_notes.set_character(cid, sera, {"text": _CHARACTER_NOTE, "depth": 0, "every": 1})
+
     npc_names = _npc_names(cid, sid)
     nomination = context.speaker.nominate(npc_names,
                                           scenes.read_scene(cid, sid)["messages"])
     return {"cid": cid, "sid": sid, "npc_names": npc_names, "nomination": nomination,
             "players": frozenset(appearances.player_names(cid, sid)),
-            "tracker_lines": tracker_lines}
+            "tracker_lines": tracker_lines,
+            "sera_ref": sera, "other_ref": f"characters:{ids['Tobin']}"}
+
+
+_CAMPAIGN_NOTE = "Keep the storm audible in every scene."
+_CHARACTER_NOTE = "Seraphine never names the buyer."
+
+
+def _authors_note_checks(ctx: dict) -> list[Check]:
+    """The campaign note reaches the narrator's prompt verbatim, and the
+    character note reaches Seraphine's own call and neither Tobin's nor the
+    narrator's. Rendered from the template, so a reword moves both sides."""
+    from grimoire import prompts
+
+    # `grade_prompt_section`'s own rule, spelled out: the template's `name`
+    # variable collides with that function's `name` parameter.
+    campaign = prompts.render("scene/authors_note.j2", level="campaign", name="",
+                              text=_CAMPAIGN_NOTE).strip()
+    delivered = [Check("prompt.authors_note",
+                       bool(campaign) and campaign in graders.prompt_text(ctx["messages"]),
+                       "scene/authors_note.j2 rendered nothing" if not campaign else
+                       "the rendered campaign author's note is not in the assembled prompt")]
+    own = prompts.render("scene/authors_note.j2", level="character", name="Seraphine Vale",
+                         text=_CHARACTER_NOTE).strip()
+
+    def call(ref: str) -> str:
+        return graders.prompt_text(context.compose_turn(ctx["cid"], ctx["sid"], describe=False,
+                                                        actor_ref=ref)[0])
+
+    in_own = bool(own) and own in call(ctx["sera_ref"])
+    in_other = _CHARACTER_NOTE in call(ctx["other_ref"])
+    in_narrator = _CHARACTER_NOTE in graders.prompt_text(ctx["messages"])
+    return delivered + [Check(
+        "prompt.authors_note_scoped", in_own and not in_other and not in_narrator,
+        f"character note in its own call: {in_own}, in another character's: {in_other}, "
+        f"in the narrator's: {in_narrator}")]
 
 
 def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
@@ -681,7 +724,8 @@ def grade_turn_taking(ctx: dict, output: str) -> list[Check]:
                                            "scene/sections/tracker_state.j2",
                                            tracker_lines=ctx["tracker_lines"],
                                            tracker_narrator=True)
-    return [control] + section + voice + tracker + graders.grade_turn_taking(
+    notes = _authors_note_checks(ctx)
+    return [control] + section + voice + tracker + notes + graders.grade_turn_taking(
         output, nomination, ctx["players"], ctx["npc_names"])
 
 
