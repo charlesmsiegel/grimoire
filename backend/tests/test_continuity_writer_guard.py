@@ -17,9 +17,8 @@ bindings rather than comparing spellings for the same reason that one does.
 
 Reach:
 
-- It scans the discovery modules in `SCANNED`. `graph` is a later slice's and
-  may not exist yet; every other name must, or the guard would quietly scan
-  nothing.
+- It scans the discovery modules in `SCANNED`. Every one must exist, or the
+  guard would quietly scan nothing.
 - `pending` is scanned and is read-only by design. It is what Todo's count and
   both reconcile persists read a finding's current meaning through, so a write
   routed through it would let the sweep change reviewed state while looking
@@ -55,9 +54,10 @@ PACKAGE = "grimoire.store.continuity"
 #: The discovery modules: they may read everything below and write none of it.
 SCANNED = ("similarity", "identity", "reconcile", "pending", "pressure", "drivers", "graph")
 
-#: `graph` arrives in a later slice; anything else missing means a rename the
-#: guard would otherwise follow into scanning nothing.
-REQUIRED_PRESENT = {"similarity", "identity", "reconcile", "pending", "pressure", "drivers"}
+#: Every scanned module: one missing means a rename the guard would otherwise
+#: follow into scanning nothing.
+REQUIRED_PRESENT = {"similarity", "identity", "reconcile", "pending", "pressure", "drivers",
+                    "graph"}
 
 #: Mutators the discovery modules may not reach, by absolute module. Matching
 #: is exact on the module, never on its tail: `doc` is a common word.

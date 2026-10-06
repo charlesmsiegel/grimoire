@@ -27,11 +27,14 @@ from grimoire.store import (
     scene_ideas,
 )
 from grimoire.store.continuity import (
+    candidates,
     canon,
+    doc,
     drivers,
     effective,
     graph,
     involvement,
+    pending,
     pressure,
     review,
 )
@@ -871,3 +874,166 @@ def test_a_raising_event_list_falls_back_to_undated_events(monkeypatch, tmp_path
     assert statuses == {"event:saltmarch-eve": "fired", CORONATION: "undated",
                         "event:mara-s-oath": "undated", "event:winifred-s-chart": "undated"}
     assert _by_id(g)[CORONATION]["fixed"] is None
+
+
+# ---- reviewed links and review candidates -----------------------------------
+
+
+DUP = "possible_duplicate"
+REL = "possible_relation"
+CLOSURE = "possible_thread_closure"
+EVE = "thread:saltmarch-eve"
+
+
+def _every_edge_names_two_nodes(g: dict) -> None:
+    ids = {n["id"] for n in g["nodes"]}
+    for e in g["edges"]:
+        assert e["from"] in ids and e["to"] in ids, e
+
+
+def _sourced(g: dict, source: str) -> list[dict]:
+    return [e for e in g["edges"] if e["source"] == source]
+
+
+def _finding(cid: str, kind: str, refs: list[str]) -> tuple[str, dict]:
+    """A cached finding whose stored fingerprint is the current one (`live`)."""
+    fp = pending.fingerprint(pending.Current.load(cid), kind, refs)
+    assert fp is not None
+    return canon.candidate_id(kind, refs), {
+        "kind": kind, "refs": list(refs), "fingerprint": fp, "signals": {},
+        "proposal": None, "created": ""}
+
+
+def _cache(cid: str, *found: tuple[str, dict]) -> None:
+    data = candidates.empty()
+    data["records"] = dict(found)
+    candidates.write(cid, data)
+
+
+def _review_campaign(monkeypatch, tmp_path) -> str:
+    cid = _campaign(monkeypatch, tmp_path)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s1)
+    _thread(cid, "saltmarch-eve", "Saltmarch Eve", s1)
+    _oath(cid, "mara-s-oath", "Mara's oath", s1)
+    events.create(cid, "The coronation", "2026-05-13")
+    return cid
+
+
+def test_reviewed_links_are_link_edges(monkeypatch, tmp_path):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    lid = review.create_link(cid, MAP, OATH, "pays_off")["link"]["id"]
+
+    g = graph.build(cid)
+    [edge] = _edges(g, "link")
+    assert edge == {"id": lid, "kind": "link", "from": MAP, "to": OATH,
+                    "source": "reviewed", "relation": "pays_off", "candidate_id": None}
+    assert g["omitted"] == []
+
+
+def test_a_dangling_link_draws_nothing(monkeypatch, tmp_path):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    lid = canon.link_id("before", OATH, "event:gone")
+    doc.put_link(cid, lid, {"a": OATH, "b": "event:gone", "relation": "before",
+                            "created": "", "scene": "", "note": ""})
+
+    g = graph.build(cid)
+    assert _edges(g, "link") == []
+    assert lid in {b["id"] for b in effective.diagnostics(cid)["broken_links"]}
+    _every_edge_names_two_nodes(g)
+
+
+@pytest.mark.parametrize("a, relation, b, ledger", [
+    (MAP, "pays_off", OATH, "plot.json"),
+    (OATH, "before", CORONATION, "events.json"),
+])
+def test_a_link_to_an_unreadable_ledger_draws_nothing(monkeypatch, tmp_path, a, relation, b,
+                                                       ledger):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    lid = review.create_link(cid, a, b, relation)["link"]["id"]
+    (campaigns.campaign_root(cid) / ledger).write_text("{ no", encoding="utf-8")
+
+    # The positive control: existence unknown is not existence false, so the
+    # effective view keeps the link.
+    assert lid in {link["id"] for link in effective.links(cid)}
+    g = graph.build(cid)
+    assert _edges(g, "link") == []
+    _every_edge_names_two_nodes(g)
+
+
+def test_visible_pair_findings_are_candidate_edges(monkeypatch, tmp_path):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    dup_id, dup = _finding(cid, DUP, [MAP, CHART])
+    closure_id, closure = _finding(cid, CLOSURE, [MAP])
+    rel_id, rel = _finding(cid, REL, [OATH, CORONATION])
+    _cache(cid, (dup_id, dup), (closure_id, closure), (rel_id, rel))
+
+    g = graph.build(cid)
+    candidate_edges = {e["id"]: e for e in _sourced(g, "candidate")}
+    assert set(candidate_edges) == {dup_id, rel_id}
+    assert candidate_edges[dup_id] == {
+        "id": dup_id, "kind": DUP, "from": MAP, "to": CHART, "source": "candidate",
+        "relation": None, "candidate_id": dup_id}
+    rel_edge = candidate_edges[rel_id]
+    assert (rel_edge["kind"], rel_edge["from"], rel_edge["to"], rel_edge["candidate_id"]) == (
+        REL, OATH, CORONATION, rel_id)
+    nodes = _by_id(g)
+    assert nodes[MAP]["findings"] == sorted([
+        {"id": dup_id, "kind": DUP, "other": CHART},
+        {"id": closure_id, "kind": CLOSURE, "other": None},
+    ], key=lambda f: f["id"])
+    assert nodes[CHART]["findings"] == [{"id": dup_id, "kind": DUP, "other": MAP}]
+    # The temporal relation lands on the commitment and on the event.
+    assert nodes[OATH]["findings"] == [{"id": rel_id, "kind": REL, "other": CORONATION}]
+    assert nodes[CORONATION]["findings"] == [{"id": rel_id, "kind": REL, "other": OATH}]
+    assert g["omitted"] == []
+    _every_edge_names_two_nodes(g)
+
+    # A suppressed duplicate is the reader's own "no": no edge, no finding.
+    doc.put_suppression(cid, dup["fingerprint"], {"kind": DUP, "refs": [MAP, CHART],
+                                                  "decision": "dismiss", "created": ""})
+    g = graph.build(cid)
+    assert {e["id"] for e in _sourced(g, "candidate")} == {rel_id}
+    assert _by_id(g)[MAP]["findings"] == [{"id": closure_id, "kind": CLOSURE, "other": None}]
+    assert _by_id(g)[CHART]["findings"] == []
+
+
+def test_a_pair_finding_on_a_merged_source_is_dropped(monkeypatch, tmp_path):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    fid, record = _finding(cid, DUP, [CHART, EVE])
+    _cache(cid, (fid, record))
+    review.create_alias(cid, CHART, MAP)
+
+    # D's verdict for an alias source is `gone`.
+    assert [(i, v) for i, _, v in pending.findings(cid)] == [(fid, "gone")]
+    g = graph.build(cid)
+    assert _sourced(g, "candidate") == []
+    nodes = _by_id(g)
+    for ref in (MAP, CHART, EVE):
+        assert nodes[ref]["findings"] == [], ref
+
+
+def test_a_lifecycle_finding_on_the_canonical_lands_on_it(monkeypatch, tmp_path):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    review.create_alias(cid, CHART, MAP)
+    fid, record = _finding(cid, CLOSURE, [MAP])
+    _cache(cid, (fid, record))
+
+    assert [(i, v) for i, _, v in pending.findings(cid)] == [(fid, "live")]
+    g = graph.build(cid)
+    nodes = _by_id(g)
+    assert nodes[MAP]["findings"] == [{"id": fid, "kind": CLOSURE, "other": None}]
+    assert nodes[CHART]["findings"] == []
+    assert not [e for e in _sourced(g, "candidate") if CHART in (e["from"], e["to"])]
+
+
+def test_a_malformed_cache_costs_only_candidates(monkeypatch, tmp_path):
+    cid = _review_campaign(monkeypatch, tmp_path)
+    lid = review.create_link(cid, MAP, OATH, "pays_off")["link"]["id"]
+    candidates._path(cid).write_text("{ no", encoding="utf-8")
+
+    g = graph.build(cid)
+    assert _sourced(g, "candidate") == []
+    assert "candidates" in g["omitted"]
+    assert [e["id"] for e in _edges(g, "link")] == [lid]
