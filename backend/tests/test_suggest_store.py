@@ -787,6 +787,25 @@ def test_snapshot_has_ids_commitments_timeline_and_index(monkeypatch, tmp_path):
     assert {MAP, OATH, f"event:{eid}"} <= {d["ref"] for d in snap["driver_index"]}
 
 
+@pytest.mark.parametrize(("warn", "near"), [(30, 30), (3, suggest.NEAR_MIN_DAYS)])
+def test_near_days_is_the_wider_of_warn_days_and_the_floor(monkeypatch, tmp_path, warn, near):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["warn_days"] = warn
+    calendars.write_calendar(croot, cfg)
+    snap = suggest.build_snapshot(cid)
+    assert snap["near_days"] == near
+    gregorian = calendars.get_provider({"provider": "gregorian"})
+    assert snap["fixed"] == calendars.fixed_of(gregorian, "2026-05-10")
+
+
+def test_a_garbled_calendar_json_still_gets_the_near_floor(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / "calendar.json").write_text("{oops", encoding="utf-8")
+    assert suggest.build_snapshot(cid)["near_days"] == suggest.NEAR_MIN_DAYS == 7
+
+
 def test_unchanged_keys_are_unchanged(monkeypatch, tmp_path):
     cid = _pressure_campaign(monkeypatch, tmp_path, holidays=[_rule("Saltmarch Eve", "05", 10)])
     sid = scenes.create_scene(cid, "One")
@@ -924,6 +943,7 @@ def test_snapshot_survives_a_raising_plugin(monkeypatch, tmp_path):
     assert snap["timeline"] and all(i["fixed"] is None for i in snap["timeline"])
     assert [i["ref"] for i in snap["timeline"]] == [f"event:{eid}"]
     assert snap["anchors"] == []
+    assert snap["fixed"] is None
     assert {MAP, OATH} <= {d["ref"] for d in snap["driver_index"]}
 
 
