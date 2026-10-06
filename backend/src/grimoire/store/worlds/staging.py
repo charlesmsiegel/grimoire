@@ -21,6 +21,13 @@ that is cannot be known until the rename succeeds — the one it was going to
 get can be taken in between — so `publish` owns the retry and re-points on
 each attempt, and the world it finally publishes always references itself.
 
+**A delete leaves by the same door.** `remove_published` moves a world's or
+a campaign's tree in here before stripping its image scope and removing it, so
+a strip that fails can put the tree back. A campaign tree is staged here too,
+rather than in a directory of its own, because this is the one place every
+reader of the store (the listings, backups, the image collector) already
+treats as off the shelf.
+
 **What this deliberately does not do is sweep.** A process killed outright
 mid-copy leaves a world-sized tree under `staging_root()` that nothing lists
 and nothing removes; the callers' own `finally` covers every exception but not
@@ -35,14 +42,17 @@ at.
 
 from __future__ import annotations
 
+import contextlib
+import os
 import shutil
 import stat
+import traceback
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from .. import atomic
+from .. import atomic, logs
 from ..paths import home, uniquify
 from . import paths as worlds_paths
 
@@ -101,6 +111,76 @@ def staging_tree() -> Iterator[Path]:
         # one that runs when the copy raised.
         make_writable(work)
         shutil.rmtree(work, ignore_errors=True)
+
+
+def remove_published(root: Path, strip: Callable[[], object], *, what: str) -> None:
+    """Delete the published record tree at `root`, after `strip` has removed
+    what the record keeps outside it -- so a failure leaves the record either
+    whole or gone, never a record that is still there with its tags stripped.
+
+    A world's and a campaign's subject tags live on the shared image objects,
+    not in the directory, so a delete has two halves that cannot share one
+    atomic step. Stripping first and `rmtree`'ing second (which this replaced)
+    lost the tags of a record that then survived: a read-only or locked file
+    stops the `rmtree`, the request fails, and the world is still on the shelf
+    with its pictures untagged (Codex review, P1). So the order is:
+
+    1. **Move the tree aside**, by one `os.replace` into a fresh work directory
+       under `staging_root()` -- the dot-directory no listing, resolver or
+       backup reads as a library, and whose trees the image collector already
+       counts as roots. A move that fails changes nothing: the error
+       propagates and nothing has been stripped.
+    2. **Strip.** If it fails, the tree is moved back and the error re-raised,
+       so the record is exactly as it was and the delete can be run again.
+    3. **Remove the moved-aside tree.** The record is already gone from every
+       listing and its tags are stripped, so a failure here is not a failed
+       delete: it is logged, and the leftover stays under `staging_root()`.
+       Nothing sweeps it, for the reason the module docstring gives for
+       staged trees in general; it is named by a directory the user can see,
+       and a later image collection keeps what its placements reach until it
+       is removed by hand.
+
+    `root` must be the record's directory as the filesystem spells it (the
+    callers' `names_its_directory` check), and the caller holds whatever lock
+    covers the strip. `what` names the record in a log line.
+    """
+    work = staging_root() / uuid.uuid4().hex
+    work.mkdir(parents=True)
+    aside = work / "removed"
+    try:
+        os.replace(root, aside)
+    except BaseException:
+        _drop_empty(work)
+        raise
+    try:
+        strip()
+    except BaseException:
+        try:
+            os.replace(aside, root)
+        except OSError:
+            # The record is gone and its tags may be half-stripped: say where
+            # the tree is, since nothing else will.
+            logs.record("error", __name__,
+                        f"delete {what}: the scope strip failed and the tree could "
+                        f"not be put back; it is at {aside}",
+                        kind="restore-failed", trace=traceback.format_exc())
+        else:
+            _drop_empty(work)
+        raise
+    make_writable(work)
+    try:
+        shutil.rmtree(work)
+    except OSError as exc:
+        logs.record("error", __name__,
+                    f"delete {what}: deleted, but its files could not all be "
+                    f"removed; the leftover is at {work}",
+                    kind=type(exc).__name__, trace=traceback.format_exc())
+
+
+def _drop_empty(work: Path) -> None:
+    """Remove a work directory nothing was left in. Never raises."""
+    with contextlib.suppress(OSError):
+        work.rmdir()
 
 
 def make_writable(root: Path) -> None:

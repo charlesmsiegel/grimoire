@@ -1414,12 +1414,14 @@ text above, they win.
   world. `delete_campaign` takes the campaign lock, so it can be refused with
   409 behind a long hold. `staging.repoint_urls` no longer rewrites a world URL
   written inside an object description. `delete_world` is unlocked, so a tag
-  written between the strip and the removal survives, and running the delete
-  again clears it.
+  written by a request that resolved the world before its tree was moved aside,
+  and landing after the strip, survives it.
 
 Two points the plan left open, now settled. **Scope lifecycle (§9):** a delete
-strips its scope under the campaign lock for a campaign, and a strip that
-fails aborts the delete so it can be re-run. A world fork's tag copy is best
+moves the tree aside, strips its scope (under the campaign lock for a
+campaign), then removes the tree; a strip that fails moves the tree back so
+the delete can be re-run, and a removal that fails after the strip is logged
+and the record reads as deleted. A world fork's tag copy is best
 effort, since the fork is already published: a failure is logged and the fork
 stands. A failed campaign fork strips the new scope. **Reads:** a greeting's
 image catalog carries each placement's image id, so answering for a subject

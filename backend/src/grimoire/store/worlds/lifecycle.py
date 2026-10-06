@@ -338,9 +338,13 @@ def delete_world(wid: str) -> None:
     if used_by:
         raise WorldInUse(wid, used_by)
     # The world's subject tags live on the shared image objects, which outlive
-    # this directory; stripped first, so a world created again under this slug
-    # starts untagged (Review Focus 4). Unlocked, as worlds are: a tag written
-    # between the strip and the `rmtree` survives it, and deleting again --
-    # which a re-created world of this name would need first -- clears it (R13).
-    image_scopes.strip_world(wid)
-    shutil.rmtree(root)
+    # this directory; stripped, so a world created again under this slug starts
+    # untagged (Review Focus 4). `remove_published` moves the tree aside first
+    # and puts it back if the strip fails, so a delete that fails leaves the
+    # world with its tags, and one whose final `rmtree` fails still reads as
+    # deleted (Codex review, P1). `wid` is canonical by the check above, which
+    # is what lets `strip_world` name its scope once the directory has moved.
+    # Unlocked, as worlds are: a tag written by a request that resolved the
+    # world before the move and lands after the strip survives it (R13).
+    staging.remove_published(root, lambda: image_scopes.strip_world(wid),
+                             what=f"world {wid}")
