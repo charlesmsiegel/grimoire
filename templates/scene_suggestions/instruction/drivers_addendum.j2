@@ -1,0 +1,16 @@
+{#- The driver contract: what each suggestion's "drivers" and "time_anchor"
+    keys hold, and the batch's diversity guidance (capstone spec §15.1, §15.2).
+    Appended after the instruction section only when the rendered driver index
+    is non-empty, so a campaign with nothing to drive keeps today's message.
+    Begins with a single space, like every addendum. Every enum is rendered
+    from `view` (suggest.driver_view), never typed here: the action words from
+    view.actions, the anchor kinds from the kinds that take "anchor", the
+    relations from view.relations, the high-pressure states from
+    view.high_pressure.
+    Vars: view. -#}
+{%- macro quoted(xs) -%}
+{%- for x in xs -%}{{ "" if loop.first else (" or " if loop.last else ", ") }}"{{ x }}"{%- endfor -%}
+{%- endmacro -%}
+{%- set temporal = [] -%}
+{%- for a in view.actions -%}{%- if "anchor" in a.actions -%}{%- set _ = temporal.append(a.kind) -%}{%- endif -%}{%- endfor -%}
+{%- set kinds = temporal[:-1] | join(", ") ~ (" or " if temporal | length > 1 else "") ~ (temporal | last) %} Each suggestion also includes key "drivers": a list of {"ref" (a ref chosen ONLY from the story drivers below), "action"}, naming the drivers that scene serves and what it does to each. Actions by kind — {% for a in view.actions %}{{ a.kind }}: {{ quoted(a.actions) }}{{ "; " if not loop.last else "." }}{% endfor %} An action ending in "_candidate" means the scene is plausibly about that outcome, not that playing it guarantees one. A suggestion may also include key "time_anchor": {"ref" (one {{ kinds }} ref from the story drivers below that has not passed), "relation" ({{ quoted(view.relations) }})} when the scene is timed against that day; omit it otherwise. High pressure means a driver whose state is {{ quoted(view.high_pressure) }}. Not every suggestion should serve the same drivers. At least one suggestion should address a high-pressure driver, if any exists. Stale or cold drivers are worth reviving but are not mandatory. Near-future temporal anchors are worth using. A quiet character or relationship scene is welcome when nothing urgent dominates, and such a suggestion may list no drivers.

@@ -17,6 +17,7 @@ import pytest
 
 from grimoire import prompts
 from grimoire.llm_errors import LLMError
+from grimoire.store import suggest
 from grimoire.store.continuity import identity, reconcile
 from tests import llm_fakes
 from tests.llm_fakes import (
@@ -217,13 +218,23 @@ async def test_from_entries_refuses_a_request_it_does_not_cover():
 #: template. `scene_suggestions/system.j2`, the reply-format section and
 #: `absorb/system.j2` (whose steering paragraph is conditional; True renders
 #: the superset) are the only ones needing vars, in the shape their builders pass.
+_THREAD_DRIVER = {"ref": "thread:the-debt", "kind": "thread", "label": "The debt",
+                  "summary": "", "actors": [], "status": "open",
+                  "pressure": {"state": "stale", "in_days": None, "friendly": ""},
+                  "time_anchors": [], "links": [], "dormancy": 3}
+
+
 def _rendered_prompts() -> list[str]:
     return [prompts.render("absorb/system.j2", steering=True)] + \
            [prompts.render(t) for t in ("audit/system.j2",
                                         "dossier/system.j2", "voice_anchor/system.j2",
                                         "voice_drift/system.j2", "tagline/system.j2")] + [
+        # `drivers` with a one-row index, so the drivers addendum is rendered
+        # (and covered) too.
         prompts.render("scene_suggestions/system.j2", offscreen=False, s={"now": ""},
-                       greeting_candidates=[], direction=""),
+                       greeting_candidates=[], direction="", drivers=True,
+                       view=suggest.driver_view({"driver_index": [_THREAD_DRIVER], "near_days": 7},
+                                                suggest.NO_CONTROLS)),
         prompts.render("scene/sections/response_format.j2", player_names=[],
                        response_actor={"ref": "grimoire", "name": "Grimoire"}),
         prompts.render("tracker/update_system.j2"),

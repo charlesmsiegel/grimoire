@@ -107,13 +107,44 @@ standing flag is a write: only an explicit `in_voice` justifies one.
 ### `scene_suggestions/` — POST /campaigns/{cid}/scene-suggestions
 Mirrors `store/suggest.py:build_prompt`. Messages: system, user.
 Vars (both files take the same set):
-- `s` — `suggest.build_snapshot()` dict
+- `s` — `suggest.build_snapshot()` dict (the `drivers=True` shape: no
+  `upcoming`; adds `commitments`, `timeline`, `driver_index`, `anchors`,
+  `links`, `fixed`, `near_days` and `sooner_ref`, and a `ref` on each thread)
 - `offscreen` — bool selector: `instruction/{standard|offscreen}.j2`
 - `greeting_candidates` — `suggest.greeting_candidates()` list or None
-`system.j2` appends `instruction/date_addendum.j2` when `s.now` is set and
-`instruction/rank_addendum.j2` when there are greeting candidates. Both
-addenda begin with a **leading space** — they continue the instruction
-sentence-style; keep it when editing.
+- `direction` — the game master's steering text, "" when absent
+- `drivers` — bool; `build_prompt` passes True. Under it, `user.j2` prefixes
+  each thread line with its `thread:<id> =` ref, drops the Upcoming line in
+  favour of the timeline, and adds the "Open commitments", "Timeline", "Story
+  drivers" and "Reviewed links between drivers" blocks (each only when
+  non-empty). False is `scene_intent`'s legacy render, below.
+- `view` — `suggest.driver_view(s, controls)`: the rendered index (capped at
+  `DRIVER_PROMPT_CAP`, pinned refs always in, the rest "and N more"), the
+  capped timeline (same rule, plus the `sooner_ref` pick; rows keep the
+  snapshot's calendar order), the links among rendered drivers, the action
+  vocabulary, the high-pressure states and the controls with their labels.
+  Read only under `drivers`.
+
+`system.j2` appends `instruction/date_addendum.j2` when `s.now` is set,
+`instruction/rank_addendum.j2` when there are greeting candidates and
+`instruction/direction_addendum.j2` when there is a direction — together, the
+**instruction section**, which no driver or control ever changes (capstone
+spec §15.1, pinned by `tests/test_suggest_golden.py`). After it, only under
+`drivers`: `instruction/drivers_addendum.j2` when `view.index` is non-empty
+(the `"drivers"`/`"time_anchor"` reply keys and the diversity guidance), then
+`instruction/controls_addendum.j2` when `view.active` (focus, avoid, must and
+the time mode). So a campaign with no drivers and no controls gets the system
+message it always had. Every addendum begins with a **leading space** — they
+continue the instruction sentence-style; keep it when editing. The two driver
+addenda render every enum (action words, relations, high-pressure states) from
+`view`, never as literals, so the vocabulary has one source in Python.
+
+### `scene_intent/` — POST /campaigns/{cid}/scene-intent
+Mirrors `store/suggest.py:build_intent_prompt`. Messages: system, user.
+`user.j2` includes `scene_suggestions/user.j2` verbatim, so it takes that
+file's vars plus `typed`. It renders with `drivers=False` and `view=None`, over
+`build_snapshot(drivers=False)` — the legacy snapshot, `upcoming` included —
+so the intent prompt is byte-identical whatever drivers exist (spec §15).
 
 `instruction/date_notation.j2` is a **shared** partial, and the one file here
 included from outside its own family: `date_addendum.j2` and

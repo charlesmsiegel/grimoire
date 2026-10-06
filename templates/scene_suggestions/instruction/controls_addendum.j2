@@ -1,0 +1,23 @@
+{#- The reader's Story Pressure controls for this batch (capstone spec §16.3).
+    Appended after the drivers addendum only when a control is active
+    (suggest.Controls.active). Begins with a single space, like every addendum,
+    and renders one sentence group per control that is set: focus, avoid and
+    must as "ref = label" lists, then the time mode (near, move, or the batch
+    anchor). Relations are rendered from view.relations, never typed here.
+    Vars: view (suggest.driver_view's dict). -#}
+{%- macro quoted(xs) -%}
+{%- for x in xs -%}{{ "" if loop.first else (" or " if loop.last else ", ") }}"{{ x }}"{%- endfor -%}
+{%- endmacro -%}
+{%- macro listed(rows) -%}
+{%- for r in rows -%}{{ "" if loop.first else "; " }}{{ r.ref }} = {{ r.label }}{%- endfor -%}
+{%- endmacro -%}
+{%- if view.focus %} Focus drivers: {{ listed(view.focus) }}. Spread the focus drivers across the suggestions: each should be served by at least one suggestion, and no suggestion needs to serve them all.{% endif -%}
+{%- if view.avoid %} Avoid drivers: {{ listed(view.avoid) }}. No suggestion should serve them or list them in "drivers".{% endif -%}
+{%- if view.must %} Must-include drivers: {{ listed(view.must) }}. Every suggestion must serve each must-include driver and list it in "drivers".{% endif -%}
+{%- if view.time_mode == "near" %} Every suggestion's "date" must fall between the current date and {{ view.near_days }} days after it.
+{%- elif view.time_mode == "move" %} Every suggestion's "date" must be later than the current date: move the story forward in time.
+{%- elif view.time_mode == "anchor" and view.anchor %} Anchor every suggestion to {{ view.anchor.ref }} ({{ view.anchor.label }}{{ (", " ~ view.anchor.friendly) if view.anchor.friendly else "" }}): set its "time_anchor" "ref" to {{ view.anchor.ref }} and its "relation" to
+{%- if view.anchor.relation %} "{{ view.anchor.relation }}".
+{%- else %} whichever of {{ quoted(view.relations) }} fits that scene, "on" when unsure.
+{%- endif -%}
+{%- endif -%}

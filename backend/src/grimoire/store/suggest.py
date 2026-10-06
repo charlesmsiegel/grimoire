@@ -13,12 +13,19 @@ index (`drivers.snapshot`'s drivers), its anchors and the reviewed links
 between drivers -- one pressure computation at one `now`, shared by the
 timeline and the index. `build_snapshot(drivers=False)` is the intent prompt's
 legacy shape: exactly the keys it always had, and no pressure or driver work.
+
+The prompt renders that capture through `driver_view`, which caps the index
+and the timeline at `DRIVER_PROMPT_CAP` while always keeping what the reader's
+`Controls` pin. The instruction section of the system message never changes;
+the driver contract and the controls are addenda after it, so a campaign with
+nothing to drive and no control set gets the message it always had.
 """
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import dataclass
 
 from .. import prompts
 from . import (
@@ -344,6 +351,9 @@ def build_snapshot(cid: str, offscreen: bool = False, *, drivers: bool = True) -
            "story_so_far": story_so_far, "open_threads": open_threads,
            "cast": cast, "available_locations": available_locations}
     if drivers:
+        # The timeline replaces the Upcoming line (Decision 2); the pick is
+        # still what `sooner_ref` names, so the timeline keeps it in the prompt.
+        del out["upcoming"]
         out.update(_driver_capture(cid, offscreen, now, croot, open_threads, _dormancy,
                                    cal["upcoming"]))
     return out
@@ -378,13 +388,189 @@ def greeting_candidates(cid: str, after: str | None = None, pcless: bool = False
 
 DIRECTION_LIMIT = 500
 
+#: How many drivers the prompt's index lists (spec §15), and how many dated
+#: items its timeline lists (Decision 11). Pinned refs render past it; the rest
+#: is "and N more". A bound on prompt length, not a measurement: the index is
+#: one short line per driver, and forty is far more than one batch of three or
+#: four suggestions can serve -- tune it against real prompts later.
+DRIVER_PROMPT_CAP = 40
+
+#: At most this many must-include refs (spec §16.3): every suggestion has to
+#: serve each one, and a batch of three or four cannot serve many at once.
+MUST_CAP = 3
+
+TIME_MODES = ("auto", "near", "move", "anchor")
+ANCHOR_RELATIONS = ("before", "on", "after", "by")
+
+#: The kinds a must ref may name; temporal constraints go through the anchor.
+MUST_KINDS = ("thread", "commitment")
+
+#: The driver kinds a time anchor may name, in `DRIVER_KINDS` order.
+TEMPORAL_KINDS = ("event", "birthday", "holiday")
+
+
+@dataclass(frozen=True)
+class Controls:
+    """The reader's Story Pressure controls for one batch (spec §16.3).
+
+    The ref tuples keep request order. `relation` is the request's, possibly
+    "" (the model's or `on` then applies). Validation and precedence are
+    `resolve_controls`'; this is only the value it produces.
+    """
+    focus: tuple[str, ...] = ()
+    avoid: tuple[str, ...] = ()
+    must: tuple[str, ...] = ()
+    time_mode: str = "auto"
+    anchor: str = ""
+    relation: str = ""
+
+    @property
+    def active(self) -> bool:
+        """Any structured control set: the controls addendum renders, and the
+        picker shows every generated suggestion (§16.4)."""
+        return bool(self.focus or self.avoid or self.must) or self.time_mode != "auto"
+
+    @property
+    def pinned(self) -> tuple[str, ...]:
+        """The refs the prompt always shows: must, then focus, then the anchor."""
+        out: list[str] = []
+        for ref in (*self.must, *self.focus, *((self.anchor,) if self.anchor else ())):
+            if ref not in out:
+                out.append(ref)
+        return tuple(out)
+
+
+NO_CONTROLS = Controls()
+
+
+def _when(in_days: int | None, precision: str | None = None) -> str:
+    """Decision 10's phrase for an item's distance from now."""
+    if precision == "month":
+        return "day unknown"
+    if in_days is None:
+        return "undated"
+    if in_days == 0:
+        return "today"
+    if in_days > 0:
+        return "in 1 day" if in_days == 1 else f"in {in_days} days"
+    return "1 day ago" if in_days == -1 else f"{-in_days} days ago"
+
+
+def _select(rows: list[dict], rank: Callable[[dict], tuple],
+            always: Callable[[dict], bool]) -> list[int]:
+    """The indices of `rows` to render, ascending: every row `always` keeps,
+    plus the best-ranked rest up to `DRIVER_PROMPT_CAP` in all."""
+    kept = [i for i, r in enumerate(rows) if always(r)]
+    rest = sorted((i for i, r in enumerate(rows) if not always(r)), key=lambda i: rank(rows[i]))
+    return sorted([*kept, *rest[:max(0, DRIVER_PROMPT_CAP - len(kept))]])
+
+
+def _index_rank(row: dict) -> tuple:
+    """Pressure in `SORT_ORDER` (Decision 9: not `PRESSURE_STATES`, which ranks
+    `passed` above `today`), then the coldest first, then Slice B's ties."""
+    dormancy, in_days = row.get("dormancy"), row["pressure"]["in_days"]
+    return (pressure.SORT_ORDER.index(row["pressure"]["state"]), dormancy is None,
+            -(dormancy or 0), continuity_drivers.DRIVER_KINDS.index(row["kind"]),
+            in_days is None, in_days or 0, row["ref"])
+
+
+def _timeline_rank(item: dict) -> tuple:
+    in_days = item["in_days"]
+    return (pressure.SORT_ORDER.index(item["state"]), in_days is None, in_days or 0,
+            pressure.KINDS.index(item["kind"]), item["ref"])
+
+
+def _index_rows(snapshot: dict, pinned: set[str]) -> tuple[list[dict], int]:
+    ordered = sorted(snapshot.get("driver_index", []), key=_index_rank)
+    chosen = _select(ordered, _index_rank, lambda r: r["ref"] in pinned)
+    precision = {i["ref"]: i.get("precision") for i in snapshot.get("timeline", [])
+                 if i["kind"] in TEMPORAL_KINDS}
+    rows = []
+    for i in chosen:
+        d = ordered[i]
+        in_days = d["pressure"]["in_days"]
+        temporal = d["kind"] in TEMPORAL_KINDS
+        when = (_when(in_days, precision.get(d["ref"])) if temporal
+                else _when(in_days) if in_days is not None else "")
+        rows.append({"ref": d["ref"], "label": d["label"], "kind": d["kind"],
+                     "state": d["pressure"]["state"], "when": when})
+    return rows, len(ordered) - len(rows)
+
+
+def _timeline_rows(snapshot: dict, pinned: set[str]) -> tuple[list[dict], int]:
+    """Decision 11: pinned refs (on `ref` or `subject`) and the Upcoming pick
+    always render, the rest is ranked and capped, and rows keep the
+    snapshot's own (calendar) order."""
+    items = snapshot.get("timeline", [])
+    sooner = snapshot.get("sooner_ref", "")
+
+    def always(item: dict) -> bool:
+        return (item["ref"] in pinned or item.get("subject") in pinned
+                or (bool(sooner) and item["ref"] == sooner and item["kind"] in _SOONER_KINDS))
+
+    chosen = _select(items, _timeline_rank, always)
+    rows = [{**items[i], "when": _when(items[i]["in_days"], items[i].get("precision"))}
+            for i in chosen]
+    return rows, len(items) - len(rows)
+
+
+def _rendered_links(snapshot: dict, refs: set[str]) -> list[dict]:
+    out: list[dict] = []
+    seen: set[str] = set()
+    for link in snapshot.get("links", []):
+        if link["id"] in seen or link["a"] not in refs or link["b"] not in refs:
+            continue
+        seen.add(link["id"])
+        out.append({"a": link["a"], "relation": link["relation"], "b": link["b"]})
+    return out
+
+
+def _anchor_view(snapshot: dict, controls: Controls, labels: dict[str, str]) -> dict | None:
+    if not controls.anchor:
+        return None
+    found: dict = next((a for a in snapshot.get("anchors", []) if a["ref"] == controls.anchor), {})
+    return {"ref": controls.anchor,
+            "label": found.get("label") or labels.get(controls.anchor, controls.anchor),
+            "friendly": found.get("friendly") or "", "relation": controls.relation}
+
+
+def driver_view(snapshot: dict, controls: Controls) -> dict:
+    """What the prompt renders of the snapshot's drivers under `controls`: the
+    capped, pinned index (Decision 9), the capped timeline (Decision 11), the
+    links among rendered drivers, the action vocabulary, and the controls with
+    their labels. A snapshot without driver keys yields an empty view."""
+    pinned = set(controls.pinned)
+    index, more = _index_rows(snapshot, pinned)
+    timeline, timeline_more = _timeline_rows(snapshot, pinned)
+    labels = {d["ref"]: d["label"] for d in snapshot.get("driver_index", [])}
+
+    def named(refs: tuple[str, ...]) -> list[dict]:
+        return [{"ref": r, "label": labels.get(r, r)} for r in refs]
+
+    return {
+        "index": index, "more": more, "timeline": timeline, "timeline_more": timeline_more,
+        "links": _rendered_links(snapshot, {r["ref"] for r in index}),
+        "actions": [{"kind": k, "actions": list(continuity_drivers.ACTIONS_BY_KIND[k])}
+                    for k in continuity_drivers.DRIVER_KINDS],
+        "high_pressure": [s for s in pressure.SORT_ORDER if s in pressure.HIGH_PRESSURE],
+        "relations": list(ANCHOR_RELATIONS),
+        "focus": named(controls.focus), "avoid": named(controls.avoid),
+        "must": named(controls.must),
+        "time_mode": controls.time_mode,
+        "near_days": snapshot.get("near_days", NEAR_MIN_DAYS),
+        "anchor": _anchor_view(snapshot, controls, labels),
+        "active": controls.active,
+    }
+
 
 def build_prompt(snapshot: dict, greeting_candidates: list[dict] | None = None,
-                 offscreen: bool = False, direction: str = "") -> list[dict]:
+                 offscreen: bool = False, direction: str = "",
+                 controls: Controls | None = None) -> list[dict]:
     # the templates pick the instruction variant and addenda from the same vars
     vars = {"s": snapshot, "offscreen": offscreen,
             "greeting_candidates": greeting_candidates,
-            "direction": direction.strip()[:DIRECTION_LIMIT]}
+            "direction": direction.strip()[:DIRECTION_LIMIT],
+            "drivers": True, "view": driver_view(snapshot, controls or NO_CONTROLS)}
     return [{"role": "system", "content": prompts.render("scene_suggestions/system.j2", **vars)},
             {"role": "user", "content": prompts.render("scene_suggestions/user.j2", **vars)}]
 
@@ -397,14 +583,16 @@ def build_intent_prompt(cid: str, typed: str, offscreen: bool = False) -> list[d
 
     Over the FULL snapshot, story-so-far included: "the morning after the
     funeral" is exactly the kind of phrase this has to resolve, and only the
-    recent chronicle can resolve it."""
-    # `direction` is here because scene_intent/user.j2 INCLUDES
-    # scene_suggestions/user.j2, which reads it (Task 3) — and both this env and
-    # verify_templates render with StrictUndefined, so omitting it is a hard
-    # failure, not a silently-empty block.
-    vars = {"s": build_snapshot(cid, offscreen=offscreen), "offscreen": offscreen,
-            "greeting_candidates": None, "direction": "",
-            "typed": typed.strip()[:INTENT_LIMIT]}
+    recent chronicle can resolve it. The legacy (`drivers=False`) snapshot and
+    render: the intent prompt is promised byte-identical (spec §15), so it
+    keeps its Upcoming line and does no pressure or driver work."""
+    # `direction`, `drivers` and `view` are here because scene_intent/user.j2
+    # INCLUDES scene_suggestions/user.j2, which reads them — and both this env
+    # and verify_templates render with StrictUndefined, so omitting one is a
+    # hard failure, not a silently-empty block.
+    vars = {"s": build_snapshot(cid, offscreen=offscreen, drivers=False),
+            "offscreen": offscreen, "greeting_candidates": None, "direction": "",
+            "drivers": False, "view": None, "typed": typed.strip()[:INTENT_LIMIT]}
     return [{"role": "system", "content": prompts.render("scene_intent/system.j2", **vars)},
             {"role": "user", "content": prompts.render("scene_intent/user.j2", **vars)}]
 
