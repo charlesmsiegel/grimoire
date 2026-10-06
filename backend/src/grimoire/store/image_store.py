@@ -176,12 +176,21 @@ def blob_sha_of(path: Path) -> str | None:
     return None
 
 
-def _index_root() -> Path:
-    return paths.home() / ".cache" / "image-store" / "blob-index"
+def _index_root(root: Path | None = None) -> Path:
+    return (paths.home() if root is None else Path(root)) / ".cache" / "image-store" / "blob-index"
 
 
 def _index_path(sha: str) -> Path:
     return _index_root() / sha[:2] / sha
+
+
+def index_path(sha: str, *, root: Path | None = None) -> Path:
+    """The blob-index entry for blob `sha` -- the one spelling of it, `root`
+    pinned as `store_root`'s is. For the collector, which deletes an entry
+    only when it names the object it collected (stage-4 M14)."""
+    if not _is_sha(sha):
+        raise ValueError("bad blob sha")
+    return _index_root(root) / sha[:2] / sha
 
 
 def _int_or_none(v: object) -> int | None:
