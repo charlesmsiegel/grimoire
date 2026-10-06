@@ -399,6 +399,17 @@ def test_store_guarantees_names_the_image_store_locks():
     assert not gone, f"store/locks.py no longer defines: {gone}"
 
 
+def test_store_guarantees_names_the_shared_metadata_modules():
+    """Stage 2's two modules -- the scope lifecycle and the derived usage walk --
+    are named by the image store section, and both still exist. The section
+    describes where a description, a subject tag and a "used in" answer live;
+    a module renamed away would leave it describing nothing."""
+    section = _section(_read(GUARANTEES), "The image store")
+    for name in ("image_scopes", "image_usage"):
+        assert name in section, f"the image store section does not name {name}"
+        assert (SRC / "store" / f"{name}.py").is_file(), f"store/{name}.py is gone"
+
+
 def test_store_guarantees_image_section_cites_real_tests():
     """Every test the image store section cites as its evidence exists: each
     `test_*.py` file, and each `test_*` function somewhere under

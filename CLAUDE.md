@@ -648,6 +648,10 @@ would answer neither question.
   is still copied as a file, and promoting one ingests it first. A route or
   script that writes a `.png` into a record directory is a regression, and
   the surface roster in `backend/tests/test_image_surfaces.py` fails on it.
+  A picture's description and its subject tags live on its object, not in the
+  record's folder: a legacy `descriptions.json` / `subjects.json` key is read
+  first until migration, and descriptions are global to every world that places
+  the picture.
   What the store promises is in `docs/store-guarantees.md`; the design is
   `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
 - **Adding an LLM call site?** Resolve its connection with

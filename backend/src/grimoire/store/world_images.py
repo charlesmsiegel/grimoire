@@ -35,9 +35,17 @@ on one world-scoped process lock. Dependent campaign tombstone cleanup happens
 after releasing it, avoiding a new world-to-campaign lock ordering. Other world
 records have no general lock domain. Historically that
 is not a gap this module opens; ``overlay.set_description``'s docstring already
-names it -- the world-side description write is unlocked too, and ``focus.json``
-and ``subjects.json`` race there in exactly the same way. Inventing a half-lock
-for one directory would imply a guarantee the world root does not make. It also
+names it -- the world-side description write is unlocked too. Since stage 2 the
+text itself lands on the shared image object, whose own stripe lock
+(``image_store.update``) makes that one write atomic; what stays unlocked is
+the read-modify-write around it -- deleting the name's legacy
+``descriptions.json`` key afterwards, and ``focus.json``, which races there as
+it always did. Subject tags are not written here at all: they sit on the
+object under the world's scope (``image_scopes``), whose delete-time strip is
+the one unlocked sweep (``worlds.delete_world``; a tag written between the
+strip and the removal survives, and re-running the delete clears it). Inventing
+a half-lock for one directory would imply a guarantee the world root does not
+make. It also
 means this module is never surveyed by the lock-domain guard (``_takes_cid``
 looks for a parameter named ``cid``, and everything here takes ``wid``), so it
 is deliberately absent from ``locks.py``'s three lists rather than declared in
