@@ -119,8 +119,12 @@ Spec → planning gate: independent adversarial review (stand-in for
 `/codex:adversarial-review`, Codex CLI unavailable; owner-approved).
 
 **Tasks.** `rolling_summary` and `scene_break` call their routes with
-`force=true` and `upto=<messages.length>` (the same bound the inspector panel
-uses, so a fold cannot swallow an unanswered post), and are disabled while
+`force=true` and an absolute `upto=<firstIndex + messages.length>` (the
+transcript is fetched in windows, so the bound counts from the window's
+offset), so a fold cannot swallow an unanswered post. The inspector panel
+sends no `upto` at all — its buttons are held while a turn streams — so the
+strip bounds absolutely because it fires outside that turn-held context. They
+are disabled while
 `sceneLocked`, while no connection is `ready`, and while the same task is
 already running from either the strip or the inspector. Their outcome
 (`refreshed`/`asked` false, or an error) is shown as a composer notice; a
@@ -142,8 +146,19 @@ is not a quick reply).
 
 **Insert.** Into an empty composer: the text, and a `direct` insert switches the
 composer to Direct (a `send` insert to Speak). Into a same-kind draft: appended
-after a blank line. Into a different-kind draft: refused with the existing
-held-draft notice — one composer carries one mode.
+after a blank line. Into a different-kind draft: the box is kept (one
+composer carries one mode) and the text is parked in `parkedPrompts`, behind
+the existing held-draft notice, exactly as a recovered prompt waits; it comes
+back when the box is cleared (sending the draft clears it, so the parked text
+then arrives and flips the composer to its kind, as a recovered prompt does).
+If something recovered is already parked for the scene, the insert is refused
+with a composer notice instead, so the player's own words are never
+overwritten.
+
+*Recorded resolution (final review):* this replaces the earlier "refused with
+the existing held-draft notice" — that notice reads "held · clear the box to
+get it back", which is false unless the text is actually held, so the two
+rulings can only both be honoured by parking it.
 
 **Roll.** Disabled by the dice button's real guards — `!activeId || busy ||
 sceneLocked || messages.length === 0 || rolling` — and while `moduleBound` is
