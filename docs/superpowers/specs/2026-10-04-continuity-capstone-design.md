@@ -385,7 +385,7 @@ Do not add same_as. Identity is represented by aliasing.
 
 A future mechanics phase may add mechanics-specific relations without changing existing records.
 
-**One wording per relation** (Slice G plan, Decision 12; this closes Slice F's h8). The Ledger's Reviewed links / merges and the Story Graph lead a link with one phrase, `RELATION_PHRASES` in `components/continuity/labels.ts`: “Due by” for `by`, the form the Meaning column gives, and the graph's `RELATION_PHRASE[r].out` is taken from that table rather than redeclared. The journal uses the sentence forms of the Meaning column (“is due by”, §12.8), because a journal label is read as one sentence while both UI tables lead a line under a record's title. The graph's inbound phrases (“Deadline for”, “Continued by” and the rest) have no Ledger counterpart and stay the graph's.
+**One wording per relation** (Slice G plan, Decision 12; this closes Slice F's h8). The Ledger's Reviewed links / merges and the Story Graph lead a link with one phrase, `RELATION_PHRASES` in `components/continuity/labels.ts`: “Due by” for `by`, the form the Meaning column gives, and the graph's `RELATION_PHRASE[r].out` is taken from that table rather than redeclared. The journal uses the sentence forms of the Meaning column (“is due by”, §12.8), because a journal label is read as one sentence while both UI tables lead a line under a record's title. The graph's inbound phrases (“Deadline for”, “Continued by” and the rest) have no Ledger counterpart and stay the graph's. Each still states the Meaning column's relation, read from b's side and naming a: `before` / `on` / `after` / `by` read “Due before this:”, “On this day:”, “Due after this:” and “Deadline for”, the direction an idea anchored to that event reads in on the same node (“Scene idea before this:”, §19.6), so the event's Linked section never says a thread due before it comes after it.
 
 ## 5.4 Link identity
 
@@ -2029,7 +2029,7 @@ Selecting a thread or commitment shows:
 - touched scenes;
 - involved actors;
 - pressure;
-- reviewed links;
+- reviewed links, each read from this record's end in the §5.3 phrasing;
 - the saved ideas that serve it, each with the driver action its `serves` edge carries;
 - candidate findings.
 

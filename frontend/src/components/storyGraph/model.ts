@@ -208,14 +208,17 @@ export const PART_LABELS: Record<GraphPart, string> = {
 
 /** A reviewed link read from either end: `out` from the link's `from`, `in`
  *  from its `to`. `out` is the Ledger's own phrase (`RELATION_PHRASES`), so a
- *  link reads one way on both pages; `in` has no Ledger counterpart. */
+ *  link reads one way on both pages; `in` has no Ledger counterpart. `in`
+ *  still says the same relation, from b's side: `a before b` is a due before
+ *  b, so b reads "Due before this: a", the direction an idea anchored
+ *  `before` b reads in on the same node ("Scene idea before this:"). */
 export const RELATION_PHRASE: Record<LinkRelation, { out: string; in: string }> = {
   continues: { out: RELATION_PHRASES.continues, in: "Continued by" },
   subthread_of: { out: RELATION_PHRASES.subthread_of, in: "Has subthread" },
   pays_off: { out: RELATION_PHRASES.pays_off, in: "Paid off by" },
-  before: { out: RELATION_PHRASES.before, in: "After this:" },
+  before: { out: RELATION_PHRASES.before, in: "Due before this:" },
   on: { out: RELATION_PHRASES.on, in: "On this day:" },
-  after: { out: RELATION_PHRASES.after, in: "Before this:" },
+  after: { out: RELATION_PHRASES.after, in: "Due after this:" },
   by: { out: RELATION_PHRASES.by, in: "Deadline for" },
   related_to: { out: RELATION_PHRASES.related_to, in: "Related to" },
 };
