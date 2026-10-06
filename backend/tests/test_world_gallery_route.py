@@ -55,8 +55,10 @@ def _greeting(client, wid, cid, vid, *, images=(), name="Saltmarch dawn"):
     assert r.status_code == 200, r.text
     gid = r.json()["id"]
     for img in images:
+        # Distinct bytes per image: identical ones are one image object, which
+        # carries one subject answer for the whole world.
         store.assets.put_image(store.worlds.world_root(wid), gid, "default", img,
-                               PNG, "png", base="greetings")
+                               PNG + img.encode(), "png", base="greetings")
     return gid
 
 

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Literal
 from urllib.parse import quote, unquote, urlsplit
 
 from markdown_it import MarkdownIt
@@ -50,19 +51,24 @@ _MISSING = (OSError, characters.CharacterNotFound, characters.VersionNotFound,
 
 def local_path(root: Path, url: str) -> Path | None:
     """Resolve only supported world image routes, never an arbitrary pathname."""
-    found = _world_target(root, url)
-    if found is None:
-        return None
-    try:
-        return _record_image_path(*found)
-    except _MISSING:
-        return None
+    record = _record(root, url)
+    return _record_path(*record) if record is not None else None
 
 
 def local_slot(root: Path, url: str) -> tuple[Path, str] | None:
     """The image directory and logical name behind a supported world image
     route -- what `local_path` resolves, one step earlier, so a caller can ask
     for the placement there (`assets.resolve`) rather than for its bytes."""
+    record = _record(root, url)
+    return _record_dir(*record) if record is not None else None
+
+
+_Slot = tuple[str, str, str, str]
+
+
+def _record(root: Path, url: str) -> tuple[Path, _Slot] | None:
+    """The world root a supported world image route serves from, and the
+    `_record_slot` it names there -- one read of that record -- or None."""
     found = _world_target(root, url)
     if found is None:
         return None
@@ -70,12 +76,24 @@ def local_slot(root: Path, url: str) -> tuple[Path, str] | None:
         slot = _record_slot(*found)
     except _MISSING:
         return None
-    if slot is None:
-        return None
+    return (found[0], slot) if slot is not None else None
+
+
+def _record_dir(root: Path, slot: _Slot) -> tuple[Path, str]:
     base, owner, vid, name = slot
     if base == "images":
-        return _library_dir(found[0]), name
-    return assets.version_dir(found[0], owner, vid, base), name
+        return _library_dir(root), name
+    return assets.version_dir(root, owner, vid, base), name
+
+
+def _record_path(root: Path, slot: _Slot) -> Path | None:
+    base, owner, vid, name = slot
+    try:
+        if base == "images":
+            return assets.path_in(_library_dir(root), name, supported_only=True)
+        return assets.image_path(root, owner, vid, name, base=base)
+    except _MISSING:
+        return None
 
 
 def _library_dir(root: Path) -> Path:
@@ -84,7 +102,7 @@ def _library_dir(root: Path) -> Path:
     return root / "assets" / "images"
 
 
-def _record_slot(root: Path, parts: list[str]) -> tuple[str, str, str, str] | None:
+def _record_slot(root: Path, parts: list[str]) -> _Slot | None:
     """`(base, owner, vid, name)` of the record image `parts` names, checked
     against the record (a missing one raises its own not-found); base
     ``"images"``, with no owner or version, is the world library."""
@@ -106,16 +124,6 @@ def _record_slot(root: Path, parts: list[str]) -> tuple[str, str, str, str] | No
             return None
         return parts[0], parts[1], "default", parts[3]
     return None
-
-
-def _record_image_path(root: Path, parts: list[str]) -> Path | None:
-    slot = _record_slot(root, parts)
-    if slot is None:
-        return None
-    base, owner, vid, name = slot
-    if base == "images":
-        return assets.path_in(_library_dir(root), name, supported_only=True)
-    return assets.image_path(root, owner, vid, name, base=base)
 
 
 def _references(root: Path, gid: str) -> list[str]:
@@ -147,14 +155,42 @@ def _collection_members(url: str) -> list[str]:
         return []
 
 
+#: Where a catalog key's tags can be kept, beside its entry: ``("slot", (dir,
+#: name))`` for a key whose picture is a slot in some record's image directory
+#: (the greeting's own art, or a local reference the route names), None for one
+#: with no slot (a remote URL). Tagged, because a key may later name an image
+#: object directly rather than through a slot.
+Target = tuple[Literal["slot"], tuple[Path, str]] | None
+
+
 def catalog(root: Path, gid: str) -> dict[str, dict]:
     """Legacy stored art plus currently referenced pictures, deduplicated by key.
 
     Stored art stays taggable even if it is not embedded in the body. Referenced
     art disappears when its reference or its local serving record disappears.
     Markdown is parsed once per greeting, not once per image.
+
+    The public shape: entries only. `catalog_with_slots` is the same inventory
+    with each key's `Target`, which is a filesystem location and so never
+    belongs in anything a route answers with.
     """
-    out: dict[str, dict] = {image["name"]: {} for image in assets.list_images(root, gid, "default", base="greetings")}
+    return {key: entry for key, (entry, _target) in catalog_with_slots(root, gid).items()}
+
+
+def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
+    """`catalog`, with each key's `Target` beside its entry.
+
+    A local reference's slot is the one its existence check already found
+    (`_record`), so this reads each referenced record once, as `catalog`
+    always has. The slot may lie in ANOTHER world's root -- a reference names
+    the world it serves from -- and a caller that keeps something per world
+    has to check which root it is under.
+    """
+    out: dict[str, tuple[dict, Target]] = {}
+    rows = assets.list_images(root, gid, "default", base="greetings")
+    if rows:    # `list_images` answering at all proves `gid` safe
+        own = assets.version_dir(root, gid, "default", base="greetings")
+        out = {image["name"]: ({}, ("slot", (own, image["name"]))) for image in rows}
     try:
         sig = statcache.signature(root / "greetings" / f"{gid}.md") if safe_id(gid) else None
         refs = statcache.memo("greeting_image_refs", sig, lambda: _references(root, gid),
@@ -165,10 +201,11 @@ def catalog(root: Path, gid: str) -> dict[str, dict]:
         for source in _collection_members(url):
             key = image_key(root, gid, source)
             if source.startswith("/api/worlds/"):
-                if local_path(root, source) is None:
+                record = _record(root, source)
+                if record is None or _record_path(*record) is None:
                     continue
                 if key.startswith("/"):
-                    out[key] = {"url": key}
+                    out[key] = ({"url": key}, ("slot", _record_dir(*record)))
             elif urlsplit(source).scheme in ("http", "https") and urlsplit(source).netloc:
-                out[key] = {"url": key}
+                out[key] = ({"url": key}, None)
     return out
