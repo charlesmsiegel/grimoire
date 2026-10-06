@@ -316,6 +316,13 @@ def _merge_beats(members: list[list[dict]]) -> list[dict]:
     return out
 
 
+def play_ordered(beats: list[dict]) -> list[dict]:
+    """One record's beats in scene play order, by the rule a merged group's
+    beats are already in. An unmerged record stores its beats in the order
+    reviews were saved, which need not be the order the scenes were played."""
+    return _merge_beats([beats])
+
+
 def later_scene(stored: str, other: str) -> str:
     """Whichever of two scene ids comes later in play order. An id outside the
     grammar loses to one inside it; when neither parses, `stored` is kept
