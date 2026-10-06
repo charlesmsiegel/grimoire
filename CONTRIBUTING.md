@@ -187,6 +187,7 @@ cannot fail a test run.
 | `test_import_guard.py` | module-scope imports, acyclic graph, submodule binding inside `store/` | `# import-ok:` |
 | `test_path_guard_store.py` | the store never joins a caller-supplied id onto a path unchecked | — |
 | `test_absorb_writer_guard.py` | the absorb pass never edits or deletes a fact — only the user may | — |
+| `test_continuity_writer_guard.py` | continuity discovery modules never write plot or commitment records, events, scene ideas, reviewed aliases and links, or suppressions — only `continuity.review` and the routes apply a reviewed decision | — |
 | `test_docs_guard.py` | this page, `AGENTS.md` and `docs/store-guarantees.md` still match the code | — |
 | `test_ratchet_guard.py` | the lint baselines are canonical, positive, and name files that exist | — |
 
