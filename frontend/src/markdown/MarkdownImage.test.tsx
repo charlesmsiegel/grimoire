@@ -77,6 +77,53 @@ test("a remote member in a manifest is rejected rather than fetched", async () =
   expect(await screen.findByAltText("Scene")).toHaveAttribute("src", source);
 });
 
+const cid = "0123456789abcdef0123456789abcdef";
+const member2 = (n: number, query = "?v=" + "f".repeat(64)) =>
+  `/api/worlds/realm/image-collections/${cid}/members/${n}${query}`;
+function body(doc: unknown) { return { ok: true, json: async () => doc } as Response; }
+
+test("accepts a format 2 collection of member URLs", async () => {
+  const list = [member2(0), member2(1), member2(3)];
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: list }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  const image = await screen.findByAltText("Scene");
+  expect(image).toHaveAttribute("src", list[1]);
+  fireEvent.click(screen.getByRole("button", { name: "Next image" }));
+  expect(image).toHaveAttribute("src", list[2]);
+  expect(screen.getByText("Image 3 of 3")).toBeInTheDocument();
+});
+
+test("accepts a format 2 member URL without a version query", async () => {
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: [member2(0, "")] }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member2(0, ""));
+});
+
+test.each([
+  ["another world", `/api/worlds/other/image-collections/${cid}/members/0?v=1`],
+  ["another collection", `/api/worlds/realm/image-collections/${"b".repeat(32)}/members/0?v=1`],
+  ["a library URL", members[0]],
+  ["a non-numeric index", member2(0).replace("/0?", "/x?")],
+  ["a nested path", member2(0).replace("/0?", "/0/1?")],
+  ["a remote host", "https://example.test" + member2(0)],
+])("refuses a format 2 member URL from %s", async (_name, url) => {
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: [url] }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  expect(await screen.findByAltText("Scene")).toHaveAttribute("src", source);
+});
+
+test("refuses a format 1 collection carrying member URLs", async () => {
+  vi.mocked(fetch).mockResolvedValue(body({ format: 1, id: cid, members: [member2(0)] }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  expect(await screen.findByAltText("Scene")).toHaveAttribute("src", source);
+});
+
+test("refuses an unknown format", async () => {
+  vi.mocked(fetch).mockResolvedValue(body({ format: 3, members: [member2(0)] }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  expect(await screen.findByAltText("Scene")).toHaveAttribute("src", source);
+});
+
 test("ordinary images need no manifest request", () => {
   render(<MarkdownImage src="/ordinary.png" alt="Ordinary" />);
   expect(screen.getByAltText("Ordinary")).toHaveAttribute("src", "/ordinary.png");

@@ -14,20 +14,32 @@ function collectionPath(src: string): RegExpMatchArray | null {
   } catch { return null; }
 }
 
+/** A member is checked against the shape its collection's format promises:
+ * format 1 names a library file, format 2 an index into this very collection.
+ * Anything else throws and the viewer falls back to `/image`. */
 function localMembers(raw: unknown, world: string, id: string): string[] {
   if (!raw || typeof raw !== "object") throw new Error("Invalid image collection");
   const data = raw as { format?: unknown; id?: unknown; members?: unknown };
-  if (data.format !== 1 || data.id !== id || !Array.isArray(data.members) || !data.members.length || data.members.length > 10000) {
+  if ((data.format !== 1 && data.format !== 2) || !Array.isArray(data.members)
+      || !data.members.length || data.members.length > 10000) {
     throw new Error("Invalid image collection");
   }
-  const prefix = `/api/worlds/${world}/images/collection-image-`;
+  // Format 1 names its collection in the body; format 2 is named by the URL it
+  // was fetched from, so an id there is optional but may not disagree.
+  if (data.format === 1 ? data.id !== id : data.id !== undefined && data.id !== id) {
+    throw new Error("Invalid image collection");
+  }
+  const format = data.format;
+  const libraryPrefix = `/api/worlds/${world}/images/collection-image-`;
+  const indexPrefix = `/api/worlds/${world}/image-collections/${id}/members/`;
   const members = data.members.map((member: unknown) => {
     if (typeof member !== "string") throw new Error("Invalid image collection member");
     const url = new URL(member, window.location.origin);
-    if (url.origin !== window.location.origin || !url.pathname.startsWith(prefix)
-        || !/^[0-9a-f]{64}$/.test(url.pathname.slice(prefix.length))) {
-      throw new Error("Invalid image collection member");
-    }
+    const valid = url.origin === window.location.origin && (format === 1
+      ? url.pathname.startsWith(libraryPrefix) && /^[0-9a-f]{64}$/.test(url.pathname.slice(libraryPrefix.length))
+      : url.pathname.startsWith(indexPrefix) && /^\d+$/.test(url.pathname.slice(indexPrefix.length))
+        && /^(\?v=.*)?$/.test(url.search) && !url.hash);
+    if (!valid) throw new Error("Invalid image collection member");
     return member;
   });
   if (new Set(members).size !== members.length) throw new Error("Duplicate image collection member");
