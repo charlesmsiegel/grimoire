@@ -271,6 +271,12 @@ export function statusOf(n: GraphNode, ix: GraphIndex): string {
       }
       const parts = [n.status];
       if (n.pressure && n.pressure.state !== "ok") parts.push(STATE_WORDS[n.pressure.state]);
+      // A dated commitment says when its deadline falls (§19.2); a thread
+      // carries no day, and "today" is already the state word.
+      if (n.kind === "commitment" && n.fixed !== null) {
+        const when = whenOf(n);
+        if (!parts.includes(when)) parts.push(when);
+      }
       for (const f of n.findings) {
         const phrase = FINDING_PHRASE[f.kind];
         if (LIFECYCLE.has(f.kind) && !parts.includes(phrase)) parts.push(phrase);
