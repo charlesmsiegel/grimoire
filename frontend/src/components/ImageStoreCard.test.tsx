@@ -133,7 +133,11 @@ test("delete carries the token", async () => {
 
   (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
     mode: "collect", token: null, token_expires_at: null,
-    deleted: { objects: ["a", "b", "c"], blobs: ["x", "y", "z"], bytes: 7168 },
+    deleted: {
+      objects: ["a", "b", "c"].map((id) => ({ id, blob: "x", bytes: 0 })),
+      blobs: ["x", "y", "z"].map((blob) => ({ id: "a", blob, bytes: 2389 })),
+      bytes: 7168,
+    },
   }));
   fireEvent.click(del);
   await waitFor(() => expect(api.startImageGc).toHaveBeenCalledTimes(2));
