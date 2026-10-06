@@ -1637,7 +1637,7 @@ An absent body keeps today's behaviour, and the existing query parameters still 
 2. `must ∩ avoid` → 400.
 3. More than 3 must refs, or a temporal must ref → 400.
 4. `time_mode: "anchor"` with no anchor, a `time_anchor_ref` with any other mode, a `time_anchor_ref` whose prefix is not `event`, `birthday` or `holiday`, or a month-only birthday anchor with a relation other than `on` → 400.
-5. A ref outside the request-time driver index → 409 `{kind: "stale_drivers", refs}`. The chooser re-reads drivers and shows which selections dropped. A temporal `time_anchor_ref` missing from the captured `anchors` is a 409 too, not a 400: the chooser only offers anchors, so a missing one means the campaign moved since the read (an event passed, or a holiday left the horizon). The structural anchor check is the 400 of step 4 (Decision 5).
+5. A ref outside the request-time driver index → 409 `{kind: "stale_drivers", refs}`. The chooser re-reads drivers and shows which selections dropped, until the next suggestion request goes out; a later refusal names only what it reset (Slice E plan, Decision 19, deviation 20). A temporal `time_anchor_ref` missing from the captured `anchors` is a 409 too, not a 400: the chooser only offers anchors, so a missing one means the campaign moved since the read (an event passed, or a holiday left the horizon). The structural anchor check is the 400 of step 4 (Decision 5).
 6. Remaining overlaps resolve by precedence:
 
        must_include > avoid > focus > normal
@@ -1685,7 +1685,7 @@ The handoff then proceeds as follows:
 - ScenesView adopts the state once, then replaces it with null, and opens NewSceneChooser seeded with it. The chooser still opens at mode selection. This adoption is **new** code in ScenesView: the `seedPrompt` adoption the pattern copies lives in CampaignView, and ScenesView only sends (Slice E plan, Decision 20). A malformed `chooser` state is ignored.
 - A seeded open **waits for the scene list** before the chooser opens, because `afterSid` comes from it and an open before it lands would make the hook ask again, a second paid ranked call (Decision 20).
 - A seeded chooser holds its auto-ask, and its Suggest button, until the drivers read settles, so the ranked call made when a mode is picked carries the seeded controls rather than racing them (Decision 19).
-- A seeded ref missing from the drivers read is dropped, with a visible note.
+- A seeded ref missing from the drivers read is dropped, with a visible note. The note outlives the ranked call that carries the seed, and clears when the reader changes a control (deviation 20).
 - A seeded Story Pressure disclosure opens expanded, so the reader sees what was set (Decision 19).
 
 ---

@@ -11,11 +11,14 @@ import { api, ApiError, type SceneSuggestion, type SceneSuggestionsOptions } fro
  *  ranked call carries the seed rather than going out unsteered and then
  *  again. `onStale` hears a `stale_drivers` refusal's refs: the campaign
  *  moved since the chooser read its drivers, and only the chooser can reset
- *  what it holds and read them again. */
+ *  what it holds and read them again. `onDispatch` hears every request go
+ *  out, beside the clearing of `stale`, so a note that told the reader what
+ *  to do before the next request ends with that request. */
 export type SuggestionPressure = {
   controls?: () => SceneSuggestionsOptions;
   hold?: boolean;
   onStale?: (refs: string[]) => void;
+  onDispatch?: () => void;
 };
 
 /** Whether a request was steered at all -- a time setting, or any ref list. */
@@ -102,6 +105,7 @@ export function useSceneSuggestions(cid: string, afterSid: string | null,
     setBusy(true);
     setError(null);
     setStale(false);
+    pressure.current?.onDispatch?.();
     const controls = pressure.current?.controls?.() ?? {};
     api.sceneSuggestions(cid, { after: afterSid ?? undefined, offscreen, direction, rank,
                                 ...controls })

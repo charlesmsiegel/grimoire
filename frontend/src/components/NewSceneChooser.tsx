@@ -136,6 +136,13 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
   // by label rather than by ref; and the names one stale cycle has reset.
   const lastSnap = useRef<DriversSnapshot | null>(null);
   const resetNames = useRef<string[]>([]);
+  // What the note on screen is about, which decides what ends it. A reset
+  // ("…were reset — press Regenerate", or the failed re-read's) is about the
+  // NEXT request, so it ends when that request goes out (`onDispatch`) and a
+  // later cycle names only its own resets. A seed's note is about the seed,
+  // which the open call itself carries, so it outlives that call and ends
+  // when the reader changes a control.
+  const noteKind = useRef<"seed" | "reset" | null>(null);
 
   useEffect(() => {
     let live = true;
@@ -154,6 +161,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
           setPressure(controls);
           setPressureNote(dropped.length
             ? `Not current any more, so not applied: ${dropped.join(", ")}` : "");
+          noteKind.current = dropped.length ? "seed" : null;
           if (isActive(controls)) setPressureOpen(true);
         } else {
           // Held to what this read lists (Decision 19). A refusal's refs are
@@ -164,6 +172,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
             setPressure(controls);
             resetNames.current = [...new Set([...resetNames.current, ...dropped.map(labelOf)])];
             setPressureNote(staleNote(resetNames.current));
+            noteKind.current = "reset";
           }
         }
         lastSnap.current = snap;
@@ -174,6 +183,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
         if (seedRef.current && !seedApplied.current) {
           seedApplied.current = true;
           setPressureNote(SEED_UNREAD);
+          noteKind.current = "seed";
         } else if (isActive(pressureRef.current)) {
           // A re-read (after a stale refusal) failed with controls still held
           // -- a refusal spelled differently clears nothing. The disclosure is
@@ -189,6 +199,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
           setPressure(NO_PRESSURE);
           resetNames.current = [...new Set([...resetNames.current, ...names])];
           setPressureNote(staleNote(resetNames.current, PRESSURE_UNREAD));
+          noteKind.current = "reset";
         }
         setDriversRead({ cid, snap: null, failed: true });
       });
@@ -205,7 +216,27 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
     setPressure((p) => dropRefs(p, refs));
     resetNames.current = refs.map(labelOf);
     setPressureNote(staleNote(resetNames.current));
+    noteKind.current = "reset";
     setDriversGen((n) => n + 1);
+  }
+
+  // A request went out. A reset note's instruction has now been followed, so
+  // it is not left under the cards that request brings, and the next cycle
+  // starts naming from nothing.
+  function onDispatch() {
+    resetNames.current = [];
+    if (noteKind.current !== "reset") return;
+    noteKind.current = null;
+    setPressureNote("");
+  }
+
+  // The reader changed a control: a seed's note described what the seed
+  // could not set, and the reader has now set things for themselves.
+  function onPressureChange(next: PressureControls) {
+    setPressure(next);
+    if (noteKind.current !== "seed") return;
+    noteKind.current = null;
+    setPressureNote("");
   }
 
   // The ranked call is made when a mode is picked (§3.10): `ready && playable`
@@ -223,6 +254,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
       controls: () => toRequest(pressureSnap ? pressure : NO_PRESSURE, pressureSnap),
       hold: !!seed && !seedApplied.current,
       onStale,
+      onDispatch,
     });
 
   // CampaignView reuses this component across a `cid` navigation -- it stays
@@ -265,6 +297,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
     setPressureOpen(false);
     seedApplied.current = true;
     resetNames.current = [];
+    noteKind.current = null;
     lastSnap.current = null;
     // `writing` must reset here too. SceneConfirmForm's own create() sequence
     // stops issuing writes once its `live` ref notices this same switch (see
@@ -364,7 +397,7 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
                            {...suggestionsState}
                            storyPressure={pressureSnap ? (
                              <StoryPressure snap={pressureSnap} value={pressure}
-                                            onChange={setPressure} disabled={!ready}
+                                            onChange={onPressureChange} disabled={!ready}
                                             open={pressureOpen} onToggle={setPressureOpen} />
                            ) : null}
                            pressureNote={pressureNote}

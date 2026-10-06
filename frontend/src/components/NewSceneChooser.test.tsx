@@ -978,7 +978,10 @@ test("a failed re-read after a stale refusal resets what it can no longer show",
   await regenerate();
   await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(2));
   await waitFor(() => expect(container.querySelector("details.story-pressure")).toBeNull());
-  // Hidden controls send nothing...
+  // The reader is told what was reset...
+  expect(await screen.findByText(/Story pressure could not be read/))
+    .toHaveTextContent(/Mara's map.*Mara's oath/);
+  // ...and hidden controls send nothing.
   (api.sceneSuggestions as any).mockResolvedValue(
     { suggestions: [CARD], greeting_picks: [], next_date: "" });
   await regenerate();
@@ -986,7 +989,72 @@ test("a failed re-read after a stale refusal resets what it can no longer show",
     focus_refs: [], avoid_refs: [], must_refs: [], time_mode: "auto",
     time_anchor_ref: "", time_anchor_relation: "",
   }));
-  // ...and the reader is told what was reset.
-  expect(await screen.findByText(/Story pressure could not be read/))
-    .toHaveTextContent(/Mara's map.*Mara's oath/);
+  // The note told the reader what to do before the next request; that
+  // request has gone out, so it is not left under the cards it brought.
+  await screen.findByText("At sea");
+  expect(screen.queryByText(/Story pressure could not be read/)).toBeNull();
+});
+
+test("a stale note clears once the next request goes out", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  (api.sceneSuggestions as any).mockRejectedValueOnce(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2)],
+  }));
+  await regenerate();
+  expect(await screen.findByText(/press Regenerate\./)).toHaveTextContent("Mara's map");
+  // Regenerate works this time: the cards land, and "press Regenerate" is
+  // not left under them.
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [{ ...CARD, title: "Ashore" }], greeting_picks: [], next_date: "" });
+  await regenerate();
+  expect(await screen.findByText("Ashore")).toBeInTheDocument();
+  expect(screen.queryByText(/press Regenerate/)).toBeNull();
+  expect(screen.queryByText(/Reset:/)).toBeNull();
+});
+
+test("a second stale cycle names only what it reset", async () => {
+  const { container } = renderChooser();
+  await pickerReady(container);
+  choose("Mara's map", "Focus");
+  choose("Mara's oath", "Avoid");
+  // The first refusal names Mara's map, and the re-read drops it.
+  (api.sceneSuggestions as any).mockRejectedValueOnce(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["thread:mara-s-map"] }));
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [driver("commitment:mara-s-oath", "commitment", "Mara's oath", "due_soon", 2),
+              driver("event:the-coronation", "event", "The coronation", "upcoming", 10)],
+  }));
+  await regenerate();
+  expect(await screen.findByText(/press Regenerate\./)).toHaveTextContent("Mara's map");
+  // The second names a spelling the chooser does not hold; the re-read's
+  // prune is what drops Mara's oath, and the note names that alone.
+  (api.sceneSuggestions as any).mockRejectedValueOnce(
+    new ApiError(409, "stale", "stale_drivers", { refs: ["commitment:the-oath"] }));
+  (api.continuityDrivers as any).mockResolvedValue(snapshot({
+    drivers: [driver("event:the-coronation", "event", "The coronation", "upcoming", 10)],
+  }));
+  await regenerate();
+  await waitFor(() => expect(api.continuityDrivers).toHaveBeenCalledTimes(3));
+  const note = await screen.findByText(/Reset:.*Mara's oath/);
+  expect(note).not.toHaveTextContent("Mara's map");
+});
+
+test("a seed's dropped-ref note outlives the open call and clears on a control change", async () => {
+  const { container } = renderChooser(
+    { seed: { drivers: { "thread:ghost": "focus", "thread:mara-s-map": "focus" } } });
+  (api.sceneSuggestions as any).mockResolvedValue(
+    { suggestions: [CARD], greeting_picks: [], next_date: "" });
+  fireEvent.click(screen.getByText("With your PC"));
+  await screen.findByText("At sea");
+  // The open call went out with the seed; the note is about the seed, not
+  // about that request, so the request does not clear it.
+  expect(screen.getByText("Not current any more, so not applied: thread:ghost"))
+    .toBeInTheDocument();
+  await openPressure(container);
+  choose("Mara's oath", "Avoid");
+  await waitFor(() => expect(screen.queryByText(/Not current any more/)).toBeNull());
 });
