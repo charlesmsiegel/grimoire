@@ -4,7 +4,7 @@ rendered (on the record) and the call that wrote each variant (`made_by`)."""
 from grimoire import llm, routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
-from tests.llm_fakes import FailingOpenRouter, FakeLLM, ScriptedProvider
+from tests.llm_fakes import FailingOpenRouter, FakeLLM, ModelessHolder, ScriptedProvider
 from tests.test_character_turns import seed
 
 HANDOFF = 'Hi.\n```handoff\n{"next":null}\n```'
@@ -180,19 +180,9 @@ def test_fallback_records_the_served_connection(client):
     assert made_by["provider"] == "openai_compatible"
 
 
-class _NoModel(FakeLLM):
-    """A holder the provider left without a model."""
-
-    async def stream(self, messages, conn, usage=None):
-        async for delta in super().stream(messages, conn, usage):
-            if usage is not None:
-                usage.pop("model", None)
-            yield delta
-
-
 def test_holder_without_a_model_leaves_model_absent(client):
     cid, sid = seed(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _NoModel([[HANDOFF]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: ModelessHolder([[HANDOFF]])
     base = f"/api/campaigns/{cid}/scenes/{sid}"
     client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
     record, made_by = _made_by(client, cid, sid)

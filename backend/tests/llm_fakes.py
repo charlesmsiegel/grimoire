@@ -562,6 +562,18 @@ class QuietThenAnswers(FakeLLM):
         super().__init__([["", text]])
 
 
+class ModelessHolder(FakeLLM):
+    """Answers like `FakeLLM` but leaves the usage holder with no `model` --
+    a provider that served the call without saying which model ran it, so a
+    test can pin that the record leaves the field absent rather than empty."""
+
+    async def stream(self, messages, conn, usage=None):
+        async for delta in super().stream(messages, conn, usage):
+            if usage is not None:
+                usage.pop("model", None)
+            yield delta
+
+
 class HeldOpenRouter(FakeLLM):
     """A provider that stops after its first delta until the test releases it.
 
