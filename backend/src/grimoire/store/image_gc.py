@@ -915,8 +915,9 @@ def _classify_objects(report: dict, roots: _Roots, side: _Sidecars,
 def _reclaimable(report: dict, side: _Sidecars, blobs: dict[str, os.stat_result],
                  collectable: dict[str, Path]) -> None:
     """The collectable rows and their exact bytes: a sidecar always, its blob
-    only when every holder of it goes too and no sidecar is unreadable."""
-    keep_all = side.keep_all_blobs()
+    only when every holder of it goes too, no sidecar is unreadable and no
+    reachable object is unarrived (whose blob it may be)."""
+    keep_all = side.keep_all_blobs() or bool(report["unarrived_objects"])
     gone = set(collectable.values())
     counted: set[str] = set()
     for image_id, path in collectable.items():
@@ -1142,6 +1143,11 @@ def _collect_object(run: _Run, image_id: str) -> None:
         if run.side.keep_all_blobs():
             run.report["kept_blobs"].append({"id": image_id, "blob": key,
                                              "reason": "unreadable-sidecars"})
+        elif run.unarrived:
+            # A reachable object whose sidecar has not arrived may share this
+            # blob; deleting it would leave that object pointing at nothing.
+            run.report["kept_blobs"].append({"id": image_id, "blob": key,
+                                             "reason": "unarrived-objects"})
         elif run.side.refs.get(key):
             run.report["kept_blobs"].append({"id": image_id, "blob": key, "reason": "shared"})
         else:

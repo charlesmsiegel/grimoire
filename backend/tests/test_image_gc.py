@@ -878,3 +878,27 @@ def test_blob_keys_are_where_thumbnails_land(root):
     made = {thumbs.thumbnail(_blob(obj), w).resolve() for w in thumbs.WIDTHS}
     keys = {(root / k).resolve() for k in thumbs.blob_keys(obj.blob_sha256)}
     assert made <= keys
+
+
+# ---- fix round 2 ----------------------------------------------------------------------
+
+def test_a_blob_shared_with_an_unarrived_object_is_kept(root):
+    """Object B is placed and shares A's blob, but B's sidecar has not
+    synced in yet: collecting A must not take the blob B will point at."""
+    a = _obj(1)
+    b = _share_blob(a, 2)
+    d = _char_dir(root)
+    image_refs.write(d, "avatar", b)
+    _scan(root, now=T)
+    os.unlink(image_store.object_path(b))
+    report = _scan(root, now=LATER)
+    assert report["unarrived_objects"] == [b]
+    assert _ids(report) == {a.id}
+    assert report["reclaimable_bytes"] == _sidecar(a).stat().st_size   # the blob not counted
+
+    done = _collect(root, report["token"])
+    assert [r["id"] for r in done["deleted"]["objects"]] == [a.id]
+    assert done["deleted"]["blobs"] == []
+    assert {"id": a.id, "blob": a.blob_sha256 + ".png", "reason": "unarrived-objects"} \
+        in done["kept_blobs"]
+    assert _blob(a).is_file()
