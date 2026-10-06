@@ -38,6 +38,14 @@ def _live(entries: list[apply.Entry], phase: str) -> list[apply.Entry]:
     return out
 
 
+def connection_of(message: dict) -> str:
+    """The connection that produced `message`, "" for none. Only a non-empty
+    string is an id: the transcript reader already drops anything else, and a
+    caller's own dict is held to the same rule rather than trusted as a key."""
+    conn = message.get("connection")
+    return conn if isinstance(conn, str) else ""
+
+
 def view(messages: list[dict], *, cid: str | None, phase: str, offset: int = 0,
          total: int | None = None) -> list[dict]:
     """Copies of `messages` with `content` run through the `phase` rules.
@@ -50,14 +58,14 @@ def view(messages: list[dict], *, cid: str | None, phase: str, offset: int = 0,
     out = [dict(m) for m in messages]
     lists: dict[str, list[apply.Entry]] = {}
     for m in out:
-        conn = m.get("connection") or ""
+        conn = connection_of(m)
         if conn not in lists:
             lists[conn] = _live(layers.effective(cid=cid, connection=conn), phase)
     if not any(lists.values()):
         return out
     n = total if total is not None else len(messages)
     for i, m in enumerate(out):
-        entries = lists[m.get("connection") or ""]
+        entries = lists[connection_of(m)]
         role = apply.role_of(m)
         if not entries or role is None or not isinstance(m.get("content"), str):
             continue
