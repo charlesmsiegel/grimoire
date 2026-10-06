@@ -80,8 +80,9 @@ const REVIEWED: ContinuityState = {
     { id: "l1", a: CORONATION.ref, b: CHART.ref, relation: "continues", scene: "",
       note: "", created: "", state: "ok", reason: "",
       a_title: "The coronation", b_title: "Winifred's chart" },
-    // The server's own reason code, and a missing end titled by its ref, which
-    // is what `describe` answers for a record that is gone.
+    // The server's own reason code, and a missing end titled by its ref: the
+    // server words it (`review.reader_name`), and `recordName` still never
+    // shows a ref that reaches it.
     { id: "l2", a: "thread:seraphine-s-errand", b: OATH.ref, relation: "pays_off", scene: "",
       note: "", created: "", state: "broken", reason: "missing_endpoint",
       a_title: "Seraphine's errand", b_title: OATH.ref },
@@ -620,9 +621,9 @@ test("a dangling merge says why in words", async () => {
 });
 
 test("a record whose ledger cannot be read is not called missing", async () => {
-  // With plot.json unreadable the server titles every thread by its ref
-  // (`review.describe` cannot look it up), although the thread may exist; the
-  // alias is not dangling and the link is not broken.
+  // With plot.json unreadable a thread cannot be looked up, although it may
+  // exist; the alias is not dangling and the link is not broken. A ref-titled
+  // record is worded by `recordName` from `unreadable`, never called missing.
   (api.getContinuity as any).mockResolvedValue({
     ...REVIEWED,
     unreadable: ["plot"],
@@ -648,6 +649,53 @@ test("a record whose ledger cannot be read is not called missing", async () => {
   expect(link).toHaveTextContent("Pays off Mara's oath");
   expect(link).toHaveTextContent("a thread that cannot be read right now");
   for (const row of rows) expect(row).not.toHaveTextContent(MAP.ref);
+});
+
+test("an untitled record is named untitled in every group, never by its ref", async () => {
+  // A thread that is there with its title blanked by hand (§12.8). The
+  // candidates read joins it with an empty title and `gone: false`; the
+  // continuity read names it the way `review.reader_name` does.
+  const untitled = record(MAP.ref, "");
+  const gone = record("thread:seraphine-s-errand", "thread:seraphine-s-errand",
+                      { gone: true, status: "" });
+  (api.continuityCandidates as any).mockResolvedValue({
+    ...EMPTY_CANDIDATES,
+    candidates: [
+      finding("possible_duplicate-3333333333333333", "possible_duplicate", "overlaps",
+              [untitled, CHART]),
+      finding("possible_duplicate-4444444444444444", "possible_duplicate", "overlaps",
+              [gone, CHART]),
+    ],
+  });
+  (api.getContinuity as any).mockResolvedValue({
+    ...EMPTY_CONTINUITY,
+    aliases: [{ ...REVIEWED.aliases[0], title: "an untitled thread" }],
+    suppressions: [{ ...REVIEWED.suppressions[0],
+                     titles: ["an untitled thread", "Winifred's chart"] }],
+  });
+
+  renderLedger("/campaigns/run/ledger/continuity/overlaps");
+  expect(await main().findByRole("button", { name: /^an untitled thread \/ Winifred's chart/ }))
+    .toBeInTheDocument();
+  expect(main().getByRole("button", { name: /^a missing thread \/ Winifred's chart/ }))
+    .toBeInTheDocument();
+  expect(main().queryByText(/thread:/)).toBeNull();
+  // Nor does the gone record's detail show its ref.
+  fireEvent.click(main().getByRole("button", { name: /^a missing thread \/ Winifred's chart/ }));
+  expect(await main().findByRole("heading", { level: 3 })).not.toHaveTextContent("thread:");
+  expect(main().queryByText(/thread:/)).toBeNull();
+
+  fireEvent.click(column().getByRole("button", { name: /reviewed links \/ merges/i }));
+  const alias = await main().findByRole("listitem", { name: "an untitled thread" });
+  expect(alias).toHaveTextContent("an untitled threadMerged into Winifred's chart");
+  expect(alias).not.toHaveTextContent(/missing/i);
+
+  fireEvent.click(column().getByRole("button", { name: /dismissed findings/i }));
+  const dismissed = await main().findByRole(
+    "listitem", { name: "an untitled thread / Winifred's chart" });
+  expect(within(dismissed).getByRole("button", {
+    name: "Restore an untitled thread / Winifred's chart" })).toBeInTheDocument();
+  expect(main().queryByText(/thread:/)).toBeNull();
 });
 
 test("an unknown reason code is never shown", async () => {

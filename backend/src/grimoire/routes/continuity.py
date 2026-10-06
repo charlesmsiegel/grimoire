@@ -166,14 +166,18 @@ def get_continuity(cid: str):
         meta = record if isinstance(record, dict) else {}
         aliases.append({
             "ref": ref, "to": to, "canonical": live.get(ref, ref),
-            "title": review.describe(cid, ref, ledgers),
-            "to_title": review.describe(cid, to, ledgers) if to else "",
+            "title": review.reader_name(cid, ref, ledgers),
+            "to_title": review.reader_name(cid, to, ledgers) if to else "",
             "created": _text(meta.get("created")), "source": _text(meta.get("source")),
             "note": _text(meta.get("note")),
             "dangling": ref in dangling, "reason": dangling.get(ref, ""),
         })
-    links = [{**link, "a_title": review.describe(cid, link["a"], ledgers),
-              "b_title": review.describe(cid, link["b"], ledgers)} for link in kept]
+    # Every title this read hands a review surface is `reader_name`'s (§12.8,
+    # §30): a record that is gone, untitled, or in a ledger that will not read
+    # is named by its kind in words, never by its ref -- only the server can
+    # tell an untitled record from a missing one.
+    links = [{**link, "a_title": review.reader_name(cid, link["a"], ledgers),
+              "b_title": review.reader_name(cid, link["b"], ledgers)} for link in kept]
     states = {d["id"]: ("broken", d["reason"]) for d in diagnostics["broken_links"]}
     states.update({d["id"]: ("hidden", d["reason"]) for d in diagnostics["hidden_links"]})
     raw_links = []
@@ -183,11 +187,12 @@ def get_continuity(cid: str):
         state, reason = states.get(lid, ("ok", ""))
         row = {k: _text(meta.get(k)) for k in ("a", "b", "relation", "scene", "note", "created")}
         # Titled as effective links are (§30): a broken link's ends are the
-        # ones a reader most needs named. `describe` answers a missing record
-        # with its ref, which the client words by kind.
+        # ones a reader most needs named.
         raw_links.append({"id": lid, **row, "state": state, "reason": reason,
-                          "a_title": review.describe(cid, row["a"], ledgers) if row["a"] else "",
-                          "b_title": review.describe(cid, row["b"], ledgers) if row["b"] else ""})
+                          "a_title": review.reader_name(cid, row["a"], ledgers)
+                          if row["a"] else "",
+                          "b_title": review.reader_name(cid, row["b"], ledgers)
+                          if row["b"] else ""})
     suppressions = []
     for fp in sorted(k for k in data["suppressions"] if isinstance(k, str)):
         meta = data["suppressions"][fp]
@@ -199,7 +204,7 @@ def get_continuity(cid: str):
             "fingerprint": fp, "kind": kind, "refs": refs,
             "decision": _text(meta.get("decision")), "created": _text(meta.get("created")),
             "live": _suppresses(current, fp, kind, refs),
-            "titles": [review.describe(cid, ref, ledgers) for ref in refs]})
+            "titles": [review.reader_name(cid, ref, ledgers) for ref in refs]})
     return {"aliases": aliases, "links": links, "raw_links": raw_links,
             "suppressions": suppressions, "diagnostics": diagnostics,
             "malformed": malformed, "unreadable": diagnostics["unreadable"],

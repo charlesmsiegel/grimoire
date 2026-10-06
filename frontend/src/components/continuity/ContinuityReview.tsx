@@ -29,13 +29,13 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../../api/errors";
 import type {
-  ContinuityApply, ContinuityCandidate, ContinuityGroup,
+  CandidateRecord, ContinuityApply, ContinuityCandidate, ContinuityGroup,
 } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
 import { CandidateDetail, formKey, type DetailError } from "./CandidateDetail";
 import { DismissedGroup } from "./DismissedGroup";
 import {
-  findingsUnreadable, GROUP_LABELS, isLive, KIND_PHRASES, LIVENESS_SENTENCES, MATCHING_LINES,
+  candidateName, findingsUnreadable, GROUP_LABELS, isLive, KIND_PHRASES, LIVENESS_SENTENCES, MATCHING_LINES,
   proposalLabel, RELATION_PHRASES, STALE_TEXT,
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
@@ -52,9 +52,9 @@ const NOTHING: Record<"overlaps" | "closures" | "resolutions", string> = {
     + "scene just moved, is offered here.",
 };
 
-/** The records a finding names, the way Todo and the server label them. */
-const titlesOf = (c: ContinuityCandidate) =>
-  c.records.map((r) => r.title || r.ref).join(" / ");
+/** The records a finding names, in words: never a ref (§30). */
+const titlesOf = (c: ContinuityCandidate, unreadable: string[]) =>
+  c.records.map((r) => candidateName(r, unreadable)).join(" / ");
 
 /** Refresh, and what it is doing. Rendered in the column and in this pane's
  *  head, from one hook, so both show the same sweep. */
@@ -120,7 +120,9 @@ function FindingList(
               <button type="button" className="continuity-finding"
                       onClick={() => navigate(ledgerHref(cid, {
                         section: "continuity", group, candidate: c.id }))}>
-                <span className="continuity-item-title">{titlesOf(c)}</span>
+                <span className="continuity-item-title">
+                  {titlesOf(c, candidates.diagnostics.unreadable)}
+                </span>
                 <span className="continuity-item-meta">
                   {KIND_PHRASES[c.kind]}{suggested && ` · ${suggested}`}
                 </span>
@@ -165,11 +167,11 @@ function livenessSentence(body: Record<string, unknown>): string | null {
 }
 
 /** The one line a landed action leaves behind (Decision 24). */
-function confirmation(c: ContinuityCandidate, body: ContinuityApply | "dismiss" | "keep_open"):
-    string {
-  const title = (ref?: string) =>
-    c.records.find((r) => r.ref === ref)?.title || "the record";
-  const first = c.records[0]?.title || "The record";
+function confirmation(c: ContinuityCandidate, body: ContinuityApply | "dismiss" | "keep_open",
+                      unreadable: string[]): string {
+  const named = (r: CandidateRecord | undefined) => (r ? candidateName(r, unreadable) : "");
+  const title = (ref?: string) => named(c.records.find((r) => r.ref === ref)) || "the record";
+  const first = named(c.records[0]) || "the record";
   if (body === "dismiss") return "Dismissed the finding.";
   if (body === "keep_open") return `Kept ${first} open.`;
   if (body.op === "alias") {
@@ -240,7 +242,8 @@ export function ContinuityReview(
       if (openRef.current.cid !== cid) return;
       review.wrote();
       if (openRef.current.candidate !== c.id) return;
-      setDone({ cid, group: c.group, text: confirmation(c, said) });
+      setDone({ cid, group: c.group, text: confirmation(c, said, review.candidates && review.candidates !== "failed"
+        ? review.candidates.diagnostics.unreadable : []) });
       navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
     } catch (err: unknown) {
       if (openRef.current.cid === cid) refused(c, err, said);

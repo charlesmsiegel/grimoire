@@ -53,9 +53,11 @@ type Form =
 const typeOf = (ref: string) => ref.slice(0, Math.max(ref.indexOf(":"), 0));
 const physicalId = (ref: string) => ref.slice(ref.indexOf(":") + 1);
 
-/** A record's title, or what it is when it has none -- never its ref. */
+/** A record's title, or what it is when it has none -- never its ref, which
+ *  is what the candidates read titles a gone record by when it holds no
+ *  stored title. */
 function titleOf(r: CandidateRecord | undefined, fallback: string): string {
-  return r?.title || fallback;
+  return r?.title && r.title !== r.ref ? r.title : fallback;
 }
 
 const ORDINALS = ["first", "second", "third"];

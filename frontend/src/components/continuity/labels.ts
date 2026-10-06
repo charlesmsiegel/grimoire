@@ -135,12 +135,12 @@ const UNREADABLE: Record<string, string> = {
   event: "an event that cannot be read right now",
 };
 
-/** A record's name on a review surface. The server titles a record with its
- *  ref (`review.describe`) for two reasons: the record is gone, or its ledger
- *  did not read, so it could not be looked up at all. `unreadable` -- the
- *  campaign's own list -- tells the two apart: a ref whose ledger is in it is
- *  a record that cannot be read right now, which may well exist, and only
- *  otherwise is a title that is empty or is the ref a missing record. */
+/** A record's name on a review surface. `GET /continuity` already names a
+ *  record it cannot title in words (`review.reader_name`: gone, untitled, or
+ *  in a ledger that will not read), so a title there is used as it is. A
+ *  title that is empty or is the ref still never reaches the reader:
+ *  `unreadable` -- the campaign's own list -- tells a record that cannot be
+ *  read right now, which may well exist, from a missing one. */
 export function recordName(title: string, ref: string, unreadable: string[] = []): string {
   if (title && title !== ref) return title;
   const prefix = ref.split(":")[0];
@@ -149,6 +149,28 @@ export function recordName(title: string, ref: string, unreadable: string[] = []
     return UNREADABLE[prefix];
   }
   return missingName(ref);
+}
+
+const UNTITLED: Record<string, string> = {
+  thread: "an untitled thread", commitment: "an untitled commitment", event: "an untitled event",
+};
+
+/** A finding's record on a review surface (§12.8, §30). The candidates read
+ *  joins a record that is there with its own title -- empty when it has none,
+ *  which is "an untitled thread", never "a missing" one -- and a record the
+ *  current view no longer shows (`gone`) with its stored title or its ref,
+ *  which `recordName` words. */
+export function candidateName(
+  r: { ref: string; title: string; gone: boolean }, unreadable: string[] = [],
+): string {
+  if (r.title && r.title !== r.ref) return r.title;
+  if (!r.gone) {
+    const prefix = r.ref.split(":")[0];
+    return Object.prototype.hasOwnProperty.call(UNTITLED, prefix)
+      ? UNTITLED[prefix]
+      : "an untitled record";
+  }
+  return recordName("", r.ref, unreadable);
 }
 
 // ---- a continuity.json that does not read (§4, §26) -------------------------

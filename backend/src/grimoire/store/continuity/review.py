@@ -106,16 +106,16 @@ def _kind_word(ref) -> str:
 
 def reader_name(cid: str, ref, ledgers: effective.Ledgers | None = None, *,
                 start: bool = False) -> str:
-    """A record's name in a journal label or a refusal: `describe`'s, or --
-    where that could only answer with the ref -- the kind in words (§30: no
-    store token reaches a reader). The server's counterpart of the review's
-    `recordName`: a record whose ledger will not read "cannot be read right
-    now" (it may well exist), one the ledger reads without is "a missing
-    thread", and one that is there with no name is "an untitled thread".
-    `describe` itself still answers with the ref, because the review's titles
-    are compared against it to tell those apart. `start` capitalises a
-    fallback that opens a sentence; a real title is never recased. Never
-    raises."""
+    """A record's name in a journal label, a refusal, or a title `GET
+    /continuity` hands a review surface: `describe`'s, or -- where that could
+    only answer with the ref -- the kind in words (§30: no store token reaches
+    a reader). A record whose ledger will not read "cannot be read right now"
+    (it may well exist), one the ledger reads without is "a missing thread",
+    and one that is there with no name is "an untitled thread" -- the last of
+    which only the server can tell, so the review takes these words rather
+    than wording a ref itself. `describe` still answers with the ref, which is
+    what this compares against. `start` capitalises a fallback that opens a
+    sentence; a real title is never recased. Never raises."""
     try:
         title = describe(cid, ref, ledgers) if isinstance(ref, str) and ref else ""
         if title and title != ref:
