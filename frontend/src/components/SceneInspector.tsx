@@ -6,12 +6,13 @@ import {
   type CharacterSummary, type PCSummary, type Briefing, type BriefingRow,
   type PinRule, type PromptDiff, type PromptEntry, type PromptSnapshot,
   type RollingSummary, type SceneBreak, type CampaignBudget, type SceneUsage,
-  type Message, type RegexBundle, type SceneRewrite,
+  type Message, type RegexBundle, type SceneRewrite, type AuthorsNotesNext,
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { getModels, type Model } from "../api/models";
 import { THUMB } from "../api/thumbs";
 import { onNoticesChanged } from "../appEvents";
+import { AuthorsNotesPanel } from "./AuthorsNotesPanel";
 import { approxMark, ContextBreakdown, contextPercent } from "./ContextBreakdown";
 import { ContextDiff } from "./ContextDiff";
 import { CostPanel } from "./CostPanel";
@@ -267,6 +268,12 @@ export const SceneInspector = memo(function SceneInspector({
      *  edit does. */
     onTranscriptEdited?: () => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
+  // Which author's notes apply to the NEXT turn (play controls V), for the
+  // section's count. Stamped with its scene, like the briefing, so a late answer
+  // for the previous scene never counts against this one.
+  const [notesNext, setNotesNext] = useState<{ cid: string; sid: string;
+                                               data: AuthorsNotesNext } | null>(null);
+  const [notesTick, setNotesTick] = useState(0);
   const [roster, setRoster] = useState<RosterEntry[]>([]);
   const [names, setNames] = useState<Record<string, string>>({});
   const [setting, setSetting] = useState<SceneLocation | null>(null);
@@ -777,6 +784,17 @@ export const SceneInspector = memo(function SceneInspector({
       .catch(() => { if (live) setTurns({ cid, sid, rows: [] }); });
     return () => { live = false; };
   }, [cid, sid, refreshKey]);
+
+  useEffect(() => {
+    let live = true;
+    api.getAuthorsNotesNext(cid, sid)
+      .then((data) => { if (live) setNotesNext({ cid, sid, data }); })
+      .catch(() => { if (live) setNotesNext(null); });
+    return () => { live = false; };
+  }, [cid, sid, refreshKey, notesTick]);
+  const nextNotes = notesNext && notesNext.cid === cid && notesNext.sid === sid
+    ? notesNext.data : null;
+  const onNotesSaved = useCallback(() => setNotesTick((t) => t + 1), []);
 
   // Which scene is on screen *now*, readable from a fetch that started under a
   // previous one — the same "a late answer is wrong, not just stale" problem
@@ -1605,6 +1623,19 @@ export const SceneInspector = memo(function SceneInspector({
       <SideSection id="routing" title="Model routing" collapsed={collapsed.routing ?? true}
                    onToggle={toggleSection}>
         <ModelRoutingPicker scope="campaign" cid={cid} />
+      </SideSection>
+
+      {/* Standing instructions placed in the history at a depth (play controls
+          V). Collapsed by default, like routing: set once, then left alone.
+          The count is every note due on the next turn. */}
+      <SideSection id="authors_notes" title="Author's notes"
+                   collapsed={collapsed.authors_notes ?? true} onToggle={toggleSection}
+                   extra={nextNotes && nextNotes.count > 0
+                     ? <span className="chip on" aria-label="Notes applying next turn">
+                         {nextNotes.count}</span>
+                     : undefined}>
+        <AuthorsNotesPanel cid={cid} sid={sid} cast={cast} next={nextNotes}
+                           onSaved={onNotesSaved} />
       </SideSection>
 
       <SideSection id="when" title="When" collapsed={!!collapsed.when} onToggle={toggleSection}>

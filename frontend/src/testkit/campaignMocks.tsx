@@ -121,6 +121,10 @@ export async function campaignApiMock() {
       // Per-task routing (#142): the page resolves the model its turns run on
       // and publishes it to the header.
       getCampaignRouting: vi.fn(), setCampaignRouting: vi.fn(),
+      // Author's notes (play controls V): the inspector's section and its count.
+      getAuthorsNotes: vi.fn(), setCampaignAuthorsNote: vi.fn(),
+      setCharacterAuthorsNote: vi.fn(), setSceneAuthorsNote: vi.fn(),
+      getAuthorsNotesNext: vi.fn(),
       // The width a portrait asks for is part of the URL a test reads, so a
       // plate that fell back to the full-size original says so.
       actorImageUrl: (_sc: { id: string }, k: string, a: string, v: string, n: string,

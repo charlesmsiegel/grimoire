@@ -239,6 +239,9 @@ export function installCampaignMocks() {
     active_connection_id: "openrouter",
     connections: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter",
                     model: "vendor/opus" }] });
+  // No author's notes: the inspector section draws no count.
+  (api.getAuthorsNotesNext as any).mockResolvedValue({ turn: 1, count: 0, notes: [] });
+  (api.getAuthorsNotes as any).mockResolvedValue({ campaign: null, scenes: {}, characters: {} });
   (getModels as any).mockResolvedValue([]);
   // `{review, generation}`, not the review alone (#396): the absorb is a
   // detached run now, and the client's `absorbScene` starts it, polls it, and

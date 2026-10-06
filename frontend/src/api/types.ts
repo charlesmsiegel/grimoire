@@ -2709,3 +2709,20 @@ export type RegexImportRow = {
   index: number; name: string; verdict: "exact" | "approximate" | "untranslatable";
   notes: string[]; rule: Omit<RegexRule, "id"> | null; original: unknown;
 };
+/** An author's note (play controls V): a standing instruction inserted into
+ *  the history `depth` posts from the end (0 = after the last), on every
+ *  `every`-th turn. */
+export type AuthorsNote = { text: string; depth: number; every: number };
+/** A campaign's notes; scene notes keyed by sid (the server resolves them). */
+export type AuthorsNotes = {
+  campaign: AuthorsNote | null;
+  scenes: Record<string, AuthorsNote>;
+  characters: Record<string, AuthorsNote>;
+};
+/** Which notes apply to the scene's NEXT turn. A character entry applies when
+ *  that character speaks. */
+export type AuthorsNotesNext = {
+  turn: number; count: number;
+  notes: { level: "campaign" | "scene" | "character"; depth: number; every: number;
+           applies: boolean; ref?: string; name?: string }[];
+};

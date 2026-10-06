@@ -16,7 +16,7 @@ import { THUMB_REV } from "./thumbs";
 // imported by name for the ones the calls below actually mention.
 export * from "./types";
 import {
-  type Actor, type AdvanceDigest, type AdvanceRequest, type Appearance, type Availability,
+  type Actor, type AdvanceDigest, type AuthorsNote, type AuthorsNotes, type AuthorsNotesNext, type AdvanceRequest, type Appearance, type Availability,
   type BackupList, type BackupRun, type ImageBackupRun, type Briefing, type CalendarConfig, type CalendarMonth,
   type CalendarScope, type CampaignClock, type CampaignImage, type CampaignLibrary,
   type CampaignMeta,
@@ -2543,6 +2543,20 @@ export const api = {
     request<RoutingBundle>("GET", `/api/campaigns/${cid}/routing`, undefined, { fresh: true }),
   setCampaignRouting: (cid: string, routes: Record<string, string>) =>
     request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }).then(notifyConfig),
+  // Author's notes (play controls V). `fresh` on the reads: the panel reloads
+  // right after a save, and a cached copy would show the note it just replaced.
+  getAuthorsNotes: (cid: string) =>
+    request<AuthorsNotes>("GET", `/api/campaigns/${cid}/authors-notes`, undefined, { fresh: true }),
+  setCampaignAuthorsNote: (cid: string, note: AuthorsNote) =>
+    request<AuthorsNotes>("PUT", `/api/campaigns/${cid}/authors-notes/campaign`, note),
+  setCharacterAuthorsNote: (cid: string, ref: string, note: AuthorsNote) =>
+    request<AuthorsNotes>("PUT",
+      `/api/campaigns/${cid}/authors-notes/characters/${encodeURIComponent(ref)}`, note),
+  setSceneAuthorsNote: (cid: string, sid: string, note: AuthorsNote) =>
+    request<AuthorsNotes>("PUT", `/api/campaigns/${cid}/scenes/${sid}/authors-note`, note),
+  getAuthorsNotesNext: (cid: string, sid: string) =>
+    request<AuthorsNotesNext>("GET", `/api/campaigns/${cid}/scenes/${sid}/authors-notes/next`,
+      undefined, { fresh: true }),
   // The sampler-preset half of the same bundle. Separate calls rather than a
   // second argument to the two above: one write per choice, like routes, and
   // a preset does not move which model the status bar names, so no notify.
