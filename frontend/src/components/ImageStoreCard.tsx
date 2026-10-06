@@ -389,9 +389,19 @@ function Stopped({ report }: { report: ImageGcReport }) {
   );
 }
 
+/** What a collection deleted, counted the way the scan counted it: each object,
+ *  plus each orphan blob (a row with no object, or none deleted here). A blob
+ *  that went with an object it belonged to is that object, not a second image. */
+function deletedCount(deleted: Partial<ImageGcReport["deleted"]> | undefined): number {
+  const objects = deleted?.objects ?? [];
+  const ids = new Set(objects.map((o) => o.id));
+  const orphans = (deleted?.blobs ?? []).filter((b) => b.id === null || !ids.has(b.id));
+  return objects.length + orphans.length;
+}
+
 function CollectReport({ report }: { report: ImageGcReport }) {
   const r: Partial<ImageGcReport> = report;
-  const n = (r.deleted?.objects ?? []).length;
+  const n = deletedCount(r.deleted);
   const skipped = r.skipped ?? [];
   return (
     <div className="image-store-report">
