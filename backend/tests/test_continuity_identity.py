@@ -840,6 +840,20 @@ def test_accepted_existing_rewrites_commitment_fields(cid, s0, sid):
         "the-midnight-deadline", "", "fulfilled", "midnight")
 
 
+def test_a_blank_due_on_a_retargeted_row_never_lifts_the_stored_deadline(cid, s0, sid):
+    # On a row that would open a record "" lifts nothing -- there is no deadline
+    # yet -- so moving it onto a stored commitment must not turn it into an
+    # instruction to clear that commitment's deadline. A stated one still lands.
+    _seed_deadline(cid, s0)
+    blank = {**SERAPHINES_THREAT, "due": ""}
+    exam = _examine(cid, sid, owed=[blank])
+    exam.decide(_say(("r1", "existing", "the-midnight-deadline")))
+    [new] = _rewrite(exam, owed=[blank])[1]["commitment_movements"]
+    assert new["id"] == "the-midnight-deadline"
+    assert "due" not in new
+    assert new[identity.AS_NEW_KEY] == blank
+
+
 def test_existing_naming_an_unoffered_id_is_uncertain(cid, s0, sid):
     _seed_ledger(cid, s0)
     _seed_deadline(cid, s0)

@@ -865,7 +865,7 @@ When `existing` is accepted, the parsed row is rewritten before `materialize`:
 - plot `status` := the model's original `closed` or `advanced` if it gave one, else `advanced`. It is never `open`, which `parse_output` uses as a default and which would regress an advanced thread;
 - commitment `kind` := `""` (keep stored);
 - commitment `status` is kept only if it is in `commitments.RESOLVED`, else `""`;
-- `due` is kept only if the original row carried it.
+- `due` is kept only if the original row carried a non-blank one. A blank `due` means “lift the deadline” only on a row that named the record; on a row that would have opened one there was no deadline to lift, so it is dropped rather than carried onto the stored record, whose deadline it would clear. The as-existing alternatives of §10.3 follow the same rule (Slice G final review; see §31).
 
 **Uncertain rows.** An `uncertain` row stays a new staged row, but it gets `review.band = "low"` after materialize, so it arrives unticked in the NEEDS YOU drawer. Under the existing save rule an unticked row is **still written unless rejected**, and its hint says so: “Possible existing record — reject this row, or switch it to the existing record, if it is the same business.”
 
@@ -2746,6 +2746,7 @@ Slice G implementation deviations. Each was decided in the Slice G plan (`docs/s
 - **The §30 avoid-list guard scans for the phrases the spec avoids by name — §30's four and §3.3's “continuity disabled” — and their plain rewordings only** (Decision 12; §3.3, §30). The plan's Task 5 list was bare substrings and also named “ai detected” and “health score”; the scan covers every non-test source file, so a phrase the spec does not name would fail an unrelated page, and “health score” was dropped. “ai detected” is kept only where it attributes a duplicate, as part of a whole-word pattern that also reaches articles, plurals and verb forms the substrings missed (“AI detected a duplicate”, “Duplicates detected”, “Embeddings are required”).
 - **§28.10's cases are each held to a grader check that a counterexample trips**, with `continuity-reconcile.timid` for cases 4, 5 and 7 (Decision 14; §28.10, Appendix B).
 - **§25.4 binds what the capstone adds**; the shell's pre-capstone transcript read stays (Decision 17; §25.4).
+- **A blank `due` is dropped when a row is moved onto an existing commitment** — by an accepted `existing` or by an as-existing alternative — rather than kept because the key was present: on a row that would have opened a record `""` lifts nothing, and carried across it cleared the stored deadline (final code review, not a plan Decision; §10.2).
 
 Slice G rulings. Every hand-off Slices A–F addressed to Slice G, or deferred, that Slice G does not close, with its reason (Decision 16). A deferred defect remains open for §33's correctness-defect channel; a parked feature — (f3)'s graph node families and (f5)'s wide-canvas virtualization — is parked by §33 and is not a correctness defect.
 

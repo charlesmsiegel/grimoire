@@ -338,9 +338,14 @@ def _onto_existing(kind: str, row: dict, rid: str) -> dict:
     status is the model's ``closed`` or ``advanced``, else ``advanced`` -- never
     ``open``, which `parse_output` defaults to and which would regress an
     advanced thread. A commitment keeps its stored kind and keeps a status only
-    when it resolves the record. ``due`` stays exactly as present or absent.
-    Citation keys are untouched."""
+    when it resolves the record. A stated ``due`` is kept and an absent one
+    stays absent; a blank one is dropped, because ``""`` means "lift the
+    deadline" only on a row that named the record -- on a row that would have
+    opened one there was no deadline to lift, so carrying it across would
+    clear the stored record's. Citation keys are untouched."""
     new = {**row, "id": rid, "title": ""}
+    if "due" in row and not _text(row.get("due")):
+        del new["due"]
     status = row.get("status")
     if kind == "thread":
         new["status"] = status if status in ("closed", "advanced") else "advanced"
