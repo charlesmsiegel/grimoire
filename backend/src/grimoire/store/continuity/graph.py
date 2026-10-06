@@ -22,7 +22,8 @@ code that can do anything, including wait -- must never run under that hold
   `docs/store-guarantees.md`). Under contention the read proceeds unlocked, and
   (A) and (B) can be a moment apart: that is the stated trade of every
   best-effort reader, and refusing would turn a read into an error.
-- (C) `_assemble`, outside again: the per-row `calendars.fixed_of` /
+- (C) `_names` and `_assemble`, outside again: the roster summaries that label
+  actors and locations, then the per-row `calendars.fixed_of` /
   `calendars.friendly` on scene dates (plugin code, so never inside `_files`
   beside the list they derive from), then one private builder per family.
 
@@ -62,10 +63,10 @@ import hashlib
 from collections.abc import Callable
 from typing import Any, TypeVar
 
-from .. import calendars, chronicle, fieldtext, locks
+from .. import calendars, chronicle, fieldtext, locks, overlay, relationships
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
-from . import pressure
+from . import canon, involvement, pressure
 
 #: §20's node kinds: `canon.KIND_OF_PREFIX`'s kinds minus the two §19.2 leaves
 #: optional (groups, standing facts). The order is the payload's node order.
@@ -91,6 +92,14 @@ PARTS = ("calendar", "scenes", "chronicle", "plot", "commitments", "events", "co
 
 T = TypeVar("T")
 
+#: The two node kinds an actor token can name (`_actor_kind`).
+_ACTOR_KINDS = ("character", "pc")
+
+#: A feeling's three meters, each drawn as five pips: the ledger's and the
+#: case file's axes (`routes.campaigns.FEELING_AXES`, `casefile.FEELING_AXES`),
+#: restated because neither is a module `continuity` may import.
+_FEELING_AXES = ("trust", "affection", "tension")
+
 
 def edge_id(kind: str, a: str, b: str) -> str:
     """A structural or alias edge's id: `canon.link_id`'s recipe, scoped by kind."""
@@ -111,6 +120,35 @@ def _attempt(omitted: set[str], part: str | None, fn: Callable[..., T], fallback
 
 def _int_or_none(value) -> int | None:
     return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _edge(kind: str, a: str, b: str, *, source: str = "structural", **extra: Any) -> dict:
+    """One §20 edge with a derived id; `extra` carries a kind's typed fields."""
+    return {"id": edge_id(kind, a, b), "kind": kind, "from": a, "to": b, "source": source,
+            "relation": None, "candidate_id": None, **extra}
+
+
+def _label(ref: str, names: dict[str, str]) -> str:
+    """The roster's name for `ref`, else the id after its first `:`."""
+    return names.get(ref) or ref.partition(":")[2]
+
+
+def _actor_kind(token) -> str | None:
+    """`"character"`, `"pc"` or None for an actor token; never raises.
+
+    Not `canon.split_ref`: `involvement.scene_actors` passes every non-empty
+    chronicle `cast` string through `canon.actor_ref`, which leaves `"Mara"` as
+    `"Mara"` and turns `"characters/"` into `"characters:"`, and `split_ref`
+    raises on both. A hand edit costs that token's edges, never the family."""
+    if not isinstance(token, str):
+        return None
+    prefix, sep, rest = token.partition(":")
+    kind = canon.KIND_OF_PREFIX.get(prefix)
+    return kind if sep and rest and kind in _ACTOR_KINDS else None
+
+
+def _actor_node(token: str, names: dict[str, str]) -> dict:
+    return {"id": token, "kind": _actor_kind(token), "label": _label(token, names)}
 
 
 # ---- phase A: temporal, outside the hold ------------------------------------
@@ -161,9 +199,45 @@ def _files(cid: str, omitted: set[str]) -> dict:
         for row in scenes:
             histories[row["id"]] = _attempt(omitted, "scenes",
                                             scenes_read.get_location_history, [], cid, row["id"])
+        actors: dict = _attempt(omitted, "chronicle", involvement.scene_actors, {}, cid)
+        # `read` raises on bad JSON, and on a list top level from `setdefault`.
+        rels: dict = _attempt(omitted, "relationships", relationships.read, {}, cid)
     # Valid JSON of the wrong shape arrives without raising.
     return {"scenes": scenes, "chronicle": chron if isinstance(chron, dict) else {},
-            "histories": histories}
+            "histories": histories, "actors": actors if isinstance(actors, dict) else {},
+            "relationships": rels if isinstance(rels, dict) else {}}
+
+
+# ---- phase C: names, outside ------------------------------------------------
+
+
+def _locations(cid: str) -> list[dict]:
+    return overlay.list_entities(cid, "locations")
+
+
+#: Each roster summary, read in its own `_attempt`: `entities.list_entities`
+#: raises on a record it cannot parse rather than skipping it, so one bad
+#: location file must cost location labels, not every actor's name.
+_ROSTERS: tuple[tuple[str, Callable[[str], list[dict]]], ...] = (
+    (canon.PREFIX_OF_KIND["character"], overlay.character_roster),
+    (canon.PREFIX_OF_KIND["pc"], overlay.pc_roster),
+    (canon.PREFIX_OF_KIND["location"], _locations),
+)
+
+
+def _names(cid: str, omitted: set[str]) -> dict[str, str]:
+    """`"<prefix>:<id>" -> name` from the roster summaries (§19.7): no card read,
+    no image scan. A ref no roster names is labelled with its id (`_label`)."""
+    names: dict[str, str] = {}
+    for prefix, read in _ROSTERS:
+        rows: list[dict] = _attempt(omitted, "names", read, [], cid)
+        for row in rows if isinstance(rows, list) else ():
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                continue
+            name = fieldtext.text(row.get("name"))
+            if name:
+                names[f"{prefix}:{row['id']}"] = name
+    return names
 
 
 # ---- phase C: assembly, outside ---------------------------------------------
@@ -210,6 +284,74 @@ def _scene_nodes(temporal: dict, files: dict, omitted: set[str]) -> tuple[list, 
     return nodes, []
 
 
+def _appearances(files: dict) -> list[dict]:
+    """`appeared_in`: actor -> listed scene, from the appearance roster and the
+    chronicle cast, unioned by `involvement.scene_actors`."""
+    listed = {row["id"] for row in files["scenes"]}
+    edges: list[dict] = []
+    for sid, actors in files["actors"].items():
+        if sid not in listed or not isinstance(actors, (set, list, tuple)):
+            continue
+        edges.extend(_edge("appeared_in", token, f"scene:{sid}")
+                     for token in actors if _actor_kind(token) is not None)
+    return edges
+
+
+def _places(files: dict, names: dict[str, str]) -> tuple[list, list]:
+    """`occurred_at`: scene -> each distinct location in its history, and the
+    location nodes those edges name."""
+    prefix = canon.PREFIX_OF_KIND["location"]
+    nodes, edges = [], []
+    for sid, history in files["histories"].items():
+        for eid in dict.fromkeys(h for h in history if isinstance(h, str) and h):
+            ref = f"{prefix}:{eid}"
+            nodes.append({"id": ref, "kind": "location", "label": _label(ref, names)})
+            edges.append(_edge("occurred_at", f"scene:{sid}", ref))
+    return nodes, edges
+
+
+def _meter(value) -> int:
+    """A stored meter clamped to the five pips drawn; a non-int reads 0."""
+    return min(5, max(0, value)) if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
+def _meters(rec: dict) -> dict[str, Any]:
+    return {axis: _meter(rec.get(axis)) for axis in _FEELING_AXES}
+
+
+def _pairs(table, sep: str) -> list[tuple[str, str, dict]]:
+    """`(a, b, record)` per relationship key that names two actors."""
+    out = []
+    for key, rec in (table.items() if isinstance(table, dict) else ()):
+        if not isinstance(key, str) or not isinstance(rec, dict):
+            continue
+        a, found, b = key.partition(sep)
+        if found and _actor_kind(a) is not None and _actor_kind(b) is not None:
+            out.append((a, b, rec))
+    return out
+
+
+def _relationship_edges(rels: dict) -> list[dict]:
+    """`feeling` (directed, metered) and `bond` (`lo -> hi`, named, dated),
+    parsed as the ledger's relationships section parses them, names aside."""
+    edges = [_edge("feeling", a, b, **_meters(rec), note=fieldtext.text(rec.get("note")))
+             for a, b, rec in _pairs(rels.get("feelings"), "->")]
+    edges += [_edge("bond", a, b, bond_type=fieldtext.text(rec.get("type")),
+                    since_scene=fieldtext.text(rec.get("since_scene")))
+              for a, b, rec in _pairs(rels.get("bonds"), "|")]
+    return edges
+
+
+def _actor_parts(files: dict, names: dict[str, str]) -> tuple[list, list]:
+    """Appearances, places and relationships, and the actor and location nodes
+    their edges name -- never the whole roster (§19.2, "do not dump")."""
+    place_nodes, place_edges = _places(files, names)
+    edges = _appearances(files) + place_edges + _relationship_edges(files["relationships"])
+    actors = {end for e in edges for end in (e["from"], e["to"])
+              if _actor_kind(end) is not None}
+    return [_actor_node(a, names) for a in sorted(actors)] + place_nodes, edges
+
+
 def _node_key(node: dict) -> tuple:
     kind = node["kind"]
     return (NODE_KINDS.index(kind), node.get("order", 0) if kind == "scene" else 0, node["id"])
@@ -223,6 +365,7 @@ def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
               omitted: set[str]) -> dict:
     families: tuple[tuple[str, Callable[..., tuple[list, list]], tuple], ...] = (
         ("scenes", _scene_nodes, (temporal, files, omitted)),
+        ("chronicle", _actor_parts, (files, names)),
     )
     nodes: dict[str, dict] = {}
     edges: dict[str, dict] = {}
@@ -248,4 +391,5 @@ def build(cid: str) -> dict:
     omitted: set[str] = set()
     temporal = _temporal(cid, omitted)
     files = _files(cid, omitted)
-    return _assemble(cid, temporal, files, {}, omitted)
+    names = _names(cid, omitted)
+    return _assemble(cid, temporal, files, names, omitted)

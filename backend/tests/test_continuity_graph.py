@@ -7,10 +7,18 @@ already exist. Dates are asserted on the campaign's own fixed-day axis
 
 from __future__ import annotations
 
+import json
 import textwrap
 
 from grimoire import store
-from grimoire.store import calendars, chronicle
+from grimoire.store import (
+    appearances,
+    calendars,
+    campaigns,
+    chronicle,
+    overlay,
+    relationships,
+)
 from grimoire.store.continuity import canon, drivers, effective, graph, pressure
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.scenes import paths as scenes_paths
@@ -233,3 +241,164 @@ def test_a_free_text_seeded_present_is_not_a_broken_calendar(monkeypatch, tmp_pa
     g = graph.build(cid)
     assert g["now"] == {"native": "midsummer", "friendly": "", "fixed": None}
     assert g["omitted"] == []
+
+
+# ---- actors and locations ---------------------------------------------------
+
+
+def _edges(g: dict, kind: str) -> list[dict]:
+    return [e for e in g["edges"] if e["kind"] == kind]
+
+
+def _pairs(g: dict, kind: str) -> set[tuple[str, str]]:
+    return {(e["from"], e["to"]) for e in _edges(g, kind)}
+
+
+def _by_id(g: dict) -> dict[str, dict]:
+    return {n["id"]: n for n in g["nodes"]}
+
+
+def _seat(cid: str, sid: str, kind: str, aid: str, vid: str) -> None:
+    role = "player" if kind == "pcs" else "npc"
+    appearances.transitions.appear(cid, sid, kind, aid, vid, role, narrate=False)
+
+
+def _cast(cid: str, sid: str, cast: list) -> None:
+    chronicle.absorb(cid, {"id": sid, "one_line": "", "cast": cast})
+
+
+def _relationships_file(cid: str):
+    return campaigns.campaign_root(cid) / "relationships.json"
+
+
+def test_appeared_in_unions_roster_and_chronicle_cast(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    winifred, _ = overlay.create_character(cid, "Winifred")
+    seraphine, seraphine_v = overlay.create_pc(cid, "Seraphine", [])
+    s1 = store.scenes.create_scene(cid, "Saltmarch harbour")
+    s2 = store.scenes.create_scene(cid, "Mara's map")
+    _seat(cid, s1, "characters", mara, mara_v)
+    _cast(cid, s2, [f"characters/{winifred}"])
+    _seat(cid, s2, "pcs", seraphine, seraphine_v)
+
+    g = graph.build(cid)
+    assert _pairs(g, "appeared_in") == {
+        (f"characters:{mara}", f"scene:{s1}"),
+        (f"characters:{winifred}", f"scene:{s2}"),
+        (f"pcs:{seraphine}", f"scene:{s2}"),
+    }
+    nodes = _by_id(g)
+    assert (nodes[f"characters:{mara}"]["kind"], nodes[f"characters:{mara}"]["label"]) == (
+        "character", "Mara")
+    assert (nodes[f"characters:{winifred}"]["kind"],
+            nodes[f"characters:{winifred}"]["label"]) == ("character", "Winifred")
+    assert (nodes[f"pcs:{seraphine}"]["kind"], nodes[f"pcs:{seraphine}"]["label"]) == (
+        "pc", "Seraphine")
+    edge = _edges(g, "appeared_in")[0]
+    assert edge["source"] == "structural"
+    assert edge["relation"] is None and edge["candidate_id"] is None
+    assert edge["id"] == graph.edge_id("appeared_in", edge["from"], edge["to"])
+    assert g["omitted"] == []
+
+
+def test_occurred_at_follows_location_history(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    harbour = overlay.create_entity(cid, "locations", "Saltmarch harbour")
+    docks = overlay.create_entity(cid, "locations", "Saltmarch docks")
+    s1 = store.scenes.create_scene(cid, "Mara's map")
+    s2 = store.scenes.create_scene(cid, "Winifred's chart")
+    store.scenes.set_location(cid, s1, harbour)
+    store.scenes.set_location(cid, s1, docks)
+
+    g = graph.build(cid)
+    assert [(e["from"], e["to"]) for e in _edges(g, "occurred_at")
+            if e["from"] == f"scene:{s1}"] == sorted([
+                (f"scene:{s1}", f"locations:{harbour}"),
+                (f"scene:{s1}", f"locations:{docks}")])
+    assert not [e for e in _edges(g, "occurred_at") if e["from"] == f"scene:{s2}"]
+    nodes = _by_id(g)
+    assert (nodes[f"locations:{harbour}"]["kind"],
+            nodes[f"locations:{harbour}"]["label"]) == ("location", "Saltmarch harbour")
+    assert nodes[f"locations:{docks}"]["label"] == "Saltmarch docks"
+    assert g["omitted"] == []
+
+
+def test_relationships_become_feeling_and_bond_edges(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    relationships.set_feeling(cid, "characters:mara", "characters:winifred", 9, 2, -1, "wary")
+    relationships.set_bond(cid, "characters:winifred", "characters:mara", "kin",
+                           since_scene="009--gone")
+    data = json.loads(_relationships_file(cid).read_text(encoding="utf-8"))
+    data["feelings"]["groups:realm->characters:mara"] = {
+        "trust": 1, "affection": 1, "tension": 1, "note": ""}
+    _relationships_file(cid).write_text(json.dumps(data), encoding="utf-8")
+
+    g = graph.build(cid)
+    [feeling] = _edges(g, "feeling")
+    assert (feeling["from"], feeling["to"]) == ("characters:mara", "characters:winifred")
+    assert (feeling["trust"], feeling["affection"], feeling["tension"]) == (5, 2, 0)
+    assert feeling["note"] == "wary"
+    assert feeling["source"] == "structural"
+    [bond] = _edges(g, "bond")
+    assert (bond["from"], bond["to"]) == ("characters:mara", "characters:winifred")
+    assert (bond["bond_type"], bond["since_scene"]) == ("kin", "009--gone")
+    nodes = _by_id(g)
+    assert "groups:realm" not in nodes
+    assert nodes["characters:mara"]["kind"] == "character"
+    assert g["omitted"] == []
+
+
+def test_actor_labels_fall_back_to_the_id(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = store.scenes.create_scene(cid, "Saltmarch harbour")
+    _cast(cid, sid, ["characters/winifred-gone"])
+
+    g = graph.build(cid)
+    node = _by_id(g)["characters:winifred-gone"]
+    assert (node["kind"], node["label"]) == ("character", "winifred-gone")
+    assert _pairs(g, "appeared_in") == {("characters:winifred-gone", f"scene:{sid}")}
+
+
+def test_relationships_raising_costs_only_their_edges(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    sid = store.scenes.create_scene(cid, "Saltmarch harbour")
+    _seat(cid, sid, "characters", mara, mara_v)
+    _relationships_file(cid).write_text("[]", encoding="utf-8")
+
+    g = graph.build(cid)
+    assert _edges(g, "feeling") == [] and _edges(g, "bond") == []
+    assert "relationships" in g["omitted"]
+    assert _pairs(g, "appeared_in") == {(f"characters:{mara}", f"scene:{sid}")}
+
+
+def test_malformed_cast_tokens_cost_only_their_edges(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    store.scenes.create_scene(cid, "Saltmarch harbour")
+    s2 = store.scenes.create_scene(cid, "Mara's map")
+    _cast(cid, s2, ["Mara", "characters/", "groups/realm", "characters/winifred"])
+
+    g = graph.build(cid)
+    assert [(e["from"], e["to"]) for e in _edges(g, "appeared_in")
+            if e["to"] == f"scene:{s2}"] == [("characters:winifred", f"scene:{s2}")]
+    node_ids = {n["id"] for n in g["nodes"]}
+    assert all({e["from"], e["to"]} <= node_ids for e in g["edges"])
+
+
+def test_an_unreadable_location_costs_only_location_labels(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    harbour = overlay.create_entity(cid, "locations", "Saltmarch harbour")
+    sid = store.scenes.create_scene(cid, "Mara's map")
+    _seat(cid, sid, "characters", mara, mara_v)
+    store.scenes.set_location(cid, sid, harbour)
+    (overlay.croot_of(cid) / "locations" / f"{harbour}.md").write_bytes(
+        b"---\nname: \xff\xfe Saltmarch\n---\n\xff\n")
+
+    g = graph.build(cid)
+    nodes = _by_id(g)
+    assert nodes[f"characters:{mara}"]["label"] == "Mara"
+    assert nodes[f"locations:{harbour}"]["label"] == harbour
+    assert _pairs(g, "occurred_at") == {(f"scene:{sid}", f"locations:{harbour}")}
+    assert "names" in g["omitted"]
