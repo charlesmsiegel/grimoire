@@ -1229,6 +1229,7 @@ Do not journal derived candidate-file updates or suppressions.
 
 - **Refresh** starts the §11.1 run. The section shows the run in progress and re-reads candidates when it lands. Refresh is enabled even with no LLM or embeddings connection, and the matching-mode line says what it will do.
 - **A `409 stale_candidate`** on apply re-reads `GET /continuity/candidates` only. It never starts a run. The 409 body carries the current records (§22), so the detail can re-render immediately. The reader may resubmit against the new fingerprint after looking.
+- **A finding whose meaning moved opens its action form fresh.** The form's input (the open action, a closing beat, its evidence scene, a temporal relation, a due copy) was chosen against one reading of the finding, so when the same candidate id comes back with a new fingerprint or a changed proposal (decision, relation or evidence scenes) — after a Refresh, or a 409 laying the current records over it — the form closes and reopens on the new defaults. A re-read that changes none of those keeps a half-filled form.
 
 ---
 

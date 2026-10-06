@@ -69,6 +69,22 @@ function toldApart(records: CandidateRecord[]): CandidateRecord[] {
       : r);
 }
 
+/** What the action form's state was chosen against, as a key for the detail.
+ *
+ *  The form (which action is open, the beat, the evidence scene, the temporal
+ *  relation, the due copy) is the reader's input against ONE reading of the
+ *  finding. Its defaults come from the proposal (its decision, relation and
+ *  evidence scenes) and the due copy from the records' dates, which the
+ *  fingerprint covers. A refresh that moves any of them -- the same id back
+ *  with a new fingerprint or a re-asked proposal -- opens the form fresh, so a
+ *  choice made against the old finding is never applied to the new one. A
+ *  re-read that changes none of them keeps a half-filled form. */
+export function formKey(candidate: ContinuityCandidate): string {
+  const p = candidate.proposal;
+  return JSON.stringify([candidate.id, candidate.fingerprint, p?.decision ?? null,
+                         p?.relation ?? null, p?.evidence_scenes ?? []]);
+}
+
 type Props = {
   cid: string;
   candidate: ContinuityCandidate;

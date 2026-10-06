@@ -1360,4 +1360,91 @@ describe("the finding detail", () => {
     expect(main().getByRole("link", { name: "Untitled scene" }))
       .toHaveAttribute("href", `/campaigns/run/scenes/${untitled}`);
   });
+  // ---- a refreshed finding opens its action form fresh ---------------------
+
+  /** Pressing `press`, answered by an evidence 409 (the finding goes stale and
+   *  its form is hidden), then a Refresh whose re-read returns `after`. */
+  async function staleThenRefreshed(press: string, after: ContinuityCandidate) {
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(
+      409, "Records have changed since this was found.", "stale_candidate", {
+        kind: "stale_candidate", reason: "evidence",
+      }));
+    fireEvent.click(aside().getByRole("button", { name: press }));
+    const refresh = await (await sidebar()).findByRole("button", { name: "Refresh" });
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, candidates: DETAIL.candidates.map((c) => c.id === after.id ? after : c) });
+    fireEvent.click(refresh);
+    await waitFor(() => expect(api.reconcileContinuity).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(aside().queryByRole("button", { name: "Refresh" })).toBeNull());
+  }
+
+  test("a refreshed closure drops the beat and scene chosen against the old finding",
+       async () => {
+    renderLedger(at(CLOSE_ME));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Closing beat" }),
+                     { target: { value: "The crown is placed." } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Evidence scene" }),
+                     { target: { value: "002--saltmarch-eve" } });
+    await staleThenRefreshed("Apply", {
+      ...CLOSE_ME, fingerprint: "fp-refreshed",
+      proposal: { ...CLOSE_ME.proposal!, reason: "The crown was carried in.",
+                  evidence_scenes: [] },
+    });
+    // The form is closed, and reopens on the refreshed finding's defaults.
+    expect(screen.queryByRole("textbox", { name: "Closing beat" })).toBeNull();
+    fireEvent.click(aside().getByRole("button", { name: "Close thread" }));
+    expect(screen.getByRole("textbox", { name: "Closing beat" })).toHaveValue("");
+    expect(screen.getByRole("combobox", { name: "Evidence scene" })).toHaveValue("");
+  });
+
+  test("a refreshed temporal pair drops the relation chosen against the old finding",
+       async () => {
+    renderLedger(at(TEMPORAL));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Accept" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "Relation" }),
+                     { target: { value: "by" } });
+    await staleThenRefreshed("Apply", {
+      ...TEMPORAL, fingerprint: "fp-refreshed",
+      proposal: { ...TEMPORAL.proposal!, decision: "after", relation: "after" },
+    });
+    expect(screen.queryByRole("combobox", { name: "Relation" })).toBeNull();
+    fireEvent.click(aside().getByRole("button", { name: "Accept" }));
+    expect(screen.getByRole("combobox", { name: "Relation" })).toHaveValue("after");
+  });
+
+  test("a refreshed merge drops a due copy ticked against the old dates", async () => {
+    renderLedger(at(OATHS));
+    fireEvent.click(await (await sidebar()).findByRole("checkbox", {
+      name: "Also copy the due date “Saltmarch Eve” to Seraphine's oath" }));
+    await staleThenRefreshed("Keep Mara's oath", {
+      ...OATHS, fingerprint: "fp-refreshed",
+      records: [{ ...OATH_DUE, due: "Realm Day" }, SER_OATH],
+    });
+    const box = aside().getByRole("checkbox", {
+      name: "Also copy the due date “Realm Day” to Seraphine's oath" });
+    expect(box).not.toBeChecked();
+    fireEvent.click(aside().getByRole("button", { name: "Keep Seraphine's oath" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(2));
+    expect(applied()[1][2]).toEqual({
+      op: "alias", canonical: SER_OATH.ref, expect_fingerprint: "fp-refreshed" });
+  });
+
+  test("a re-read returning the same finding keeps the reader's choices", async () => {
+    renderLedger(at(CLOSE_ME));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Closing beat" }),
+                     { target: { value: "The crown is placed." } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Evidence scene" }),
+                     { target: { value: "002--saltmarch-eve" } });
+    // A fresh copy of the identical read.
+    (api.continuityCandidates as any).mockResolvedValue(structuredClone(DETAIL));
+    fireEvent.click(main().getByRole("button", { name: "Refresh continuity review" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("textbox", { name: "Closing beat" }))
+      .toHaveValue("The crown is placed.");
+    expect(screen.getByRole("combobox", { name: "Evidence scene" }))
+      .toHaveValue("002--saltmarch-eve");
+  });
 });

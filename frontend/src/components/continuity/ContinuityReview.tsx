@@ -32,7 +32,7 @@ import type {
   ContinuityApply, ContinuityCandidate, ContinuityGroup,
 } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
-import { CandidateDetail, type DetailError } from "./CandidateDetail";
+import { CandidateDetail, formKey, type DetailError } from "./CandidateDetail";
 import { DismissedGroup } from "./DismissedGroup";
 import {
   GROUP_LABELS, isLive, KIND_PHRASES, LIVENESS_SENTENCES, MATCHING_LINES, proposalLabel,
@@ -312,7 +312,7 @@ export function ContinuityReview(
                           void perform(() => api.restoreSuppression(cid, fp));
                         }} />
       ) : open && read ? (
-        <CandidateDetail key={open.id} cid={cid} candidate={open} names={read.names}
+        <CandidateDetail key={formKey(open)} cid={cid} candidate={open} names={read.names}
                          scenes={read.scenes} busy={busy} refreshing={review.refreshing}
                          error={detailError}
                          onApply={(body) => apply(open, body)}
