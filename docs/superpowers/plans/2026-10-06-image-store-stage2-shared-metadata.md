@@ -67,7 +67,8 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
 
 **R9. One description cap, `image_store.MAX_DESCRIPTION = 4000`.**
 - `world_bundle.MAX_IMPORTED_DESCRIPTION` becomes an alias of it.
-- `image_descriptions.set_in` refuses longer text with `ValueError("description too long")`, and every description PUT route answers that with 422.
+- `image_descriptions.set_in` refuses longer text with `image_descriptions.DescriptionTooLongError(ValueError)`.
+- Every description PUT route catches that exception **before** its existing `ValueError` → 404 handler and answers 422.
 - Existing longer legacy keys still read.
 
 **R10. Scope ids are canonical.**
@@ -77,7 +78,14 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
 **R11. Cross-world references keep their tags in the sidecar.** A greeting's reference to a picture placed in another world keeps its tag in that greeting's `subjects.json`, so the tag travels with the greeting's world bundle.
 
 **R12. A replaced picture sheds a stale caption.**
-- When `assets.put_in` or `link_in` changes a name's image id, and the new object already has a string `description`, the name's legacy description key is dropped in the same operation. (The Chub replace already drops it.)
+- **When the key is dropped:** `assets.put_in` or `link_in` replaces a slot that held a **known, different** identity, and the new object already has a string `description`. The name's legacy description key is dropped in the same operation. (The Chub replace already drops it.)
+- **What counts as a known, different identity:**
+  - the old placement's `image` is set and differs from the new one; or
+  - the old slot is a legacy file whose `image_store.identify` differs, which is the test `characters._legacy_identity` already makes.
+- **Never dropped:**
+  - on a first placement (no prior identity);
+  - on an adoption of the same picture;
+  - on a promote's `link_in`. R5 carries the key just before it, and the slot had no placement.
 - Otherwise today's rule stands: the old text stays.
 
 **R13. Documented, not changed:**
@@ -109,7 +117,8 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
 - **Test fixtures that share bytes now share an object.** Many store tests upload the same opaque `b"png"` for different images. Since R4, those images share one description. Where a test needs distinct texts, give the images distinct bytes (`b"png-1"`, `b"png-2"`, …). Never weaken an assertion.
 - **Hot paths:**
   - `/api/shell` (every navigation), `/api/todo`, the per-turn art catalogue and the per-turn `overlay.read_descriptions` must not resolve blobs, and must not re-read placements that the caller's listing already read.
-  - Object reads in whole-store sweeps (`image_scopes`, `image_usage`) use an unmemoized read (`image_store.read_fresh`, Task 1), so they do not flood the shared statcache.
+  - Object reads in whole-store sweeps (`image_scopes`, `image_usage`) use an unmemoized read (`image_store.read_fresh`, Task 1).
+  - Every other object read goes through `image_store.read`, which memoizes in its **own statcache pool** (`pool="image_objects"`), so backlog walks never evict the shared pool's card and entity entries.
 - **Ratchets** (ruff, mypy, eslint) stay at baseline; if one improves, run `make baseline` and commit the result.
 - **The docs guard** stays green.
 - **How to run things:**
@@ -139,8 +148,8 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
 
 **Files:**
 - Modify:
-  - `backend/src/grimoire/store/image_store.py`: `update -> bool` (R8), `MAX_DESCRIPTION` (R9), `read_fresh`
-  - `backend/src/grimoire/store/assets.py`: `names_in` also returns the refs map; R12 in `put_in` / `link_in`
+  - `backend/src/grimoire/store/image_store.py`: `update -> bool` (R8), `MAX_DESCRIPTION` (R9), `read_fresh`, and `read` memoized in its own statcache pool
+  - `backend/src/grimoire/store/assets.py`: `names_in(..., with_refs=True)`; R12 in `put_in` / `link_in`
   - `backend/src/grimoire/store/image_descriptions.py`
   - `backend/src/grimoire/store/world_images.py`: `undescribed`, `has_undescribed`
   - `backend/src/grimoire/store/campaign_images.py`: `own_undescribed`
@@ -160,11 +169,17 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
   - `update(image_id, change) -> bool`. Every existing caller that ignored the return keeps working.
   - `MAX_DESCRIPTION = 4000`.
   - `read_fresh(image_id) -> ImageObject | None`, the same as `read` but bypassing statcache.
+  - `read` memoizes in `statcache` pool `"image_objects"` (check `statcache.memo`'s pool parameter; if pools need registering, register one sized like the default).
 - **Produces in `assets`:**
-  - `names_in(d, also="") -> tuple[set[str], bool]` is unchanged.
-  - New `refs_in(d) -> dict[str, image_refs.Ref]`, the scan `names_in` already does, exposed so a backlog walk reads placements once. Refactor `names_in` to use it.
+  - `names_in(d, also="", *, with_refs: bool = False)`. Without `with_refs` it returns `tuple[set[str], bool]` as today. With it, it returns `tuple[set[str], bool, dict[str, image_refs.Ref]]`, the refs from the one scan it already makes.
+  - A backlog walk calls it once per folder and never scans placements a second time.
 - **Produces in `image_descriptions`:**
-  - `text_in(d: Path, name: str, image_id: str | None = None) -> str | None` implements R1. `image_id` is the caller's known id, and when it is given, no placement is read. None means undescribed. A non-string legacy value counts as absent.
+  - `DescriptionTooLongError(ValueError)` (R9).
+  - `text_in(d: Path, name: str, *, known_id: str | None | object = UNKNOWN) -> str | None` implements R1.
+    - `UNKNOWN` (a module sentinel): read the placement.
+    - `None`: the caller's listing row has no id (a legacy row), so read no object.
+    - A string: use that id and read no placement.
+    - The return value None means undescribed. A non-string legacy value counts as absent.
   - `legacy_text_in(d: Path, name: str) -> str | None` returns only the raw legacy key.
   - `read_in(d, names=None, ids: dict[str, str] | None = None) -> dict[str, str]` applies R1 per present name. It uses `ids` (name → image_id from the caller's listing) when given; otherwise it does one `image_refs.scan(d)`.
   - `set_in(d, name, text, names=None, *, also_clear: Path | None = None) -> None` implements R2, R8 and R9 for one directory.
@@ -186,11 +201,17 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
     - set up a legacy `avatar.png` beside a ref whose object is absent;
     - `set_in` writes `descriptions.json`;
     - `text_in` returns the text.
-  - `test_an_unconfirmed_object_write_keeps_the_text_on_the_legacy_key` (B2): patch `image_store.read` to return None on its second call (inside `update`). The text is in `descriptions.json`, and the old key's text is replaced, not lost.
+  - `test_an_unconfirmed_object_write_keeps_the_text_on_the_legacy_key` (B2): monkeypatch `image_store.update` to return `False` without writing. The text is in `descriptions.json`, and the old key's text is replaced, not lost.
+  - `test_an_object_deleted_before_update_keeps_the_text`: delete the sidecar file from inside a wrapped `object_id_in` after it returns. The text lands in `descriptions.json`.
+  - `test_description_too_long_is_its_own_error`: `DescriptionTooLongError` is a `ValueError` subclass, distinct from the unknown-name `ValueError`.
   - `test_set_in_clears_the_also_clear_directory`: cleared after a confirmed object write; kept after a legacy write.
   - `test_carry_legacy_writes_only_the_key`.
   - `test_set_in_refuses_an_overlong_description`: 4001 characters raise `ValueError`; exactly 4000 pass.
-  - `test_put_in_drops_a_stale_caption_when_the_new_picture_is_described` (R12), plus the converse: an undescribed new picture keeps the old key.
+  - R12:
+    - `test_put_in_drops_a_stale_caption_when_a_different_described_picture_replaces_it`;
+    - converse: an undescribed new picture keeps the old key;
+    - `test_a_first_placement_keeps_its_legacy_key`: a legacy `map.png` with key `"K"`, `put_in` of the same picture whose object has another world's text: `"K"` still reads;
+    - `test_link_in_onto_an_empty_slot_keeps_a_carried_key`, the R5 order: carry the key, then `link_in` a described object, and the key still reads.
   - `test_backlogs_never_resolve_blobs`: patch `image_refs.resolve_ref` to raise. Then `undescribed_count`, `undescribed`, `has_undescribed`, `world_images.undescribed`, `world_images.has_undescribed` and `campaign_images.own_undescribed` are all correct, counting an object-described placement as described.
   - `test_a_world_library_image_described_through_set_in_leaves_the_queue` (B1, test_world_images_store), and the same for the campaign library (test_campaign_images_store).
   - `test_shell_undescribed_count_drops_after_describing_a_placement` (test_shell_route).
@@ -223,8 +244,8 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
 - **Consumes:** Task 1's `text_in`, `legacy_text_in`, `read_in(ids=)`, `set_in(also_clear=)`, `carry_legacy`, `object_id_in`.
 - **Produces:** unchanged public signatures. Behaviour:
   - **Visible text for a campaign name:**
-    - when the campaign holds the image, or it is tombstoned, or the campaign is detached: `text_in(campaign dir, name, id)`;
-    - otherwise: the campaign's `legacy_text_in` if it is a string, else `text_in(world dir, name, id)`.
+    - when the campaign holds the image, or it is tombstoned, or the campaign is detached: `text_in(campaign dir, name, known_id=<row id or None>)`;
+    - otherwise: the campaign's `legacy_text_in` if it is a string, else `text_in(world dir, name, known_id=<row id or None>)`.
     - The ids come from the `list_images` rows the overlay already builds. Pass them via `ids=`; never re-scan.
   - **`overlay.set_description` on an inherited name** (under `campaign_lock(cid)`, as today):
     - if `object_id_in(world dir, name)` resolves: `set_in(world_dir, name, text, names=union, also_clear=campaign_dir)`;
@@ -264,7 +285,10 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
 - **Consumes:** `greeting_images.catalog`, `image_refs.resolve`, `image_store.read`/`update` (`update -> bool`), and `worlds.paths.canonical_id`.
 - **Produces:**
   - Same signatures: `read_subjects`, `set_image_subjects`, `reviewed_names`, `untagged`, `appearances`.
-  - In `greeting_images`, `catalog(root, gid)`'s values gain an optional `"slot": (dir, name)` for own names and for local keys whose slot resolves, computed while it already resolves `local_path`. No second record read.
+  - In `greeting_images`:
+    - new internal `catalog_with_slots(root, gid) -> dict[str, tuple[dict, tuple[Path, str] | None]]`. It returns each entry plus its slot (own names, and local keys whose slot resolves), computed while it already resolves `local_path`, with no second record read.
+    - `catalog(root, gid)` wraps it and returns only the entries, so its public shape is unchanged and no filesystem path reaches an API response.
+    - `image_subjects` uses `catalog_with_slots`.
   - In `image_subjects`:
     - `_scope(root) -> str` returns `f"world:{canonical_id(root.name)}"` (R10).
     - `_placement_of(root, entry) -> tuple[Path, str] | None` returns the slot of the catalog entry when that slot lies **under `root`** and its placement resolves. A remote URL or a slot in another world's root gives None (R11).
@@ -285,10 +309,11 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
   - `test_scope_uses_the_canonical_world_id` (R10): `root.name` spelled `REALM` on a case-insensitive check. Simulate it by monkeypatching `canonical_id` if the test filesystem is case-sensitive.
   - `test_an_unconfirmed_object_write_keeps_the_sidecar_entry` (R8).
   - `test_appearances_finds_object_tags_without_a_sidecar`.
+  - `test_untagged_and_appearances_routes_expose_no_slot` (route): no `slot` key in either response.
 
 - [ ] **Step 2:** run them; they fail.
 - [ ] **Step 3:** implement, with tolerant reads (a malformed association list or a non-string id is ignored).
-- [ ] **Step 4:** run them, plus `tests/test_world_gallery_route.py tests/test_todo_route.py tests/test_greeting_images.py` (if present); they pass.
+- [ ] **Step 4:** run them, plus `tests/test_world_gallery_route.py tests/test_todo_route.py`; they pass.
 - [ ] **Step 5:** commit: `feat(images): greeting subjects are scoped associations on the image object`.
 
 ### Task 4: Scope lifecycle (`image_scopes`), wired into delete and fork
@@ -447,13 +472,14 @@ R1–R7 were decided with the user. R8–R13 come from the plan gate.
     - `PostImagePicker` passes `navigable={false}`, because it is a modal over a composer.
   - **Bucket → route** (check each one against `src/App.tsx` and correct any path that differs, keeping one test per bucket):
     - characters: `world:<wid>` → `/worlds/<wid>/characters/<id>`; `campaign:<cid>` → `/campaigns/<cid>/world/characters/<id>`;
-    - pcs → `/worlds/<wid>/pcs/<id>`;
-    - entities → `/worlds/<wid>/<kind>/<id>`;
+    - pcs: `world:` → `/worlds/<wid>/pcs/<id>`; `campaign:` → `/campaigns/<cid>/world/pcs/<id>`;
+    - entities: `world:` → `/worlds/<wid>/<kind>/<id>`; `campaign:` → the matching `/campaigns/<cid>/world/<kind>/<id>` route if App.tsx has one, else non-clickable;
     - greetings → `/worlds/<wid>/greetings/<id>`;
     - world_images → the world art page;
     - campaign_images → the campaign images page;
     - covers and collections → non-clickable.
   - No keyboard binding.
+  - The read-only "World images" tiles in ArtTab render no `ImageDescriptionField`, so they get no "Used in" control. This is intended: the panel sits beside the editable description.
 
 - [ ] **Step 1: Write the failing tests.**
   - `ImageUsage.test.tsx`:
