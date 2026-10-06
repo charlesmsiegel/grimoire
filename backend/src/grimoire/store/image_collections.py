@@ -95,7 +95,6 @@ def validate(raw: object) -> dict:
     return {"format": fmt, "members": list(members)}
 
 
-
 def read(wid: str, collection_id: str) -> dict:
     """`{"format": 1 | 2, "members": [...]}`. Raises `FileNotFoundError` for no
     such collection, and `CollectionInvalidError` for one that does not read."""
