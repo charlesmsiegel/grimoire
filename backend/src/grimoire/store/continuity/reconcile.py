@@ -46,12 +46,14 @@ campaign id plus the run's stamp -- the stamp is what makes the rotation real,
 since a seed of the campaign alone hands two runs the same offset and a text
 stuck there would be retried forever. `similarity.semantic` embeds in
 `embeddings.BATCH` chunks under one `embeddings.TIMEOUT` deadline, saving each
-chunk as it lands and forgetting off-width vectors. The required texts and the
-window go in separate calls, and a failed required call is retried once over a
-rotating proper subset of what it did not save: a changed ref left without a
-vector stays changed and so stays required, so a text the provider refuses
-would otherwise fail the window and every changed ref beside it on every sweep,
-which is the stuck head the rotation exists to remove. A provider failure is
+chunk as it lands and forgetting off-width vectors. The cap and that window are
+the run's (`EmbedBudget`): a follow-on pass embeds only what the first left.
+The required texts and the window go in separate calls, and a failed required
+call is retried once over a rotating proper subset of what it did not save: a
+changed ref left without a vector stays changed and so stays required, so a
+text the provider refuses would otherwise fail the window and every changed ref
+beside it on every sweep, which is the stuck head the rotation exists to
+remove. A provider failure is
 mode ``failure`` and one counts-only error row; the lexical candidates stand.
 While a space is configured, a ref left without a vector (a failure, or outside
 this run's window) is scored lexically but not reported rescored: its basis
@@ -132,10 +134,11 @@ from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 from . import candidates, canon, effective, involvement, pending, pressure, similarity
 
-#: Uncached texts one sweep may embed: four `embeddings.BATCH` round trips under
-#: one shared `embeddings.TIMEOUT`. Nobody waits on a sweep, but a live one
-#: refuses a storage move, so it is bounded like a reader-facing window and the
-#: rest rotate in over later runs. To be tuned against real prompts later.
+#: Uncached texts one run may embed, across its passes (`EmbedBudget`): four
+#: `embeddings.BATCH` round trips within one `embeddings.TIMEOUT` of embedding
+#: time. Nobody waits on a sweep, but a live one refuses a storage move, so it
+#: is bounded like a reader-facing window and the rest rotate in over later
+#: runs. To be tuned against real prompts later.
 RECONCILE_WARM_LIMIT = embeddings.BATCH * 4
 
 #: Pairs one sweep scores. A pair costs two comparisons of sets built once per
@@ -420,37 +423,60 @@ def _pairs(sweep: Sweep, current: pending.Current, subjects: list[similarity.Sub
 # --------------------------------------------------------------- embeddings
 
 
+class EmbedBudget:
+    """What one run may still embed (§9.4): `RECONCILE_WARM_LIMIT` texts and
+    `embeddings.TIMEOUT` seconds of embedding, shared by every pass of the run.
+    A follow-on pass (§11.1, Decision 6) gets only what the first left, so a
+    run with two passes costs and holds a storage move no longer than one
+    would. The time is charged while embedding, not while the run waits on
+    its model call, so a quick first pass leaves the follow-on its share."""
+
+    __slots__ = ("left", "seconds")
+
+    def __init__(self) -> None:
+        self.left = RECONCILE_WARM_LIMIT
+        self.seconds = embeddings.TIMEOUT
+
+
 def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
-              order: list[str]) -> similarity.Semantic:
+              order: list[str], budget: EmbedBudget) -> similarity.Semantic:
     """Vectors for the sweep (Decision 12): one probe of the cache, the changed
     refs' uncached texts required (incremental only), and a rotating window of
-    the other uncached texts, all within `RECONCILE_WARM_LIMIT`."""
+    the other uncached texts, all within what `budget` has left -- which this
+    pass then spends."""
     text_of = {s.ref: s.text for s in subjects}
     texts = list(dict.fromkeys(text_of[ref] for ref in sorted(text_of)))
     loaded = vectors.load(space["space"], texts)
     uncached = [t for t in texts if t not in loaded]
+    deadline = similarity.deadline(budget.seconds)
+    limit = max(budget.left, 0) if deadline is not None else 0
     required: list[str] = []
     if not sweep.full:
         changed = (text_of[ref] for ref in order if text_of[ref] not in loaded)
-        required = list(dict.fromkeys(changed))[:RECONCILE_WARM_LIMIT]
+        required = list(dict.fromkeys(changed))[:limit]
     need = set(required)
     seed = f"{cid}\0{sweep.stamp}"
-    room = max(RECONCILE_WARM_LIMIT - len(required), 0)
+    room = max(limit - len(required), 0)
     # Sliced as well: `warm_window` hands back a lone text whatever its limit,
     # which past a full `required` would embed one text over the bound.
     warm = embed_space.warm_window([t for t in uncached if t not in need], seed, room)[:room]
-    return similarity.semantic(required, warm, deadline=time.monotonic() + embeddings.TIMEOUT,
-                               space=space, cached=texts, warm_limit=RECONCILE_WARM_LIMIT,
-                               loaded=loaded, rotate=seed)
+    started = time.monotonic()
+    try:
+        return similarity.semantic(required, warm, deadline=deadline, space=space,
+                                   cached=texts, warm_limit=room, loaded=loaded,
+                                   rotate=seed)
+    finally:
+        budget.left -= len(required) + len(warm)
+        budget.seconds -= time.monotonic() - started
 
 
 def _embed(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Subject],
-           order: list[str]) -> dict[str, list[float]]:
+           order: list[str], budget: EmbedBudget) -> dict[str, list[float]]:
     """Run `_semantic`, record its mode on `sweep`, and answer its vectors. A
     failure (or anything unexpected) keeps basic matching and writes one
     counts-only error row."""
     failed = similarity.Semantic({}, "failure", error="unexpected")
-    sem = _soft(_semantic, failed, cid, sweep, space, subjects, order)
+    sem = _soft(_semantic, failed, cid, sweep, space, subjects, order, budget)
     sweep.embedding, sweep.embedding_error = sem.mode, sem.error
     if sem.mode == "failure":
         errors.record(_TASK, sem.error or "network", _SEMANTIC_UNAVAILABLE,
@@ -613,12 +639,14 @@ def _subjects(cid: str, current: pending.Current) -> tuple[list[similarity.Subje
 
 
 def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
-             embed: bool = True) -> Sweep:
+             embed: bool = True, budget: EmbedBudget | None = None) -> Sweep:
     """One discovery pass over the campaign's ledgers. Read-only on the
     campaign (the only write is the global vector cache, through
     `similarity.semantic`), and never raises for an existing campaign.
     `touched` names the records a scene moved (incremental sweeps only).
-    `embed` False skips the embedding step, leaving mode ``off``."""
+    `embed` False skips the embedding step, leaving mode ``off``. `budget` is
+    the run's (`EmbedBudget`), shared with a follow-on pass; a fresh one when
+    omitted."""
     sweep = Sweep(stamp, full)
     space = _soft(similarity.available, None)
     if space is not None:
@@ -635,7 +663,8 @@ def discover(cid: str, *, stamp: str, full: bool, touched: Iterable[str] = (),
     sweep.hashes = {s.ref: _identity_hash(sweep.space, s.text) for s in subjects}
     sweep.text_hashes = {s.ref: _text_hash(s.text) for s in subjects}
     order = _order(subjects, sweep.hashes, basis, sweep.full)
-    vecs = _embed(cid, sweep, space, subjects, order) if embed and space is not None else {}
+    vecs = (_embed(cid, sweep, space, subjects, order, budget or EmbedBudget())
+            if embed and space is not None else {})
     _pairs(sweep, current, subjects, order, vecs, pools_whole)
     now = _soft(clock.now, "", cid)
     found, moved, checked = _lifecycle(cid, current, _touched_refs(sweep, basis, touched), now)
