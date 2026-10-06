@@ -293,3 +293,31 @@ test("a run this card started names its own mode", async () => {
 
   expect(await screen.findByText(/Looking for unused images/)).toBeInTheDocument();
 });
+
+test("a minimal failure report renders rather than crashing the card", async () => {
+  // What a pass that raised before writing its own report used to leave: no
+  // lists and no counts. The card shows the failure and treats the rest as empty.
+  (api.getImageMaintenanceReport as any).mockResolvedValue({
+    kind: "image-migration", dry_run: false, outcome: "failed", state: "failed",
+    error: "OSError",
+  });
+  const { unmount } = render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Check" }));
+
+  expect(await screen.findByText(/Stopped \(failed\)\. OSError/)).toBeInTheDocument();
+  expect(screen.getByText(/0 legacy files found/)).toBeInTheDocument();
+  expect(screen.queryByRole("list", { name: "Left alone" })).not.toBeInTheDocument();
+  unmount();
+
+  for (const mode of ["scan", "collect"]) {
+    (api.getImageMaintenanceReport as any).mockResolvedValue({
+      kind: "image-gc", mode, state: "failed", error: "OSError",
+    });
+    const view = render(<ImageStoreCard />);
+    fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+    expect(await screen.findByText(/The run failed\. OSError/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Delete/ })).not.toBeInTheDocument();
+    view.unmount();
+  }
+});

@@ -42,7 +42,7 @@ from .models import ImageGcStart, ImageMigrationStart
 
 router = APIRouter()
 
-MIGRATION_KIND = "image-migration"
+MIGRATION_KIND = store.image_migration.KIND
 
 
 def _pinned(run: runs.Run) -> Path:
@@ -69,9 +69,10 @@ def _migration_work(dry_run: bool):
             # bug or a shutdown. The class of the exception only: its message
             # can carry a path or a name.
             maintenance_reports.write(root, run.id, {
+                **store.image_migration.failed_report(type(exc).__name__,
+                                                      dry_run=dry_run),
                 "kind": MIGRATION_KIND, "run_id": run.id, "mode": mode,
-                "dry_run": dry_run, "outcome": "failed", "state": "failed",
-                "error": type(exc).__name__})
+                "state": "failed"})
             raise
         maintenance_reports.write(root, run.id, report)
         return report
@@ -99,7 +100,8 @@ def post_images_migrate(
 ):
     dry_run = True if body is None else body.dry_run
     return runs.run_maintenance(request.app, "migrate", x_grimoire_attempt,
-                                _migration_work(dry_run))
+                                _migration_work(dry_run),
+                                mode="plan" if dry_run else "migrate")
 
 
 @router.post("/maintenance/images/gc", status_code=202)
@@ -109,7 +111,8 @@ def post_images_gc(
 ):
     dry_run = True if body is None else body.dry_run
     if dry_run:
-        return runs.run_maintenance(request.app, "gc", x_grimoire_attempt, _scan_work())
+        return runs.run_maintenance(request.app, "gc", x_grimoire_attempt, _scan_work(),
+                                    mode="scan")
     token = (body.token if body is not None else None) or ""
     if not token.strip():
         raise HTTPException(status_code=400, detail={
@@ -117,7 +120,7 @@ def post_images_gc(
             "detail": "deleting unused images needs the token a dry run issued; "
                       "run Find unused images first"})
     return runs.run_maintenance(request.app, "gc", x_grimoire_attempt,
-                                _collect_work(token.strip()))
+                                _collect_work(token.strip()), mode="collect")
 
 
 @router.get("/maintenance/images/reports/{run_id}")

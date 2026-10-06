@@ -240,7 +240,8 @@ export function ImageStoreCard() {
 function deletable(r: ImageGcReport): { token: string; count: number } | null {
   if (r.mode !== "scan" || r.state !== "complete" || !r.token) return null;
   if (r.token_expires_at !== null && r.token_expires_at * 1000 <= Date.now()) return null;
-  const count = r.collectable.length + r.collectable_blobs.length;
+  const p: Partial<ImageGcReport> = r;
+  const count = (p.collectable ?? []).length + (p.collectable_blobs ?? []).length;
   return count > 0 ? { token: r.token, count } : null;
 }
 
@@ -267,9 +268,17 @@ function Rows({ rows, label }: { rows: { path: string; reason: string }[]; label
   );
 }
 
+/** A stored report is read as possibly partial: a pass that raised before
+ *  writing its own leaves a minimal one, and one written by an older build may
+ *  lack a list or a count. A missing list is empty and a missing count zero,
+ *  rather than a card that throws. */
 function MigrationReport({ report }: { report: ImageMigrationReport }) {
+  const r: Partial<ImageMigrationReport> = report;
   const planned = report.dry_run;
   const stopped = report.outcome !== "done";
+  const exact = r.exact_duplicates ?? 0;
+  const conflicts = r.description_conflicts ?? 0;
+  const errors = r.errors ?? [];
   return (
     <div className="image-store-report">
       {stopped && (
@@ -281,36 +290,40 @@ function MigrationReport({ report }: { report: ImageMigrationReport }) {
         </p>
       )}
       <p className="field-hint">
-        {plural(report.legacy_files, "legacy file", "legacy files")} found, holding{" "}
-        {plural(report.unique_images, "unique image", "unique images")}
-        {report.exact_duplicates > 0
-          ? ` (${plural(report.exact_duplicates, "exact duplicate", "exact duplicates")})` : ""}.
+        {plural(r.legacy_files ?? 0, "legacy file", "legacy files")} found, holding{" "}
+        {plural(r.unique_images ?? 0, "unique image", "unique images")}
+        {exact > 0
+          ? ` (${plural(exact, "exact duplicate", "exact duplicates")})` : ""}.
         {planned
-          ? ` Migrating would free ${formatSize(report.bytes_reclaimed)}.`
-          : ` ${plural(report.placed, "image", "images")} placed and `
-            + `${plural(report.legacy_deleted, "legacy file", "legacy files")} removed, `
-            + `freeing ${formatSize(report.bytes_reclaimed)}.`}
-        {report.description_conflicts > 0
-          ? ` ${plural(report.description_conflicts, "image has", "images have")} `
+          ? ` Migrating would free ${formatSize(r.bytes_reclaimed ?? 0)}.`
+          : ` ${plural(r.placed ?? 0, "image", "images")} placed and `
+            + `${plural(r.legacy_deleted ?? 0, "legacy file", "legacy files")} removed, `
+            + `freeing ${formatSize(r.bytes_reclaimed ?? 0)}.`}
+        {conflicts > 0
+          ? ` ${plural(conflicts, "image has", "images have")} `
             + "descriptions that disagree; both are kept for you to choose." : ""}
       </p>
-      <Rows rows={report.untouched} label="Left alone" />
-      {report.errors.length > 0 && (
+      <Rows rows={r.untouched ?? []} label="Left alone" />
+      {errors.length > 0 && (
         <p className="config-msg err">
-          {plural(report.errors.length, "step failed", "steps failed")} and was left as it was:{" "}
-          {report.errors.map((e) => [e.path, e.reason ?? e.error].filter(Boolean).join(" — ")).join("; ")}
+          {plural(errors.length, "step failed", "steps failed")} and was left as it was:{" "}
+          {errors.map((e) => [e.path, e.reason ?? e.error].filter(Boolean).join(" — ")).join("; ")}
         </p>
       )}
     </div>
   );
 }
 
+/** Read as possibly partial, for `MigrationReport`'s reason. */
 function GcReport({ report }: { report: ImageGcReport }) {
   if (report.mode === "collect") return <CollectReport report={report} />;
-  const now = report.counts.collectable + report.counts.collectable_blobs;
+  const r: Partial<ImageGcReport> = report;
+  const now = (r.counts?.collectable ?? 0) + (r.counts?.collectable_blobs ?? 0);
+  const skew = r.clock_skew ?? [];
+  const unreadable = r.unreadable_sidecars ?? [];
   const dated = new Map<string, number>();
   let undated = 0;
-  for (const row of report.protected) {
+  for (const row of r.protected ?? []) {
     if (row.collectable_at === null) undated += 1;
     else {
       const when = day(row.collectable_at);
@@ -324,10 +337,10 @@ function GcReport({ report }: { report: ImageGcReport }) {
         <p className="field-hint">
           {now > 0
             ? `${plural(now, "unused image", "unused images")} can be deleted now, `
-              + `freeing ${formatSize(report.reclaimable_bytes)}.`
+              + `freeing ${formatSize(r.reclaimable_bytes ?? 0)}.`
             : "No unused images can be deleted yet."}
-          {" "}{plural(report.counts.objects, "image", "images")} in the store,{" "}
-          {plural(report.counts.unreferenced, "image is", "images are")} not used by anything.
+          {" "}{plural(r.counts?.objects ?? 0, "image", "images")} in the store,{" "}
+          {plural(r.counts?.unreferenced ?? 0, "image is", "images are")} not used by anything.
         </p>
       )}
       {[...dated.entries()].map(([when, n]) => (
@@ -341,15 +354,15 @@ function GcReport({ report }: { report: ImageGcReport }) {
           {plural(undated, "image", "images")} cannot be dated: see the notes below.
         </p>
       )}
-      {report.clock_skew.length > 0 && (
+      {skew.length > 0 && (
         <p className="config-msg err">
-          {plural(report.clock_skew.length, "image has", "images have")} a timestamp in the
+          {plural(skew.length, "image has", "images have")} a timestamp in the
           future and will not be collected until the clock catches up.
         </p>
       )}
-      {report.unreadable_sidecars.length > 0 && (
+      {unreadable.length > 0 && (
         <Rows label="Unreadable records"
-              rows={report.unreadable_sidecars.map((path) => ({ path, reason: "unreadable" }))} />
+              rows={unreadable.map((path) => ({ path, reason: "unreadable" }))} />
       )}
     </div>
   );
@@ -371,23 +384,25 @@ function Stopped({ report }: { report: ImageGcReport }) {
         {lead[report.state] ?? `Stopped (${report.state}).`}
         {report.error ? ` ${report.error}` : ""}
       </p>
-      <Rows rows={report.blocking} label="Blocking paths" />
+      <Rows rows={(report as Partial<ImageGcReport>).blocking ?? []} label="Blocking paths" />
     </>
   );
 }
 
 function CollectReport({ report }: { report: ImageGcReport }) {
-  const n = report.deleted.objects.length;
+  const r: Partial<ImageGcReport> = report;
+  const n = (r.deleted?.objects ?? []).length;
+  const skipped = r.skipped ?? [];
   return (
     <div className="image-store-report">
       <Stopped report={report} />
       {(report.state === "complete" || n > 0) && (
         <p className="field-hint">
           Deleted {plural(n, "unused image", "unused images")}, freeing{" "}
-          {formatSize(report.deleted.bytes)}.
-          {report.skipped.length > 0
-            ? ` ${plural(report.skipped.length, "image was", "images were")} left `
-              + `(${[...new Set(report.skipped.map((s) => s.reason))].join(", ")}).` : ""}
+          {formatSize(r.deleted?.bytes ?? 0)}.
+          {skipped.length > 0
+            ? ` ${plural(skipped.length, "image was", "images were")} left `
+              + `(${[...new Set(skipped.map((s) => s.reason))].join(", ")}).` : ""}
         </p>
       )}
     </div>
