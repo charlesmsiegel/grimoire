@@ -650,14 +650,16 @@ def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -
 
 async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
                       touched: tuple[str, ...], progress: dict,
+                      budget: reconcile.EmbedBudget,
                       malformed: str = _MALFORMED) -> dict:
     """Steps 1-7 of one pass (§11.1), as the run's outcome. Sets
     ``progress["saved"]`` once persist 1 has landed: from then on the section
     lists what this sweep found, whatever the rest of the run does (§26).
-    `malformed` is what a refusal before persist 1 says it lost."""
+    `malformed` is what a refusal before persist 1 says it lost. `budget` is
+    the run's embedding allowance, which every pass draws on (§9.4)."""
     sweep = await run_in_threadpool(reconcile.discover, cid,
                                     stamp=reconcile.generation(run.id),
-                                    full=full, touched=touched)
+                                    full=full, touched=touched, budget=budget)
     result = _blank_result(full, sweep)
 
     def stillborn() -> bool:
@@ -695,10 +697,13 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     `sweep` (a Refresh that absorbed an End Scene still reads ``full``) with
     `follow_on` and the last pass's counts. A failure from then on sets
     ``progress["follow_on"]``: the first pass's findings stand whatever it
-    was, so the failure is the follow-on pass's alone."""
+    was, so the failure is the follow-on pass's alone. Both passes draw on one
+    `reconcile.EmbedBudget`: `RECONCILE_WARM_LIMIT` and the embedding window
+    are the run's (§9.4), so the follow-on embeds only what the first left."""
     refs = set(touched) if full else set(touched) | _take_touched(app, cid)
+    budget = reconcile.EmbedBudget()
     outcome = await _sweep_pass(run, cid, client, full=full, touched=tuple(sorted(refs)),
-                                progress=progress)
+                                progress=progress, budget=budget)
     if outcome["state"] != "landed" or run.cancel_requested or run.forgotten:
         return outcome
     more = _take_touched(app, cid)
@@ -707,7 +712,8 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     first = outcome["result"]["sweep"]
     progress["follow_on"] = True
     follow = await _sweep_pass(run, cid, client, full=False, touched=tuple(sorted(more)),
-                               progress=progress, malformed=_MALFORMED_FOLLOW_ON)
+                               progress=progress, budget=budget,
+                               malformed=_MALFORMED_FOLLOW_ON)
     out = {**follow, "result": {**(follow.get("result") or {}), "sweep": first,
                                 "follow_on": True}}
     if follow.get("error"):

@@ -757,6 +757,35 @@ def test_sweep_embeds_at_most_the_warm_limit(cid, s0, fake, monkeypatch):
     assert len(loads) == 2                      # one read of the cache per sweep
 
 
+def test_a_runs_passes_share_one_embedding_budget(cid, s0, monkeypatch):
+    """§9.4: the cap and the `embeddings.TIMEOUT` window are the run's. A second
+    discovery under the same `EmbedBudget` (a follow-on pass, §11.1) embeds
+    nothing once the first spent the time, and that is no provider failure:
+    what it left uncached rotates in on a later run."""
+    _configure()
+    _chores(cid, s0, n=3)
+    monkeypatch.setattr(embeddings, "TIMEOUT", 0.2)
+
+    def slow(text):
+        time.sleep(0.15)                        # two texts spend the window
+        return [1.0, 0.0]
+
+    double = FakeEmbeddings(vector_for=slow)
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    budget = reconcile.EmbedBudget()
+    reconcile.discover(cid, stamp="00000000000000000010-a", full=True, budget=budget)
+    assert len(_sent(double)) == 2              # `warm_window`: a proper subset of three
+    assert budget.left == reconcile.RECONCILE_WARM_LIMIT - 2
+    assert budget.seconds <= 0
+
+    plot.set_movement(cid, "saltmarch-errand-late", "Saltmarch late errand", "open",
+                      "A late errand began.", s0)
+    sweep = reconcile.discover(cid, stamp="00000000000000000020-b", full=True,
+                               budget=budget)
+    assert len(double.calls) == 1               # nothing sent past the run's window
+    assert sweep.embedding == "configured"
+
+
 def test_incremental_changed_texts_are_required(cid, s0, fake, monkeypatch):
     _configure()
     texts = _chores(cid, s0)

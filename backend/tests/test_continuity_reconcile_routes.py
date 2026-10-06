@@ -26,13 +26,15 @@ from grimoire.main import create_app
 from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import runs
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import candidates, canon, doc, reconcile
+from grimoire.store.continuity import candidates, canon, doc, reconcile, similarity
 
 from . import draft_runs, review_runs
-from .llm_fakes import Cassette, HeldCassette, from_cassette, from_entries
+from .llm_fakes import Cassette, FakeEmbeddings, HeldCassette, from_cassette, from_entries
 from .review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER
 from .test_absorb_identity import MODES as SHARED_MODES
 from .test_absorb_identity import ROW_ENVELOPE, _dumped, _leaked, _row_texts
+from .test_continuity_reconcile import _chores as chores
+from .test_continuity_reconcile import _configure as configure_embeddings
 
 SYSTEM = "You are reviewing a campaign's story ledger"
 LEDGER = f"thread:{LEDGER_THREAD[0]}"
@@ -811,6 +813,41 @@ def test_a_first_pass_failure_is_not_a_follow_on(client, monkeypatch):
     run = _settled(client, cid, _refresh(client, cid))
 
     assert (run["error"]["kind"], run["error"]["follow_on"]) == ("undecodable", False)
+
+
+def test_a_follow_on_pass_embeds_within_what_the_run_has_left(client, monkeypatch):
+    """§9.4: `RECONCILE_WARM_LIMIT` and the embedding window are the run's, not
+    each pass's -- a follow-on embeds only what the first pass left of them
+    (one `reconcile.EmbedBudget`), so a run with two passes costs and refuses a
+    storage move no longer than one would."""
+    _wid, cid, sid = _campaign(client)
+    _key(client)
+    configure_embeddings()
+    texts = chores(cid, sid)
+    double = FakeEmbeddings()
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    monkeypatch.setattr(reconcile, "RECONCILE_WARM_LIMIT", 4)
+    budgets: list[object] = []
+    real = reconcile.discover
+
+    def spy(*args, **kwargs):
+        budgets.append(kwargs.get("budget"))
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(reconcile, "discover", spy)
+    fake = _install(client, from_entries([_entry(_reply())]))
+    client.app.state.runs.pend_touched(runs.campaign_subject(cid),
+                                       {"thread:saltmarch-errand-0"})
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["follow_on"] is True
+    assert len(_reconcile_requests(fake)) == 2           # two passes ran
+    sent = [text for call in double.calls for text in call]
+    assert set(sent) <= set(texts.values())
+    assert len(sent) <= 4, sent
+    assert len(budgets) == 2 and budgets[0] is not None and budgets[0] is budgets[1]
 
 
 @pytest.mark.reconcile
