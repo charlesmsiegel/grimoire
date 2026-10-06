@@ -794,8 +794,11 @@ def image_ingest_gc_lock() -> _ProcessScopedLock:
 #: `image_sidecar_lock`). Bounded for the reason `IMAGE_OBJECT_STRIPES` is: a
 #: lock per name would leave one lock file per image name ever written.
 IMAGE_NAME_STRIPES = 256
-_NAME_DOMAIN = "image-names"
-_SIDECAR_DOMAIN = "image-sidecars"
+#: The stripe scheme is IN the domain names, so a server running a different
+#: scheme (another stripe count or key) shares no lock file with this one and
+#: cannot hold a lock this one reads as some other name's stripe.
+_NAME_DOMAIN = f"image-names-v1-{IMAGE_NAME_STRIPES}"
+_SIDECAR_DOMAIN = f"image-sidecars-v1-{IMAGE_NAME_STRIPES}"
 _image_stripe_locks: dict[tuple[str, str, int], StripeLock] = {}
 #: How many stripe acquisitions (either family, reentrant ones included) the
 #: current thread holds -- what `image_stripes_held` answers from.
@@ -821,6 +824,13 @@ class StripeLock(_ProcessScopedLock):
             if owned:
                 _stripe_holds.n -= 1
 
+    def __enter__(self):
+        # "this image is busy": what a waiter on any stripe was writing. The
+        # stripe's own name would mean nothing to whoever reads the 409.
+        if not self.acquire(timeout=LOCK_TIMEOUT):
+            raise StoreBusy(self._name, "image")
+        return self
+
 
 def image_stripes_held() -> bool:
     """Whether the current thread holds any image name or sidecar stripe.
@@ -836,8 +846,19 @@ def _image_stripe(d: Path, key: str) -> int:
     """The stripe of `key` (an image name or a sidecar filename) in directory
     `d`: the resolved, case-normalised directory and the case-FOLDED key, so a
     name and its case variant -- one file on a case-insensitive filesystem --
-    are always one lock, and the same directory spelled two ways is one too."""
-    where = os.path.normcase(str(Path(d).resolve()))
+    are always one lock, and the same directory spelled two ways is one too.
+
+    The directory is taken RELATIVE to the resolved store root when it is under
+    it (the absolute path only when it is not). The lock files already live in
+    a per-store directory keyed on the root's identity, so two processes that
+    spell one store's root differently -- `/Users/A/Store` and
+    `/users/a/store` on a case-insensitive POSIX volume, where `normcase` folds
+    nothing -- must still land on the same stripe for the same directory."""
+    resolved = Path(d).resolve()
+    try:
+        where = "store:" + os.path.normcase(resolved.relative_to(paths.home().resolve()).as_posix())
+    except ValueError:
+        where = "abs:" + os.path.normcase(str(resolved))
     digest = hashlib.sha256(
         f"{where}\0{key.casefold()}".encode("utf-8", "surrogateescape")).digest()
     return int.from_bytes(digest[:8], "big") % IMAGE_NAME_STRIPES

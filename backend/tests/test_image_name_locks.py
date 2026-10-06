@@ -46,7 +46,7 @@ from grimoire.store import (
 
 from .world_fixtures import seed_world
 
-_FAMILIES = ("image-names", "image-sidecars")
+_FAMILIES = (locks._NAME_DOMAIN, locks._SIDECAR_DOMAIN)
 
 
 @pytest.fixture(autouse=True)
@@ -249,9 +249,13 @@ def _crossing_workers(root: Path) -> list:
 def test_a_nested_heal_never_waits(monkeypatch, tmp_path):
     """Deterministically, the half of the test above that has to hold: a heal
     reached while this thread holds a stripe skips a busy lock instead of
-    waiting on it."""
+    waiting on it.
+
+    Timed, not merely "returns": a heal that waited would also return, once
+    the timeout ran out and its `StoreBusy` was swallowed. With a 2 s timeout,
+    returning inside 0.2 s is what proves it never waited."""
     monkeypatch.setattr(locks, "_image_stripe", _forced_stripes)
-    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.5)
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
     root = tmp_path / "root"
     assets.put_image(root, "sera", "default", "gallery_1", _png(1), "png")
     d = assets.version_dir(root, "sera", "default")
@@ -259,13 +263,123 @@ def test_a_nested_heal_never_waits(monkeypatch, tmp_path):
     done = _hold(locks.image_name_lock(d, "promote-tmp"))
     try:
         with assets._image_lock(d, "gallery_1"):
+            started = time.monotonic()
             assets._heal_stranded_promotion(d)          # returns; does not raise
+            took = time.monotonic() - started
+        assert took < 0.2, f"the nested heal waited {took:.2f}s"
         assert (d / "promote-tmp.png").exists()          # skipped, left for the next scan
     finally:
         done()
     assets._heal_stranded_promotion(d)                   # not nested, lock free: heals
     assert not (d / "promote-tmp.png").exists()
     assert assets.path_in(d, assets.AVATAR) is not None
+
+
+def test_a_writer_never_writes_over_a_journal_its_recovery_skipped(monkeypatch, tmp_path):
+    """A writer runs the promotion recovery under its own name lock, and the
+    recovery never waits -- so a write to an unrelated name sharing one of the
+    journal's stripes makes it skip. Writing anyway moved the slot out of its
+    `pre`/`post` states, the next recovery discarded the journal as stale, and
+    the picture only the journal still named (mid-swap, the old avatar) was
+    gone. The writer refuses instead, and the swap finishes once the stripe is
+    free."""
+    stripes = {"avatar": 1, "gallery_1": 7, "gallery_9": 7}
+    monkeypatch.setattr(locks, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 3))
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 2.0)
+    root = tmp_path / "root"
+    assets.put_image(root, "sera", "default", assets.AVATAR, _png(1), "png")
+    assets.put_image(root, "sera", "default", "gallery_1", _png(2), "png")
+    d = assets.version_dir(root, "sera", "default")
+    a, g = (image_refs.read(d, n).image for n in (assets.AVATAR, "gallery_1"))
+    # A promotion of gallery_1 interrupted after its first write: the avatar
+    # slot already holds g, and `a` survives only in the journal.
+    image_refs.write_journal(d, {"name": "gallery_1",
+                                 "pre": {"avatar": a, "gallery_1": g},
+                                 "post": {"avatar": g, "gallery_1": a},
+                                 "desc": {"avatar": None, "gallery_1": None}})
+    image_refs.write(d, assets.AVATAR, g)
+    other = assets.version_dir(root, "mara", "default")
+
+    done = _hold(locks.image_name_lock(other, "gallery_9"))      # in flight elsewhere
+    try:
+        # Every writer of the avatar slot -- the one slot the journal names
+        # whose stripe is free here (gallery_1's is the busy one).
+        for write in (lambda: assets.put_in(d, assets.AVATAR, _png(3), "png"),
+                      lambda: assets.link_in(d, assets.AVATAR, a),
+                      lambda: assets.delete_in(d, assets.AVATAR),
+                      lambda: assets.write_focus(root, "sera", "default", 20)):
+            with pytest.raises(OSError, match="still unfinished"):
+                write()
+        # A slot the journal does not name is not held back.
+        assets.put_in(d, "gallery_2", _png(4), "png")
+        assert image_refs.read_journal(d) is not None
+    finally:
+        done()
+    assets.list_images(root, "sera", "default")
+    assert image_refs.read_journal(d) is None
+    assert (image_refs.read(d, assets.AVATAR).image, image_refs.read(d, "gallery_1").image) == (g, a)
+
+
+def test_copy_slots_never_writes_over_a_skipped_journal(monkeypatch, tmp_path):
+    stripes = {"avatar": 1, "gallery_1": 7, "gallery_9": 7}
+    monkeypatch.setattr(locks, "_image_stripe", lambda dd, key: stripes.get(key.casefold(), 3))
+    src = tmp_path / "src"
+    assets.put_in(src, assets.AVATAR, _png(5), "png")
+    dst = tmp_path / "dst"
+    assets.put_in(dst, "gallery_1", _png(6), "png")
+    g = image_refs.read(dst, "gallery_1").image
+    image_refs.write_journal(dst, {"name": "gallery_1",
+                                   "pre": {"avatar": None, "gallery_1": g},
+                                   "post": {"avatar": g, "gallery_1": None},
+                                   "desc": {"avatar": None, "gallery_1": None}})
+    done = _hold(locks.image_name_lock(tmp_path / "elsewhere", "gallery_9"))
+    try:
+        with pytest.raises(OSError, match="still unfinished"):
+            assets.copy_slots(src, dst)
+        assert image_refs.read(dst, assets.AVATAR) is None
+    finally:
+        done()
+    assets.copy_slots(src, dst)
+    assert image_refs.read_journal(dst) is None
+    assert image_refs.read(dst, assets.AVATAR).image == g      # the promotion won
+
+
+# ---- stripe keys -----------------------------------------------------------
+
+def test_a_directory_keys_relative_to_the_store_root(monkeypatch, tmp_path):
+    """Two spellings of one store's root (a case-insensitive POSIX volume folds
+    nothing through `normcase`) must give one directory one stripe. Stood in
+    for by two roots: the same relative directory keys the same under each."""
+    stripes = []
+    for spelling in ("Store", "store-elsewhere"):
+        root = tmp_path / spelling
+        monkeypatch.setenv("GRIMOIRE_HOME", str(root))
+        d = root / "characters" / "sera" / "assets" / "default"
+        stripes.append([locks._image_stripe(d, n) for n in ("avatar", "gallery_1", "gallery_2")])
+    assert stripes[0] == stripes[1]
+    # A directory outside the store keys on its absolute path, never on a
+    # relative one it happens to share with a directory inside.
+    outside = tmp_path / "outside" / "characters" / "sera" / "assets" / "default"
+    assert locks._image_stripe(outside, "avatar") == locks._image_stripe(outside, "Avatar")
+
+
+def test_the_stripe_scheme_is_in_the_lock_domain(tmp_path):
+    d = tmp_path / "v"
+    assert locks.image_name_lock(d, "avatar")._domain == (
+        f"image-names-v1-{locks.IMAGE_NAME_STRIPES}")
+    assert locks.image_sidecar_lock(d, "descriptions.json")._domain == (
+        f"image-sidecars-v1-{locks.IMAGE_NAME_STRIPES}")
+
+
+def test_a_busy_stripe_says_the_image_is_busy(monkeypatch, tmp_path):
+    monkeypatch.setattr(locks, "LOCK_TIMEOUT", 0.2)
+    d = tmp_path / "v"
+    done = _hold(locks.image_name_lock(d, "avatar"))
+    try:
+        with pytest.raises(locks.StoreBusy, match="this image is busy"):
+            assets.put_in(d, assets.AVATAR, _png(7), "png")
+    finally:
+        done()
 
 
 # ---- two instances, one file lock ------------------------------------------
@@ -388,7 +502,7 @@ def test_set_in_takes_both_sidecar_stripes_before_either_write(monkeypatch, tmp_
     real = locks._ProcessScopedLock.acquire
 
     def acquire(self, blocking=True, timeout=-1):
-        if self._domain == "image-sidecars" and not self._is_owned():
+        if self._domain == locks._SIDECAR_DOMAIN and not self._is_owned():
             taken.append(self)
         return real(self, blocking, timeout)
 
