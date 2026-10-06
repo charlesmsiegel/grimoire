@@ -1,6 +1,7 @@
 import { api, ApiError, invalidateConfigCache, RefreshRefused } from "./client";
 import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
+import type { DriverLink, GraphEdge, LinkRelation, StoryGraph } from "./types";
 import { THUMB_REV } from "./thumbs";
 
 test("referenced image subjects send the full URL in the body rather than a route segment", async () => {
@@ -2649,4 +2650,53 @@ test("continuityDrivers reads fresh", async () => {
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/c/continuity/drivers");
   expect((fetchMock.mock.calls[0][1] as { method: string }).method).toBe("GET");
+});
+
+test("continuityGraph reads fresh and encodes the campaign", async () => {
+  // A lens change never re-reads, so the one read a mount makes must be its
+  // own. `request` shares only an in-flight GET, so the two calls overlap: the
+  // first is still open when the second is issued, and a shared read would
+  // reach `fetch` once.
+  const graph: StoryGraph = {
+    now: { native: "", friendly: "", fixed: null }, nodes: [], edges: [], omitted: [],
+  };
+  let releaseFirst: (v: unknown) => void = () => {};
+  const fetchMock = vi
+    .fn()
+    .mockImplementationOnce(() => new Promise((r) => { releaseFirst = r; }))
+    .mockResolvedValue(jsonOk(graph));
+  globalThis.fetch = fetchMock;
+
+  const older = api.continuityGraph("a b");   // in flight, unresolved
+  const newer = api.continuityGraph("a b");   // issues its own, not shared
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  for (const [url, init] of fetchMock.mock.calls as [string, { method: string }][]) {
+    expect(url).toBe("/api/campaigns/a%20b/continuity/graph");
+    expect(init.method).toBe("GET");
+  }
+
+  expect(await newer).toEqual(graph);
+  releaseFirst(jsonOk(graph));
+  expect(await older).toEqual(graph);
+});
+
+test("an edge's relation is typed by its kind, and a driver link's is a LinkRelation", () => {
+  // Type-level pins, checked by `tsc` (§20: typed unions, not open string
+  // bags); the runtime asserts only keep the bindings used.
+  const relationOf = (e: GraphEdge): LinkRelation | null => {
+    if (e.kind !== "link") return null;
+    const r: LinkRelation = e.relation;
+    return r;
+  };
+  const d: LinkRelation = ({ relation: "pays_off" } as DriverLink).relation;
+  // @ts-expect-error a driver link names one of the reviewed-link relations
+  const bad: DriverLink["relation"] = "not_a_relation";
+
+  expect(relationOf({ id: "e", kind: "link", from: "thread:a", to: "thread:b",
+                      source: "reviewed", relation: "continues", candidate_id: null }))
+    .toBe("continues");
+  expect(relationOf({ id: "f", kind: "appeared_in", from: "characters:mara",
+                      to: "scene:s1", source: "structural", relation: null,
+                      candidate_id: null })).toBeNull();
+  expect([d, bad]).toEqual(["pays_off", "not_a_relation"]);
 });
