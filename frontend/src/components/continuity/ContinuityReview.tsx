@@ -184,7 +184,8 @@ export function ContinuityReview(
 ) {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /** A refused reviewed/dismissed action, held with the campaign it was for. */
+  const [error, setError] = useState<{ cid: string; text: string } | null>(null);
   /** A refusal of an action on the open finding. */
   const [detailError, setDetailError] = useState<DetailError | null>(null);
   /** Findings an action was told are no longer pending (404), held with the
@@ -203,16 +204,18 @@ export function ContinuityReview(
     if (candidate) setDone(null);
   }, [candidate]);
 
-  /** One reviewed or dismissed write, then the shared re-read (one epoch). */
+  /** One reviewed or dismissed write, then the shared re-read (one epoch).
+   *  An answer that lands after a campaign switch is the old campaign's: it
+   *  neither re-reads the new one nor lays its refusal over it. */
   async function perform(write: () => Promise<unknown>) {
     if (busy) return;
     setBusy(true);
     setError(null);
     try {
       await write();
-      review.wrote();
+      if (openRef.current.cid === cid) review.wrote();
     } catch (err: unknown) {
-      setError(errorText(err));
+      if (openRef.current.cid === cid) setError({ cid, text: errorText(err) });
     } finally {
       setBusy(false);
     }
@@ -297,7 +300,8 @@ export function ContinuityReview(
         </div>
         <RefreshControl review={review} />
       </div>
-      {error && <p className="continuity-error" role="alert">{error}</p>}
+      {error && error.cid === cid
+        && <p className="continuity-error" role="alert">{error.text}</p>}
       {group === "reviewed" ? (
         <ReviewedGroup state={review.state} busy={busy}
                        onUnmerge={(ref) => { void perform(() => api.removeAlias(cid, ref)); }}

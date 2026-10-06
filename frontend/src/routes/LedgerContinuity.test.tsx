@@ -618,6 +618,77 @@ test("a dismissed finding is restorable", async () => {
     .toBeGreaterThan(reads));
 });
 
+/** The reviewed group, with a way to switch campaign while staying mounted. */
+function renderReviewedSwitchable() {
+  return render(
+    <MemoryRouter initialEntries={["/campaigns/run/ledger/continuity/reviewed"]}>
+      <SwitchTo to="/campaigns/other/ledger/continuity/reviewed" />
+      <Routes>
+        <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+}
+
+const readsFor = (fn: unknown, cid: string) =>
+  (fn as any).mock.calls.filter((c: unknown[]) => c[0] === cid).length;
+
+test("a reviewed action refused after a campaign switch says nothing on the new campaign",
+     async () => {
+  const write = deferred<never>();
+  (api.removeAlias as any).mockReturnValueOnce(write.promise);
+  renderReviewedSwitchable();
+  fireEvent.click(await main().findByRole("button", { name: "Unmerge Mara's map" }));
+  fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
+  await waitFor(() => expect(api.getContinuity).toHaveBeenCalledWith("other"));
+  await act(async () => {
+    write.reject(new ApiError(409, "that merge changed", "conflict"));
+  });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(screen.queryByText("that merge changed")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  // The new campaign's buttons are not left waiting on the old write.
+  expect(await main().findByRole("button", { name: "Unmerge Mara's map" })).toBeEnabled();
+});
+
+test("a reviewed action landing after a campaign switch re-reads nothing for the new one",
+     async () => {
+  const write = deferred<{ ok: true }>();
+  (api.restoreSuppression as any).mockReturnValueOnce(write.promise);
+  render(
+    <MemoryRouter initialEntries={["/campaigns/run/ledger/continuity/dismissed"]}>
+      <SwitchTo to="/campaigns/other/ledger/continuity/dismissed" />
+      <Routes>
+        <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const dismissed = await main().findByRole("listitem", { name: /mara's map \/ winifred's chart/i });
+  fireEvent.click(within(dismissed).getByRole("button", { name: /^Restore/ }));
+  fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
+  await waitFor(() => expect(api.getContinuity).toHaveBeenCalledWith("other"));
+  await main().findByRole("listitem", { name: /mara's map \/ winifred's chart/i });
+  const ledgerReads = readsFor(api.campaignLedger, "other");
+  const continuityReads = readsFor(api.getContinuity, "other");
+  await act(async () => { write.resolve({ ok: true }); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+  expect(readsFor(api.campaignLedger, "other")).toBe(ledgerReads);
+  expect(readsFor(api.getContinuity, "other")).toBe(continuityReads);
+});
+
+test("a refusal shown before a campaign switch does not follow the reader", async () => {
+  (api.removeLink as any).mockRejectedValueOnce(
+    new ApiError(409, "that link changed", "conflict"));
+  renderReviewedSwitchable();
+  const link = await main().findByRole("listitem", { name: /the coronation/i });
+  fireEvent.click(within(link).getByRole("button", { name: /^Remove link/ }));
+  expect(await main().findByText("that link changed")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
+  await waitFor(() => expect(api.getContinuity).toHaveBeenCalledWith("other"));
+  await main().findByRole("listitem", { name: /the coronation/i });
+  expect(screen.queryByText("that link changed")).toBeNull();
+});
+
 test("the candidates read failing costs only its section", async () => {
   (api.continuityCandidates as any).mockRejectedValue(new Error("boom"));
   (api.campaignLedger as any).mockResolvedValue({
