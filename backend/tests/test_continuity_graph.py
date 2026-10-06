@@ -1081,6 +1081,14 @@ def test_graph_makes_no_model_call(monkeypatch, tmp_path):
     _RecordingEmbeddings.built = []
     monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
+    # Every real embedding call goes through a client built at import time
+    # (`similarity._CLIENT` and its siblings), which a swapped class never
+    # sees -- so the method is recorded on the class, covering those instances,
+    # and the swap below still catches a client built fresh. `embed_missing`
+    # swallows the failure the recorded call then meets, so `omitted` cannot
+    # be what shows it.
+    embed_calls: list = []
+    _recorded(monkeypatch, grimoire.embeddings.EmbeddingsClient, "embed", embed_calls)
     monkeypatch.setattr(grimoire.embeddings, "EmbeddingsClient", _RecordingEmbeddings)
     llm_calls: list = []
     for name in ("stream", "complete", "list_models", "check"):
@@ -1089,6 +1097,7 @@ def test_graph_makes_no_model_call(monkeypatch, tmp_path):
 
     g = graph.build(cid)
     assert _RecordingEmbeddings.built == []
+    assert embed_calls == []
     assert llm_calls == []
     assert g["omitted"] == []
     assert {"scene", "thread", "event", "idea"} <= {n["kind"] for n in g["nodes"]}

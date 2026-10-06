@@ -14,12 +14,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.embeddings
+import grimoire.llm
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import doc, drivers, graph
-from tests.llm_fakes import FakeLLM, from_entries
+from tests.llm_fakes import from_entries
+from tests.test_continuity_graph import _recorded
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
 
@@ -324,30 +326,33 @@ class _RecordingEmbeddings:
         type(self).built.append((args, kwargs))
 
 
-def _no_model_recorders(monkeypatch):
+def _no_model_recorders(monkeypatch) -> list:
+    """Record every model call at the method that makes it, on the class.
+
+    Every real embedding call goes through a client built at import time
+    (`similarity._CLIENT` and its siblings) and every LLM call through an
+    `LLMClient` the app built before this test ran, so a swapped class sees
+    neither -- and `get_graph` resolves no `routes.get_llm`, so an override
+    there would record nothing either. Patching the class attribute covers the
+    instances that already exist; the class swap still catches a fresh one."""
+    calls: list = []
     _RecordingEmbeddings.built = []
     monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
+    _recorded(monkeypatch, grimoire.embeddings.EmbeddingsClient, "embed", calls)
+    for name in ("stream", "complete", "list_models", "check"):
+        _recorded(monkeypatch, grimoire.llm.LLMClient, name, calls)
+    _recorded(monkeypatch, grimoire.llm, "LLMClient", calls)
     monkeypatch.setattr(grimoire.embeddings, "EmbeddingsClient", _RecordingEmbeddings)
-    # A fake that answers every call (and records it), not an empty cassette,
-    # which would raise at construction and so record nothing.
-    return FakeLLM([[""]])
-
-
-def _llm_calls(fake) -> int:
-    return fake.calls + len(fake.listed) + len(fake.checked)
+    return calls
 
 
 def test_graph_route_makes_no_model_call(client, cid, monkeypatch):
     _graph_campaign(cid)
-    fake = _no_model_recorders(monkeypatch)
-    client.app.dependency_overrides[routes.get_llm] = lambda: fake
-    try:
-        body = _graph(client, cid)
-    finally:
-        client.app.dependency_overrides.pop(routes.get_llm, None)
+    calls = _no_model_recorders(monkeypatch)
+    body = _graph(client, cid)
     assert _RecordingEmbeddings.built == []
-    assert _llm_calls(fake) == 0
+    assert calls == []
     assert body["omitted"] == []
     assert {"scene", "thread", "event", "idea"} <= {n["kind"] for n in body["nodes"]}
 
