@@ -43,6 +43,7 @@ MEMBER_PREFIX = "collection-image-"
 MAX_MEMBERS = 10000
 _MEMBER = re.compile(r"collection-image-[0-9a-f]{64}\Z")
 _ID = re.compile(r"[0-9a-f]{32}\Z")
+_INDEX = re.compile(r"(?:0|[1-9][0-9]*)\Z")
 #: Each format's member rule: a library name, or an image id.
 _MEMBER_RULES = {1: _MEMBER, 2: image_hash.ID_RE}
 
@@ -111,6 +112,16 @@ def _resolve_member(wid: str, fmt: int, member: str) -> tuple[Path, str, str | N
     return None if found is None else (found.blob_path, found.blob_sha256, found.image_id)
 
 
+def member_index(n: str) -> int | None:
+    """A member URL's `{n}` as an index, or None; the one parser for the route, `local_path`, `local_target` and export."""
+    # Canonical ASCII decimal only, so one member has one URL (`str.isdigit`
+    # and `int` accept other scripts' digits and leading zeros), and no longer
+    # than the largest index, so `int` never sees a huge string.
+    if not isinstance(n, str) or len(n) > len(str(MAX_MEMBERS)) or not _INDEX.match(n):
+        return None
+    return int(n)
+
+
 def member_url(wid: str, collection_id: str, index: int, v: str) -> str:
     manifest_path(wid, collection_id)
     return f"/api/worlds/{wid}/image-collections/{collection_id}/members/{index}?v={v}"
@@ -133,8 +144,10 @@ def available(wid: str, collection_id: str) -> list[dict]:
             out.append({"index": index, "path": path,
                         "url": f"/api/worlds/{wid}/images/{member}?v={v}"})
         else:
-            out.append({"index": index, "path": path, "image_id": image_id,
-                        "url": member_url(wid, collection_id, index, v)})
+            # Built here, not by `member_url`: `read` already proved the world
+            # and the id, and that would re-prove them for every row.
+            out.append({"index": index, "path": path, "image_id": image_id, "url":
+                        f"/api/worlds/{wid}/image-collections/{collection_id}/members/{index}?v={v}"})
     return out
 
 

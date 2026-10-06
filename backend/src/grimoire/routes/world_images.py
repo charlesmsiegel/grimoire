@@ -20,8 +20,6 @@ The 404s are hand-rolled. There is no world equivalent of
 
 from __future__ import annotations
 
-import re
-
 from fastapi import APIRouter, Depends, File, Header, HTTPException, Request, UploadFile
 from starlette.responses import JSONResponse
 
@@ -40,8 +38,6 @@ from .common import (
 from .models import ImageDescription
 
 router = APIRouter()
-
-_MEMBER_INDEX = re.compile(r"[0-9]+")
 
 
 def _world_or_404(wid: str) -> str:
@@ -97,12 +93,11 @@ def get_world_image_collection_member(wid: str, collection_id: str, n: str, requ
     """Member `n` (0-based), in either format. `n` is a string so that `-1`,
     `abc` and an index past the end are all the same 404 rather than a 422;
     a member whose picture is missing is a 404 too, never another member."""
-    # ASCII digits only (`str.isdigit` and `int` accept other scripts' digits),
-    # and no longer than the largest index, so `int` never sees a huge string.
-    if not _MEMBER_INDEX.fullmatch(n) or len(n) > len(str(store.image_collections.MAX_MEMBERS)):
+    index = store.image_collections.member_index(n)
+    if index is None:
         raise HTTPException(status_code=404, detail="image collection member not found")
     path = _collection_or_404(wid, collection_id,
-                              lambda w, c: store.image_collections.member_path(w, c, int(n)))
+                              lambda w, c: store.image_collections.member_path(w, c, index))
     if path is None:
         raise HTTPException(status_code=404, detail="image collection member not found")
     return _serve_image_file(path, request)

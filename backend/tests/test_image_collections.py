@@ -355,3 +355,9 @@ def test_has_format1_fails_closed(wid):
     assert collections.has_format1(wid)
     write_manifest(wid, CID, {'format': 1, 'members': [member_name(png())]})
     assert collections.has_format1(wid)
+
+
+def test_member_index_is_canonical_decimal():
+    assert [collections.member_index(n) for n in ('0', '7', '9999', '10000')] == [0, 7, 9999, 10000]
+    for n in ('', '00', '01', '-1', '+1', '1.0', ' 1', '1 ', 'abc', '٢', '100000', '9' * 5000, '1\n'):
+        assert collections.member_index(n) is None, n

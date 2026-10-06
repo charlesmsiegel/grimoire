@@ -187,7 +187,7 @@ def test_member_route_bounds(client, fmt):
     else:
         _resolved(members[1]).blob_path.unlink()
     base = f'/api/worlds/{wid}/image-collections/{CID}/members/'
-    for n in ('-1', str(10 ** 9), 'abc', '3', '1', '9' * 5000, '\u0662', '1.0', ' 2'):
+    for n in ('-1', str(10 ** 9), 'abc', '3', '1', '9' * 5000, '\u0662', '1.0', ' 2', '01', '00'):
         assert client.get(base + n).status_code == 404, n
     assert _pixel(client.get(base + '2').content) == (0, 128, 0)
     assert _pixel(client.get(base + '0').content) == (255, 0, 0)
