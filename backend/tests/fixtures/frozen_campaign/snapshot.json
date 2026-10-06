@@ -798,6 +798,285 @@
       "title": "The debt in salt"
     }
   ],
+  "continuity.graph.build[the-drowned-ledger]": {
+    "edges": [
+      {
+        "candidate_id": null,
+        "from": "characters:mara",
+        "id": "e2a311a4a913f79662d4b",
+        "kind": "appeared_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:002--2026-01-02--the-long-quay"
+      },
+      {
+        "candidate_id": null,
+        "from": "characters:seraphine",
+        "id": "e6c000ae7303cb926968f",
+        "kind": "appeared_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:001--the-tide-comes-in"
+      },
+      {
+        "candidate_id": null,
+        "from": "pcs:winifred",
+        "id": "ef86d9218a72d56660ec9",
+        "kind": "appeared_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:001--the-tide-comes-in"
+      },
+      {
+        "candidate_id": null,
+        "from": "scene:001--the-tide-comes-in",
+        "id": "e8defcb7082e7669a2160",
+        "kind": "occurred_at",
+        "relation": null,
+        "source": "structural",
+        "to": "locations:tidewatch-keep"
+      },
+      {
+        "candidate_id": null,
+        "from": "commitment:salt-owed",
+        "id": "eef61ef128d357e527642",
+        "kind": "opened_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:001--the-tide-comes-in"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-debt",
+        "id": "ef94efb1948d461ba6066",
+        "kind": "opened_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:001--the-tide-comes-in"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-tide-table",
+        "id": "e91f98bace6a26d4feca2",
+        "kind": "opened_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:001--the-tide-comes-in"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-debt",
+        "id": "e5e44c546689a0fdf31f1",
+        "kind": "advanced_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:002--2026-01-02--the-long-quay"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-tide-table",
+        "id": "eebae8588b1a1fe707a97",
+        "kind": "closed_in",
+        "relation": null,
+        "source": "structural",
+        "to": "scene:001--the-tide-comes-in"
+      },
+      {
+        "candidate_id": null,
+        "from": "commitment:salt-owed",
+        "id": "ea672f222eb1c5492ca7c",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "characters:seraphine"
+      },
+      {
+        "candidate_id": null,
+        "from": "commitment:salt-owed",
+        "id": "ea653a71895c6d9817749",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "pcs:winifred"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-debt",
+        "id": "e3d8ebcc8181595053f2c",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "characters:mara"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-debt",
+        "id": "e07fd11b9f264616db060",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "characters:seraphine"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-debt",
+        "id": "ea2f4e24a6e3df53b44a2",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "pcs:winifred"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-tide-table",
+        "id": "e8af7fd27c9cdcaf90fad",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "characters:seraphine"
+      },
+      {
+        "candidate_id": null,
+        "from": "thread:the-tide-table",
+        "id": "e418ebdb3bb71748688a9",
+        "kind": "involves",
+        "relation": null,
+        "source": "structural",
+        "to": "pcs:winifred"
+      },
+      {
+        "affection": 0,
+        "candidate_id": null,
+        "from": "pcs:winifred",
+        "id": "ede8bb73c34f4905620b6",
+        "kind": "feeling",
+        "note": "Owes her a page.",
+        "relation": null,
+        "source": "structural",
+        "tension": 2,
+        "to": "characters:seraphine",
+        "trust": 1
+      },
+      {
+        "bond_type": "creditor",
+        "candidate_id": null,
+        "from": "characters:seraphine",
+        "id": "e5fd96f6af30ac67632fd",
+        "kind": "bond",
+        "relation": null,
+        "since_scene": "001--the-tide-comes-in",
+        "source": "structural",
+        "to": "pcs:winifred"
+      }
+    ],
+    "nodes": [
+      {
+        "done": false,
+        "fixed": null,
+        "friendly": "",
+        "id": "scene:001--the-tide-comes-in",
+        "in_days": null,
+        "kind": "scene",
+        "label": "The Tide Comes In",
+        "native": "",
+        "order": 0,
+        "pcless": false,
+        "place": ""
+      },
+      {
+        "done": false,
+        "fixed": 739618,
+        "friendly": "2 January 2026",
+        "id": "scene:002--2026-01-02--the-long-quay",
+        "in_days": null,
+        "kind": "scene",
+        "label": "The Long Quay",
+        "native": "2026-01-02",
+        "order": 1,
+        "pcless": false,
+        "place": ""
+      },
+      {
+        "id": "characters:mara",
+        "kind": "character",
+        "label": "Mara"
+      },
+      {
+        "id": "characters:seraphine",
+        "kind": "character",
+        "label": "Seraphine"
+      },
+      {
+        "id": "pcs:winifred",
+        "kind": "pc",
+        "label": "Winifred"
+      },
+      {
+        "id": "locations:tidewatch-keep",
+        "kind": "location",
+        "label": "Tidewatch Keep"
+      },
+      {
+        "aliases": [],
+        "findings": [],
+        "focusable": true,
+        "id": "thread:the-debt",
+        "kind": "thread",
+        "label": "The debt in salt",
+        "latest_beat": "Mara knows what the debt was for.",
+        "live": true,
+        "merged_into": null,
+        "pressure": {
+          "friendly": "",
+          "in_days": null,
+          "state": "ok"
+        },
+        "status": "open"
+      },
+      {
+        "aliases": [],
+        "findings": [],
+        "focusable": false,
+        "id": "thread:the-tide-table",
+        "kind": "thread",
+        "label": "The tide table",
+        "latest_beat": "The table was copied out and hung by the door.",
+        "live": false,
+        "merged_into": null,
+        "pressure": null,
+        "status": "closed"
+      },
+      {
+        "aliases": [],
+        "commitment_kind": "promise",
+        "due": "2026-01-05",
+        "findings": [],
+        "fixed": null,
+        "focusable": true,
+        "friendly": "",
+        "id": "commitment:salt-owed",
+        "in_days": null,
+        "kind": "commitment",
+        "label": "Bring salt to the keep",
+        "latest_beat": "Seraphine asked for salt.",
+        "live": true,
+        "merged_into": null,
+        "native": "",
+        "pressure": {
+          "friendly": "",
+          "in_days": null,
+          "state": "ok"
+        },
+        "status": "open"
+      }
+    ],
+    "now": {
+      "fixed": null,
+      "friendly": "",
+      "native": ""
+    },
+    "omitted": []
+  },
   "continuity.pending.findings[the-drowned-ledger]": [],
   "continuity.pressure.build[the-drowned-ledger]": {
     "fixed": null,

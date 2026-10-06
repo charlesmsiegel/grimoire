@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import textwrap
+from typing import ClassVar
 
 import pytest
 
@@ -1037,3 +1038,285 @@ def test_a_malformed_cache_costs_only_candidates(monkeypatch, tmp_path):
     assert _sourced(g, "candidate") == []
     assert "candidates" in g["omitted"]
     assert [e["id"] for e in _edges(g, "link")] == [lid]
+
+
+# ---- cost, isolation and invariants -----------------------------------------
+
+
+class _RecordingEmbeddings:
+    """Records every construction rather than raising: `_attempt` catches
+    `Exception`, which an `AssertionError` is, so a raiser would be swallowed."""
+    built: ClassVar[list] = []
+
+    def __init__(self, *args, **kwargs):
+        type(self).built.append((args, kwargs))
+
+
+def _recorded(monkeypatch, owner, name: str, calls: list, note=None) -> None:
+    """Replace `owner.name` with a pass-through that appends to `calls`."""
+    real = getattr(owner, name)
+
+    def recording(*args, **kwargs):
+        calls.append(note() if note is not None else name)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(owner, name, recording)
+
+
+def _cost_campaign(monkeypatch, tmp_path) -> str:
+    """A stamped scene with a thread beat, an event and a dated idea."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _stamp(cid, store.scenes.create_scene(cid, "Saltmarch harbour"), "2026-05-12")
+    _thread(cid, "mara-s-map", "Mara's map", sid)
+    events.create(cid, "The coronation", "2026-05-13")
+    scene_ideas.add(cid, "Mara's map", "Mara reads the map.", date="2026-05-12",
+                    drivers=[{"ref": MAP, "action": "advance"}])
+    return cid
+
+
+def test_graph_makes_no_model_call(monkeypatch, tmp_path):
+    import grimoire.embeddings
+    import grimoire.llm
+    cid = _cost_campaign(monkeypatch, tmp_path)
+    _RecordingEmbeddings.built = []
+    monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
+        "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
+    monkeypatch.setattr(grimoire.embeddings, "EmbeddingsClient", _RecordingEmbeddings)
+    llm_calls: list = []
+    for name in ("stream", "complete", "list_models", "check"):
+        _recorded(monkeypatch, grimoire.llm.LLMClient, name, llm_calls)
+    _recorded(monkeypatch, grimoire.llm, "LLMClient", llm_calls)
+
+    g = graph.build(cid)
+    assert _RecordingEmbeddings.built == []
+    assert llm_calls == []
+    assert g["omitted"] == []
+    assert {"scene", "thread", "event", "idea"} <= {n["kind"] for n in g["nodes"]}
+
+
+@pytest.fixture
+def _hold_state(monkeypatch):
+    """`best_effort_campaign_lock` as graph sees it, replaced by one that marks
+    a mutable cell while it is held and counts how often it was entered."""
+    import contextlib
+    state = {"inside": False, "entered": 0}
+
+    @contextlib.contextmanager
+    def hold(cid, timeout=2.0):
+        state["entered"] += 1
+        state["inside"] = True
+        try:
+            yield True
+        finally:
+            state["inside"] = False
+
+    monkeypatch.setattr(graph.locks, "best_effort_campaign_lock", hold)
+    return state
+
+
+def test_plugin_code_runs_outside_the_hold(monkeypatch, tmp_path, _hold_state):
+    cid = _cost_campaign(monkeypatch, tmp_path)
+    seen: dict[str, list] = {name: [] for name in (
+        "primary_provider", "build", "snapshot", "list_events", "fixed_of", "friendly")}
+
+    def inside():
+        return _hold_state["inside"]
+
+    _recorded(monkeypatch, graph.calendars, "primary_provider", seen["primary_provider"], inside)
+    _recorded(monkeypatch, graph.pressure, "build", seen["build"], inside)
+    _recorded(monkeypatch, graph.drivers, "snapshot", seen["snapshot"], inside)
+    _recorded(monkeypatch, graph.events, "list_events", seen["list_events"], inside)
+    _recorded(monkeypatch, calendars, "fixed_of", seen["fixed_of"], inside)
+    _recorded(monkeypatch, calendars, "friendly", seen["friendly"], inside)
+
+    graph.build(cid)
+    assert _hold_state["entered"] == 1
+    for name, values in seen.items():
+        assert values, name             # the check is not vacuous
+        assert not any(values), name    # and nothing ran under the hold
+
+
+def test_graph_reads_no_card_or_image(monkeypatch, tmp_path):
+    from grimoire.store import assets, characters, pcs
+    cid = _campaign(monkeypatch, tmp_path)
+    seraphine, seraphine_v = overlay.create_pc(cid, "Seraphine", [], persona={
+        **pcs.blank_persona("Seraphine"), "birthdate": "--05-11"})
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    harbour = overlay.create_entity(cid, "locations", "Saltmarch harbour")
+    sid = store.scenes.create_scene(cid, "Saltmarch harbour")
+    _seat(cid, sid, "pcs", seraphine, seraphine_v)
+    _seat(cid, sid, "characters", mara, mara_v)
+    store.scenes.set_location(cid, sid, harbour)
+    relationships.set_feeling(cid, f"pcs:{seraphine}", f"characters:{mara}", 2, 1, 0, "")
+    calls: list = []
+    _recorded(monkeypatch, assets, "list_images", calls)
+    _recorded(monkeypatch, characters, "read_character", calls)
+    _recorded(monkeypatch, pcs, "read_pc", calls)
+    _recorded(monkeypatch, relationships, "actor_name", calls)
+
+    g = graph.build(cid)
+    assert calls == []
+    # The control: every family the recorders could have been reached through
+    # is in the payload.
+    kinds = {n["kind"] for n in g["nodes"]}
+    assert {"pc", "character", "location", "birthday"} <= kinds
+    assert _edges(g, "feeling") and _edges(g, "occurred_at") and _edges(g, "birthday_of")
+    assert _by_id(g)[f"pcs:{seraphine}"]["label"] == "Seraphine"
+
+
+def _read_counts(monkeypatch, cid: str) -> tuple[int, int]:
+    plot_reads: list = []
+    chronicle_reads: list = []
+    with monkeypatch.context() as m:
+        _recorded(m, plot, "read", plot_reads)
+        _recorded(m, chronicle, "read_chronicle", chronicle_reads)
+        graph.build(cid)
+    return len(plot_reads), len(chronicle_reads)
+
+
+def test_reads_do_not_grow_with_the_node_count(monkeypatch, tmp_path):
+    one = _campaign(monkeypatch, tmp_path / "one")
+    (s1,) = _scenes(one, "Saltmarch harbour")
+    _thread(one, "mara-s-map", "Mara's map", s1)
+    few = _read_counts(monkeypatch, one)
+
+    five = _campaign(monkeypatch, tmp_path / "five")
+    sids = _scenes(five, *(f"Saltmarch harbour {i}" for i in range(5)))
+    for i, sid in enumerate(sids):
+        _thread(five, f"mara-s-map-{i}", f"Mara's map {i}", sid)
+    many = _read_counts(monkeypatch, five)
+
+    assert len(_records(graph.build(five), "thread")) == 5
+    assert few[0] > 0 and few[1] > 0     # the recorders see the reads at all
+    assert many == few
+
+
+def test_graph_calls_no_card_image_or_blocking_lock():
+    import ast
+    import inspect
+    tree = ast.parse(inspect.getsource(graph))
+    forbidden = {"read_pc", "read_character", "list_images", "actor_name", "list_pcs",
+                 "campaign_lock"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            fn = node.func
+            name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+            assert name not in forbidden, ast.unparse(node)
+            if isinstance(fn, ast.Attribute) and fn.attr == "build":
+                assert ast.unparse(fn.value) != "timeline", ast.unparse(node)
+        if isinstance(node, ast.ImportFrom):
+            assert node.module is None or "timeline" not in node.module.split(".")
+            assert all(a.name != "timeline" and a.asname != "timeline" for a in node.names)
+        if isinstance(node, ast.Import):
+            assert all("timeline" not in a.name.split(".") for a in node.names)
+
+
+def _malformed_campaign(monkeypatch, tmp_path) -> tuple[str, str]:
+    """Something in every optional file, plus a link from a thread to a
+    commitment and from that commitment to an event, so an unreadable plot or
+    events ledger leaves a kept link pointing at a ledger nobody could read."""
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _seat(cid, s1, "characters", mara, mara_v)
+    _cast(cid, s1, [f"characters/{mara}"])
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s1)
+    _oath(cid, "mara-s-oath", "Mara's oath", s1)
+    events.create(cid, "The coronation", "2026-05-13")
+    review.create_link(cid, MAP, OATH, "pays_off")
+    review.create_link(cid, OATH, CORONATION, "by")
+    review.create_alias(cid, CHART, MAP)
+    relationships.set_feeling(cid, f"characters:{mara}", "characters:winifred", 1, 1, 1, "")
+    scene_ideas.add(cid, "Mara's map", "Mara reads the map.",
+                    drivers=[{"ref": MAP, "action": "advance"}])
+    _cache(cid, _finding(cid, CLOSURE, [MAP]))
+    return cid, s1
+
+
+@pytest.mark.parametrize("name, part", [
+    ("plot.json", "plot"),
+    ("commitments.json", "commitments"),
+    ("events.json", "events"),
+    ("continuity.json", "continuity"),
+    ("continuity_candidates.json", "candidates"),
+    ("relationships.json", "relationships"),
+    ("scene_ideas.json", "scene_ideas"),
+    ("chronicle.json", "chronicle"),
+    # The appearance record has no part of its own: `scene_actors` steps over
+    # it while the chronicle's cast still answers, and names the actor
+    # family's part (Task 3's review fix).
+    ("appearances.json", "chronicle"),
+])
+def test_a_malformed_optional_file_costs_only_its_part(monkeypatch, tmp_path, name, part):
+    cid, s1 = _malformed_campaign(monkeypatch, tmp_path)
+    (campaigns.campaign_root(cid) / name).write_text("{ no", encoding="utf-8")
+
+    g = graph.build(cid)
+    assert [n["id"] for n in _scene_nodes(g)] == [f"scene:{s1}"]
+    _every_edge_names_two_nodes(g)
+    assert part in g["omitted"], g["omitted"]
+
+
+def test_every_edge_names_two_nodes(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara = _actor(cid, "Mara", "1990-07-01")
+    s1, s2, gone = _scenes(cid, "Saltmarch harbour", "Mara's map", "Winifred's chart")
+    # A beat in a deleted scene.
+    _thread(cid, "mara-s-map", "Mara's map", gone, s1)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s2)
+    _thread(cid, "saltmarch-eve", "Saltmarch Eve", s2)
+    _oath(cid, "mara-s-oath", "Mara's oath", s1)
+    # A candidate naming what is about to be merged away.
+    _cache(cid, _finding(cid, DUP, [CHART, EVE]))
+    review.create_alias(cid, CHART, MAP)
+    # A reviewed link to a deleted event, written by hand.
+    doc.put_link(cid, canon.link_id("on", MAP, "event:gone"),
+                 {"a": MAP, "b": "event:gone", "relation": "on", "created": "",
+                  "scene": "", "note": ""})
+    # A reviewed link whose endpoint's ledger will be unreadable.
+    review.create_link(cid, MAP, OATH, "pays_off")
+    # An idea serving a deleted thread, anchored past the horizon.
+    anchor = {"ref": f"birthday:characters:{mara}:{F(cid, '2026-07-01')}",
+              "relation": "on", "native": "2026-07-01"}
+    lid = scene_ideas.add(cid, "Mara's map", "Mara reads the map.", time_anchor=anchor,
+                          drivers=[{"ref": "thread:gone", "action": "advance"},
+                                   {"ref": MAP, "action": "advance"}])
+    # A feeling whose token has no known prefix; a bond from a deleted scene.
+    relationships.set_feeling(cid, f"characters:{mara}", "characters:winifred", 1, 1, 1, "")
+    relationships.set_bond(cid, "characters:winifred", f"characters:{mara}", "kin",
+                           since_scene=gone)
+    data = json.loads(_relationships_file(cid).read_text(encoding="utf-8"))
+    data["feelings"][f"nobody:realm->characters:{mara}"] = {
+        "trust": 1, "affection": 1, "tension": 1, "note": ""}
+    _relationships_file(cid).write_text(json.dumps(data), encoding="utf-8")
+    # Hand-edited cast tokens with no `:` after `canon.actor_ref`.
+    _cast(cid, s1, ["Mara", "characters/", f"characters/{mara}"])
+    store.scenes.delete_scene(cid, gone)
+    (campaigns.campaign_root(cid) / "commitments.json").write_text("{ no", encoding="utf-8")
+
+    # An event, and a link to it, created between phase A and phase B.
+    real = graph.locks.best_effort_campaign_lock
+
+    def hold(cid_, timeout=2.0):
+        if not events.list_events(cid_):
+            eid = events.create(cid_, "The coronation", "2026-05-13")
+            review.create_link(cid_, MAP, f"event:{eid}", "before")
+        return real(cid_, timeout)
+
+    monkeypatch.setattr(graph.locks, "best_effort_campaign_lock", hold)
+    g = graph.build(cid)
+    monkeypatch.setattr(graph.locks, "best_effort_campaign_lock", real)
+    # The controls: the cases are in the files the graph read.
+    assert CORONATION in {link["b"] for link in effective.links(cid)}
+    assert CORONATION not in _by_id(g)
+
+    node_ids = {n["id"] for n in g["nodes"]}
+    _every_edge_names_two_nodes(g)
+    assert len(node_ids) == len(g["nodes"])
+    assert len({e["id"] for e in g["edges"]}) == len(g["edges"])
+    assert {n["kind"] for n in g["nodes"]} <= set(graph.NODE_KINDS)
+    assert {e["kind"] for e in g["edges"]} <= set(graph.EDGE_KINDS)
+    assert {e["source"] for e in g["edges"]} <= set(graph.EDGE_SOURCES)
+    assert _by_id(g)[f"idea:{lid}"]["time_anchor"] == anchor
+    assert "commitments" in g["omitted"]
