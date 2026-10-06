@@ -195,6 +195,8 @@ def test_a_data_dir_move_fork_delete_and_export_are_refused_while_maintenance_ru
         ("delete", f"/api/campaigns/{cid}", None),
         ("post", f"/api/campaigns/{cid}/fork", {"name": "Winifred Copy"}),
         ("get", f"/api/worlds/{wid}/export.zip", None),
+        ("post", "/api/backups", None),
+        ("post", "/api/backups/images", None),
     ]
     for method, path, body in calls:
         r = getattr(client, method)(path, **({"json": body} if body else {}))
@@ -207,6 +209,8 @@ def test_a_data_dir_move_fork_delete_and_export_are_refused_while_maintenance_ru
     assert {wid, spare} <= worlds
     assert len(worlds) == 2
     assert client.get(f"/api/campaigns/{cid}").status_code == 200
+    listing = client.get("/api/backups").json()
+    assert listing["backups"] == [] and listing["image_backups"] == []
 
     work.release.set()
     _wait_terminal(run)
@@ -377,6 +381,48 @@ def test_another_devices_live_marker_refuses_a_start(client):
     run = _start(client, Held(released=True), attempt="later")
     _wait_terminal(run)
     assert run.state == "landed", run.error
+
+
+def test_another_process_on_this_machine_refuses_a_start(client):
+    """A second backend over the same store has its own registry and the same
+    device key, so neither the exclusion key nor the marker can see it. The
+    process lock can."""
+    root = _root()
+    fd = proclock.acquire(proclock.lock_path(root, "image-maintenance", "run"),
+                          proclock.NO_WAIT)
+    assert fd is not None
+    try:
+        detail = _refused(
+            lambda: runs.run_maintenance(client.app, "migrate", None, Held()),
+            "maintenance_elsewhere")
+        assert "another grimoire process" in detail["detail"]
+        assert client.app.state.runs.any_live() is None
+        # Refused before the marker was claimed: nothing is left behind.
+        assert maintenance_reports.read_marker(root) is None
+    finally:
+        proclock.release(fd)
+
+    run = _start(client, Held(released=True), attempt="free")
+    _wait_terminal(run)
+    assert run.state == "landed", run.error
+    # And the run let it go when it ended.
+    again = proclock.acquire(proclock.lock_path(root, "image-maintenance", "run"),
+                             proclock.NO_WAIT)
+    assert again is not None
+    proclock.release(again)
+
+
+def test_a_pass_that_raised_before_reporting_still_leaves_a_minimal_report(client):
+    def broken(run):
+        raise OSError("/somewhere/private/Mara.png vanished")
+
+    run = _start(client, broken)
+    _wait_terminal(run)
+
+    assert run.state == "failed"
+    report = maintenance_reports.read(run.root, run.id)
+    # The exception's CLASS only: its message can carry a path or a name.
+    assert report == {"kind": "migrate", "state": "failed", "error": "OSError"}
 
 
 def test_this_devices_own_marker_does_not_refuse(client):
