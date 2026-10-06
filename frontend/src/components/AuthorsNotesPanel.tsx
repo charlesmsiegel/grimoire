@@ -60,8 +60,12 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
   }, [tab, sid, charRef]);
 
   // On `sid` too: a rename moves the key the scene tab reads the note under.
+  // The notes on hand are cleared first: until the re-read lands they are not
+  // this sid's, and a Save from them would write a blank over the renamed
+  // scene's real note (codex review, #458). Null disables the form and Save.
   useEffect(() => {
     const n = (ticket.current += 1);
+    setNotes(null);
     api.getAuthorsNotes(cid)
       .then((data) => { if (n === ticket.current) { setError(null); setNotes(data); } })
       .catch((err: unknown) => { if (n === ticket.current) setError(reason(err)); });

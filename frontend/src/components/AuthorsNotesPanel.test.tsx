@@ -138,6 +138,21 @@ describe("AuthorsNotesPanel", () => {
       "c", "characters:mara", { text: "Mara listens.", depth: 4, every: 1 }));
   });
 
+  it("holds Save while a renamed scene's notes are re-read", async () => {
+    const { rerender } = render(
+      <AuthorsNotesPanel cid="c" sid="s" cast={CAST} next={null} onSaved={vi.fn()} />);
+    await screen.findByLabelText("Author's note");
+    fireEvent.click(screen.getByRole("tab", { name: "This scene" }));
+    expect(screen.getByLabelText<HTMLTextAreaElement>("Author's note").value)
+      .toBe("Rain on the roof.");
+    // The re-read under the new sid never answers: the old notes are not the
+    // new scene's, so a Save from them would write a blank over its real note.
+    mocked.getAuthorsNotes.mockReturnValue(new Promise(() => {}));
+    rerender(<AuthorsNotesPanel cid="c" sid="s2" cast={CAST} next={null} onSaved={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+    expect(screen.getByLabelText("Author's note")).toBeDisabled();
+  });
+
   it("lists which notes apply next turn, a character's when they speak", async () => {
     renderPanel(vi.fn(), NEXT);
     await screen.findByLabelText("Author's note");
