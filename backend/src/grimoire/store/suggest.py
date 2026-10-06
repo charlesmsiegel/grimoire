@@ -24,6 +24,7 @@ nothing to drive and no control set gets the message it always had.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -633,15 +634,16 @@ def date_normalizer(cid: str, tolerant: bool = False):
     `ref_validator` resolves its id sets once: one reply can carry four dates.
 
     Off by default, and the callers divide cleanly. Model TEXT is tolerant
-    (`parse_output`, `parse_next_date`, `parse_intent`) -- that is the whole
-    point. Stored RECORDS are not (`ref_validator`): their dates were
+    (`parse_intent` here; `parse_output` and `parse_next_date` call the same
+    `normalize_date` directly, anchored on the snapshot's `now`) -- that is the
+    whole point. Stored RECORDS are not (`ref_validator`): their dates were
     canonicalized on write, so one that no longer parses means the campaign
     changed calendars under it, and re-reading a Gregorian date through a Hebrew
     string matcher would invent a moment nobody wrote. It is also the path that
     could least afford it -- the ledger has no cap, it is revalidated on every
     read, and a fuzzy miss costs a whole window scan per row.
     """
-    provider = calendars.primary_provider(campaigns_paths.campaign_root(cid))
+    provider = _soft_provider(campaigns_paths.campaign_root(cid))
     if provider is None:
         return lambda _s: ""
     if not tolerant:
@@ -654,15 +656,30 @@ def date_normalizer(cid: str, tolerant: bool = False):
                 return ""
         return strict
     anchor = clock.now(cid)
+    return lambda s: normalize_date(provider, anchor, s)
 
-    def norm(s: str) -> str:
-        if not s:
-            return ""
-        try:
-            return calendars.resolve(provider, s, anchor)
-        except calendars.CalendarError:
-            return ""
-    return norm
+
+def _soft_provider(croot):
+    """`calendars.primary_provider(croot)`, or None when resolving it raises
+    anything at all (Decision 25). `primary_provider` absorbs `CalendarError`
+    and `KeyError`; a plugin whose constructor raises something else used to
+    escape it, and every parser behind this degrades to undated instead (§26)."""
+    try:
+        return calendars.primary_provider(croot)
+    except Exception:  # noqa: BLE001 -- user calendar plugin code can raise anything
+        return None
+
+
+def normalize_date(provider, near: str, text) -> str:
+    """Model text as a canonical native date, or "" -- never raises for bad
+    text. `calendars.resolve` anchored on `near`, so a date written the way the
+    prompt displays one resolves too. No provider means no date."""
+    if provider is None or not isinstance(text, str) or not text.strip():
+        return ""
+    try:
+        return calendars.resolve(provider, text.strip(), near)
+    except calendars.CalendarError:
+        return ""
 
 
 def ref_validator(cid: str):
@@ -749,35 +766,345 @@ def token_ok(tok: str, char_ids: set[str], player_tokens: set[str], offscreen: b
     return not offscreen and tok in player_tokens
 
 
-def parse_output(text: str, cid: str, offscreen: bool = False) -> list[dict]:
+def raw_suggestions(text: str) -> list | None:
+    """The reply's suggestion list: a dict's `"suggestions"`, or a bare array (a
+    common LLM deviation). None when nothing in the text decodes, `[]` when what
+    decoded holds no list. Shared by `parse_output` and the eval grader."""
     parsed = _extract_json(text)
-    if isinstance(parsed, dict):
-        suggestions = parsed.get("suggestions", [])
-    elif isinstance(parsed, list):
-        suggestions = parsed
-    else:
-        suggestions = []
-    if not isinstance(suggestions, list):
-        return []
-    char_ids, player_tokens, loc_ids = valid_ids(cid)
-    norm = date_normalizer(cid, tolerant=True)
+    if parsed is None:
+        return None
+    suggestions = parsed.get("suggestions", []) if isinstance(parsed, dict) else parsed
+    return suggestions if isinstance(suggestions, list) else []
 
+
+_MONTH_KEY = re.compile(r"^(-?\d+)-(.+)$")
+
+
+def _month_of(ref: str) -> tuple[int, str] | None:
+    """`(year, month_key)` of a month-only birthday ref
+    (`birthday:<kind>:<id>:month:<year>-<key>`, spec §4), else None. The month
+    comes from the ref because pressure items and anchor options carry no
+    `year`/`month_key` (Decision 12). A key may hold `-`; a year may be
+    negative; the last `:month:` is the separator, so an actor id of `month`
+    cannot confuse it."""
+    if not isinstance(ref, str) or not ref.startswith("birthday:"):
+        return None
+    _head, sep, tail = ref.rpartition(":month:")
+    found = _MONTH_KEY.match(tail) if sep else None
+    return (int(found.group(1)), found.group(2)) if found else None
+
+
+def _canon_map(snapshot: dict) -> dict[str, str]:
+    """Alias source -> canonical, from the captured thread and commitment rows'
+    `aliases` (no store read: what the prompt showed is what the reply is
+    held to)."""
+    rows = (*snapshot.get("open_threads", []), *snapshot.get("commitments", []))
+    return {a["ref"]: row["ref"] for row in rows if "ref" in row
+            for a in row.get("aliases") or [] if isinstance(a, dict) and "ref" in a}
+
+
+def _pair(e, kinds: dict[str, str], canon: dict[str, str]) -> dict | None:
+    """One model driver entry as a canonical `{ref, action}`, or None when it is
+    malformed, unknown to the captured index, or wrong for its kind."""
+    if not isinstance(e, dict):
+        return None
+    ref, action = e.get("ref"), e.get("action")
+    if not isinstance(ref, str) or not isinstance(action, str):
+        return None
+    ref = canon.get(ref.strip(), ref.strip())
+    allowed = continuity_drivers.ACTIONS_BY_KIND.get(kinds.get(ref, ""), ())
+    return {"ref": ref, "action": action} if action in allowed else None
+
+
+def _valid_pairs(entry: dict, snapshot: dict) -> list[dict]:
+    """The entry's claimed drivers, validated against the captured index and
+    de-duplicated by canonical ref (the first action wins)."""
+    kinds = {d["ref"]: d["kind"] for d in snapshot.get("driver_index", [])}
+    canon = _canon_map(snapshot)
+    raw = entry.get("drivers")
     out: list[dict] = []
-    for e in suggestions:
-        if not isinstance(e, dict):
-            continue
-        title, premise = str(e.get("title", "")).strip(), str(e.get("premise", "")).strip()
-        if not title or not premise:
-            continue
-        raw_cast = e.get("cast", [])
-        cast = ([t for t in (str(x).strip() for x in raw_cast)
-                 if token_ok(t, char_ids, player_tokens, offscreen)]
-                if isinstance(raw_cast, list) else [])
-        loc = str(e.get("location", "")).strip()
-        out.append({"title": title, "premise": premise, "cast": cast,
-                    "location": loc if loc in loc_ids else "",
-                    "date": norm(str(e.get("date", "")).strip())})
+    for e in raw if isinstance(raw, list) else []:
+        pair = _pair(e, kinds, canon)
+        if pair is not None and pair["ref"] not in {p["ref"] for p in out}:
+            out.append(pair)
     return out
+
+
+def _anchor_of(entry: dict, snapshot: dict, controls: Controls) -> dict | None:
+    """`{ref, relation}`: the request's anchor when the batch has one (Decision
+    14), else the model's when it names an anchor option (Decision 5: a passed
+    or undated event is a driver, never an anchor). The relation is the
+    request's, else the model's if valid, else `on`; a month-only birthday only
+    ever takes `on` (Decision 6)."""
+    model = entry.get("time_anchor")
+    model = model if isinstance(model, dict) else {}
+    relation = model.get("relation")
+    relation = relation if isinstance(relation, str) and relation in ANCHOR_RELATIONS else ""
+    if controls.anchor:
+        ref, relation = controls.anchor, controls.relation or relation
+    else:
+        raw_ref = model.get("ref")
+        ref = raw_ref.strip() if isinstance(raw_ref, str) else ""
+        if ref not in {a["ref"] for a in snapshot.get("anchors", [])}:
+            return None
+    if _month_of(ref) is not None:
+        relation = "on"
+    return {"ref": ref, "relation": relation or "on"}
+
+
+def _misses(refs: set[str], controls: Controls) -> tuple[list[str], list[str]]:
+    """`(unmet_must, avoided)` over the claimed refs, in request order."""
+    return ([r for r in controls.must if r not in refs],
+            [r for r in controls.avoid if r in refs])
+
+
+def claim(entry: dict, snapshot: dict, controls: Controls) -> dict:
+    """What one suggestion validly claims (spec §15.2, Decision 14):
+    `{drivers: [{ref, action}], time_anchor: {ref, relation} | None,
+    unmet_must: [ref], avoided: [ref]}`.
+
+    Model refs canonicalize through the captured rows' aliases, and an unknown
+    ref or a wrong action for its kind is dropped. The time anchor is added to
+    `drivers` as `anchor` when missing, and an `anchor` entry naming anything
+    else is dropped, so a card never claims two anchors (as a saved idea never
+    does, Decision 16). Avoided refs are reported and left out of `drivers`;
+    an avoided anchor stays the anchor. Nothing here drops the suggestion."""
+    anchor = _anchor_of(entry, snapshot, controls)
+    kept = anchor["ref"] if anchor else None
+    pairs = [p for p in _valid_pairs(entry, snapshot)
+             if p["action"] != "anchor" or p["ref"] == kept]
+    if kept is not None and kept not in {p["ref"] for p in pairs}:
+        pairs.append({"ref": kept, "action": "anchor"})
+    claimed = {p["ref"] for p in pairs}
+    unmet, avoided = _misses(claimed, controls)
+    return {"drivers": [p for p in pairs if p["ref"] not in controls.avoid],
+            "time_anchor": anchor, "unmet_must": unmet, "avoided": avoided}
+
+
+def _plugin_soft(fn: Callable, *args):
+    """`fn(*args)` over provider code, or None when it raises anything."""
+    try:
+        return fn(*args)
+    except Exception:  # noqa: BLE001 -- user calendar plugin code can raise anything; a day it cannot read is no day
+        return None
+
+
+def _fixed(provider, native: str) -> int | None:
+    """The primary fixed day of a native date, time of day split off."""
+    if provider is None or not native:
+        return None
+    return _plugin_soft(calendars.fixed_of, provider, native)
+
+
+def _friendly_of(provider, fixed: int | None) -> str:
+    if provider is None or fixed is None:
+        return ""
+    described = _plugin_soft(provider.describe, fixed)
+    return str(described.get("friendly", "")) if isinstance(described, dict) else ""
+
+
+def _now_fixed(provider, snapshot: dict) -> int | None:
+    fixed = snapshot.get("fixed")
+    if isinstance(fixed, int):
+        return fixed
+    return _fixed(provider, snapshot.get("now") or "")
+
+
+def _anchor_day(provider, anchor: dict) -> int | None:
+    """D: the option's fixed day, else its native's (time of day dropped)."""
+    fixed = anchor.get("fixed")
+    return fixed if isinstance(fixed, int) else _fixed(provider, anchor.get("native") or "")
+
+
+def _month_key(provider, fixed: int) -> tuple[int, str] | None:
+    """`(year, case-folded month key)` of a fixed day, or None if unreadable."""
+    described = _plugin_soft(provider.describe, fixed)
+    if not isinstance(described, dict):
+        return None
+    months = _plugin_soft(provider.months, described.get("year"))
+    try:
+        return described["year"], str(months[described["month"] - 1]["key"]).casefold()
+    except (KeyError, IndexError, TypeError):
+        return None
+
+
+def _in_month(provider, month: tuple[int, str], date: str) -> tuple[str, bool]:
+    """A month-only `on`: the date is kept only inside the anchor's month."""
+    d = _fixed(provider, date)
+    if d is None:
+        return "", False
+    year, key = month
+    return (date, False) if _month_key(provider, d) == (year, key.casefold()) else ("", True)
+
+
+def _lower_ok(d: int, now: int | None) -> bool:
+    return now is None or now <= d
+
+
+#: Spec §15.3's relation rules over fixed days: (d, D, now) -> date allowed.
+#: `on` is absent: it derives the date rather than checking one.
+_RELATION_RULES: dict[str, Callable[[int, int, int | None], bool]] = {
+    "before": lambda d, big_d, now: _lower_ok(d, now) and d < big_d,
+    "by": lambda d, big_d, now: _lower_ok(d, now) and d <= big_d,
+    "after": lambda d, big_d, _now: big_d < d <= big_d + calendars.RESOLVE_WINDOW_DAYS,
+}
+
+
+def _against_anchor(provider, anchor: dict, relation: str, now: int | None,
+                    date: str) -> tuple[str, bool]:
+    month = _month_of(anchor["ref"])
+    if month is not None:
+        return _in_month(provider, month, date) if date else ("", False)
+    big_d = _anchor_day(provider, anchor)
+    if big_d is None:
+        return date, False
+    rule = _RELATION_RULES.get(relation)
+    if rule is None:   # `on`: derived from the anchor, canonical, no time of day
+        return _plugin_soft(provider.format, big_d) or "", False
+    d = _fixed(provider, date)
+    if d is None:
+        return "", False
+    return (date, False) if rule(d, big_d, now) else ("", True)
+
+
+def _against_mode(provider, snapshot: dict, controls: Controls, now: int | None,
+                  date: str) -> tuple[str, bool]:
+    """`near` and `move` (spec §16.3); skipped with no `now` (Decision 12)."""
+    if controls.time_mode not in ("near", "move") or now is None:
+        return date, False
+    d = _fixed(provider, date)
+    if d is None:
+        return date, False
+    if controls.time_mode == "near":
+        ok = now <= d <= now + snapshot.get("near_days", NEAR_MIN_DAYS)
+    else:
+        ok = d > now
+    return (date, False) if ok else ("", True)
+
+
+def check_date(provider, snapshot: dict, controls: Controls, time_anchor: dict | None,
+               date: str) -> tuple[str, bool]:
+    """`(date, rejected)` for one already normalized native (spec §15.3,
+    Decision 12). An `on` anchor derives the date; `before`/`by`/`after`
+    check it on fixed days; a month-only `on` keeps it only inside its month;
+    then `near`/`move` check what is left. An absent date is never rejected,
+    and with no calendar nothing is derived or checked."""
+    if provider is None:
+        return "", False
+    now = _now_fixed(provider, snapshot)
+    if time_anchor is not None:
+        anchor = next((a for a in snapshot.get("anchors", []) if a["ref"] == time_anchor["ref"]),
+                      None)
+        date, rejected = ((date, False) if anchor is None else
+                          _against_anchor(provider, anchor, time_anchor["relation"], now, date))
+        if rejected:
+            return "", True
+    if not date:
+        return "", False
+    return _against_mode(provider, snapshot, controls, now, date)
+
+
+def _claimed_refs(row: dict) -> list[str]:
+    anchor = row.get("time_anchor")
+    return [*(d["ref"] for d in row.get("drivers", [])), *([anchor["ref"]] if anchor else [])]
+
+
+def order_cards(rows: list[dict], snapshot: dict, controls: Controls) -> list[dict]:
+    """A stable re-ordering (Decision 13): the first card claiming a
+    high-pressure driver, then the earliest card covering each focus ref not
+    yet covered, then the rest in model order."""
+    states = {d["ref"]: d["pressure"]["state"] for d in snapshot.get("driver_index", [])}
+    remaining = list(rows)
+    hot = next((i for i, r in enumerate(remaining)
+                if any(states.get(ref) in pressure.HIGH_PRESSURE for ref in _claimed_refs(r))),
+               None)
+    out = [remaining.pop(hot)] if hot is not None else []
+    covered = {ref for row in out for ref in _claimed_refs(row)}
+    focus = set(controls.focus)
+    while True:
+        nxt = next((i for i, r in enumerate(remaining)
+                    if (focus & set(_claimed_refs(r))) - covered), None)
+        if nxt is None:
+            return out + remaining
+        out.append(remaining.pop(nxt))
+        covered.update(_claimed_refs(out[-1]))
+
+
+def _cast_of(entry: dict, ids: tuple, offscreen: bool) -> list[str]:
+    char_ids, player_tokens, _loc_ids = ids
+    raw_cast = entry.get("cast", [])
+    return ([t for t in (str(x).strip() for x in raw_cast)
+             if token_ok(t, char_ids, player_tokens, offscreen)]
+            if isinstance(raw_cast, list) else [])
+
+
+def _card(entry, ctx: dict) -> dict | None:
+    """One parsed suggestion with its validated provenance (spec §15.2), or
+    None when it has no title or premise."""
+    if not isinstance(entry, dict):
+        return None
+    title, premise = str(entry.get("title", "")).strip(), str(entry.get("premise", "")).strip()
+    if not title or not premise:
+        return None
+    snap, controls, provider = ctx["snapshot"], ctx["controls"], ctx["provider"]
+    claimed = claim(entry, snap, controls)
+    date = normalize_date(provider, snap.get("now") or "", entry.get("date", ""))
+    date, rejected = check_date(provider, snap, controls, claimed["time_anchor"], date)
+    fixed = _fixed(provider, date)
+    loc = str(entry.get("location", "")).strip()
+    labels = ctx["labels"]
+
+    def named(refs: list[str]) -> list[dict]:
+        return [{"ref": r, "label": labels.get(r, r)} for r in refs]
+
+    return {"title": title, "premise": premise,
+            "cast": _cast_of(entry, ctx["ids"], ctx["offscreen"]),
+            "location": loc if loc in ctx["ids"][2] else "",
+            "date": date, "date_friendly": _friendly_of(provider, fixed),
+            "in_days": (fixed - ctx["now"] if fixed is not None and ctx["now"] is not None
+                        else None),
+            "date_rejected": rejected,
+            "drivers": [{"ref": d["ref"], "kind": ctx["kinds"].get(d["ref"], d["ref"].split(":")[0]),
+                         "action": d["action"], "label": labels.get(d["ref"], d["ref"])}
+                        for d in claimed["drivers"]],
+            "time_anchor": _anchor_card(claimed["time_anchor"], snap, labels),
+            "unmet_must": named(claimed["unmet_must"]), "avoided": named(claimed["avoided"])}
+
+
+def _anchor_card(anchor: dict | None, snapshot: dict, labels: dict[str, str]) -> dict | None:
+    if anchor is None:
+        return None
+    ref = anchor["ref"]
+    opt: dict = next((a for a in snapshot.get("anchors", []) if a["ref"] == ref), {})
+    return {"ref": ref, "kind": opt.get("kind") or ref.split(":", 1)[0],
+            "relation": anchor["relation"], "label": opt.get("label") or labels.get(ref, ref),
+            "friendly": opt.get("friendly") or "", "in_days": opt.get("in_days")}
+
+
+def parse_output(text: str, cid: str, offscreen: bool = False, *,
+                 snapshot: dict | None = None, controls: Controls | None = None) -> list[dict]:
+    """The reply's suggestions, every id and date validated, each with its
+    claimed drivers and time anchor resolved against `snapshot` -- the capture
+    the prompt was rendered from (spec §16.3) -- and in `order_cards` order.
+
+    Without a snapshot the index is empty and no control applies: the rows
+    carry today's fields plus empty provenance. The calendar is resolved once,
+    softly (Decision 25): a plugin that cannot load blanks every date and
+    rejects none (§26). Store failures under `valid_ids` still surface as the
+    run's ordinary failure."""
+    suggestions = raw_suggestions(text)
+    if not suggestions:
+        return []
+    snap: dict = snapshot if snapshot is not None else {"now": clock.now(cid)}
+    controls = controls or NO_CONTROLS
+    provider = _soft_provider(campaigns_paths.campaign_root(cid))
+    ctx = {"snapshot": snap, "controls": controls, "provider": provider,
+           "now": _now_fixed(provider, snap) if provider is not None else None,
+           "ids": valid_ids(cid), "offscreen": offscreen,
+           "labels": {d["ref"]: d["label"] for d in snap.get("driver_index", [])},
+           "kinds": {d["ref"]: d["kind"] for d in snap.get("driver_index", [])}}
+    rows = [row for row in (_card(e, ctx) for e in suggestions) if row is not None]
+    return order_cards(rows, snap, controls)
 
 
 def _str_field(value) -> str:
@@ -797,10 +1124,10 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
 
     Malformed or semantically invalid model output never raises — extraction is
     a convenience, and a miss must leave the user a blank form rather than an
-    error. Store and calendar failures underneath (`valid_ids` reads entities,
-    `date_normalizer` imports a user-authored provider) are NOT covered by that
-    and surface as the route's ordinary 500, exactly as they do for
-    `parse_output`."""
+    error. Store failures underneath (`valid_ids` reads entities) are NOT
+    covered by that and surface as the route's ordinary 500, exactly as they do
+    for `parse_output`. A calendar plugin that cannot load is: the provider
+    resolves softly (Decision 25), so the date comes back blank."""
     empty = {"title": "", "date": "", "location": "", "cast": []}
     parsed = _extract_json(reply)
     if isinstance(parsed, list):   # a bare array is a common LLM deviation
@@ -819,11 +1146,17 @@ def parse_intent(reply: str, cid: str, offscreen: bool = False) -> dict:
             "cast": cast}
 
 
-def parse_next_date(text: str, cid: str) -> str:
-    """The model's general next-scene date estimate, validated; "" when absent/bad."""
+def parse_next_date(text: str, cid: str, *, snapshot: dict | None = None,
+                    controls: Controls | None = None) -> str:
+    """The model's general next-scene date estimate, validated; "" when
+    absent/bad. `near`/`move` check it; an anchor does not, since it answers
+    "if none is used" and an anchor constrains suggestions (Decision 12)."""
     parsed = _extract_json(text)
     raw = parsed.get("next_date", "") if isinstance(parsed, dict) else ""
-    return date_normalizer(cid, tolerant=True)(str(raw).strip())
+    provider = _soft_provider(campaigns_paths.campaign_root(cid))
+    snap: dict = snapshot if snapshot is not None else {"now": clock.now(cid)}
+    date = normalize_date(provider, snap.get("now") or "", raw)
+    return check_date(provider, snap, controls or NO_CONTROLS, None, date)[0]
 
 
 def parse_greeting_picks(text: str, allowed: set[str]) -> list[str]:

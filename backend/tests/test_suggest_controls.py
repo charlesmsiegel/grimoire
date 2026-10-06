@@ -8,7 +8,11 @@ would only make the counts harder to read.
 
 from __future__ import annotations
 
-from grimoire.store import suggest
+import json
+
+import pytest
+
+from grimoire.store import calendars, campaigns, suggest, worlds
 from grimoire.store.continuity import pressure
 from grimoire.store.continuity.drivers import DRIVER_KINDS
 from grimoire.store.suggest import NO_CONTROLS, Controls
@@ -241,3 +245,325 @@ def test_view_controls_carry_labels():
     assert view["must"] == [{"ref": "commitment:b", "label": "Mara's oath"}]
     assert view["avoid"] == [{"ref": "thread:gone", "label": "thread:gone"}]
     assert (view["time_mode"], view["near_days"], view["active"]) == ("near", 9, True)
+
+
+# ---- Task 4: claims, anchors, date derivation, constraint misses, card order ----
+#
+# Pure over a hand-built snapshot and the real Gregorian provider, the clock at
+# NOW. The anchors carry exactly `drivers._ANCHOR_FIELDS`; timeline items carry
+# no `year`/`month_key`, as Slice B's do not.
+
+GREG = calendars.get_provider({"provider": "gregorian", "region": "", "custom_holidays": [],
+                               "anchor": None})
+NOW = "2026-05-10"
+MAP = "thread:mara-s-map"
+CHART = "thread:winifred-s-chart"
+OATH = "commitment:mara-s-oath"
+CORONATION = "event:the-coronation"
+DEBT = "event:the-debt"                     # passed: a driver, never an anchor
+MIDNIGHT = "event:the-midnight-deadline"    # undated: a driver, never an anchor
+EVE = "holiday:739746:Saltmarch Eve"
+MARA_JUNE = "birthday:characters:mara:month:2026-06"
+
+
+def _fx(native: str) -> int:
+    return calendars.fixed_of(GREG, native)
+
+
+def _day(fixed: int) -> str:
+    return GREG.format(fixed)
+
+
+def _anchor(ref: str, native: str = "", *, label: str = "", fixed: int | None = None) -> dict:
+    if fixed is None and native:
+        fixed = _fx(native)
+    month = suggest._month_of(ref) is not None
+    return {"ref": ref, "kind": ref.split(":", 1)[0], "label": label or ref, "native": native,
+            "friendly": GREG.describe(fixed)["friendly"] if fixed is not None else "June 2026",
+            "fixed": fixed, "in_days": None if fixed is None else fixed - _fx(NOW),
+            "precision": "month" if month else "exact"}
+
+
+def _claim_snap(*, now: str = NOW, anchors: list[dict] | None = None, **over) -> dict:
+    index = [_driver(MAP, "ok", dormancy=1, label="Mara's map"),
+             _driver(OATH, "overdue", dormancy=0, in_days=-1, label="Mara's oath"),
+             _driver(CORONATION, "upcoming", in_days=3, label="The coronation"),
+             _driver(DEBT, "passed", in_days=-2, label="The debt"),
+             _driver(MIDNIGHT, "ok", label="The midnight deadline"),
+             _driver(EVE, "today", in_days=0, label="Saltmarch Eve"),
+             _driver(MARA_JUNE, "ok", label="Mara")]
+    if anchors is None:
+        anchors = [_anchor(EVE, "2026-05-10", label="Saltmarch Eve"),
+                   _anchor(CORONATION, "2026-05-13", label="The coronation"),
+                   _anchor(MARA_JUNE, label="Mara")]
+    base = {"now": now, "fixed": _fx(now) if now else None, "near_days": 7,
+            "open_threads": [{"ref": MAP, "aliases": []}],
+            "commitments": [{"ref": OATH, "aliases": []}],
+            "timeline": [{"ref": MARA_JUNE, "kind": "birthday", "label": "Mara",
+                          "native": "", "friendly": "", "fixed": None, "in_days": None,
+                          "relation": "in_month", "state": "ok", "subject": None,
+                          "due_text": "", "precision": "month", "actor": "characters:mara",
+                          "age": None}],
+            "driver_index": index, "anchors": anchors, "links": []}
+    return {**base, **over}
+
+
+def test_unknown_driver_is_dropped():
+    entry = {"drivers": [{"ref": "thread:ghost", "action": "advance"},
+                         {"ref": OATH, "action": "advance"},
+                         "not a dict",
+                         {"ref": MAP, "action": "advance"},
+                         {"ref": MAP, "action": "close_candidate"},
+                         {"ref": OATH, "action": "address"},
+                         {"ref": 7, "action": "advance"},
+                         {"action": "advance"}]}
+    got = suggest.claim(entry, _claim_snap(), NO_CONTROLS)
+    assert got == {"drivers": [{"ref": MAP, "action": "advance"},
+                               {"ref": OATH, "action": "address"}],
+                   "time_anchor": None, "unmet_must": [], "avoided": []}
+    assert suggest.claim({"drivers": "x"}, _claim_snap(), NO_CONTROLS)["drivers"] == []
+    assert suggest.claim({}, {}, NO_CONTROLS) == {"drivers": [], "time_anchor": None,
+                                                  "unmet_must": [], "avoided": []}
+
+
+def test_anchor_is_validated_and_auto_added():
+    snap = _claim_snap()
+    got = suggest.claim({"drivers": [{"ref": MAP, "action": "advance"}],
+                         "time_anchor": {"ref": CORONATION, "relation": "before"}},
+                        snap, NO_CONTROLS)
+    assert got["time_anchor"] == {"ref": CORONATION, "relation": "before"}
+    assert got["drivers"] == [{"ref": MAP, "action": "advance"},
+                              {"ref": CORONATION, "action": "anchor"}]
+    # listed already: not added twice
+    again = suggest.claim({"drivers": [{"ref": CORONATION, "action": "anchor"}],
+                           "time_anchor": {"ref": CORONATION, "relation": "by"}},
+                          snap, NO_CONTROLS)
+    assert again["drivers"] == [{"ref": CORONATION, "action": "anchor"}]
+    for ref in (DEBT, MIDNIGHT, "event:ghost", MAP):
+        got = suggest.claim({"drivers": [{"ref": MAP, "action": "advance"}],
+                             "time_anchor": {"ref": ref, "relation": "before"}},
+                            snap, NO_CONTROLS)
+        assert got["time_anchor"] is None, ref
+        assert got["drivers"] == [{"ref": MAP, "action": "advance"}], ref
+    # an invalid model relation reads as `on`; a month anchor only ever takes `on`
+    assert suggest.claim({"time_anchor": {"ref": CORONATION, "relation": "around"}},
+                         snap, NO_CONTROLS)["time_anchor"] == {"ref": CORONATION,
+                                                               "relation": "on"}
+    assert suggest.claim({"time_anchor": {"ref": MARA_JUNE, "relation": "before"}},
+                         snap, NO_CONTROLS)["time_anchor"] == {"ref": MARA_JUNE,
+                                                               "relation": "on"}
+    # an `anchor` entry naming anything but the kept time anchor is dropped
+    stray = suggest.claim({"drivers": [{"ref": DEBT, "action": "anchor"},
+                                       {"ref": EVE, "action": "anchor"}],
+                           "time_anchor": {"ref": CORONATION, "relation": "on"}},
+                          snap, NO_CONTROLS)
+    assert stray["drivers"] == [{"ref": CORONATION, "action": "anchor"}]
+
+
+def test_batch_anchor_forces_every_suggestion():
+    snap = _claim_snap()
+    model = {"drivers": [{"ref": MAP, "action": "advance"}],
+             "time_anchor": {"ref": EVE, "relation": "after"}}
+    forced = suggest.claim(model, snap, Controls(time_mode="anchor", anchor=CORONATION,
+                                                 relation="before"))
+    assert forced["time_anchor"] == {"ref": CORONATION, "relation": "before"}
+    assert forced["drivers"] == [{"ref": MAP, "action": "advance"},
+                                 {"ref": CORONATION, "action": "anchor"}]
+
+    open_relation = Controls(time_mode="anchor", anchor=CORONATION)
+    assert suggest.claim(model, snap, open_relation)["time_anchor"] == {
+        "ref": CORONATION, "relation": "after"}
+    invalid = {**model, "time_anchor": {"ref": EVE, "relation": "sideways"}}
+    assert suggest.claim(invalid, snap, open_relation)["time_anchor"] == {
+        "ref": CORONATION, "relation": "on"}
+    assert suggest.claim({}, snap, open_relation)["time_anchor"] == {
+        "ref": CORONATION, "relation": "on"}
+    month = Controls(time_mode="anchor", anchor=MARA_JUNE)
+    assert suggest.claim(model, snap, month)["time_anchor"] == {
+        "ref": MARA_JUNE, "relation": "on"}
+
+
+def test_focus_avoid_must_report_misses(monkeypatch, tmp_path):
+    controls = Controls(must=(OATH,), avoid=(MAP,))
+    entry = {"title": "Midnight at Saltmarch", "premise": "P", "cast": [], "location": "",
+             "drivers": [{"ref": MAP, "action": "advance"}]}
+    got = suggest.claim(entry, _claim_snap(), controls)
+    assert got["unmet_must"] == [OATH]
+    assert got["avoided"] == [MAP]
+    assert got["drivers"] == []
+
+    # an avoided anchor the model chose itself stays the anchor, and is reported
+    anchored = suggest.claim({"time_anchor": {"ref": CORONATION, "relation": "on"}},
+                             _claim_snap(), Controls(avoid=(CORONATION,)))
+    assert anchored["time_anchor"] == {"ref": CORONATION, "relation": "on"}
+    assert anchored["avoided"] == [CORONATION]
+    assert anchored["drivers"] == []
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = campaigns.create_campaign("Run", worlds.create_world("Realm"))
+    rows = suggest.parse_output(json.dumps({"suggestions": [entry]}), cid,
+                                snapshot=_claim_snap(), controls=controls)
+    assert [r["title"] for r in rows] == ["Midnight at Saltmarch"]
+    assert rows[0]["unmet_must"] == [{"ref": OATH, "label": "Mara's oath"}]
+    assert rows[0]["avoided"] == [{"ref": MAP, "label": "Mara's map"}]
+    assert rows[0]["drivers"] == []
+
+
+def test_a_canonical_alias_prevents_duplicate_drivers():
+    snap = _claim_snap(open_threads=[{"ref": CHART, "aliases": [
+        {"ref": MAP, "title": "Mara's map"}]}],
+        driver_index=[_driver(CHART, "ok", dormancy=1, label="Winifred's chart")])
+    got = suggest.claim({"drivers": [{"ref": MAP, "action": "advance"},
+                                     {"ref": CHART, "action": "advance"}]},
+                        snap, NO_CONTROLS)
+    assert got["drivers"] == [{"ref": CHART, "action": "advance"}]
+
+
+def test_on_derives_the_date():
+    on = {"ref": CORONATION, "relation": "on"}
+    for model_date in ("2026-06-01", "2026-05-11", ""):
+        assert suggest.check_date(GREG, _claim_snap(), NO_CONTROLS, on, model_date) == (
+            "2026-05-13", False)
+
+
+@pytest.mark.parametrize(("relation", "bad", "good"), [
+    ("before", "2026-05-13", "2026-05-12"),     # d = D, then D - 1
+    ("by", "2026-05-14", "2026-05-13"),         # d = D + 1, then D
+    ("after", "2026-05-13", "2026-05-14"),      # d = D, then D + 1
+    ("before", "2026-05-09", "2026-05-10"),     # d < now, then now
+], ids=["before-D", "by-D+1", "after-D", "before-past"])
+def test_invalid_relation_dates_are_blanked_and_kept(relation, bad, good):
+    anchor = {"ref": CORONATION, "relation": relation}
+    snap = _claim_snap()
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, anchor, bad) == ("", True)
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, anchor, good) == (good, False)
+
+
+def test_anchor_day_boundaries_ignore_the_time_of_day():
+    evening = _anchor(CORONATION, "2026-05-12T20:00", label="The coronation")
+    assert evening["fixed"] == _fx("2026-05-12")
+    snap = _claim_snap(anchors=[evening])
+    f = evening["fixed"]
+
+    def check(relation: str, date: str) -> tuple[str, bool]:
+        return suggest.check_date(GREG, snap, NO_CONTROLS,
+                                  {"ref": CORONATION, "relation": relation}, date)
+
+    assert check("on", "") == ("2026-05-12", False)
+    assert check("before", "2026-05-12") == ("", True)
+    assert check("before", "2026-05-11") == ("2026-05-11", False)
+    assert check("by", "2026-05-12") == ("2026-05-12", False)
+    assert check("after", "2026-05-12") == ("", True)
+    assert check("after", "2026-05-13") == ("2026-05-13", False)
+    assert check("after", _day(f + 400)) == (_day(f + 400), False)
+    assert check("after", _day(f + 401)) == ("", True)
+
+
+def test_near_and_move_blank_out_of_range_dates():
+    snap = _claim_snap()
+    n = _fx(NOW)
+    near, move = Controls(time_mode="near"), Controls(time_mode="move")
+    assert suggest.check_date(GREG, snap, near, None, NOW) == (NOW, False)
+    assert suggest.check_date(GREG, snap, near, None, _day(n + 7)) == (_day(n + 7), False)
+    assert suggest.check_date(GREG, snap, near, None, _day(n + 8)) == ("", True)
+    assert suggest.check_date(GREG, snap, near, None, _day(n - 1)) == ("", True)
+    assert suggest.check_date(GREG, snap, move, None, NOW) == ("", True)
+    assert suggest.check_date(GREG, snap, move, None, _day(n + 1)) == (_day(n + 1), False)
+    # auto checks nothing
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, None, _day(n - 30)) == (
+        _day(n - 30), False)
+
+
+def test_an_absent_date_is_not_rejected():
+    snap = _claim_snap()
+    before = {"ref": CORONATION, "relation": "before"}
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, before, "") == ("", False)
+    assert suggest.check_date(GREG, snap, Controls(time_mode="near"), None, "") == ("", False)
+    month_on = {"ref": MARA_JUNE, "relation": "on"}
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, month_on, "") == ("", False)
+    # no calendar: nothing is derived or checked
+    assert suggest.check_date(None, snap, NO_CONTROLS, {"ref": CORONATION, "relation": "on"},
+                              "2026-05-12") == ("", False)
+
+
+def test_no_now_skips_the_lower_bound():
+    snap = _claim_snap(now="")
+    before = {"ref": CORONATION, "relation": "before"}
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, before, "2026-01-01") == (
+        "2026-01-01", False)
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, before, "2026-05-13") == ("", True)
+    assert suggest.check_date(GREG, snap, Controls(time_mode="near"), None, "2027-01-01") == (
+        "2027-01-01", False)
+    assert suggest.check_date(GREG, snap, Controls(time_mode="move"), None, "2020-01-01") == (
+        "2020-01-01", False)
+
+
+def test_month_only_birthday_on_keeps_only_its_month():
+    snap = _claim_snap()
+    item = snap["timeline"][0]
+    assert "year" not in item and "month_key" not in item
+    on = {"ref": MARA_JUNE, "relation": "on"}
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-06-20") == (
+        "2026-06-20", False)
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2026-07-01") == ("", True)
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, on, "2027-06-20") == ("", True)
+
+
+def test_month_of_parses_refs():
+    assert suggest._month_of("birthday:characters:mara:month:2026-06") == (2026, "06")
+    assert suggest._month_of("birthday:characters:mara:month:5786-Adar-I") == (5786, "Adar-I")
+    assert suggest._month_of("birthday:pcs:winifred:month:-12-06") == (-12, "06")
+    assert suggest._month_of("birthday:characters:month:month:2026-06") == (2026, "06")
+    assert suggest._month_of("birthday:characters:mara:739780") is None
+    assert suggest._month_of("event:the-coronation") is None
+    assert suggest._month_of("birthday:characters:mara:month:june") is None
+    assert suggest._month_of("") is None
+
+
+def test_on_date_is_canonical():
+    handwritten = _anchor(CORONATION, fixed=GREG.parse("2026-5-13"), label="The coronation")
+    handwritten["native"] = "2026-5-13"
+    snap = _claim_snap(anchors=[handwritten])
+    assert suggest.check_date(GREG, snap, NO_CONTROLS, {"ref": CORONATION, "relation": "on"},
+                              "") == ("2026-05-13", False)
+
+
+def _row(title: str, *refs: str, anchor: str | None = None) -> dict:
+    return {"title": title, "drivers": [{"ref": r} for r in refs],
+            "time_anchor": {"ref": anchor} if anchor else None}
+
+
+def test_high_pressure_card_first():
+    snap = _claim_snap(driver_index=[*_claim_snap()["driver_index"],
+                                     _driver(CHART, "ok", dormancy=2)])
+    rows = [_row("ok", MAP), _row("overdue", OATH), _row("focus", CHART)]
+    assert [r["title"] for r in suggest.order_cards(rows, snap, NO_CONTROLS)] == [
+        "overdue", "ok", "focus"]
+    # only one card is promoted; a time anchor counts as a claim
+    rows = [_row("ok", MAP), _row("eve", anchor=EVE), _row("overdue", OATH)]
+    assert [r["title"] for r in suggest.order_cards(rows, snap, NO_CONTROLS)] == [
+        "eve", "ok", "overdue"]
+    assert suggest.order_cards([], snap, NO_CONTROLS) == []
+
+
+def test_distinct_focus_cards_come_next():
+    snap = _claim_snap(driver_index=[_driver(MAP, "ok"), _driver(CHART, "ok")])
+    controls = Controls(focus=(MAP, CHART))
+    rows = [_row("a1", MAP), _row("a2", MAP), _row("b", CHART)]
+    assert [r["title"] for r in suggest.order_cards(rows, snap, controls)] == ["a1", "b", "a2"]
+    # a high-pressure card's focus refs count as covered
+    snap = _claim_snap(driver_index=[_driver(MAP, "ok"), _driver(CHART, "ok"),
+                                     _driver(OATH, "overdue")])
+    controls = Controls(focus=(MAP, CHART, OATH))
+    rows = [_row("map", MAP), _row("oath", OATH), _row("oath2", OATH), _row("chart", CHART)]
+    assert [r["title"] for r in suggest.order_cards(rows, snap, controls)] == [
+        "oath", "map", "chart", "oath2"]
+
+
+def test_raw_suggestions_shapes():
+    assert suggest.raw_suggestions("no json here at all") is None
+    assert suggest.raw_suggestions('{"suggestions": 3}') == []
+    assert suggest.raw_suggestions('{"next_date": "2026-05-12"}') == []
+    assert suggest.raw_suggestions('[{"title": "T"}, 4]') == [{"title": "T"}, 4]
+    assert suggest.raw_suggestions('{"suggestions": [{"title": "T"}]}') == [{"title": "T"}]
+    assert suggest.raw_suggestions("42") == []

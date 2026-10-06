@@ -1080,3 +1080,130 @@ def test_an_empty_campaign_keeps_todays_system_message(monkeypatch, tmp_path):
     system = suggest.build_prompt(suggest.build_snapshot(cid))[0]["content"]
     assert system == suggest.build_prompt(_snap())[0]["content"]
     assert 'key "drivers"' not in system
+
+
+# ---- Task 4: parsing against the captured snapshot ----
+def _reply(*suggestions, next_date=None) -> str:
+    body: dict = {"suggestions": [{"title": f"T{i}", "premise": "P", "cast": [],
+                                   "location": "", **s} for i, s in enumerate(suggestions)]}
+    if next_date is not None:
+        body["next_date"] = next_date
+    return json.dumps(body)
+
+
+def _break_calendar(cid, tmp_path):
+    """Point the campaign's primary calendar at a plugin whose constructor
+    raises RuntimeError -- not CalendarError, which today's guards absorb."""
+    plugins = tmp_path / "calendars"
+    plugins.mkdir(exist_ok=True)
+    (plugins / "broken_test.py").write_text(_BROKEN_PROVIDER_SRC, encoding="utf-8")
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "broken-test-calendar", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+
+
+def test_parse_output_resolves_labels_and_dates(monkeypatch, tmp_path):
+    cid, event = _store_campaign(monkeypatch, tmp_path)
+    snap = suggest.build_snapshot(cid)
+    controls = suggest.Controls(time_mode="anchor", anchor=event, relation="before")
+    text = _reply({"date": "2026-05-12", "drivers": [{"ref": MAP, "action": "advance"}]})
+    [row] = suggest.parse_output(text, cid, snapshot=snap, controls=controls)
+    assert row["time_anchor"] == {"ref": "event:the-coronation", "kind": "event",
+                                  "relation": "before", "label": "The coronation",
+                                  "friendly": "13 May 2026", "in_days": 3}
+    assert row["drivers"] == [
+        {"ref": MAP, "kind": "thread", "action": "advance", "label": "Mara's map"},
+        {"ref": event, "kind": "event", "action": "anchor", "label": "The coronation"}]
+    assert (row["date"], row["date_friendly"], row["in_days"], row["date_rejected"]) == (
+        "2026-05-12", "12 May 2026", 2, False)
+    assert (row["unmet_must"], row["avoided"]) == ([], [])
+    assert set(row) == {"title", "premise", "cast", "location", "date", "date_friendly",
+                        "in_days", "date_rejected", "drivers", "time_anchor", "unmet_must",
+                        "avoided"}
+
+
+def test_plugin_calendar_dates_derive_in_native_notation(monkeypatch, tmp_path):
+    # the wide test calendar's months have ten days, so the brief's "5-M03-12"
+    # would be read as 5-M04-02; the tenth is the same check inside the month
+    cid = _wide_campaign(monkeypatch, tmp_path)
+    eid = events.create(cid, "The coronation", "5-M03-10")
+    snap = suggest.build_snapshot(cid)
+    assert f"event:{eid}" in {a["ref"] for a in snap["anchors"]}
+
+    def parsed(relation: str, date: str) -> dict:
+        controls = suggest.Controls(time_mode="anchor", anchor=f"event:{eid}",
+                                    relation=relation)
+        return suggest.parse_output(_reply({"date": date}), cid, snapshot=snap,
+                                    controls=controls)[0]
+
+    on = parsed("on", "")
+    assert (on["date"], on["date_rejected"], on["in_days"]) == ("5-M03-10", False, 3)
+    assert on["date_friendly"] == "10 M03 5"
+    before = parsed("before", "9 M03 5")
+    assert (before["date"], before["date_rejected"]) == ("5-M03-09", False)
+
+
+def test_parse_output_without_a_snapshot_keeps_todays_fields(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    text = _reply({"date": "2026-05-12", "drivers": [{"ref": MAP, "action": "advance"}],
+                   "time_anchor": {"ref": "event:the-coronation", "relation": "on"}},
+                  {"date": "2026-04-01"})
+    rows = suggest.parse_output(text, cid)
+    assert [r["date"] for r in rows] == ["2026-05-12", "2026-04-01"]
+    for row in rows:
+        assert row["drivers"] == [] and row["time_anchor"] is None
+        assert row["date_rejected"] is False
+        assert (row["unmet_must"], row["avoided"]) == ([], [])
+    assert (rows[0]["date_friendly"], rows[0]["in_days"]) == ("12 May 2026", 2)
+    assert rows[1]["in_days"] == -39
+
+
+def test_next_date_is_checked_under_near_only(monkeypatch, tmp_path):
+    cid, event = _store_campaign(monkeypatch, tmp_path)
+    snap = suggest.build_snapshot(cid)
+    text = _reply(next_date="2026-05-30")    # 20 days out; near is 7
+    assert suggest.parse_next_date(text, cid, snapshot=snap,
+                                   controls=suggest.Controls(time_mode="near")) == ""
+    anchored = suggest.Controls(time_mode="anchor", anchor=event, relation="before")
+    assert suggest.parse_next_date(text, cid, snapshot=snap, controls=anchored) == "2026-05-30"
+    assert suggest.parse_next_date(text, cid, snapshot=snap) == "2026-05-30"
+    assert suggest.parse_next_date(text, cid) == "2026-05-30"
+    past = _reply(next_date="2026-05-10")
+    assert suggest.parse_next_date(past, cid, snapshot=snap,
+                                   controls=suggest.Controls(time_mode="move")) == ""
+
+
+def test_month_only_on_against_a_real_campaign(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    aid, _ = overlay.create_character(cid, "Winifred")
+    characters.set_birthdate(campaigns.campaign_root(cid), aid, "--06")
+    snap = suggest.build_snapshot(cid)
+    [ref] = [a["ref"] for a in snap["anchors"] if a["ref"].startswith(f"birthday:characters:{aid}:")]
+    assert suggest._month_of(ref) == (2026, "06")
+    controls = suggest.Controls(time_mode="anchor", anchor=ref, relation="on")
+    rows = suggest.parse_output(_reply({"date": "2026-06-20"}, {"date": "2026-07-01"}), cid,
+                                snapshot=snap, controls=controls)
+    assert [(r["date"], r["date_rejected"]) for r in rows] == [
+        ("2026-06-20", False), ("", True)]
+    assert rows[0]["time_anchor"]["relation"] == "on"
+
+
+def test_parse_survives_a_raising_plugin(monkeypatch, tmp_path):
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    events.create(cid, "The coronation", "2026-05-13")
+    _break_calendar(cid, tmp_path)
+    snap = suggest.build_snapshot(cid)
+    text = _reply({"date": "2026-05-12", "drivers": [{"ref": MAP, "action": "advance"}]},
+                  {"date": "2026-05-20"}, next_date="2026-05-14")
+    for kwargs in ({}, {"snapshot": snap, "controls": suggest.Controls(focus=(MAP,))}):
+        rows = suggest.parse_output(text, cid, **kwargs)
+        assert [r["title"] for r in rows] == ["T0", "T1"], kwargs
+        assert all(r["date"] == "" and r["date_rejected"] is False for r in rows), kwargs
+        assert suggest.parse_next_date(text, cid, **kwargs) == ""
+    intent = suggest.parse_intent('{"title": "A", "date": "2026-05-12"}', cid)
+    assert (intent["title"], intent["date"]) == ("A", "")
+    assert suggest.ref_validator(cid)([], "", "2026-05-12")["date"] == ""
