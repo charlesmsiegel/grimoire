@@ -7,10 +7,12 @@ Collections contribute each available member independently.
 
 Where an assignment is kept is `image_subjects`' business, and this module
 only tells it where each key's picture is (`catalog_with_slots`): a picture
-placed in this world is answered on its image object, so tagging it in one
-greeting tags it in every greeting of the world that shows it. A per-greeting
-answer in that greeting's sidecar is kept for everything else: a remote URL,
-a picture placed in another world, legacy art with no placement, a placement
+placed in this world, or a member of one of this world's format-2 collections
+(which is its object, with no placement), is answered on its image object, so
+tagging it in one greeting tags it in every greeting of the world that shows
+it. A per-greeting answer in that greeting's sidecar is kept for everything
+else: a remote URL, a picture placed in another world or a member of another
+world's collection, legacy art with no placement, a placement
 whose object or blob has not arrived (the legacy file of the same name beside
 it is the picture shown), and an answer whose object write was not confirmed
 (R8). A sidecar answer, while present, wins over the object's.
@@ -25,7 +27,16 @@ from urllib.parse import quote, unquote, urlsplit
 
 from markdown_it import MarkdownIt
 
-from . import assets, characters, entities, greetings, image_collections, pcs, statcache
+from . import (
+    assets,
+    characters,
+    entities,
+    greetings,
+    image_collections,
+    image_refs,
+    pcs,
+    statcache,
+)
 from .paths import safe_id
 from .worlds import paths as worlds_paths
 
@@ -59,17 +70,46 @@ _MISSING = (OSError, characters.CharacterNotFound, characters.VersionNotFound,
 
 
 def local_path(root: Path, url: str) -> Path | None:
-    """Resolve only supported world image routes, never an arbitrary pathname."""
+    """Resolve only supported world image routes, never an arbitrary pathname.
+    A collection member's URL is served by `image_collections.member_path`."""
+    member = _member_route(url)
+    if member is not None:
+        try:
+            return image_collections.member_path(*member)
+        except _MEMBER_MISSING:
+            return None
     record = _record(root, url)
     return _record_path(*record) if record is not None else None
 
 
-def local_slot(root: Path, url: str) -> tuple[Path, str] | None:
-    """The image directory and logical name behind a supported world image
-    route -- what `local_path` resolves, one step earlier, so a caller can ask
-    for the placement there (`assets.resolve`) rather than for its bytes."""
+def local_target(root: Path, url: str) -> Target:
+    """Where the picture behind a supported world image route is, or None
+    when nothing is served there: `("slot", (dir, name), image_id)` for a
+    record's image (the world library's, for a format-1 collection member),
+    `("object", image_id)` for a format-2 member, which is its object.
+
+    Where the picture IS, in any world: whether its tags may be kept there is
+    the catalog's question (`catalog_with_slots`), not this one's."""
+    member = _member_route(url)
+    if member is not None:
+        try:
+            return _member_target(*member)
+        except _MEMBER_MISSING:
+            return None
     record = _record(root, url)
-    return _record_dir(*record) if record is not None else None
+    found = _record_file(*record) if record is not None else None
+    return ("slot", found[0], found[1]) if found is not None else None
+
+
+def resolve(target: Target) -> image_refs.ResolvedImage | None:
+    """The image behind a target, resolved NOW (object and blob): a slot's
+    placement, or the object itself. None for no target, a legacy slot, and
+    a picture whose object or blob is not there."""
+    if target is None:
+        return None
+    if target[0] == "object":
+        return image_refs.resolve_ref(image_refs.Ref(name="", image=target[1], focus=None))
+    return assets.resolve(*target[1])
 
 
 _Slot = tuple[str, str, str, str]
@@ -169,30 +209,74 @@ def _references(root: Path, gid: str) -> list[str]:
 # A dedicated pool avoids evicting unrelated record caches during that sweep.
 _REF_POOL: dict = {}
 
+#: What a collection that is not there, or does not read, raises.
+_MEMBER_MISSING = (OSError, ValueError, worlds_paths.WorldNotFound)
 
-def _collection_members(url: str) -> list[str]:
+
+def _member_route(url: str) -> tuple[str, str, int] | None:
+    """`(wid, collection id, index)` of a collection member URL,
+    ``/api/worlds/{wid}/image-collections/{id}/members/{n}``, or None. The
+    index is read by `image_collections.member_index`, the one parser of it;
+    the collection id is proved by whatever is asked of it next."""
+    try:
+        parts = [unquote(segment) for segment in urlsplit(url).path.split("/")]
+    except ValueError:
+        return None
+    if (len(parts) != 8 or parts[:3] != ["", "api", "worlds"] or not safe_id(parts[3])
+            or parts[4] != "image-collections" or parts[6] != "members"):
+        return None
+    index = image_collections.member_index(parts[7])
+    return None if index is None else (parts[3], parts[5], index)
+
+
+def _member_target(wid: str, collection_id: str, index: int) -> Target:
+    """`local_target` for member `index`: a format-2 member is its object
+    (resolved, as `image_collections.available` resolves one), a format-1
+    member the world-library slot its name places."""
+    manifest = image_collections.read(wid, collection_id)
+    members = manifest["members"]
+    if not 0 <= index < len(members):
+        return None
+    if manifest["format"] == 2:
+        found = image_refs.resolve_ref(image_refs.Ref(name="", image=members[index], focus=None))
+        return ("object", found.image_id) if found is not None else None
+    filed = _record_file(worlds_paths.world_root(wid), ("images", "", "", members[index]))
+    return ("slot", filed[0], filed[1]) if filed is not None else None
+
+
+def _collection_members(url: str) -> list[tuple[str, Target]]:
+    """The pictures one body reference shows, as `(url, target)`: each
+    available member of a collection (`.../image`), else the reference itself.
+    A format-2 member carries its object target from the listing, so nothing
+    resolves it twice; every other target is None here, for the caller to
+    find (`local_target`)."""
     try:
         path = urlsplit(url).path
     except ValueError:
         return []
     collection = re.fullmatch(r"/api/worlds/([^/]+)/image-collections/([0-9a-f]{32})/image", path)
     if not collection or not url.startswith("/api/worlds/"):
-        return [url]
+        return [(url, None)]
     try:
-        return [member["url"] for member in image_collections.available(*collection.groups())]
-    except (OSError, ValueError, worlds_paths.WorldNotFound):
+        rows = image_collections.available(*collection.groups())
+    except _MEMBER_MISSING:
         return []
+    return [(row["url"], ("object", row["image_id"]) if "image_id" in row else None)
+            for row in rows]
 
 
-#: Where a catalog key's tags can be kept, beside its entry: ``("slot", (dir,
-#: name), image_id)`` for a key whose picture is a slot in some record's image
-#: directory (the greeting's own art, or a local reference the route names),
-#: None for one with no slot (a remote URL). `image_id` is the image the slot's
-#: placement resolved to while the catalog was built, None when it did not
+#: Where a picture is: ``("slot", (dir, name), image_id)`` for a key whose
+#: picture is a slot in some record's image directory (the greeting's own art,
+#: or a local reference the route names), with `image_id` the image the slot's
+#: placement resolved to while the catalog was built -- None when it did not
 #: resolve (legacy art, or a placement whose object or blob has not arrived) --
-#: carried so a reader never reads that placement a second time. Tagged,
-#: because a key may later name an image object directly rather than a slot.
-Target = tuple[Literal["slot"], tuple[Path, str], str | None] | None
+#: carried so a reader never reads that placement a second time;
+#: ``("object", image_id)`` for a format-2 collection member, which is its
+#: image object and has no slot. In a catalog it is where the key's tags can
+#: be kept: None there for a key with neither (a remote URL, or a member of
+#: another world's collection, R11).
+Target = (tuple[Literal["slot"], tuple[Path, str], str | None]
+          | tuple[Literal["object"], str] | None)
 
 
 def catalog(root: Path, gid: str) -> dict[str, dict]:
@@ -218,6 +302,11 @@ def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
     image id is the listing's own. The slot may lie in ANOTHER world's root --
     a reference names the world it serves from -- and a caller that keeps
     something per world has to check which root it is under.
+
+    A format-2 collection member's key is its member URL without the query.
+    Its target is `("object", image_id)` only when the collection is this
+    world's (C6): a member of another world's collection has no target, so
+    its tags stay in the greeting's sidecar, as any cross-world picture's do.
     """
     out: dict[str, tuple[dict, Target]] = {}
     rows = assets.list_images(root, gid, "default", base="greetings")
@@ -231,17 +320,30 @@ def catalog_with_slots(root: Path, gid: str) -> dict[str, tuple[dict, Target]]:
                               pool=_REF_POOL, max_entries=characters.POOL_ENTRIES)
     except (OSError, greetings.GreetingNotFound):
         return out
+    same_world: dict[str, bool] = {}
     for url in refs:
-        for source in _collection_members(url):
+        for source, listed in _collection_members(url):
             key = image_key(root, gid, source)
             if source.startswith("/api/worlds/"):
                 if not key.startswith("/"):
                     continue    # this greeting's own art, listed above
-                record = _record(root, source)
-                found = _record_file(*record) if record is not None else None
-                if found is not None:
-                    slot, image_id = found
-                    out[key] = ({"url": key}, ("slot", slot, image_id))
+                target = listed if listed is not None else local_target(root, source)
+                if target is None:
+                    continue
+                if target[0] == "object" and not _same_world(root, source, same_world):
+                    target = None
+                out[key] = ({"url": key}, target)
             elif urlsplit(source).scheme in ("http", "https") and urlsplit(source).netloc:
                 out[key] = ({"url": key}, None)
     return out
+
+
+def _same_world(root: Path, url: str, seen: dict[str, bool]) -> bool:
+    """Is the world a local URL names `root`'s world? Canonical ids compared,
+    so `REALM` is `realm` where the filesystem says so; answered once per
+    spelling per catalog (`seen`), since canonicalizing lists the worlds."""
+    wid = unquote(urlsplit(url).path.split("/")[3])
+    if wid not in seen:
+        seen[wid] = wid == root.name or (worlds_paths.canonical_id(wid)
+                                         == worlds_paths.canonical_id(root.name))
+    return seen[wid]

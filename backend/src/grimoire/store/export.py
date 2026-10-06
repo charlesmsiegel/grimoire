@@ -30,6 +30,7 @@ from . import (
     entities,
     fetch,
     image_collections,
+    image_refs,
     overlay,
     pcs,
     worlds,
@@ -74,8 +75,11 @@ _IMG_URL = re.compile(
     r")/images"
     r")/(?P<name>[^/\s?#]+)")
 
+# A local collection: its representative (`/image`), or one member by index
+# (`/members/{n}`, `n` read by `image_collections.member_index`).
 _COLLECTION_URL = re.compile(
-    r"/api/worlds/[^/\s]+/image-collections/(?P<collection>[0-9a-f]{32})/image(?:\?[^\s#]*)?\Z")
+    r"/api/worlds/[^/\s]+/image-collections/(?P<collection>[0-9a-f]{32})"
+    r"/(?:image|members/(?P<n>[^/\s?#]+))(?:\?[^\s#]*)?\Z")
 
 _MD_IMG = re.compile(r"!\[(?P<alt>[^\]]*)\]\((?P<url>[^)\s]+)(?:\s+\"[^\"]*\")?\)")
 
@@ -239,17 +243,39 @@ def resolve_url(cid: str, url: str) -> Path | None:
     """
     collection = _COLLECTION_URL.fullmatch(url)
     if collection:
-        # Like ordinary world image links, resolve in the exported
-        # campaign's world, and respect its hidden-image tombstones.
         try:
-            wid = campaigns_read.world_root_of(cid).name
-            members = image_collections.read(wid, collection["collection"])["members"]
-            return next((path for name in members
-                         if (path := campaign_images.image_path(cid, name)) is not None), None)
+            return _resolve_collection(cid, collection["collection"], collection["n"])
         except (FileNotFoundError, ValueError, worlds.WorldNotFound):
             return None
     app = _IMG_URL.match(url)
     return _resolve_image(cid, app) if app else None
+
+
+def _resolve_collection(cid: str, collection_id: str, n: str | None) -> Path | None:
+    """The file a collection URL exports as: its first available member
+    (`n` None, the `/image` representative), or member `n`.
+
+    Like ordinary world image links, resolved in the exported campaign's
+    world whatever world the URL names. A format-1 member is a library name,
+    so it takes the campaign's library rule and its hidden-image tombstones
+    (`campaign_images.image_path`); a format-2 member is its object, which no
+    campaign can hide, and exports as its blob. A missing member is None,
+    never another member."""
+    wid = campaigns_read.world_root_of(cid).name
+    manifest = image_collections.read(wid, collection_id)
+    members = manifest["members"]
+    if n is not None:
+        index = image_collections.member_index(n)
+        # Member `n` alone: out of range is no member, and a missing one is
+        # never replaced by the next.
+        members = members[index:index + 1] if index is not None else []
+    if manifest["format"] == 1:
+        return next((path for name in members
+                     if (path := campaign_images.image_path(cid, name)) is not None), None)
+    # Lazily: the first that resolves, without resolving the rest.
+    return next((found.blob_path for image_id in members
+                 if (found := image_refs.resolve_ref(
+                     image_refs.Ref(name="", image=image_id, focus=None))) is not None), None)
 
 
 def rewrite_images(text: str, cid: str, images: Images, prefix: str = "images/") -> str:

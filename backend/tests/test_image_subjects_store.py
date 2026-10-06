@@ -1,6 +1,8 @@
+import io
 from urllib.parse import quote
 
 import pytest
+from PIL import Image
 
 from grimoire.store import (
     assets,
@@ -13,6 +15,7 @@ from grimoire.store import (
     pcs,
     worlds,
 )
+from tests.collection_fixtures import format2
 
 
 def _world(tmp_path, images=("art_1", "art_2")):
@@ -691,3 +694,95 @@ def test_a_reference_into_a_half_promoted_record_rolls_the_promotion_forward(tmp
     assert image_refs.read_journal(d) is None
     assert image_refs.read(d, "gallery_1").image == a
     assert image_subjects.read_subjects(root, gid) == {url: [cid]}
+
+
+# ---- format-2 collection members (stage 3, C6) ----
+
+_COLLECTION = "0123456789abcdef0123456789abcdef"
+
+
+def _real_png(color: str) -> bytes:
+    """A real PNG: a collection member is ingested, and its id is its pixels'."""
+    out = io.BytesIO()
+    Image.new("RGB", (2, 2), color).save(out, "PNG")
+    return out.getvalue()
+
+
+def _member_key(wid: str, index: int, collection: str = _COLLECTION) -> str:
+    return f"/api/worlds/{wid}/image-collections/{collection}/members/{index}"
+
+
+def test_tagging_a_format_2_member_writes_its_object(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    ids = format2(root.name, _COLLECTION, _real_png("red"), _real_png("blue"))
+    gid = _greeting_with(root, cid, vid, {},
+                         body=f"![Pool](/api/worlds/{root.name}/image-collections/{_COLLECTION}/image)")
+    # Another greeting shows member 0 by its own URL, and a third holds the
+    # same pixels as its own art: one object, so one answer for all three.
+    direct = _greeting_with(root, cid, vid, {}, body=f"![One]({_member_key(root.name, 0)}?v=old)")
+    own = _greeting_with(root, cid, vid, {"art_1": _real_png("red")})
+    first, second = _member_key(root.name, 0), _member_key(root.name, 1)
+    assert sorted(a["name"] for a in image_subjects.untagged(root)) == sorted([first, second, first, "art_1"])
+
+    image_subjects.set_image_subjects(root, gid, first, [cid])
+
+    raw = image_store.read(ids[0]).raw
+    assert raw["associations"] == [
+        {"kind": "character", "relation": "subject", "scope": "world:realm", "id": cid}]
+    assert raw["reviews"] == {"subjects": ["world:realm"]}
+    assert not image_subjects.subjects_path(root, gid).exists()
+    assert image_subjects.read_subjects(root, gid) == {first: [cid]}
+    assert image_subjects.read_subjects(root, direct) == {first: [cid]}
+    assert image_subjects.read_subjects(root, own) == {"art_1": [cid]}
+    assert [a["name"] for a in image_subjects.untagged(root)] == [second]
+    assert "reviews" not in image_store.read(ids[1]).raw
+
+
+def test_a_cross_world_format_2_member_tag_stays_in_the_sidecar(tmp_path, monkeypatch):
+    """R11 for a member: the tag travels with this greeting's world."""
+    realm, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    salt = worlds.world_root(worlds.create_world("Saltmarch"))
+    [image_id] = format2(salt.name, _COLLECTION, _real_png("red"))
+    key = _member_key(salt.name, 0)
+    gid = _greeting_with(realm, cid, vid, {},
+                         body=f"![Pool](/api/worlds/{salt.name}/image-collections/{_COLLECTION}/image)")
+    assert [a["name"] for a in image_subjects.untagged(realm)] == [key]
+
+    image_subjects.set_image_subjects(realm, gid, key, [cid])
+
+    assert image_subjects._read_raw(realm, gid) == {key: [cid]}
+    raw = image_store.read(image_id).raw
+    assert "associations" not in raw and "reviews" not in raw
+    assert image_subjects.read_subjects(realm, gid) == {key: [cid]}
+    assert image_subjects.untagged(realm) == []
+
+
+def test_an_unconfirmed_member_object_write_keeps_the_sidecar_entry(tmp_path, monkeypatch):
+    """R8 for a member: the object write was not confirmed, so the answer
+    lands in the sidecar rather than nowhere."""
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    format2(root.name, _COLLECTION, _real_png("red"))
+    key = _member_key(root.name, 0)
+    gid = _greeting_with(root, cid, vid, {}, body=f"![One]({key})")
+    monkeypatch.setattr(image_subjects.image_store, "update", lambda image_id, change: False)
+
+    image_subjects.set_image_subjects(root, gid, key, [cid])
+
+    assert image_subjects._read_raw(root, gid) == {key: [cid]}
+    assert image_subjects.read_subjects(root, gid) == {key: [cid]}
+
+
+def test_a_format_2_member_tag_survives_fork_world(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    [image_id] = format2(root.name, _COLLECTION, _real_png("red"))
+    gid = _greeting_with(root, cid, vid, {},
+                         body=f"![Pool](/api/worlds/{root.name}/image-collections/{_COLLECTION}/image)")
+    image_subjects.set_image_subjects(root, gid, _member_key(root.name, 0), [cid])
+
+    fork = worlds.world_root(worlds.fork_world(root.name, "Other Realm"))
+
+    key = _member_key(fork.name, 0)
+    assert not image_subjects.subjects_path(fork, gid).exists()
+    assert image_subjects.read_subjects(fork, gid) == {key: [cid]}
+    assert image_subjects.untagged(fork) == []
+    assert f"world:{fork.name}" in image_store.read(image_id).raw["reviews"]["subjects"]

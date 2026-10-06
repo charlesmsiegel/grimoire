@@ -21,6 +21,11 @@ them is skipped.
 
 Scope strings are R10's: ``world:<canonical id>`` and ``campaign:<cid>`` as
 stored.
+
+The ``collections`` bucket lists a format-1 member by its library placement
+(the walk finds the placement, then the manifests naming it) and a format-2
+member by its id (C10): such a member is its object and has no placement, so
+each world's format-2 manifests are read for the id itself.
 """
 
 from __future__ import annotations
@@ -80,10 +85,10 @@ def _record_dir(root: Path, parts: tuple[str, ...]) -> tuple[str, str, str] | No
     return (base, rid, vid) if built == root.joinpath(*parts) else None
 
 
-def _collections_of(wid: str, name: str) -> list[dict]:
-    """The format-1 manifests that list `name` as a member. A manifest nobody
-    can read is skipped: this is a report, and an unknown reference is shown by
-    the walk that found the placement."""
+def _manifests(wid: str) -> list[tuple[str, dict]]:
+    """`(collection id, manifest)` for every manifest of the world that reads.
+    A manifest nobody can read is skipped: this is a report, and an unknown
+    reference is shown by the walk that found the placement."""
     try:
         listing = sorted(image_collections.directory(wid).glob("*.json"))
     except (OSError, worlds_paths.WorldNotFound):
@@ -91,12 +96,27 @@ def _collections_of(wid: str, name: str) -> list[dict]:
     out = []
     for path in listing:
         try:
-            members = image_collections.read(wid, path.stem)["members"]
+            out.append((path.stem, image_collections.read(wid, path.stem)))
         except (ValueError, OSError):
             continue
-        if name.casefold() in {m.casefold() for m in members}:
-            out.append({"wid": wid, "collection": path.stem})
     return out
+
+
+def _collections_of(wid: str, name: str) -> list[dict]:
+    """The format-1 manifests that list the library image `name` as a member."""
+    folded = name.casefold()
+    return [{"wid": wid, "collection": collection}
+            for collection, manifest in _manifests(wid)
+            if manifest["format"] == 1
+            and folded in {m.casefold() for m in manifest["members"]}]
+
+
+def _collections_naming(wid: str, image_id: str) -> list[dict]:
+    """The format-2 manifests that list `image_id` as a member: a format-2
+    member is its object, with no library placement for the walk to find."""
+    return [{"wid": wid, "collection": collection}
+            for collection, manifest in _manifests(wid)
+            if manifest["format"] == 2 and image_id in manifest["members"]]
 
 
 def _sorted(rows: list[dict]) -> list[dict]:
@@ -125,6 +145,8 @@ def _scan_root(out: dict[str, list[dict]], is_world: bool, root: Path, image_id:
         ident = root.name
         scope = image_scopes.campaign_scope(root.name)
         library = root / "assets" / campaign_images.DIRNAME
+    if is_world:
+        out["collections"].extend(_collections_naming(ident, image_id))
     for d, ref in image_refs.walk(root):
         if ref.image != image_id:
             continue

@@ -12,7 +12,7 @@ import json
 import pytest
 
 from grimoire.store import assets, entities, image_collections, image_refs, image_store, revision
-from tests.collection_fixtures import format1
+from tests.collection_fixtures import format1, format2
 from tests.test_image_surfaces import COLLECTION, SURFACES, _png, _put
 from tests.test_image_surfaces import ids as surface_ids  # noqa: F401  (the fixture)
 
@@ -105,6 +105,25 @@ def test_usage_lists_a_format1_collection_member(client, surface_ids):  # noqa: 
     assert got["collections"] == sorted(
         [{"wid": ids["wid"], "collection": c} for c in (COLLECTION, other)], key=_key)
     assert got["world_images"] == [{"wid": ids["wid"], "name": name}]
+
+
+def test_usage_lists_a_format_2_collection_member(client, surface_ids):  # noqa: F811
+    """A format-2 member is its object, with no library placement: the
+    manifest naming its id is the usage."""
+    ids = surface_ids
+    other = "fedcba9876543210fedcba9876543210"
+    [image_id] = format2(ids["wid"], COLLECTION, ids["png"])
+    format2(ids["wid"], other, _png(11), ids["png"])
+    format2(ids["wid"], "b" * 32, _png(12))                 # not this picture
+    (image_collections.directory(ids["wid"]) / ("a" * 32 + ".json")).write_text(
+        "{", encoding="utf-8")
+    second = client.post("/api/worlds", json={"name": "Winifred"}).json()["id"]
+    format2(second, COLLECTION, ids["png"])
+    got = _usage(client, image_id)
+    assert got["collections"] == sorted(
+        [{"wid": ids["wid"], "collection": c} for c in (COLLECTION, other)]
+        + [{"wid": second, "collection": COLLECTION}], key=_key)
+    assert got["world_images"] == []
 
 
 def test_usage_spans_worlds_and_campaigns(client, surface_ids):  # noqa: F811

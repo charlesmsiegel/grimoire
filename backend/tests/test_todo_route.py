@@ -25,9 +25,10 @@ from PIL import Image
 import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo
+from grimoire.routes.common import thumb_query
 from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
-from tests.collection_fixtures import format1
+from tests.collection_fixtures import format1, format2
 
 
 @pytest.fixture
@@ -211,6 +212,77 @@ def test_collection_members_are_individually_reviewed_and_deduplicated(client, c
     store.assets.path_in(root / "assets" / "images", second, supported_only=True).unlink()
     assert client.get(queue_url).json() == []
     assert client.get(endpoint).json() == {url: []}
+
+
+def _member_blob(image_id: str):
+    found = store.image_refs.resolve_ref(store.image_refs.Ref(name="", image=image_id, focus=None))
+    assert found is not None
+    return found
+
+
+def test_untagged_lists_format_2_members_once_each(client, campaign):
+    """The format-2 copy of the test above: each available member is one
+    queue entry, keyed by its member URL without the query, whether the
+    greeting shows it through the collection or by its own URL."""
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    collection = "a" * 32
+    first, second = format2(wid, collection, _png(), _png("white"))
+    base = f"/api/worlds/{wid}/image-collections/{collection}"
+    url = f"{base}/members/0"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid,
+        f"![Art]({base}/image)\n![Again]({url}?v=old)")
+    queue_url = f"/api/worlds/{wid}/subjects/untagged"
+    queue = client.get(queue_url).json()
+    assert len(queue) == 2
+    assert {a["name"] for a in queue} == {url, f"{base}/members/1"}
+    endpoint = f"/api/worlds/{wid}/greetings/{gid}/subjects"
+    assert client.put(endpoint, json={"image": url, "subjects": []}).status_code == 200
+    assert len(client.get(queue_url).json()) == 1
+    # Available members, not the immutable manifest's missing pixels, are TODO.
+    _member_blob(second).blob_path.unlink()
+    assert client.get(queue_url).json() == []
+    assert client.get(endpoint).json() == {url: []}
+    assert store.image_store.read(first).raw["reviews"] == {"subjects": [f"world:{wid}"]}
+
+
+def test_a_format_2_member_tile_has_v_thumb_and_image_id(client, campaign):
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    collection = "b" * 32
+    [image_id] = format2(wid, collection, _png("white"))
+    url = f"/api/worlds/{wid}/image-collections/{collection}/members/0"
+    store.greetings.create_greeting(root, "Saltmarch", owner, vid, f"![Art]({url})")
+    [row] = client.get(f"/api/worlds/{wid}/subjects/untagged").json()
+    v = _member_blob(image_id).blob_sha256
+    assert row["url"] == f"{url}?v={v}"
+    assert row["thumb"] == f"{url}{thumb_query(v)}"
+    assert row["image_id"] == image_id
+    assert "copyable" not in row
+    assert client.get(row["thumb"]).status_code == 200
+
+
+def test_copy_from_greeting_links_a_format_2_member(client, campaign):
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    collection = "c" * 32
+    _first, second = format2(wid, collection, _png(), _png("white"))
+    url = f"/api/worlds/{wid}/image-collections/{collection}/members/1"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid,
+        f"![Art](/api/worlds/{wid}/image-collections/{collection}/image)")
+    blobs = sorted(p for p in (store.image_store.store_root() / "blobs").rglob("*") if p.is_file())
+    copied = client.post(f"/api/worlds/{wid}/characters/{owner}/versions/{vid}/images/copy-from-greeting",
+                         json={"gid": gid, "name": url, "slot": "gallery"})
+    assert copied.status_code == 200, copied.text
+    assert store.assets.image_id(root, owner, vid, copied.json()["name"]) == second
+    assert sorted(p for p in (store.image_store.store_root() / "blobs").rglob("*") if p.is_file()) == blobs
+    missing = client.post(f"/api/worlds/{wid}/characters/{owner}/versions/{vid}/images/copy-from-greeting",
+                          json={"gid": gid, "name": url.replace("/members/1", "/members/2"),
+                                "slot": "gallery"})
+    assert missing.status_code == 404
 
 
 def test_a_reference_removed_during_assignment_is_reported_missing(client, campaign, monkeypatch):
