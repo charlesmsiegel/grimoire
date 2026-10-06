@@ -2040,6 +2040,100 @@ def test_png_import_keeps_a_plane_that_is_the_carried_picture_turned(tmp_path, m
     assert assets.image_path(tmp_path, cid, vid, assets.AVATAR).suffix == ".png"
 
 
+# ---- Codex: an over-budget avatar is never fully decoded by a card export/import ----
+
+def _refuse_decoding(monkeypatch, size) -> list:
+    """Record (and refuse) every full decode of an image of `size`: header
+    reads (`Image.open`, `.size`) still work, `load()` and `convert()` raise.
+    Returns the record -- the code under test swallows the raise, so the
+    caller asserts the record is empty."""
+    from PIL import Image, ImageFile
+    real_load, real_convert = ImageFile.ImageFile.load, Image.Image.convert
+    decoded: list = []
+
+    def load(self, *a, **kw):
+        if self.size == size:
+            decoded.append(("load", size))
+            raise RuntimeError(f"decoded an over-budget {size} image")
+        return real_load(self, *a, **kw)
+
+    def convert(self, *a, **kw):
+        if self.size == size:
+            decoded.append(("convert", size))
+            raise RuntimeError(f"converted an over-budget {size} image")
+        return real_convert(self, *a, **kw)
+
+    monkeypatch.setattr(ImageFile.ImageFile, "load", load)
+    monkeypatch.setattr(Image.Image, "convert", convert)
+    return decoded
+
+
+@pytest.mark.parametrize("make, ext", [
+    (lambda: _real_jpeg((200, 30, 30), size=(24, 16)), "jpg"),
+    (_animated_gif, "gif"),
+])
+def test_png_round_trip_of_an_over_budget_avatar_never_decodes_it(tmp_path, monkeypatch, make, ext):
+    """An avatar larger than pixel identity would decode (stored with opaque
+    over-budget identity) is not decoded to draw the plane either: the export
+    writes the placeholder and carries the original, and the import takes the
+    carried original back without decoding it."""
+    import io
+
+    from PIL import Image
+
+    from grimoire.store import assets, cards, image_hash, image_store
+    avatar = make()
+    with Image.open(io.BytesIO(avatar)) as im:
+        size = im.size
+    monkeypatch.setattr(image_hash, "STATIC_BUDGET", size[0] * size[1] - 1)
+    src, dest = tmp_path / "src", tmp_path / "dest"
+    src.mkdir()
+    dest.mkdir()
+    monkeypatch.setenv("GRIMOIRE_HOME", str(src))
+    cid, vid = ch.create_character(src, "Seraphine")
+    assets.put_image(src, cid, vid, assets.AVATAR, avatar, ext)
+    stored = image_store.read(assets.image_id(src, cid, vid, assets.AVATAR))
+    assert stored is not None and stored.identity == "bytes"   # opaque: over budget
+    original = assets.image_path(src, cid, vid, assets.AVATAR).read_bytes()
+    source_hash = ch.card_hash(src, cid, vid)
+
+    decoded = _refuse_decoding(monkeypatch, size)
+    blob, _name = ch.export_card(src, cid, vid, "png")
+    assert decoded == []
+    assert cards.is_placeholder_png(blob)
+    assert cards.loads(blob, "png")["data"]["assets"][0]["ext"] == ext
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(dest))  # a fresh store
+    new_cid, new_vid = ch.import_card(dest, blob, "png")
+    p = assets.image_path(dest, new_cid, new_vid, assets.AVATAR)
+    assert decoded == []
+    assert p.read_bytes() == original and p.suffix == f".{ext}"
+    assert ch.card_hash(dest, new_cid, new_vid) == source_hash
+
+
+def test_png_import_never_decodes_an_over_budget_carried_avatar(tmp_path, monkeypatch):
+    """A third-party PNG whose plane is a real picture and whose card carries
+    an over-budget avatar: the carried copy is not decoded to compare it, and
+    the PNG's own pixels stay the picture, as for any plane that is not ours."""
+    import base64
+
+    from grimoire.store import assets, cards, image_hash
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    plane = _gallery_png(3, size=(10, 10))
+    carried = _real_jpeg((10, 200, 10), size=(24, 16))
+    monkeypatch.setattr(image_hash, "STATIC_BUDGET", 24 * 16 - 1)
+    card = ch.blank_card("Mara")
+    card["data"]["assets"] = [{
+        "type": "icon", "name": "main", "ext": "jpg",
+        "uri": "data:image/jpeg;base64," + base64.b64encode(carried).decode()}]
+    png = cards.dumps(card, "png", avatar=(plane, "png"))
+    decoded = _refuse_decoding(monkeypatch, (24, 16))
+    cid, vid = ch.import_card(tmp_path, png, "png")
+    assert decoded == []
+    p = assets.image_path(tmp_path, cid, vid, assets.AVATAR)
+    assert p.suffix == ".png" and p.read_bytes() != carried
+
+
 def test_chub_redownload_keeps_the_caption_of_a_legacy_slot(tmp_path, monkeypatch):
     """A gallery slot written before the image store (a bare `gallery_0.png`)
     holding the very picture chub serves again keeps its caption: identity is

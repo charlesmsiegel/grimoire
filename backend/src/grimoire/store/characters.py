@@ -964,6 +964,8 @@ def _shown(blob: bytes) -> tuple[tuple[int, int], bytes] | None:
             if im.size[0] * im.size[1] > image_hash.STATIC_BUDGET:
                 return None
             im.seek(0)
+            if im.size[0] * im.size[1] > image_hash.STATIC_BUDGET:
+                return None             # a GIF's frame 0 can grow the canvas
             turn = image_hash.orientation(im)
             rgba = im.convert("RGBA")
             if turn is not None:
@@ -978,6 +980,11 @@ def _plane_is_the_carried_avatar(png: bytes, carried: bytes) -> bool:
     copy (the original bytes, lossless) should be the one stored? True for our
     placeholder plane, and for a plane that IS the same picture -- what a PNG
     export of a non-PNG avatar writes (`_png_plane_of`).
+
+    Neither side is decoded past `image_hash.STATIC_BUDGET`: an over-budget
+    carried avatar is exported under the placeholder (so the check above
+    already took it), and one beside a real plane is no export of ours, so
+    the plane stays the picture.
 
     "The same picture" is what that export would have drawn from the carried
     copy, compared as decoded pixels -- not pixel identity, which also counts
@@ -1486,7 +1493,15 @@ def _png_plane_of(avatar: tuple[bytes, str] | None) -> bytes | None:
         return None
     try:
         with Image.open(BytesIO(avatar[0])) as im:
+            # Held to the budget pixel identity holds a decode to, read from
+            # the header before anything is decoded (and again after the seek,
+            # which can grow a GIF's canvas): an avatar stored as over-budget
+            # is drawn as the placeholder, and still rides in the card whole.
+            if im.size[0] * im.size[1] > image_hash.STATIC_BUDGET:
+                return None
             im.seek(0)  # an animation's first frame
+            if im.size[0] * im.size[1] > image_hash.STATIC_BUDGET:
+                return None
             turn = image_hash.orientation(im)
             has_alpha = "A" in im.getbands() or "transparency" in im.info
             frame = im.convert("RGBA" if has_alpha else "RGB")
