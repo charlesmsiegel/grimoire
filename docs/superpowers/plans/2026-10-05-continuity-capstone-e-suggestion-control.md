@@ -340,7 +340,7 @@ Out of scope:
 21. **TS mirrors** (`SORT_ORDER`, `DRIVER_KINDS`, `DRIVER_ACTIONS`, `TIME_MODES`, `ANCHOR_RELATIONS`, `MUST_CAP`) are declared once in `frontend/src/components/pressureControls.ts`. A backend test reads that file and compares each literal array with the Python tuple (§20: "a backend test pins the tuples"). The API types in `frontend/src/api/types.ts` are hand-written literal unions (`DriverKind`, `DriverAction`, `PressureState`, `TimeMode`, `AnchorRelation`, and `AnchorOption.kind`), and they are the §20 "TS unions", so the same test parses them too: two declarations of one vocabulary are pinned to the one Python tuple each, rather than to each other. Deriving the unions from the consts was rejected, because `api/types.ts` would then import from `components/`, the wrong direction for the API layer.
     - **Not `storyPressure.ts`.** That name differs from the component `StoryPressure.tsx` only in case. TypeScript (`moduleResolution: "bundler"`) and Vite try `.ts` before `.tsx`, so on the case-insensitive filesystems of Windows and macOS, `./StoryPressure` would resolve to the helper module. Linux CI would stay green while the owner's `make check-web` went red. No pair of `frontend/src` modules differs only in case today.
 22. **"Show every generated suggestion while any control is active" (§16.4) follows the batch on screen.** The hook reports `controlled`: whether the reply now shown was requested with an active control. An unsent control edit therefore never re-slices cards the reader is looking at.
-23. **An anchored generated card never borrows `nextDate`.** `suggestionDraft` uses `s.date || (s.time_anchor ? "" : nextDate)`, because `nextDate` is not anchor-aware and would silently contradict the card's reason. A saved idea uses `idea.anchor_date || nextDate || idea.date`.
+23. **An anchored generated card never borrows `nextDate`.** `suggestionDraft` uses `s.date || (s.time_anchor ? "" : nextDate)`, because `nextDate` is not anchor-aware and would silently contradict the card's reason. A saved idea uses `idea.anchor_date || (idea.time_anchor ? "" : nextDate || idea.date)`: the server's `anchor_date` (a live, dated `on` anchor) wins, any other anchored idea (`before`/`by`/`after`, or `on` an occurrence that has passed) gets an empty date for the same reason a card does, and only an un-anchored or dangling idea (read back with no `time_anchor`) keeps the inverted `nextDate || idea.date` precedence. The idea's stored date is not the anchored fallback, because it is a fossil of whenever the idea was saved.
 24. **`DRIVER_ACTIONS` lives in `drivers.py`** beside `DRIVER_KINDS`, as `DRIVER_ACTIONS` (a flat tuple) and `ACTIONS_BY_KIND` (kind → tuple). §20 lists it with the driver tuples; Slice B never declared it.
 25. **Calendar hardening inside `suggest`** (Global Constraints, "Fail soft"):
     - `_calendar_facts(cid, croot, now, roster) -> dict` returns `{notation, friendly, holidays_today, upcoming, events_today, birthdays}`. It holds today's `if now:` block (`_notation`, `today_facts`, `events.day_facts` and `events.sooner`) and the `birthdays.upcoming` call (made whether or not `now` is set, as today), moved verbatim, inside one `except Exception:  # noqa: BLE001 -- user calendar plugin code can raise anything; §26 degrades to undated`. On failure every field is blank.
@@ -1146,7 +1146,7 @@ The snapshot gains its new keys here, while `upcoming` and the templates stay as
   - `SAVED_SLOTS` and "Show all N saved" apply to `live`;
   - a `<button className="subtle" aria-expanded={showStale}>` reads `Stale (${stale.length})` when `stale.length > 0`;
   - when expanded, each stale idea renders like a saved row (a card that calls `savedDraft`, plus the dismiss ×), with `<span className="field-hint">{i.stale_reason}</span>` inside the card.
-- **`sceneDraft.ts`:** `suggestionDraft` uses `date: s.date || (s.time_anchor ? "" : nextDate)`, and `savedDraft` uses `date: idea.anchor_date || nextDate || idea.date`. Both docstrings say why (Decision 23).
+- **`sceneDraft.ts`:** `suggestionDraft` uses `date: s.date || (s.time_anchor ? "" : nextDate)`, and `savedDraft` uses `date: idea.anchor_date || (idea.time_anchor ? "" : nextDate || idea.date)`. Both docstrings say why (Decision 23).
 - **`CampaignHub`:** `rows.filter(i => i.status === "active" && !i.stale_reason)`.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -1161,7 +1161,8 @@ The snapshot gains its new keys here, while `upcoming` and the templates stay as
     - `stale ideas sit under a collapsed Stale group outside the budget` (§28.9): five live ideas and one stale give `Show all 5 saved` and `Stale (1)`. The stale title is absent until the toggle; after it, the stale card is pickable (`onPicked` gets a saved draft with its `lid`), and its reason text shows.
   - `sceneDraft.test.ts`:
     - `an anchored suggestion never borrows nextDate`;
-    - `a saved idea anchored on an upcoming occurrence uses the server anchor date`: `anchor_date` wins over `nextDate`, and an idea with no `anchor_date` keeps today's inverted precedence.
+    - `a saved idea anchored on an upcoming occurrence uses the server anchor date`: `anchor_date` wins over `nextDate`, and an idea with no `anchor_date` keeps today's inverted precedence;
+    - `a saved anchored idea never borrows the batch's anchor-unaware nextDate`: a `before` idea, and an `on` idea whose occurrence has passed, each with no `anchor_date`, get `""` despite a `nextDate`, while an un-anchored idea still borrows it.
   - `CampaignHub.test.tsx`: `play next skips stale ideas` (Review Focus 5). The tail counts only live ideas, and `(api as any).sceneSuggestions` is still `undefined`.
 - [ ] **Step 2: Run them and confirm they fail.** From `frontend/`, `npx vitest run src/components/SceneIdeaPicker.test.tsx src/components/sceneDraft.test.ts src/routes/CampaignHub.test.tsx`. Expected: FAIL.
 - [ ] **Step 3: Implement.**
@@ -1312,6 +1313,7 @@ The slices above each prove one layer. This task proves they agree, through one 
 16. The suggestion snapshot's calendar block, the suggestion parser and `date_normalizer` fail soft for a plugin that raises anything, not only `CalendarError` (Decision 25). The intent route and the saved-idea read degrade the same way. On a working calendar every output is byte-identical.
 17. The batch anchor beats avoid (Decision 26).
 18. The prompt index is ordered by `SORT_ORDER`, the §16.2 order, rather than B's decision precedence `PRESSURE_STATES` (Decision 9).
+19. A saved idea anchored other than `on` a live occurrence opens the confirm form with an empty date, rather than the chooser's `nextDate` (Decision 23). §17.1 named only the live-`on` case.
 
 **Open questions (none block execution):**
 

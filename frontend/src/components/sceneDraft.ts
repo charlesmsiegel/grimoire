@@ -88,11 +88,18 @@ export function suggestionDraft(s: SceneSuggestion, nextDate: string,
  *  derives it on THIS read, and only for an idea anchored `on` an occurrence
  *  that is still live and dated (§17.1), so it is the anchor's current day --
  *  following a rescheduled event -- and `nextDate`, which is not anchor-aware,
- *  would contradict the reason the idea was saved for. Absent or "" falls
- *  through to the precedence above. */
+ *  would contradict the reason the idea was saved for.
+ *
+ *  Without an `anchor_date`, an ANCHORED idea (`before`/`after`, or `on` an
+ *  occurrence that has passed) gets an empty date, as `suggestionDraft` gives
+ *  an anchored card with none: `nextDate` may sit on the wrong side of the
+ *  event the idea's reason names, and the idea's own date is the fossil above.
+ *  Only an un-anchored idea -- or a dangling one, which reads back with no
+ *  `time_anchor` -- falls through to the inverted precedence. */
 export function savedDraft(idea: SceneIdea, nextDate: string, pcless: boolean): SceneDraft {
+  const date = idea.anchor_date || (idea.time_anchor ? "" : nextDate || idea.date);
   return { source: "saved", lid: idea.id, title: idea.title, defaultTitle: idea.title,
-           date: idea.anchor_date || nextDate || idea.date, location: idea.location?.id ?? "",
+           date, location: idea.location?.id ?? "",
            pcless, premise: idea.premise, cast: narrowCast(idea.cast) };
 }
 

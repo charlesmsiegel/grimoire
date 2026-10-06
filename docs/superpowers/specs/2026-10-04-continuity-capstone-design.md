@@ -1758,6 +1758,7 @@ An active idea with a `stale_reason` stays recoverable:
 - the hub's Play next card skips it.
 
 Picking a saved idea anchored `on` an upcoming occurrence uses the server-supplied anchor date, rather than the chooser's `nextDate`.
+Picking any other anchored saved idea (`before`, `by` or `after`, or `on` an occurrence that has passed) leaves the date empty for the reader. The chooser's `nextDate` is not anchor-aware and may sit on the wrong side of the event the idea names, and the idea's stored date is a fossil of whenever it was saved. Only an un-anchored idea borrows `nextDate` (Slice E plan, Decision 23; deviation 19).
 
 Dismissed and used semantics are unchanged.
 
