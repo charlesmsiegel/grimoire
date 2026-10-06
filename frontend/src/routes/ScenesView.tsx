@@ -77,6 +77,11 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
    *  open. Cleared when the chooser closes, so `+ New scene` never inherits
    *  steering the reader has already walked away from. */
   const [seed, setSeed] = useState<ChooserSeed | null>(null);
+  /** A handoff's seed is waiting for the scene list before it opens the
+   *  chooser (Decision 20). One-way: it is released once -- by the list
+   *  landing or failing -- and nothing sets it again, so clearing an error
+   *  banner can never re-hold a chooser the reader is already using. */
+  const [held, setHeld] = useState(false);
   const [importing, setImporting] = useState(false);
   /** Per-scene spend, or null until it lands. A second effect on purpose: the
    *  read behind it scans the ledger's whole history, which is the right cost
@@ -110,11 +115,21 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   useEffect(() => {
     if (rawHandoff === undefined) return;
     setSeed(handoff);
-    if (handoff) setChoosing(true);
+    setHeld(handoff !== null);
     // Search and hash carried along: the replace exists to drop the STATE.
     navigate(location.pathname + location.search + location.hash,
              { replace: true, state: null });
   }, [rawHandoff, handoff, location.pathname, location.search, location.hash, navigate]);
+
+  // A seeded open waits for the scene list (Decision 20): the chooser ranks
+  // against `afterSid`, and opening before the list lands would make it re-ask
+  // when the newest scene arrives -- a second paid ranked call. A failed list
+  // releases it anyway, with no reference.
+  useEffect(() => {
+    if (!held || (scenes === null && !failed)) return;
+    setHeld(false);
+    setChoosing(true);
+  }, [held, scenes, failed]);
 
   useEffect(() => {
     if (!cid) return;
@@ -262,7 +277,11 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                 always inside a scene now, so an empty campaign has no composer
                 to type the first one into -- this is where a campaign starts. */}
             <button type="button" className="hub-primary"
-                    onClick={() => setChoosing(true)}>+ New scene</button>
+                    onClick={() => {
+                      // An ordinary open: never steered by, nor held behind, a
+                      // handoff still waiting for the list.
+                      setSeed(null); setHeld(false); setChoosing(true);
+                    }}>+ New scene</button>
           </div>
         </div>
 
@@ -278,11 +297,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
           </div>
         )}
 
-        {/* A seeded open also waits for the scene list (Decision 20): the
-            chooser ranks against `afterSid`, and opening before the list lands
-            would make it re-ask when the newest scene arrives -- a second
-            paid ranked call. A failed list opens it anyway, with no reference. */}
-        {choosing && !(seed && scenes === null && !failed) && (
+        {choosing && (
           <NewSceneChooser
             cid={cid} ready={ready} seed={seed ?? undefined}
             // Ranking reference: the newest scene, or none in a fresh campaign.

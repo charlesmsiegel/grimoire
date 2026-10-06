@@ -595,3 +595,39 @@ test("a seeded open waits for the scene list", async () => {
   expect(within(chooser).getByTestId("after")).toHaveTextContent('"003--third"');
   expect(within(chooser).getByTestId("seed")).toHaveTextContent("thread:mara-s-map");
 });
+
+test("a seeded open after a failed list survives Try again, and + New scene still opens", async () => {
+  // A failed list opens a seeded chooser anyway, with no reference
+  // (Decision 20). The release is one-way: clearing the error banner must not
+  // re-hold a chooser the reader is already using, and a seed left over from
+  // the handoff must never hide an ordinary open.
+  (api.listScenes as any).mockRejectedValue(new Error("down"));
+  renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
+  const chooser = await screen.findByTestId("scene-chooser");
+  expect(within(chooser).getByTestId("after")).toHaveTextContent("null");
+  expect(within(chooser).getByTestId("seed")).toHaveTextContent("thread:mara-s-map");
+
+  fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+  await waitFor(() =>
+    expect(screen.queryByText(/could not be read/i)).toBeNull());
+  expect(screen.getByTestId("scene-chooser")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByText("stub-close"));
+  await waitFor(() => expect(screen.queryByTestId("scene-chooser")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  expect(within(await screen.findByTestId("scene-chooser")).getByTestId("seed"))
+    .toHaveTextContent("null");
+});
+
+test("+ New scene during a held handoff opens the chooser unseeded", async () => {
+  // While a handoff waits for the list, the ordinary entry point is not held
+  // behind it: it opens at once, and with no seed.
+  (api.listScenes as any).mockReturnValue(new Promise(() => {}));
+  renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
+  await waitFor(() =>
+    expect(screen.getByTestId("history-state")).toHaveTextContent("null"));
+  expect(screen.queryByTestId("scene-chooser")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  expect(within(await screen.findByTestId("scene-chooser")).getByTestId("seed"))
+    .toHaveTextContent("null");
+});
