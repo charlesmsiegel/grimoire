@@ -385,6 +385,8 @@ Do not add same_as. Identity is represented by aliasing.
 
 A future mechanics phase may add mechanics-specific relations without changing existing records.
 
+**One wording per relation** (Slice G plan, Decision 12; this closes Slice F's h8). The Ledger's Reviewed links / merges and the Story Graph lead a link with one phrase, `RELATION_PHRASES` in `components/continuity/labels.ts`: “Due by” for `by`, the form the Meaning column gives, and the graph's `RELATION_PHRASE[r].out` is taken from that table rather than redeclared. The journal uses the sentence forms of the Meaning column (“is due by”, §12.8), because a journal label is read as one sentence while both UI tables lead a line under a record's title. The graph's inbound phrases (“Deadline for”, “Continued by” and the rest) have no Ledger counterpart and stay the graph's.
+
 ## 5.4 Link identity
 
 Endpoints are stored as given at creation, when they are canonical. They are **never rewritten** when aliases change later.
@@ -444,6 +446,7 @@ Thread, commitment and event ids are slugs, and they become free again on delete
 - `routes/ledger.py`'s `delete_thread` and `delete_commitment`, and the event DELETE route, call `continuity.review.forget_ref(cid, ref)` inside their existing `campaign_lock` hold. It removes aliases whose source or target is `ref`, and links naming `ref`. Each removal is journalled as a `manual` row. It lives in `review` rather than `doc` because journalling needs `undo`, and `doc` cannot import it.
 - A thread/commitment DELETE is refused with 409 `{kind:'malformed'}` before any write while continuity.json (or its aliases or links section) is malformed. A strict check cannot tell whether the record is an alias target, and a cascade that fails after the delete has landed would report a completed write as an error.
 - Deleting a record that is an alias **target** is refused first with 409 `{kind:'has_merged_records', refs}`, unless `?force=1` is passed. The Ledger shows the 409 as “This record has merged records: unmerge them first, or delete anyway”.
+- **A cascade that fails after the delete has landed** answers a structured 500 (Slice G plan, Decision 10). The 409 above refuses what a strict check can see, but an `OSError`, or a `ContinuityError` from a file garbled under the hold, can still escape `forget_ref` once the record is gone. Before Slice G that reached the reader as a bare 500, which read as a failed delete; the activity middleware's bump-on-raise already moved the write token. Now `routes/ledger.forget_or_partial` catches either error, bumps the revision itself (an `HTTPException` reaches neither the middleware's stamp, which is for responses below 300, nor its bump-on-raise), and answers 500 `{kind: "partial_delete", landed: [<noun>], detail}`, saying what landed, by noun. A thread or commitment delete is journalled, so its sentence says the delete can be undone; an event delete writes no journal row, so its sentence points at Reviewed links / merges, which lists each link left behind as broken. The Ledger and the events panel re-read on it, since the row is gone. Pinned by `test_ledger_routes.py::test_a_delete_whose_cascade_fails_moves_the_token` and `test_events_routes.py::test_an_event_delete_whose_cascade_fails_moves_the_token`.
 - Deletions that do not pass through those handlers (undo of a create, cascade reversal) leave dangling refs. These surface as broken in `GET /continuity` diagnostics. Slug reuse in those paths is a documented residual.
 
 ## 5.8 Forks
@@ -770,6 +773,7 @@ Exact numerical thresholds belong in the implementation plan, after test fixture
 - **In a sweep (§11):** embed misses with one `embed()` call per `embeddings.BATCH` chunk under one shared deadline, calling `vectors.save` after each chunk so a later failure keeps earlier work. Cap at `RECONCILE_WARM_LIMIT` per run, rotated with `embed_space.warm_window` seeded by `cid`, so that repeated runs cover the whole ledger.
 - **Width:** the reference width is that of vectors embedded in this run; if none were, it is the most common width among the loaded vectors. Vectors of any other width get `vectors.forget` and are treated as misses. Recall and search compare against a fresh query vector; a fully cached sweep has none, which is why this rule exists.
 - **Failure:** any `EmbeddingsError` or `OSError` leaves lexical/structural candidates intact and sets the run's embedding mode to `failure`.
+- **A zero vector is never cached** (Slice G plan, Decision 5). `vectors.save` keeps no vector without a direction, so a ref whose text the provider answers with zeros stays vectorless, and so stays required: its text is re-sent once per sweep, within `RECONCILE_WARM_LIMIT`. That is accepted. It holds back no other text (the required/warm split and the subset retry, §31 Slice D), and the ref's prior pairs are kept under the vectorless rule. Remembering “unembeddable” texts in the cache basis was rejected: it adds a key for one provider quirk, and a provider that later answered properly would never be asked again. Pinned by `test_continuity_reconcile.py::test_a_zero_vector_text_costs_one_resend_per_sweep`.
 - **Metering:** embedding calls stay unmetered, consistent with recall and search, so semantic-matching cost does not appear on Costs.
 
 Opening Todo, Graph or Ledger never calls this path.
@@ -979,10 +983,12 @@ Both triggers run deterministic discovery **inside the run**, never inside the r
    2. duplicates, by strongest structural signal;
    3. the rest.
 
-   Candidates over the cap persist without a proposal. One LLM call per run, metered as `store.usage.meter("continuity-reconcile", campaign=cid)` in `routes/`.
+   Candidates over the cap persist without a proposal. At most one LLM call per pass (below), metered as `store.usage.meter("continuity-reconcile", campaign=cid)` in `routes/`.
 4. **Second persist (proposals).** Same hold rules as step 2; it merges proposals into the cache. An LLM failure therefore keeps the deterministic candidates (§26).
 
-**Storage relocation.** `PUT /config/data-dir` is refused while any run is live, background runs included. That is accepted: the run is bounded by the warm limits, the candidate cap and one LLM call, so the window is short.
+**Passes, not triggers** (Slice D plan, Decision 6; Slice G plan, Decision 4). An End Scene that finds a reconcile already live adopts it: it leaves the refs its scene touched on the campaign's pending set and starts nothing. A run makes at most one model call per pass, and has at most two passes: its own, and, once that pass has landed, one incremental follow-on that carries every ref adopters pended before the run took the set. So End Scene and Refresh each cost at most one call, a run at most two, and a burst of adopters exactly one more. Refs pended after that last take wait for the next fresh run: an incremental run takes them before its own pass, and a full Refresh leaves them for its follow-on. That is this section's own rule, that a skipped automatic run is caught by the next one. A follow-on per adopter, or looping until the set is empty, was rejected: either makes the calls in one run grow with the number of saves, which is the N+1 §25.1 forbids. Pinned by `test_continuity_reconcile_routes.py::test_a_burst_of_adopters_coalesces_into_one_follow_on` and `::test_a_full_refresh_keeps_refs_left_pending_for_its_follow_on`.
+
+**Storage relocation.** `PUT /config/data-dir` is refused while any run is live, background runs included. That is accepted: the run is bounded by the warm limits, the candidate cap and one LLM call per pass, so the window is short.
 
 ## 11.2 Reconciliation input
 
@@ -1202,6 +1208,8 @@ For a commitment:
 
 This group lists aliases and links from `GET /continuity`. Each alias offers **Unmerge** (DELETE alias) and each link **Remove link** (DELETE link); both are journalled. Dangling aliases and broken links (§26) show in this group, marked “Broken”, with the same remove actions.
 
+Every entry speaks in words, never in store tokens (Slice G plan, Decision 12). A broken entry's reason is a sentence from `BROKEN_REASONS` in `labels.ts` (“The merged record no longer exists.”, “One of its records no longer exists.”, “It is part of a loop of merges.” and the rest), and a code the table does not hold reads “This entry can no longer be followed.”, never the code. A record that no longer exists is named by its kind (“a missing thread”, “a missing commitment”, “a missing event”, or “a missing record”), never by its ref, because `review.describe` answers a missing record with its ref. A ref-titled record whose ledger cannot be read right now reads “a thread that cannot be read right now” (or commitment, or event) instead, since `GET /continuity` reports that ledger as `unreadable` and the record may well exist. `GET /continuity`'s raw links carry `a_title` and `b_title`, as effective links already do.
+
 ## 12.7 Dismissed group
 
 This group lists suppressions whose fingerprint still matches current records. That `live` flag is computed on read; suppressions for records that have since changed are not shown, because they no longer suppress anything. Each entry has a resolved label and a **Restore** action (`DELETE /continuity/suppressions/{fingerprint}`). Restored candidates reappear at the next refresh.
@@ -1220,6 +1228,8 @@ Register both in `undo.read_value` / `undo.write_value`. Restoring goes through 
 - Both raise a continuity-specific error, which `undo.write_value` converts to `UndoConflict` (409), never a 500.
 
 Journal labels name both sides, for example “Mara's map → merged into Winifred's chart”. `before` and `after` are display text only.
+
+A link's label is one sentence, `<a> <relation words> <b>`, never the stored relation token (Slice G plan, Decision 12): “Mara's map pays off Mara's oath”, with the “ — removed” and “ — removed with deleted record” suffixes as before. `review.RELATION_WORDS` gives `continues` → “continues”, `subthread_of` → “is a subthread of”, `pays_off` → “pays off”, `before` / `on` / `after` / `by` → “is due before” / “is due on” / “is due after” / “is due by”, and `related_to` → “is related to”, the sentence forms of §5.3's Meaning column; a relation the table does not hold reads “is linked to”. The two link refusals carry no token either: “That kind of link cannot join these two records.” (`create_link`) and “That kind of link cannot join these records in that direction.” Pinned by `test_continuity_review.py::test_link_journal_labels_use_relation_words`, `test_continuity_routes.py::test_link_refusals_carry_no_store_token` and `test_continuity_wording.py::test_relation_words_cover_every_relation`.
 
 Continuity alias and link writes are journalled through `undo.journalled` under the same **best-effort** policy as ledger hand edits: the write is authoritative, and a failed journal append is logged, not raised.
 
@@ -1389,6 +1399,8 @@ Add:
 - `gather` gains `ref`.
 - `upcoming` is a projection of the **same lazy per-actor scan** (`_actor_hits`) that `occurrences` materializes, not of the materialized `occurrences` list: it takes only the first hit per actor, so it stops on the same day it always has and a plugin raising on a later day cannot cost a line that renders today. The existing prompt line is byte-identical (Decision 2).
 - Age is computed only for exact birthdays with a known year.
+
+**Residual: Hebrew month-only birthdays across the leap cycle** (Slice G rulings, b4). A month-only key matches the year's own month keys literally, a rule inherited from `_when`: `--Adar1` gives no occurrence in a common year, and `--Adar` none in a leap year, so such a birthday drops out of pressure, the drivers and the prompts' Birthdays line in those years. Day-bearing keys are folded by the provider and are not affected. The fix is in the month-key match, which the intent prompt's Birthdays line also renders, and §15 holds that line byte-identical, so it waits for a later correctness fix (§33).
 
 ---
 
@@ -1813,6 +1825,8 @@ Campaign Todo uses the cached candidate file only. It never generates anything.
 
 The filter costs three small JSON reads per campaign: continuity.json, the candidate cache, and plot/commitments. There is no involvement, chronicle, calendar or embedding work. If the cache file is absent, no chore is shown.
 
+“Three small JSON reads” takes the reading §19.7 gives “once” (Slice G plan, Decision 7): each of those files, and events.json (§31 Slice D), is read a constant number of times per request, independent of record and finding counts, and never more often as the ledger grows. Pinned by `test_continuity_read_cost.py::test_the_continuity_chores_read_a_constant_number_of_files`.
+
 **Registration and items.** Both chores are registered in `CAMPAIGN_BUILDERS` and `ITEMS`. Items are shaped `{id: candidate-id, label, detail, fix}`, with `fix` the §12.1 candidate address. There is one chore per kind group, never one per candidate.
 
 ## 18.3 Timeline chores
@@ -2051,11 +2065,11 @@ This is a deterministic endpoint. Its response is normalized nodes and edges, no
 
 - **No lens parameter.** The endpoint returns one uncapped payload. There is no `truncated` field in v1: lenses are client-side, so a cap would silently omit nodes from a lens.
 - **Cost:** it walks scenes, chronicle and the ledgers once per request, and uses `best_effort_campaign_lock`. Actor names come from roster and overlay summaries, never from per-node full card reads. There are no image-directory scans.
-- **“Once” is a constant number of whole-file reads, with no N+1** (Slice F plan, Decision 4). Literally one read of each file would mean threading one `Ledgers` through `pressure`, `drivers`, `involvement` and `effective.records`, a cross-slice refactor handed to Slice G's performance audit. What is guaranteed is no per-node card read, no image scan and no per-record ledger read, pinned by a test that counts `plot.read` and `chronicle.read_chronicle` for one thread and for five and requires the counts to be equal. Per request, the graph reads:
+- **“Once” is a constant number of whole-file reads, with no N+1** (Slice F plan, Decision 4). Literally one read of each file would mean threading one `Ledgers` through `pressure`, `drivers`, `involvement` and `effective.records`, a cross-slice refactor handed to Slice G's performance audit. What is guaranteed is no per-node card read, no image scan and no per-record ledger read, pinned by a test that counts `plot.read` and `chronicle.read_chronicle` for one thread and for five and requires the counts to be equal. Slice G kept this reading rather than literal once, and holds every capstone read path to it (§25.3; Slice G plan, Decision 7): literal once would thread one `Ledgers` through five signatures across four slices, for no N+1 and no growth. Per request, the graph reads:
   - outside the hold: the primary provider, `pressure.build`, `drivers.snapshot(cid, pressure_result=…)` over that same result, and `events.list_events`;
   - inside one hold: the scene list and one frontmatter-head location history per scene (never a transcript), the chronicle, `effective.Ledgers`, the effective records, links and live canon, involvement, the continuity doc's malformed check, the candidate cache and pending findings, `relationships.json` and `scene_ideas.json`;
   - outside again: the three name rosters, and the per-row `calendars.fixed_of` / `calendars.friendly` on scene, event and idea dates, and on a live commitment's due that no deadline item dates (§19.2).
-- **Names:** characters from `overlay.character_roster`; PCs from `overlay.pc_roster`, a new image-free listing, because `overlay.list_pcs` scans images per PC; locations from a whole-kind `overlay.list_entities(cid, "locations")` read, which parses every location file but is constant per request. Narrowing it to the locations a history names is handed to Slice G. The three are read separately, so one unreadable location file costs only location labels. A ref missing from its roster is labelled with its bare id (Slice F plan, Decision 5). For the same rule, `birthdays.gather` names a PC from its meta (`pcs.name_of`) rather than through `pcs.read_pc`, which scans images; the birthday line is byte-identical.
+- **Names:** characters from `overlay.character_roster`; PCs from `overlay.pc_roster`, a new image-free listing, because `overlay.list_pcs` scans images per PC; locations from a whole-kind `overlay.list_entities(cid, "locations")` read, which parses every location file but is constant per request. Slice G kept that whole-kind read (Slice G plan, Decision 8): it is one call per graph read, constant per request, and the same sweep the turn loop pays, while narrowing it to the locations a history names would need a second entity reader plus one read per named location, cheaper only for a world with many unvisited locations. `test_continuity_read_cost.py::test_the_graph_reads_location_names_once` pins one call per `graph.build`, at both sizes. The three are read separately, so one unreadable location file costs only location labels. A ref missing from its roster is labelled with its bare id (Slice F plan, Decision 5). For the same rule, `birthdays.gather` names a PC from its meta (`pcs.name_of`) rather than through `pcs.read_pc`, which scans images; the birthday line is byte-identical.
 - **Fail soft (§3.9, §26):** every source and every family builder runs through one helper, so a source that raises costs only its own nodes and edges and never fails the read. The response's top-level `omitted` names which source was lost (§20), so a reader can tell an empty campaign from a broken file. A free-text date such as “midsummer” is ordinary data and records nothing (Slice F plan, Decision 16).
 - **Every edge names two nodes**, and node and edge order are deterministic, so two reads of an unchanged campaign are equal (Slice F plan, Decision 15).
 
@@ -2250,7 +2264,7 @@ Store and calendar errors beneath the parser keep their existing failure semanti
 ## 25.1 No N+1 LLM reconciliation
 
 - At most one identity-resolver call per absorb, and only when ambiguous proposed-new records exist.
-- At most one reconciliation call per run (End Scene or refresh), on a bounded, prioritized set of candidates that have no cached proposal (§11.1).
+- At most one reconciliation call per pass, on a bounded, prioritized set of candidates that have no cached proposal, and at most two passes per run: its own, and one follow-on carrying every ref adopters pended (§11.1). End Scene and Refresh each cost at most one call, and a burst of saves during a live run adds exactly one more, never one per save (Slice G plan, Decision 4).
 - Do not call an LLM for every pair.
 
 ## 25.2 Candidate generation complexity
@@ -2260,6 +2274,7 @@ There is no numpy (Android). Pure-Python dot products are O(d) each, so all-pair
 - runs in a worker thread, never on the event loop;
 - restricts pair scoring to changed × all (incremental) or all × all (explicit refresh), under a hard `RECONCILE_MAX_PAIRS` cap. When pairs are dropped at the cap, the run reports `pairs_capped: true`;
 - computes identity texts once;
+- computes each record's lexical features (normalized tokens and character trigrams) once per sweep, cached on the record's `Subject` (`Subject.features()`), not once per pair; only the two title comparisons stay per pair, because a title is a few words. The memory is bounded by the pool size times `CONTINUITY_IDENTITY_BYTES`, for one sweep. An `lru_cache` keyed on text was rejected: unbounded across sweeps unless sized, and a size would be one more constant to tune (Slice G plan, Decision 6; `test_continuity_similarity.py::test_lexical_normalizes_each_text_once`, `test_continuity_reconcile.py::test_a_sweep_builds_each_identity_text_once`);
 - loads cached vectors once;
 - embeds bounded misses in batches (§9.4);
 - computes dot products in memory;
@@ -2276,9 +2291,15 @@ Avoid per-node full character reads where roster or overlay summary APIs already
 
 No image-directory scans merely to render graph nodes.
 
+“Once per request” is a constant number of whole-file reads (§19.7), and Slice G holds every capstone read path to it, not only the graph (Slice G plan, Decision 7): the Ledger, `GET /continuity`, the candidates read, the drivers read, the graph, the saved-idea read and the two Todo continuity chores. On each, every whole file is read a constant number of times, independent of record, scene and finding counts; no single scene file is read more often as the campaign grows; and no transcript, card version or image directory is read. Pinned by `test_continuity_read_cost.py::test_read_paths_read_each_file_a_constant_number_of_times` and `::test_the_continuity_chores_read_a_constant_number_of_files`.
+
+The no-card, no-image rule applies to the candidates read and the saved-idea read too (Slice G plan, Decision 9). An actor's name comes from its meta, never from its card versions or image directories: `relationships.actor_name` reads `characters.name_and_versions` for a character and `pcs.name_of` for a PC, and `suggest._actor_name` names a PC through `pcs.name_of`. The names are byte-identical, so prompts and the frozen snapshot do not move. Pinned by `test_relationships_store.py::test_actor_name_reads_meta_only`, `test_continuity_read_cost.py::test_continuity_review_reads_name_actors_without_cards` and `::test_the_saved_idea_read_names_a_pc_birthday_without_images`.
+
 ## 25.4 Candidate cache
 
 Todo and shell badge reads must not perform embedding calls or full transcript reads. Todo's continuity chores use the §18.2 live filter only. No new shell badge is added in this milestone.
+
+The rule binds what the capstone adds to Todo and the shell (Slice G plan, Decision 17). `GET /shell` read each open scene's transcript to count its model replies before the capstone (`routes/shell._scene_turns`), a cost its docstring bounds by the open scenes, and removing that rail count is not the capstone's to do (§33). The shell's transcript reads stay exactly those, whatever the continuity records and findings number, and it does no continuity review work: `test_continuity_read_cost.py::test_the_shell_read_does_no_continuity_review_work`.
 
 ---
 
@@ -2532,6 +2553,8 @@ At minimum:
 
 There is no scene-suggestion eval case today. Add a `scene-suggestions` case and grader for cases 9–10.
 
+The case-to-check table lives in Appendix B: each of the ten cases names its eval case, its grader check and the counterexample recording that trips that check, and `test_capstone_acceptance.py` holds the table to `evals/cases.py`. Cases 2–8 share one eval case, `continuity-reconcile`, whose first four counterexamples never tripped `reconcile.cross_type`, `reconcile.close` or `reconcile.fulfilled`, so a grader that stopped scoring cases 4, 5 and 7 would have stayed green. The `continuity-reconcile.timid` counterexample trips exactly those three (Slice G plan, Decision 14).
+
 ---
 
 # 29. Observability
@@ -2568,6 +2591,13 @@ Structured log rows go through `store.logs.record` with counts only:
 
 No private narrative text goes into these rows.
 
+Both rows ship, and each carries fields beyond the list above, every one a count or a closed mode (Slice G plan, Decisions 1–3). Their exact key sets and vocabularies:
+
+- **`continuity identity check`** (`routes/scenes._identity_outcome`, one per absorb): `kind` (`continuity-identity`), `campaign`, `scene`, `status` (`ok` | `degraded` | `failed` | `skipped`), `matching` (`basic` | `semantic`), `embedding` (`off` | `configured` | `failure`), `embedding_error` (empty, a word from `llm_errors.KINDS`, or `unexpected`), and the counts `Examination.counts()` gives: `proposed`, `examined`, `candidates`, `deterministic`, `semantic`, `embedded`, one per `identity.CHECK_DECISIONS` word (`existing`, `new`, `uncertain`, `unchecked`), `downgraded` and `hint_only`. When the examination itself raised, the row carries the modes only, with `embedding` and `embedding_error` empty.
+- **`continuity reconcile`** (`routes/continuity._log_pass`, one per pass): `kind` (`continuity-reconcile`), `campaign`, `sweep` (`full` | `incremental`), `matching`, `embedding` and `embedding_error` (as above), `llm` (`off` | `skipped` | `ok` | `failed`), `continuity` (`ok` | `malformed`), the counts `candidates`, `deterministic`, `semantic` and `adjudicated`, one count per word in `reconcile.DECISIONS`, and the flags `pairs_capped` and `superseded`. Only this row carries the two flags, because only the sweep caps pairs or races a newer run.
+
+Every count is an integer and every other string field comes from its closed vocabulary; no title, beat, identity text, prompt line or model reason appears anywhere in either row. Pinned by `test_absorb_identity.py::test_identity_log_row_is_counts_and_closed_modes_only` and `test_continuity_reconcile_routes.py::test_reconcile_log_row_is_counts_and_closed_modes_only`. The route above is pinned verbatim, as the only route claiming a `continuity-*` task, by `test_routing.py::test_the_continuity_route_is_spelled_as_section_29_spells_it`. The Debug-capture note lives in `templates/README.md`, under each continuity template family, and in `docs/incoming-llm-capture.md`, which `test_docs_guard.py::test_llm_capture_doc_names_every_continuity_task` requires to name every task the route claims.
+
 Do not log full identity texts, beats, or prompt content in generic logs. Note in the docs that the Debug-level incoming response capture still records model replies (including reasons), under the existing Settings disclosure.
 
 ---
@@ -2596,6 +2626,8 @@ Avoid:
 
 The README may gain a concise mention of reconciliation and the Story Graph after implementation. Implementation details belong in docs.
 
+These lists are held to the code (Slice G plan, Decision 12). `test_continuity_wording.py::test_no_continuity_surface_uses_a_phrase_section_30_avoids` reads every non-test source file under `backend/src/grimoire/` and `frontend/src/`, and `README.md`, for the avoided phrases, since a list of capstone files would miss the next surface; `::test_section_30_preferred_phrases_are_used` pins each preferred phrase, as whole words, to the surface that shows it. No store token reaches a reader on a review surface: journal labels and link refusals speak relation words (§12.8), Reviewed links / merges speaks reasons and missing records in words (§12.6), and each link relation has one wording across the Ledger, the Story Graph and the journal (§5.3). Unchanged by decision: an unknown relation in `RELATION_PHRASES` reads as itself (reachable only by a hand edit), the hedged proposal labels (“Suggested: before” and its siblings, pinned against each other on both sides), and the chooser's time-anchor options, whose relation is not a link.
+
 ---
 
 # 31. Suggested implementation slices
@@ -2621,6 +2653,11 @@ This is a design spec, not the required implementation plan. The later plan may 
 - pressure service and contract;
 - driver projection and `GET /continuity/drivers`;
 - canonical context, briefing, digest, ledger and shell readers.
+
+Two Slice B read tolerances went beyond the Slice B plan, each added by a review fix and until Slice G recorded only in the slice's own ledger (Slice G plan, Decision 16):
+
+- **`events._UNREADABLE = (CalendarError, ValueError, OverflowError)`**, the set `birthdays` already guards each actor with. One hand-edited event date that a provider's arithmetic cannot read (a year past its range) reads as undated in the events panel, the advance digest and pressure, rather than taking every event out of the pressure list.
+- **`continuity.doc._UNREADABLE = (ValueError, RecursionError, OSError)`**. A continuity.json whose JSON the parser refuses without a decode error (an overlong integer, deep nesting) reads empty like any other unreadable file, so the briefing and the advance digest keep the obligations the prompts show, and the writer still refuses it with `ContinuityError` rather than leaking a raw `ValueError`.
 
 ### Slice C — similarity and absorb identity hardening
 
@@ -2694,6 +2731,34 @@ Slice D implementation deviations. Each was decided in the Slice D plan (`docs/s
 - docs (CLAUDE.md inventory, CONTRIBUTING guard table, templates/README, store-guarantees if it lists campaign files);
 - make check;
 - final adversarial implementation-vs-spec review.
+
+Slice G implementation deviations. Each was decided in the Slice G plan (`docs/superpowers/plans/2026-10-06-continuity-capstone-g-polish.md`) and is cited by its Decision there.
+
+- **The two §29 log rows carry fields beyond §29's list**, every one a count or a closed mode; §29 names them (Decision 1).
+- **A run may make two model calls**, its own pass's and one follow-on's that carries every ref adopters pended; never one per trigger (Decision 4; §11.1, §25.1).
+- **A zero-vector text is re-sent once per sweep** (Decision 5; §9.4).
+- **Lexical features are computed once per record per sweep**, on the `Subject`, with the two title comparisons kept per pair (Decision 6; §25.2).
+- **“Once per request” is a constant number of whole-file reads**, never literal once, on every capstone read path (Decision 7; §18.2, §19.7, §25.3), and **location names stay a whole-kind read** (Decision 8; §19.7).
+- **Actor names on the candidates and saved-idea reads come from meta**, never from card versions or image directories (Decision 9; §25.3).
+- **A partial delete answers a structured 500 `partial_delete`**, worded by noun, and bumps the write token itself (Decision 10; §5.7).
+- **Four small hand-off fixes** (Decision 11): an unmerge or a removed link refreshes the rail's counts (`api.removeAlias` / `api.removeLink` notify the shell, as apply, dismiss and restore do); `birthdays.crossed` skips a birthdate that raises any of `birthdays._UNREADABLE`, not only `CalendarError`, so a huge-year birthdate no longer fails an advance; a failed reconcile run's error body is typed (`ReconcileRunError`); and the scene list's “Try again” reads the list again.
+- **No store token reaches a reader on a review surface**: journal labels and link refusals speak relation words, Reviewed links / merges speaks reasons and missing records in words, raw links carry titles, and `by` reads “Due by” in the Ledger as in the Story Graph (Decision 12; §5.3, §12.6, §12.8, §30).
+- **§28.10's cases are each held to a grader check that a counterexample trips**, with `continuity-reconcile.timid` for cases 4, 5 and 7 (Decision 14; §28.10, Appendix B).
+- **§25.4 binds what the capstone adds**; the shell's pre-capstone transcript read stays (Decision 17; §25.4).
+
+Slice G rulings. Every hand-off Slices A–F addressed to Slice G, or deferred, that Slice G does not close, with its reason (Decision 16). Each remains open for §33's correctness-defect channel.
+
+- **(a2) Alias edge cases reachable only by hand.** Cycle detection reads the raw alias graph; `create_alias`'s `source` is not validated; `affected` under-reports over a hand-edited cycle; the private `_text` helpers do not strip (Slice A review F8, F11, d and f). Deferred: each is reachable only by a hand edit or an internal parameter, and `effective.live_canon` already stops at the bad hop.
+- **(b2) `clock.read` on a hand-edited clock.json.** It raises on a very long integer or deep nesting. Deferred: it is a pre-capstone reader, and the capstone reads the clock only through soft wrappers (`pressure._soft`, `_IdeaContext.load`), so no capstone surface fails on it.
+- **(b4) Hebrew month-only birthdays across the leap cycle.** Deferred, and recorded as a residual in §13.6: the fix moves the intent prompt's Birthdays line, which §15 holds byte-identical.
+- **(b5) A calendar plugin whose `describe` raises on one day** still fails the events panel's read (`routes/campaigns.py`). Deferred: it predates the capstone, it is reachable only through a broken calendar plugin, and its fix would change the events-panel read, outside Slice G's decisions.
+- **(c1) Slice C's final minors.** The “Switched” label's `before !== ""` check (a race); candidate titles folded by `_text` and a moved candidate's raw `latest_beat` (display-only); `identityProposal`'s bare id for a record that was not offered (the model's own spelling of an id it named); a spent budget skipping semantic matching with no `fallback` (a race); `distinguished_from` carrying an id `_offerable` excluded (hand-edited ids only); fallback survival pinned for two of five paths, and the frontend `checkedRows` guard on the fallback hint untested. Deferred: each is display-only, race-only or hand-edit-only.
+- **(d2) The Ledger's delete and mutator paths keep record ids unencoded.** Deferred: this is pre-capstone Ledger behaviour; new ids are slugs (`materializer` allocates `slugify(title)`, and an explicit new id must already be one); fixing a `/` in a legacy id needs a path converter on every sibling ledger route.
+- **(d7) Two Refresh-note nuances.** A second Refresh pass overwrites the first pass's note, and the follow-on note replaces the no-model note. Deferred: copy nuance in rare sequences, which the next Refresh corrects.
+- **(e3) Tuning `DRIVER_PROMPT_CAP`**, which the driver index and the rendered timeline share. Deferred: tuning needs real prompts, and Slice G measures only synthetic stores. The constant's comment says to tune it against real prompts later.
+- **(f3) Groups and facts as graph nodes.** Deferred: §19.2 makes them optional, and §33 parks more graph node families.
+- **(f5) One wide canvas for a very large campaign.** Deferred: §19.7 forbids a cap, and column virtualization is the stated fix if one is ever needed. (A scene stamped in a secondary calendar's notation reading as Undated is not deferred: §3.8 dates on the primary provider only, so it is honest.)
+- **(f7) The Story Graph's node-detail copy and its play-axis column headings** (“Review this finding”, “Feels toward” / “Felt by”, “since a deleted scene”, “Scene idea before this:” and its siblings, “Served by”, “Birthday of”; “Scene <n>” columns). Deferred: Slice F names no defect in either, only a wording pass, and rewording them would change `storyGraph/NodeDetail.tsx` and `storyGraph/layout.ts`, outside Decision 12. The §30 avoid-list guard still reads both files, and the anchored-to “due by this:” already agrees with “Due by”.
 
 Do not start Slice F first because it is visually attractive. The graph must expose the real canonical continuity substrate, not become a parallel model.
 
@@ -2851,3 +2916,47 @@ The spec → planning gate was run by four independent reviewers. Each read one 
 | F20 | major | edges insufficient for Cast lens | §19.3 |
 | F21 | major | loose types | §20 |
 | F22–F29 | minor | route order, chooser test wording, jsdom-testable graph tests, scene order trap, shell badge, Timeline name clash, node actions, keyboard | §21, §28.9, §28.9, §19.4/§28.8, §7.3, §19.5, §19.6, §19.5 |
+
+---
+
+# Appendix B. Acceptance evidence
+
+Each acceptance criterion (§32) and the stopping rule (§33), with the tests and eval cases that prove it on the integrated tree (Slice G plan, Decision 14). `backend/tests/test_capstone_acceptance.py` fails when a criterion has no row, or when a cited backend test, frontend test title or eval case does not exist, so a rename cannot leave a criterion silently proven by nothing. Backend tests live under `backend/tests/`.
+
+| Criterion | Claim | Evidence |
+|---|---|---|
+| AC1 | A new thread or commitment is compared against plausible same-type records before it is treated as new | `test_absorb_identity.py::test_close_candidate_mapped_to_existing_rewrites_the_row`; `test_absorb_identity.py::test_a_new_record_with_no_close_neighbour_makes_no_identity_call`; `test_continuity_identity.py::test_reworded_duplicate_is_examined_with_the_record_as_candidate`; `test_continuity_identity.py::test_cross_type_never_a_candidate`; eval `continuity-identity` |
+| AC2 | Matching works without embeddings and improves with them | `test_continuity_identity.py::test_wordless_paraphrase_is_not_a_candidate_without_embeddings`; `test_continuity_identity.py::test_semantic_matching_finds_a_wordless_paraphrase`; `test_continuity_reconcile.py::test_unconfigured_makes_no_embedding_call`; `test_continuity_reconcile_routes.py::test_refresh_works_with_no_connection` |
+| AC3 | Todo says when semantic matching is not configured, and that basic matching still works | `test_todo_route.py::test_missing_embeddings_shows_one_library_chore_on_the_global_page`; `test_todo_route.py::test_embeddings_with_recall_depth_zero_show_no_chore`; `test_todo_route.py::test_no_embeddings_still_shows_continuity_chores` |
+| AC4 | Reconciliation proposes duplicate, relation, closure and resolution findings without applying them | `test_continuity_reconcile_routes.py::test_a_duplicate_proposal_mutates_nothing_until_apply`; `test_continuity_reconcile.py::test_a_stale_thread_is_nominated_for_closure_not_closed`; `test_continuity_reconcile.py::test_a_passed_deadline_nominates_but_does_not_resolve`; `test_continuity_reconcile.py::test_thread_and_commitment_overlap_is_a_relation_never_a_duplicate`; `test_continuity_reconcile_prompt.py::test_resolutions_need_evidence_too_and_carry_their_status`; `test_continuity_writer_guard.py::test_discovery_modules_never_write_reviewed_state`; `test_continuity_writer_guard.py::test_the_scanned_modules_exist`; eval `continuity-reconcile` |
+| AC5 | A reviewed duplicate is merged non-destructively and reversibly | `test_continuity_effective.py::test_removing_alias_restores_two_records`; `test_continuity_review.py::test_create_alias_journals_and_undo_removes`; `test_continuity_undo.py::test_undo_alias_create_and_redo`; `test_continuity_review_routes.py::test_applying_a_duplicate_writes_an_alias_only` |
+| AC6 | Prompts show a merged record once, under its canonical, and a campaign with no aliases sees byte-identical sections | `test_continuity_effective.py::test_identity_law_threads`; `test_continuity_effective.py::test_identity_law_commitments`; `test_continuity_effective.py::test_render_helpers_obey_identity_law`; `test_continuity_effective.py::test_render_helpers_show_canonical_ids_only`; `test_context.py::test_the_play_prompt_lists_a_merged_record_once_under_its_canonical`; `test_absorb_store.py::test_absorb_snapshots_show_canonical_ids_only`; `test_briefing_route.py::test_a_merged_thread_briefs_once_under_its_canonical`; `test_frozen_campaign.py::test_the_frozen_campaign_still_reads_the_way_it_was_recorded` |
+| AC7 | Commitments are first-class suggestion inputs | `test_suggest_store.py::test_snapshot_has_ids_commitments_timeline_and_index`; `test_suggest_store.py::test_prompt_renders_refs_commitments_timeline_and_index` |
+| AC8 | Suggestions see a bounded list of events, holidays, birthdays and deadlines, keeping the controls' refs and the sooner pick | `test_continuity_pressure.py::test_several_holidays_are_kept_and_today_included`; `test_continuity_pressure.py::test_events_listed_regardless_of_horizon_and_ordered_on_the_fixed_axis`; `test_continuity_pressure.py::test_hebrew_birthday_and_event_ordering`; `test_suggest_store.py::test_snapshot_has_ids_commitments_timeline_and_index`; `test_suggest_controls.py::test_timeline_is_capped_but_keeps_sooner_and_anchors`; `test_suggest_store.py::test_timeline_contains_what_sooner_picks` |
+| AC9 | Date arithmetic is provider-driven and deterministic | `test_continuity_pressure.py::test_hebrew_birthday_and_event_ordering`; `test_continuity_pressure.py::test_fake_provider_axis`; `test_suggest_controls.py::test_on_derives_the_date`; `test_suggest_store.py::test_plugin_calendar_dates_derive_in_native_notation`; eval `scene-suggestions-anchor-on` |
+| AC10 | The reader can focus on, avoid and require drivers, and choose a time anchor | `test_suggestion_controls_route.py::test_must_and_avoid_overlap_is_400`; `test_suggestion_controls_route.py::test_must_cap_and_kind_are_400`; `test_suggestion_controls_route.py::test_stale_refs_are_409`; `test_suggest_controls.py::test_focus_avoid_must_report_misses`; `test_suggest_controls.py::test_batch_anchor_forces_every_suggestion`; `frontend/src/components/NewSceneChooser.test.tsx` "driver controls alter the request body"; `frontend/src/components/NewSceneChooser.test.tsx` "anchor mode sends the anchor and relation" |
+| AC11 | Cards show validated reasons and drivers, and make constraint misses visible | `frontend/src/components/SceneIdeaPicker.test.tsx` "a generated card shows its validated reasons"; `frontend/src/components/SceneIdeaPicker.test.tsx` "constraint misses show warning chips"; `frontend/src/components/SceneIdeaPicker.test.tsx` "a rejected date says so"; `test_suggest_store.py::test_parse_output_resolves_labels_and_dates`; eval `scene-suggestions` |
+| AC12 | Saved ideas keep driver and time provenance, and go visibly stale without being destroyed | `test_scene_ideas_provenance.py::test_post_scene_idea_round_trips_provenance`; `test_scene_ideas_provenance.py::test_stale_reason_after_resolution`; `test_scene_ideas_provenance.py::test_reads_never_write`; `test_suggestion_controls_route.py::test_saved_card_round_trip_goes_stale_after_resolution`; `frontend/src/components/SceneIdeaPicker.test.tsx` "stale ideas sit under a collapsed Stale group outside the budget" |
+| AC13 | Todo surfaces pending continuity review without model calls | `test_todo_route.py::test_todo_makes_no_embedding_calendar_or_client_call`; `test_todo_route.py::test_continuity_counts_come_from_the_cache_after_the_live_filter`; `test_continuity_read_cost.py::test_no_read_only_path_reaches_a_model_or_an_embedding` |
+| AC14 | The Story Graph shows played history and obligations from the data suggestions use | `test_continuity_graph.py::test_focusable_is_exactly_the_chooser_driver_set`; `test_continuity_graph.py::test_anchorable_is_exactly_the_chooser_anchor_set`; `test_continuity_graph.py::test_scenes_follow_play_order_not_recency_or_date`; `frontend/src/routes/StoryGraphView.test.tsx` "renders the drawing from one graph read" |
+| AC15 | Every alias and link write is reviewable and journalled, and undoes | `test_continuity_undo.py::test_undo_alias_create_and_redo`; `test_continuity_undo.py::test_undo_link_create_and_redo`; `test_continuity_review.py::test_create_link_journals_and_round_trips`; `frontend/src/routes/LedgerContinuity.test.tsx` "apply requires an explicit action" |
+| AC16 | No read-only navigation path launches an embedding or a model request | `test_continuity_read_cost.py::test_no_read_only_path_reaches_a_model_or_an_embedding`; `test_continuity_routes.py::test_graph_route_makes_no_model_call`; `test_suggestion_controls_route.py::test_opening_paths_make_no_model_call`; `frontend/src/routes/StoryGraphView.test.tsx` "only one graph read across mount, lenses, toggles, arcs and nodes"; `frontend/src/components/NewSceneChooser.test.tsx` "changing a control starts no generation"; `frontend/src/routes/LedgerContinuity.test.tsx` "a stale 409 re-renders current records and does not start a run" |
+| AC17 | Existing campaigns open and play with no migration | `test_frozen_campaign.py::test_the_frozen_campaign_still_reads_the_way_it_was_recorded`; `test_frozen_campaign.py::test_the_read_only_sweep_writes_nothing`; `test_continuity_doc.py::test_absent_file_reads_empty`; `test_continuity_candidates.py::test_absent_cache_reads_empty`; `test_scene_ideas_provenance.py::test_ideas_without_provenance_read_nothing_extra` |
+| AC18 | Settings discloses automatic continuity embedding before it first happens | `frontend/src/routes/ConfigView.test.tsx` "the embeddings chip reports embedding separately from recall depth"; `frontend/src/routes/ConfigView.test.tsx` "the disclosure names every embedded payload" |
+| AC19 | The gate passes, and both final reviews ran or were stood in for | `make check` (every target, frontend typecheck and template verification included); `evals/run.py` (every recording scores as declared); §31 Slice G's gate bullet, which records both final reviews and who stood in for them (Slice G plan, Task 8) |
+| §33 | The capstone stops at its spec: no kind, node, edge or control beyond it | `test_continuity_candidates.py::test_kinds_are_the_four_in_spec_order`; `test_continuity_graph.py::test_graph_tuples_are_pinned`; `test_suggest_controls.py::test_controls_tuples_are_pinned`; the stopping-rule review over the whole capstone (Slice G plan, Task 8) |
+
+Each of §28.10's ten cases, held to the grader check that scores it and the counterexample recording that trips that check. `test_evals.py::test_recording_scores_as_declared` proves each recording trips exactly the checks it declares, and `test_capstone_acceptance.py` holds this table to those declarations. Where a row names two eval cases, its three columns list the clauses in the same order, separated by `;`.
+
+| §28.10 case | Eval case | Check | Tripped by |
+|---|---|---|---|
+| 1 | `continuity-identity` | `identity.same_obligation` | `unknown-id` |
+| 2 | `continuity-reconcile`; `continuity-identity` | `reconcile.distinct`; `identity.distinct` | `merged`; `merged` |
+| 3 | `continuity-reconcile`; `continuity-identity` | `reconcile.continuation`; `identity.continuation` | `merged`; `merged` |
+| 4 | `continuity-reconcile` | `reconcile.cross_type` | `timid` |
+| 5 | `continuity-reconcile` | `reconcile.close` | `timid` |
+| 6 | `continuity-reconcile` | `reconcile.keep_open` | `eager` |
+| 7 | `continuity-reconcile` | `reconcile.fulfilled` | `timid` |
+| 8 | `continuity-reconcile` | `reconcile.unproven` | `eager` |
+| 9 | `scene-suggestions` | `suggest.focus_coverage`, `suggest.distinct` | `cloned` |
+| 10 | `scene-suggestions`; `scene-suggestions-anchor-on` | `suggest.date_consistent`; `suggest.on_derived` | `bad-date`; `compliant` (an “on” batch's date is derived from its anchor, so no reply can get it wrong: the compliant recording, graded in a custom calendar, is the evidence) |
