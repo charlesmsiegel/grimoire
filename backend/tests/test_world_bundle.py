@@ -738,6 +738,36 @@ def test_export_projects_the_canonical_world_scope(monkeypatch, tmp_path):
     assert projected["reviews"] == {"subjects": [f"world:{wid}"]}
 
 
+def test_a_case_variant_export_keeps_its_tags_through_import(monkeypatch, tmp_path):
+    """The manifest names the canonical id, so the scope import reads the
+    bundle's tags under is the one the projection wrote them under. Recording
+    the caller's spelling (`REALM`) had import filter for `world:REALM` and
+    drop every tag (Codex review, P2b)."""
+    _home(monkeypatch, tmp_path)
+    wid, _shared, avatar = _placed_realm()
+    tag = {"kind": "character", "relation": "subject", "scope": f"world:{wid}",
+           "id": "seraphine"}
+    image_store.update(avatar, lambda raw: {
+        **raw, "associations": [tag], "reviews": {"subjects": [f"world:{wid}"]}})
+    variant = wid.upper()
+    with monkeypatch.context() as m:
+        m.setattr(worlds.paths, "canonical_id", lambda w: wid if w == variant else w)
+        m.setattr(worlds.paths, "world_root",
+                  lambda w, _real=worlds.paths.world_root: _real(wid if w == variant else w))
+        m.setattr(worlds.paths, "world_meta_path",
+                  lambda w, _real=worlds.paths.world_meta_path:
+                  _real(wid if w == variant else w))
+        bundle = _export(variant, tmp_path)
+    with zipfile.ZipFile(bundle) as z:
+        assert json.loads(z.read(world_bundle.MANIFEST_NAME))["world_id"] == wid
+    _wipe_image_store(tmp_path)
+
+    new = world_bundle.import_bundle(bundle)
+    raw = image_store.read(avatar).raw
+    assert raw["associations"] == [{**tag, "scope": f"world:{new}"}]
+    assert raw["reviews"] == {"subjects": [f"world:{new}"]}
+
+
 def test_export_skips_an_unresolvable_placement(monkeypatch, tmp_path):
     """A ref naming an object the store does not hold still exports -- the
     world is not refused for it, the ref simply carries no dependency."""

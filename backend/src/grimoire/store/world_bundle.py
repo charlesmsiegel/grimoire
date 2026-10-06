@@ -236,6 +236,12 @@ def write_bundle(wid: str, dest: Path) -> None:
     themselves (Codex review). Import already refuses symlink members, so
     nothing that round-trips through here can contain one either way.
     """
+    # Canonical once, here: the manifest's `world_id` is what import reads the
+    # bundle's tag scope as (`world:<world_id>`), and the projection writes
+    # tags under the canonical scope (R10). Asked for as `REALM` with the
+    # directory spelled `realm`, the two used to disagree, and import dropped
+    # every tag (Codex review, P2b).
+    wid = worlds_paths.canonical_id(wid)
     root = worlds_paths.world_root(wid)                     # rejects an unsafe id
     meta_path = worlds_paths.world_meta_path(wid)
     if not meta_path.exists():
