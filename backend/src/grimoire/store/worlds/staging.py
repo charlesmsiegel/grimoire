@@ -152,6 +152,22 @@ def repoint_urls(staging: Path, old_wid: str, new_wid: str) -> int:
     it: a description naming an image by its world-scoped URL should follow the
     world being renamed exactly as a record body does. The prefix carries its
     trailing slash, so the substitution is as precise here as in a ``.md``.
+
+    **What this no longer reaches (stage 2).** Two things that used to sit in
+    the scanned tree now sit on the shared image objects, outside any staged
+    world, so no rewrite can touch them:
+
+    - *Subject tags* are associations under the scope ``world:<wid>`` (R10),
+      not entries in a ``subjects.json``. A fork gets them from
+      ``image_scopes.copy_world`` after publishing, and an import from the
+      bundle's projection merged under the final id, never from a rewrite. A
+      remote or cross-world reference keeps its tag in the sidecar (R11), where
+      this still scans it, though the file holds ids and no URL.
+    - *A description written on an object* is global (R4), shared by every
+      world holding the picture, so it is not this world's text to rewrite. A
+      world URL typed inside one is left as written (R13); a legacy
+      ``descriptions.json`` key still follows the rename as above, until
+      migration folds it in.
     """
     old = f"/api/worlds/{old_wid}/".encode()
     new = f"/api/worlds/{new_wid}/".encode()

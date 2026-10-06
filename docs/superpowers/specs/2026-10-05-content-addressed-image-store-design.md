@@ -1342,3 +1342,84 @@ before `px1` shipped, so the version stays `px1`:
 - **Release note:** re-uploading the same picture in another format keeps the
   first-ingested format (§5). `docs/store-guarantees.md` states it in its image
   section.
+
+### Stage-2 amendments
+
+R1 to R7 were decided with the owner before the plan; R8 to R13 came from the
+plan gate. Together they refine §9 and §10, and where they differ from the
+text above, they win.
+
+- **R1, the local legacy entry wins until migration.** For a directory and an
+  image-bearing placement, the text is a string `descriptions.json` key there,
+  else the object's string `description`, else undescribed. A legacy name with
+  no placement reads only its key. Subjects follow the same rule: a
+  `subjects.json` list wins, else the ids of the object's `character`/`subject`
+  associations under the scope when the scope is in `reviews.subjects`, else
+  unreviewed.
+- **R2, a write goes to the object behind the visible placement.** The
+  placement resolves and `image_store.update` confirms the write (R8); the
+  object is set first, and then the name's legacy key is deleted in the
+  directory being edited and in the visible placement's directory. Other
+  directories' keys keep masking until migration. An unconfirmed write, an
+  unarrived placement or a name with no placement writes the legacy key of the
+  edited directory as today, so no text is lost. An unarrived placement can only
+  be described when a legacy file of its name sits beside it.
+- **R3, D1 for inherited art in campaigns.** A campaign edit of an image it
+  inherits writes the shared object, for records and the library alike. The
+  campaign library route still answers 409 ("describe this image in its
+  world"), but only for an inherited image the world holds as a legacy file,
+  which the route decides itself before the store is called.
+- **R4, descriptions are global.** One picture has one description in every
+  world. Subject associations stay scoped.
+- **R5, promotion carries a text up.** `overlay.promote_image` carries a text
+  into the campaign only when the campaign has no string key for the name and
+  the world directory's raw key is a string, which is the one case where the
+  campaign would lose visible text. It carries it as a campaign legacy key
+  (`image_descriptions.carry_legacy`) and never touches the shared object.
+- **R6, "Used in".** The route is `GET /api/images/{image_id}/usage`, an
+  on-demand full walk (§9). The UI is a collapsed "Used in..." control beside
+  every description field that has an image id, and it fetches only when opened.
+  An image used nowhere answers 200 with every bucket empty, and a malformed id
+  answers 400.
+- **R7, the lock-domain guard.** It treats `image_store.update` and
+  `image_store.merge_projection` as writes, so `image_scopes` is surveyed and
+  sits in `DOMAIN_MODULES` (§9).
+- **R8, `image_store.update` returns `bool`.** It is `True` only when it wrote.
+  A caller deletes a legacy key only after `True`, and on `False` it takes R2's
+  legacy path.
+- **R9, one description cap.** `image_store.MAX_DESCRIPTION` is 4000
+  characters; `world_bundle.MAX_IMPORTED_DESCRIPTION` is an alias of it.
+  `image_descriptions.set_in` refuses longer text with
+  `DescriptionTooLongError`, a `ValueError`, and every description PUT route
+  catches it before its `ValueError` to 404 handler and answers 422. Existing
+  longer legacy keys still read.
+- **R10, scope ids are canonical.** `world:<canonical id>` and
+  `campaign:<cid>` as stored, each spelled once, in
+  `image_scopes.world_scope` and `campaign_scope`.
+- **R11, cross-world references keep their tags in the sidecar.** A greeting's
+  reference to a picture placed in another world keeps its tag in that
+  greeting's `subjects.json`, so the tag travels with the greeting's world
+  bundle and not with the other world's object.
+- **R12, a replaced picture sheds a stale caption.** When `assets.put_in` or
+  `link_in` replaces a slot that held a known, different identity and the new
+  object already has a string description, the name's legacy key is dropped in
+  the same operation. A known identity is a placement's differing `image`, or a
+  legacy file whose `image_store.identify` differs. A first placement, an
+  adoption of the same picture and a promotion's `link_in` never drop it, and
+  otherwise the old text stays.
+- **R13, documented and not changed.** A global description travels in every
+  world's bundle that holds the picture, including text written in another
+  world. `delete_campaign` takes the campaign lock, so it can be refused with
+  409 behind a long hold. `staging.repoint_urls` no longer rewrites a world URL
+  written inside an object description. `delete_world` is unlocked, so a tag
+  written between the strip and the removal survives, and running the delete
+  again clears it.
+
+Two points the plan left open, now settled. **Scope lifecycle (§9):** a delete
+strips its scope under the campaign lock for a campaign, and a strip that
+fails aborts the delete so it can be re-run. A world fork's tag copy is best
+effort, since the fork is already published: a failure is logged and the fork
+stands. A failed campaign fork strips the new scope. **Reads:** a greeting's
+image catalog carries each placement's image id, so answering for a subject
+never re-reads a placement, and an unarrived placement beside a legacy file
+answers its subjects from the greeting's sidecar (R2's state).

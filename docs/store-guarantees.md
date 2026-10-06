@@ -386,10 +386,13 @@ engineering reason it cannot be fixed at this layer.
 
 ## The image store
 
-**Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets.py` ·
+**Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets.py`,
+`store/image_descriptions.py`, `store/image_subjects.py`,
+`store/image_scopes.py`, `store/image_usage.py` ·
 **Spec:** [the content-addressed image store](superpowers/specs/2026-10-05-content-addressed-image-store-design.md) ·
 **Tests:** `test_image_store.py`, `test_image_refs.py`, `test_assets_store.py`,
-`test_image_surfaces.py`
+`test_image_surfaces.py`, `test_image_descriptions_store.py`,
+`test_image_subjects_store.py`, `test_image_scopes.py`, `test_image_usage.py`
 
 A picture's bytes are kept once, under `<home>/assets/image-store/`, and
 everything that shows one holds a small placement naming it. Two kinds of file
@@ -484,6 +487,83 @@ beside it, even one identical to the world's: the legacy file would become the
 campaign's picture again
 (`test_slimming_keeps_an_identical_placement_beside_a_divergent_legacy_file`).
 
+### Shared metadata: descriptions and subjects
+
+What a picture depicts is a fact about the picture, so it lives on the image
+object, written only through `image_store.update`. Who appears in it is a fact
+about a story, so it stays scoped.
+
+- **A description is global (R4).** One picture has one description in every
+  world and campaign that places it. Two uploads of the same pixels are one
+  object, so they share the text. The one cap is `image_store.MAX_DESCRIPTION`;
+  a longer write is refused with `DescriptionTooLongError` and answered 422,
+  while a longer legacy key still reads.
+- **Subjects are scoped (R10).** A tag is an association on the object under a
+  scope, `world:<canonical id>` or `campaign:<cid>`, plus the scope's entry in
+  `reviews.subjects`. Both spellings are made in one place,
+  `image_scopes.world_scope` and `campaign_scope`. Tagging a picture in one
+  greeting tags it in every placement of it in that world, and in no other
+  world. A remote reference, a reference to a picture placed in another world
+  (R11) and a legacy name keep their tag in the greeting's `subjects.json`.
+- **The legacy sidecar is read first (R1).** `descriptions.json` and
+  `subjects.json` are what a name said before the object held it. For one
+  directory a string key there wins; otherwise the object answers; otherwise the
+  image is undescribed, or unreviewed. A key therefore masks the shared text
+  until a write or a migration clears it, and a non-string value counts as
+  absent. A greeting's image catalog carries each placement's image id, so
+  answering for a subject re-reads no placement. An unarrived placement beside
+  a legacy file answers its subjects from the greeting's sidecar.
+- **A write goes to the object behind the visible placement (R2).** The object
+  is written first. Only when `image_store.update` has returned `True` (R8) are
+  the name's legacy keys deleted, in the directory being edited and in the
+  visible placement's directory when that is another one. A write that is not
+  confirmed, a placement that has not arrived, or a name with no placement
+  writes the legacy key exactly as before, so a failure between the two steps
+  leaves text showing twice and never none. Other directories' keys keep
+  masking the shared text until migration. A campaign edit of art it inherits
+  writes the shared object (R3); only a library image the world holds as a
+  legacy file is refused, with a 409 telling the author to describe it in its
+  world.
+- **A promotion carries a text up only where it would otherwise be lost (R5):**
+  as a campaign legacy key, never as a write to the object.
+- **A replaced picture sheds its stale caption (R12).** Replacing a slot that
+  held a known, different picture, with one whose object already has a
+  description, drops the name's legacy key in the same operation. A first
+  placement, an adoption of the same picture and a promotion never do. Anything
+  else keeps the old text, as it always did.
+- **Delete strips a scope; fork copies it.** Both scopes follow their record's
+  lifecycle in `image_scopes`, because a slug is reusable and the object
+  outlives the directory that held its tags. Deleting a world or campaign strips
+  its scope from every object, then removes the tree; a campaign delete takes
+  the campaign lock for the sweep, so it can be refused with 409 behind a long
+  hold. A strip that fails aborts the delete, which can be run again. A world
+  fork copies the source's scope onto the fork after it is published, best
+  effort: a failure is logged and the fork stands without its tags. A campaign
+  fork copies its scope too, and a fork that fails strips the new scope again.
+  The sweeps read objects without caching them and call `update` only for an
+  object with something to change.
+- **Usage is derived (R6).** `GET /api/images/{id}/usage` is an on-demand full
+  walk of every world and campaign, answered by `image_usage.find` from the
+  placements. Nothing records an inverse, so nothing can drift, and an image
+  placed nowhere, or an id that is not one, gets an empty answer or a 400, never
+  a 404.
+- **The hot paths resolve no blob.** The shell badge, the to-do counts and the
+  per-turn art catalogue count a placement-backed image as described from the
+  object text, reading an object only for a name with no legacy key and using
+  the ids the caller's listing already read.
+
+Pinned by `test_a_local_legacy_key_wins_over_the_object`,
+`test_an_unconfirmed_object_write_keeps_the_text_on_the_legacy_key`,
+`test_put_in_drops_a_stale_caption_when_a_different_described_picture_replaces_it`,
+`test_a_first_placement_keeps_its_legacy_key`,
+`test_a_legacy_key_wins_until_retagged`,
+`test_an_unarrived_placement_beside_a_legacy_file_answers_from_the_sidecar`,
+`test_a_recreated_world_slug_starts_untagged`,
+`test_forking_a_world_carries_its_tags`,
+`test_a_fork_whose_tag_copy_fails_is_still_published`,
+`test_a_failed_campaign_fork_leaves_no_scope` and
+`test_usage_is_empty_for_an_unknown_id`.
+
 ### What it does not promise
 
 - **Devices on different versions.** A build from before the store writes a
@@ -499,6 +579,19 @@ campaign's picture again
 - **Nothing is collected yet.** Deleting a placement never deletes an object or
   a blob, so an image nothing places any more stays on disk until a collector
   is built.
+- **A description is global, so it travels.** A world's bundle carries the
+  description of every picture that world holds, including text written while
+  the picture was placed in another world. The same sharing means a text typed
+  in one world is read in all of them.
+- **A world URL inside an object description is not rewritten.** A fork or an
+  import re-points the URLs in the world's own files; a description sits on the
+  object, which belongs to no one world, so it is left as written.
+- **`delete_world` takes no lock.** A tag written between the strip and the
+  removal survives on the object. It is rare, and running the delete again
+  clears it.
+- **Usage is not cached.** Each request walks every world and campaign, so it
+  costs the size of the library and is asked for only when someone opens the
+  control.
 
 ---
 
