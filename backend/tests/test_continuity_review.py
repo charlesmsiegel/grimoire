@@ -92,6 +92,21 @@ def test_create_alias_unreadable_ledger_refused(cid):
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     refused = _refused(review.create_alias, cid, "thread:maras-map", "thread:winifreds-chart")
     assert (refused.status, refused.kind) == (409, "unreadable")
+    assert refused.detail == "threads cannot be read right now"
+
+
+def test_an_unreadable_ledger_refusal_names_the_kind_not_the_file(cid):
+    """§30: the refusal is the reader's sentence -- "threads", the records the
+    reader knows, never "plot", the stem of the file that holds them."""
+    eid = store.events.create(cid, "The coronation", "2026-05-09", "")
+    for name in ("plot.json", "events.json"):
+        (_root(cid) / name).write_text("{ no", encoding="utf-8")
+    refused = _refused(review.create_link, cid, "commitment:mara-oath", "thread:maras-map",
+                       "related_to")
+    assert refused.detail == "threads cannot be read right now"
+    both = _refused(review.create_link, cid, "thread:maras-map", f"event:{eid}", "related_to")
+    assert both.detail == "threads and events cannot be read right now"
+    assert "plot" not in refused.detail and "plot" not in both.detail
 
 
 def test_create_alias_malformed_file_refused(cid):
