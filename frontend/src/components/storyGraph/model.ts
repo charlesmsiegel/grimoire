@@ -130,6 +130,15 @@ export function arcNeighbourhood(ix: GraphIndex, arc: string): Set<string> {
   return set;
 }
 
+/** An event that is played history: fired or passed, and not on its own day.
+ *  Reaching the day fires an event, but the day is still the present -- its
+ *  driver reads `today` and the chooser offers it as an anchor (§13.5's
+ *  own-day carve-out) -- so an event on today is never "reached". */
+export function isReached(n: GraphNode): boolean {
+  return n.kind === "event" && (n.status === "fired" || n.status === "passed")
+    && n.in_days !== 0;
+}
+
 function lensKeeps(n: GraphNode, lens: Lens, show: Show): boolean {
   // Merged records ADDS its nodes, as Actors does, on every lens: a merged
   // node has no date, so Calendar's kinds and deadline rule would otherwise
@@ -141,7 +150,7 @@ function lensKeeps(n: GraphNode, lens: Lens, show: Show): boolean {
     || (show.locations && n.kind === "location");
   if (!shown) return false;
   // §19.4: the Story lens is about what is still ahead.
-  if (lens === "story" && n.kind === "event" && (n.status === "fired" || n.status === "passed")) {
+  if (lens === "story" && isReached(n)) {
     return false;
   }
   // §19.5 lists deadlines, not every commitment.
