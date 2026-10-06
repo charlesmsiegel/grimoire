@@ -2014,6 +2014,7 @@ Selecting a thread or commitment shows:
 - involved actors;
 - pressure;
 - reviewed links;
+- the saved ideas that serve it, each with the driver action its `serves` edge carries;
 - candidate findings.
 
 Actions:
@@ -2024,7 +2025,9 @@ Actions:
 
 Focus next scene is shown unless the record is merged, and is enabled only when the record is among `drivers.snapshot`'s thread and commitment drivers (the node's `focusable`), so the graph never sends a ref the chooser would drop. Open ledger entry is built only with `ledgerHref` (§12.1). Each candidate finding reads “<finding phrase> with <the other record>” for a pair kind, and links to its Ledger address.
 
-Selecting an event, birthday or holiday shows its date, in-days, linked records, and **Anchor next scene** (§16.5). Anchor is enabled only when the ref is among `drivers.snapshot`'s `anchors` (the node's `anchorable`).
+A `serves` edge's action is named at both ends, in the chooser's driver-chip words (Advances / May close / Addresses / May fulfil / May break / May expire / Anchored to): an idea's “Serves” row reads “<action> <record>”, and the served record's row reads “<idea> <action>”. The edge layer is `aria-hidden`, so two ideas that serve one driver with different actions would otherwise read alike to everyone (Slice F plan, Decision 26).
+
+Selecting an event, birthday or holiday shows its date, in-days, linked records (an idea that serves it with its action, as above), and **Anchor next scene** (§16.5). Anchor is enabled only when the ref is among `drivers.snapshot`'s `anchors` (the node's `anchorable`).
 
 Selecting an actor shows:
 
