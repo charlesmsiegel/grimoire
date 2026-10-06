@@ -285,8 +285,13 @@ def release_marker(root: Path, run_id: str, device: str) -> None:
 
 
 @contextlib.contextmanager
-def heartbeat(root: Path, run_id: str, device: str) -> Iterator[None]:
+def heartbeat(root: Path, run_id: str, device: str,
+              lock_fd: int | None = None) -> Iterator[None]:
     """Keep this run's marker fresh for as long as the block runs, then clear it.
+
+    ``lock_fd`` is the run's cross-process maintenance lock, if it holds one;
+    it is released last, after the marker, so no other process on this
+    machine can start between the two.
 
     A SEPARATE THREAD, not a beat at item boundaries: one item -- a large image
     decoded, hashed and verified -- can outlast the staleness window, and a
@@ -312,4 +317,8 @@ def heartbeat(root: Path, run_id: str, device: str) -> Iterator[None]:
     finally:
         stop.set()
         thread.join(timeout=HEARTBEAT_SECONDS + 5.0)
-        release_marker(root, run_id, device)
+        try:
+            release_marker(root, run_id, device)
+        finally:
+            if lock_fd is not None:
+                proclock.release(lock_fd)

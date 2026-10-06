@@ -44,7 +44,7 @@ from fastapi.responses import StreamingResponse
 
 from .. import runner, store
 from ..store import attempts as scenes_attempts
-from ..store import maintenance_reports, paths, scenes
+from ..store import maintenance_reports, paths, proclock, scenes
 from ..store.campaigns import read as campaigns_read
 from ..store.campaigns.paths import CampaignNotFound
 
@@ -1879,7 +1879,7 @@ def store_held_still(app):
     except RunInFlightError as exc:
         raise HTTPException(status_code=409, detail={
             "kind": "runs_in_flight", "run_id": exc.run_id,
-            "detail": "a turn is still generating; wait for it or stop it before "
+            "detail": "a run is still in progress; wait for it or stop it before "
                       "moving the storage location"}) from exc
 
 
@@ -2235,12 +2235,13 @@ def run_maintenance(app, kind: str, attempt_id: str | None,
       duplicate delivery of the same attempt adopts it instead);
     * the store root is being moved, or a fork, delete or export holds the
       store -- ``busy``: both finish on their own and the same start succeeds;
-    * another device's marker is still beating -- ``maintenance_elsewhere``.
+    * another device's marker is still beating, or another grimoire process
+      on this machine holds the store's maintenance lock --
+      ``maintenance_elsewhere``.
 
     A ``def`` caller only: reserving builds the run's events through the
     portal, which raises when called from the loop thread.
     """
-    root = paths.home().resolve()
     try:
         run, fresh = app.state.runs.start_or_existing(
             GLOBAL_SUBJECT, "maintenance", kind, attempt_id or uuid.uuid4().hex,
@@ -2261,29 +2262,89 @@ def run_maintenance(app, kind: str, attempt_id: str | None,
     if not fresh:
         return {"run": run_payload(run)}
     with reservation(app, run):
+        # Pinned INSIDE the reservation: a store move cannot begin while this
+        # run is live (`hold_still` refuses it), so the root read here is the
+        # one the run keeps for its whole life.
+        root = paths.home().resolve()
         run.root = root
-        device = maintenance_reports.device_key(root)
-        try:
-            maintenance_reports.claim_marker(root, run.id, device)
-        except maintenance_reports.MaintenanceElsewhereError as exc:
-            raise HTTPException(status_code=409, detail={
-                "kind": "maintenance_elsewhere",
-                "detail": "image-store maintenance is running on another device "
-                          "that shares this library; wait for it to finish",
-                "heartbeat": exc.marker.get("heartbeat")}) from exc
+        lock_fd, device = _claim_maintenance(root, run.id)
 
         def body(r: Run) -> dict:
             # The heartbeat thread runs for the WHOLE of the work, independent
-            # of its item boundaries, and clears the marker when it returns.
-            with maintenance_reports.heartbeat(root, r.id, device):
-                return work_sync(r)
+            # of its item boundaries, and clears the marker (and releases the
+            # process lock) when it returns.
+            #
+            # Its first beat comes HEARTBEAT_SECONDS after the work starts, not
+            # at reservation: until then the stamp `claim_marker` wrote above
+            # stands in for it. The gap is the portal handing the task to a
+            # worker thread -- normally milliseconds, and in any case far inside
+            # MARKER_STALE_SECONDS, so another device never sees a live run's
+            # marker as stale because of it.
+            with maintenance_reports.heartbeat(root, r.id, device, lock_fd=lock_fd):
+                try:
+                    return work_sync(r)
+                except BaseException as exc:
+                    _report_failure(root, r, exc)
+                    raise
 
         try:
             start_maintenance(app, run, body)
         except BaseException:
             maintenance_reports.release_marker(root, run.id, device)
+            proclock.release(lock_fd)
             raise
         return {"run": run_payload(run)}
+
+
+def _claim_maintenance(root: Path, run_id: str) -> tuple[int, str]:
+    """Take the process lock and the marker for a maintenance run, or answer 409.
+
+    Returns the lock's descriptor -- held until the work returns, released in
+    `heartbeat`'s `finally` -- and this device's key for the store.
+
+    The process lock is the cross-PROCESS half of the exclusion. The registry's
+    key is this process's memory and the marker refuses only another DEVICE, so
+    a second backend on this machine over the same store is stopped here.
+    """
+    lock_fd = proclock.acquire(
+        proclock.lock_path(root, "image-maintenance", "run"), proclock.NO_WAIT)
+    if lock_fd is None:
+        raise HTTPException(status_code=409, detail={
+            "kind": "maintenance_elsewhere",
+            "detail": "another grimoire process is running image-store "
+                      "maintenance on this store; wait for it to finish"})
+    try:
+        device = maintenance_reports.device_key(root)
+        maintenance_reports.claim_marker(root, run_id, device)
+    except maintenance_reports.MaintenanceElsewhereError as exc:
+        proclock.release(lock_fd)
+        raise HTTPException(status_code=409, detail={
+            "kind": "maintenance_elsewhere",
+            "detail": "image-store maintenance is running on another device "
+                      "that shares this library; wait for it to finish",
+            "heartbeat": exc.marker.get("heartbeat")}) from exc
+    except BaseException:
+        proclock.release(lock_fd)
+        raise
+    return lock_fd, device
+
+
+def _report_failure(root: Path, run: Run, exc: BaseException) -> None:
+    """Leave a minimal report for a pass that raised without writing its own.
+
+    The work's own ``finally`` is what normally writes the report; this covers
+    a pass that failed before reaching it. Deliberately says nothing a store
+    holds -- the class of the exception only, never its message, which can
+    carry a path or a name. Fail-soft: the run is already failing, and a report
+    that cannot be written must not replace that failure.
+    """
+    try:
+        if maintenance_reports.read(root, run.id) is None:
+            maintenance_reports.write(root, run.id, {
+                "kind": run.kind, "state": "failed", "error": type(exc).__name__})
+    except Exception:                                        # noqa: BLE001
+        _log.warning("could not write a failure report for maintenance run %s",
+                     run.id, exc_info=True)
 
 
 def start_maintenance(app, run: Run, work_sync: Callable[[Run], dict]) -> None:

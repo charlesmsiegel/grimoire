@@ -366,7 +366,7 @@ def get_backups():
 
 
 @router.post("/backups")
-def post_backup():
+def post_backup(request: Request):
     """Back up now, then apply retention. Returns the refreshed listing, so the
     caller needs no second request to show what it just made.
 
@@ -375,9 +375,14 @@ def post_backup():
     what happened, about the half of the operation they care about, and
     throwing away the listing that would have shown them the archive sitting
     there. A backup that landed is a success with a retention problem attached.
+
+    The archive is built holding the store against image-store maintenance
+    (`maintenance_running` while a migration or collection is live), so it never
+    zips a tree a pass is moving files out of.
     """
     try:
-        made = store.backups.create_backup()
+        with runs.maintenance_excluded(request.app):
+            made = store.backups.create_backup()
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"could not write a backup: {exc}")
     swept: list[str] = []
@@ -391,10 +396,15 @@ def post_backup():
 
 
 @router.post("/backups/images")
-def post_image_backup():
-    """Create a separate image archive from the currently resolved store."""
+def post_image_backup(request: Request):
+    """Create a separate image archive from the currently resolved store.
+
+    Held against image-store maintenance while it is built, as `post_backup`
+    is: a collection deleting objects under it would archive placements whose
+    images are already gone."""
     try:
-        made = store.backups.create_image_backup()
+        with runs.maintenance_excluded(request.app):
+            made = store.backups.create_image_backup()
     except OSError as exc:
         raise HTTPException(status_code=500, detail=f"could not back up images: {exc}") from exc
     try:
