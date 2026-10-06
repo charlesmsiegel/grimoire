@@ -659,6 +659,9 @@ test("a new connection is offered prefill off, whatever its kind", async () => {
   fireEvent.click(screen.getByText("+ New connection"));
   fireEvent.change(screen.getByLabelText("Kind"), { target: { value: "claude" } });
   expect(screen.getByRole("checkbox", { name: /continue replies by prefill/i })).not.toBeChecked();
+  // The switch is per connection, so a per-turn model override rides it too.
+  expect(screen.getByText(/a model override on this connection still sends the prefill/i))
+    .toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Realm Claude" } });
   fireEvent.click(screen.getByRole("button", { name: /create connection/i }));
   await waitFor(() => expect(api.createConnection).toHaveBeenCalledWith(

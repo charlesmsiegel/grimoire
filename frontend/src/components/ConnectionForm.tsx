@@ -178,7 +178,8 @@ export function ConnectionForm({
       <div className="field-hint">
         Send a cut-short reply back as the start of the model&apos;s own turn. Only for
         models that continue a trailing assistant message; most chat models and current
-        Claude models do not, and get an instruction instead.
+        Claude models do not, and get an instruction instead. A model override on this
+        connection still sends the prefill, so check that model continues one too.
       </div>
     </>
   );
