@@ -179,6 +179,34 @@ def test_timeline_is_capped_but_keeps_sooner_and_anchors():
     assert whole["timeline_more"] == 0
 
 
+def test_a_pinned_commitment_keeps_its_linked_deadline():
+    """Decision 11 pins on `subject` as well as `ref`: a linked deadline's ref
+    is its event, so a focus or must on the commitment reaches that row only
+    through its subject."""
+    items, sooner, _anchor = _capped_timeline()
+    linked = _item("event:saltmarch-fair-25", "linked_deadline", 25, "upcoming",
+                   subject="commitment:mara-s-oath", relation="before",
+                   label="Mara's oath")
+    snap = {"timeline": [*items, linked], "sooner_ref": sooner}
+
+    def rendered(controls: Controls) -> list[tuple[str, str]]:
+        return [(r["ref"], r["kind"]) for r in suggest.driver_view(snap, controls)["timeline"]]
+
+    row = ("event:saltmarch-fair-25", "linked_deadline")
+    assert row not in rendered(NO_CONTROLS)      # past the cap, cut without a control
+    for controls in (Controls(focus=("commitment:mara-s-oath",)),
+                     Controls(must=("commitment:mara-s-oath",))):
+        refs = rendered(controls)
+        assert row in refs, controls
+        assert len(refs) == suggest.DRIVER_PROMPT_CAP
+
+
+def test_view_is_dated_only_with_a_now():
+    assert suggest.driver_view({"now": "2026-05-10"}, NO_CONTROLS)["dated"] is True
+    assert suggest.driver_view({"now": ""}, Controls(time_mode="near"))["dated"] is False
+    assert suggest.driver_view({}, Controls(time_mode="move"))["dated"] is False
+
+
 def test_timeline_when_phrases():
     items = [_item("event:a", "event", 0, "today"),
              _item("event:b", "event", 1, "upcoming"),

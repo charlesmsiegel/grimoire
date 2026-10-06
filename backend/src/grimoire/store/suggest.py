@@ -557,6 +557,9 @@ def driver_view(snapshot: dict, controls: Controls) -> dict:
         "focus": named(controls.focus), "avoid": named(controls.avoid),
         "must": named(controls.must),
         "time_mode": controls.time_mode,
+        # the date addendum (what defines the "date" key) renders only under a
+        # `now`, so near/move may not ask for a date without one (§26)
+        "dated": bool(snapshot.get("now")),
         "near_days": snapshot.get("near_days", NEAR_MIN_DAYS),
         "anchor": _anchor_view(snapshot, controls, labels),
         "active": controls.active,

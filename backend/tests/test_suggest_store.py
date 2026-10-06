@@ -1059,6 +1059,22 @@ def test_controls_addendum_needles(monkeypatch, tmp_path):
     assert "Every suggestion must serve each must-include driver" in steered
 
 
+@pytest.mark.parametrize("mode", ["near", "move"])
+def test_near_and_move_ask_for_no_date_in_an_undated_campaign(monkeypatch, tmp_path, mode):
+    """§26: with no current date the prompt never asks for a "date" (the date
+    addendum, which defines that key, renders only under `s.now`), so near and
+    move render no sentence rather than one measured from a date that does
+    not exist."""
+    cid = _pressure_campaign(monkeypatch, tmp_path, now=None)
+    _map(cid)
+    _oath(cid)
+    snap = suggest.build_snapshot(cid)
+    assert snap["now"] == ""
+    system = suggest.build_prompt(snap, controls=suggest.Controls(time_mode=mode))[0]["content"]
+    assert '"date"' not in system
+    assert system == suggest.build_prompt(snap)[0]["content"]
+
+
 def test_an_empty_campaign_keeps_todays_system_message(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     system = suggest.build_prompt(suggest.build_snapshot(cid))[0]["content"]
