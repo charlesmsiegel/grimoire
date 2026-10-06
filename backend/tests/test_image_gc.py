@@ -17,6 +17,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -256,7 +257,7 @@ def test_manifests_journals_staging_and_pending_map_entries_are_roots(root, monk
     (manifests / ("a" * 32 + ".json")).write_text(
         json.dumps({"format": 2, "members": [member.id]}), encoding="utf-8")
     # The journal of a world that is gone: read from the raw directory (M10).
-    journals = root.joinpath(*image_gc.JOURNALS_DIR, "vanished")
+    journals = image_collections.raw_journal_directory(root, "vanished")
     journals.mkdir(parents=True)
     (journals / ("b" * 64 + ".json")).write_text(json.dumps(
         {"format": 2, "job_id": "b" * 64, "members": [harvested.id], "accepted": False}),
@@ -287,7 +288,7 @@ def test_an_unreadable_manifest_journal_or_map_aborts(root, monkeypatch, what):
         p = root / "worlds" / "realm" / "assets" / "image-collections" / ("a" * 32 + ".json")
         body = json.dumps({"format": 3, "members": []})
     elif what == "journal":
-        p = root.joinpath(*image_gc.JOURNALS_DIR, "realm", "b" * 64 + ".json")
+        p = image_collections.raw_journal_directory(root, "realm") / ("b" * 64 + ".json")
         body = "{half"
     else:
         p = image_migration.work_map_path(root)
@@ -361,7 +362,9 @@ def test_collectable_only_after_grace_old_first_sighting_and_a_second_scan(root)
 
 def test_the_grace_period_has_a_floor(root):
     with pytest.raises(ValueError):
-        _scan(root, grace_days=image_gc.GRACE_DAYS_MIN - 1)
+        _scan(root, grace_days=image_gc.GRACE_DAYS_MIN - 1, run_id="5" * 32)
+    refused = maintenance_reports.read(root, "5" * 32)
+    assert refused["state"] == "failed" and refused["error"] == "ValueError"
     orphan = _obj(1)
     _scan(root, now=T, grace_days=image_gc.GRACE_DAYS_MIN)
     report = _scan(root, now=T + 7 * DAY, grace_days=image_gc.GRACE_DAYS_MIN)
@@ -735,14 +738,143 @@ def test_scan_and_collect_leave_a_report_on_success_failure_and_cancel(root, mon
 # ---- spellings shared with other modules --------------------------------------------
 
 def test_the_paths_gc_spells_agree_with_their_owners(root):
-    assert tuple(common.THUMB_BUCKETS) == image_gc.THUMB_WIDTHS
+    assert tuple(common.THUMB_BUCKETS) == thumbs.WIDTHS
     assert set(image_gc.STAGING_DIRS) == {world_staging.staging_root().name,
                                           module_staging._staging_root().name}
     (root / "worlds" / "realm").mkdir(parents=True)
     (root / "worlds" / "realm" / "world.md").write_text("---\nname: Realm\n---\n",
                                                          encoding="utf-8")
     assert (image_collections.journal_directory("realm").parent
-            == root.joinpath(*image_gc.JOURNALS_DIR))
+            == image_collections.raw_journals_root(root))
     obj = _obj(1)
     thumb = thumbs.thumbnail(_blob(obj), 256)
     assert thumb.resolve() in {p.resolve() for p in image_gc.blob_thumbnails(root, obj.blob_sha256)}
+
+
+# ---- fix round 1 ----------------------------------------------------------------------
+
+def test_a_case_variant_image_refs_folder_aborts(root):
+    """A case-insensitive filesystem serves `Image-Refs/` as `image-refs/`,
+    so its placements are roots the exact-spelling walk would have missed."""
+    orphan, hidden = _obj(1), _obj(2)
+    d = _char_dir(root)
+    variant = d / "Image-Refs"
+    variant.mkdir(parents=True)
+    (variant / "avatar.json").write_text(json.dumps({"format": 1, "image": hidden.id}),
+                                         encoding="utf-8")
+    _scan(root, now=T)
+    report = _scan(root, now=LATER)
+    assert report["state"] == "blocked" and report["token"] is None
+    assert {"path": variant.relative_to(root).as_posix(), "reason": "case-variant"} \
+        in report["blocking"]
+    assert _sidecar(hidden).is_file() and _sidecar(orphan).is_file()
+
+
+def test_an_unarrived_object_keeps_every_orphan_blob(root):
+    gone = _obj(1)
+    os.unlink(_sidecar(gone))                     # an orphan blob, old enough
+    os.utime(_blob(gone), (OLD, OLD))
+    report = _ready(root)
+    assert [r["blob"] for r in report["collectable_blobs"]] == [_blob(gone).name]
+
+    # A placement synced in whose object has not: its blob may be that one.
+    unarrived = "px1-" + "ab" * 32
+    image_refs.write(_char_dir(root), "avatar", unarrived)
+    held = _scan(root, now=LATER + 60)
+    assert held["state"] == "complete"
+    assert held["unarrived_objects"] == [unarrived]
+    assert held["collectable_blobs"] == [] and held["token"] is None
+    assert {"id": None, "blob": _blob(gone).name, "why": "unarrived-objects",
+            "collectable_at": None} in held["protected"]
+
+    done = _collect(root, report["token"], now=LATER + 120)
+    assert done["deleted"]["blobs"] == []
+    assert {"id": None, "blob": _blob(gone).name, "reason": "unarrived-objects"} \
+        in done["skipped"]
+    assert _blob(gone).is_file()
+
+
+def test_blobs_without_an_objects_folder_block(root):
+    gone = _obj(1)
+    blob = _blob(gone)
+    shutil.rmtree(image_store.store_root() / "objects")
+    os.utime(blob, (OLD, OLD))
+    _scan(root, now=T)
+    report = _scan(root, now=LATER)
+    assert report["state"] == "blocked" and report["token"] is None
+    assert {"path": "assets/image-store/objects", "reason": "objects-missing"} \
+        in report["blocking"]
+    assert blob.is_file()
+
+
+def test_a_linked_cache_blocks(root, tmp_path):
+    _obj(1)
+    elsewhere = tmp_path / "outside" / "cache"
+    elsewhere.mkdir()
+    shutil.rmtree(root / ".cache", ignore_errors=True)
+    (root / ".cache").symlink_to(elsewhere)
+    report = _scan(root, now=T)
+    assert report["state"] == "blocked"
+    assert {"path": ".cache", "reason": "symlink"} in report["blocking"]
+
+
+def test_a_root_flip_between_sidecar_and_blob_reports_the_sidecar(root, monkeypatch, tmp_path):
+    first, second = _obj(1), _obj(2)
+    report = _ready(root)
+    other = tmp_path / "other-home"
+    other.mkdir()
+    real = image_gc._delete_file
+    deleted: list[Path] = []
+
+    def delete_file(rootp, path):
+        freed = real(rootp, path)
+        deleted.append(path)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))     # flips after the sidecar
+        return freed
+
+    files = {o.id: (_sidecar(o), _blob(o)) for o in (first, second)}   # before the flip
+    monkeypatch.setattr(image_gc, "_delete_file", delete_file)
+    done = _collect(root, report["token"])
+    assert done["state"] == "root-changed"
+    assert len(deleted) == 1
+    gone = next(o for o in (first, second) if not files[o.id][0].exists())
+    kept = first if gone is second else second
+    assert deleted == [files[gone.id][0]]
+    assert done["deleted"]["objects"] == [
+        {"id": gone.id, "blob": gone.blob_sha256 + ".png", "bytes": done["deleted"]["bytes"]}]
+    assert done["deleted"]["blobs"] == []
+    assert files[gone.id][1].is_file()
+    assert files[kept.id][0].is_file() and files[kept.id][1].is_file()
+    assert list(other.iterdir()) == []
+
+
+def test_cache_cleanup_is_best_effort(root):
+    orphan = _obj(1)
+    stuck = image_gc.blob_thumbnails(root, orphan.blob_sha256)[0]
+    stuck.mkdir(parents=True)                      # not a file: will not unlink
+    report = _ready(root)
+    done = _collect(root, report["token"])
+    assert done["state"] == "complete"
+    assert [r["id"] for r in done["deleted"]["objects"]] == [orphan.id]
+    assert [r["blob"] for r in done["deleted"]["blobs"]] == [_blob(orphan).name]
+    assert done["cache_cleanup"] == [{"path": stuck.relative_to(root).as_posix(),
+                                      "reason": "_UnsafePathError"}]
+
+
+def test_a_gone_blobs_thumbnails_still_go(root):
+    orphan = _obj(1)
+    thumb = thumbs.thumbnail(_blob(orphan), 256)
+    assert thumb is not None and thumb.is_file()
+    report = _ready(root)
+    os.unlink(_blob(orphan))                       # a partial earlier collection
+    done = _collect(root, report["token"])
+    assert [r["id"] for r in done["deleted"]["objects"]] == [orphan.id]
+    assert done["deleted"]["blobs"] == []
+    assert not thumb.exists()
+
+
+def test_blob_keys_are_where_thumbnails_land(root):
+    obj = _obj(1)
+    made = {thumbs.thumbnail(_blob(obj), w).resolve() for w in thumbs.WIDTHS}
+    keys = {(root / k).resolve() for k in thumbs.blob_keys(obj.blob_sha256)}
+    assert made <= keys

@@ -194,7 +194,13 @@ def raw_journal_directory(root: Path, wid: str) -> Path:
     (stage-4 M10). `ValueError` for an unsafe id."""
     if not paths.safe_id(wid):
         raise ValueError("unsafe world id")
-    return Path(root) / ".cache" / "image-collection-imports" / wid
+    return raw_journals_root(root) / wid
+
+
+def raw_journals_root(root: Path) -> Path:
+    """The folder of every world's journal folder under store root `root`
+    (`raw_journal_directory`'s parent), for a reader of all of them (GC)."""
+    return Path(root) / ".cache" / "image-collection-imports"
 
 
 def _is_format2_journal(path: Path) -> bool:
