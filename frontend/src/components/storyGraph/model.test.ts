@@ -310,7 +310,7 @@ describe("names", () => {
       [MAP, "thread", "open, May be finished"],
       [OLD, "thread", "closed"],
       [CHART, "thread", "merged into Mara's map"],
-      [OATH, "commitment", "open, due soon"],
+      [OATH, "commitment", "open, due soon, in 4 days"],
       [DEBT, "commitment", "open"],
       ["commitment:winifred-s-gift", "commitment", "merged into Mara's oath"],
       [CORONATION, "event", "in 3 days"],
@@ -360,6 +360,16 @@ describe("names", () => {
     expect(statusOf(map, ix)).toBe("open, stale, May be finished");
   });
 
+  it("a commitment due today says so once", () => {
+    const g = graphFixture();
+    const oath = g.nodes.find((n) => n.id === OATH);
+    if (oath?.kind !== "commitment") throw new Error("fixture");
+    oath.pressure = { state: "today", in_days: 0, friendly: "10 March 1200" };
+    oath.in_days = 0;
+    const { ix } = setup(g);
+    expect(statusOf(oath, ix)).toBe("open, today");
+  });
+
   it("with no present, a dated record says its date rather than 'undated'", () => {
     const { ix, node } = setup(noPresentFixture());
     const cases: [string, string, string][] = [
@@ -375,6 +385,14 @@ describe("names", () => {
       expect([id, statusOf(n, ix)]).toEqual([id, status]);
       expect(accessibleName(n, ix)).toBe(`${n.label}, ${noun}, ${status}`);
     }
+    // A commitment's deadline is a day too: with no present pressure is
+    // withheld, and the due itself still names the day.
+    const oath = node(OATH);
+    if (oath.kind !== "commitment") throw new Error("fixture");
+    oath.pressure = null;
+    expect(statusOf(oath, ix)).toBe("open, 14 March 1200");
+    expect(accessibleName(oath, ix)).toBe("Mara's oath, commitment, open, 14 March 1200");
+    expect(statusOf(node(DEBT), ix)).toBe("open");
     // A day the calendar could not phrase still reads as that day.
     const bare = noPresentFixture();
     for (const n of bare.nodes) if ("friendly" in n) n.friendly = "";
