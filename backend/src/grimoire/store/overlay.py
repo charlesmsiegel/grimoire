@@ -1445,6 +1445,14 @@ def character_roster(cid: str, *, v: View | None = None) -> list[dict]:
                         characters.roster(v.wroot), key=lambda r: r["id"])
 
 
+def pc_roster(cid: str, *, v: View | None = None) -> list[dict]:
+    """`{id, name, default_version}` per PC `list_pcs` lists -- the PC
+    counterpart of `character_roster`, and like it, no image is scanned."""
+    v = _view(cid, v)
+    return _roster_union(v, "pcs", pcs.roster(v.croot), pcs.roster(v.wroot),
+                         key=lambda r: r["id"])
+
+
 def character_ids(cid: str, *, v: View | None = None) -> list[str]:
     """The ids of `character_roster`, reading no character file at all."""
     v = _view(cid, v)

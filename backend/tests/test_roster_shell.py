@@ -179,6 +179,54 @@ def test_store_level_ids_match_their_listings(monkeypatch, tmp_path):
         entities.entity_ids(wroot, "greetings")
 
 
+def test_the_pc_roster_is_list_pcs_cut_to_three_fields(monkeypatch, tmp_path):
+    """`pc_roster` is the PC counterpart of `character_roster`: the same union,
+    cut to the three fields a name reader asks for."""
+    cid, _ = _library(monkeypatch, tmp_path)
+    full = overlay.list_pcs(cid)
+    roster = overlay.pc_roster(cid)
+    assert roster
+    assert roster == [{"id": p["id"], "name": p["name"], "default_version": p["default_version"]}
+                      for p in full]
+    assert "mara" not in {r["id"] for r in roster}              # tombstoned campaign-side
+
+
+def _record(monkeypatch, owner, name):
+    calls = []
+    real = getattr(owner, name)
+
+    def recording(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(owner, name, recording)
+    return calls
+
+
+def test_the_pc_roster_scans_no_image(monkeypatch, tmp_path):
+    from grimoire.store import assets
+    cid, _ = _library(monkeypatch, tmp_path)
+    listed = _record(monkeypatch, assets, "list_images")
+    focused = _record(monkeypatch, assets, "read_focus")
+    assert overlay.pc_roster(cid)
+    assert (len(listed), len(focused)) == (0, 0)
+
+
+def test_pc_name_of_matches_read_pc(monkeypatch, tmp_path):
+    _cid, wroot = _library(monkeypatch, tmp_path)
+    assert pcs.name_of(wroot, "seraphine") == pcs.read_pc(wroot, "seraphine")["meta"]["name"]
+    with pytest.raises(pcs.PCNotFound):
+        pcs.name_of(wroot, "winifred-ashcroft")
+    # Versions are files beside `pc.md`; with every one gone, both readers refuse.
+    for p in (wroot / "pcs" / "mara").glob("*.md"):
+        if p.name != "pc.md":
+            p.unlink()
+    with pytest.raises(pcs.PCNotFound):
+        pcs.read_pc(wroot, "mara")
+    with pytest.raises(pcs.PCNotFound):
+        pcs.name_of(wroot, "mara")
+
+
 def test_world_rows_are_list_worlds_without_counts(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     first = worlds.create_world("Realm")

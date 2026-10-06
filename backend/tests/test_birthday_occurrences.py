@@ -233,3 +233,25 @@ def test_upcoming_forwards_visible_characters(monkeypatch, tmp_path):
     assert birthdays.upcoming(cid, now, []) == []
     assert birthdays.upcoming(cid, now, [], visible_characters=True) == [
         {"name": "Mara", "age": None, "when": "in 1 days"}]
+
+
+def test_gather_names_a_pc_without_scanning_images(monkeypatch, tmp_path):
+    """A seated PC's birthday is named from its meta: the read that named it
+    used to list every version's images, which `pressure.build` (and so every
+    graph read) paid per rostered PC."""
+    from grimoire.store import appearances, assets, pcs
+    cid = _campaign(monkeypatch, tmp_path, now="2026-05-10")
+    pid, vid = overlay.create_pc(cid, "Seraphine", [], persona={
+        **pcs.blank_persona("Seraphine"), "birthdate": "--05-11"})
+    appearances.transitions.appear(cid, "001--saltmarch", "pcs", pid, vid, "player")
+    calls = []
+    real = assets.list_images
+
+    def recording(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(assets, "list_images", recording)
+    [row] = birthdays.occurrences(cid, _now_fixed(cid))
+    assert row["name"] == "Seraphine"
+    assert calls == []

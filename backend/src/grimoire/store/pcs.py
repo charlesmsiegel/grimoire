@@ -381,6 +381,21 @@ def read_pc(root: Path, pid: str) -> dict:
             "versions": versions}
 
 
+def name_of(root: Path, pid: str) -> str:
+    """`read_pc(root, pid)["meta"]["name"]`, reading only `pc.md`.
+
+    Raises `PCNotFound` exactly where `read_pc` does -- an unknown id, or a PC
+    with no addressable version -- so a caller that swapped one for the other
+    skips the same PCs. What it does not do is the rest of `read_pc`: a persona
+    read, an image listing, a focus read and a description sidecar per
+    version, which a caller that only names the PC (`birthdays.gather`, and
+    through it every continuity pressure read) was paying per rostered PC."""
+    _require_pc(root, pid)
+    if not _version_ids(root, pid):
+        raise PCNotFound(pid)   # see read_pc
+    return _read_meta(root, pid).get("name", pid)
+
+
 def _listed_dirs(root: Path) -> list[Path]:
     """The PC directories `list_pcs` walks, in its order -- see
     `characters._listed_dirs`."""
@@ -433,6 +448,36 @@ def list_pcs(root: Path) -> list[dict]:
                     "gallery_count": sum(1 for n in names if n.startswith("gallery_")),
                     "versions": [{"id": v, "name": read_persona(root, pid, v)["name"]}
                                  for v in version_ids]})
+    return out
+
+
+def roster(root: Path) -> list[dict]:
+    """`list_pcs`, cut to `id`, `name` and `default_version`.
+
+    For the callers that ask who is here and what they are called -- the Story
+    Graph's actor labels -- which would otherwise pay the full row for it: an
+    asset scan and a focus read per PC, and a persona read per version. What is
+    left is the meta read and the version glob, and both are load-bearing: the
+    glob is the row FILTER (a PC with no addressable version is not listed, see
+    `read_pc`) and the meta is the name.
+
+    Same walk, same filter, same order, same values as `list_pcs`, and held to
+    it by test -- see `characters.roster`, whose counterpart this is. A caller
+    that needs another field of the row should read the full listing for it
+    rather than widen this one piecemeal.
+    """
+    out: list[dict] = []
+    for pd in _listed_dirs(root):
+        pid = pd.name
+        # Meta first, as the listing reads it, so an unreadable meta fails
+        # here exactly where it fails there.
+        meta = _read_meta(root, pid)
+        version_ids = _version_ids(root, pid)
+        if not version_ids:
+            continue
+        default = meta.get("default_version", "")
+        out.append({"id": pid, "name": meta.get("name", pid),
+                    "default_version": default if default in version_ids else version_ids[0]})
     return out
 
 
