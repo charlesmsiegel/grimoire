@@ -535,19 +535,45 @@ def _with_actor_refs(cid: str, sid: str, scene: dict) -> dict:
         scene["messages"], cid=cid, offset=scene.get("offset", 0), total=scene.get("total"))
     rewritten = store.regex.rewrites.read_all(cid, sid)
     active = _active_variants(cid, sid, rewritten)
+    firsts = _first_parts(scene["messages"]) if rewritten else {}
     for message in scene["messages"]:
         ref = refs.get(message.get("response_id", ""))
         if ref:
             message["actor_ref"] = ref
-        found = _record_for(message, rewritten, active) if rewritten else None
+        found = (_record_for(message, rewritten, active,
+                             firsts.get(message.get("response_id") or ""))
+                 if rewritten else None)
         if found is not None:
             message["rewritten"] = True
             message["rewrite_key"] = found[0]
     return scene
 
 
+def _first_parts(messages: list[dict]) -> dict[str, dict]:
+    """Each response's first part among `messages`, by `response_id` -- what
+    `_record_for` hands a later part so the first one wins a legacy record
+    both of them match. A window may not hold it, and then nothing settles the
+    tie there; the edit routes read the whole transcript (`_first_part_of`)."""
+    out: dict[str, dict] = {}
+    for m in messages:
+        rid = m.get("response_id")
+        if rid and not m.get("response_part") and rid not in out:
+            out[rid] = m
+    return out
+
+
+def _first_part_of(cid: str, sid: str, target: dict) -> dict | None:
+    """The first part of `target`'s response when `target` is a later part --
+    read only then, since only then is there a tie to settle."""
+    if not (target.get("response_id") and target.get("response_part")):
+        return None
+    return _first_parts(store.scenes.read_scene(cid, sid)["messages"]).get(
+        target["response_id"])
+
+
 def _record_for(message: dict, records: dict[str, dict],
-                active: dict[str, str | None]) -> tuple[str, dict] | None:
+                active: dict[str, str | None],
+                first: dict | None = None) -> tuple[str, dict] | None:
     """The store phase's record that still describes this message, and the key
     it is under, or None. Every key the message may be recorded under is asked
     (`rewrites.candidates`): its part's, the bare `response_id` -- where a later
@@ -555,11 +581,23 @@ def _record_for(message: dict, records: dict[str, dict],
     legacy reply was recorded under before the response migration gave it a
     `response_id` too. A key can hold a record that is not this message's (the
     first part's, a variant since swiped away), so the first that describes it
-    (`_describes`) wins. `active` is `_active_variants`."""
+    (`_describes`) wins. `active` is `_active_variants`.
+
+    The bare `response_id` is the first part's key, so a later part takes a
+    record there only when it is one from before records named their part
+    (`rewrites.claims`) and `first` -- the first part of the same response,
+    when the caller has it -- does not match it as well: two parts can say
+    the same thing, and the key's owner keeps the record then."""
     for key in store.regex.rewrites.candidates(message):
         rec = records.get(key)
-        if rec is not None and _describes(message, rec, active):
-            return key, rec
+        if (rec is None or not store.regex.rewrites.claims(message, key, rec)
+                or not _describes(message, rec, active)):
+            continue
+        if (first is not None and first is not message
+                and key == message.get("response_id") and message.get("response_part")
+                and _describes(first, rec, active)):
+            continue
+        return key, rec
     return None
 
 
@@ -5180,7 +5218,8 @@ def _require_restorable(cid: str, sid: str, target: dict, content: str) -> None:
     Anything else is a stale view of the scene, answered 409 for the client to
     re-read rather than written over whatever is there now."""
     records = store.regex.rewrites.read_all(cid, sid)
-    found = _record_for(target, records, _active_variants(cid, sid, records))
+    found = _record_for(target, records, _active_variants(cid, sid, records),
+                        _first_part_of(cid, sid, target))
     if found is None or content != found[1].get("original"):
         raise HTTPException(409, detail={
             "kind": "rewrite_stale",
@@ -5211,7 +5250,8 @@ def _settle_rewrite(cid: str, sid: str, target: dict, key: str, original: str,
     A rewrite that fired supersedes the others, and an edit that clears the
     rewrite retires them all."""
     records = store.regex.rewrites.read_all(cid, sid)
-    found = _record_for(target, records, _active_variants(cid, sid, records))
+    found = _record_for(target, records, _active_variants(cid, sid, records),
+                        _first_part_of(cid, sid, target))
     rid = target.get("response_id") or ""
     own = [k for k in store.regex.rewrites.candidates(target)
            if k in records and (k != rid or k == key or (found and found[0] == k))]

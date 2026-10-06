@@ -16,7 +16,10 @@ under one `response_id`, and each part's rewrite is its own -- else the
 `post_id` of a player post or a legacy reply segment. Records written before
 parts had keys of their own sit under the bare `response_id` whichever part
 they were made for; `candidates` still offers that key for every part, and the
-stored text decides which part it describes. Each record holds the text
+stored text decides which part it describes -- which is why a record now
+also names its `part` ("" for a first part or a player post): one under the
+bare `response_id` that names one is the first part's and never a later
+part's (`claims`). Each record holds the text
 before the rewrite (`original`), the ids of the rules that changed it
 (`rules`), the text the rewrite stored (`stored`) and when (`at`). Only the
 latest rewrite of a message is kept. `stored` is what lets a reader tell a
@@ -79,6 +82,19 @@ def candidates(message: dict) -> list[str]:
     return [k for k in dict.fromkeys(keys) if k]
 
 
+def claims(message: dict, key: str, rec: dict) -> bool:
+    """Whether the record `rec` under `key` can be `message`'s at all, before
+    its text is compared. Only the bare `response_id` is in doubt for a later
+    part: it is the first part's key, so a record written there since records
+    carry their `part` is the first part's and never a later one's. One from
+    before (no `part`) may be either, and the stored text has to decide --
+    with the first part, as the key's owner, winning a tie (the caller's to
+    settle, since it holds the transcript)."""
+    if key != (message.get("response_id") or "") or not message.get("response_part"):
+        return True
+    return "part" not in rec
+
+
 def response_of(key: str) -> str:
     """The `response_id` (or `post_id`) a record key belongs to."""
     return key.split("#", 1)[0]
@@ -108,7 +124,8 @@ def _read(p: Path) -> dict[str, dict]:
 def _shaped(rec: dict) -> dict:
     """A record whose `original` survived, with every field a reader
     dereferences put back in shape: `rules` a list of rule-id strings, `stored`
-    and `at` strings, `variant` kept only as a non-empty string. A hand edit or
+    and `at` strings, `variant` kept only as a non-empty string, `part` only as
+    a string (absent on a record from before parts had keys). A hand edit or
     a sync conflict can leave any of them as anything, and the inspector maps
     over `rules`. Unknown fields are dropped."""
     rules = rec.get("rules")
@@ -118,6 +135,8 @@ def _shaped(rec: dict) -> dict:
            "at": rec["at"] if isinstance(rec.get("at"), str) else ""}
     if isinstance(rec.get("variant"), str) and rec["variant"]:
         out["variant"] = rec["variant"]
+    if isinstance(rec.get("part"), str):
+        out["part"] = rec["part"]
     return out
 
 
@@ -150,7 +169,8 @@ def record(cid: str, sid: str, key: str, *, original: str, rules: list[str],
         p = path(cid, scenes_identity.ensure_identity(cid, sid))
         records = _read(p)
         records[key] = {"original": original, "rules": list(rules), "stored": stored,
-                        "at": now_iso(), **({"variant": variant} if variant else {})}
+                        "at": now_iso(), "part": key.split("#", 1)[1] if "#" in key else "",
+                        **({"variant": variant} if variant else {})}
         _write(p, records)
 
 

@@ -615,7 +615,8 @@ def test_a_record_written_under_the_bare_response_id_still_resolves_for_a_later_
     rid = shown[2]["response_id"]
     path = rewrites.path(cid, store.scenes.scene_identity(cid, sid))
     data = json.loads(path.read_text(encoding="utf-8"))
-    data = {rid: data[shown[2]["rewrite_key"]]}
+    # As such a record was written: no `part`.
+    data = {rid: {k: v for k, v in data[shown[2]["rewrite_key"]].items() if k != "part"}}
     path.write_text(json.dumps(data), encoding="utf-8")
 
     shown = messages(client, cid, sid)
@@ -695,3 +696,53 @@ def test_a_hand_mangled_connection_reads_as_none(client):
                                   "content": "Four...", "connection": ["x"]}],
                                 cid=cid, phase="display")
     assert out[0]["content"] == "Four…"
+
+
+def _declined_roll(client, first, second):
+    cid, sid = seed(client)
+    put_rules(client, cid, ELLIPSIS)
+    fake = FakeLLM([
+        [first + '\n```roll\n{"check":"notice"}\n```'],
+        [second + '\n```handoff\n{"next":null}\n```'],
+    ])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    base = f"/api/campaigns/{cid}/scenes/{sid}"
+    client.post(base + "/chat", json={"content": "Hello", "speaker_ref": "characters:mara"})
+    proposal = store.proposals.get(cid, sid)
+    response = client.post(base + "/roll-proposal",
+                           json={"proposal": proposal["id"], "action": "decline"})
+    assert response.status_code == 200 and '"error"' not in response.text, response.text
+    return cid, sid
+
+
+def test_a_later_part_saying_what_the_first_stored_does_not_take_its_record(client):
+    """The bare `response_id` is the first part's key. A later part that
+    happens to say exactly what the first part's rewrite stored is not
+    rewritten, and Restore must not write the first part's original into it."""
+    cid, sid = _declined_roll(client, "Wait...", "Wait…")
+    first, second = messages(client, cid, sid)[1:]
+    assert first["content"] == second["content"] == "Wait…"
+    assert first["rewritten"] is True
+    assert "rewritten" not in second
+    r = edit(client, cid, sid, 2, "Wait...", restore=True)
+    assert r.status_code == 409
+    assert store.scenes.read_scene(cid, sid)["messages"][2]["content"] == "Wait…"
+
+
+def test_a_legacy_bare_record_both_parts_match_is_the_first_parts(client):
+    """A record from before parts had keys (no `part` field) under the bare
+    `response_id` may be a later part's; when the first part matches it too,
+    nothing tells them apart, and the key's owner -- the first part -- keeps
+    it."""
+    cid, sid = _declined_roll(client, "Wait...", "Wait...")
+    first, second = messages(client, cid, sid)[1:]
+    rid = first["response_id"]
+    path = rewrites.path(cid, store.scenes.scene_identity(cid, sid))
+    data = json.loads(path.read_text(encoding="utf-8"))
+    legacy = {k: v for k, v in data[second["rewrite_key"]].items() if k != "part"}
+    path.write_text(json.dumps({rid: legacy}), encoding="utf-8")
+
+    first, second = messages(client, cid, sid)[1:]
+    assert first["rewritten"] is True and first["rewrite_key"] == rid
+    assert "rewritten" not in second
+    assert edit(client, cid, sid, 2, "Wait...", restore=True).status_code == 409
