@@ -356,12 +356,22 @@ def own_undescribed(cid: str) -> list[dict]:
 
     Unreviewed means nothing describes it -- no string legacy key and no string
     on its image object -- read off ``image_library.backlog_rows``, which
-    resolves no blob.
+    resolves no blob. A row carries ``conflicts`` when migration left several
+    texts to choose between (`image_descriptions.queue_rows`).
     """
+    return image_descriptions.queue_rows(_undescribed_rows(cid))
+
+
+def _undescribed_rows(cid: str) -> list[dict]:
+    """`own_undescribed`'s rows before `queue_rows`: ``{"name", "image_id"?}``,
+    for the count, which reads no object for conflicts."""
     d = images_dir(cid)
-    rows = image_library.backlog_rows(d)
-    done = image_descriptions.described_names(d, rows)
-    return [{"name": r["name"]} for r in rows if r["name"] not in done]
+    return image_descriptions.undescribed_rows(d, image_library.backlog_rows(d))
+
+
+def own_undescribed_count(cid: str) -> int:
+    """How many of this campaign's own library images are unreviewed."""
+    return len(_undescribed_rows(cid))
 
 
 def set_description(cid: str, name: str, text: str) -> None:

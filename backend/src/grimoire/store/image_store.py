@@ -714,7 +714,9 @@ def merge_projection(image_id: str, projected: dict, scope: str) -> None:
 
     Only ever *adds*: a projected ``description`` fills the object only when it
     has none -- local text and a local ``""`` (reviewed, nothing to say) both
-    win -- and the projection's associations and subject reviews in `scope`
+    win, and so does a pending ``description_conflicts`` (a disagreement the
+    describe queue is waiting on the player to settle; filling would bury it)
+    -- and the projection's associations and subject reviews in `scope`
     are unioned in. Everything else in `projected` (its blob, its id, any
     sources a hand-built bundle carried) is ignored: the local object's global
     fields were computed here from the blob and are not the bundle's to say.
@@ -731,7 +733,8 @@ def merge_projection(image_id: str, projected: dict, scope: str) -> None:
 
     def change(raw: dict) -> dict | None:
         dirty = False
-        if isinstance(desc, str) and not isinstance(raw.get("description"), str):
+        if (isinstance(desc, str) and not isinstance(raw.get("description"), str)
+                and not raw.get("description_conflicts")):
             raw["description"] = desc
             dirty = True
         if assoc:

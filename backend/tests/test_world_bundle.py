@@ -788,6 +788,26 @@ def test_import_renames_the_bundle_scope_to_the_final_world_id(monkeypatch, tmp_
     assert raw["reviews"] == {"subjects": [f"world:{new}"]}
 
 
+def test_bundle_fill_never_buries_a_conflict(monkeypatch, tmp_path):
+    """A bundle's description fills an object only when it has none -- and an
+    object holding unresolved conflicts has one waiting to be chosen, so the
+    projection must not decide it for the player (stage 4, M11)."""
+    _home(monkeypatch, tmp_path)
+    wid, _shared, avatar = _placed_realm()
+    _describe(avatar, "From the bundle.")
+    bundle = _export(wid, tmp_path)
+    conflicts = [{"text": "A grey quay.", "from": "a"}, {"text": "A harbour.", "from": "b"}]
+    image_store.update(avatar, lambda raw: {
+        **{k: v for k, v in raw.items() if k != "description"},
+        "description_conflicts": conflicts})
+
+    world_bundle.import_bundle(bundle)
+
+    raw = image_store.read(avatar).raw
+    assert "description" not in raw
+    assert raw["description_conflicts"] == conflicts
+
+
 def test_import_reuses_existing_blob(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     wid, _shared, _avatar = _placed_realm()

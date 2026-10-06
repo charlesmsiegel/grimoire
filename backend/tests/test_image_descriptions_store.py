@@ -915,3 +915,110 @@ def test_the_r12_decision_and_drop_hold_the_sidecar_lock(tmp_path, monkeypatch):
     assets.put_in(d, "avatar", b"png-r12-new", "png")
     assert held == [True]
     assert "avatar" not in image_descriptions.read_raw(d)
+
+
+# ---- migration conflicts in the describe queue (stage 4, M11) ---------------
+
+CONFLICTS = [{"text": "A grey quay at dusk.", "from": "characters/mara/assets/main"},
+             {"text": "Mara at the gate.", "from": "worlds/realm"}]
+
+
+def _conflict(image_id, conflicts=CONFLICTS):
+    """What migration leaves behind: no `description`, a conflict list."""
+    assert image_store.update(
+        image_id, lambda raw: {**raw, "description_conflicts": [dict(c) for c in conflicts]})
+
+
+def test_a_conflicted_object_is_queued_with_its_texts_in_every_queue(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    rid, vid = characters.create_character(root, "Winifred", "main")
+    for n in ("avatar", "gallery_1"):
+        assets.put_image(root, rid, vid, n, f"png-cq-{n}".encode(), "png")
+    vdir = assets.version_dir(root, rid, vid)
+    world_images.put_image(wid, "coastline", b"png-cq-wl", "png")
+    world_images.put_image(wid, "harbour", b"png-cq-wl2", "png")
+    campaign_images.put_image(cid, "c-quay", b"png-cq-cl", "png")
+    _conflict(image_refs.read(vdir, "avatar").image)
+    _conflict(image_refs.read(world_images.images_dir(wid), "coastline").image)
+    _conflict(image_refs.read(campaign_images.images_dir(cid), "c-quay").image)
+
+    # Still undescribed -- no text answers -- so each is in its queue, with
+    # the texts to choose between; an ordinary row carries no `conflicts`.
+    assert image_descriptions.undescribed(root) == [
+        {"id": rid, "vid": vid, "name": "avatar", "conflicts": CONFLICTS},
+        {"id": rid, "vid": vid, "name": "gallery_1"}]
+    assert world_images.undescribed(wid) == [
+        {"name": "coastline", "conflicts": CONFLICTS}, {"name": "harbour"}]
+    assert campaign_images.own_undescribed(cid) == [
+        {"name": "c-quay", "conflicts": CONFLICTS}]
+    # ...and the counts and the shell's presence check are untouched by it.
+    assert image_descriptions.undescribed_count(root) == 2
+    assert world_images.undescribed_count(wid) == 2
+    assert world_images.has_undescribed(wid) is True
+
+
+def test_a_malformed_conflict_entry_is_not_offered(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-bad", "png")
+    image_id = image_refs.read(d, "avatar").image
+    assert image_store.update(image_id, lambda raw: {
+        **raw, "description_conflicts": [
+            {"text": "Kept.", "from": "a"}, {"text": 7, "from": "b"}, "junk",
+            {"text": "No source."}]})
+    rows = image_descriptions.queue_rows([{"name": "avatar", "image_id": image_id}])
+    assert rows == [{"name": "avatar", "conflicts": [
+        {"text": "Kept.", "from": "a"}, {"text": "No source.", "from": ""}]}]
+
+
+def test_resolving_a_conflict_writes_the_description_and_clears_the_list(tmp_path):
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-res", "png")
+    image_id = image_refs.read(d, "avatar").image
+    _conflict(image_id)
+    assert image_descriptions.text_in(d, "avatar") is None
+
+    image_descriptions.set_in(d, "avatar", CONFLICTS[0]["text"])
+
+    raw = image_store.read(image_id).raw
+    assert raw["description"] == CONFLICTS[0]["text"]
+    assert "description_conflicts" not in raw
+    assert image_descriptions.text_in(d, "avatar") == CONFLICTS[0]["text"]
+    assert image_descriptions.queue_rows([{"name": "avatar", "image_id": image_id}]) == [
+        {"name": "avatar"}]
+
+
+def test_a_legacy_fallback_write_leaves_the_conflicts(tmp_path, monkeypatch):
+    """Only the object write resolves a conflict: text that landed on a legacy
+    key (the object write unconfirmed) leaves the list for the next attempt."""
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-fb", "png")
+    image_id = image_refs.read(d, "avatar").image
+    _conflict(image_id)
+    with monkeypatch.context() as m:
+        m.setattr(image_store, "update", lambda *_a, **_k: False)
+        image_descriptions.set_in(d, "avatar", "Typed.")
+    assert image_descriptions.read_raw(d) == {"avatar": "Typed."}
+    assert image_store.read(image_id).raw["description_conflicts"] == CONFLICTS
+
+
+def test_resolving_a_conflict_holds_the_sidecar_locks_across_the_clear(tmp_path, monkeypatch):
+    """The conflict clear is part of `set_in`'s own hold, not a second step."""
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-hold", "png")
+    image_id = image_refs.read(d, "avatar").image
+    _conflict(image_id)
+    held = []
+    real = image_store.update
+
+    def spy(i, change):
+        held.append(assets.sidecar_lock(
+            d, image_descriptions.DESCRIPTIONS_FILE)._is_owned())
+        return real(i, change)
+
+    monkeypatch.setattr(image_store, "update", spy)
+    image_descriptions.set_in(d, "avatar", "Resolved.")
+    assert held == [True]
+    assert "description_conflicts" not in image_store.read(image_id).raw

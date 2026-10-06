@@ -826,7 +826,7 @@ def list_campaign_undescribed_images(cid: str, count: bool = False):
             seen, base, rid, vid, lambda b, r: _campaign_record_name_and_versions(cid, b, r, v))
 
     if count:
-        return {"count": len(store.campaign_images.own_undescribed(cid)) + sum(
+        return {"count": store.campaign_images.own_undescribed_count(cid) + sum(
             k for base in character_routes.UNDESCRIBED_BASES
             for rid, vid, k in store.image_descriptions.undescribed_by_version(root, base)
             if describable(base, rid, vid) is not None)}
@@ -837,7 +837,8 @@ def list_campaign_undescribed_images(cid: str, count: bool = False):
     # docstring above exists to prevent.
     out.extend({"kind": "campaign", "id": "", "vid": "", "name": image["name"],
                 "record_name": "Campaign library",
-                "url": f"/api/campaigns/{cid}/images/{quote(image['name'], safe='')}"}
+                "url": f"/api/campaigns/{cid}/images/{quote(image['name'], safe='')}",
+                **({"conflicts": image["conflicts"]} if "conflicts" in image else {})}
                for image in store.campaign_images.own_undescribed(cid))
 
     for base in character_routes.UNDESCRIBED_BASES:
@@ -847,7 +848,8 @@ def list_campaign_undescribed_images(cid: str, count: bool = False):
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
                         "name": item["name"], "record_name": name,
-                        "url": _campaign_image_url(cid, base, item)})
+                        "url": _campaign_image_url(cid, base, item),
+                        **({"conflicts": item["conflicts"]} if "conflicts" in item else {})})
     return out
 
 
