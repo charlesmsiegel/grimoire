@@ -766,6 +766,13 @@ everything and writes only its report, and it has the same shape as a real one
   (`test_format_1_manifest_converts_keeping_indices_library_urls_and_tags`).
   Harvest journals are converted, or retired only when unaccepted and
   unmappable.
+- **A cancel is honoured between journals as between files.** Journals not yet
+  reached are left as they were, and the work map is kept for the rerun
+  (`test_a_cancel_while_journals_settle_keeps_the_rest_and_the_map`).
+- **A real run reports what it freed.** `bytes_reclaimed` is the legacy bytes
+  it deleted less the blobs its ingests added, so a run that stopped part-way
+  reports less than its plan; a dry run reports the plan's figure
+  (`test_a_real_run_reports_the_bytes_it_freed_not_the_plan`).
 
 **What it does not do.**
 

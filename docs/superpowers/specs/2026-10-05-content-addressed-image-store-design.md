@@ -923,7 +923,8 @@ Rerunning is idempotent.
 - description conflicts;
 - subject disagreements;
 - untouched files, with paths;
-- bytes before, after and reclaimed.
+- bytes before, after and reclaimed (planned for a dry run; for a real run,
+  what it actually freed).
 
 It lives under `.cache/` and in the run result, never in a committed file.
 
