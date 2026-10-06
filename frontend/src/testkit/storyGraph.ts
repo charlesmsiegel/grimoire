@@ -149,3 +149,15 @@ export function graphFixture(): StoryGraph {
     nodes, edges, omitted: [],
   };
 }
+
+/** The same campaign with no present: no clock, so no `in_days` anywhere and
+ *  no holiday or birthday (both are computed against the present). A dated
+ *  record keeps its `fixed`, `native` and `friendly`. */
+export function noPresentFixture(): StoryGraph {
+  const g = graphFixture();
+  g.now = { native: "", friendly: "", fixed: null };
+  g.nodes = g.nodes
+    .filter((n) => n.kind !== "holiday" && n.kind !== "birthday")
+    .map((n): GraphNode => ("in_days" in n ? { ...n, in_days: null } : n));
+  return g;
+}
