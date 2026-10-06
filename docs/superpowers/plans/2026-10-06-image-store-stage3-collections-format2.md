@@ -23,7 +23,7 @@
 - §13 "Collections, export, bundles, backups";
 - every amendment section, including stage 2's.
 
-**Precondition:** stage 2 (all of its tasks) is complete on this branch. Stage 2 Task 3's `greeting_images.catalog_with_slots` returns values `(entry, target)` with the tagged `target = ("slot", (dir, name)) | None`. That was a controller ruling given to its implementer, and Task 4 verifies it. If `_placement_of` is untagged, Task 4 makes it target-aware. This stage adds `("object", image_id)`. A code map is at `.superpowers/sdd/stage3-notes/code-map.md`.
+**Precondition:** stage 2 (all of its tasks) is complete on this branch. Stage 2 Task 3's `greeting_images.catalog_with_slots` returns values `(entry, target)` with the tagged `target = ("slot", (dir, name), image_id | None) | None` (the id is carried from the listing so the todo hot path never re-reads placements). That was a controller ruling given to its implementer, and Task 4 verifies it. If `_placement_of` is untagged, Task 4 makes it target-aware. This stage adds `("object", image_id)`. A code map is at `.superpowers/sdd/stage3-notes/code-map.md`.
 
 ## Stage-3 rulings (the spec gains them in Task 6)
 
