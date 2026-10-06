@@ -2,7 +2,7 @@
 // enabled (mirroring the control it stands for), and the set edits the editor
 // makes. Kept out of the components so the rules can be read, and tested, in
 // one place.
-import type { QuickReply, QuickReplyEntry, QuickReplyHide, QuickReplyTask } from "../api/types";
+import type { QuickReply, QuickReplyDraft, QuickReplyEntry, QuickReplyHide, QuickReplyTask } from "../api/types";
 
 export function isHide(e: QuickReplyEntry): e is QuickReplyHide {
   return "hidden" in e && e.hidden === true;
@@ -82,4 +82,46 @@ export function quickReplyAvailability(r: QuickReply, ctx: QuickReplyContext): Q
     default:
       return { shown: false, disabled: true, title };
   }
+}
+
+// ---- the editor's set edits (pure; none of them mutates its input) ----
+
+type AnyEntry = QuickReplyEntry | QuickReplyDraft;
+
+/** `entry` in place of the entry with id `replaceId`, or appended. */
+export function upsertEntry<T extends AnyEntry>(entries: T[], entry: T, replaceId?: string): T[] {
+  if (replaceId !== undefined && entries.some((e) => e.id === replaceId))
+    return entries.map((e) => (e.id === replaceId ? entry : e));
+  return [...entries, entry];
+}
+
+/** The entry with `id` swapped with its neighbour in direction `delta` --
+ *  counting only entries `among` accepts, so a campaign reorders its own
+ *  replies without its hides and overrides being in the way. A no-op at
+ *  either end. */
+export function moveEntry<T extends AnyEntry>(entries: T[], id: string, delta: -1 | 1,
+                                              among: (e: T) => boolean = () => true): T[] {
+  const from = entries.findIndex((e) => e.id === id);
+  if (from < 0) return entries;
+  let to = from + delta;
+  while (to >= 0 && to < entries.length && !among(entries[to])) to += delta;
+  if (to < 0 || to >= entries.length) return entries;
+  const next = [...entries];
+  [next[from], next[to]] = [next[to], next[from]];
+  return next;
+}
+
+export function removeEntry<T extends AnyEntry>(entries: T[], id: string): T[] {
+  return entries.filter((e) => e.id !== id);
+}
+
+/** A campaign set with the world reply `id` hidden. */
+export function hideEntry<T extends AnyEntry>(entries: T[], id: string): (T | QuickReplyHide)[] {
+  return [...entries, { id, hidden: true }];
+}
+
+/** A campaign's own copy of a world reply, under the world reply's id -- which
+ *  is what makes it replace the world reply rather than sit beside it. */
+export function overrideOf(r: QuickReply): QuickReply {
+  return { ...r };
 }
