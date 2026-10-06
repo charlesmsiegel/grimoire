@@ -191,6 +191,10 @@ def _temporal(cid: str, omitted: set[str]) -> dict:
 # ---- phase B: campaign files, inside one hold -------------------------------
 
 
+def _scene_actors(cid: str, unread: set[str]) -> dict[str, set[str]]:
+    return involvement.scene_actors(cid, unreadable=unread)
+
+
 def _files(cid: str, omitted: set[str]) -> dict:
     with locks.best_effort_campaign_lock(cid):
         scenes: list[dict] = _attempt(omitted, "scenes", scenes_read.list_scenes, [], cid)
@@ -199,7 +203,13 @@ def _files(cid: str, omitted: set[str]) -> dict:
         for row in scenes:
             histories[row["id"]] = _attempt(omitted, "scenes",
                                             scenes_read.get_location_history, [], cid, row["id"])
-        actors: dict = _attempt(omitted, "chronicle", involvement.scene_actors, {}, cid)
+        # `scene_actors` steps over a source that will not read rather than
+        # raising, so it names what it stepped over; the family's part is
+        # "chronicle" either way (the appearance record has no part of its own).
+        unread: set[str] = set()
+        actors: dict = _attempt(omitted, "chronicle", _scene_actors, {}, cid, unread)
+        if unread:
+            omitted.add("chronicle")
         # `read` raises on bad JSON, and on a list top level from `setdefault`.
         rels: dict = _attempt(omitted, "relationships", relationships.read, {}, cid)
     # Valid JSON of the wrong shape arrives without raising.
