@@ -84,7 +84,7 @@ function body(doc: unknown) { return { ok: true, json: async () => doc } as Resp
 
 test("accepts a format 2 collection of member URLs", async () => {
   const list = [member2(0), member2(1), member2(3)];
-  vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: list }));
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, id: cid, members: list }));
   render(<MarkdownImage src={source} alt="Scene" />);
   const image = await screen.findByAltText("Scene");
   expect(image).toHaveAttribute("src", list[1]);
@@ -94,7 +94,7 @@ test("accepts a format 2 collection of member URLs", async () => {
 });
 
 test("accepts a format 2 member URL without a version query", async () => {
-  vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: [member2(0, "")] }));
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, id: cid, members: [member2(0, "")] }));
   render(<MarkdownImage src={source} alt="Scene" />);
   expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member2(0, ""));
 });
@@ -104,10 +104,23 @@ test.each([
   ["another collection", `/api/worlds/realm/image-collections/${"b".repeat(32)}/members/0?v=1`],
   ["a library URL", members[0]],
   ["a non-numeric index", member2(0).replace("/0?", "/x?")],
+  ["a non-canonical index", member2(0).replace("/0?", "/01?")],
   ["a nested path", member2(0).replace("/0?", "/0/1?")],
   ["a remote host", "https://example.test" + member2(0)],
 ])("refuses a format 2 member URL from %s", async (_name, url) => {
   vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: [url] }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  expect(await screen.findByAltText("Scene")).toHaveAttribute("src", source);
+});
+
+test("accepts a format 2 collection that omits its id", async () => {
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, members: [member2(0)] }));
+  render(<MarkdownImage src={source} alt="Scene" />);
+  expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member2(0));
+});
+
+test("refuses a format 2 collection whose id disagrees", async () => {
+  vi.mocked(fetch).mockResolvedValue(body({ format: 2, id: "b".repeat(32), members: [member2(0)] }));
   render(<MarkdownImage src={source} alt="Scene" />);
   expect(await screen.findByAltText("Scene")).toHaveAttribute("src", source);
 });

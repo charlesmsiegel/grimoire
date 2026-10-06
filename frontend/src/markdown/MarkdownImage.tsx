@@ -24,8 +24,8 @@ function localMembers(raw: unknown, world: string, id: string): string[] {
       || !data.members.length || data.members.length > 10000) {
     throw new Error("Invalid image collection");
   }
-  // Format 1 names its collection in the body; format 2 is named by the URL it
-  // was fetched from, so an id there is optional but may not disagree.
+  // Format 1 names its collection in the body; format 2 carries it too, but an absent one is
+  // tolerated since the URL it was fetched from already names the collection.
   if (data.format === 1 ? data.id !== id : data.id !== undefined && data.id !== id) {
     throw new Error("Invalid image collection");
   }
@@ -37,7 +37,7 @@ function localMembers(raw: unknown, world: string, id: string): string[] {
     const url = new URL(member, window.location.origin);
     const valid = url.origin === window.location.origin && (format === 1
       ? url.pathname.startsWith(libraryPrefix) && /^[0-9a-f]{64}$/.test(url.pathname.slice(libraryPrefix.length))
-      : url.pathname.startsWith(indexPrefix) && /^\d+$/.test(url.pathname.slice(indexPrefix.length))
+      : url.pathname.startsWith(indexPrefix) && /^(0|[1-9]\d*)$/.test(url.pathname.slice(indexPrefix.length))
         && /^(\?v=.*)?$/.test(url.search) && !url.hash);
     if (!valid) throw new Error("Invalid image collection member");
     return member;

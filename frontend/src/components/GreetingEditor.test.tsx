@@ -1193,7 +1193,7 @@ test("format 2 collection members expose subject controls keyed by member URL", 
   const id = "a".repeat(32);
   const member = `/api/worlds/realm/image-collections/${id}/members/2?v=${"c".repeat(64)}`;
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
-    json: async () => ({ format: 2, members: [member] }) }));
+    json: async () => ({ format: 2, id, members: [member] }) }));
   vi.mocked(api.readGreeting).mockResolvedValue({
     ...greetingFixture("open", "Open"),
     body: `![Scene](/api/worlds/realm/image-collections/${id}/image)`,
