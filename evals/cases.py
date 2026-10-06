@@ -1445,7 +1445,15 @@ CASES: tuple[Case, ...] = (
              # settles, each citing a shown scene, so evidence still passes.
              Recording("eager", ("reconcile.keep_open", "reconcile.unproven"), "json"),
              # The right word on the answered thread, with no scene cited.
-             Recording("unfounded", ("reconcile.evidence",), "json"))),
+             Recording("unfounded", ("reconcile.evidence",), "json"),
+             # §28.10 cases 4, 5 and 7 held back: the thread and commitment
+             # kept apart as `distinct`, the answered thread and the kept
+             # promise each `keep_open` with no scene cited. Every word is in
+             # its candidate's vocabulary and none claims an outcome, so enum
+             # and evidence still pass: what trips is exactly the three
+             # verdicts no other counterexample reaches.
+             Recording("timid", ("reconcile.cross_type", "reconcile.close",
+                                 "reconcile.fulfilled"), "json"))),
     Case(id="scene-suggestions",
          hypothesis="with two focused drivers and a batch anchor in a custom calendar, "
                     "the suggestions spread focus coverage instead of cloning one premise, "

@@ -192,7 +192,7 @@ and renders the drivers and controls addenda whole.
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
   `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`,
-  `eager`, `unfounded`, `cloned`, `bad-date`, `unknown-ref`)
+  `eager`, `unfounded`, `timid`, `cloned`, `bad-date`, `unknown-ref`)
   and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —
