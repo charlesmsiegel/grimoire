@@ -287,6 +287,45 @@ def test_stale_reason_from_a_past_anchor(monkeypatch, tmp_path):
     assert rows[after]["stale_reason"] == ""
 
 
+def test_an_on_anchor_on_its_own_day_is_live(monkeypatch, tmp_path):
+    """§13.5's own-day carve-out, read the way occurrences are: reaching the
+    coronation's day fires it, and an idea anchored on (or by, or before) it
+    is still for today -- as a holiday on the same day is. The day after, it
+    has passed."""
+    cid = _campaign(monkeypatch, tmp_path)
+    eve = f"holiday:{_fx('2026-05-13')}:Saltmarch Eve"
+    lids = {rel: _save(cid, rel, [_d(CORONATION, "anchor")],
+                       {"ref": CORONATION, "relation": rel})
+            for rel in ("on", "by", "before")}
+    holiday = _save(cid, "Eve", [_d(eve, "anchor")], {"ref": eve, "relation": "on"})
+    clock.advance(cid, to="2026-05-13")
+    assert events.get(cid, "the-coronation")["fired"]
+    rows = _read(cid)
+    for rel, lid in lids.items():
+        assert rows[lid]["stale_reason"] == "", rel
+        assert rows[lid]["time_anchor"]["state"] == "live", rel
+    assert rows[lids["on"]]["anchor_date"] == "2026-05-13"
+    assert rows[holiday]["anchor_date"] == "2026-05-13"
+    assert rows[holiday]["stale_reason"] == ""
+
+    clock.advance(cid, to="2026-05-14")
+    rows = _read(cid)
+    for rel, lid in lids.items():
+        assert rows[lid]["stale_reason"] == "The coronation has passed", rel
+        assert rows[lid]["anchor_date"] == "", rel
+    assert rows[holiday]["stale_reason"] == "Saltmarch Eve has passed"
+
+
+def test_a_fired_event_off_its_day_is_finished(monkeypatch, tmp_path):
+    """Fired still finishes an event whose day is not today -- one fired by
+    hand ahead of its date, or whose date the calendar cannot read."""
+    cid = _campaign(monkeypatch, tmp_path)
+    lid = _save(cid, "Before", [_d(CORONATION, "anchor")],
+                {"ref": CORONATION, "relation": "before"})
+    events.fire(cid, ["the-coronation"], "2026-05-10")
+    assert _read(cid)[lid]["stale_reason"] == "The coronation has passed"
+
+
 def test_a_rescheduled_anchor_reads_as_moved(monkeypatch, tmp_path):
     """§28.6, Review Focus 5."""
     cid = _campaign(monkeypatch, tmp_path)
@@ -368,7 +407,7 @@ def test_a_past_month_occurrence_is_finished(monkeypatch, tmp_path):
                    "2026-06": "live"}
     april = next(rows[lid] for lid, month in states.items() if month == "2026-04")
     assert april["time_anchor"]["friendly"] == "April 2026"
-    assert april["stale_reason"] == "winifred has passed"
+    assert april["stale_reason"] == "winifred's birthday has passed"
     assert all(rows[lid]["anchor_date"] == "" for lid in states)
 
 
@@ -389,6 +428,19 @@ def test_occurrence_labels_come_from_the_ref_and_the_actor(monkeypatch, tmp_path
     assert labels == {"named": "Mara", "gone": "seraphine",
                       "bounded": f"{long_name.strip()[:notices.NAME_BUDGET]}…"}
     assert rows[lids["named"]]["anchor_date"] == "2026-05-20"
+
+
+def test_a_past_birthday_reads_as_a_birthday(monkeypatch, tmp_path):
+    """The chip label is the actor's bare name; the stale sentence names the
+    birthday, so it never reads as a death notice."""
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, _version = overlay.create_character(cid, "Mara", "main")
+    ref = f"birthday:characters:{mara}:{_fx('2026-05-01')}"
+    lid = _save(cid, "Gift", [_d(ref, "anchor")], {"ref": ref, "relation": "before"})
+    row = _read(cid)[lid]
+    assert row["time_anchor"]["label"] == "Mara"
+    assert row["drivers"][0]["label"] == "Mara"
+    assert row["stale_reason"] == "Mara's birthday has passed"
 
 
 # ---- cost and failure ----------------------------------------------------------
