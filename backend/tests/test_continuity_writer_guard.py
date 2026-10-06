@@ -29,9 +29,12 @@ Reach:
   change: plot and commitment records, continuity.json's aliases, links and
   suppressions (and the scene repointing that rewrites a link's scene), the
   review mutators themselves, events and scene ideas.
-- It sees calls. A module that reached a store's private `_write`, or wrote
-  the file through `atomic` by hand, is `test_atomic_guard.py`'s and
-  `test_lock_domain_guard.py`'s business, not this one's.
+- It sees every load of a guarded function, called or not: the scanned
+  modules pass store functions to a fail-soft `_soft(fn, fallback, *args)`
+  far more often than they call one directly. A module that reached a
+  store's private `_write`, or wrote the file through `atomic` by hand, is
+  `test_atomic_guard.py`'s and `test_lock_domain_guard.py`'s business, not
+  this one's.
 """
 
 from __future__ import annotations
@@ -119,24 +122,29 @@ def _resolve(expr: str, modules: dict[str, str]) -> str | None:
     return f"{modules[head]}.{rest}" if rest else modules[head]
 
 
-def _calls(tree: ast.AST, package: str) -> Iterator[tuple[int, str, str, str]]:
-    """Calls that may reach a module, as (line, module, function, source)."""
+def _references(tree: ast.AST, package: str) -> Iterator[tuple[int, str, str, str]]:
+    """Every load that may name a module's function, as (line, module, function, source).
+
+    A load, not only a call: reconcile, pressure and drivers reach nearly every
+    store function through a fail-soft helper -- `_soft(events.list_events,
+    None, cid, ...)` -- where the guarded function is an argument and the
+    callee is the helper. Copying that line with `events.fire` in place of
+    `events.list_events` is the most natural way to add a write, so the scan
+    has to see a function wherever it is named, called or not.
+    """
     names, modules = _bindings(tree, package)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        fn = node.func
-        if isinstance(fn, ast.Attribute):
-            module = _resolve(ast.unparse(fn.value), modules)
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load):
+            module = _resolve(ast.unparse(node.value), modules)
             if module is not None:
-                yield node.lineno, module, fn.attr, ast.unparse(fn)
-        elif isinstance(fn, ast.Name) and fn.id in names:
-            module, original = names[fn.id]
-            yield node.lineno, module, original, fn.id
+                yield node.lineno, module, node.attr, ast.unparse(node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load) and node.id in names:
+            module, original = names[node.id]
+            yield node.lineno, module, original, node.id
 
 
 def _forbidden(tree: ast.AST, package: str = PACKAGE) -> list[tuple[int, str]]:
-    return [(line, rendered) for line, module, name, rendered in _calls(tree, package)
+    return [(line, rendered) for line, module, name, rendered in _references(tree, package)
             if name in FORBIDDEN.get(module, ())]
 
 
@@ -208,6 +216,18 @@ def test_the_detector_catches_every_spelling_of_the_call():
     # The review mutators, reached from a discovery module.
     assert _found("from . import review\ndef go(c):\n    review.create_link(c, 'a', 'b', 'related')\n") \
         == ["review.create_link"]
+    # Passed by reference to a fail-soft helper, the idiom reconcile, pressure
+    # and drivers use for nearly every store call: the guarded function is an
+    # argument, never the callee.
+    assert _found("from .. import events\ndef go(c):\n    _soft(events.fire, None, c, ['e1'], 'now')\n") \
+        == ["events.fire"]
+    assert _found("from . import doc\ndef go(c):\n    _soft(doc.put_alias, None, c, 'thread:a', {})\n") \
+        == ["doc.put_alias"]
+    assert _found("from .doc import put_alias\ndef go(c):\n    _soft(put_alias, None, c, 'thread:a', {})\n") \
+        == ["put_alias"]
+    # Bound to a local first and called later under another name.
+    assert _found("from .. import plot\ndef go(c):\n    fn = plot.restore\n    fn(c, 'p', None)\n") \
+        == ["plot.restore"]
 
 
 def test_the_detector_does_not_flag_a_module_that_merely_looks_like_this_one():
@@ -226,6 +246,8 @@ def test_the_detector_does_not_flag_a_module_that_merely_looks_like_this_one():
     assert _found("from other.doc import put_alias\ndef go(c):\n    put_alias(c, 'x', {})\n") == []
     # A local function that happens to share a guarded name.
     assert _found("def add(c):\n    pass\ndef go(c):\n    add(c)\n") == []
+    # A reader passed by reference is what the fail-soft helpers are for.
+    assert _found("from .. import events\ndef go(c):\n    _soft(events.list_events, None, c)\n") == []
 
 
 def test_review_still_uses_the_vocabulary_it_is_supposed_to():
@@ -233,7 +255,7 @@ def test_review_still_uses_the_vocabulary_it_is_supposed_to():
     stopped seeing calls: `review` (not scanned) is where reviewed aliases and
     links are written, and the detector has to see it doing so."""
     tree = ast.parse((CONTINUITY / "review.py").read_text(encoding="utf-8"))
-    used = {(module, fn) for _line, module, fn, _r in _calls(tree, PACKAGE)
+    used = {(module, fn) for _line, module, fn, _r in _references(tree, PACKAGE)
             if fn in FORBIDDEN.get(module, ())}
     expected = {("grimoire.store.continuity.doc", "put_alias"),
                 ("grimoire.store.continuity.doc", "put_link")}
