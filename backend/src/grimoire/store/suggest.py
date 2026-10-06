@@ -1137,8 +1137,12 @@ def _event_reading(ref: str, ctx: _IdeaContext, native: str) -> dict:
     passed = fixed is not None and ctx.now_fixed is not None and fixed < ctx.now_fixed
     # §13.5's own-day carve-out: reaching the day fires the event, and an idea
     # anchored on it is still for today, as a holiday or birthday on today is.
+    # With no calendar or no `now`, whether the day is today is unknown, and
+    # unknown is never stale (Decision 17); an undatable event on a readable
+    # calendar has no day to be today, so fired still finishes it.
+    unknown = ctx.provider is None or ctx.now_fixed is None
     today = fixed is not None and fixed == ctx.now_fixed
-    finished = passed or (fired and not today)
+    finished = passed or (fired and not today and not unknown)
     return _reading("event", label, "finished" if finished else "live", friendly,
                     day if fixed is not None else "")
 

@@ -317,6 +317,34 @@ def test_an_on_anchor_on_its_own_day_is_live(monkeypatch, tmp_path):
     assert rows[holiday]["stale_reason"] == "Saltmarch Eve has passed"
 
 
+def test_a_fired_event_whose_day_cannot_be_placed_is_live(monkeypatch, tmp_path):
+    """Decision 17 meets the own-day carve-out: fired alone does not finish an
+    event, so with no calendar or no `now` to say whether its day is today,
+    an idea anchored on it is unknown -- and unknown is never stale."""
+    cid = _campaign(monkeypatch, tmp_path)
+    lid = _save(cid, "On", [_d(CORONATION, "anchor")],
+                {"ref": CORONATION, "relation": "on"})
+    clock.advance(cid, to="2026-05-13")
+    assert events.get(cid, "the-coronation")["fired"]
+    assert _read(cid)[lid]["stale_reason"] == ""
+
+    croot = campaigns.campaign_root(cid)
+    calendar = (croot / "calendar.json").read_text(encoding="utf-8")
+    _break_calendar(cid, tmp_path)
+    row = _read(cid)[lid]
+    assert row["stale_reason"] == ""
+    assert row["time_anchor"]["state"] == "live"
+    (croot / "calendar.json").write_text(calendar, encoding="utf-8")
+
+    def _no_present(_cid):
+        raise RuntimeError("clock unreadable")
+
+    monkeypatch.setattr(clock, "now", _no_present)
+    row = _read(cid)[lid]
+    assert row["stale_reason"] == ""
+    assert row["time_anchor"]["state"] == "live"
+
+
 def test_a_fired_event_off_its_day_is_finished(monkeypatch, tmp_path):
     """Fired still finishes an event whose day is not today -- one fired by
     hand ahead of its date, or whose date the calendar cannot read."""
