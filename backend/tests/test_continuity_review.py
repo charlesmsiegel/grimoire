@@ -266,6 +266,31 @@ def test_merged_sources_lists_direct_sources(cid):
     assert review.merged_sources(cid, "thread:maras-map") == []
 
 
+def test_merged_sources_counts_only_live_merges(cid):
+    """The delete guard asks what the Ledger shows (spec §7.1, §12.5): a source
+    that no longer exists, or a hand-edited self alias, merges nothing, so it
+    shows no "Merged:" note and must not refuse the delete either."""
+    review.create_alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    store.plot.restore(cid, "maras-map", None)  # an undo of its create, outside the cascade
+    assert review.merged_sources(cid, "thread:winifreds-chart") == []
+    data = doc.read(cid)
+    data["aliases"]["thread:realm-feud"] = {"to": "thread:realm-feud"}
+    (_root(cid) / "continuity.json").write_text(json.dumps(data), encoding="utf-8")
+    assert review.merged_sources(cid, "thread:realm-feud") == []
+
+
+def test_merged_sources_keeps_a_direct_source_merged_on_through_ref(cid):
+    """A chain a -> b -> c: `a` is still merged through `b`, so deleting `b`
+    would un-merge it, and the guard still says so."""
+    store.plot.set_movement(cid, "seraphines-map", "Seraphine's map", "open", "Torn.", S2)
+    review.create_alias(cid, "thread:winifreds-chart", "thread:seraphines-map")
+    data = doc.read(cid)
+    data["aliases"]["thread:maras-map"] = {"to": "thread:winifreds-chart"}
+    (_root(cid) / "continuity.json").write_text(json.dumps(data), encoding="utf-8")
+    assert review.merged_sources(cid, "thread:winifreds-chart") == ["thread:maras-map"]
+    assert review.merged_sources(cid, "thread:seraphines-map") == ["thread:winifreds-chart"]
+
+
 def test_merged_sources_strict_on_malformed(cid):
     (_root(cid) / "continuity.json").write_text("{ no", encoding="utf-8")
     with pytest.raises(doc.ContinuityError):

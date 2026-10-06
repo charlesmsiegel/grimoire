@@ -359,12 +359,19 @@ def remove_link(cid: str, lid: str) -> dict:
 def merged_sources(cid: str, ref: str) -> list[str]:
     """The records merged directly into `ref`. Strict: a continuity.json whose
     aliases cannot be read raises `ContinuityError`, because "none" would be a
-    guess -- and the guess a delete would act on."""
+    guess -- and the guess a delete would act on.
+
+    Only a merge the live resolver follows counts (spec §7.1): the same question
+    the Ledger's "Merged:" note answers. A stored alias whose source no longer
+    exists, or a hand-edited self alias or loop, merges nothing, so a delete
+    guarded on it would refuse over a merge the reader cannot see. A source in
+    `live_canon` followed its first hop, and that hop is the one to `ref`."""
     if set(doc.malformed(cid)) & {"file", "aliases"}:
         raise doc.ContinuityError("continuity.json's aliases cannot be read")
     aliases = doc.read(cid)["aliases"]
+    live = effective.live_canon(cid)
     return sorted(src for src, record in aliases.items()
-                  if isinstance(record, dict) and record.get("to") == ref)
+                  if isinstance(record, dict) and record.get("to") == ref and src in live)
 
 
 #: The staged edit kinds whose target can be an alias source, and the ref
