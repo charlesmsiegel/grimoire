@@ -1643,14 +1643,30 @@ def _asset_ref(base: str, aid: str, vid: str, name: str) -> str:
 
 def list_images(cid: str, aid: str, vid: str, base: str = "characters",
                 *, v: View | None = None) -> list[dict]:
-    v = _view(cid, v)
+    mine, inherited = _image_halves(cid, aid, vid, base, _view(cid, v))
+    return sorted(mine + inherited, key=lambda i: i["name"])
+
+
+def _image_halves(cid: str, aid: str, vid: str, base: str,
+                  v: View) -> tuple[list[dict], list[dict]]:
+    """`list_images`' two halves, unsorted: the campaign's own rows, and the
+    world rows it inherits (none when the record is detached -- the world's
+    id-mate is a stranger -- and never a tombstoned one).
+
+    Split for the description reads, which answer the two halves by different
+    rules and must not list (or scan the placements of) either side twice."""
     mine = assets.list_images(v.croot, aid, vid, base)
     if _flat_ref(base, aid) in v.off:
-        return sorted(mine, key=lambda i: i["name"])   # the world's id-mate is a stranger
+        return mine, []
     have = {i["name"] for i in mine}
     inherited = [i for i in assets.list_images(v.wroot, aid, vid, base)
                  if i["name"] not in have and _asset_ref(base, aid, vid, i["name"]) not in v.gone]
-    return sorted(mine + inherited, key=lambda i: i["name"])
+    return mine, inherited
+
+
+def _row_ids(rows: list[dict]) -> dict[str, str]:
+    """name -> image id for the image-bearing placements among listing rows."""
+    return {i["name"]: i["image_id"] for i in rows if i.get("image_id")}
 
 
 def image_root(cid: str, aid: str, vid: str, name: str, base: str = "characters",
@@ -1730,35 +1746,41 @@ def read_description(cid: str, aid: str, vid: str, name: str,
 
     The rule is per IMAGE, where `read_focus`' is per folder, because that is
     the granularity of the thing: a description is a claim about particular
-    bytes.
+    bytes. Within one directory, `image_descriptions`' R1 answers: a string
+    legacy key there wins, else the text on the image object behind the
+    placement.
 
-    - **The campaign holds the image.** Its own sidecar answers, and there is
-      NO fallback to the world's. A campaign-side `gallery_1` is different art
-      from the world's `gallery_1`, so inheriting the world's sentence about it
-      would caption one picture with a description of another -- which, since
-      the caption becomes alt text in a transcript, is worse than saying
-      nothing.
-    - **The image is inherited.** The campaign's sidecar answers if it has a
-      key (an author may describe inherited art without diverging the art
-      itself), and the world's otherwise.
+    - **The campaign holds the image.** R1 in the campaign's directory, and
+      there is NO fallback to the world's. A campaign-side `gallery_1` is
+      different art from the world's `gallery_1`, so inheriting the world's
+      sentence about it would caption one picture with a description of
+      another -- which, since the caption becomes alt text in a transcript, is
+      worse than saying nothing.
+    - **The image is inherited.** The campaign's own legacy key answers if it
+      holds a string (written before stage 2, it masks the shared text until
+      migration), and R1 in the world's directory otherwise -- which is where a
+      campaign edit of inherited art now lands (`set_description`, D1).
     - **Tombstoned or detached.** Campaign-side only, matching `read_focus` and
-      `image_root`: the world's id-mate is a stranger.
+      `image_root`: the world's id-mate is a stranger. Such a name is not in
+      the union, and a name the union does not show has no description.
 
-    Reads pass the overlay-resolved union as `names`, or a description written
-    campaign-side for an image whose bytes are still inherited would be
-    filtered out as naming nothing.
+    The ids come from the overlay listing, so no placement is read twice.
     """
     v = _view(cid, v)
-    croot = v.croot
-    union = {i["name"] for i in list_images(cid, aid, vid, base, v=v)}
-    mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
-    if (assets.image_path(croot, aid, vid, name, base) is not None
-            or _asset_ref(base, aid, vid, name) in v.gone
-            or _flat_ref(base, aid) in v.off):
-        return mine.get(name, "")
-    if name in mine:            # typed read: a malformed entry is not an answer
-        return mine[name]
-    return image_descriptions.read(v.wroot, aid, vid, name, base)
+    mine, inherited = _image_halves(cid, aid, vid, base, v)
+    own = next((i for i in mine if i["name"] == name), None)
+    if own is not None:
+        return image_descriptions.text_in(assets.version_dir(v.croot, aid, vid, base), name,
+                                          known_id=own.get("image_id")) or ""
+    theirs = next((i for i in inherited if i["name"] == name), None)
+    if theirs is None:
+        return ""           # not in the union (an unsafe id lists nothing either)
+    cdir = assets.version_dir(v.croot, aid, vid, base)
+    legacy = image_descriptions.legacy_text_in(cdir, name)
+    if legacy is not None:
+        return legacy
+    return image_descriptions.text_in(assets.version_dir(v.wroot, aid, vid, base), name,
+                                      known_id=theirs.get("image_id")) or ""
 
 
 def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters",
@@ -1772,52 +1794,50 @@ def read_descriptions(cid: str, aid: str, vid: str, base: str = "characters",
     directory scanning. This runs once per cast member per TURN, on the
     synchronous path that blocks the event loop, so that was the difference
     between a rounding error and a fifth of a second of stat() calls per reply.
+    So it lists each side once and hands the listing's ids along: no placement
+    is read that the listing did not already read, and no blob is resolved.
 
     One entry per image the overlay lists; an image nobody has reviewed is
     ABSENT rather than empty, so a caller can still tell "not reviewed" from
     "reviewed, nothing to say".
     """
     v = _view(cid, v)
-    croot = v.croot
-    images = list_images(cid, aid, vid, base, v=v)
-    union = {i["name"] for i in images}
-    mine_images = {i["name"] for i in assets.list_images(croot, aid, vid, base)}
-    mine = image_descriptions.read_all(croot, aid, vid, base, names=union)
-    # From the TYPED read, not `raw_keys`. A campaign sidecar holding a non-string
-    # value for an inherited image is dropped by `read_all` but still has a raw
-    # key -- and treating that as "the campaign has spoken" turned the malformed
-    # entry into `""`, masking the world's perfectly good description and marking
-    # the image reviewed-empty. `read_description` never agreed with that: it
-    # falls through to the world for the same image.
-    mine_keys = set(mine)
-    gone, detached_record = v.gone, _flat_ref(base, aid) in v.off
-    theirs: dict[str, str] = {}
-    # Only read the world side if some image might fall through to it -- a fully
-    # diverged version never touches it.
-    if not detached_record and not union <= mine_images:
-        theirs = image_descriptions.read_all(v.wroot, aid, vid, base, names=union)
-
-    out: dict[str, str] = {}
-    for name in sorted(union):
-        campaign_side = (name in mine_images or detached_record
-                         or _asset_ref(base, aid, vid, name) in gone)
-        if name in mine_keys:
-            out[name] = mine.get(name, "")
-        elif not campaign_side and name in theirs:
-            out[name] = theirs[name]
-    return out
+    mine, inherited = _image_halves(cid, aid, vid, base, v)
+    union = {i["name"] for i in mine} | {i["name"] for i in inherited}
+    # One read of the campaign sidecar answers both halves: the campaign's own
+    # images by R1 with their ids, and the inherited ones by their legacy key
+    # ONLY -- no id is passed for them, so no object is read on their behalf
+    # here. A non-string value is dropped by the typed read, so a malformed
+    # campaign entry never masks the world's text.
+    out = image_descriptions.read_all(v.croot, aid, vid, base, names=union, ids=_row_ids(mine))
+    # Only read the world side if some image falls through to it -- a fully
+    # diverged (or detached) version never touches it.
+    fall = {i["name"] for i in inherited if i["name"] not in out}
+    if fall:
+        out.update(image_descriptions.read_all(v.wroot, aid, vid, base, names=fall,
+                                               ids=_row_ids(inherited)))
+    return dict(sorted(out.items()))
 
 
 def set_description(cid: str, aid: str, vid: str, name: str, text: str,
                     base: str = "characters") -> None:
-    """Write one image's description campaign-side.
+    """Write one image's description, as this campaign sees the image.
 
-    The write always lands in the campaign, exactly as `put_campaign_avatar_focus`
-    lands a focus there, and `read_description` then treats the campaign as
-    authoritative for that image going forward. The existence gate is the
-    overlay UNION, not this campaign's own directory: a thin campaign reaches
-    most of its art through the world, and describing an inherited picture must
-    not require diverging the picture.
+    - **Inherited art whose world placement resolves** (D1, R3): the text goes
+      on the shared image object behind it -- the picture every world and
+      campaign holding it shows -- and the name's legacy key is cleared in the
+      world's directory and in this campaign's (`image_descriptions.set_in`'s
+      `also_clear`), so neither masks the edit. Another campaign's key is not
+      this edit's to clear: it keeps masking the shared text until migration.
+    - **Anything else** -- the campaign's own art, or inherited art the world
+      holds as a legacy file with no object to share -- lands campaign-side,
+      as it always has: on the object behind a campaign placement, or as the
+      campaign's legacy key, which `read_description` then treats as
+      authoritative for that image.
+
+    The existence gate is the overlay UNION, not this campaign's own directory:
+    a thin campaign reaches most of its art through the world, and describing
+    an inherited picture must not require diverging the picture.
 
     UNDER `campaign_lock`, unlike almost everything else in this module.
     `overlay` sits in `locks.UNREVIEWED` — the frozen backlog — so the guard
@@ -1842,9 +1862,17 @@ def set_description(cid: str, aid: str, vid: str, name: str, text: str,
         # The union is resolved INSIDE the lock, and `set_in` re-checks it inside
         # the sidecar lock as well. Computed outside, it was a check-then-act:
         # a slot could be promoted away between the check and the write.
-        image_descriptions.set_description(
-            croot_of(cid), aid, vid, name, text, base,
-            names={i["name"] for i in list_images(cid, aid, vid, base)})
+        v = _view(cid, None)
+        mine, inherited = _image_halves(cid, aid, vid, base, v)
+        union = {i["name"] for i in mine} | {i["name"] for i in inherited}
+        if any(i["name"] == name for i in inherited):
+            wdir = assets.version_dir(v.wroot, aid, vid, base)
+            if image_descriptions.object_id_in(wdir, name) is not None:
+                image_descriptions.set_in(
+                    wdir, name, text, names=union,
+                    also_clear=assets.version_dir(v.croot, aid, vid, base))
+                return
+        image_descriptions.set_description(v.croot, aid, vid, name, text, base, names=union)
 
 
 def delete_image(cid: str, aid: str, vid: str, name: str, base: str = "characters") -> None:
@@ -1861,27 +1889,18 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
 
     UNDER `campaign_lock`, for `set_description`'s reason and then one of its
     own. The sidecar lock serializes each *write* to the file, which is not
-    enough here: this reads the resolved descriptions and writes them back a
-    few statements later, so a save landing in that gap was read past and then
-    overwritten with the snapshot -- losing text somebody had just written (PR
-    review). A read-modify-write needs the lock the other writer takes, and for
-    campaign-scoped state that is this one.
+    enough here: this reads the world's legacy keys and carries them up a few
+    statements later, so a save landing in that gap was read past and then
+    masked by the stale carried key -- losing text somebody had just written
+    (PR review). A read-modify-write needs the lock the other writer takes, and
+    for campaign-scoped state that is this one.
     """
     croot, wroot = croot_of(cid), wroot_of(cid)
     with locks.campaign_lock(cid):
         inherits = _flat_ref(base, aid) not in detached(cid)
-        # Resolved BEFORE anything moves. Copying the bytes up is what makes
-        # this campaign hold the picture, and from that moment
-        # `read_description` stops falling through to the world for it --
-        # deliberately, since a campaign-side image is normally different art.
-        # Here it is the SAME art, so a description not carried up with the
-        # bytes is one this campaign silently loses the instant somebody
-        # promotes the picture (PR review).
-        resolved = read_descriptions(cid, aid, vid, base)
-        union = {i["name"] for i in list_images(cid, aid, vid, base)}
         cdir = assets.version_dir(croot, aid, vid, base)
-        _check_promote_arrived(cid, aid, vid, name, base, inherits, cdir,
-                               assets.version_dir(wroot, aid, vid, base))
+        wdir = assets.version_dir(wroot, aid, vid, base)
+        _check_promote_arrived(cid, aid, vid, name, base, inherits, cdir, wdir)
         for n in (name, assets.AVATAR):
             if not (inherits and assets.image_path(croot, aid, vid, n, base) is None
                     and _asset_ref(base, aid, vid, n) not in deleted(cid)):
@@ -1896,26 +1915,33 @@ def promote_image(cid: str, aid: str, vid: str, name: str, base: str = "characte
             src = assets.image_path(wroot, aid, vid, n, base)
             if src is None:
                 continue
-            # The DESCRIPTION first, then the bytes. Describing an image whose
-            # bytes are still inherited is an ordinary state of this store, so
-            # a failure between the two leaves something coherent; the other
-            # order leaves the picture campaign-side with the world's sentence
-            # masked, and a retry cannot even see that it has to fix it --
-            # `image_path` is non-null by then, so the carry-up is skipped
-            # forever (PR review).
+            # The DESCRIPTION first, then the bytes (R5). Copying the bytes up
+            # is what makes this campaign hold the picture, and from then on
+            # its slot answers by its own key or the object -- no longer by the
+            # world's key. So the one text that would be lost is a string
+            # WORLD legacy key with no campaign key over it, and that alone is
+            # carried, as a campaign legacy key: text read off the object is
+            # still the object's after the link, and a promote never writes
+            # the shared object. Description first because describing an image
+            # whose bytes are still inherited is an ordinary state of this
+            # store, so a failure between the two leaves something coherent;
+            # the other order leaves the picture campaign-side with the world's
+            # sentence masked, and a retry cannot even see that it has to fix
+            # it -- `image_path` is non-null by then, so the carry-up is
+            # skipped forever (PR review).
             #
             # Key presence, not truthiness: `""` is "reviewed, nothing to say"
             # and has to travel too, or the promoted image walks back into the
-            # describe queue somebody has already answered for. `names` is the
-            # overlay union, since the bytes are not campaign-side yet.
-            if n in resolved:
-                image_descriptions.set_description(croot, aid, vid, n, resolved[n],
-                                                   base, names=union)
+            # describe queue somebody has already answered for.
+            if image_descriptions.legacy_text_in(cdir, n) is None:
+                carried = image_descriptions.legacy_text_in(wdir, n)
+                if carried is not None:
+                    image_descriptions.carry_legacy(cdir, n, carried)
             # By REFERENCE (spec section 8): the campaign slot names the very
             # image the world's does, so no blob is written. A legacy world
             # file is ingested once -- the store keeps its blob -- and the
             # world's folder is left as it was.
-            placed = assets.resolve(assets.version_dir(wroot, aid, vid, base), n)
+            placed = assets.resolve(wdir, n)
             image_id = (placed.image_id if placed is not None
                         else image_store.ingest(src.read_bytes(), src.suffix[1:]).id)
             assets.link_in(cdir, n, image_id)
@@ -2081,7 +2107,11 @@ def shadowed_images(cid: str, char_id: str, vid: str, *, v: View | None = None) 
             out.append(i)
     if not out:
         return []
-    described = image_descriptions.read_all(wroot, char_id, vid, names={i["name"] for i in out})
+    # The world's R1 for each row, off the world listing's own ids: no
+    # placement is read twice, and a placement-backed row shows the text on
+    # its (shared) image object.
+    described = image_descriptions.read_all(wroot, char_id, vid,
+                                            names={i["name"] for i in out}, ids=_row_ids(out))
     return [{"name": i["name"], "v": i["v"],
              **({"image_id": i["image_id"]} if i.get("image_id") else {}),
              **({"description": described[i["name"]]} if i["name"] in described else {})}

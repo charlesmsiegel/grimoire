@@ -84,10 +84,11 @@ def test_campaign_character_description_lands_campaign_side(client, world):
     detail = client.get(f"/api/campaigns/{camp}/characters/{cid}").json()
     version = next(v for v in detail["versions"] if v["id"] == vid)
     assert version["image_descriptions"] == {"gallery_1": "This campaign's take."}
-    # ...and the world is untouched
+    # ...and, D1: the picture is the world's shared image, so the world shows
+    # the edit too (R3) -- one picture, one description.
     detail = client.get(f"/api/worlds/{world}/characters/{cid}").json()
     version = next(v for v in detail["versions"] if v["id"] == vid)
-    assert version["image_descriptions"] == {"gallery_1": "The world's take."}
+    assert version["image_descriptions"] == {"gallery_1": "This campaign's take."}
 
 
 # ---- pcs -------------------------------------------------------------------
@@ -149,6 +150,31 @@ def test_library_description_roundtrip(client, world):
     assert [i["name"] for i in listing] == ["coastline"]
     assert store.image_descriptions.read_in(
         store.campaign_images.images_dir(camp)) == {"coastline": "A hand-drawn map."}
+
+
+def test_campaign_library_route_describes_an_inherited_placement(client, world):
+    """D1 (R3): the campaign route describes an inherited, placement-backed
+    library image on the shared object, so the world reads it as well. A
+    world LEGACY file has no object to share, and is still the world's to
+    describe: 409."""
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    client.put(f"/api/worlds/{world}/images/coastline",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n", "image/png")})
+    r = client.put(f"/api/campaigns/{camp}/images/coastline/description",
+                   json={"description": "A rocky shore."})
+    assert r.status_code == 200
+    assert store.world_images.read_descriptions(world) == {"coastline": "A rocky shore."}
+    listing = client.get(f"/api/campaigns/{camp}/images").json()["images"]
+    assert [(i["name"], i.get("description")) for i in listing] == [
+        ("coastline", "A rocky shore.")]
+
+    (store.world_images.images_dir(world) / "harbour.png").write_bytes(
+        b"\x89PNG\r\n\x1a\nlegacy")
+    r = client.put(f"/api/campaigns/{camp}/images/harbour/description",
+                   json={"description": "mine"})
+    assert r.status_code == 409
+    assert "harbour" not in store.world_images.read_descriptions(world)
 
 
 def test_library_description_for_a_missing_image_is_a_404(client, world):

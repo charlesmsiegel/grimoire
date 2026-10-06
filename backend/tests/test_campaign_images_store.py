@@ -371,12 +371,34 @@ def test_descriptions_come_from_whichever_side_owns_the_image(cid, wid):
         "coastline": "a rocky shore", "handout": "the party's map"}
 
 
-def test_a_campaign_may_not_describe_an_inherited_image(cid, wid):
-    """Inherited art is described in the WORLD's queue, where describing it
-    once serves every campaign on that world."""
+def test_a_campaign_describes_an_inherited_placement_on_the_shared_image(cid, wid):
+    """D1 (R3): an inherited library image whose world placement resolves is
+    described on its image object -- the one every campaign on that world
+    shows -- and the campaign's own legacy key for it is cleared, not left to
+    mask the edit."""
     world_images.put_image(wid, "coastline", _png(), "png")
+    cdir = campaign_images.images_dir(cid)
+    image_descriptions.carry_legacy(cdir, "coastline", "an old campaign note")
+    assert campaign_images.read_descriptions(cid) == {"coastline": "an old campaign note"}
+
+    campaign_images.set_description(cid, "coastline", "a rocky shore")
+
+    assert world_images.read_descriptions(wid) == {"coastline": "a rocky shore"}
+    assert campaign_images.read_descriptions(cid) == {"coastline": "a rocky shore"}
+    assert "coastline" not in image_descriptions.read_raw(cdir)
+    assert "coastline" not in image_descriptions.read_raw(world_images.images_dir(wid))
+
+
+def test_a_campaign_may_not_describe_an_inherited_legacy_file(cid, wid):
+    """No resolving world placement, no shared object to write: inherited
+    legacy art is still described in the WORLD's editor."""
+    (world_images.images_dir(wid)).mkdir(parents=True, exist_ok=True)
+    (world_images.images_dir(wid) / "coastline.png").write_bytes(_png())
+    assert [(r["name"], r["inherited"]) for r in campaign_images.list_images(cid)] \
+        == [("coastline", True)]
     with pytest.raises(ValueError):
         campaign_images.set_description(cid, "coastline", "mine")
+    assert campaign_images.read_descriptions(cid) == {}
 
 
 def test_the_campaign_backlog_is_its_own_images_only(cid, wid):
