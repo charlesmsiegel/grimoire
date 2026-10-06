@@ -113,6 +113,10 @@ test("whenPhrase mirrors the prompt's phrase list", () => {
   expect(whenPhrase(4, "month")).toBe("day unknown");
   expect(whenPhrase(null, "month")).toBe("day unknown");
   expect(whenPhrase(null)).toBe("undated");
+  // a fixed day with no present to measure from is not undated (§19.2)
+  expect(whenPhrase(null, "exact", true)).toBe("no current date");
+  expect(whenPhrase(null, "month", true)).toBe("day unknown");
+  expect(whenPhrase(3, "exact", true)).toBe("in 3 days");
   expect(whenPhrase(2, "exact")).toBe("in 2 days");
 });
 

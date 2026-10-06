@@ -563,12 +563,14 @@ def resolve_controls(cid: str, snapshot: dict, *, focus_refs=(), avoid_refs=(), 
                     relation=("on" if month else time_anchor_relation) if anchor else "")
 
 
-def _when(in_days: int | None, precision: str | None = None) -> str:
-    """Decision 10's phrase for an item's distance from now."""
+def _when(in_days: int | None, precision: str | None = None, dated: bool = False) -> str:
+    """Decision 10's phrase for an item's distance from now. `dated` says the
+    item has a fixed day: with no present it has no distance, but it is not
+    undated (§19.2's rule, kept by the prompt and the chooser alike)."""
     if precision == "month":
         return "day unknown"
     if in_days is None:
-        return "undated"
+        return "no current date" if dated else "undated"
     if in_days == 0:
         return "today"
     if in_days > 0:
@@ -603,14 +605,14 @@ def _timeline_rank(item: dict) -> tuple:
 def _index_rows(snapshot: dict, pinned: set[str]) -> tuple[list[dict], int]:
     ordered = sorted(snapshot.get("driver_index", []), key=_index_rank)
     chosen = _select(ordered, _index_rank, lambda r: r["ref"] in pinned)
-    precision = {i["ref"]: i.get("precision") for i in snapshot.get("timeline", [])
-                 if i["kind"] in TEMPORAL_KINDS}
+    day = {i["ref"]: i for i in snapshot.get("timeline", []) if i["kind"] in TEMPORAL_KINDS}
     rows = []
     for i in chosen:
         d = ordered[i]
         in_days = d["pressure"]["in_days"]
-        temporal = d["kind"] in TEMPORAL_KINDS
-        when = (_when(in_days, precision.get(d["ref"])) if temporal
+        item = day.get(d["ref"], {})
+        when = (_when(in_days, item.get("precision"), item.get("fixed") is not None)
+                if d["kind"] in TEMPORAL_KINDS
                 else _when(in_days) if in_days is not None else "")
         rows.append({"ref": d["ref"], "label": d["label"], "kind": d["kind"],
                      "state": d["pressure"]["state"], "when": when})
@@ -629,7 +631,8 @@ def _timeline_rows(snapshot: dict, pinned: set[str]) -> tuple[list[dict], int]:
                 or (bool(sooner) and item["ref"] == sooner and item["kind"] in _SOONER_KINDS))
 
     chosen = _select(items, _timeline_rank, always)
-    rows = [{**items[i], "when": _when(items[i]["in_days"], items[i].get("precision"))}
+    rows = [{**items[i], "when": _when(items[i]["in_days"], items[i].get("precision"),
+                                       items[i].get("fixed") is not None)}
             for i in chosen]
     return rows, len(items) - len(rows)
 

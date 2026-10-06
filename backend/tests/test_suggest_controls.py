@@ -127,11 +127,16 @@ def test_view_rows_carry_the_when_phrase():
     rows = [_driver("commitment:late", "overdue", dormancy=0, in_days=-1),
             _driver("commitment:soon", "due_soon", dormancy=0, in_days=4),
             _driver("event:undated", "ok"),
+            _driver("event:dated", "ok"),
             _driver("thread:quiet", "ok", dormancy=1)]
+    # event:dated has a day but the campaign no present: not "undated"
+    dated = {**_item("event:dated", "event", 0, "ok"), "in_days": None}
     when = {r["ref"]: r["when"] for r in
-            suggest.driver_view({"driver_index": rows}, NO_CONTROLS)["index"]}
+            suggest.driver_view({"driver_index": rows, "timeline": [dated]},
+                                NO_CONTROLS)["index"]}
     assert when == {"commitment:late": "1 day ago", "commitment:soon": "in 4 days",
-                    "event:undated": "undated", "thread:quiet": ""}
+                    "event:undated": "undated", "event:dated": "no current date",
+                    "thread:quiet": ""}
 
 
 def test_view_links_only_between_rendered_drivers():
@@ -222,12 +227,13 @@ def test_timeline_when_phrases():
              _item("event:e", "event", -3, "passed"),
              _item("birthday:characters:mara:month:2026-05", "birthday", None, "ok",
                    precision="month"),
-             _item("event:f", "event", None, "ok")]
+             _item("event:f", "event", None, "ok"),
+             {**_item("event:g", "event", 0, "ok"), "in_days": None}]
     items[5]["precision"] = "month"
     view = suggest.driver_view({"timeline": items}, NO_CONTROLS)
     assert [r["when"] for r in view["timeline"]] == [
         "today", "in 1 day", "in 5 days", "1 day ago", "3 days ago", "day unknown",
-        "undated"]
+        "undated", "no current date"]
 
 
 def test_view_actions_come_from_the_tuple():
