@@ -123,11 +123,32 @@ export function missingName(ref: string): string {
     : "a missing record";
 }
 
-/** A record's name on a review surface. The server titles a record it cannot
- *  find with its ref (`review.describe`), so a title that is empty or is the
- *  ref names a missing record, by kind. */
-export function recordName(title: string, ref: string): string {
-  return title && title !== ref ? title : missingName(ref);
+/** The ledger file each kind of record lives in, as `GET /continuity`'s
+ *  `unreadable` names it (`review._LEDGER_FILE`). */
+const LEDGER_FILE: Record<string, string> = {
+  thread: "plot", commitment: "commitments", event: "events",
+};
+
+const UNREADABLE: Record<string, string> = {
+  thread: "a thread that cannot be read right now",
+  commitment: "a commitment that cannot be read right now",
+  event: "an event that cannot be read right now",
+};
+
+/** A record's name on a review surface. The server titles a record with its
+ *  ref (`review.describe`) for two reasons: the record is gone, or its ledger
+ *  did not read, so it could not be looked up at all. `unreadable` -- the
+ *  campaign's own list -- tells the two apart: a ref whose ledger is in it is
+ *  a record that cannot be read right now, which may well exist, and only
+ *  otherwise is a title that is empty or is the ref a missing record. */
+export function recordName(title: string, ref: string, unreadable: string[] = []): string {
+  if (title && title !== ref) return title;
+  const prefix = ref.split(":")[0];
+  if (Object.prototype.hasOwnProperty.call(LEDGER_FILE, prefix)
+      && unreadable.includes(LEDGER_FILE[prefix])) {
+    return UNREADABLE[prefix];
+  }
+  return missingName(ref);
 }
 
 /** What a dismissal decided, for the Dismissed findings group (§12.7). */
