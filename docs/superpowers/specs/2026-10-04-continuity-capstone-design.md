@@ -1957,8 +1957,8 @@ The **Calendar** lens places scenes by their opening date's `fixed`, and puts No
 
 - The **play axis** serves Story, Cast and Continuity. Left to right:
   - a leading **“Not in a scene”** column, for a node with no visible scene column (an arc in a view that shows no scene, an actor with no appearance);
-  - **“Reached”**, for fired and passed events in the Cast and Continuity lenses (the Story lens drops them);
   - the scenes in play order, one column each, headed by ordinal (“Scene 1”, …). An ordinal stays true under an arc filter that hides the scenes between;
+  - **“Reached”**, for fired and passed events on the play axis: the Continuity lens, or an arc filter whose link neighbours include one (on any play lens, Story included). The Story preset drops them and Cast shows no events;
   - **Now**, which holds only its marker, so the marker never runs through a button;
   - the temporal slots right of Now by `in_days` (upcoming events, holidays, birthdays, and deadlines still ahead);
   - **“Undated”**, for unfired events and birthdays whose `fixed` is null (an undated non-idea node);

@@ -269,6 +269,28 @@ describe("layout: an arc filter", () => {
     expect(debt.colOf(DEBT).kind).toBe("not-dated");
     expect(debt.colOf(DEBT).head).toBe("Not dated");
   });
+
+  it("Reached follows the scenes and precedes Now, and an arc filter brings it onto Story (§19.4)", () => {
+    // The coronation fired; the oath is linked to it by `by`.
+    const g = graphFixture();
+    g.nodes = g.nodes.map((n) => (n.id === CORONATION && n.kind === "event"
+      ? { ...n, status: "fired" as const } : n));
+    // The Story preset drops a fired event, and Cast shows no events at all.
+    expect(draw("story", { g }).view.nodes.map((n) => n.id)).not.toContain(CORONATION);
+    expect(draw("cast", { g }).lay.columns.some((c) => c.kind === "reached")).toBe(false);
+
+    // An arc filter's link neighbours are not the preset's to drop.
+    const { lay, colOf } = draw("story", { g, arc: OATH });
+    const reached = colOf(CORONATION);
+    expect(reached.kind).toBe("reached");
+    expect(reached.head).toBe("Reached");
+    const scene = colOf(S2);
+    expect(scene.kind).toBe("scene");
+    const now = lay.columns.find((c) => c.kind === "now");
+    expect(now).toBeDefined();
+    expect(scene.index).toBeLessThan(reached.index);
+    expect(reached.index).toBeLessThan(now!.index);
+  });
 });
 
 describe("layout: the calendar axis", () => {
