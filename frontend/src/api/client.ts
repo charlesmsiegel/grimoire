@@ -2503,9 +2503,18 @@ export const api = {
     return r;
   },
   deleteCampaignEvent: async (cid: string, eid: string) => {
-    const r = await request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/events/${eid}`);
-    noticesChanged();
-    return r;
+    try {
+      const r = await request<{ ok: boolean }>("DELETE", `/api/campaigns/${cid}/events/${eid}`);
+      noticesChanged();
+      return r;
+    } catch (err) {
+      // A `partial_delete` 500 says the delete landed and only its link
+      // cleanup did not: the event and its acknowledgements are gone either
+      // way, so the notice readers re-read as they would on success. Any
+      // other refusal changed nothing.
+      if (err instanceof ApiError && err.kind === "partial_delete") noticesChanged();
+      throw err;
+    }
   },
 
   // ---- warn-once pre-notices (#106) ----
