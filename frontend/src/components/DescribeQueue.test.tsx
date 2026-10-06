@@ -122,3 +122,34 @@ test("a failed save keeps the image in the queue and says why", async () => {
   expect(await screen.findByText("image not found")).toBeInTheDocument();
   expect(screen.getByText(/Describing 1 \/ 2/)).toBeInTheDocument();
 });
+
+test("offers each conflicting text as a choice", async () => {
+  const conflicted = [{
+    kind: "characters", id: "seraphine", vid: "default", name: "avatar",
+    record_name: "Seraphine", url: "/img/3",
+    conflicts: [{ text: "A grey quay at dusk.", from: "characters/mara/assets/main" },
+                { text: "Mara at the gate.", from: "worlds/realm" }],
+  }];
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={conflicted}
+                        onClose={vi.fn()} onSaved={vi.fn()} />);
+
+  const group = screen.getByRole("group", { name: "Conflicting descriptions" });
+  const choices = Array.from(group.querySelectorAll("button"));
+  expect(choices).toHaveLength(2);
+  expect(choices[0]).toHaveTextContent("A grey quay at dusk.");
+  expect(choices[1]).toHaveTextContent("Mara at the gate.");
+  // Nothing is chosen for the player.
+  expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("");
+
+  fireEvent.click(choices[1]);
+  expect(screen.getByRole("textbox", { name: "Description" })).toHaveValue("Mara at the gate.");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setCharacterImageDescription).toHaveBeenCalledWith(
+    { kind: "world", id: "w" }, "seraphine", "default", "avatar", "Mara at the gate."));
+});
+
+test("an ordinary row offers no choices", () => {
+  render(<DescribeQueue scope={{ kind: "world", id: "w" }} wid="w" queue={QUEUE}
+                        onClose={vi.fn()} onSaved={vi.fn()} />);
+  expect(screen.queryByRole("group", { name: "Conflicting descriptions" })).toBeNull();
+});

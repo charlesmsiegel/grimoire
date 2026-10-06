@@ -740,14 +740,16 @@ def list_undescribed_images(wid: str, count: bool = False):
                 continue
             out.append({"kind": base, "id": item["id"], "vid": item["vid"],
                         "name": item["name"], "record_name": name,
-                        "url": _undescribed_url(wid, base, item)})
+                        "url": _undescribed_url(wid, base, item),
+                        **({"conflicts": item["conflicts"]} if "conflicts" in item else {})})
     # The world's own library, which hangs off no record and so is reachable by
     # none of the base walks above. It belongs in THIS queue rather than each
     # campaign's: every campaign on the world inherits these pictures, so
     # describing one here describes it once for all of them.
     out.extend({"kind": "world", "id": "", "vid": "", "name": image["name"],
                 "record_name": "World library",
-                "url": f"/api/worlds/{wid}/images/{quote(image['name'], safe='')}"}
+                "url": f"/api/worlds/{wid}/images/{quote(image['name'], safe='')}",
+                **({"conflicts": image["conflicts"]} if "conflicts" in image else {})}
                for image in store.world_images.undescribed(wid))
     return out
 

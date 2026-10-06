@@ -1113,7 +1113,13 @@ export type CampaignClock = {
 export type UndescribedImage = {
   kind: string; id: string; vid: string; name: string;
   record_name: string; url: string;
+  /** Present only when migration found this picture described several ways and
+   *  left the choice to the player: each candidate text and where it came from.
+   *  The picture has no description until one is saved. */
+  conflicts?: DescriptionConflict[];
 };
+/** One candidate text of a migration conflict (`UndescribedImage.conflicts`). */
+export type DescriptionConflict = { text: string; from: string };
 /** One tile in the world gallery (#200) — every image the world holds, from
  *  whichever of the eight bases it hangs off.
  *

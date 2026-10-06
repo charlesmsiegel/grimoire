@@ -10,7 +10,14 @@ import io
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, image_descriptions, image_refs, world_images, worlds
+from grimoire.store import (
+    assets,
+    image_descriptions,
+    image_refs,
+    image_store,
+    world_images,
+    worlds,
+)
 
 
 def _png(size=(4, 4), color=(10, 20, 30)) -> bytes:
@@ -162,3 +169,36 @@ def test_a_world_library_image_described_through_set_in_leaves_the_queue(wid):
     assert world_images.undescribed_count(wid) == 0
     assert not world_images.has_undescribed(wid)
     assert world_images.read_descriptions(wid) == {"coastline": "A grey quay."}
+
+
+CONFLICTS = [{"text": "A grey quay at dusk.", "from": "characters/mara/assets/main"},
+             {"text": "Mara at the gate.", "from": "worlds/realm"}]
+
+
+def _conflict(wid, name):
+    image_id = image_refs.read(world_images.images_dir(wid), name).image
+    assert image_store.update(
+        image_id, lambda raw: {**raw, "description_conflicts": [dict(c) for c in CONFLICTS]})
+    return image_id
+
+
+def test_a_conflicted_object_is_queued_with_its_texts_in_every_queue(wid):
+    """The library queue: the row carries the texts to choose between."""
+    world_images.put_image(wid, "coastline", _png(color=(1, 2, 3)), "png")
+    world_images.put_image(wid, "harbour", _png(color=(4, 5, 6)), "png")
+    _conflict(wid, "coastline")
+    assert world_images.undescribed(wid) == [
+        {"name": "coastline", "conflicts": CONFLICTS}, {"name": "harbour"}]
+    assert world_images.undescribed_count(wid) == 2
+    assert world_images.has_undescribed(wid)
+
+
+def test_resolving_a_conflict_writes_the_description_and_clears_the_list(wid):
+    world_images.put_image(wid, "coastline", _png(color=(1, 2, 3)), "png")
+    image_id = _conflict(wid, "coastline")
+    world_images.set_description(wid, "coastline", "Mara at the gate.")
+    raw = image_store.read(image_id).raw
+    assert raw["description"] == "Mara at the gate."
+    assert "description_conflicts" not in raw
+    assert world_images.undescribed(wid) == []
+    assert not world_images.has_undescribed(wid)

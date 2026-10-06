@@ -176,15 +176,20 @@ def undescribed(wid: str) -> list[dict]:
     ``image_library.backlog_rows``, so it resolves no blob: it feeds the shell
     badge on every navigation.
     """
+    return image_descriptions.queue_rows(_undescribed_rows(wid))
+
+
+def _undescribed_rows(wid: str) -> list[dict]:
+    """``undescribed``'s rows before `queue_rows`: ``{"name", "image_id"?}``.
+    What the count and the presence check take, so neither reads an object for
+    its conflicts."""
     d = images_dir(wid)
-    rows = image_library.backlog_rows(d)
-    done = image_descriptions.described_names(d, rows)
-    return [{"name": r["name"]} for r in rows if r["name"] not in done]
+    return image_descriptions.undescribed_rows(d, image_library.backlog_rows(d))
 
 
 def undescribed_count(wid: str) -> int:
     """How many library images are unreviewed -- the badge's half of the count."""
-    return len(undescribed(wid))
+    return len(_undescribed_rows(wid))
 
 
 def has_undescribed(wid: str) -> bool:
@@ -196,7 +201,7 @@ def has_undescribed(wid: str) -> bool:
     read (memoized) per placement with no legacy key -- so this is that list
     tested for emptiness, and cannot disagree with it.
     """
-    return bool(undescribed(wid))
+    return bool(_undescribed_rows(wid))
 
 
 def delete_image(wid: str, name: str) -> None:

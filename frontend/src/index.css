@@ -5191,3 +5191,10 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .sg-filter { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .sg-toggle { justify-content: flex-start; }
 .sg-toggle input { margin: 0; }
+/* A migration conflict: each candidate text is one block button, so a long
+   description reads as text rather than as a chip. */
+.tagging-queue .conflict-choices { display: flex; flex-direction: column; gap: 6px; }
+.tagging-queue .conflict-choice {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
+  text-align: left; white-space: normal;
+}

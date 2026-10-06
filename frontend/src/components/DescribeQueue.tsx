@@ -1,7 +1,10 @@
 import { useState } from "react";
 import { api, type EntityKind, type EntityScope, type UndescribedImage } from "../api/client";
 
-/** A stepper over every stored image nobody has described yet.
+/** A stepper over every stored image nobody has described yet. An image whose
+ *  texts disagreed when the library was migrated is in it too, with each
+ *  candidate offered as a choice (`UndescribedImage.conflicts`); saving
+ *  anything, including "No description", settles it.
  *
  *  `TaggingQueue`'s shape, for `TaggingQueue`'s reason: a library that has been
  *  collecting art since before descriptions existed starts with all of it
@@ -135,6 +138,24 @@ export function DescribeQueue({ scope, wid, queue, onClose, onSaved }: {
         Describing {pos} / {total} — {cur.record_name} · {cur.name}
       </div>
       <img className="queue-image" alt={`${cur.record_name} art`} src={cur.url} />
+      {cur.conflicts && cur.conflicts.length > 0 && (
+        // Migration found this picture described more than one way and kept all
+        // of them. Picking one only fills the box: Save is still what writes it,
+        // so the text can be edited first, and Skip leaves every candidate for
+        // next time.
+        <div className="conflict-choices" role="group" aria-label="Conflicting descriptions">
+          <div className="field-hint">
+            This picture was described more than one way. Pick the one to keep, or write your own.
+          </div>
+          {cur.conflicts.map((c) => (
+            <button key={`${c.from}\u0000${c.text}`} type="button" className="conflict-choice"
+                    disabled={busy !== null} onClick={() => setText(c.text)}>
+              <span className="conflict-text">{c.text}</span>
+              {c.from && <span className="field-hint">from {c.from}</span>}
+            </button>
+          ))}
+        </div>
+      )}
       <textarea value={text} rows={4} aria-label="Description"
                 placeholder="What does this picture show?"
                 onChange={(e) => setText(e.target.value)} />

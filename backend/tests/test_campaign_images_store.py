@@ -12,6 +12,7 @@ from grimoire.store import (
     image_descriptions,
     image_library,
     image_refs,
+    image_store,
     overlay,
     world_images,
     worlds,
@@ -536,3 +537,43 @@ def test_a_campaign_library_image_described_through_set_in_leaves_the_queue(cid)
     assert "sketch" not in image_descriptions.read_raw(d)
     assert campaign_images.own_undescribed(cid) == []
     assert campaign_images.read_descriptions(cid) == {"sketch": "A charcoal sketch."}
+
+
+CONFLICTS = [{"text": "A grey quay at dusk.", "from": "characters/mara/assets/main"},
+             {"text": "Mara at the gate.", "from": "worlds/realm"}]
+
+
+def _conflict(d, name):
+    image_id = image_refs.read(d, name).image
+    assert image_store.update(
+        image_id, lambda raw: {**raw, "description_conflicts": [dict(c) for c in CONFLICTS]})
+    return image_id
+
+
+def test_a_conflicted_object_is_queued_with_its_texts_in_every_queue(cid):
+    campaign_images.put_image(cid, "sketch", _png(color=(1, 2, 3)), "png")
+    campaign_images.put_image(cid, "map", _png(color=(4, 5, 6)), "png")
+    _conflict(campaign_images.images_dir(cid), "sketch")
+    assert campaign_images.own_undescribed(cid) == [
+        {"name": "map"}, {"name": "sketch", "conflicts": CONFLICTS}]
+
+
+def test_resolving_a_conflict_writes_the_description_and_clears_the_list(cid):
+    campaign_images.put_image(cid, "sketch", _png(color=(1, 2, 3)), "png")
+    image_id = _conflict(campaign_images.images_dir(cid), "sketch")
+    campaign_images.set_description(cid, "sketch", "A grey quay at dusk.")
+    raw = image_store.read(image_id).raw
+    assert raw["description"] == "A grey quay at dusk."
+    assert "description_conflicts" not in raw
+    assert campaign_images.own_undescribed(cid) == []
+
+
+def test_resolving_an_inherited_conflict_clears_it_on_the_shared_object(cid, wid):
+    """An inherited image is described on the world's object (D1): resolving
+    it from the campaign clears the world's list too."""
+    world_images.put_image(wid, "coastline", _png(color=(7, 8, 9)), "png")
+    image_id = _conflict(world_images.images_dir(wid), "coastline")
+    campaign_images.set_description(cid, "coastline", "From the campaign.")
+    raw = image_store.read(image_id).raw
+    assert raw["description"] == "From the campaign."
+    assert "description_conflicts" not in raw

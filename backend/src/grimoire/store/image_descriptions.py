@@ -76,6 +76,16 @@ Object first, keys second, so a failure in between leaves text showing rather
 than none. An unconfirmed write, an unarrived placement or a name with no
 placement writes the legacy key exactly as before: no text is ever lost.
 
+**Conflicts (stage 4, M11).** Migration that finds one picture described
+several ways leaves no ``description`` and a ``description_conflicts`` list on
+the object. Nothing answers for it, so it is *undescribed* and sits in every
+describe queue, and each queue's rows carry the candidate texts as
+``conflicts: [{text, from}]`` (`queue_rows`; present only when there are some,
+read off the object a row's own id names -- never off the counting paths, which
+only ask whether text exists). `set_in`'s object write drops the list in the
+same `image_store.update` that writes the text, under the same sidecar-lock
+hold: choosing, or typing, a description is what resolves it.
+
 Nothing detects a description drifting from the art it describes, except one
 case: an image replaced under the same name by a *different, already
 described* picture sheds the old legacy key (`assets._sheds_caption`, R12).
@@ -157,6 +167,41 @@ def _object_text(image_id: str | None) -> str | None:
         return None
     text = obj.raw.get("description")
     return text if isinstance(text, str) else None
+
+
+def conflicts_of(image_id: str | None) -> list[dict]:
+    """The object's unresolved description conflicts as ``[{"text", "from"}]``,
+    or ``[]``: no id, no object, none recorded. An entry without a string
+    ``text`` is dropped and a missing ``from`` reads ``""``, so a hand-edited
+    or half-synced sidecar cannot hand a queue a row it cannot render. Never
+    resolves a blob."""
+    if not image_id:
+        return []
+    obj = image_store.read(image_id)
+    held = obj.raw.get("description_conflicts") if obj is not None else None
+    if not isinstance(held, list):
+        return []
+    return [{"text": c["text"], "from": c["from"] if isinstance(c.get("from"), str) else ""}
+            for c in held if isinstance(c, dict) and isinstance(c.get("text"), str)]
+
+
+def queue_rows(rows: list[dict]) -> list[dict]:
+    """Backlog `rows` (``name``, optional ``image_id``) as the describe queue
+    shows them: ``{"name"}``, plus ``conflicts`` when the object behind the
+    row's own id holds any. The list form's step; the count and presence
+    checks never take it."""
+    out = []
+    for r in rows:
+        conflicts = conflicts_of(r.get("image_id"))
+        out.append({"name": r["name"], **({"conflicts": conflicts} if conflicts else {})})
+    return out
+
+
+def undescribed_rows(d: Path, rows: list[dict]) -> list[dict]:
+    """The `rows` of a flat library `d` that nothing describes (R1), unchanged:
+    the one filter behind a library's list, its count and its presence check."""
+    done = described_names(d, rows)
+    return [r for r in rows if r["name"] not in done]
 
 
 def _text(raw: dict, name: str, image_id: str | None) -> str | None:
@@ -320,8 +365,13 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
                 f"description longer than {image_store.MAX_DESCRIPTION} characters")
         image_id = object_id_in(d, name)
         # A pure dict edit: the callback contract (`image_store.update`).
+        # The same edit drops `description_conflicts` (stage 4, M11): choosing
+        # or typing a description is what resolves a migration disagreement,
+        # and a second step would leave a window with both.
         if image_id is not None and image_store.update(
-                image_id, lambda raw: {**raw, "description": text}):
+                image_id, lambda raw: {**{k: v for k, v in raw.items()
+                                          if k != "description_conflicts"},
+                                       "description": text}):
             # Object first, keys second: a failure between the two leaves the
             # old key showing (R1), never nothing. Cleared STRICTLY, not with
             # `assets.edit_sidecar` (which swallows a failed write): a key left
@@ -519,9 +569,10 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
     Text absent = unreviewed; an explicit ``""`` counts as reviewed. Sorted by
     (id, vid, name), which is the order the editors list versions and images in.
 
-    Only the three keys the queue reads, not `catalog`'s row whole: widening a
+    Only the keys the queue reads, not `catalog`'s row whole: widening a
     response nobody asked to widen is how a second, quieter contract grows on a
-    route that already has one.
+    route that already has one. The fourth, `conflicts` (`queue_rows`), is on a
+    row only when migration left the picture's texts to choose between.
 
     Off `_undescribed_names` rather than `catalog`, for the reason
     `undescribed_count` gives: the gallery's `ext` and `v` are a stat per
@@ -529,8 +580,8 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
     another for the list also left the two free to disagree; now a count is
     this list's length by construction (`undescribed_by_version`).
     """
-    return [{"id": rid, "vid": vid, "name": name}
-            for rid, vid, names in _undescribed_names(root, base) for name in names]
+    return [{"id": rid, "vid": vid, **row}
+            for rid, vid, rows in _undescribed_rows(root, base) for row in queue_rows(rows)]
 
 
 def undescribed_count(root: Path, base: str = "characters") -> int:
@@ -552,8 +603,17 @@ def undescribed_count(root: Path, base: str = "characters") -> int:
 
 def _undescribed_names(root: Path, base: str) -> Iterator[tuple[str, str, list[str]]]:
     """`(record id, version id, sorted undescribed names)` per version folder
-    holding any: the one walk behind `undescribed`, `undescribed_count` and
+    holding any: the walk behind `undescribed_count` and
     `undescribed_by_version`."""
+    for rid, vid, rows in _undescribed_rows(root, base):
+        yield rid, vid, [r["name"] for r in rows]
+
+
+def _undescribed_rows(root: Path, base: str) -> Iterator[tuple[str, str, list[dict]]]:
+    """`(record id, version id, undescribed rows sorted by name)` per version
+    folder holding any, a row being ``{"name", "image_id"?}``: the one walk
+    behind `undescribed` and `_undescribed_names`, so the list and the count
+    cannot disagree."""
     for rec, vdir in _walk(root, base):
         # ONE directory read per version, answering both questions it is asked:
         # which images are here, and is there a sidecar at all. Asking
@@ -566,7 +626,7 @@ def _undescribed_names(root: Path, base: str) -> Iterator[tuple[str, str, list[s
         # with no legacy key is checked against its object by the id its
         # placement names -- an object read, never a blob resolution, and never
         # a second scan of the placements.
-        todo = sorted(_todo_in(vdir))
+        todo = sorted(_todo_rows_in(vdir), key=lambda r: r["name"])
         if todo:
             yield rec.name, vdir.name, todo
 
@@ -586,12 +646,17 @@ def _backlog_rows(d: Path) -> tuple[list[dict], dict]:
     return rows, (read_raw(d) if has_sidecar and names else {})
 
 
-def _todo_in(d: Path) -> list[str]:
-    """The storable names of `d` nothing describes (R1), unsorted."""
+def _todo_rows_in(d: Path) -> list[dict]:
+    """The storable rows of `d` nothing describes (R1), unsorted."""
     rows, raw = _backlog_rows(d)
     rows = [r for r in rows if assets.storable(r["name"])]
     done = _described(raw, rows)
-    return [r["name"] for r in rows if r["name"] not in done]
+    return [r for r in rows if r["name"] not in done]
+
+
+def _todo_in(d: Path) -> list[str]:
+    """The storable names of `d` nothing describes (R1), unsorted."""
+    return [r["name"] for r in _todo_rows_in(d)]
 
 
 def undescribed_by_version(root: Path, base: str = "characters") -> Iterator[tuple[str, str, int]]:
