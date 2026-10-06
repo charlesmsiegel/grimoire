@@ -1629,7 +1629,8 @@ def _accept_reroll(cid, sid, rid, run, token, record, watcher, tracked=None, con
 
 
 def _land_variant(cid, sid, rid, text, *, handoff, issue, reasoning, tracked=None,
-                  made_by=None, connection="", rewrite=None) -> None:
+                  made_by=None, connection="",
+                  rewrite: tuple[str, list[str]] | None = None) -> None:
     """Save `text` as a new complete variant of `rid` and make it the one shown.
 
     The tail a reroll and a Keep writing continuation share. Called inside the
