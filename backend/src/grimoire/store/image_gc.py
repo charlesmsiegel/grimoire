@@ -432,7 +432,7 @@ def _work_map(root: Path, r: _Roots) -> None:
     path = image_migration.work_map_path(root)
     try:
         # Task 4's reader; ignore kept valid whether or not this tree has it yet.
-        pending = image_migration.pending_ids(root)  # type: ignore[attr-defined, unused-ignore]
+        pending = image_migration.pending_ids(root)
     except (ValueError, OSError):
         r.block(root, path, image_refs.UNPARSEABLE)
         return
