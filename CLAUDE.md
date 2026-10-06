@@ -260,7 +260,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Twenty-five handlers** start detached runs, in four classes:
+subscriber. **Twenty-nine handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
@@ -272,18 +272,21 @@ subscriber. **Twenty-five handlers** start detached runs, in four classes:
   streams: each answers **202** with a run to poll and persists its result to
   `store/pending_reviews.py`, because a review's value is a payload nobody has
   written down and losing it costs the longest generation in the app.
-- `draft` — `post_opener`, plus the twelve computing previews: scene
-  suggestions and intent, the four image-description drafts, both voice
-  anchors, taglines, both scenario parses, and the model-catalog refresh. The
-  twelve answer **202** and hand back a result held on the run and reaped;
+- `draft` — `post_opener`, plus the fourteen computing previews: scene
+  suggestions and intent, the five image-description drafts (a campaign
+  library, a world library, a character version, an entity and a PC), both voice
+  anchors, taglines, both scenario parses, character-from-passage, and the
+  model-catalog refresh. The
+  fourteen answer **202** and hand back a result held on the run and reaped;
   `post_opener` streams and buffers its frames like a turn. **A draft declares
   no exclusion key** — it neither holds a scene nor is refused by one, which is
   what stops a tagline preview from being able to refuse a chat, and its result
   is deliberately *not* durable: a sentence nobody has agreed to yet is
   regenerable, and storing it would be a second store to keep consistent.
 
-  All twelve go through **one contract** rather than twelve variants —
-  `runs.run_draft` on the route side, `common.draft_completion` for the call,
+  All fourteen go through **one contract** rather than fourteen variants —
+  `runs.run_draft` on the route side (the two scenario parses reserve through
+  `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call,
   and `api.draftRun` in the client. `post_opener` is the exception on the
   client side only, where `api.streamDraft` re-attaches by attempt id instead
   of polling.
@@ -301,6 +304,31 @@ subscriber. **Twenty-five handlers** start detached runs, in four classes:
   turn's rolling summary and scene-break check (below), and the
   `tracker-update` that a turn, `post_start_from_greeting` or `post_first_post`
   schedules after its posts are written.
+
+- `maintenance` — two handlers, `post_images_migrate` and `post_images_gc`
+  (`routes/maintenance.py`), start the image store's migration and collector
+  from Settings. They are the one class that holds the *store* rather than a
+  scene or a campaign, so it carries its own constant key,
+  `MAINTENANCE_KEY`, that no other run's key can collide with (a model refresh
+  is never refused by it). Both start routes answer **202**, and a start goes
+  through `runs.run_maintenance`. Four rules differ from every other class:
+  - **The thread outlives a cancel.** The work is a synchronous function run
+    through `anyio.to_thread.run_sync` with its await **shielded**, so the run
+    keeps its exclusion until the thread returns; cancel is the cooperative flag
+    `cancel_requested`, `abandon_on_cancel` is never used, and lifespan shutdown
+    sets the flag on every live one before cancelling the task group. The work
+    writes its report in its own `finally`.
+  - **It pins the store root** at reservation (`run.root`) and builds every path
+    from it; a root that changes stops the run, and nothing is deleted after.
+  - **It excludes tree operations, both ways.** World and campaign fork and
+    delete, bundle export, both manual backups and the scheduled-backup ticker
+    hold `runs.maintenance_excluded(app)`; a live run refuses a hold with 409
+    `maintenance_running`, and a hold refuses a start with 409 `busy`. A second
+    process on this machine is refused by a proclock, and another device by a
+    synced heartbeat marker, both as `maintenance_elsewhere`. The holds live in
+    the routes and the ticker, never in a store module.
+  - **It is neither notifying nor attachable**, and `PUT /config/data-dir`
+    refuses while it is live, like any run.
 
 - The run registry lives on **`app.state.runs`**, not at module scope: a
   `TestClient` builds an app per test, and module state would leak runs between
@@ -650,6 +678,15 @@ would answer neither question.
   record's folder: a legacy `descriptions.json` / `subjects.json` key is read
   first until migration, and descriptions are global to every world that places
   the picture.
+  Legacy files are moved into the store by **migration**, and what nothing
+  places any more is deleted by **collection**: both are maintenance runs
+  started from Settings, Storage, Image store, never at startup, and neither is
+  ever pointed at the frozen campaign's `home/`. Collection fails closed
+  (a root it cannot parse, a link, an object whose placement has not arrived,
+  anything younger than its grace period) and needs the token of a scan.
+  Neither module appears in `store/locks.py`'s domain lists, because the guard
+  surveys by `cid` and each takes a root; the migration's campaign writes take
+  `campaign_lock` anyway.
   What the store promises is in `docs/store-guarantees.md`; the design is
   `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
 - **Adding an LLM call site?** Resolve its connection with

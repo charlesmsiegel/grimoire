@@ -119,7 +119,11 @@ FALLBACK_ENCODER = f"jpeg-q{JPEG_QUALITY}-png"
 #: nothing written before it can be served for it, and what a legacy file's
 #: key names did not change. The cost is the other side: a legacy file's
 #: current-generation entry outlives the file once it migrates to a blob,
-#: unreferenced, until the stage-4 sweep removes it (spec sections 11, 12).
+#: unreferenced, unless something removes it. `image_migration` removes the
+#: entries of each legacy file it migrates (`legacy_keys`), and `image_gc`
+#: removes a collected blob's (`blob_keys`); both are best effort, and an entry
+#: either misses stays in the cache, where nothing asks for it and the sweep
+#: (older generations only) does not reach it (spec sections 11, 12).
 #:
 #: It does two jobs. It orders generations, so a sweep retires only those
 #: OLDER than its own (`sweep`): two devices on one synced library, one a
