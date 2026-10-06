@@ -2929,6 +2929,37 @@ export type WorldImage = {
   description?: string; described?: boolean;
 };
 
+/** A character or PC that places an image. `scope` is `world:<wid>` or
+ *  `campaign:<cid>`; `name` is the record's display name. */
+export type ImageUsageActor = { scope: string; id: string; vid: string; name: string };
+/** A location, item, group, creature or lore entry that places an image. */
+export type ImageUsageEntity = { scope: string; kind: string; id: string; vid: string; name: string };
+/** A greeting whose art is the image. */
+export type ImageUsageGreeting = { scope: string; id: string; name: string };
+/** A name in a world's own image library. */
+export type ImageUsageWorldImage = { wid: string; name: string };
+/** A name in a campaign's own image library. */
+export type ImageUsageCampaignImage = { cid: string; name: string };
+/** A world's or campaign's cover. */
+export type ImageUsageCover = { scope: string };
+/** A collection of a world that holds the image. */
+export type ImageUsageCollection = { wid: string; collection: string };
+export type ImageUsageEntry =
+  | ImageUsageActor | ImageUsageEntity | ImageUsageGreeting | ImageUsageWorldImage
+  | ImageUsageCampaignImage | ImageUsageCover | ImageUsageCollection;
+/** Where one image object is placed (`GET /api/images/{id}/usage`): exactly
+ *  these eight buckets, each a list that may be empty. */
+export type ImageUsageReport = {
+  characters: ImageUsageActor[];
+  pcs: ImageUsageActor[];
+  entities: ImageUsageEntity[];
+  greetings: ImageUsageGreeting[];
+  world_images: ImageUsageWorldImage[];
+  campaign_images: ImageUsageCampaignImage[];
+  covers: ImageUsageCover[];
+  collections: ImageUsageCollection[];
+};
+
 // --- the scene state tracker (routes/tracker.py) ---------------------------------
 
 /** Who knows a value: everyone present, or exactly these refs. */

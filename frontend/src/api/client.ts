@@ -75,7 +75,7 @@ import {
   type TrackerRecord, type TrackerScope, type TrackerSetting, type TrackerSummary,
   type RegexBundle, type RegexImportRow, type RegexLayer, type RegexRule, type RegexScope,
   type RegexStep, type RegexTestBody, type SceneRewrite,
-  type WorldCampaignPending, type WorldDetail, type WorldImage, type WorldMeta, type WorldProfile,
+  type WorldCampaignPending, type WorldDetail, type WorldImage, type ImageUsageReport, type WorldMeta, type WorldProfile,
 } from "./types";
 
 /** Announce a campaign mutation once it has actually landed, passing the
@@ -2265,6 +2265,9 @@ export const api = {
   countUndescribedImages: (scope: EntityScope) =>
     request<{ count: number }>("GET", `${entityBase(scope)}/images/undescribed?count=1`)
       .then((r) => r.count),
+  /** Every record that places this image object, by bucket. */
+  getImageUsage: (imageId: string) =>
+    request<ImageUsageReport>("GET", `/api/images/${encodeURIComponent(imageId)}/usage`),
   /** Every image in a world, from all eight bases, in one response (#200).
    *  World-scoped only: a campaign reaches most of its art through its world,
    *  and the art it has diverged is listed in its own editors — the same split

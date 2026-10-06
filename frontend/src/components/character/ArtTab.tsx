@@ -4,6 +4,7 @@ import { api, type Appearance, type BaseVersion, type EntityScope, type Shadowed
   from "../../api/client";
 import { errorText } from "../../api/errors";
 import { ImageDescriptionField } from "../ImageDescriptionField";
+import { ImageUsage } from "../ImageUsage";
 import { thumbSet } from "../../api/thumbs";
 import { characterImage } from "./shared";
 
@@ -33,7 +34,7 @@ export function nextImageNames(count: number, hasAvatar: boolean, gallery: strin
  *  written to from here, and the description in the same clamped box whether
  *  it can be edited (`onSave` given, the field) or only read (a plain box).
  */
-function Tile({ name, url, avatar, caption, description, descKey,
+function Tile({ name, url, avatar, caption, description, descKey, imageId,
                 onSave, onDraft, onPromote, onRemove }: {
   name: string;
   /** The image's URL at a `?w=`, or the original with none: the tile draws a
@@ -44,6 +45,9 @@ function Tile({ name, url, avatar, caption, description, descKey,
   caption?: string;
   description: string | undefined;
   descKey: string;
+  /** The picture's identity in the image store; absent for a legacy file, which
+   *  has no placements to report. */
+  imageId?: string | null;
   onSave?: (d: string) => Promise<void>;
   onDraft?: () => Promise<string>;
   onPromote?: () => void;
@@ -65,6 +69,7 @@ function Tile({ name, url, avatar, caption, description, descKey,
                title={description || undefined}>
             {description || "No description"}
           </div>}
+      {onSave && imageId && <ImageUsage imageId={imageId} />}
       {onRemove && (
         <button className="shelf-promote" type="button" onClick={onRemove}>Remove</button>
       )}
@@ -88,7 +93,7 @@ function Tile({ name, url, avatar, caption, description, descKey,
  *  world's -- and say so by carrying no control.
  */
 export function ArtTab(
-  { scope, wid, cid, vid, hasAvatar, galleryImages, imageTokens, descriptions, appearances,
+  { scope, wid, cid, vid, hasAvatar, galleryImages, imageTokens, imageIds, descriptions, appearances,
     worldScope, inherited, baseVersions, shadowed, localizeProg, localizeMsg, onLocalize,
     onRefresh, onError, greetingHref }: {
     scope: EntityScope;
@@ -98,6 +103,8 @@ export function ArtTab(
     hasAvatar: boolean;
     galleryImages: string[];
     imageTokens: Record<string, string>;
+    /** Image identity per name, for the images the image store holds. */
+    imageIds?: Record<string, string>;
     /** Absent key = never reviewed, `""` = reviewed and deliberately
      *  undescribed. Only the first belongs in the describe queue. */
     descriptions: Record<string, string>;
@@ -175,6 +182,7 @@ export function ArtTab(
     <Tile key={name} name={name} avatar={avatar} caption={avatar ? "avatar" : undefined}
           url={characterImage(scope, cid, vid, name, imageTokens[name])}
           description={descriptions[name]} descKey={`${vid}:${name}`}
+          imageId={imageIds?.[name]}
           onSave={(d) => guard(() => api.setCharacterImageDescription(scope, cid, vid, name, d))}
           onDraft={worldScope
             ? () => api.draftCharacterImageDescription(wid, cid, vid, name).then((r) => r.description)
