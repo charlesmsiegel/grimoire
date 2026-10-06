@@ -1429,9 +1429,9 @@ Rules:
 - **Liveness:** resolved commitments and closed threads are not active drivers.
 - **Temporal drivers:** upcoming temporal occurrences (event, holiday, birthday) may be drivers even when no thread links to them. A commitment's pressure comes from §13. A commitment is never itself a time anchor in v1.
 - **Links:** reviewed links let a driver expose related obligations without collapsing them. A link is listed on both of its drivers: `direction` is `"out"` on its `a` endpoint, `"in"` on its `b` endpoint, and `"both"` for an undirected relation (`related_to`); `other` is the far endpoint. Links come from `effective.links`, so endpoints are canonical and broken or duplicate links are already excluded (Slice B plan, Decision 13).
-- **Offscreen:** with `offscreen=true`, driver `actors` drop PC tokens, exactly as the suggestion snapshot does.
+- **Offscreen:** with `offscreen=true`, driver `actors` drop PC tokens, exactly as the suggestion snapshot does. A PC's birthday driver is **kept**, with `actors: []`: an offscreen scene of NPCs planning around the player's birthday is legitimate, and the Birthdays line already names the PC offscreen. The suggestion parser's `token_ok` still drops every PC cast token, so the ref renders while the cast rule holds (Slice E plan, Decision 15).
 
-`drivers.snapshot(cid, offscreen=False)` returns:
+`drivers.snapshot(cid, offscreen=False, *, pressure_result=None)` returns:
 
     {now, friendly, fixed, matching, drivers: [Driver], anchors: [AnchorOption]}
 
@@ -1440,6 +1440,8 @@ Rules:
                     precision: "exact" | "yearless" | "month"}
 
 `anchors` is the bounded list of upcoming temporal drivers, ordered by `in_days`, nulls last. The suggestion snapshot (§15), the drivers read route (§21), and the suggestion request validation (§16.3) all use this **one** function.
+
+`pressure_result` is keyword-only. A caller that has already run `pressure.build` passes its result, and the function uses it rather than computing pressure again. The suggestion snapshot does this, so its `timeline` and its `driver_index` come from one pressure computation at one `now`. Without the keyword the behaviour is unchanged (Slice E plan, Decision 3).
 
 ---
 
@@ -1456,12 +1458,21 @@ The snapshot must include:
   - `holidays_today` and `events_today`;
   - `story_so_far`;
   - `available_locations`;
-- `cast`, unchanged except for any needed actor-ref normalization;
+- `cast`, unchanged except for any needed actor-ref normalization. In an offscreen snapshot a PC's birthday driver still renders in the index and the timeline (§14), while `token_ok` still drops every PC cast token, so no PC is ever cast offscreen (Slice E plan, Decision 15);
 - canonical active threads, **with ids rendered** and with dormancy;
 - canonical unresolved commitments, with id, kind, due, latest beat, and aging/pressure;
-- `timeline`: the pressure items (§13);
-- `driver_index`: the drivers from `drivers.snapshot`. The rendered index is capped at `DRIVER_PROMPT_CAP` (40), ordered by pressure-state precedence and then dormancy. Focus, must and anchor refs are always included; the rest is summarised as “and N more”;
+- `timeline`: every pressure item (§13). The snapshot holds them all, so the parser, the grader and the tests see them all. What the prompt **renders** is bounded with the index's rule (AC8; Slice E plan, Decision 11): items whose `ref` or `subject` is a focus, must or anchor ref, and the item `events.sooner` would pick, always render; the rest are ranked by `SORT_ORDER`, then `in_days`, and capped at `DRIVER_PROMPT_CAP` less the always-rendered count; the kept rows render in the snapshot's own order, followed by “and N more dated items” when any were cut. A timeline under the cap renders whole;
+- `driver_index`: the drivers from `drivers.snapshot`, each carrying `dormancy` (`None` for temporal kinds). The rendered index is capped at `DRIVER_PROMPT_CAP` (40), ordered by pressure state in `SORT_ORDER` (the §16.2 display order, not the decision precedence `PRESSURE_STATES`, which ranks `passed` second and would let passed events push due-soon drivers out of the cap) and then dormancy, coldest first. Focus, must and anchor refs are always included; the rest is summarised as “and N more” (Slice E plan, Decision 9);
 - `links`: reviewed links among active drivers.
+
+The snapshot also carries additive keys (Slice E plan, Decision 9):
+
+- `anchors`: `drivers.snapshot`'s anchor options, the set a time anchor is validated against (§15.2, §16.3);
+- `fixed`: the pressure result's fixed day for `now` (`None` without a calendar);
+- `near_days`: `max(warn_days, 7)`, the `near` window (§16.3);
+- `sooner_ref`: the ref of the item `events.sooner` picks (`""` when it picks nothing), so the prompt's bounded timeline can pin it (Decision 11).
+
+Thread rows gain `ref`, and commitment rows carry `ref` and `dormancy` as well as their pressure.
 
 **Removing `upcoming`.** Only the snapshot's `upcoming` key is removed, once the suggestion templates have moved to `timeline`. Leave these unchanged:
 
@@ -1471,7 +1482,7 @@ The snapshot must include:
 
 `events.sooner`'s docstring forbids the prompt and the snapshot from disagreeing, so the timeline must contain the item that `sooner` would pick.
 
-**Scene intent.** `scene_intent` shares the snapshot and includes `scene_suggestions/user.j2` verbatim. The new sections render behind a `drivers` flag, which `build_intent_prompt` passes as false, so the intent prompt is unchanged.
+**Scene intent.** `scene_intent` shares the snapshot and includes `scene_suggestions/user.j2` verbatim. The new sections render behind a `drivers` flag, which `build_intent_prompt` passes as false, so the intent prompt is unchanged. The flag is also the snapshot's shape: `build_snapshot(cid, offscreen, drivers=False)` returns today's key set exactly, **`upcoming` included**, and does no pressure or driver work. Only the suggestion snapshot (`drivers=True`) drops `upcoming` (Slice E plan, Decision 2), because deriving the intent prompt's Upcoming line from the timeline would change both its tie order and its holiday spelling.
 
 ## 15.1 Prompt instruction
 
@@ -1488,6 +1499,8 @@ Without explicit focus:
 Do not hard-code exactly one category per card. Diversity is the objective, not a four-slot template.
 
 **Byte-identity.** With no structured control set (§16.3 `time_mode: "auto"`, empty ref lists), the instruction section of the system prompt is byte-identical to today's. The snapshot sections (threads with ids, commitments, timeline) do change: that is the point of §15.
+
+The schema (§15.2), the action vocabulary and the diversity guidance above go in a **drivers addendum**, and focus, avoid, must and time go in a **controls addendum**. Both are appended **after** the byte-identical instruction section, so it stays a prefix of the system message. The drivers addendum is present whenever the rendered driver index is non-empty, and the controls addendum only when a control is active. So the system message as a whole gains the drivers addendum whenever the campaign has drivers, and a campaign with none gets today's system message exactly (Slice E plan, Decision 1).
 
 **Card order.** The picker shows a limited number of cards (four slots, shared with greetings), so batch-level objectives are judged over cards the reader may never see. The parser therefore orders suggestions so that the card addressing high pressure, and cards covering distinct focus refs, come first. While any structured control is active, the picker shows every generated suggestion (§16.4).
 
@@ -1522,7 +1535,7 @@ The suggestion does not itself mutate these records. “candidate” means the p
 Validation:
 
 - The parser validates every ref against the driver index captured at request time, and drops unknown refs and invalid kind/action pairs.
-- `time_anchor` must name a temporal driver from that index. If a `time_anchor` is present, its ref is added to `drivers` with action `anchor`, if missing.
+- `time_anchor` must name one of the captured snapshot's `anchors` (§14, §15): membership in `anchors`, not merely a temporal driver. Passed and undated events are drivers but not anchors, and no date can be derived against them, so a model `time_anchor` naming one is dropped, with no auto-added driver (Slice E plan, Decision 5). If a valid `time_anchor` is present, its ref is added to `drivers` with action `anchor`, if missing.
 - The parser **never drops a suggestion** for a constraint miss. Each suggestion carries `unmet_must: [ref]` (must refs it does not claim) and `avoided: [ref]` (avoid refs it claims).
 
 What the route returns per suggestion, resolved server-side from the captured driver index:
@@ -1545,11 +1558,15 @@ All comparisons use primary-provider fixed days. An anchor's time component is s
 | `by` | now ≤ d ≤ D |
 | `after` | D < d ≤ D + `RESOLVE_WINDOW_DAYS` |
 
+**A month-only birthday anchor takes only `on`** (Slice E plan, Decision 6). Its `fixed` is null, so `before`, `by` and `after` have no D to compare against. A request pairing it with another relation is a 400 `anchor_relation` (§16.3), and a model relation for it is coerced to `on`. Its month comes from its ref (`birthday:<kind>:<id>:month:<year>-<key>`), since the pressure items carry no month key. An `on` anchor's derived date is `provider.format(D)`, the canonical spelling, not the stored text (Decision 12).
+
+**With no `now`** (no clock and no chronicle date), the `now ≤` lower bounds and the `near`/`move` checks are skipped, while the D bound still applies. No date is fabricated. An absent or unparseable model date is `""` and is never `date_rejected`: rejection means a date was given and fails the rule (Decision 12).
+
 **Batch anchor.** With an anchor in the request, every suggestion's `time_anchor` is forced to that ref. Its relation is the request's relation if given; otherwise the model's relation, if valid; otherwise `on`.
 
 **A failing date is blanked**, not the suggestion: `date: ""`, `date_rejected: true`. The card shows “date not consistent with anchor”.
 
-**Unanchored suggestions** keep today's date behaviour (`date_addendum.j2`). `time_mode` (§16.3) may constrain them further.
+**Unanchored suggestions** keep today's date behaviour (`date_addendum.j2`). `time_mode` (§16.3) may constrain them further. A date blanked by `near` or `move` is marked `date_rejected` too, and its card reads “date not consistent with the time setting” (Decision 12). The reply's `next_date` is checked under `near`/`move`, and is not checked under an anchor: it answers “if none is used”, and an anchor constrains suggestions, not that.
 
 ---
 
@@ -1616,14 +1633,18 @@ An absent body keeps today's behaviour, and the existing query parameters still 
 
 **Validation.** Every check runs in the route **before** `runs.run_draft`, because a refusal raised inside the work closure would surface as a failed run rather than a 4xx:
 
-1. Canonicalize every ref through `canonical_refs`.
+1. Canonicalize every ref through `effective.live_canon`, not `canonical_refs` (Slice E plan, Decision 4). The driver index is built from effective rows, which follow an alias only to an existing record; `canonical_refs` follows a stored alias even to a deleted target, so a control naming a dangling alias's source (its own live driver) would canonicalize outside the index and draw a spurious 409. If `live_canon` raises, canonicalization is the identity.
 2. `must ∩ avoid` → 400.
 3. More than 3 must refs, or a temporal must ref → 400.
-4. `time_mode: "anchor"` with no valid anchor, or a `time_anchor_ref` with any other mode → 400.
-5. A ref outside the request-time driver index → 409 `{kind: "stale_drivers", refs}`. The chooser re-reads drivers and shows which selections dropped.
+4. `time_mode: "anchor"` with no anchor, a `time_anchor_ref` with any other mode, a `time_anchor_ref` whose prefix is not `event`, `birthday` or `holiday`, or a month-only birthday anchor with a relation other than `on` → 400.
+5. A ref outside the request-time driver index → 409 `{kind: "stale_drivers", refs}`. The chooser re-reads drivers and shows which selections dropped. A temporal `time_anchor_ref` missing from the captured `anchors` is a 409 too, not a 400: the chooser only offers anchors, so a missing one means the campaign moved since the read (an event passed, or a holiday left the horizon). The structural anchor check is the 400 of step 4 (Decision 5).
 6. Remaining overlaps resolve by precedence:
 
        must_include > avoid > focus > normal
+
+   **The batch anchor beats avoid** (Decisions 8, 26). The anchor is a separate control, and the more specific instruction: every suggestion is forced onto it (§15.3). So an anchor ref in `avoid` is dropped from `avoid` silently rather than refused, and the chooser disables Avoid on the anchored row.
+
+A 400 body is `{kind: "bad_controls", detail, reason}`, with `reason` one of `must_avoid`, `must_cap`, `must_kind`, `anchor_missing`, `anchor_kind`, `anchor_without_mode` or `anchor_relation`. `time_mode` and `time_anchor_relation` are `Literal`s, so an unknown value is FastAPI's 422. The existing 409 `missing_key` stays first: the order is 404, the connection check, the snapshot, every 400, then the 409, then `runs.run_draft` (Decision 7). A body, when present, wins wholly over the query parameters.
 
 The `work` closure captures the snapshot and driver index, and passes them to the payload shaper. So parse-time validation and labels use exactly what the prompt showed.
 
@@ -1635,8 +1656,8 @@ A generated card renders validated provenance:
 
 - `date_friendly · <relation> <anchor label>` when anchored;
 - one chip per driver, labelled by action: Advances / May close / Addresses / May fulfil / May break / May expire;
-- warning chips for `unmet_must` and `avoided`;
-- “date not consistent with anchor” when `date_rejected`.
+- warning chips for `unmet_must` and `avoided`, worded “Doesn't claim to address <label>” and “Claims to address <label> (avoided)” (Slice E plan, deviation 15);
+- “date not consistent with anchor” when `date_rejected` on an anchored card, and “date not consistent with the time setting” when a `near` or `move` check blanked an unanchored card's date (§15.3).
 
 Example using placeholders:
 
@@ -1647,7 +1668,7 @@ Example using placeholders:
 
 These labels are derived from validated ids, not from model-written explanatory prose.
 
-While any structured control is active, the picker shows every generated suggestion, not only the slots left over by greetings.
+While any structured control is active, the picker shows every generated suggestion, not only the slots left over by greetings. “Active” follows the batch on screen: the picker asks whether the reply now shown was requested with an active control, so a control edit not yet sent never re-slices the cards the reader is looking at (Slice E plan, Decision 22).
 
 ## 16.5 Handoff from the Story Graph
 
@@ -1661,9 +1682,11 @@ For event, birthday and holiday nodes, “Anchor next scene” uses:
 
 The handoff then proceeds as follows:
 
-- ScenesView adopts the state once, as it already adopts `seedPrompt`, then replaces it with null, and opens NewSceneChooser seeded with it. The chooser still opens at mode selection.
-- The ranked call made when a mode is picked carries the seeded controls.
+- ScenesView adopts the state once, then replaces it with null, and opens NewSceneChooser seeded with it. The chooser still opens at mode selection. This adoption is **new** code in ScenesView: the `seedPrompt` adoption the pattern copies lives in CampaignView, and ScenesView only sends (Slice E plan, Decision 20). A malformed `chooser` state is ignored.
+- A seeded open **waits for the scene list** before the chooser opens, because `afterSid` comes from it and an open before it lands would make the hook ask again, a second paid ranked call (Decision 20).
+- A seeded chooser holds its auto-ask, and its Suggest button, until the drivers read settles, so the ranked call made when a mode is picked carries the seeded controls rather than racing them (Decision 19).
 - A seeded ref missing from the drivers read is dropped, with a visible note.
+- A seeded Story Pressure disclosure opens expanded, so the reader sees what was set (Decision 19).
 
 ---
 
@@ -1684,8 +1707,12 @@ On write:
 
 - canonicalize aliases;
 - drop refs whose kind/action pair is outside §15.2;
-- drop refs whose record does not exist **in any status**. Existence, not activity, is the write test;
-- store `time_anchor.native`.
+- drop refs whose record does not exist **in any status**. Existence, not activity, is the write test. An unreadable ledger keeps the ref, since the read reclassifies it. Holiday and birthday **occurrence** refs are computed rather than stored records, so they have no record whose existence could be tested: they are written when well-formed (`holiday:<int>:<name>`, `birthday:<kind>:<id>:<int>` or `birthday:<kind>:<id>:month:<year>-<key>`) (Slice E plan, Decision 16);
+- de-duplicate refs by ref; the first entry wins;
+- `time_anchor` passes the same existence test as a driver ref of its kind, so a passed anchor is stored and can later read “has passed”. Its relation is **coerced** on write: one outside before/on/after/by becomes `on`, and a month ref is always `on` (§15.3). A dropped anchor takes its `anchor` driver entry with it, and an `anchor` entry naming any other ref is dropped, so a record never claims two anchors (Decision 16);
+- store `time_anchor.native`: an event's date as currently stored, `provider.format` of a day occurrence's fixed day, `""` for a month ref. With no calendar, a day occurrence anchor is dropped.
+
+A plain save, carrying neither field, writes exactly today's record: `drivers` and `time_anchor` are written only when non-empty (Decision 18).
 
 On read:
 
@@ -1696,6 +1723,15 @@ On read:
   - `dangling`: the record is gone, or an event anchor's stored `native` differs from the event's current date;
 - return live and finished refs, each with a `state`, and drop dangling refs from the returned list;
 - derive `stale_reason` from the stored refs **before** anything is dropped.
+
+Read details (Slice E plan, Decision 17):
+
+- **Occurrence refs are never `dangling`.** Holiday and birthday occurrences are computed, so there is no record to lose: they are `finished` when their day (or, for a month ref, their month in calendar order) is behind `now`, and `live` otherwise.
+- **Unknown classifies as `live`.** Classification reads one tolerant ledger load and `live_canon`, never the raising `effective.records`. An unreadable ledger, an unreadable status, or a calendar or `now` that cannot be resolved classifies the ref as live, so unknown is never stale. Each idea's annotation runs inside its own guard, and one bad read falls back to the stored refs unannotated rather than emptying the saved list.
+- **Canonical on read.** Each stored ref is mapped through `live_canon`, returned under its canonical ref with the canonical record's label and state, and de-duplicated, the first stored entry winning. The file keeps both spellings.
+- **Labels are derived on read**, since §17 stores none: a thread's or commitment's canonical title; an event's current name; a holiday's name from its ref (a shortened name's digest shown as `…`); a birthday's actor's current name; else the ref's id.
+- **`anchor_date`** is added to each read: the anchor's date when its relation is `on` and the anchor is live and dated, else `""`. It is the server-supplied anchor date of §17.1.
+- A **deleted** anchor is dropped from the read without making the idea stale on its own.
 
 Reads never rewrite scene_ideas.json.
 
@@ -1709,7 +1745,7 @@ Do not add a stored “stale” status.
 
 `stale_reason: "" | "<human-readable reason>"` is non-empty iff the idea stored at least one driver ref or a time anchor, **and** one of the following holds:
 
-- **No stored ref is live.** Reason: “Every thread it was about is closed”, “Every commitment it was about is resolved”, or “Its drivers no longer exist”.
+- **No stored ref is live.** Reason: “Every thread it was about is closed”, “Every commitment it was about is resolved”, “Its drivers no longer exist”, or, for a mixed set, “Nothing it was about is still open” (a fourth text, Slice E plan, Decision 17). A finished `after` anchor counts as live here, because its passing is what the idea waits for.
 - **The anchor is past.** Its relation is before/by/on and the anchor occurrence is past or fired (never on its own day, above). Reason: “<anchor> has passed”, where a birthday anchor reads “<actor>'s birthday has passed”.
 - **The anchor moved.** It is dangling because it was rescheduled. Reason: “<event> moved to <friendly>”.
 
@@ -1969,6 +2005,8 @@ Define typed backend and TS unions, not open string bags.
 
 Python declares the tuples `NODE_KINDS`, `EDGE_KINDS`, `EDGE_SOURCES`, `DRIVER_KINDS`, `DRIVER_ACTIONS`, `PRESSURE_STATES` and `LINK_RELATIONS`. The TS unions mirror them, and a backend test pins the tuples so a change shows up in review.
 
+`DRIVER_ACTIONS` (a flat tuple) and `ACTIONS_BY_KIND` (kind → its tuple of actions, §15.2) live in `store/continuity/drivers.py`, beside `DRIVER_KINDS` (Slice E plan, Decision 24).
+
 **Nodes** are a discriminated union on `kind` ∈ scene | character | pc | location | thread | commitment | event | idea | birthday | holiday.
 
 - `id` is the §4 canonical ref, with the kind→prefix mapping stated once (§4).
@@ -2125,6 +2163,8 @@ Every model-returned field follows the current tolerant-parser discipline:
 
 Store and calendar errors beneath the parser keep their existing failure semantics. Do not broadly catch programmer or store bugs as “bad model output”.
 
+**One exception: calendar plugin code** (Slice E plan, Decision 25). A user calendar plugin can raise anything, not only `CalendarError`. The suggestion snapshot's calendar block, the suggestion parser and `date_normalizer` resolve the calendar through a broad fail-soft wrapper, so under such a plugin they degrade to blank dates where they used to fail; the intent route and the saved-idea read degrade the same way. Nothing is fabricated (§26). On a working calendar every output is byte-identical. `calendars.primary_provider` itself, and its other callers across the app, are unchanged.
+
 ---
 
 # 25. Performance and cost
@@ -2180,7 +2220,7 @@ Todo and shell badge reads must not perform embedding calls or full transcript r
 | dangling alias | Source record remains visible/effective; Continuity review lists it as Broken |
 | dangling or self-collapsing reviewed link | Omitted from drivers and graph edges; listed in `diagnostics.broken_links`; Broken in review |
 | deleted record with aliases/links | §5.7 cascade; 409 for alias targets unless forced |
-| calendar unavailable | Temporal arithmetic degrades to undated/free-text; no fabricated dates |
+| calendar unavailable | Temporal arithmetic degrades to undated/free-text; no fabricated dates. This includes a calendar plugin that raises anything: the suggestion snapshot's calendar block, the suggestion parser and `date_normalizer` degrade to blank dates rather than failing the run (§24; Slice E plan, Decision 25) |
 | stale candidate apply | 409 with current records; no partial write |
 | concurrent reconcile runs | One live per campaign; newest generation wins at persist |
 | undo of a continuity row that would now be invalid | 409 UndoConflict |
@@ -2467,7 +2507,7 @@ Prefer:
 - “Semantic matching not configured”
 - “Merged into”
 - “Continuation of”
-- “Claims to address”
+- “Claims to address” — on a card, a self-reported claim on an avoided driver reads “Claims to address <label> (avoided)”, and a missed must reads “Doesn't claim to address <label>” (Slice E plan, deviation 15; §16.4)
 
 Avoid:
 
@@ -2599,7 +2639,7 @@ The capstone is complete only when all of these are true:
 
 7. Commitments are first-class inputs to scene suggestions.
 
-8. Suggestions see a bounded list of upcoming events, holidays, birthdays and deadlines, rather than only the single nearest item.
+8. Suggestions see a bounded list of upcoming events, holidays, birthdays and deadlines, rather than only the single nearest item. The snapshot's `timeline` holds every pressure item; the rendered timeline is bounded with the driver index's rule, always keeping the controls' refs and `events.sooner`'s pick (§15; Slice E plan, Decision 11).
 
 9. Date arithmetic is provider-driven and deterministic.
 
