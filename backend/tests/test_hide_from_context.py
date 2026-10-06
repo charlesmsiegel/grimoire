@@ -373,12 +373,18 @@ def test_absorb_evidence_ignores_a_quote_only_in_an_excluded_post(monkeypatch, t
         assert "the fog lifts" in index["texts"]["Mara"]
 
 
-def test_an_all_excluded_scene_is_empty_to_absorb_dossiers_and_the_fold(client):
+@pytest.mark.parametrize("with_note", [False, True])
+def test_an_all_excluded_scene_is_empty_to_absorb_dossiers_and_the_fold(client, with_note):
+    # A director note left beside the hidden posts is no story either:
+    # `transcript_text` drops it, so the prompt would still be empty.
     cid, sid = seed(client)
     store.scenes.append_message(cid, sid, "user", "ooc: testing")
     store.scenes.append_message(cid, sid, "assistant", "ooc: ok", speaker="Mara")
     store.scenes.set_excluded(cid, sid, 0, True)
     store.scenes.set_excluded(cid, sid, 1, True)
+    if with_note:
+        store.scenes.append_message(cid, sid, "assistant", "slower",
+                                    speaker=store.scenes.DIRECTOR_SPEAKER)
     fake = FakeLLM([["must not run"]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     base = f"/api/campaigns/{cid}/scenes/{sid}"
