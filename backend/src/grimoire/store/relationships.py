@@ -97,12 +97,17 @@ def restore_bond(cid: str, a: str, b: str, record: dict | None) -> None:
 def actor_name(cid: str, token: str) -> str:
     """Overlay-aware: a thin campaign's cast is mostly inherited (never
     materialized campaign-side), so the name must resolve across the union,
-    not just the campaign's own copy."""
+    not just the campaign's own copy.
+
+    Read from the actor's meta alone (`pcs.name_of`, `characters.name_and_versions`):
+    the full reads open every version's card and list its images, all to be
+    thrown away, and a review read names every actor its findings mention.
+    Both raise exactly where the full reads did, so the same ids fall back."""
     kind, _, aid = token.partition(":")
     try:
         if kind == "pcs":
-            return pcs.read_pc(overlay.pc_root(cid, aid), aid)["meta"].get("name", aid)
-        return characters.read_character(overlay.char_root(cid, aid), aid)["meta"].get("name", aid)
+            return pcs.name_of(overlay.pc_root(cid, aid), aid)
+        return characters.name_and_versions(overlay.char_root(cid, aid), aid)[0]
     except (characters.CharacterNotFound, pcs.PCNotFound):
         return aid
 

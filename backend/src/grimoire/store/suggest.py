@@ -1147,7 +1147,7 @@ def _actor_name(ctx: _IdeaContext, actor: str) -> str:
         name = aid
         try:
             if kind == "pcs":
-                name = pcs.read_pc(overlay.pc_root(ctx.cid, aid), aid)["meta"].get("name", aid)
+                name = pcs.name_of(overlay.pc_root(ctx.cid, aid), aid)
             elif kind == "characters":
                 name = characters.birthdate_meta(overlay.char_root(ctx.cid, aid), aid)[0]
         except (characters.CharacterNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):

@@ -1,4 +1,4 @@
-from grimoire.store import campaigns, relationships, worlds
+from grimoire.store import assets, campaigns, characters, overlay, pcs, relationships, worlds
 
 
 def _campaign(monkeypatch, tmp_path):
@@ -36,3 +36,43 @@ def test_render_present_lists_feelings_and_bonds(monkeypatch, tmp_path):
     lines = relationships.render_present(cid, ["characters:a", "characters:b"], lambda t: t.split(":")[1].title())
     assert "A → B: trust 4, affection 3, tension 1 (warm)" in lines
     assert "A & B: allies" in lines
+
+
+def test_actor_name_reads_meta_only(monkeypatch, tmp_path):
+    """§25.3 / Decision 9: a name is read from the record's meta -- never from
+    its card versions or its image directories -- and is the name the full
+    read gave."""
+    cid = _campaign(monkeypatch, tmp_path)
+    wroot = worlds.world_root(campaigns.read_campaign(cid)["meta"]["world"])
+    mara, _ = characters.create_character(wroot, "Mara")
+    winifred, _ = characters.create_character(wroot, "Winifred")
+    overlay.materialize_actor(cid, "characters", winifred)
+    characters.set_name(campaigns.campaign_root(cid), winifred, "Winifred of Saltmarch")
+    seraphine, _ = pcs.create_pc(wroot, "Seraphine", [])
+    shadow, shadow_v = characters.create_character(wroot, "Mara's shadow")
+    (wroot / "characters" / shadow / f"{shadow_v}.json").unlink()
+    calls: list[str] = []
+
+    def _record(owner, name):
+        real = getattr(owner, name)
+
+        def recording(*args, **kwargs):
+            calls.append(name)
+            return real(*args, **kwargs)
+
+        monkeypatch.setattr(owner, name, recording)
+
+    for owner, name in ((characters, "read_card"), (characters, "read_character"),
+                        (pcs, "read_pc"), (assets, "list_images")):
+        _record(owner, name)
+
+    assert relationships.actor_name(cid, f"characters:{mara}") == "Mara"
+    # The campaign's own copy, not the world's: the overlay root is resolved.
+    assert relationships.actor_name(cid, f"characters:{winifred}") == "Winifred of Saltmarch"
+    assert relationships.actor_name(cid, f"pcs:{seraphine}") == "Seraphine"
+    assert relationships.actor_name(cid, "characters:nobody") == "nobody"
+    assert relationships.actor_name(cid, "pcs:nobody") == "nobody"
+    # Every version file gone: not one addressable version, so the id, as
+    # `read_character` answered it.
+    assert relationships.actor_name(cid, f"characters:{shadow}") == shadow
+    assert calls == []
