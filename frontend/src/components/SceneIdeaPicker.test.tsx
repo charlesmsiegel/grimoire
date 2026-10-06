@@ -776,6 +776,41 @@ test("a saved idea shows what it advances and what it is anchored to", async () 
   expect(within(fair).getByText("after Saltmarch fair (passed)")).toBeInTheDocument();
 });
 
+test("a birthday anchor names the birthday, so a passed one is no death notice", async () => {
+  // The read's label for a birthday is the actor's bare name (§17), so the row
+  // names the birthday itself, as `stale_reason` does: "after Mara (passed)"
+  // would read as a death notice.
+  const BIRTHDAY = { ref: "birthday:characters:mara:2026-06-01", kind: "birthday" as const,
+                     native: "2026-06-01", label: "Mara", friendly: "1 Jun 2026" };
+  (api.listSceneIdeas as any).mockResolvedValue([
+    // a finished `after` anchor is live, so this sits in the main list
+    { ...SAVED, id: "after-cake", title: "After the cake",
+      time_anchor: { ...BIRTHDAY, relation: "after", state: "finished" }, drivers: [] },
+    { ...SAVED, id: "before-cake", title: "Before the cake",
+      time_anchor: { ...BIRTHDAY, relation: "before", state: "finished" }, drivers: [],
+      stale_reason: "Mara's birthday has passed" },
+    { ...SAVED, id: "on-cake", title: "On the day",
+      time_anchor: { ...BIRTHDAY, relation: "on", state: "live" },
+      // a birthday claimed beyond the kept anchor draws its chip the same way
+      drivers: [{ ref: "birthday:characters:winifred:2026-07-01", kind: "birthday",
+                  action: "anchor", label: "Winifred", state: "live" }] },
+  ]);
+  renderPicker({ suggestions: [{ ...REASONED, title: "At the party",
+    time_anchor: { ...BIRTHDAY, relation: "on", in_days: 3 }, drivers: [] }] });
+  const after = (await screen.findByText("After the cake")).closest("button")!;
+  expect(within(after).getByText("after Mara's birthday (passed)")).toBeInTheDocument();
+  expect(within(after).queryByText(/Mara \(passed\)/)).toBeNull();
+  const on = screen.getByText("On the day").closest("button")!;
+  expect(within(on).getByText("on Mara's birthday")).toBeInTheDocument();
+  expect(within(on).getByText("Anchored to: Winifred's birthday")).toBeInTheDocument();
+  // a generated card draws the anchor line the same way
+  const party = screen.getByText("At the party").closest("button")!;
+  expect(within(party).getByText("12 May 2026 · on Mara's birthday")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Stale (1)" }));
+  const before = screen.getByText("Before the cake").closest("button")!;
+  expect(within(before).getByText("before Mara's birthday (passed)")).toBeInTheDocument();
+});
+
 test("stale ideas sit under a collapsed Stale group outside the budget", async () => {
   const STALE: SceneIdea = { ...SAVED, id: "the-bells", title: "Before the bells",
                              stale_reason: "The coronation has passed" };
