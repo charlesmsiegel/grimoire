@@ -1,6 +1,6 @@
 import type { EdgeKind, GraphNode, NodeKind, StoryGraph } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
-import { graphFixture, NOW_FIXED } from "../../testkit/storyGraph";
+import { graphFixture, noPresentFixture, NOW_FIXED } from "../../testkit/storyGraph";
 import { sanitizeSeed } from "../pressureControls";
 import {
   accessibleName, arcNeighbourhood, arcRows, FINDING_PHRASE, indexGraph, isLens, KIND_NOUN,
@@ -357,6 +357,29 @@ describe("names", () => {
     map.findings.push({ id: "cand-again", kind: "possible_thread_closure", other: null });
     const { ix } = setup(g);
     expect(statusOf(map, ix)).toBe("open, stale, May be finished");
+  });
+
+  it("with no present, a dated record says its date rather than 'undated'", () => {
+    const { ix, node } = setup(noPresentFixture());
+    const cases: [string, string, string][] = [
+      [CORONATION, "event", "13 March 1200"],
+      [MEETING, "scene idea", "11 March 1200"],
+      // Only what has no day of its own is undated or unscheduled.
+      [FAIR, "event", "undated"],
+      [LETTER, "scene idea", "unscheduled"],
+      [BELL, "event", "fired"],
+    ];
+    for (const [id, noun, status] of cases) {
+      const n = node(id);
+      expect([id, statusOf(n, ix)]).toEqual([id, status]);
+      expect(accessibleName(n, ix)).toBe(`${n.label}, ${noun}, ${status}`);
+    }
+    // A day the calendar could not phrase still reads as that day.
+    const bare = noPresentFixture();
+    for (const n of bare.nodes) if ("friendly" in n) n.friendly = "";
+    const b = setup(bare);
+    expect(statusOf(b.node(CORONATION), b.ix)).toBe("1200-03-13");
+    expect(statusOf(b.node(MEETING), b.ix)).toBe("1200-03-11");
   });
 
   it("no shown string carries an internal token", () => {

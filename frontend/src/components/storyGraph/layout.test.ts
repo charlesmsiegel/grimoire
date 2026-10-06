@@ -1,5 +1,5 @@
 import type { GraphNode, StoryGraph } from "../../api/types";
-import { graphFixture, NOW_FIXED } from "../../testkit/storyGraph";
+import { graphFixture, noPresentFixture, NOW_FIXED } from "../../testkit/storyGraph";
 import {
   COL, edgePath, HEAD, layout, NODE_H, NODE_W, PAD, ROW, type Column, type Layout,
 } from "./layout";
@@ -360,18 +360,9 @@ describe("layout: the calendar axis", () => {
 /** The payload of a campaign with no present (no clock, no dated chronicle):
  *  `now` is blank, nothing has an `in_days`, and pressure dated no holiday or
  *  birthday -- but a record that carries its own date still has `fixed`. */
-function noPresent(): StoryGraph {
-  const g = graphFixture();
-  g.now = { native: "", friendly: "", fixed: null };
-  g.nodes = g.nodes
-    .filter((n) => n.kind !== "holiday" && n.kind !== "birthday")
-    .map((n): GraphNode => ("in_days" in n ? { ...n, in_days: null } : n));
-  return g;
-}
-
 describe("layout: a campaign with no present", () => {
   it("dated records are placed on the calendar axis by fixed", () => {
-    const { at, lay, colOf, view } = draw("calendar", { g: noPresent() });
+    const { at, lay, colOf, view } = draw("calendar", { g: noPresentFixture() });
     expect(view.nodes.map((n) => n.id)).toEqual(expect.arrayContaining([OATH, CORONATION]));
     for (const id of [OATH, CORONATION, S1]) {
       expect(colOf(id).kind).toBe("day");
@@ -387,7 +378,7 @@ describe("layout: a campaign with no present", () => {
   });
 
   it("an unfired dated event sits right of Now by fixed on the play axis, not in Undated", () => {
-    const { column, colOf, at } = draw("story", { g: noPresent() });
+    const { column, colOf, at } = draw("story", { g: noPresentFixture() });
     const now = column("now");
     const coronation = colOf(CORONATION);
     expect(coronation.kind).toBe("future");

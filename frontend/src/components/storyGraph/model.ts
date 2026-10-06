@@ -240,6 +240,15 @@ function edgeCount(list: GraphEdge[] | undefined, kind: EdgeKind): number {
   return (list ?? []).filter((e) => e.kind === kind).length;
 }
 
+/** When a dated record falls: its distance from the present, or, with no
+ *  present to measure from, the day itself. A dated record never reads
+ *  "undated" because the campaign has no clock. */
+function whenOf(n: { fixed: number | null; in_days: number | null; friendly: string;
+                     native: string }): string {
+  if (n.in_days === null && n.fixed !== null) return n.friendly || n.native || "undated";
+  return whenPhrase(n.in_days);
+}
+
 /** A node's one-line status, the same on every lens and whatever the toggles
  *  say: the Arcs row, the node's own line and its accessible name read it. */
 export function statusOf(n: GraphNode, ix: GraphIndex): string {
@@ -265,13 +274,13 @@ export function statusOf(n: GraphNode, ix: GraphIndex): string {
       return parts.filter(Boolean).join(", ");
     }
     case "event":
-      return n.status === "scheduled" ? whenPhrase(n.in_days) : n.status;
+      return n.status === "scheduled" ? whenOf(n) : n.status;
     case "holiday":
       return whenPhrase(n.in_days);
     case "birthday":
       return whenPhrase(n.in_days, n.precision);
     case "idea":
-      return n.fixed === null ? "unscheduled" : whenPhrase(n.in_days);
+      return n.fixed === null ? "unscheduled" : whenOf(n);
   }
 }
 
