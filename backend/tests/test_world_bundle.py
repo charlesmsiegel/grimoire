@@ -22,6 +22,7 @@ from grimoire.store import (
     covers,
     fetch,
     greetings,
+    image_collections,
     image_descriptions,
     image_hash,
     image_refs,
@@ -31,6 +32,7 @@ from grimoire.store import (
     worlds,
 )
 
+from .collection_fixtures import format1, format2
 from .world_fixtures import PNG, seed_world, tree
 
 
@@ -243,7 +245,7 @@ def test_import_rejects_unsafe_and_malformed_archives(monkeypatch, tmp_path):
         "no-world-meta": {world_bundle.MANIFEST_NAME: _manifest()},
         "bad-manifest-json": {world_bundle.MANIFEST_NAME: "{not json", **GOOD_WORLD},
         "manifest-not-an-object": {world_bundle.MANIFEST_NAME: "[]", **GOOD_WORLD},
-        "future-format": {world_bundle.MANIFEST_NAME: _manifest(fmt=world_bundle.FORMAT + 1),
+        "future-format": {world_bundle.MANIFEST_NAME: _manifest(fmt=world_bundle.MAX_FORMAT + 1),
                           **GOOD_WORLD},
         "wrong-kind": {world_bundle.MANIFEST_NAME:
                        json.dumps({"format": 1, "kind": "module", "world_id": "x", "name": "X"}),
@@ -1326,14 +1328,13 @@ def _collection(fmt: object) -> str:
     return json.dumps({"format": fmt, "members": ["collection-image-" + "a" * 64]})
 
 
-@pytest.mark.parametrize("fmt", [2, 7])
-def test_a_newer_collection_manifest_refuses_the_import(monkeypatch, tmp_path, fmt):
-    """Stage 3 changes the manifest; it will move bundles to a new format when
-    it does, so a manifest this grimoire cannot read is refused rather than
-    imported as a collection nothing can open."""
+@pytest.mark.parametrize("bundle_fmt, fmt", [(2, 3), (3, 3), (3, 7)])
+def test_a_newer_collection_manifest_refuses_the_import(monkeypatch, tmp_path, bundle_fmt, fmt):
+    """A manifest this grimoire cannot read is refused rather than imported as
+    a collection nothing can open."""
     _home(monkeypatch, tmp_path)
     bundle = _hand_bundle(tmp_path, f"coll{fmt}", {
-        f"world/assets/image-collections/{'b' * 32}.json": _collection(fmt)})
+        f"world/assets/image-collections/{'b' * 32}.json": _collection(fmt)}, fmt=bundle_fmt)
     with pytest.raises(world_bundle.BundleError,
                        match=f"collection manifest format {fmt} is newer"):
         world_bundle.import_bundle(bundle)
@@ -1342,20 +1343,23 @@ def test_a_newer_collection_manifest_refuses_the_import(monkeypatch, tmp_path, f
         (image_store.store_root() / "blobs").rglob("*.*"))
 
 
+@pytest.mark.parametrize("bundle_fmt", [1, 2, 3])
 @pytest.mark.parametrize("fmt", [0, True, "1", None])
-def test_an_unknown_collection_manifest_format_refuses_the_import(monkeypatch, tmp_path, fmt):
+def test_an_unknown_collection_manifest_format_refuses_the_import(monkeypatch, tmp_path,
+                                                                  fmt, bundle_fmt):
     _home(monkeypatch, tmp_path)
     bundle = _hand_bundle(tmp_path, "collx", {
-        f"world/assets/image-collections/{'b' * 32}.json": _collection(fmt)})
+        f"world/assets/image-collections/{'b' * 32}.json": _collection(fmt)}, fmt=bundle_fmt)
     with pytest.raises(world_bundle.BundleError, match="collection manifest format"):
         world_bundle.import_bundle(bundle)
 
 
-def test_a_format_1_collection_manifest_imports(monkeypatch, tmp_path):
+@pytest.mark.parametrize("bundle_fmt", [1, 2, 3])
+def test_a_format_1_collection_manifest_imports(monkeypatch, tmp_path, bundle_fmt):
     _home(monkeypatch, tmp_path)
     body = _collection(1)
     bundle = _hand_bundle(tmp_path, "coll1", {
-        f"world/assets/image-collections/{'b' * 32}.json": body})
+        f"world/assets/image-collections/{'b' * 32}.json": body}, fmt=bundle_fmt)
     new = world_bundle.import_bundle(bundle)
     got = worlds.world_root(new) / "assets" / "image-collections" / f"{'b' * 32}.json"
     assert got.read_text(encoding="utf-8") == body
@@ -1432,3 +1436,248 @@ def test_a_case_variant_placement_path_is_refused(monkeypatch, tmp_path, member)
     with pytest.raises(world_bundle.BundleError, match="spelling"):
         world_bundle.import_bundle(bundle)
     assert worlds.list_worlds() == []
+
+
+# ---- bundle format 3: format-2 collections ----
+#
+# A format-2 manifest names image ids, so a bundle carrying one carries those
+# pictures too, rewrites their ids to the local ones on import, and holds the
+# manifest to what it contains -- exactly as a placement is held. Only a bundle
+# that packs one is written as format 3, so a world without one stays
+# importable by an older grimoire.
+
+COLL = "0123456789abcdef0123456789abcdef"
+COLL_MEMBER = f"world/assets/image-collections/{COLL}.json"
+
+
+def _format2(*members: str) -> str:
+    return json.dumps({"format": 2, "members": list(members)})
+
+
+def _carried(data: bytes, claimed: str | None = None) -> tuple[dict[str, str | bytes], str]:
+    """Bundle entries for one picture, its object claimed under `claimed` (by
+    default its own local id); returns (entries, local id)."""
+    sha, blob_name = _blob_entry(data)
+    local = image_hash.pixel_identity(data, sha).id
+    bid = claimed or local
+    return ({blob_name: data,
+             f"image-store/objects/{bid[4:6]}/{bid}.json": _object_body(bid, sha, len(data))},
+            local)
+
+
+def _imported_members(wid: str) -> list[str]:
+    return image_collections.read(wid, COLL)["members"]
+
+
+def _logged(monkeypatch) -> list[dict]:
+    rows: list[dict] = []
+    real = world_bundle.logs.record
+    monkeypatch.setattr(world_bundle.logs, "record",
+                        lambda *a, **k: rows.append(k) or real(*a, **k))
+    return rows
+
+
+def test_bundle_format_constants():
+    assert world_bundle.MAX_FORMAT == 3
+    assert sorted(world_bundle._READABLE) == [1, 2, 3]
+
+
+def test_a_collection_free_world_still_writes_bundle_format_2(monkeypatch, tmp_path):
+    """Format 3 only when a format-2 manifest is packed: a world without one --
+    a format-1 collection included -- stays importable by an older grimoire."""
+    _home(monkeypatch, tmp_path)
+    wid, _shared, _avatar = _placed_realm()
+    format1(wid, COLL, _pixels(60))
+    with zipfile.ZipFile(_export(wid, tmp_path)) as z:
+        assert json.loads(z.read(world_bundle.MANIFEST_NAME))["format"] == 2
+    format2(wid, "f" * 32, _pixels(61))
+    with zipfile.ZipFile(_export(wid, tmp_path, "with-format-2")) as z:
+        assert json.loads(z.read(world_bundle.MANIFEST_NAME))["format"] == 3
+
+
+def test_export_packs_format_2_members(monkeypatch, tmp_path):
+    """A member is packed like a placed picture: its blob and its projection."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(62), _pixels(63))
+    blobs, objects = _store_members(_export(wid, tmp_path))
+    assert len(blobs) == 2
+    assert sorted(objects) == sorted(f"image-store/objects/{i[4:6]}/{i}.json" for i in ids)
+
+
+def test_import_rewrites_format_2_members_to_local_ids(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    claimed = "px1-" + "c" * 64
+    drifted, drifted_local = _carried(_pixels(64), claimed)
+    own, own_local = _carried(_pixels(65))
+    assert drifted_local != claimed
+    bundle = _hand_bundle(tmp_path, "rewrite", {
+        **drifted, **own, COLL_MEMBER: _format2(own_local, claimed)}, fmt=3)
+    new = world_bundle.import_bundle(bundle)
+    assert _imported_members(new) == [own_local, drifted_local]
+    assert [image_collections.member_path(new, COLL, i) is not None for i in (0, 1)] == [True, True]
+
+
+def test_rewrite_duplicates_collapse_to_the_first(monkeypatch, tmp_path):
+    """A claimed id and the local id it rewrites to are one picture: the
+    manifest keeps the first, so it still reads (members are unique)."""
+    _home(monkeypatch, tmp_path)
+    claimed = "px1-" + "c" * 64
+    drifted, drifted_local = _carried(_pixels(66), claimed)
+    own, own_local = _carried(_pixels(67))
+    bundle = _hand_bundle(tmp_path, "dupes", {
+        **drifted, **own,
+        COLL_MEMBER: _format2(own_local, claimed, drifted_local)}, fmt=3)
+    new = world_bundle.import_bundle(bundle)
+    assert _imported_members(new) == [own_local, drifted_local]
+
+
+def test_a_member_the_bundle_does_not_carry_is_dropped(monkeypatch, tmp_path):
+    """Review Focus 4: an id the bundle has no picture for would otherwise
+    resolve to whatever this library holds under it."""
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(68)
+    own, own_local = _carried(_pixels(69))
+    rows = _logged(monkeypatch)
+    bundle = _hand_bundle(tmp_path, "stolen-member", {
+        **own, COLL_MEMBER: _format2(stolen, own_local)}, fmt=3)
+    new = world_bundle.import_bundle(bundle)
+    assert _imported_members(new) == [own_local]
+    assert any(k.get("kind") == "bundle_collection_members_uncontained"
+               and k.get("count") == 1 and k.get("removed") == 0 for k in rows)
+
+
+def test_a_manifest_emptied_by_containment_is_removed(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(70)
+    rows = _logged(monkeypatch)
+    bundle = _hand_bundle(tmp_path, "emptied", {COLL_MEMBER: _format2(stolen)}, fmt=3)
+    new = world_bundle.import_bundle(bundle)
+    with pytest.raises(FileNotFoundError):
+        image_collections.read(new, COLL)
+    assert not image_collections.manifest_path(new, COLL).exists()
+    assert any(k.get("kind") == "bundle_collection_members_uncontained"
+               and k.get("count") == 1 and k.get("removed") == 1 for k in rows)
+
+
+@pytest.mark.parametrize("member", [
+    f"world/Assets/Image-Collections/{COLL}.json",
+    f"world/ASSETS/IMAGE-COLLECTIONS/{COLL}.json",
+    f"world/assets/\u0131mage-collections/{COLL}.json",
+    f"world/assets/image-collections/{COLL}.JSON",
+    f"world/assets/image-collections/{COLL.upper()}.json",
+])
+def test_a_case_variant_manifest_path_is_contained(monkeypatch, tmp_path, member):
+    """On a case-insensitive filesystem every one of these IS the manifest the
+    store reads, so it is held to the bundle's contents like the exact one."""
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(71)
+    own, own_local = _carried(_pixels(72))
+    bundle = _hand_bundle(tmp_path, "case-manifest", {
+        **own, member: _format2(stolen, own_local)}, fmt=3)
+    new = world_bundle.import_bundle(bundle)
+    staged = worlds.world_root(new) / member[len("world/"):]
+    assert json.loads(staged.read_text(encoding="utf-8"))["members"] == [own_local]
+
+
+@pytest.mark.parametrize("bundle_fmt", [3, 2])
+@pytest.mark.parametrize("label, raw", [
+    ("duplicates", {"format": 2, "members": ["px1-" + "a" * 64, "px1-" + "a" * 64]}),
+    ("empty", {"format": 2, "members": []}),
+    ("library-name", {"format": 2, "members": ["collection-image-" + "a" * 64]}),
+    ("upper-hex", {"format": 2, "members": ["px1-" + "A" * 64]}),
+    ("extra-key", {"format": 2, "members": ["px1-" + "a" * 64], "source": "x"}),
+    ("not-a-list", {"format": 2, "members": "px1-" + "a" * 64}),
+])
+def test_an_invalid_format_2_manifest_refuses_the_import(monkeypatch, tmp_path, label, raw,
+                                                         bundle_fmt):
+    _home(monkeypatch, tmp_path)
+    bundle = _hand_bundle(tmp_path, label, {COLL_MEMBER: json.dumps(raw)}, fmt=bundle_fmt)
+    with pytest.raises(world_bundle.BundleError, match="collection manifest"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+
+
+def test_too_many_format_2_members_refuses_the_import(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(image_collections, "MAX_MEMBERS", 2)
+    members = [f"px1-{i:064x}" for i in range(3)]
+    bundle = _hand_bundle(tmp_path, "many", {COLL_MEMBER: _format2(*members)}, fmt=3)
+    with pytest.raises(world_bundle.BundleError, match=f"invalid collection manifest.*{COLL}"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+
+
+def test_export_refuses_an_oversized_member_blob(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    [member] = format2(wid, COLL, _pixels(73))
+    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", image_store.read(member).size - 1)
+    dest = tmp_path / "out" / "bundle.zip"
+    dest.parent.mkdir()
+    with pytest.raises(world_bundle.BundleError) as caught:
+        world_bundle.write_bundle(wid, dest)
+    assert str(caught.value).startswith(
+        f"image too large to bundle: assets/image-collections/{COLL}.json member 0 ")
+    assert not dest.exists()
+
+
+@pytest.mark.parametrize("label, body", [
+    ("duplicates", json.dumps({"format": 2, "members": ["px1-" + "a" * 64] * 2})),
+    ("empty", json.dumps({"format": 2, "members": []})),
+    ("unknown-format", json.dumps({"format": 9, "members": ["px1-" + "a" * 64]})),
+    ("format-1-shape", json.dumps({"format": 1, "members": ["px1-" + "a" * 64]})),
+    ("unparseable", "{broken"),
+])
+def test_export_refuses_an_invalid_format_2_manifest(monkeypatch, tmp_path, label, body):
+    """An export runs the store's own manifest validation over every manifest
+    it packs, so it never writes one its import refuses -- and says which."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    format2(wid, "f" * 32, _pixels(74))                    # a valid one beside it
+    image_collections.manifest_path(wid, COLL).write_text(body, encoding="utf-8")
+    dest = tmp_path / "out" / "bundle.zip"
+    dest.parent.mkdir()
+    with pytest.raises(world_bundle.BundleError,
+                       match=f"invalid collection manifest: assets/image-collections/{COLL}.json"):
+        world_bundle.write_bundle(wid, dest)
+    assert not dest.exists()
+
+
+def test_the_newer_than_this_grimoire_message_names_max_format(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    newer = world_bundle.MAX_FORMAT + 1
+    bundle = _hand_bundle(tmp_path, "newer", {}, fmt=newer)
+    with pytest.raises(world_bundle.BundleError,
+                       match=fr"bundle format {newer} is newer than this grimoire "
+                             fr"understands \({world_bundle.MAX_FORMAT}\)"):
+        world_bundle.import_bundle(bundle)
+
+
+@pytest.mark.parametrize("bundle_fmt", [1, 2])
+def test_bundle_format_2_still_refuses_a_format_2_manifest(monkeypatch, tmp_path, bundle_fmt):
+    """Before format 3 a bundle carried format-1 manifests only, and the rule
+    for the formats it names does not change."""
+    _home(monkeypatch, tmp_path)
+    own, own_local = _carried(_pixels(75))
+    entries = {**own} if bundle_fmt >= 2 else {}
+    bundle = _hand_bundle(tmp_path, "old-format", {
+        **entries, COLL_MEMBER: _format2(own_local)}, fmt=bundle_fmt)
+    with pytest.raises(world_bundle.BundleError, match="collection manifest format 2"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
+
+
+def test_a_format_3_bundle_round_trips_through_its_own_export(monkeypatch, tmp_path):
+    """Members, order and pictures survive export, deletion and a fresh store."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    ids = format2(wid, COLL, _pixels(76), _pixels(77))
+    format1(wid, "f" * 32, _pixels(78))
+    bundle = _export(wid, tmp_path)
+    worlds.delete_world(wid)
+    _wipe_image_store(tmp_path)
+    new = world_bundle.import_bundle(bundle)
+    assert _imported_members(new) == ids
+    assert all(image_collections.member_path(new, COLL, i) is not None for i in (0, 1))
+    assert image_collections.read(new, "f" * 32)["format"] == 1

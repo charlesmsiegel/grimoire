@@ -1,11 +1,22 @@
 import hashlib
 import io
 import json
+import shutil
+import zipfile
 
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, campaigns, export, image_refs, world_bundle, world_images, worlds
+from grimoire.store import (
+    assets,
+    campaigns,
+    export,
+    image_refs,
+    image_store,
+    world_bundle,
+    world_images,
+    worlds,
+)
 from grimoire.store import image_collection_imports as imports
 from grimoire.store import image_collections as collections
 from grimoire.store.campaigns import read
@@ -91,6 +102,57 @@ def test_world_forks_and_bundles_keep_all_members_and_repoint_links(client, coll
         assert len(data['members']) == 2
         assert all(url.startswith(f'/api/worlds/{new_id}/images/') for url in data['members'])
         assert [client.get(url).content for url in data['members']] == [png(), png('blue')]
+
+
+def _bundle_format(bundle):
+    with zipfile.ZipFile(bundle) as z:
+        return json.loads(z.read(world_bundle.MANIFEST_NAME))['format']
+
+
+def test_format_2_forks_and_bundles_keep_all_members_and_repoint_links(client, tmp_path):
+    wid = worlds.create_world('Realm')
+    ids = format2(wid, CID, png('red'), png('blue'))
+    lore = worlds.world_root(wid) / 'sources/lore/scene.md'
+    lore.parent.mkdir(parents=True, exist_ok=True)
+    lore.write_text(f'![Scene]({collections.url_for(wid, CID)})')
+    forked = worlds.fork_world(wid, 'Other Realm')
+    bundle = tmp_path / 'realm.zip'
+    world_bundle.write_bundle(wid, bundle)
+    assert _bundle_format(bundle) == 3
+    imported = world_bundle.import_bundle(bundle)
+    for new_id in (forked, imported):
+        assert new_id != wid
+        assert collections.read(new_id, CID) == {'format': 2, 'members': ids}
+        text = (worlds.world_root(new_id) / 'sources/lore/scene.md').read_text()
+        assert collections.url_for(new_id, CID) in text
+        data = client.get(f'/api/worlds/{new_id}/image-collections/{CID}').json()
+        assert data['members'] == [
+            f'/api/worlds/{new_id}/image-collections/{CID}/members/{i}?v={_resolved(x).blob_sha256}'
+            for i, x in enumerate(ids)]
+        assert [_pixel(client.get(u).content) for u in data['members']] == [(255, 0, 0), (0, 0, 255)]
+
+
+def test_a_format_2_collection_round_trips_into_a_fresh_store(client, tmp_path):
+    """Deleted and with the image store gone, the world comes back from its
+    bundle alone, and every member is served through the member route."""
+    wid = worlds.create_world('Realm')
+    ids = format2(wid, CID, png('red'), png('blue'), png('green'))
+    bundle = tmp_path / 'out' / 'realm.zip'
+    bundle.parent.mkdir()
+    world_bundle.write_bundle(wid, bundle)
+    worlds.delete_world(wid)
+    shutil.rmtree(image_store.store_root())
+    assert _resolved(ids[0]) is None
+    new_id = world_bundle.import_bundle(bundle)
+    assert collections.read(new_id, CID) == {'format': 2, 'members': ids}
+    base = f'/api/worlds/{new_id}/image-collections/{CID}'
+    colours = [(255, 0, 0), (0, 0, 255), (0, 128, 0)]
+    for i, colour in enumerate(colours):
+        r = client.get(f'{base}/members/{i}')
+        assert r.status_code == 200 and _pixel(r.content) == colour
+    urls = client.get(base).json()['members']
+    assert [_pixel(client.get(u).content) for u in urls] == colours
+    assert client.get(f'{base}/members/3').status_code == 404
 
 
 def png_dpi(dpi, color='red'):

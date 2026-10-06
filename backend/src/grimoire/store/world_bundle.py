@@ -69,6 +69,17 @@ answering "failed" would invite a retry that imports a second copy.
 Blobs and objects are ingested before the world is published, so an import
 that fails afterwards leaves an orphan picture behind -- a GC candidate, never
 corruption (spec section 12). Format-1 bundles import exactly as before.
+
+**Format 3 carries format-2 image collections.** A format-2 manifest names
+image ids rather than library names, so the export packs those pictures as it
+packs placed ones, and the import holds the manifest to the bundle's contents
+as it holds a placement (`_contain_manifests`): each member is rewritten to its
+local id, one the bundle carries no picture for is dropped, and a manifest left
+with no members is removed. A bundle is written as format 3 only when it packs
+a format-2 manifest, so a world without one stays importable by an older
+grimoire; a bundle of format 1 or 2 carries format-1 manifests only, and is
+still refused for any other. Every manifest an export packs is validated first
+with the store's own rule, so an export never writes one its import refuses.
 """
 
 from __future__ import annotations
@@ -82,15 +93,32 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import assets, atomic, fetch, image_refs, image_scopes, image_store, logs, ziputil
+from . import (
+    assets,
+    atomic,
+    fetch,
+    image_collections,
+    image_refs,
+    image_scopes,
+    image_store,
+    logs,
+    ziputil,
+)
 from .frontmatter import parse_frontmatter
 from .paths import ensure_home, now_iso, safe_id, slugify, uniquify
 from .worlds import paths as worlds_paths
 from .worlds import staging as worlds_staging
 
+#: The format written for a world that packs no format-2 collection manifest,
+#: so an older grimoire can still import it.
 FORMAT = 2
-#: Every format this grimoire reads. Format 1 is format 2 without images.
-_READABLE = frozenset({1, 2})
+#: The format written when the export packs a format-2 collection manifest.
+COLLECTIONS_FORMAT = 3
+#: The highest format this grimoire reads.
+MAX_FORMAT = 3
+#: Every format this grimoire reads. Format 1 is format 2 without images, and
+#: format 2 is format 3 without format-2 collection manifests.
+_READABLE = frozenset({1, 2, 3})
 MANIFEST_NAME = "grimoire-bundle.json"
 WORLD_PREFIX = "world"
 STORE_PREFIX = "image-store"
@@ -117,11 +145,15 @@ MAX_OBJECT_BYTES = 64 * 1024 * 1024
 # ...and each object on its own, refused from its header before it is read:
 # the total cap alone still let one 64 MiB object be parsed whole.
 MAX_OBJECT_MEMBER_BYTES = 1024 * 1024
-# A format-1 collection manifest holds at most 10 000 member names, well under
-# a megabyte; this is room for that and a refusal for anything shaped otherwise.
+# A collection manifest holds at most 10 000 member names or ids, well under a
+# megabyte; this is room for that and a refusal for anything shaped otherwise.
 MAX_COLLECTION_MANIFEST_BYTES = 16 * 1024 * 1024
-#: The collection manifest format this grimoire reads (`image_collections`).
-_COLLECTION_FORMAT = 1
+#: The collection manifest formats each bundle format may carry. Before format
+#: 3 a bundle carried format-1 manifests only, and still may not carry another.
+_COLLECTION_FORMATS = {1: frozenset({1}), 2: frozenset({1}), 3: frozenset({1, 2})}
+#: Where a collection manifest sits, relative to the world root, as a
+#: case-insensitive filesystem compares it (`_fold`).
+_COLLECTIONS_DIR = ("assets", "image-collections")
 # The longest bundle description merged. Longer is not a description of a
 # picture; it is dropped (and logged) and the image imports undescribed. The
 # store's one cap, so an import cannot carry text a description write refuses.
@@ -211,13 +243,16 @@ def write_bundle(wid: str, dest: Path) -> None:
     # A crashed promotion is finished first: mid-swap, the picture it moved
     # out of the avatar slot is named only by its journal, which is not packed.
     assets.recover_promotions_in(root)
-    _check_blob_sizes(root)
-    manifest = {"format": FORMAT, "kind": "world", "world_id": wid,
-                "name": meta.get("name", wid), "app_version": app_version(),
-                "exported": now_iso()}
+    world = _world_entries(root)
+    collections = _packed_manifests(root, world)
+    _check_blob_sizes(root, collections)
+    member_ids = _manifest_ids(collections)
+    manifest = {"format": COLLECTIONS_FORMAT if member_ids else FORMAT, "kind": "world",
+                "world_id": wid, "name": meta.get("name", wid),
+                "app_version": app_version(), "exported": now_iso()}
     entries = [_Entry(MANIFEST_NAME, compress=zipfile.ZIP_DEFLATED,
                       data=(json.dumps(manifest, indent=2) + "\n").encode("utf-8")),
-               *_world_entries(root), *_image_entries(root, wid)]
+               *world, *_image_entries(root, wid, member_ids)]
     _check_whole(entries)
     try:
         with zipfile.ZipFile(dest, "w") as z:
@@ -273,6 +308,47 @@ def _world_entries(root: Path) -> list[_Entry]:
     return out
 
 
+def _is_manifest(rel: list[str]) -> bool:
+    """Is the world-relative path `rel` a collection manifest, as a
+    case-insensitive filesystem would open it? Both sides of a bundle ask this
+    one question, so export validates exactly what import checks and contains."""
+    return (len(rel) == 3 and tuple(_fold(p) for p in rel[:2]) == _COLLECTIONS_DIR
+            and _fold(rel[2]).endswith(".json"))
+
+
+def _packed_manifests(root: Path, world: list[_Entry]) -> list[tuple[str, dict]]:
+    """Every collection manifest among the packed world files, validated by the
+    store's own rule, as `(path relative to root, manifest)`.
+
+    `BundleError` names the first that does not read, before anything is
+    written: an export never packs a manifest its own import refuses. A
+    manifest that vanished since the walk is not part of the world any more."""
+    out = []
+    for e in world:
+        rel = e.arc.split("/")[1:]
+        if e.src is None or not _is_manifest(rel):
+            continue
+        where = "/".join(rel)
+        try:
+            text = e.src.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError) as exc:
+            raise BundleError(f"invalid collection manifest: {where}: {exc}") from exc
+        try:
+            manifest = image_collections._validated(json.loads(text))
+        except (ValueError, RecursionError) as exc:
+            # `CollectionInvalidError` is a `ValueError`, as is a JSON error.
+            raise BundleError(f"invalid collection manifest: {where}: {exc}") from exc
+        out.append((where, manifest))
+    return out
+
+
+def _manifest_ids(collections: list[tuple[str, dict]]) -> set[str]:
+    """The image ids the format-2 manifests among `collections` name."""
+    return {m for _where, c in collections if c["format"] == 2 for m in c["members"]}
+
+
 def _check_whole(entries: list[_Entry]) -> None:
     """`BundleError` for a bundle the import's whole-archive caps would refuse
     (`ziputil.scan`'s member count and expanded size, and the object metadata
@@ -317,29 +393,47 @@ def _packable_blob(obj: image_store.ImageObject) -> Path | None:
     return blob
 
 
-def _check_blob_sizes(root: Path) -> None:
-    """`BundleError` naming the first placement whose blob is larger than
-    `MAX_BUNDLE_BLOB_BYTES` -- asked before the bundle is opened, so a refused
-    export writes nothing, and the user is told which picture to replace."""
+def _check_blob_sizes(root: Path, collections: list[tuple[str, dict]]) -> None:
+    """`BundleError` naming the first placement or format-2 collection member
+    whose blob is larger than `MAX_BUNDLE_BLOB_BYTES` -- asked before the
+    bundle is opened, so a refused export writes nothing, and the user is told
+    which picture to replace."""
     for d, ref in image_refs.walk(root):
-        obj = image_store.read(ref.image) if ref.image is not None else None
-        blob = _packable_blob(obj) if obj is not None else None
-        if blob is None:
-            continue
-        try:
-            size = blob.stat().st_size
-        except OSError:
-            continue                                        # collected mid-walk
-        if size > MAX_BUNDLE_BLOB_BYTES and image_store.blob_intact(blob):
+        size = _oversized(ref.image)
+        if size is not None:
             where = d.relative_to(root).as_posix()
             raise BundleError(
                 f"image too large to bundle: {where}/{ref.name} ({size} bytes; "
                 f"a bundle carries images up to {MAX_BUNDLE_BLOB_BYTES} bytes)")
+    for where, manifest in collections:
+        if manifest["format"] != 2:
+            continue
+        for index, image_id in enumerate(manifest["members"]):
+            size = _oversized(image_id)
+            if size is not None:
+                raise BundleError(
+                    f"image too large to bundle: {where} member {index} ({size} bytes; "
+                    f"a bundle carries images up to {MAX_BUNDLE_BLOB_BYTES} bytes)")
 
 
-def _image_entries(root: Path, wid: str) -> list[_Entry]:
+def _oversized(image_id: str | None) -> int | None:
+    """The size of `image_id`'s blob when the export would pack it and it is
+    past `MAX_BUNDLE_BLOB_BYTES`; None otherwise."""
+    obj = image_store.read(image_id) if image_id is not None else None
+    blob = _packable_blob(obj) if obj is not None else None
+    if blob is None:
+        return None
+    try:
+        size = blob.stat().st_size
+    except OSError:
+        return None                                         # collected mid-walk
+    return size if size > MAX_BUNDLE_BLOB_BYTES and image_store.blob_intact(blob) else None
+
+
+def _image_entries(root: Path, wid: str, member_ids: set[str]) -> list[_Entry]:
     """The blob and the projected object of every image a placement under
-    `root` names -- once each, however many placements share it.
+    `root` or a format-2 collection manifest (`member_ids`) names -- once
+    each, however many name it.
 
     An id that does not resolve (no object, or its blob missing) is skipped:
     the world still exports, and that ref simply travels without a picture,
@@ -352,7 +446,7 @@ def _image_entries(root: Path, wid: str) -> list[_Entry]:
     """
     scope = image_scopes.world_scope(wid)
     out = []
-    for image_id in sorted(image_refs.walk_ids(root)):
+    for image_id in sorted(set(image_refs.walk_ids(root)) | member_ids):
         obj = image_store.read(image_id)
         blob = _packable_blob(obj) if obj is not None else None
         if obj is None or blob is None:
@@ -396,9 +490,9 @@ def _read_manifest(z: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> dict:
     if type(fmt) is not int or fmt not in _READABLE:
         # Named separately because the fix differs: a newer bundle needs a
         # newer grimoire, anything else is a broken file.
-        if type(fmt) is int and fmt > FORMAT:
+        if type(fmt) is int and fmt > MAX_FORMAT:
             raise BundleError(
-                f"bundle format {fmt} is newer than this grimoire understands ({FORMAT})")
+                f"bundle format {fmt} is newer than this grimoire understands ({MAX_FORMAT})")
         raise BundleError(f"unsupported bundle format: {fmt!r}")
     if not safe_id(manifest.get("world_id")):
         raise BundleError(f"bundle names an unusable world id: {manifest.get('world_id')!r}")
@@ -479,21 +573,21 @@ def _world_members(infos: list[zipfile.ZipInfo], fmt: int) -> _Members:
     return out
 
 
-def _check_collections(z: zipfile.ZipFile, members: _Members) -> None:
-    """Refuse a bundle carrying an image collection manifest of a format this
-    grimoire does not read.
+def _check_collections(z: zipfile.ZipFile, members: _Members, bundle_fmt: int) -> None:
+    """Refuse a bundle carrying an image collection manifest of a format its
+    own format may not carry, or a format-2 manifest that does not read.
 
-    Stage 3 changes the manifest, and moves bundles to a new format when it
-    does; until then a manifest that is not format 1 would import as a
-    collection nothing here can open, so the bundle is refused before anything
-    is written. A manifest that is not a JSON object at all is left alone: it
-    was as unreadable where it came from, and reads as invalid here too."""
+    A bundle of format 1 or 2 carries format-1 manifests only; format 3 may
+    carry format 2 as well, each one validated by the store's own rule, since
+    `_contain_manifests` rewrites it and the store must then read it. Either
+    way the bundle is refused before anything is written. A manifest that is
+    not a JSON object at all is left alone: it was as unreadable where it came
+    from, and reads as invalid here too."""
+    allowed = _COLLECTION_FORMATS[bundle_fmt]
     for info in members.world:
-        # Lower-cased: on a case-insensitive filesystem `Image-Collections/`
-        # is the same directory.
-        parts = [p.lower() for p in ziputil.member_parts(info.filename)]
-        if (len(parts) != 4 or parts[1:3] != ["assets", "image-collections"]
-                or not parts[3].endswith(".json")):
+        # Folded: on a case-insensitive filesystem `Image-Collections/` is
+        # the same directory.
+        if not _is_manifest(ziputil.member_parts(info.filename)[1:]):
             continue
         try:
             raw = json.loads(_read_member(z, info, MAX_COLLECTION_MANIFEST_BYTES))
@@ -502,11 +596,22 @@ def _check_collections(z: zipfile.ZipFile, members: _Members) -> None:
         if not isinstance(raw, dict):
             continue
         fmt = raw.get("format")
-        if type(fmt) is int and fmt == _COLLECTION_FORMAT:
+        if type(fmt) is int and fmt in allowed:
+            if fmt == 2:
+                try:
+                    image_collections._validated(raw)
+                except image_collections.CollectionInvalidError as e:
+                    raise BundleError(
+                        f"invalid collection manifest: {info.filename}: {e}") from e
             continue
-        if type(fmt) is int and fmt > _COLLECTION_FORMAT:
-            raise BundleError(f"collection manifest format {fmt} is newer than this "
-                              f"grimoire understands ({_COLLECTION_FORMAT}): {info.filename}")
+        if type(fmt) is int and fmt > max(_COLLECTION_FORMATS[MAX_FORMAT]):
+            raise BundleError(
+                f"collection manifest format {fmt} is newer than this grimoire "
+                f"understands ({max(_COLLECTION_FORMATS[MAX_FORMAT])}): {info.filename}")
+        if type(fmt) is int and fmt in _COLLECTION_FORMATS[MAX_FORMAT]:
+            raise BundleError(
+                f"collection manifest format {fmt} needs bundle format "
+                f"{COLLECTIONS_FORMAT}; this bundle is format {bundle_fmt}: {info.filename}")
         raise BundleError(f"unsupported collection manifest format {fmt!r}: {info.filename}")
 
 
@@ -666,6 +771,73 @@ def _contain_ref(owner: Path, name: str, id_map: dict[str, str],
     return True
 
 
+def _contain_manifests(staging: Path, id_map: dict[str, str],
+                       contained: set[str]) -> tuple[int, int]:
+    """Hold every staged format-2 collection manifest to what the bundle itself
+    carries, by `_contain_refs`'s rule; returns (members dropped, manifests
+    removed).
+
+    A member naming a bundle id is rewritten to that object's local id, and
+    one naming an id the bundle carries no picture for is dropped: it would
+    otherwise resolve to whatever this library holds under it. Two members the
+    rewrite makes one picture keep the first, since members are unique. A
+    manifest left with no members is removed -- an empty one does not read.
+
+    Manifests are found by folded path, as `_contain_refs` finds placements: on
+    a case-insensitive filesystem every spelling is the manifest the store
+    reads. One that is not a valid format-2 manifest is left alone;
+    `_check_collections` has already refused any such format 2."""
+    dropped = removed = 0
+    for assets_dir in _folded_children(staging, _COLLECTIONS_DIR[0]):
+        for collections_dir in _folded_children(assets_dir, _COLLECTIONS_DIR[1]):
+            for path in sorted(collections_dir.iterdir()):
+                if path.is_symlink() or not path.is_file() or not _fold(path.name).endswith(".json"):
+                    continue
+                lost, gone = _contain_manifest(path, id_map, contained)
+                dropped += lost
+                removed += gone
+    if dropped or removed:
+        logs.record("warning", __name__,
+                    "bundle collection members named images the bundle does not carry; dropped",
+                    kind="bundle_collection_members_uncontained", count=dropped,
+                    removed=removed)
+    return dropped, removed
+
+
+def _folded_children(d: Path, folded: str) -> list[Path]:
+    """The directories directly under `d` whose folded name is `folded`, not
+    following symlinks (extraction makes none)."""
+    return sorted(p for p in d.iterdir()
+                  if _fold(p.name) == folded and p.is_dir() and not p.is_symlink())
+
+
+def _contain_manifest(path: Path, id_map: dict[str, str],
+                      contained: set[str]) -> tuple[int, int]:
+    """One staged manifest, held to `_contain_manifests`'s rule; returns
+    (members dropped, 1 if it was removed else 0)."""
+    try:
+        manifest = image_collections._validated(json.loads(path.read_text(encoding="utf-8")))
+    except (ValueError, RecursionError):
+        return 0, 0
+    if manifest["format"] != 2:
+        return 0, 0
+    kept: dict[str, None] = {}                  # ordered, so the first is kept
+    dropped = 0
+    for member in manifest["members"]:
+        local = id_map.get(member, member if member in contained else None)
+        if local is None:
+            dropped += 1
+        else:
+            kept.setdefault(local)
+    if list(kept) == manifest["members"]:
+        return 0, 0
+    if not kept:
+        path.unlink()
+        return dropped, 1
+    atomic.write_text(path, json.dumps({"format": 2, "members": list(kept)}, indent=2) + "\n")
+    return dropped, 0
+
+
 def _projection(meta: _ObjectMeta, scope: str) -> dict:
     """`meta` as a projection in the final `scope` -- the bundle's own scope
     renamed, which is the only one `_meta_of` kept."""
@@ -728,7 +900,7 @@ def import_bundle(path: Path) -> str:
         manifest = _read_manifest(z, infos)
         members = _world_members(infos, manifest["format"])
         metas = _read_objects(z, members, manifest["world_id"])
-        _check_collections(z, members)
+        _check_collections(z, members, manifest["format"])
         # The work directory is the context manager's to name and to remove.
         # It used to be this function's, held in the same name as the world's
         # slug -- which the slug then overwrote, so the cleanup `rmtree`'d a
@@ -741,6 +913,7 @@ def import_bundle(path: Path) -> str:
             # bundle id -> local id, for every object.
             id_map = {bid: local[m.blob_sha] for bid, m in metas.items()}
             _contain_refs(staging, id_map, set(local.values()))
+            _contain_manifests(staging, id_map, set(local.values()))
             wid = uniquify(base, lambda c: worlds_paths.world_root(c).exists())
             if wid != manifest["world_id"]:
                 worlds_staging.repoint_urls(staging, manifest["world_id"], wid)
