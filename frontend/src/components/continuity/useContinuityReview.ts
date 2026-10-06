@@ -36,6 +36,25 @@ export const NO_MODEL_NOTE =
   "No model connection — findings are listed without a suggested decision.";
 /** What a failed sweep still did: persist 1 landed before the model call. */
 export const FAILED_NOTE = "The model check did not finish — basic findings are listed.";
+/** A sweep that saved nothing: the start was refused, or persist 1 was. */
+export const NOT_SAVED_NOTE = "The refresh did not finish — nothing it found was saved.";
+/** A failure that does not say which of the two it was. */
+export const UNFINISHED_NOTE = "The refresh did not finish.";
+
+/** The note for a failed Refresh (§26). A failed reconcile run's `error`
+ *  carries `saved` -- whether persist 1 landed -- and `sweep`
+ *  (`routes/continuity._reconcile_work`). An `ApiError` with no `sweep` and a
+ *  4xx is the start's own refusal (409 `busy` while the store moves, 404), so
+ *  no sweep ran. Anything else -- a poll that gave up, a cancelled run, no
+ *  answer at all -- may or may not have saved, and says neither. */
+export function failedNote(err: unknown): string {
+  const body = err instanceof ApiError ? err.body : undefined;
+  if (body?.saved === true) return FAILED_NOTE;
+  if (body?.saved === false) return NOT_SAVED_NOTE;
+  const refused = err instanceof ApiError && body?.sweep === undefined
+    && err.status < 500 && err.kind !== "cancelled";
+  return refused ? NOT_SAVED_NOTE : UNFINISHED_NOTE;
+}
 
 type Current = { fingerprint: string; records: CandidateRecord[] };
 
@@ -119,7 +138,8 @@ export function useContinuityReview(cid: string, epoch: number,
   const reread = useCallback(() => setNonce((n) => n + 1), []);
 
   /** Wait on a sweep this client did not start, then re-read, whatever it
-   *  ended as: a failed sweep still landed its deterministic findings. */
+   *  ended as: a sweep that failed after persist 1 still landed its
+   *  deterministic findings. */
   const follow = useCallback((handle: RunHandle) => {
     const signal = control.current?.signal;
     if (!signal || signal.aborted || latch.current) return;
@@ -173,9 +193,9 @@ export function useContinuityReview(cid: string, epoch: number,
         if (signal.aborted) return;
         setRefreshNote(outcome.result
           ? (outcome.result.llm === "off" ? NO_MODEL_NOTE : null)
-          : `${FAILED_NOTE} ${errorText(outcome.error)}`);
-        // Landed or failed alike: persist 1 lands before the model is asked.
-        // What a 409 laid over the last read is the sweep's to answer now: it
+          : `${failedNote(outcome.error)} ${errorText(outcome.error)}`);
+        // Landed or failed alike, re-read: a failure after persist 1 still
+        // landed its findings, and one before it changed nothing. What a 409 laid over the last read is the sweep's to answer now: it
         // re-found each finding against the records as they are, and voided
         // any proposal whose evidence moved.
         setOverrides({});

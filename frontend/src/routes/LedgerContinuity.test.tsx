@@ -240,16 +240,52 @@ test("an adopted incremental sweep that failed also runs once more", async () =>
 
 test("a failed refresh still re-reads and explains", async () => {
   (api.reconcileContinuity as any).mockRejectedValue(new ApiError(
-    409, "continuity.json is malformed; nothing this sweep found was saved", "malformed",
-    { kind: "malformed", sweep: "full" }));
+    502, "the reconciliation check returned no readable answer", "undecodable",
+    { kind: "undecodable", sweep: "full", saved: true }));
   renderLedger();
   await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(1));
   fireEvent.click(column().getByRole("button", { name: "Refresh continuity review" }));
   expect(await column().findByText(/The model check did not finish — basic findings are listed\./))
-    .toHaveTextContent("continuity.json is malformed; nothing this sweep found was saved");
+    .toHaveTextContent("the reconciliation check returned no readable answer");
   await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
   // A failed full sweep is not adopted-incremental: one call, never a retry.
   expect(api.reconcileContinuity).toHaveBeenCalledTimes(1);
+});
+
+// §26: "basic findings are listed" is true only when persist 1 landed, which
+// the run's `error.saved` says. A refusal of the start ran no sweep at all.
+test.each([
+  ["a refused start", new ApiError(
+    409, "the storage location is being changed; try again", "busy",
+    { kind: "busy", detail: "the storage location is being changed; try again" }),
+   "The refresh did not finish — nothing it found was saved.",
+   "the storage location is being changed; try again"],
+  ["a busy persist 1", new ApiError(
+    409, "another grimoire process is editing this campaign", "busy",
+    { kind: "busy", sweep: "full", saved: false }),
+   "The refresh did not finish — nothing it found was saved.",
+   "another grimoire process is editing this campaign"],
+  ["an io persist 1", new ApiError(
+    500, "disk full", "io", { kind: "io", sweep: "full", saved: false }),
+   "The refresh did not finish — nothing it found was saved.", "disk full"],
+  ["a malformed continuity.json", new ApiError(
+    409, "continuity.json is malformed; nothing this sweep found was saved", "malformed",
+    { kind: "malformed", sweep: "full", saved: false }),
+   "The refresh did not finish — nothing it found was saved.",
+   "continuity.json is malformed; nothing this sweep found was saved"],
+  ["a model call that failed after persist 1", new ApiError(
+    502, "connection reset", "network", { kind: "network", sweep: "full", saved: true }),
+   "The model check did not finish — basic findings are listed.", "connection reset"],
+  ["a run that could not be followed", new TypeError("Failed to fetch"),
+   "The refresh did not finish.", "TypeError: Failed to fetch"],
+])("%s says what it saved", async (_name, err, note, detail) => {
+  (api.reconcileContinuity as any).mockRejectedValue(err);
+  renderLedger();
+  await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(1));
+  fireEvent.click(column().getByRole("button", { name: "Refresh continuity review" }));
+  const shown = await column().findByText((text) => text.startsWith("The "), {
+    selector: "p.field-hint" });
+  expect(shown.textContent).toBe(`${note} ${detail}`);
 });
 
 test("refresh is enabled with no connection, and says what it did", async () => {
