@@ -690,6 +690,80 @@ def test_a_full_refresh_keeps_refs_left_pending_for_its_follow_on(client):
     assert TOUCHED in requests[1]["messages"][1]["content"]
 
 
+# A follow-on pass that fails at its own persist 1 still leaves the first
+# pass's findings listed: `saved` stays true, `follow_on` says which pass
+# failed, and its detail does not claim the whole sweep saved nothing.
+
+
+def _follow_on_refresh(client, cid: str) -> None:
+    client.app.state.runs.pend_touched(runs.campaign_subject(cid), {LEDGER})
+
+
+def test_a_follow_on_pass_refused_by_a_malformed_file_keeps_the_first_pass(
+        client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    _install(client, from_entries([_entry(_reply())]))
+    _follow_on_refresh(client, cid)
+    real = continuity_routes.reconcile.persist_proposals
+
+    def then_garble(*args, **kwargs):
+        written = real(*args, **kwargs)
+        _garble(cid)  # between the two passes
+        return written
+
+    monkeypatch.setattr(continuity_routes.reconcile, "persist_proposals", then_garble)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "failed", run
+    error = run["error"]
+    assert (error["kind"], error["saved"], error["follow_on"]) == ("malformed", True, True)
+    assert "nothing this sweep found was saved" not in error["detail"]
+    assert "follow-on pass" in error["detail"]
+    assert PAIR in _records(cid)
+
+
+def test_a_follow_on_pass_refused_at_its_persist_1_keeps_the_first_pass(
+        client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    _install(client, from_entries([_entry(_reply())]))
+    _follow_on_refresh(client, cid)
+    monkeypatch.setattr(continuity_routes, "_PERSIST_ATTEMPTS", 1)
+    real = continuity_routes.reconcile.persist_found
+    calls = []
+
+    def second_refused(*args, **kwargs):
+        calls.append(1)
+        if len(calls) > 1:
+            raise store.locks.StoreBusy("x", "campaign")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(continuity_routes.reconcile, "persist_found", second_refused)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "failed", run
+    error = run["error"]
+    assert (error["kind"], error["saved"], error["follow_on"]) == ("busy", True, True)
+    assert error["sweep"] == "full"
+
+
+def test_a_first_pass_failure_is_not_a_follow_on(client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    _install(client, from_entries([_entry("I think they are the same.")]))
+    _follow_on_refresh(client, cid)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert (run["error"]["kind"], run["error"]["follow_on"]) == ("undecodable", False)
+
+
 @pytest.mark.reconcile
 def test_schedule_reconcile_never_raises(client, monkeypatch, caplog):
     """§11.1: the save response never depends on the sweep."""

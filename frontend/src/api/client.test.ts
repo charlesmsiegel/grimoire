@@ -1,4 +1,4 @@
-import { api, ApiError, invalidateConfigCache } from "./client";
+import { api, ApiError, invalidateConfigCache, RefreshRefused } from "./client";
 import { onCampaignsChanged, onConfigChanged } from "../appEvents";
 import type { LocalizeEvent } from "./stream";
 import { THUMB_REV } from "./thumbs";
@@ -1915,6 +1915,36 @@ test("the start carries an attempt id, so a duplicate delivery is not paid for t
 
   const init = fetchMock.mock.calls[0][1] as { headers: Record<string, string> };
   expect(init.headers["X-Grimoire-Attempt"]).toBeTruthy();
+});
+
+test("a Refresh refused at its start says so; a run gone from its poll does not", async () => {
+  // Both are a 4xx with no `sweep`, but only the POST's refusal ran nothing:
+  // a poll's 404 is a run reaped or a server restarted, after it may have
+  // saved its findings (§26).
+  globalThis.fetch = vi.fn().mockResolvedValueOnce({
+    ok: false, status: 409,
+    json: async () => ({ kind: "busy", detail: "the storage location is being changed" }),
+  });
+  const refused = await api.reconcileContinuity("run").catch((e: unknown) => e);
+  expect(refused).toBeInstanceOf(RefreshRefused);
+  expect((refused as ApiError).kind).toBe("busy");
+
+  vi.useFakeTimers();
+  try {
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(draftRunResponse("running", { kind: "continuity-reconcile" }))
+      .mockResolvedValueOnce({ ok: false, status: 404,
+                               json: async () => ({ detail: "no such run for this subject",
+                                                    kind: "run_gone" }) });
+    const gone = api.reconcileContinuity("run").catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(5000);
+    const err = await gone;
+    expect(err).toBeInstanceOf(ApiError);
+    expect(err).not.toBeInstanceOf(RefreshRefused);
+    expect((err as ApiError).kind).toBe("run_gone");
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("a failed draft raises the failure the synchronous route used to raise", async () => {

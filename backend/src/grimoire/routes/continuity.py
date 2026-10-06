@@ -82,6 +82,8 @@ _UNDECODABLE = "the reconciliation check returned no readable answer"
 _MALFORMED = "continuity.json is malformed; nothing this sweep found was saved"
 #: The same refusal at persist 2, when persist 1's findings already stand.
 _MALFORMED_PROPOSALS = "continuity.json is malformed; the model's suggestions were not saved"
+#: The same refusal before a follow-on pass's persist 1: the first pass's stand.
+_MALFORMED_FOLLOW_ON = "continuity.json is malformed; nothing the follow-on pass found was saved"
 #: Every decision word once, in vocabulary order: the log row counts each.
 _WORDS = tuple(dict.fromkeys(w for words in reconcile.DECISIONS.values() for w in words))
 
@@ -605,10 +607,12 @@ def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -
 
 
 async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
-                      touched: tuple[str, ...], progress: dict) -> dict:
+                      touched: tuple[str, ...], progress: dict,
+                      malformed: str = _MALFORMED) -> dict:
     """Steps 1-7 of one pass (§11.1), as the run's outcome. Sets
     ``progress["saved"]`` once persist 1 has landed: from then on the section
-    lists what this sweep found, whatever the rest of the run does (§26)."""
+    lists what this sweep found, whatever the rest of the run does (§26).
+    `malformed` is what a refusal before persist 1 says it lost."""
     sweep = await run_in_threadpool(reconcile.discover, cid,
                                     stamp=reconcile.generation(run.id),
                                     full=full, touched=touched)
@@ -619,11 +623,11 @@ async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
 
     proposals: dict = {}
     if sweep.continuity == "malformed":
-        outcome: dict | None = _malformed(result)
+        outcome: dict | None = _malformed(result, malformed)
     else:
         first = await _persist(run, lambda: reconcile.persist_found(cid, sweep,
                                                                     stillborn=stillborn))
-        outcome = _stopped(first, result)
+        outcome = _stopped(first, result, malformed)
     if outcome is None:
         progress["saved"] = True
         outcome, proposals = await _adjudicate(run, cid, client, sweep, result, stillborn)
@@ -647,7 +651,9 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     incremental pass inside this run, since a live run can neither adopt a
     successor nor be told it finished. Its result keeps the first pass's
     `sweep` (a Refresh that absorbed an End Scene still reads ``full``) with
-    `follow_on` and the last pass's counts."""
+    `follow_on` and the last pass's counts. A failure from then on sets
+    ``progress["follow_on"]``: the first pass's findings stand whatever it
+    was, so the failure is the follow-on pass's alone."""
     refs = set(touched) if full else set(touched) | _take_touched(app, cid)
     outcome = await _sweep_pass(run, cid, client, full=full, touched=tuple(sorted(refs)),
                                 progress=progress)
@@ -657,8 +663,9 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     if not more:
         return outcome
     first = outcome["result"]["sweep"]
+    progress["follow_on"] = True
     follow = await _sweep_pass(run, cid, client, full=False, touched=tuple(sorted(more)),
-                               progress=progress)
+                               progress=progress, malformed=_MALFORMED_FOLLOW_ON)
     out = {**follow, "result": {**(follow.get("result") or {}), "sweep": first,
                                 "follow_on": True}}
     if follow.get("error"):
@@ -674,8 +681,10 @@ async def _reconcile_work(app, run, cid: str, client: LLMClient, *, full: bool,
     Every failed outcome's `error` also carries `saved`: whether persist 1
     landed, so the findings listed are this sweep's. The kind alone cannot say
     it -- `busy`, `io` and `malformed` each come from either persist -- and the
-    Refresh note must not claim findings a refused persist never wrote."""
-    progress = {"saved": False}
+    Refresh note must not claim findings a refused persist never wrote. And
+    `follow_on`: whether it was the follow-on pass that failed, after the first
+    pass landed -- then nothing about the failure is the first pass's."""
+    progress = {"saved": False, "follow_on": False}
     try:
         outcome = await _passes(app, run, cid, client, full=full, touched=touched,
                                 progress=progress)
@@ -685,7 +694,8 @@ async def _reconcile_work(app, run, cid: str, client: LLMClient, *, full: bool,
                    "error": {"kind": "run_failed", "detail": str(exc) or type(exc).__name__,
                              "status": 500, "sweep": "full" if full else "incremental"}}
     if outcome["state"] == "failed":
-        outcome["error"] = {**outcome["error"], "saved": progress["saved"]}
+        outcome["error"] = {**outcome["error"], "saved": progress["saved"],
+                            "follow_on": progress["follow_on"]}
     return outcome
 
 

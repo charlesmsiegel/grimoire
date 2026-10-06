@@ -5,7 +5,7 @@ import { MemoryRouter, Route, Routes, useNavigate } from "react-router-dom";
 
 vi.mock("../api/client", async () =>
   (await import("../testkit/ledgerMocks")).ledgerApiMock());
-import { api, ApiError } from "../api/client";
+import { api, ApiError, RefreshRefused } from "../api/client";
 import type {
   CandidateRecord, ContinuityCandidate, ContinuityCandidates, ContinuityState,
 } from "../api/client";
@@ -253,9 +253,10 @@ test("a failed refresh still re-reads and explains", async () => {
 });
 
 // §26: "basic findings are listed" is true only when persist 1 landed, which
-// the run's `error.saved` says. A refusal of the start ran no sweep at all.
+// the run's `error.saved` says. A refusal of the start ran no sweep at all; a
+// run that cannot be read back (reaped, or the server restarted) says neither.
 test.each([
-  ["a refused start", new ApiError(
+  ["a refused start", new RefreshRefused(
     409, "the storage location is being changed; try again", "busy",
     { kind: "busy", detail: "the storage location is being changed; try again" }),
    "The refresh did not finish — nothing it found was saved.",
@@ -278,6 +279,16 @@ test.each([
    "The model check did not finish — basic findings are listed.", "connection reset"],
   ["a run that could not be followed", new TypeError("Failed to fetch"),
    "The refresh did not finish.", "TypeError: Failed to fetch"],
+  // A poll's 404 has the shape a refusal would, but the run had started.
+  ["a run reaped before it was read back", new ApiError(
+    404, "no such run for this subject", "run_gone",
+    { kind: "run_gone", detail: "no such run for this subject" }),
+   "The refresh did not finish.", "no such run for this subject"],
+  ["a follow-on pass that failed", new ApiError(
+    409, "continuity.json is malformed; nothing the follow-on pass found was saved",
+    "malformed", { kind: "malformed", sweep: "full", saved: true, follow_on: true }),
+   "The follow-on pass did not finish — the first pass's findings are listed.",
+   "continuity.json is malformed; nothing the follow-on pass found was saved"],
 ])("%s says what it saved", async (_name, err, note, detail) => {
   (api.reconcileContinuity as any).mockRejectedValue(err);
   renderLedger();
