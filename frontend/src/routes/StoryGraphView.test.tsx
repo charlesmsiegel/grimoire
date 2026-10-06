@@ -100,6 +100,77 @@ test("filter presets: lens rows switch the preset and write ?lens=", async () =>
   expect(param("lens")).toBe("story");
 });
 
+test("switching the lens away and back restores its Show toggles (Decision 19)", async () => {
+  await ready();
+  const actors = () => within(column()).getByRole("checkbox", { name: "Actors" });
+  fireEvent.click(actors());
+  expect(actors()).toBeChecked();
+  expect(nodeButton("characters:mara")).toBeInTheDocument();
+  fireEvent.click(within(column()).getByRole("button", { name: "Cast" }));
+  fireEvent.click(within(column()).getByRole("button", { name: "Story" }));
+  expect(actors()).not.toBeChecked();
+  expect(queryNode("characters:mara")).not.toBeInTheDocument();
+});
+
+function Back() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate(-1)}>back</button>;
+}
+
+test("a lens change pushes history and a node pick replaces it (Decision 19)", async () => {
+  render(
+    <ShellPayloadProvider value={{ status: "ready", payload: SHELL, retry, cid: "c1" }}>
+      <MemoryRouter initialEntries={["/elsewhere", "/campaigns/c1/graph"]} initialIndex={1}>
+        <Back />
+        <LocationProbe />
+        <Routes>
+          <Route path="/campaigns/:cid/graph" element={<StoryGraphView />} />
+          <Route path="/elsewhere" element={<p>elsewhere</p>} />
+        </Routes>
+      </MemoryRouter>
+    </ShellPayloadProvider>);
+  await screen.findByTestId("story-graph-drawing");
+  fireEvent.click(within(column()).getByRole("button", { name: "Cast" }));
+  fireEvent.click(nodeButton("characters:mara"));
+  fireEvent.click(nodeButton("pcs:seraphine"));
+  expect(param("lens")).toBe("cast");
+  expect(param("node")).toBe("pcs:seraphine");
+
+  // One Back undoes the lens change and both picks with it: the picks
+  // replaced the Cast entry, and the lens pushed it over the Story one.
+  fireEvent.click(screen.getByRole("button", { name: "back" }));
+  expect(screen.queryByText("elsewhere")).not.toBeInTheDocument();
+  expect(within(column()).getByRole("button", { name: "Story" }))
+    .toHaveAttribute("aria-pressed", "true");
+  expect(param("lens")).toBeNull();
+  expect(param("node")).toBeNull();
+});
+
+test("clearing the arc filter pushes history, so Back brings the filter back", async () => {
+  render(
+    <ShellPayloadProvider value={{ status: "ready", payload: SHELL, retry, cid: "c1" }}>
+      <MemoryRouter initialEntries={["/elsewhere", "/campaigns/c1/graph?arc=thread%3Asaltmarch-toll"]}
+                    initialIndex={1}>
+        <Back />
+        <LocationProbe />
+        <Routes>
+          <Route path="/campaigns/:cid/graph" element={<StoryGraphView />} />
+          <Route path="/elsewhere" element={<p>elsewhere</p>} />
+        </Routes>
+      </MemoryRouter>
+    </ShellPayloadProvider>);
+  await screen.findByTestId("story-graph-drawing");
+  expect(screen.getByText(/^Filtered to/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Show the whole graph" }));
+  expect(param("arc")).toBeNull();
+  expect(screen.queryByText(/^Filtered to/)).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "back" }));
+  expect(screen.queryByText("elsewhere")).not.toBeInTheDocument();
+  expect(param("arc")).toBe("thread:saltmarch-toll");
+  expect(screen.getByText(/^Filtered to/)).toBeInTheDocument();
+});
+
 test("show toggles add actors and locations; merged records and candidates stay hidden until shown",
      async () => {
   await ready();
