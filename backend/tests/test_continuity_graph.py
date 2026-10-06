@@ -18,10 +18,20 @@ from grimoire.store import (
     calendars,
     campaigns,
     chronicle,
+    commitments,
     overlay,
+    plot,
     relationships,
 )
-from grimoire.store.continuity import canon, drivers, effective, graph, pressure
+from grimoire.store.continuity import (
+    canon,
+    drivers,
+    effective,
+    graph,
+    involvement,
+    pressure,
+    review,
+)
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 from grimoire.store.scenes import paths as scenes_paths
 from tests.test_continuity_pressure import (
@@ -419,3 +429,197 @@ def test_a_garbled_appearance_record_is_reported(monkeypatch, tmp_path, body):
     g = graph.build(cid)
     assert _pairs(g, "appeared_in") == {("characters:winifred", f"scene:{s2}")}
     assert "chronicle" in g["omitted"]
+
+
+# ---- threads and commitments ------------------------------------------------
+
+
+MAP = "thread:mara-s-map"
+CHART = "thread:winifred-s-chart"
+OATH = "commitment:mara-s-oath"
+VOW = "commitment:seraphine-s-vow"
+
+_RECORD_EDGES = ("opened_in", "advanced_in", "touched_in", "closed_in", "resolved_in")
+
+
+def _scenes(cid: str, *titles: str) -> list[str]:
+    return [store.scenes.create_scene(cid, t) for t in titles]
+
+
+def _thread(cid: str, pid: str, title: str, *scenes: str, status: str = "open") -> None:
+    for i, sid in enumerate(scenes):
+        plot.set_movement(cid, pid, title, status, f"{title}, beat {i + 1}.", sid)
+
+
+def _close(cid: str, pid: str, sid: str) -> None:
+    plot.set_movement(cid, pid, "", "closed", "", sid)
+
+
+def _oath(cid: str, mid: str, title: str, *scenes: str, due: str | None = None) -> None:
+    for i, sid in enumerate(scenes):
+        commitments.set_movement(cid, mid, title, "promise", "open", due,
+                                 f"{title}, beat {i + 1}.", sid)
+
+
+def _from(g: dict, ref: str, kind: str) -> set[str]:
+    return {e["to"] for e in _edges(g, kind) if e["from"] == ref}
+
+
+def _records(g: dict, kind: str) -> list[dict]:
+    return [n for n in g["nodes"] if n["kind"] == kind]
+
+
+@pytest.mark.parametrize("closing", ["closed", "Closed"])
+def test_movement_edges_opened_advanced_closed(monkeypatch, tmp_path, closing):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2, s3 = _scenes(cid, "Saltmarch harbour", "Mara's map", "Winifred's chart")
+    _thread(cid, "mara-s-map", "Mara's map", s1, s1, s2, s3)
+    _close(cid, "mara-s-map", s3)
+    if closing != "closed":
+        data = plot.read(cid)
+        data["mara-s-map"]["status"] = closing
+        plot._path(cid).write_text(json.dumps(data), encoding="utf-8")
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s2)
+
+    g = graph.build(cid)
+    assert _from(g, MAP, "opened_in") == {f"scene:{s1}"}
+    assert _from(g, MAP, "advanced_in") == {f"scene:{s2}", f"scene:{s3}"}
+    assert _from(g, MAP, "closed_in") == {f"scene:{s3}"}
+    assert _from(g, CHART, "opened_in") == {f"scene:{s2}"}
+    assert _from(g, CHART, "closed_in") == set()
+    node = _by_id(g)[MAP]
+    assert (node["kind"], node["label"], node["status"], node["live"]) == (
+        "thread", "Mara's map", closing, False)
+    assert node["merged_into"] is None and node["aliases"] == []
+    assert node["findings"] == []
+    assert _by_id(g)[CHART]["live"] is True
+    edge = _edges(g, "opened_in")[0]
+    assert edge["source"] == "structural"
+    assert edge["id"] == graph.edge_id("opened_in", edge["from"], edge["to"])
+    assert g["omitted"] == []
+
+
+def test_commitment_movements_are_touched_and_resolved(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2 = _scenes(cid, "Saltmarch harbour", "Mara's map")
+    _oath(cid, "mara-s-oath", "Mara's oath", s1, s1, s2)
+    commitments.set_movement(cid, "mara-s-oath", "", "promise", "fulfilled", None, "", s2)
+
+    g = graph.build(cid)
+    assert _from(g, OATH, "opened_in") == {f"scene:{s1}"}
+    assert _from(g, OATH, "touched_in") == {f"scene:{s2}"}
+    assert _from(g, OATH, "resolved_in") == {f"scene:{s2}"}
+    assert _from(g, OATH, "advanced_in") == _from(g, OATH, "closed_in") == set()
+    node = _by_id(g)[OATH]
+    assert (node["kind"], node["status"], node["live"], node["commitment_kind"]) == (
+        "commitment", "fulfilled", False, "promise")
+    assert (node["due"], node["native"], node["fixed"], node["in_days"]) == ("", "", None, None)
+
+
+def test_a_first_beat_in_a_deleted_scene_opens_nothing(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2 = _scenes(cid, "Saltmarch harbour", "Mara's map")
+    _thread(cid, "mara-s-map", "Mara's map", s1, s2)
+    store.scenes.delete_scene(cid, s1)
+
+    g = graph.build(cid)
+    assert _from(g, MAP, "opened_in") == set()
+    assert _from(g, MAP, "advanced_in") == {f"scene:{s2}"}
+    assert not [e for e in g["edges"] if f"scene:{s1}" in (e["from"], e["to"])]
+
+
+def test_an_alias_source_is_a_merged_node_with_a_merged_into_edge(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2, s3 = _scenes(cid, "Saltmarch harbour", "Mara's map", "Winifred's chart")
+    _thread(cid, "mara-s-map", "Mara's map", s1, s2)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s3)
+    review.create_alias(cid, CHART, MAP)
+
+    g = graph.build(cid)
+    nodes = _by_id(g)
+    merged = nodes[CHART]
+    assert merged["merged_into"] == MAP
+    assert merged["focusable"] is False and merged["pressure"] is None
+    assert (merged["label"], merged["status"], merged["aliases"], merged["latest_beat"]) == (
+        "Winifred's chart", "open", [], "")
+    [edge] = _edges(g, "merged_into")
+    assert (edge["from"], edge["to"], edge["source"]) == (CHART, MAP, "alias")
+    assert edge["id"] == graph.edge_id("merged_into", CHART, MAP)
+    assert nodes[MAP]["aliases"] == [{"ref": CHART, "title": "Winifred's chart",
+                                      "status": "open"}]
+    assert _from(g, MAP, "advanced_in") == {f"scene:{s2}", f"scene:{s3}"}
+    assert not [e for e in g["edges"] if e["kind"] in _RECORD_EDGES and e["from"] == CHART]
+
+
+def test_involves_edges_come_from_involvement_of(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    winifred, winifred_v = overlay.create_character(cid, "Winifred")
+    s1, s2, _s3, s4 = _scenes(cid, "Saltmarch harbour", "Mara's map", "Winifred's chart",
+                              "The coronation")
+    _seat(cid, s2, "characters", mara, mara_v)
+    _seat(cid, s4, "characters", winifred, winifred_v)
+    _thread(cid, "mara-s-map", "Mara's map", s1, s2)
+
+    g = graph.build(cid)
+    assert _from(g, MAP, "involves") == {f"characters:{mara}"}
+    refs = [n["id"] for n in g["nodes"] if n["kind"] in ("thread", "commitment")]
+    expected = {(ref, actor) for ref, row in involvement.of(cid, refs).items()
+                for actor in row["actors"]}
+    assert _pairs(g, "involves") == expected
+    assert _by_id(g)[f"characters:{mara}"]["label"] == "Mara"
+
+
+def test_focusable_is_exactly_the_chooser_driver_set(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    s1, s2 = _scenes(cid, "Saltmarch harbour", "Mara's map")
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _thread(cid, "winifred-s-chart", "Winifred's chart", s1)
+    _thread(cid, "saltmarch-eve", "Saltmarch Eve", s1)
+    _close(cid, "saltmarch-eve", s2)
+    review.create_alias(cid, CHART, MAP)
+    _oath(cid, "mara-s-oath", "Mara's oath", s1)
+    _oath(cid, "seraphine-s-vow", "Seraphine's vow", s1)
+    commitments.set_movement(cid, "seraphine-s-vow", "", "promise", "fulfilled", None, "", s2)
+
+    g = graph.build(cid)
+    focusable = {n["id"] for n in g["nodes"]
+                 if n["kind"] in ("thread", "commitment") and n["focusable"]}
+    chooser = {d["ref"] for d in drivers.snapshot(cid)["drivers"]
+               if d["kind"] in ("thread", "commitment")}
+    assert focusable == chooser == {MAP, OATH}
+    assert {n["id"] for n in g["nodes"] if n["kind"] in ("thread", "commitment")} == {
+        MAP, CHART, "thread:saltmarch-eve", OATH, VOW}
+
+
+def test_record_pressure_is_the_driver_reading(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _oath(cid, "mara-s-oath", "Mara's oath", s1, due="2026-05-14")
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _close(cid, "mara-s-map", s1)
+
+    g = graph.build(cid)
+    oath = _by_id(g)[OATH]
+    friendly = calendars.friendly(_provider(cid), "2026-05-14")
+    assert oath["pressure"] == {"state": "due_soon", "in_days": 4, "friendly": friendly}
+    assert oath["due"] == "2026-05-14"
+    assert oath["fixed"] == F(cid, "2026-05-14") and oath["in_days"] == 4
+    assert (oath["native"], oath["friendly"]) == ("2026-05-14", friendly)
+    assert oath["focusable"] is True
+    assert _by_id(g)[MAP]["pressure"] is None
+
+
+def test_a_garbled_plot_costs_only_threads(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    (s1,) = _scenes(cid, "Saltmarch harbour")
+    _thread(cid, "mara-s-map", "Mara's map", s1)
+    _oath(cid, "mara-s-oath", "Mara's oath", s1)
+    plot._path(cid).write_text("{ no", encoding="utf-8")
+
+    g = graph.build(cid)
+    assert _records(g, "thread") == []
+    assert [n["id"] for n in _records(g, "commitment")] == [OATH]
+    assert _from(g, OATH, "opened_in") == {f"scene:{s1}"}
+    assert "plot" in g["omitted"]
+    assert [n["id"] for n in _scene_nodes(g)] == [f"scene:{s1}"]

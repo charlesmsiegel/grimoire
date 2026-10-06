@@ -13,9 +13,10 @@ pairs one writer's two files a moment apart, and calendar plugin code -- user
 code that can do anything, including wait -- must never run under that hold
 (spec §11.1; D's reconcile and B's drivers route keep the same rule).
 
-- (A) `_temporal`, outside the hold: the primary provider, `pressure.build`
-  and one `_probe` of the present through the provider (later the driver
-  snapshot and the event list), each of which can run plugin code.
+- (A) `_temporal`, outside the hold: the primary provider, `pressure.build`,
+  one `_probe` of the present through the provider and the chooser's
+  `drivers.snapshot` over that same pressure result (later the event list),
+  each of which can run plugin code.
 - (B) `_files`, inside one `best_effort_campaign_lock` hold: every campaign file
   the graph projects. Best effort, never `campaign_lock`, because a read that
   can raise `StoreBusy` is a new way for opening a page to fail (§19.7,
@@ -66,7 +67,7 @@ from typing import Any, TypeVar
 from .. import calendars, chronicle, fieldtext, locks, overlay, relationships
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
-from . import canon, involvement, pressure
+from . import canon, drivers, effective, involvement, pressure
 
 #: §20's node kinds: `canon.KIND_OF_PREFIX`'s kinds minus the two §19.2 leaves
 #: optional (groups, standing facts). The order is the payload's node order.
@@ -94,6 +95,21 @@ T = TypeVar("T")
 
 #: The two node kinds an actor token can name (`_actor_kind`).
 _ACTOR_KINDS = ("character", "pc")
+
+#: The two record kinds, each with the `PARTS` name of its own ledger.
+_RECORD_PARTS = (("thread", "plot"), ("commitment", "commitments"))
+
+#: Per record kind, the movement edge kinds (Decision 8): opened, moved, done.
+_MOVEMENTS = {"thread": ("opened_in", "advanced_in", "closed_in"),
+              "commitment": ("opened_in", "touched_in", "resolved_in")}
+
+#: A commitment's dated fields when it carries no deadline item.
+_UNDATED = {"native": "", "friendly": "", "fixed": None, "in_days": None}
+
+#: `drivers.snapshot`'s shape when it cannot be read: nothing is a driver, so
+#: nothing is offered as one.
+_NO_SNAPSHOT: dict = {"now": "", "friendly": "", "fixed": None, "matching": "basic",
+                      "drivers": [], "anchors": []}
 
 #: A feeling's three meters, each drawn as five pips: the ledger's and the
 #: case file's axes (`routes.campaigns.FEELING_AXES`, `casefile.FEELING_AXES`),
@@ -185,7 +201,12 @@ def _temporal(cid: str, omitted: set[str]) -> dict:
     native = fieldtext.text(p.get("now")) if isinstance(p, dict) else ""
     if provider is not None and native:
         _attempt(omitted, "calendar", _probe, None, provider, native)
-    return {"provider": provider, "pressure": p}
+    # The chooser's own read over the same pressure result the dated nodes
+    # use, so "Focus" and "Anchor" never offer a ref the chooser would drop.
+    snapshot: dict = _attempt(omitted, "calendar",
+                              lambda: drivers.snapshot(cid, pressure_result=p), _NO_SNAPSHOT)
+    return {"provider": provider, "pressure": p,
+            "snapshot": snapshot if isinstance(snapshot, dict) else _NO_SNAPSHOT}
 
 
 # ---- phase B: campaign files, inside one hold -------------------------------
@@ -195,8 +216,33 @@ def _scene_actors(cid: str, unread: set[str]) -> dict[str, set[str]]:
     return involvement.scene_actors(cid, unreadable=unread)
 
 
+def _all_unreadable() -> effective.Ledgers:
+    return effective.Ledgers(None, None, None, ["plot", "commitments", "events"])
+
+
+def _records(cid: str, ledgers: effective.Ledgers, omitted: set[str]) -> dict:
+    """The effective records per kind, the live canon, and `involvement.of`
+    over every canonical ref -- closed and resolved ones included."""
+    out: dict[str, dict] = {}
+    for kind, part in _RECORD_PARTS:
+        found: dict[str, dict] = _attempt(omitted, part, effective.records, {}, cid, kind)
+        out[kind] = found if isinstance(found, dict) else {}
+    live: dict[str, str] = _attempt(omitted, "continuity", effective.live_canon, {}, cid,
+                                    ledgers)
+    refs = [ref for kind, _ in _RECORD_PARTS for ref in out[kind]]
+    # `of` is the actor join; a failure there costs `involves` edges, which
+    # belong to the actor family's part.
+    involved: dict[str, dict] = _attempt(omitted, "chronicle", involvement.of, {}, cid, refs)
+    return {"records": out, "live": live if isinstance(live, dict) else {},
+            "involved": involved if isinstance(involved, dict) else {}}
+
+
 def _files(cid: str, omitted: set[str]) -> dict:
     with locks.best_effort_campaign_lock(cid):
+        ledgers: effective.Ledgers = _attempt(omitted, None, effective.Ledgers.load,
+                                              _all_unreadable(), cid)
+        omitted.update(ledgers.unreadable)
+        recs = _records(cid, ledgers, omitted)
         scenes: list[dict] = _attempt(omitted, "scenes", scenes_read.list_scenes, [], cid)
         chron: dict = _attempt(omitted, "chronicle", chronicle.read_chronicle, {}, cid)
         histories: dict[str, list[str]] = {}
@@ -215,7 +261,8 @@ def _files(cid: str, omitted: set[str]) -> dict:
     # Valid JSON of the wrong shape arrives without raising.
     return {"scenes": scenes, "chronicle": chron if isinstance(chron, dict) else {},
             "histories": histories, "actors": actors if isinstance(actors, dict) else {},
-            "relationships": rels if isinstance(rels, dict) else {}}
+            "relationships": rels if isinstance(rels, dict) else {},
+            "ledgers": ledgers, **recs}
 
 
 # ---- phase C: names, outside ------------------------------------------------
@@ -362,6 +409,109 @@ def _actor_parts(files: dict, names: dict[str, str]) -> tuple[list, list]:
     return [_actor_node(a, names) for a in sorted(actors)] + place_nodes, edges
 
 
+def _drivers_by_ref(temporal: dict) -> dict[str, dict]:
+    """The chooser's thread and commitment drivers, by ref."""
+    found = temporal["snapshot"].get("drivers")
+    return {d["ref"]: d for d in (found if isinstance(found, list) else ())
+            if isinstance(d, dict) and d.get("kind") in effective.ALIASABLE}
+
+
+def _deadline(temporal: dict, ref: str) -> dict:
+    """A commitment's dated fields from its own deadline item: the pressure
+    item whose subject it is and whose relation is not `after` (at most one)."""
+    p = temporal["pressure"]
+    items = p.get("items") if isinstance(p, dict) else None
+    for item in items if isinstance(items, list) else ():
+        if isinstance(item, dict) and item.get("subject") == ref \
+                and item.get("relation") != "after":
+            return {"native": fieldtext.text(item.get("native")),
+                    "friendly": fieldtext.text(item.get("friendly")),
+                    "fixed": _int_or_none(item.get("fixed")),
+                    "in_days": _int_or_none(item.get("in_days"))}
+    return dict(_UNDATED)
+
+
+def _record_node(kind: str, ref: str, rec: dict, temporal: dict,
+                 by_driver: dict[str, dict]) -> dict:
+    """A canonical thread or commitment: its pressure and `focusable` are the
+    chooser's driver reading, so a non-driver is never offered as one."""
+    status = rec.get("status")
+    driver = by_driver.get(ref)
+    reading = driver.get("pressure") if driver is not None else None
+    node = {"id": ref, "kind": kind, "label": fieldtext.text(rec.get("title")),
+            "status": status, "live": effective.is_live(kind, status), "merged_into": None,
+            "aliases": rec.get("aliases") or [],
+            "latest_beat": fieldtext.text(rec.get("latest_beat")),
+            "pressure": dict(reading) if isinstance(reading, dict) else None,
+            "focusable": driver is not None, "findings": []}
+    if kind == "commitment":
+        node.update(commitment_kind=fieldtext.text(rec.get("kind")),
+                    due=fieldtext.text(rec.get("due")), **_deadline(temporal, ref))
+    return node
+
+
+def _merged_nodes(kind: str, ref: str, rec: dict) -> tuple[list, list]:
+    """Each alias source as its own node, merged into `ref`: title and status
+    only, since the canonical answers for the group."""
+    nodes, edges = [], []
+    for alias in rec.get("aliases") or ():
+        src = alias["ref"]
+        node = {"id": src, "kind": kind, "label": fieldtext.text(alias.get("title")),
+                "status": alias.get("status"),
+                "live": effective.is_live(kind, alias.get("status")), "merged_into": ref,
+                "aliases": [], "latest_beat": "", "pressure": None, "focusable": False,
+                "findings": []}
+        if kind == "commitment":
+            node.update(commitment_kind="", due="", **_UNDATED)
+        nodes.append(node)
+        edges.append(_edge("merged_into", src, ref, source="alias"))
+    return nodes, edges
+
+
+def _movements(kind: str, ref: str, rec: dict, listed: set[str]) -> list[dict]:
+    """Decision 8: `opened_in` the first merged beat's scene; the moved kind
+    to every other beat scene; the done kind to `last_scene` once not live.
+    Only listed scenes are targets, and a first beat in a deleted scene opens
+    nothing rather than moving the opening to the next beat."""
+    opened, moved, done = _MOVEMENTS[kind]
+    scenes = [fieldtext.text(b.get("scene")) for b in rec.get("beats") or ()
+              if isinstance(b, dict)]
+    edges = []
+    first = scenes[0] if scenes else ""
+    if first in listed:
+        edges.append(_edge(opened, ref, f"scene:{first}"))
+    edges += [_edge(moved, ref, f"scene:{sid}")
+              for sid in dict.fromkeys(scenes) if sid != first and sid in listed]
+    last = fieldtext.text(rec.get("last_scene"))
+    if not effective.is_live(kind, rec.get("status")) and last in listed:
+        edges.append(_edge(done, ref, f"scene:{last}"))
+    return edges
+
+
+def _involves(ref: str, files: dict, names: dict[str, str]) -> tuple[list, list]:
+    row = files["involved"].get(ref)
+    actors = row.get("actors") if isinstance(row, dict) else None
+    tokens = [a for a in (actors if isinstance(actors, list) else ())
+              if _actor_kind(a) is not None]
+    return [_actor_node(a, names) for a in tokens], [_edge("involves", ref, a) for a in tokens]
+
+
+def _record_parts(files: dict, temporal: dict, names: dict[str, str]) -> tuple[list, list]:
+    """Threads and commitments: canonical and merged nodes, movements,
+    merges and involvement."""
+    listed = {row["id"] for row in files["scenes"]}
+    by_driver = _drivers_by_ref(temporal)
+    nodes, edges = [], []
+    for kind, _ in _RECORD_PARTS:
+        for ref, rec in files["records"][kind].items():
+            nodes.append(_record_node(kind, ref, rec, temporal, by_driver))
+            merged_nodes, merged_edges = _merged_nodes(kind, ref, rec)
+            actor_nodes, actor_edges = _involves(ref, files, names)
+            nodes += merged_nodes + actor_nodes
+            edges += merged_edges + _movements(kind, ref, rec, listed) + actor_edges
+    return nodes, edges
+
+
 def _node_key(node: dict) -> tuple:
     kind = node["kind"]
     return (NODE_KINDS.index(kind), node.get("order", 0) if kind == "scene" else 0, node["id"])
@@ -376,6 +526,7 @@ def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
     families: tuple[tuple[str, Callable[..., tuple[list, list]], tuple], ...] = (
         ("scenes", _scene_nodes, (temporal, files, omitted)),
         ("chronicle", _actor_parts, (files, names)),
+        ("plot", _record_parts, (files, temporal, names)),
     )
     nodes: dict[str, dict] = {}
     edges: dict[str, dict] = {}
