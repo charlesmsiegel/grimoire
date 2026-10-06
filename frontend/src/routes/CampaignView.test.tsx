@@ -8942,6 +8942,26 @@ test("⑂ whose relist fails says so instead of opening a sibling the list lacks
   expect(here()).toBe("/campaigns/run/scenes/s1");
 });
 
+test("⑂ is held while its branch request is in flight, so a double click makes one", async () => {
+  let finish: () => void = () => {};
+  (api.branchScene as any).mockImplementation(() => new Promise((resolve) => {
+    finish = () => resolve({ id: "s1-b", scene: { meta: {}, messages: [] } });
+  }));
+  (api.listScenes as any).mockResolvedValue(WITH_SIBLING);
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  const button = await screen.findByRole("button", { name: "Branch from message 1" });
+  fireEvent.click(button);
+  await waitFor(() => expect(api.branchScene).toHaveBeenCalledTimes(1));
+  expect(screen.getByRole("button", { name: "Branch from message 1" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Branch from message 1" }));
+  await act(async () => finish());
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+  expect(api.branchScene).toHaveBeenCalledTimes(1);
+});
+
 test("⑂ on an absorbed scene forks the campaign at that post", async () => {
   (api.listScenes as any).mockResolvedValue([{ ...ONE_SCENE[0], done: true }]);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [

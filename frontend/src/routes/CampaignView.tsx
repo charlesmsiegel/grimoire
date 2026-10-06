@@ -2351,21 +2351,29 @@ export default function CampaignView({ ready }: { ready: boolean }) {
    *  campaign's files, which only a copy of the campaign can hold twice -- so
    *  there it is the fork dialog, cut at this post. */
   async function branchFrom(index: number) {
-    if (!activeId) return;
+    if (!activeId || rolling) return;
     if (activeDone) {
       await forkAtScene(activeId, index);
       return;
     }
-    let made;
+    // The latch every other write to this transcript takes, held until the
+    // reader is on the sibling: it disables ⑂ (and the gutter beside it), so a
+    // double click makes one branch rather than two (codex review, PR #458).
+    const release = takeRollLatch(activeId);
     try {
-      made = await api.branchScene(cid, activeId, index);
-    } catch (err) {
-      // Not retryable: the banner's Retry generates, and a branch is not a
-      // generation -- `forkAtScene`'s reason.
-      fail(err, false);
-      return;
+      let made;
+      try {
+        made = await api.branchScene(cid, activeId, index);
+      } catch (err) {
+        // Not retryable: the banner's Retry generates, and a branch is not a
+        // generation -- `forkAtScene`'s reason.
+        fail(err, false);
+        return;
+      }
+      await openBranch(made.id);
+    } finally {
+      release();
     }
-    await openBranch(made.id);
   }
 
   /** Open a sibling a branch has just created -- after the relist that lists
