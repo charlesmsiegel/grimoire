@@ -8,6 +8,10 @@ whole contract: a to-do list that can go stale is worse than no to-do list,
 because the reader learns to distrust it and then cannot use the one entry that
 mattered. Nothing here is stored, cached, or written down — the list is
 recomputed on every read, from the same stores the rest of the app reads.
+One exception, read-only: the continuity chores read the reconciliation cache
+(`continuity_candidates.json`) through `continuity.pending`'s live filter in the
+same request — suppressed, stale, merged-away and already-closed findings never
+count.
 
 **Ignoring is real.** An ignored chore is not counted anywhere: not in the
 rail's badge, not on the world overview's checklist, not in this list's own
