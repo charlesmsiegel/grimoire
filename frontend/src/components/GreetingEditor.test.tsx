@@ -1189,6 +1189,27 @@ test("collection members expose subject controls for the selected picture", asyn
   }
 });
 
+test("format 2 collection members expose subject controls keyed by member URL", async () => {
+  const id = "a".repeat(32);
+  const member = `/api/worlds/realm/image-collections/${id}/members/2?v=${"c".repeat(64)}`;
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
+    json: async () => ({ format: 2, members: [member] }) }));
+  vi.mocked(api.readGreeting).mockResolvedValue({
+    ...greetingFixture("open", "Open"),
+    body: `![Scene](/api/worlds/realm/image-collections/${id}/image)`,
+  } as any);
+  try {
+    renderGreetings({ selected: "open" });
+    expect(await screen.findByAltText("Scene")).toHaveAttribute("src", member);
+    fireEvent.click(await screen.findByRole("button", { name: /subjects/i }));
+    fireEvent.click(screen.getByRole("button", { name: "None" }));
+    await waitFor(() => expect(api.setImageSubjects).toHaveBeenCalledWith(
+      "realm", "open", `/api/worlds/realm/image-collections/${id}/members/2`, []));
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 test.each([
   ["/api/worlds/realm/characters/seraphine/versions/default/images/embed-art?v=1",
     "/api/worlds/realm/characters/seraphine/versions/default/images/embed-art"],
