@@ -5127,3 +5127,53 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
 .adopt-banner { margin: 0 0 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .adopt-banner p { margin: 0; }
 .editor-list .adopt-all { width: 100%; margin-bottom: 8px; }
+
+/* ---- the story graph (capstone §19) ----
+   Absolutely placed node buttons over one SVG edge layer, inside a pane that
+   scrolls sideways on its own: `min-width: 0` keeps a wide canvas from
+   widening main, so the page never scrolls sideways at phone width. The
+   selected node's detail sits below the pane, outside it. Colours are tokens
+   only, so dark mode follows. */
+.sg-scroll { overflow-x: auto; max-width: 100%; min-width: 0; margin: 16px 0; }
+.sg-canvas { position: relative; }
+.sg-edges { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
+.sg-edge { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.sg-edge.candidate { stroke-dasharray: 5 4; }
+.sg-edge.alias { stroke-dasharray: 1 3; }
+/* Exactly the 44px touch target and never taller: a wrapped label would grow
+   the button past its row and over the next lane's button, so a tap would
+   land on the wrong record. The full label is still in the accessible name
+   and the detail. */
+.sg-node {
+  position: absolute; height: 44px; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: center; gap: 2px;
+  padding: 0 10px; text-align: left; cursor: pointer;
+  background: var(--surface); color: var(--ink);
+  border: 1px solid var(--rule); border-left: 3px solid var(--rule);
+  font-family: var(--fb); font-size: 13px; line-height: 1.15;
+}
+.sg-node:hover { border-left-color: var(--accent); }
+.sg-node.selected { border-color: var(--accent); color: var(--accent); }
+.sg-node.scene { border-left-color: var(--ink); }
+.sg-node-label, .sg-node-status {
+  display: block; max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sg-node-status { font-family: var(--fm); font-size: 10px; color: var(--muted); }
+/* The marker and the column heads sit over the canvas; without
+   `pointer-events: none` their boxes would catch taps meant for the node
+   buttons beneath them on a touch screen. */
+.sg-now {
+  position: absolute; top: 0; border-left: 2px solid var(--accent); pointer-events: none;
+  padding-left: 4px; font-family: var(--fm); font-size: 10px; text-transform: uppercase;
+  color: var(--accent);
+}
+.sg-col-head {
+  position: absolute; top: 0; height: 28px; pointer-events: none;
+  overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  font-family: var(--fm); font-size: 10px; text-transform: uppercase; color: var(--muted);
+}
+.sg-detail { margin: 16px 0; padding-top: 12px; border-top: 1px solid var(--rule); }
+.sg-filter { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sg-toggle { justify-content: flex-start; }
+.sg-toggle input { margin: 0; }

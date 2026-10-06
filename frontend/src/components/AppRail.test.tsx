@@ -97,6 +97,17 @@ test("the active row is marked for a screen reader too", () => {
     .not.toHaveAttribute("aria-current");
 });
 
+test("the Story graph row links to the graph with no tail", () => {
+  renderRail({}, "/campaigns/c1/graph");
+  const camp = screen.getByRole("navigation", { name: /open campaign/i });
+  // Named exactly: no count rides this row (§19.1), so nothing follows the label.
+  const row = within(camp).getByRole("link", { name: /^story graph$/i });
+  expect(row).toHaveAttribute("href", "/campaigns/c1/graph");
+  expect(row).toHaveAttribute("aria-current", "page");
+  expect(within(camp).getByRole("link", { name: /ledger & timeline/i }))
+    .not.toHaveAttribute("aria-current");
+});
+
 test("a failed read keeps the rail usable and offers a retry", () => {
   // Navigation is the rail's first job and has to survive a server that stopped
   // answering — so the payload is kept and labelled rather than blanked.

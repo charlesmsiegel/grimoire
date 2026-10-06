@@ -55,17 +55,23 @@ export function ShellPayloadProvider({ value, children }: {
  *
  *  Once per arrival: the ref survives StrictMode's rehearsed unmount, which is
  *  not a second arrival and must not demand a second read. A real remount is a
- *  new component, with a new ref, and asks again. */
-export function useCampaignShell(cid: string): {
+ *  new component, with a new ref, and asks again.
+ *
+ *  `demand: false` skips that ask and only reads what the context already
+ *  holds. For a page that draws nothing of the payload but the campaign's name
+ *  and has promised its own read is the only one it makes -- the story graph
+ *  (§28.9). The rail's own reads stay the rail's. */
+export function useCampaignShell(cid: string, opts: { demand?: boolean } = {}): {
   payload: ShellPayload | null; failed: boolean; retry: () => void;
 } {
+  const demand = opts.demand ?? true;
   const { payload, status, retry, cid: asked } = useContext(ShellPayloadContext);
   const arrived = useRef<string | null>(null);
   useEffect(() => {
-    if (!cid || arrived.current === cid) return;
+    if (!demand || !cid || arrived.current === cid) return;
     arrived.current = cid;
     retry();
-  }, [cid, retry]);
+  }, [cid, retry, demand]);
   return {
     payload: payload?.campaign?.id === cid ? payload : null,
     failed: asked === cid && status === "failed",

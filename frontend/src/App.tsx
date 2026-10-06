@@ -30,6 +30,7 @@ import CostsView from "./routes/CostsView";
 import GlobalCostsView from "./routes/GlobalCostsView";
 import LedgerView from "./routes/LedgerView";
 import SheetsView from "./routes/SheetsView";
+import StoryGraphView from "./routes/StoryGraphView";
 import TimelineView from "./routes/TimelineView";
 import LibraryView from "./routes/LibraryView";
 import SearchView from "./routes/SearchView";
@@ -334,6 +335,12 @@ const AppRoutes = memo(function AppRoutes(
           top to bottom, and a drawer over the transcript is not where a list
           like that goes. */}
       <Route path="/campaigns/:cid/sheets" element={<SheetsView />} />
+      {/* The story graph (capstone §19) is a room for the same reason: it is
+          a projection read across the whole campaign -- every scene, thread,
+          commitment and dated moment at once -- not a drawer over one scene.
+          Not keyed on `cid`: a campaign switch keeps the page mounted, and the
+          page drops the superseded read itself. */}
+      <Route path="/campaigns/:cid/graph" element={<StoryGraphView />} />
       <Route path="/todo" element={<TodoView cid={null} />} />
       <Route path="/campaigns/:cid/todo" element={<ScopedTodoView />} />
       <Route path="/costs" element={<GlobalCostsView />} />
