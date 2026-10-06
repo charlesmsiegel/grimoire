@@ -138,3 +138,95 @@ test("a 409 re-reads and keeps the draft", async () => {
   expect(api.getQuickReplies).toHaveBeenCalledTimes(2);
   expect(screen.getByLabelText("Label")).toHaveValue("My draft");
 });
+
+// ---- campaign scope: inherited world replies ----
+
+const CAMPAIGN = { kind: "campaign" as const, cid: "run" };
+const CAMP: QuickReplySet = { version: 1, digest: "c1", replies: [{ id: "w2", hidden: true }],
+  inherited: [{ id: "w1", label: "Look around", kind: "send", text: "t", mode: "send" },
+              { id: "w2", label: "Search", kind: "roll", notation: "1d20" }] };
+
+function campaignReturns(set: QuickReplySet) {
+  (api.getQuickReplies as any).mockResolvedValue(set);
+  (api.setQuickReplies as any).mockImplementation(
+    (_scope: unknown, replies: any[]) => Promise.resolve({ ...set, digest: "c2", replies }));
+}
+
+test("inherited replies are read-only with Override and Hide", async () => {
+  campaignReturns(CAMP);
+  render(<QuickReplyEditor scope={CAMPAIGN} />);
+  expect(await screen.findByText("From the world")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Look around" }));
+  expect(await screen.findByRole("heading", { name: "Look around" })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Override" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Hide" })).toBeInTheDocument();
+  // An inherited row has no ↑/↓: its order is the world's.
+  expect(screen.queryByRole("button", { name: "Move Look around down" })).toBeNull();
+});
+
+test("Hide writes a hide entry", async () => {
+  campaignReturns(CAMP);
+  render(<QuickReplyEditor scope={CAMPAIGN} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Look around" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Hide" }));
+  await waitFor(() => expect(api.setQuickReplies).toHaveBeenCalledWith(
+    CAMPAIGN, [{ id: "w2", hidden: true }, { id: "w1", hidden: true }], "c1"));
+  expect(await screen.findByRole("button", { name: "Show" })).toBeInTheDocument();
+});
+
+test("Show removes the hide entry", async () => {
+  campaignReturns(CAMP);
+  render(<QuickReplyEditor scope={CAMPAIGN} />);
+  const search = await screen.findByRole("button", { name: /Search/ });
+  expect(within(search).getByText("hidden")).toHaveClass("chip");
+  fireEvent.click(search);
+  fireEvent.click(await screen.findByRole("button", { name: "Show" }));
+  await waitFor(() => expect(api.setQuickReplies).toHaveBeenCalledWith(CAMPAIGN, [], "c1"));
+});
+
+test("Override saves a campaign entry under the world id", async () => {
+  campaignReturns(CAMP);
+  render(<QuickReplyEditor scope={CAMPAIGN} />);
+  fireEvent.click(await screen.findByRole("button", { name: "Look around" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Override" }));
+  expect(screen.getByLabelText("Label")).toHaveValue("Look around");
+  fireEvent.change(screen.getByLabelText("Label"), { target: { value: "Look closer" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.setQuickReplies).toHaveBeenCalledWith(CAMPAIGN, [
+    { id: "w2", hidden: true },
+    { id: "w1", label: "Look closer", kind: "send", text: "t", mode: "send" }], "c1"));
+  // The world row now says it is overridden, and shows the campaign's version.
+  expect(await screen.findByRole("heading", { name: "Look closer" })).toBeInTheDocument();
+  expect(within(screen.getByRole("button", { name: /Look around/ })).getByText("overridden"))
+    .toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Edit" })).toBeInTheDocument();
+});
+
+test("an override's Delete brings the world reply back", async () => {
+  campaignReturns({ ...CAMP, replies: [
+    { id: "w1", label: "Look closer", kind: "send", text: "t", mode: "send" }] });
+  render(<QuickReplyEditor scope={CAMPAIGN} />);
+  // Overrides are listed under the world reply they replace, not as the campaign's own.
+  expect(await screen.findByText("This campaign")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Look closer" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: /Look around/ }));
+  expect(await screen.findByRole("heading", { name: "Look closer" })).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(api.setQuickReplies).toHaveBeenCalledWith(CAMPAIGN, [], "c1"));
+  expect(await screen.findByRole("heading", { name: "Look around" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Override" })).toBeInTheDocument();
+});
+
+test("a campaign reorders its own replies past its hides and overrides", async () => {
+  const mine = (id: string, label: string) => ({ id, label, kind: "opener" as const });
+  campaignReturns({ ...CAMP, replies: [
+    mine("m1", "First"), { id: "w2", hidden: true }, mine("m2", "Second")] });
+  render(<QuickReplyEditor scope={CAMPAIGN} />);
+  expect(await screen.findByRole("button", { name: "Move First up" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Move Second down" })).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Move First down" }));
+  await waitFor(() => expect(api.setQuickReplies).toHaveBeenCalledWith(CAMPAIGN, [
+    mine("m2", "Second"), { id: "w2", hidden: true }, mine("m1", "First")], "c1"));
+});

@@ -15,6 +15,7 @@ import { CampaignCover } from "../components/CoverPanel";
 import { CampaignTrackerSwitch } from "../components/tracker/CampaignTrackerSwitch";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { TrackerFieldsEditor } from "../components/tracker/TrackerFieldsEditor";
+import { QuickReplyEditor } from "../components/QuickReplyEditor";
 import { sectionHref } from "../worldPaths";
 import { intentProps } from "../api/prefetch";
 
@@ -164,7 +165,8 @@ export default function CampaignHub() {
    *  a mechanics module, set its calendar or give it a cover. They belong to
    *  the campaign, not to whichever scene you happen to have open, so they are
    *  here. */
-  const [panel, setPanel] = useState<"mechanics" | "calendar" | "cover" | "tracker" | "output" | null>(null);
+  const [panel, setPanel] = useState<
+    "mechanics" | "calendar" | "cover" | "tracker" | "output" | "quick-replies" | null>(null);
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
 
@@ -323,7 +325,7 @@ export default function CampaignHub() {
       <ColumnSection label="Settings">
         {([["mechanics", "Mechanics"], ["calendar", "Calendar"],
            ["cover", "Cover"], ["tracker", "Tracker"],
-           ["output", "Output processing"]] as const).map(([id, label]) => (
+           ["output", "Output processing"], ["quick-replies", "Quick replies"]] as const).map(([id, label]) => (
           <button key={id} type="button"
                   className={"column-row" + (panel === id ? " active" : "")}
                   aria-pressed={panel === id}
@@ -396,6 +398,9 @@ export default function CampaignHub() {
                 <CampaignTrackerSwitch key={cid} cid={cid} />
                 <TrackerFieldsEditor key={`${cid}:fields`} scope={{ kind: "campaign", cid }} />
               </>
+            )}
+            {panel === "quick-replies" && (
+              <QuickReplyEditor key={`${cid}:qr`} scope={{ kind: "campaign", cid }} />
             )}
           </section>
         )}

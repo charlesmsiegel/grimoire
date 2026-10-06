@@ -72,6 +72,7 @@ vi.mock("../api/client", () => ({
     listTags: vi.fn(),
     getTrackerFields: vi.fn(), setTrackerFields: vi.fn(),
     getRegex: vi.fn(), putRegex: vi.fn(), listConnections: vi.fn(),
+    getQuickReplies: vi.fn(), setQuickReplies: vi.fn(),
     listEntities: vi.fn(),
     readEntity: vi.fn(),
     reclassifyEntity: vi.fn(),
@@ -158,6 +159,9 @@ beforeEach(() => {
     inherited: [], warnings: {},
   });
   (api.listConnections as any).mockResolvedValue([]);
+  (api.getQuickReplies as any).mockResolvedValue({ version: 1, digest: "d", replies: [
+    { id: "a", label: "Look around", kind: "send", text: "I take in the room.", mode: "send" },
+    { id: "b", label: "Search", kind: "roll", notation: "1d20" }] });
   (api.listEntities as any).mockResolvedValue([]);
   (api.readEntity as any).mockResolvedValue({
     meta: { id: "the-salt-pact", name: "The Salt Pact", keys: "", owners: "" },
@@ -391,6 +395,18 @@ test("the Output processing row counts the world's own rules and opens their edi
   expect(screen.getByRole("button", { name: /^Strip asides/ })).toBeInTheDocument();
 });
 
+test("the Quick replies row counts the world's replies and opens their editor", async () => {
+  renderAt();
+  await screen.findByText("Drowned Realm");
+  await waitFor(() => expect(indexRow("Quick replies")).toHaveTextContent("2"));
+  expect(api.getQuickReplies).toHaveBeenCalledWith({ kind: "world", wid: "w" });
+  fireEvent.click(indexRow("Quick replies"));
+  expect(screen.getByRole("heading", { name: "Quick replies" })).toBeInTheDocument();
+  expect(indexRow("Quick replies")).toHaveClass("active");
+  expect(await screen.findByRole("button", { name: "+ New quick reply" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Look around" })).toBeInTheDocument();
+});
+
 test("the Tracker row counts the world's fields and opens their editor", async () => {
   renderAt();
   await screen.findByText("Drowned Realm");
@@ -493,6 +509,7 @@ test("campaign mode passes campaign scope and hides Tags and the Overview", asyn
   expect(screen.queryByRole("link", { name: /^Tags\b/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /^Tracker\b/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /^Output processing\b/ })).toBeNull();
+  expect(screen.queryByRole("link", { name: /^Quick replies\b/ })).toBeNull();
   expect(screen.queryByRole("link", { name: /^Overview\b/ })).toBeNull();
   // a campaign has no tag vocabulary of its own, so nothing asks for one
   expect(api.listTags).not.toHaveBeenCalled();

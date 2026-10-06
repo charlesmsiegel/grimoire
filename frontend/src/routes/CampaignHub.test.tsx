@@ -20,6 +20,10 @@ vi.mock("../components/RegexRulesEditor", () => ({
   RegexRulesEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
     <div data-testid="regex-rules" data-scope={`${scope.kind}:${scope.cid}`} />,
 }));
+vi.mock("../components/QuickReplyEditor", () => ({
+  QuickReplyEditor: ({ scope }: { scope: { kind: string; cid?: string } }) =>
+    <div data-testid="quick-replies" data-scope={`${scope.kind}:${scope.cid}`} />,
+}));
 vi.mock("../components/CampaignCover", () => ({
   CampaignCover: () => <div data-testid="cover-panel" />,
 }));
@@ -432,6 +436,14 @@ test("the Output processing panel mounts the campaign's rule editor", async () =
   expect(screen.getByTestId("regex-rules")).toHaveAttribute("data-scope", "campaign:run");
   fireEvent.click(screen.getByRole("button", { name: "Output processing" }));
   expect(screen.queryByTestId("regex-rules")).not.toBeInTheDocument();
+});
+
+test("Settings opens the campaign's quick replies", async () => {
+  renderHub();
+  await screen.findByText("Run One");
+  expect(screen.queryByTestId("quick-replies")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Quick replies" }));
+  expect(screen.getByTestId("quick-replies")).toHaveAttribute("data-scope", "campaign:run");
 });
 
 test("the Tracker panel holds the campaign's switch and its field editor", async () => {

@@ -7,7 +7,9 @@ import {
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { Field } from "./Field";
-import { isHide, moveEntry, quickReplyTitle, removeEntry, upsertEntry } from "./quickReplies";
+import {
+  hideEntry, isHide, moveEntry, overrideOf, quickReplyTitle, removeEntry, upsertEntry,
+} from "./quickReplies";
 
 const KIND_LABEL: Record<QuickReplyKind, string> = {
   send: "Speak", direct: "Direct", roll: "Roll", task: "Task", opener: "Opener",
@@ -71,10 +73,14 @@ function savable(form: Form): boolean {
  *  overwritten, and the draft in the form survives that. */
 export function QuickReplyEditor({ scope }: { scope: QuickReplyScope }) {
   const [set, setSet] = useState<QuickReplySet | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
+  // A campaign lists two kinds of row -- its own replies and its world's -- and
+  // an override shares its world reply's id, so a selection says which list.
+  const [selected, setSelected] = useState<{ id: string; from: "own" | "world" } | null>(null);
   const [mode, setMode] = useState<"view" | "edit">("view");
-  // The id the form is editing, or null for a new reply.
-  const [editingId, setEditingId] = useState<string | null>(null);
+  // What the form saves: `replaceId` is the stored entry it replaces (absent
+  // for a new one), `id` the id it is saved under (absent: the server mints
+  // one; a world reply's id: an override).
+  const [editing, setEditing] = useState<{ replaceId?: string; id?: string }>({});
   const [form, setForm] = useState<Form>(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
   const [writing, setWriting] = useState(false);
@@ -88,9 +94,18 @@ export function QuickReplyEditor({ scope }: { scope: QuickReplyScope }) {
     // The scope's identity is its id; the parent keys the editor on it anyway.
   }, [scope.kind, scope.kind === "world" ? scope.wid : scope.cid]);   // eslint-disable-line react-hooks/exhaustive-deps
 
+  const campaign = scope.kind === "campaign";
   const entries: QuickReplyEntry[] = set?.replies ?? [];
-  const own: QuickReply[] = entries.filter((e): e is QuickReply => !isHide(e));
-  const current = own.find((r) => r.id === selected) ?? null;
+  const inherited: QuickReply[] = set?.inherited ?? [];
+  const inheritedIds = new Set(inherited.map((r) => r.id));
+  const hidden = new Set(entries.filter(isHide).map((e) => e.id));
+  const replies: QuickReply[] = entries.filter((e): e is QuickReply => !isHide(e));
+  const overrides = new Map(replies.filter((r) => inheritedIds.has(r.id)).map((r) => [r.id, r]));
+  // The set's own rows: everything but hides and overrides, which are listed
+  // under the world reply they act on. Reordering moves within these only.
+  const isMine = (e: QuickReplyEntry | QuickReplyDraft) =>
+    !isHide(e as QuickReplyEntry) && !(e.id !== undefined && inheritedIds.has(e.id));
+  const mine: QuickReply[] = replies.filter(isMine);
 
   /** PUT `next`; resolves to the stored set, or null when it was refused (the
    *  refusal is on screen by then). */
@@ -119,62 +134,114 @@ export function QuickReplyEditor({ scope }: { scope: QuickReplyScope }) {
     }
   }
 
-  function open(id: string) {
-    setSelected(id);
+  function open(id: string, from: "own" | "world") {
+    setSelected({ id, from });
     setMode("view");
     setError(null);
   }
 
   function startNew() {
     setSelected(null);
-    setEditingId(null);
+    setEditing({});
     setForm(EMPTY_FORM);
     setMode("edit");
     setError(null);
   }
 
   function startEdit(r: QuickReply) {
-    setEditingId(r.id);
+    setEditing({ replaceId: r.id, id: r.id });
     setForm(formOf(r));
+    setMode("edit");
+    setError(null);
+  }
+
+  /** A campaign's own copy of a world reply, saved under the world reply's id
+   *  -- which is what makes it replace that reply rather than sit beside it. */
+  function startOverride(w: QuickReply) {
+    setEditing({ id: w.id });
+    setForm(formOf(overrideOf(w)));
     setMode("edit");
     setError(null);
   }
 
   async function save() {
     const before = new Set(entries.map((e) => e.id));
-    const entry = entryOf(form, editingId ?? undefined);
+    const entry = entryOf(form, editing.id);
     const saved = await write(upsertEntry<QuickReplyEntry | QuickReplyDraft>(
-      entries, entry, editingId ?? undefined));
+      entries, entry, editing.replaceId));
     if (!saved) return;
-    const id = editingId ?? saved.replies.find((e) => !before.has(e.id))?.id ?? null;
-    setSelected(id);
+    // An override stays selected under its world row; anything else is one of
+    // the set's own -- a new one under the id the server gave it.
+    if (selected?.from !== "world") {
+      const id = editing.id ?? saved.replies.find((e) => !before.has(e.id))?.id;
+      setSelected(id ? { id, from: "own" } : null);
+    }
     setMode("view");
   }
 
   async function remove() {
-    if (!editingId) return;
-    const saved = await write(removeEntry(entries, editingId));
+    if (!editing.replaceId) return;
+    const saved = await write(removeEntry(entries, editing.replaceId));
     if (!saved) return;
-    setSelected(null);
-    setEditingId(null);
+    // Deleting an override brings the world reply back, still selected.
+    if (selected?.from !== "world") setSelected(null);
+    setEditing({});
     setMode("view");
   }
 
   function move(id: string, delta: -1 | 1) {
-    void write(moveEntry(entries, id, delta));
+    void write(moveEntry<QuickReplyEntry>(entries, id, delta, isMine));
   }
 
   function cancel() {
     setMode("view");
     setError(null);
-    if (!editingId) setSelected(null);
+  }
+
+  /** What the body shows for the selection, in view mode. */
+  function viewOf(): ReactNode {
+    if (!selected) return null;
+    if (selected.from === "own") {
+      const r = mine.find((x) => x.id === selected.id);
+      return r ? (
+        <ReplyView reply={r} actions={
+          <button className="subtle" onClick={() => startEdit(r)}>Edit</button>
+        } />
+      ) : null;
+    }
+    const w = inherited.find((x) => x.id === selected.id);
+    if (!w) return null;
+    const override = overrides.get(w.id);
+    if (override) {
+      return (
+        <ReplyView reply={override} note={`Replaces the world's “${w.label}” in this campaign.`}
+                   actions={<button className="subtle" onClick={() => startEdit(override)}>Edit</button>} />
+      );
+    }
+    if (hidden.has(w.id)) {
+      return (
+        <ReplyView reply={w} note="From the world, hidden in this campaign." actions={
+          <button className="subtle" disabled={writing}
+                  onClick={() => void write(removeEntry(entries, w.id))}>Show</button>
+        } />
+      );
+    }
+    return (
+      <ReplyView reply={w} note="From the world. Override it to change it here, or hide it."
+                 actions={<>
+                   <button className="subtle" onClick={() => startOverride(w)}>Override</button>
+                   <button className="subtle" disabled={writing}
+                           onClick={() => void write(hideEntry<QuickReplyEntry>(entries, w.id))}>Hide</button>
+                 </>} />
+    );
   }
 
   function row(r: QuickReply, i: number, list: QuickReply[]) {
     return (
       <div key={r.id} className="quick-reply-row">
-        <button type="button" className={"row" + (selected === r.id ? " active" : "")}
-                onClick={() => open(r.id)}>
+        <button type="button"
+                className={"row" + (selected?.from === "own" && selected.id === r.id ? " active" : "")}
+                onClick={() => open(r.id, "own")}>
           {r.label}
         </button>
         <button type="button" className="subtle quick-reply-move" aria-label={`Move ${r.label} up`}
@@ -189,25 +256,38 @@ export function QuickReplyEditor({ scope }: { scope: QuickReplyScope }) {
     <div className="editor">
       <div className="editor-list">
         <button type="button" className="primary new" onClick={startNew}>+ New quick reply</button>
-        {own.map((r, i) => row(r, i, own))}
-        {set && own.length === 0 && <div className="field-hint">No quick replies yet.</div>}
+        {campaign && <div className="rail-heading">This campaign</div>}
+        {mine.map((r, i) => row(r, i, mine))}
+        {set && mine.length === 0 && (
+          <div className="field-hint">{campaign ? "None of this campaign's own yet." : "No quick replies yet."}</div>
+        )}
+        {campaign && inherited.length > 0 && (
+          <>
+            <div className="rail-heading">From the world</div>
+            {inherited.map((w) => (
+              <button key={w.id} type="button"
+                      className={"row" + (selected?.from === "world" && selected.id === w.id ? " active" : "")}
+                      onClick={() => open(w.id, "world")}>
+                {w.label}
+                {hidden.has(w.id) && <span className="chip">hidden</span>}
+                {overrides.has(w.id) && <span className="chip">overridden</span>}
+              </button>
+            ))}
+          </>
+        )}
       </div>
 
       <div className="editor-body">
         {error && <div className="banner">{error}</div>}
         {mode === "view" ? (
-          current ? (
-            <ReplyView reply={current} actions={
-              <button className="subtle" onClick={() => startEdit(current)}>Edit</button>
-            } />
-          ) : (
+          viewOf() ?? (
             <div className="field-hint">
               Pick a quick reply, or add one. They appear above the composer, in this order.
             </div>
           )
         ) : (
           <div className="form">
-            <h3>{editingId ? "Edit quick reply" : "New quick reply"}</h3>
+            <h3>{editing.replaceId ? "Edit quick reply" : editing.id ? "Override for this campaign" : "New quick reply"}</h3>
             <Field label="Label" hint="what the button says">
               <input type="text" maxLength={40} value={form.label}
                      onChange={(e) => setForm({ ...form, label: e.target.value })} />
@@ -261,7 +341,7 @@ export function QuickReplyEditor({ scope }: { scope: QuickReplyScope }) {
               </Field>
             )}
             <div className="form-actions">
-              {editingId && (
+              {editing.replaceId && (
                 <button className="subtle" disabled={writing} onClick={() => void remove()}>Delete</button>
               )}
               <button className="subtle" onClick={cancel}>Cancel</button>

@@ -53,6 +53,15 @@ describe("sectionHref", () => {
     expect(sectionHref(W, { kind: "section", at: "tracker" })).toBe("/worlds/realm/tracker");
   });
 
+  test("quick replies are a world section with a screen of its own", () => {
+    expect(sectionHref(W, { kind: "section", at: "quick-replies" })).toBe("/worlds/realm/quick-replies");
+    expect(() => sectionHref(C, { kind: "section", at: "quick-replies" })).toThrow(/quick-replies/);
+    expect(parseWorldTail("quick-replies", "world"))
+      .toEqual({ ok: true, section: "quick-replies", rid: null });
+    expect(parseWorldTail("quick-replies", "campaign")).toEqual({ ok: false });
+    expect(parseWorldTail("quick-replies/x", "world")).toEqual({ ok: false });
+  });
+
   test("a campaign cannot address a world-only section", () => {
     expect(() => sectionHref(C, { kind: "section", at: "tracker" })).toThrow(/tracker/);
     expect(() => sectionHref(C, { kind: "section", at: "tags" })).toThrow(/tags/);
