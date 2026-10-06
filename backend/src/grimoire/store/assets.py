@@ -334,6 +334,12 @@ def _legacy_path(d: Path, name: str, supported_only: bool) -> Path | None:
     return max(matches, key=lambda p: (_mtime_ns(p), p.name))
 
 
+def has_legacy(d: Path, name: str) -> bool:
+    """Whether a legacy ``<name>.*`` file sits in `d`, whatever its extension
+    -- one `path_in` would fall back to if the placement of `name` went."""
+    return _safe_name(name) and bool(_siblings(d, name, False))
+
+
 def resolve(d: Path, name: str) -> image_refs.ResolvedImage | None:
     """The placement `name` in `d`, resolved to its object and blob -- None
     when there is no image-bearing placement or it does not resolve (yet)."""

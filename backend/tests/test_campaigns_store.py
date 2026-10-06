@@ -361,6 +361,48 @@ def test_slimming_prunes_identical_refs_keeps_divergent(monkeypatch, tmp_path):
     assert overlay.read_focus(cid, cropped, vid) == 20
 
 
+def test_slimming_keeps_an_identical_placement_beside_a_divergent_legacy_file(
+        monkeypatch, tmp_path):
+    """A placement written while its image had not arrived keeps the legacy
+    file of its name (`assets._drop_if_placed`: redundant data beats lost
+    data), and once the image syncs in the placement shadows it. Pruning that
+    placement as identical to the world's would hand the name back to the
+    stale legacy file. So it is left, with the file beside it."""
+    from grimoire.store import image_store
+    home(monkeypatch, tmp_path)
+    wid = worlds.create_world("W")
+    wroot = worlds.world_root(wid)
+    aid, vid = characters.create_character(wroot, "Seraphine")
+    assets.put_image(wroot, aid, vid, "avatar", b"world-avatar", "png")
+    image_id = assets.image_id(wroot, aid, vid, "avatar")
+    cid = campaigns.create_campaign("C", wid)
+    croot = campaigns.campaign_root(cid)
+    _fat_actor(wroot, croot, aid)
+    cdir = assets.version_dir(croot, aid, vid)
+    image_refs.delete(cdir, "avatar")
+    (cdir / "avatar.png").write_bytes(b"stale-campaign-avatar")   # the campaign's old picture
+    # The world's picture placed while its blob is mid-sync: unresolved, so
+    # the legacy file stays.
+    obj = image_store.read(image_id)
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    held = blob.with_name(blob.name + ".syncing")
+    blob.rename(held)
+    assets.link_in(cdir, "avatar", image_id)
+    assert (cdir / "avatar.png").exists()
+    held.rename(blob)                                              # ... and it arrives
+    assert assets.path_in(cdir, "avatar") == blob
+    world_ref = assets.version_dir(wroot, aid, vid) / "image-refs" / "avatar.json"
+    assert (cdir / "image-refs" / "avatar.json").read_bytes() == world_ref.read_bytes()
+    campaigns.write_manifest(cid, {f"characters/{aid}": characters.dir_hash(wroot, aid)})
+    _stamp_full(cid)
+
+    campaigns.ensure_campaign_slim(cid)
+
+    assert (cdir / "image-refs" / "avatar.json").exists()
+    assert (cdir / "avatar.png").read_bytes() == b"stale-campaign-avatar"
+    assert assets.path_in(cdir, "avatar") == blob                 # still the arrived picture
+    assert overlay.image_root(cid, aid, vid, "avatar") == croot
+
 def test_slimming_prunes_a_focus_sidecar_beside_a_pruned_avatar_placement(monkeypatch, tmp_path):
     """The focus guard asks whether a campaign avatar is still held, so it must
     see the placement the same pass prunes as gone."""

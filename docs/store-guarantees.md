@@ -471,7 +471,11 @@ wins**. A placement that does not resolve (its object or blob not synced in
 yet) falls back to the legacy file if one is there, on the rule that redundant
 data beats lost data, and a version's art memo that includes such a placement
 is not cached, so a blob that syncs in later is noticed (`test_ref_wins_over_legacy_and_unresolved_ref_falls_back`,
-`test_version_art_uncacheable_while_ref_unresolved`).
+`test_version_art_uncacheable_while_ref_unresolved`). For the same reason
+campaign slimming never prunes a placement that has a legacy file of its name
+beside it, even one identical to the world's: the legacy file would become the
+campaign's picture again
+(`test_slimming_keeps_an_identical_placement_beside_a_divergent_legacy_file`).
 
 ### What it does not promise
 
