@@ -152,7 +152,7 @@ test("a live run is rediscovered on mount", async () => {
   (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), state: "running" }) });
   render(<ImageStoreCard />);
 
-  expect(await screen.findByText(/Migrating legacy images/)).toBeInTheDocument();
+  expect(await screen.findByText(/An image-store run is in progress/)).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   // Nothing can be started over it.
   expect(screen.getByRole("button", { name: "Check" })).toBeDisabled();
@@ -240,4 +240,52 @@ test("a run that failed with no report shows its error", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Check" }));
 
   expect(await screen.findByText(/the pass stopped unexpectedly/)).toBeInTheDocument();
+});
+
+test("a delete refused as busy keeps the scan, its token and its button", async () => {
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan());
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+  const del = await screen.findByRole("button", { name: "Delete 3 unused images" });
+
+  const busy = "a fork, delete, export or backup is using the store; try again when it finishes";
+  (api.startImageGc as any).mockRejectedValueOnce(new ApiError(409, busy, "busy"));
+  fireEvent.click(del);
+
+  expect(await screen.findByText(busy)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Delete 3 unused images" })).toBeEnabled();
+  expect(screen.getByText(/3 unused images can be deleted now/)).toBeInTheDocument();
+});
+
+test("a start that finds a run already going adopts it and drops the refusal", async () => {
+  const msg = "image-store maintenance is already running";
+  (api.startImageMigration as any).mockRejectedValue(new ApiError(409, msg, "run_in_flight"));
+  (api.listGlobalRuns as any)
+    .mockResolvedValueOnce({ runs: [] })
+    .mockResolvedValue({ runs: [run({ id: "l".repeat(32), state: "running" })] });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32) }) });
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Check" }));
+
+  expect(await screen.findByText(/12 legacy files/)).toBeInTheDocument();
+  expect(screen.queryByText(msg)).toBeNull();
+});
+
+test("a rediscovered collection is not described as a search", async () => {
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), state: "running", kind: "gc" }) });
+  render(<ImageStoreCard />);
+
+  expect(await screen.findByText(/An image-store run is in progress/)).toBeInTheDocument();
+  expect(screen.queryByText(/Looking for unused images/)).toBeNull();
+});
+
+test("a run this card started names its own mode", async () => {
+  (api.startImageGc as any).mockResolvedValue({ run: run({ state: "running", kind: "gc" }) });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ state: "running", kind: "gc" }) });
+  render(<ImageStoreCard />);
+  fireEvent.click(await screen.findByRole("button", { name: "Find unused images" }));
+
+  expect(await screen.findByText(/Looking for unused images/)).toBeInTheDocument();
 });
