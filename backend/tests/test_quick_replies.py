@@ -201,6 +201,49 @@ def test_a_hide_naming_no_world_reply_is_dropped_on_save(home):
     assert saved["replies"] == [{"id": "a", "hidden": True}]
 
 
+@pytest.mark.parametrize("world_file", [
+    "{\"version\": 1, \"replies\": [{\"id\": \"a\", \"la",   # half-synced: cut off mid-write
+    "not json at all",
+    json.dumps({"version": 2, "replies": []}),
+    json.dumps({"version": 1, "replies": "nope"}),
+    None,                                                          # not synced down yet
+])
+def test_hides_survive_a_save_while_the_world_file_is_unreadable(home, world_file):
+    wid, cid = home
+    qr.write_world(wid, [{"id": "a", "label": "A", "kind": "opener"}], qr.world_set(wid)["digest"])
+    qr.write_campaign(cid, [{"id": "a", "hidden": True}], qr.campaign_set(cid)["digest"])
+    if world_file is None:
+        qr.world_path(wid).unlink()
+    else:
+        qr.world_path(wid).write_text(world_file, encoding="utf-8")
+    seen = qr.campaign_set(cid)
+    saved = qr.write_campaign(cid, seen["replies"] + [{"id": "z", "label": "Z", "kind": "opener"}],
+                              seen["digest"])
+    assert {"id": "a", "hidden": True} in saved["replies"]
+
+
+def test_a_hide_survives_when_its_world_reply_was_salvaged_away(home):
+    wid, cid = home
+    qr.write_world(wid, [{"id": "a", "label": "A", "kind": "opener"},
+                         {"id": "b", "label": "B", "kind": "opener"}], qr.world_set(wid)["digest"])
+    qr.write_campaign(cid, [{"id": "a", "hidden": True}], qr.campaign_set(cid)["digest"])
+    qr.world_path(wid).write_text(json.dumps({"version": 1, "replies": [
+        {"id": "a", "label": "x" * 99, "kind": "opener"},          # one bad entry
+        {"id": "b", "label": "B", "kind": "opener"}]}), encoding="utf-8")
+    seen = qr.campaign_set(cid)
+    saved = qr.write_campaign(cid, seen["replies"], seen["digest"])
+    assert saved["replies"] == [{"id": "a", "hidden": True}]
+
+
+def test_a_hide_naming_a_world_reply_of_an_unknown_kind_is_kept(home):
+    wid, cid = home
+    qr.world_path(wid).write_text(json.dumps({"version": 1, "replies": [
+        {"id": "p", "label": "Ping", "kind": "plugin", "command": "/ping"}]}), encoding="utf-8")
+    saved = qr.write_campaign(cid, [{"id": "p", "hidden": True}, {"id": "gone", "hidden": True}],
+                              qr.campaign_set(cid)["digest"])
+    assert saved["replies"] == [{"id": "p", "hidden": True}]
+
+
 def test_writers_refuse_a_missing_world_or_campaign(home):
     with pytest.raises(store.worlds.WorldNotFound):
         qr.write_world("no-such-world", [], qr.digest([]))

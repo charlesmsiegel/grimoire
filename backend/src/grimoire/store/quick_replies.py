@@ -236,24 +236,28 @@ def is_shown(entry: dict) -> bool:
     return _is_hide(entry) or entry.get("kind") in KINDS
 
 
-def _salvage(raw: object, *, campaign: bool, path: Path) -> list[dict]:
+def _salvage(raw: object, *, campaign: bool, path: Path) -> tuple[list[dict], bool]:
+    """The entries that survive, and whether every one did."""
     if not isinstance(raw, dict) or raw.get("version") != VERSION:
         log.warning("quick replies: ignoring %s -- not a version-%d set", path, VERSION)
-        return []
+        return [], False
     replies = raw.get("replies")
     if not isinstance(replies, list):
         log.warning("quick replies: ignoring %s -- its replies are not a list", path)
-        return []
+        return [], False
     out: list[dict] = []
     seen: set[str] = set()
+    whole = True
     for entry in replies:
         if not isinstance(entry, dict):
             log.warning("quick replies: dropping a non-object entry in %s", path)
+            whole = False
             continue
         rid = entry.get("id")
         if not isinstance(rid, str) or not rid or rid in seen:
             # No minting on read: an id made up here would change on every read.
             log.warning("quick replies: dropping an entry with a missing or repeated id in %s", path)
+            whole = False
             continue
         if _unknown_kind(entry):
             out.append(entry)
@@ -263,23 +267,30 @@ def _salvage(raw: object, *, campaign: bool, path: Path) -> list[dict]:
             clean = normalize(entry, campaign=campaign)
         except QuickReplyError as exc:
             log.warning("quick replies: dropping %r in %s -- %s", rid, path, exc)
+            whole = False
             continue
         out.append(clean)
         seen.add(rid)
-    return out
+    return out, whole
+
+
+def _read(path: Path, *, campaign: bool) -> tuple[list[dict], bool]:
+    """`_load`, plus whether the file was there and read with nothing lost to
+    salvage. Never raises."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return [], False
+    except (OSError, ValueError) as exc:
+        log.warning("quick replies: ignoring %s -- %s", path, exc)
+        return [], False
+    return _salvage(raw, campaign=campaign, path=path)
 
 
 def _load(path: Path, *, campaign: bool) -> list[dict]:
     """Every entry stored at `path` that survives salvage, unknown kinds
     included. Never raises: a missing or garbled file is an empty set."""
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return []
-    except (OSError, ValueError) as exc:
-        log.warning("quick replies: ignoring %s -- %s", path, exc)
-        return []
-    return _salvage(raw, campaign=campaign, path=path)
+    return _read(path, campaign=campaign)[0]
 
 
 def _body(stored: list[dict]) -> dict:
@@ -292,6 +303,19 @@ def _world_stored(wid: str) -> list[dict]:
         return _load(world_path(wid), campaign=False)
     except worlds_paths.WorldNotFound:
         return []
+
+
+def _world_ids_if_whole(wid: str) -> set[str] | None:
+    """Every id the world's file holds -- unknown kinds included, since a hide
+    may name one this build cannot show -- or None unless the file was there
+    and read with nothing lost to salvage."""
+    if not wid:
+        return None
+    try:
+        stored, whole = _read(world_path(wid), campaign=False)
+    except worlds_paths.WorldNotFound:
+        return None
+    return {e["id"] for e in stored} if whole else None
 
 
 def world_set(wid: str) -> dict:
@@ -371,7 +395,12 @@ def write_world(wid: str, replies: object, expect: str) -> dict:
 def write_campaign(cid: str, replies: object, expect: str) -> dict:
     """Replace the campaign's own set; the digest check and the write are one
     hold of the campaign lock. A hide entry naming no world reply is dropped --
-    it hides nothing and would count toward the cap.
+    it hides nothing and would count toward the cap -- but only against a world
+    file that was there and read whole. A missing, garbled or partly salvaged
+    world file (a synced folder mid-sync) keeps every hide: an orphan costs a
+    slot of the cap, while a hide dropped against a half-read file is gone for
+    good and its world reply reappears once the file heals. A hide naming a
+    world entry of a kind this build does not show is kept too.
 
     Raises `CampaignNotFound`, `QuickReplyError`, `SetChanged`."""
     clean = validate_set(replies, campaign=True)
@@ -382,8 +411,8 @@ def write_campaign(cid: str, replies: object, expect: str) -> dict:
         stored = _load(path, campaign=True)
         if digest(stored) != expect:
             raise SetChanged(cid)
-        wid = _world_of(cid)
-        world_ids = {r["id"] for r in world_set(wid)["replies"]} if wid else set()
-        clean = [e for e in clean if not _is_hide(e) or e["id"] in world_ids]
+        world_ids = _world_ids_if_whole(_world_of(cid))
+        if world_ids is not None:
+            clean = [e for e in clean if not _is_hide(e) or e["id"] in world_ids]
         _write(path, _merge(clean, stored))
     return campaign_set(cid)
