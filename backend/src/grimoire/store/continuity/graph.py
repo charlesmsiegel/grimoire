@@ -78,7 +78,7 @@ from .. import (
 )
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
-from . import canon, drivers, effective, involvement, pressure
+from . import candidates, canon, doc, drivers, effective, involvement, pending, pressure
 
 #: §20's node kinds: `canon.KIND_OF_PREFIX`'s kinds minus the two §19.2 leaves
 #: optional (groups, standing facts). The order is the payload's node order.
@@ -269,6 +269,30 @@ def _records(cid: str, ledgers: effective.Ledgers, omitted: set[str]) -> dict:
             "involved": involved if isinstance(involved, dict) else {}}
 
 
+def _visible_findings(cid: str, ledgers: effective.Ledgers) -> list[tuple[str, dict, str]]:
+    """D's `pending.findings` over the ledgers this hold already read. An
+    empty cache answers before the current view is built, as `findings`
+    itself does when it builds that view (Todo's cost rule)."""
+    if not candidates.read(cid)["records"]:
+        return []
+    return pending.findings(cid, pending.Current.load(cid, ledgers))
+
+
+def _review_files(cid: str, ledgers: effective.Ledgers, omitted: set[str]) -> dict:
+    """The reviewed links and the cached findings with their verdicts. Both
+    readers answer a malformed file as empty, so each file's own `malformed`
+    is what names it in `omitted`."""
+    links: list[dict] = _attempt(omitted, "continuity", effective.links, [], cid, ledgers)
+    unread: list[str] = []
+    if _attempt(omitted, "continuity", doc.malformed, unread, cid):
+        omitted.add("continuity")
+    if _attempt(omitted, "candidates", candidates.malformed, False, cid):
+        omitted.add("candidates")
+    found: list = _attempt(omitted, "candidates", _visible_findings, [], cid, ledgers)
+    return {"links": links if isinstance(links, list) else [],
+            "findings": found if isinstance(found, list) else []}
+
+
 def _files(cid: str, omitted: set[str]) -> dict:
     with locks.best_effort_campaign_lock(cid):
         ledgers: effective.Ledgers = _attempt(omitted, None, effective.Ledgers.load,
@@ -292,12 +316,13 @@ def _files(cid: str, omitted: set[str]) -> dict:
         rels: dict = _attempt(omitted, "relationships", relationships.read, {}, cid)
         # `records` raises on a file whose top level is not an object.
         ideas: list[dict] = _attempt(omitted, "scene_ideas", scene_ideas.records, [], cid)
+        reviewed = _review_files(cid, ledgers, omitted)
     # Valid JSON of the wrong shape arrives without raising.
     return {"scenes": scenes, "chronicle": chron if isinstance(chron, dict) else {},
             "histories": histories, "actors": actors if isinstance(actors, dict) else {},
             "relationships": rels if isinstance(rels, dict) else {},
             "ideas": ideas if isinstance(ideas, list) else [],
-            "ledgers": ledgers, **recs}
+            "ledgers": ledgers, **recs, **reviewed}
 
 
 # ---- phase C: names, outside ------------------------------------------------
@@ -667,6 +692,53 @@ def _idea_parts(files: dict, temporal: dict, live: dict[str, str],
     return nodes, edges
 
 
+def _link_edges(links: list, node_ids: Collection[str]) -> list[dict]:
+    """Reviewed links, each kept only when both canonical ends are nodes:
+    `effective.links` keeps a link whose ledger could not be read (existence
+    unknown is not existence false), and the graph built no node for it."""
+    return [{"id": link["id"], "kind": "link", "from": link["a"], "to": link["b"],
+             "source": "reviewed", "relation": link["relation"], "candidate_id": None}
+            for link in links
+            if isinstance(link, dict) and link.get("a") in node_ids
+            and link.get("b") in node_ids]
+
+
+def _named(kind: str, ends: list[str], node_ids: Collection[str]) -> list[tuple[str, Any]]:
+    """`(node, other)` for each node a finding names: `other` is a pair's
+    other canonical end when that is a different node, else None."""
+    pair = kind in candidates.PAIR_KINDS and len(ends) == 2
+    out: list[tuple[str, Any]] = []
+    for i, end in enumerate(ends):
+        other = ends[1 - i] if pair else None
+        if other == end or other not in node_ids:
+            other = None
+        if end in node_ids and end not in {e for e, _ in out}:
+            out.append((end, other))
+    return out
+
+
+def _review_parts(files: dict, live: dict[str, str],
+                  node_ids: Collection[str]) -> tuple[list, dict[str, list[dict]]]:
+    """Reviewed `link` edges, a candidate edge per visible pair finding, and
+    every visible finding listed on the canonical nodes it names (Decision 13).
+    Only `pending.VISIBLE` verdicts draw: anything else would point at a Ledger
+    address that says the finding is no longer pending."""
+    edges = _link_edges(files["links"], node_ids)
+    found: dict[str, list[dict]] = {}
+    for fid, record, verdict in files["findings"]:
+        if verdict not in pending.VISIBLE:
+            continue
+        kind = record["kind"]
+        ends = [live.get(ref, ref) for ref in record["refs"]]
+        named = _named(kind, ends, node_ids)
+        if kind in candidates.PAIR_KINDS and len(named) == 2:
+            edges.append({"id": fid, "kind": kind, "from": ends[0], "to": ends[1],
+                          "source": "candidate", "relation": None, "candidate_id": fid})
+        for end, other in named:
+            found.setdefault(end, []).append({"id": fid, "kind": kind, "other": other})
+    return edges, {ref: sorted(rows, key=lambda f: f["id"]) for ref, rows in found.items()}
+
+
 def _node_key(node: dict) -> tuple:
     kind = node["kind"]
     return (NODE_KINDS.index(kind), node.get("order", 0) if kind == "scene" else 0, node["id"])
@@ -697,6 +769,15 @@ def _assemble(cid: str, temporal: dict, files: dict, names: dict[str, str],
             nodes.setdefault(node["id"], node)
         for edge in built_edges:
             edges.setdefault(edge["id"], edge)
+    # Last: links and candidates keep an edge only when both ends are nodes.
+    nothing: tuple[list, dict[str, list[dict]]] = ([], {})
+    reviewed = _attempt(omitted, "candidates", _review_parts, nothing,
+                        files, files["live"], nodes.keys())
+    for edge in reviewed[0]:
+        edges.setdefault(edge["id"], edge)
+    for ref, found in reviewed[1].items():
+        if "findings" in nodes.get(ref, {}):
+            nodes[ref]["findings"] = found
     return {
         "now": _now(temporal),
         "nodes": sorted(nodes.values(), key=_node_key),
