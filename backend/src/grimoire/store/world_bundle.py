@@ -102,6 +102,13 @@ _BLOB_MEMBER = re.compile(
     r"image-store/blobs/([0-9a-f]{2})/([0-9a-f]{64})\.(png|jpg|gif|webp)")
 _OBJECT_MEMBER = re.compile(
     r"image-store/objects/([0-9a-f]{2})/(px1-([0-9a-f]{64}))\.json")
+# The largest image blob a bundle carries, held on BOTH sides: export refuses
+# a world holding a bigger one before it writes anything (`_check_blob_sizes`),
+# and import refuses a bigger member -- so an export never produces a bundle
+# its own import refuses. It is the fetch cap, the largest image the app takes
+# from anywhere else; record uploads themselves are not capped, which is why
+# export has to ask.
+MAX_BUNDLE_BLOB_BYTES = fetch.MAX_BYTES
 # A projected sidecar is a few hundred bytes. This caps the *sum* over every
 # object member, checked from the headers before any is read: a per-object cap
 # alone let a small archive of many objects naming one tiny blob expand into
@@ -200,6 +207,7 @@ def write_bundle(wid: str, dest: Path) -> None:
     # A crashed promotion is finished first: mid-swap, the picture it moved
     # out of the avatar slot is named only by its journal, which is not packed.
     assets.recover_promotions_in(root)
+    _check_blob_sizes(root)
     manifest = {"format": FORMAT, "kind": "world", "world_id": wid,
                 "name": meta.get("name", wid), "app_version": app_version(),
                 "exported": now_iso()}
@@ -224,6 +232,38 @@ def write_bundle(wid: str, dest: Path) -> None:
         _pack_images(z, root, wid)
 
 
+def _packable_blob(obj: image_store.ImageObject) -> Path | None:
+    """The blob `_pack_images` would pack for `obj`, or None when it skips it
+    (missing, not a regular file, or a symlink)."""
+    blob = image_store.blob_path(obj.blob_sha256, obj.ext)
+    try:
+        if blob.is_symlink() or not blob.is_file():
+            return None
+    except OSError:
+        return None
+    return blob
+
+
+def _check_blob_sizes(root: Path) -> None:
+    """`BundleError` naming the first placement whose blob is larger than
+    `MAX_BUNDLE_BLOB_BYTES` -- asked before the bundle is opened, so a refused
+    export writes nothing, and the user is told which picture to replace."""
+    for d, ref in image_refs.walk(root):
+        obj = image_store.read(ref.image) if ref.image is not None else None
+        blob = _packable_blob(obj) if obj is not None else None
+        if blob is None:
+            continue
+        try:
+            size = blob.stat().st_size
+        except OSError:
+            continue                                        # collected mid-walk
+        if size > MAX_BUNDLE_BLOB_BYTES:
+            where = d.relative_to(root).as_posix()
+            raise BundleError(
+                f"image too large to bundle: {where}/{ref.name} ({size} bytes; "
+                f"a bundle carries images up to {MAX_BUNDLE_BLOB_BYTES} bytes)")
+
+
 def _pack_images(z: zipfile.ZipFile, root: Path, wid: str) -> None:
     """Add the blob and the projected object of every image a placement under
     `root` names -- once each, however many placements share it.
@@ -236,13 +276,8 @@ def _pack_images(z: zipfile.ZipFile, root: Path, wid: str) -> None:
     scope = f"world:{wid}"
     for image_id in sorted(image_refs.walk_ids(root)):
         obj = image_store.read(image_id)
-        if obj is None:
-            continue
-        blob = image_store.blob_path(obj.blob_sha256, obj.ext)
-        try:
-            if blob.is_symlink() or not blob.is_file():
-                continue
-        except OSError:
+        blob = _packable_blob(obj) if obj is not None else None
+        if obj is None or blob is None:
             continue
         sha = obj.blob_sha256
         try:
@@ -483,7 +518,7 @@ def _ingest_blobs(z: zipfile.ZipFile, members: _Members) -> dict[str, str]:
     """
     local: dict[str, str] = {}
     for sha, info in members.blobs.items():
-        data = _read_member(z, info, fetch.MAX_BYTES)
+        data = _read_member(z, info, MAX_BUNDLE_BLOB_BYTES)
         if hashlib.sha256(data).hexdigest() != sha:
             raise BundleError(f"image blob does not match its name: {info.filename}")
         ext = info.filename.rsplit(".", 1)[1]

@@ -15013,6 +15013,17 @@ def test_world_export_zip_route(client):
         assert json.loads(z.read("grimoire-bundle.json"))["world_id"] == wid
 
 
+def test_world_export_answers_an_image_too_large_to_bundle_with_422(client, monkeypatch):
+    wid = _world(client, "Saltmarch")
+    cid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    client.put(f"/api/worlds/{wid}/characters/{cid}/versions/default/images/avatar",
+               files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BLOB_BYTES", 8)
+    r = client.get(f"/api/worlds/{wid}/export.zip")
+    assert r.status_code == 422
+    assert r.json()["detail"].startswith("image too large to bundle: ")
+    assert f"characters/{cid}/assets/default/avatar" in r.json()["detail"]
+
 def test_world_export_unknown_world_404(client):
     assert client.get("/api/worlds/nope/export.zip").status_code == 404
 

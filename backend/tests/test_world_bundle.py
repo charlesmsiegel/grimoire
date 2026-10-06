@@ -890,10 +890,44 @@ def test_import_refuses_an_oversized_blob(monkeypatch, tmp_path):
     _home(monkeypatch, tmp_path)
     data = _pixels(12)
     _sha, blob_name = _blob_entry(data)
-    monkeypatch.setattr(fetch, "MAX_BYTES", len(data) - 1)
+    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", len(data) - 1)
     with pytest.raises(world_bundle.BundleError):
         world_bundle.import_bundle(_hand_bundle(tmp_path, "huge", {blob_name: data}))
     assert worlds.list_worlds() == []
+
+
+def test_the_bundle_blob_cap_is_fetchs_cap():
+    assert world_bundle.MAX_BUNDLE_BLOB_BYTES == fetch.MAX_BYTES
+
+
+def test_export_refuses_an_image_import_would_refuse(monkeypatch, tmp_path):
+    """One cap on both sides: an image past it is refused at export, before
+    anything is written, naming the record and the image -- so export never
+    produces a bundle that import refuses."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    root = worlds.world_root(wid)
+    cid, vid = characters.create_character(root, "Seraphine", "default")
+    assets.put_image(root, cid, vid, "avatar", _pixels(1), "png")
+    obj = image_store.read(assets.image_id(root, cid, vid, "avatar"))
+    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", obj.size - 1)
+    dest = tmp_path / "out" / "bundle.zip"
+    dest.parent.mkdir()
+    with pytest.raises(world_bundle.BundleError) as caught:
+        world_bundle.write_bundle(wid, dest)
+    msg = str(caught.value)
+    assert msg.startswith("image too large to bundle: ")
+    assert "characters/seraphine/assets/default/avatar" in msg
+    assert not dest.exists()                     # nothing written
+
+
+def test_a_bundle_at_the_cap_exports_and_imports(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    wid, shared, avatar = _placed_realm()
+    biggest = max(image_store.read(i).size for i in (shared, avatar))
+    monkeypatch.setattr(world_bundle, "MAX_BUNDLE_BLOB_BYTES", biggest)
+    new = world_bundle.import_bundle(_export(wid, tmp_path))
+    assert new != wid
 
 
 def test_import_wraps_an_unreadable_blob(monkeypatch, tmp_path):
