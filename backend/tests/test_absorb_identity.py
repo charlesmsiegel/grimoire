@@ -674,6 +674,48 @@ def test_alternatives_pass_check_conflicts_at_save(client, scene):
     assert RECOVER_THE_LEDGER["beat"] in beats
 
 
+#: `SERAPHINES_DEADLINE` with the ``"due": ""`` a model filling every key sends.
+SERAPHINES_BLANK_DUE = {**SERAPHINES_DEADLINE, "due": ""}
+
+
+def test_an_accepted_retarget_with_a_blank_due_keeps_the_stored_deadline(client, scene):
+    cid, s0, sid = scene
+    _seed_deadline(cid, s0)
+    _assert_lexical_candidate(cid, sid, "commitment", SERAPHINES_BLANK_DUE,
+                              "commitment:the-midnight-deadline")
+    _llm(client, _extraction(owed=[SERAPHINES_BLANK_DUE]),
+         _decisions({"row": "r1", "decision": "existing", "id": "the-midnight-deadline"}))
+    body = _absorb(client, cid, sid)
+
+    edit = _edit(body, "commitment:the-midnight-deadline")
+    assert (edit["identity_check"]["decision"], edit["identity_check"]["status"]) == (
+        "existing", "accepted")
+    assert edit["payload"]["due"] is None
+    assert "due midnight" in edit["label"]
+    assert _save(client, cid, sid, body).status_code == 200
+    assert store.commitments.get(cid, "the-midnight-deadline")["due"] == "midnight"
+
+
+def test_a_swapped_in_alternative_with_a_blank_due_keeps_the_stored_deadline(client, scene):
+    cid, s0, sid = scene
+    _seed_deadline(cid, s0)
+    _llm(client, _extraction(owed=[SERAPHINES_BLANK_DUE]),
+         _decisions({"row": "r1", "decision": "new", "reason": "a second deadline"}))
+    body = _absorb(client, cid, sid)
+    edits = [{k: v for k, v in e.items() if k != "identity_check"} for e in body["edits"]]
+    index = next(i for i, e in enumerate(body["edits"]) if e.get("identity_check"))
+    [alt] = [a for a in body["edits"][index]["identity_check"]["alternatives"]
+             if a["target"]["id"] == "the-midnight-deadline"]
+    assert alt["payload"]["due"] is None
+    assert "due midnight" in alt["label"]
+    edits[index] = alt
+
+    r = _save(client, cid, sid, body, edits)
+
+    assert r.status_code == 200, r.json()
+    assert store.commitments.get(cid, "the-midnight-deadline")["due"] == "midnight"
+
+
 def test_a_save_body_still_carrying_alternatives_is_accepted(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)

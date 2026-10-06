@@ -659,9 +659,13 @@ def _onto_existing(kind: str, row: dict, rid: str) -> dict:
     because materializer cannot import identity. The title is blank (keep
     stored); a plot status is the model's ``closed`` or ``advanced``, else
     ``advanced``, never ``open``; a commitment keeps its stored kind and a
-    status only when it resolves the record; ``due`` stays as present or
-    absent."""
+    status only when it resolves the record; a stated ``due`` is kept, an
+    absent or blank one is left absent (a blank ``due`` on a row that would
+    have opened a record lifted nothing, so it must not clear the stored
+    record's deadline)."""
     new = {**row, "id": rid, "title": ""}
+    if "due" in row and not _text(row.get("due")):
+        del new["due"]
     status = row.get("status")
     if kind == "thread":
         new["status"] = status if status in ("closed", "advanced") else "advanced"

@@ -604,7 +604,7 @@ Tests:
     - **`new` / `uncertain`:** as given, status `accepted`, with the model's reason.
   - `hint_only(reason: str) -> None`: every row becomes `unchecked` / `hint_only` with this reason, `target = None`. Idempotent; it discards any earlier `decide`.
   - `rewritten(parsed: dict) -> dict`: a shallow copy of `parsed` with fresh lists for the two sections. Each examined row is replaced by:
-    - **accepted `existing`:** `{**row, "id": target, "title": "", "identity_check": ic, AS_NEW_KEY: dict(row)}`. Plot `status` becomes `row["status"] if row["status"] in ("closed", "advanced") else "advanced"`. Commitment `kind` becomes `""` and `status` becomes `row["status"] if row["status"] in commitments.RESOLVED else ""`. `due` is left exactly as present or absent.
+    - **accepted `existing`:** `{**row, "id": target, "title": "", "identity_check": ic, AS_NEW_KEY: dict(row)}`. Plot `status` becomes `row["status"] if row["status"] in ("closed", "advanced") else "advanced"`. Commitment `kind` becomes `""` and `status` becomes `row["status"] if row["status"] in commitments.RESOLVED else ""`. `due` is left exactly as present or absent. (Amended by the Slice G final review: a blank `due` is dropped too, so it never clears the stored deadline; spec §10.2.)
     - **otherwise:** `{**row, "identity_check": ic}`.
 
     Citation keys (`quote`, `speaker`, `certainty`) are untouched. Here `ic` is:
