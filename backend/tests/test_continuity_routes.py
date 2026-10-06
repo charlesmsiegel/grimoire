@@ -8,6 +8,7 @@ it is what a reader opens to find out what is wrong.
 
 import importlib
 import json
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -17,8 +18,8 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import doc, drivers
-from tests.llm_fakes import from_entries
+from grimoire.store.continuity import doc, drivers, graph
+from tests.llm_fakes import FakeLLM, from_entries
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
 
@@ -179,6 +180,7 @@ def test_get_continuity_reports_malformed_sections(client, cid):
 @pytest.mark.parametrize("method,path,body", [
     ("get", "/continuity", None),
     ("get", "/continuity/drivers", None),
+    ("get", "/continuity/graph", None),
     ("post", "/continuity/aliases", {"ref": "thread:a", "to": "thread:b"}),
     ("delete", "/continuity/aliases?ref=thread:a", None),
     ("post", "/continuity/links", {"a": "thread:a", "b": "thread:b", "relation": "continues"}),
@@ -279,3 +281,89 @@ def test_drivers_route_makes_no_model_call(client, cid, monkeypatch):
     finally:
         client.app.dependency_overrides.pop(routes.get_llm, None)
     assert body["matching"] == "semantic"
+
+
+# ---- the story graph --------------------------------------------------------
+
+
+def _graph(client, cid, **params):
+    r = client.get(f"/api/campaigns/{cid}/continuity/graph", params=params)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _graph_campaign(cid):
+    """A scene, a thread beat in it, an event and an active idea."""
+    store.clock.advance(cid, to="2026-05-10")
+    sid = store.scenes.create_scene(cid, "Saltmarch harbour")
+    store.plot.set_movement(cid, "mara-s-map", "", "advanced", "Mara traced the coast.", sid)
+    store.events.create(cid, "The coronation", "2026-05-13")
+    store.scene_ideas.add(cid, "Mara's map", "Mara reads the map.",
+                          drivers=[{"ref": "thread:mara-s-map", "action": "advance"}])
+    return sid
+
+
+def test_graph_route_is_not_captured_by_entities(client, cid):
+    assert set(_graph(client, cid)) == {"now", "nodes", "edges", "omitted"}
+
+
+def test_graph_route_matches_the_store(client, cid):
+    _graph_campaign(cid)
+    body = _graph(client, cid)
+    assert body == graph.build(cid)
+    assert _graph(client, cid, lens="cast") == body
+
+
+class _RecordingEmbeddings:
+    """Records every construction rather than raising: `_attempt` and B's
+    `_soft` both catch `Exception`, which an `AssertionError` is, so a raiser
+    would be swallowed and the read would still answer 200."""
+    built: ClassVar[list] = []
+
+    def __init__(self, *args, **kwargs):
+        type(self).built.append((args, kwargs))
+
+
+def _no_model_recorders(monkeypatch):
+    _RecordingEmbeddings.built = []
+    monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
+        "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
+    monkeypatch.setattr(grimoire.embeddings, "EmbeddingsClient", _RecordingEmbeddings)
+    # A fake that answers every call (and records it), not an empty cassette,
+    # which would raise at construction and so record nothing.
+    return FakeLLM([[""]])
+
+
+def _llm_calls(fake) -> int:
+    return fake.calls + len(fake.listed) + len(fake.checked)
+
+
+def test_graph_route_makes_no_model_call(client, cid, monkeypatch):
+    _graph_campaign(cid)
+    fake = _no_model_recorders(monkeypatch)
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    try:
+        body = _graph(client, cid)
+    finally:
+        client.app.dependency_overrides.pop(routes.get_llm, None)
+    assert _RecordingEmbeddings.built == []
+    assert _llm_calls(fake) == 0
+    assert body["omitted"] == []
+    assert {"scene", "thread", "event", "idea"} <= {n["kind"] for n in body["nodes"]}
+
+
+def test_graph_route_survives_a_raising_plugin(client, cid, tmp_path):
+    store.clock.advance(cid, to="2026-05-10")
+    store.chronicle.absorb(cid, {"id": S1, "one_line": "", "date": "2026-03-31"})
+    store.plot.set_movement(cid, "mara-s-map", "", "advanced", "Mara traced the coast.", S1)
+    store.commitments.set_movement(cid, "mara-s-oath", "", "promise", "open", "2026-05-12",
+                                   "Mara swore it at the gate.", S1)
+    _plugin(tmp_path, "broken_test", _BROKEN_PROVIDER_SRC)
+    _primary(cid, "broken-test-calendar")
+
+    body = _graph(client, cid)
+    assert "calendar" in body["omitted"]
+    kinds = [n["kind"] for n in body["nodes"]]
+    assert "holiday" not in kinds and "birthday" not in kinds
+    assert {"thread:mara-s-map", "thread:winifred-s-chart"} <= {
+        n["id"] for n in body["nodes"] if n["kind"] == "thread"}

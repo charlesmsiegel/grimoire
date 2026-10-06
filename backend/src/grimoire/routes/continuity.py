@@ -13,6 +13,10 @@ The drivers read (`GET .../continuity/drivers`, spec §14) is
 `continuity.drivers.snapshot`, taken without a lock like the suggestion
 snapshot it will feed (Decision 14).
 
+The Story Graph read (`GET .../continuity/graph`, spec §19.7) is
+`continuity.graph.build`: one uncapped payload, best-effort locked inside the
+store function, calendar plugin code outside the hold.
+
 The writes are `continuity.review`'s, journalled as ``manual`` and undoable from
 the play view's Changes panel. A refusal is a `review.RefusedError`, answered as
 ``{"kind", "detail", ...}`` so the client can act on the kind.
@@ -44,7 +48,16 @@ from starlette.concurrency import run_in_threadpool
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store.continuity import candidates, doc, drivers, effective, pending, reconcile, review
+from ..store.continuity import (
+    candidates,
+    doc,
+    drivers,
+    effective,
+    graph,
+    pending,
+    reconcile,
+    review,
+)
 from . import ledger as ledger_routes
 from . import runs
 from .common import (
@@ -176,6 +189,12 @@ def get_continuity(cid: str):
 def get_drivers(cid: str, offscreen: bool = False):
     _campaign_or_404(cid)
     return drivers.snapshot(cid, offscreen=offscreen)
+
+
+@router.get("/campaigns/{cid}/continuity/graph")
+def get_graph(cid: str):
+    _campaign_or_404(cid)
+    return graph.build(cid)
 
 
 @router.post("/campaigns/{cid}/continuity/aliases")

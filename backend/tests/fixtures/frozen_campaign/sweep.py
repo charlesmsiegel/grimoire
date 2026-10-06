@@ -66,7 +66,7 @@ import tempfile
 from pathlib import Path
 
 from grimoire import store
-from grimoire.store.continuity import candidates, drivers, effective, pending, pressure
+from grimoire.store.continuity import candidates, drivers, effective, graph, pending, pressure
 
 HERE = Path(__file__).resolve().parent
 HOME = HERE / "home"
@@ -202,6 +202,12 @@ def _campaign(out: dict, cid: str) -> None:
     out[f"continuity.effective.diagnostics[{cid}]"] = effective.diagnostics(cid)
     out[f"continuity.pressure.build[{cid}]"] = pressure.build(cid)
     out[f"continuity.drivers.snapshot[{cid}]"] = drivers.snapshot(cid)
+    # The Story Graph over the same files. The fixture has no continuity.json,
+    # candidate cache or ideas, so those are absent-file reads; it does have a
+    # pre-capstone relationships.json and a legacy scene id, so the old tokens
+    # must become feeling and bond edges between nodes, and the scenes must
+    # order by `timeline.build`'s rule.
+    out[f"continuity.graph.build[{cid}]"] = graph.build(cid)
     # The derived candidate cache. The fixture predates it, so both read the
     # absent file: an old store with no cache has no findings, and neither
     # reader may create the file (`test_the_read_only_sweep_writes_nothing`).
