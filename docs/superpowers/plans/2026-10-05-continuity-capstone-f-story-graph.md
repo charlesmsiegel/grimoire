@@ -104,7 +104,7 @@ Out of scope: anything that is not the graph. That includes groups and standing 
   - the bucket headers are "Undated" (both axes: a non-idea node whose `fixed` is null), "Unscheduled" (the play axis: an idea whose `fixed` is null), "Reached", "Not in a scene" (the play axis's leading column, Task 10) and "People and places" (the calendar axis's trailing column for actors and locations);
   - the omitted note is `Some records could not be read: <PART_LABELS joined by ", ">.`, where `PART_LABELS: Record<GraphPart, string>` is `calendar` → "the calendar", `scenes` → "scenes", `chronicle` → "the chronicle", `plot` → "threads", `commitments` → "commitments", `events` → "events", `continuity` → "reviewed links and merges", `candidates` → "review findings", `relationships` → "relationships", `scene_ideas` → "saved scene ideas", `names` → "names";
   - pressure states are shown through `STATE_WORDS: Record<PressureState, string>` (for example `due_soon` → "due soon"), never raw;
-  - finding kinds are shown through `FINDING_PHRASE: Record<CandidateKind, string>` (`possible_duplicate` and `possible_relation` → "Possible overlap", `possible_thread_closure` → "May be finished", `possible_commitment_resolution` → "Needs resolution review"; §30, reused from D's `components/continuity/labels.ts` if it exports these, else declared in `model.ts`);
+  - finding kinds are shown through `FINDING_PHRASE: Record<CandidateKind, string>`, which is D's `KIND_PHRASES` from `components/continuity/labels.ts`, re-exported under this name by `model.ts` and never redeclared: `possible_duplicate` → "Possible overlap", `possible_relation` → "Possible relation", `possible_thread_closure` → "May be finished", `possible_commitment_resolution` → "Needs resolution review" (§30; confirmed against the base in "Before Task 1" step 3: D exports the table as `KIND_PHRASES`, and D's Task 16 ruling made `possible_relation` read "Possible relation" so that Todo and the Ledger share one table, which the graph now joins);
   - link relations are shown through `RELATION_PHRASE: Record<LinkRelation, { out: string; in: string }>`: `continues` → "Continuation of" / "Continued by", `subthread_of` → "Subthread of" / "Has subthread", `pays_off` → "Pays off" / "Paid off by", `before` → "Before" / "After this:", `on` → "On" / "On this day:", `after` → "After" / "Before this:", `by` → "Due by" / "Deadline for", `related_to` → "Related to" / "Related to";
   - no visible text or accessible name contains a raw ref (`characters:mara`), an underscore token or a scene filename;
   - the empty state is "Nothing to draw yet — play a scene and its threads appear here.", shown only when there are no nodes **and** `omitted` is empty. With no nodes and a non-empty `omitted`, the omitted note renders alone, so a broken scene listing never reads as an empty campaign;
@@ -732,7 +732,7 @@ Backend paths below are relative to `backend/src/grimoire/` and tests to `backen
 **Files:**
 - Create: `frontend/src/components/storyGraph/model.ts`, `frontend/src/components/storyGraph/model.test.ts`, `frontend/src/testkit/storyGraph.ts` (the shared fixture: CLAUDE.md puts scaffolding two suites use in `testkit/`, which coverage excludes; a fixture exported from `model.test.ts` would re-register that file's tests in every importer)
 
-**Interfaces** (pure; no React; imports types, `whenPhrase` and `ChooserSeed` from `../pressureControls`, and `LedgerTarget` from `../../ledgerPaths`):
+**Interfaces** (pure; no React; imports types, `whenPhrase` and `ChooserSeed` from `../pressureControls`, `LedgerTarget` from `../../ledgerPaths`, and `KIND_PHRASES` from `../continuity/labels`, a types-only leaf):
 - `export const LENSES = ["story", "cast", "calendar", "continuity"] as const; export type Lens = typeof LENSES[number];`
 - `export const LENS_LABELS: Record<Lens, string>` ("Story", "Cast", "Calendar", "Continuity").
 - `export type Show = { actors: boolean; locations: boolean; merged: boolean; candidates: boolean };` and `export const SHOW_LABELS: Record<keyof Show, string>` ("Actors", "Locations", "Merged records", "Review candidates").
@@ -778,7 +778,7 @@ Backend paths below are relative to `backend/src/grimoire/` and tests to `backen
   - `statusOf and accessibleName include the label and the status` (one case per kind).
   - `a lifecycle finding is named on its node's status`: `accessibleName(<thread:mara-s-map>, ix)` contains "May be finished"; a thread with no finding does not; a pair finding (`possible_relation`) adds no phrase to either end's status; the result is the same whatever lens or toggle a caller is on (`statusOf` takes neither).
   - `no shown string carries an internal token`: for every fixture node, `statusOf` and `accessibleName` contain no `_` and no `<prefix>:` ref; every `PART_LABELS`, `STATE_WORDS`, `FINDING_PHRASE` and `RELATION_PHRASE` value contains no `_`.
-  - `seedFor builds exactly the two section 16.5 shapes`. Each equals its literal, and `sanitizeSeed(seedFor(n, a).chooser)` deep-equals `seedFor(n, a).chooser` (E's validator accepts what F sends).
+  - `seedFor builds exactly the two section 16.5 shapes`. Each equals its literal, and `sanitizeSeed(seedFor(n, a))` deep-equals `seedFor(n, a).chooser` (E's validator accepts what F sends; it takes the whole history state `{chooser}` and reads `.chooser` itself, per E's Task 11 ruling, so passing `.chooser` would always give `null`).
   - `ledgerTarget of an odd thread id` (Review Focus 1): `ledgerHref("run", ledgerTarget(node)!)` ends `/ledger/threads/mara%2Fs%3Amap`, and events give `null`.
   - `arcRows order`.
 - [ ] **Step 2: Run them and confirm they fail.** From `frontend/`: `npx vitest run src/components/storyGraph/model.test.ts`. Expected: FAIL (no module).
@@ -1065,12 +1065,12 @@ Backend paths below are relative to `backend/src/grimoire/` and tests to `backen
   Disabled buttons carry their hint in a `.field-hint` beneath them, never only in a `title`.
 - [ ] **Step 1: Write the failing tests** (in `StoryGraphView.test.tsx`):
   - `a thread's detail shows title, merges, status, latest beat, scenes, actors, pressure, links and findings`.
-  - `a pair finding names the record it pairs with`: Mara's map's detail shows "Possible overlap with" and a "Mara's oath" chip; clicking the chip selects `commitment:mara-s-oath`. The detail text contains no `_` and no raw ref.
+  - `a pair finding names the record it pairs with`: Mara's map's detail shows `${FINDING_PHRASE.possible_relation} with` ("Possible relation with") and a "Mara's oath" chip; clicking the chip selects `commitment:mara-s-oath`. The detail text contains no `_` and no raw ref.
   - `Focus next scene sends the drivers handoff` (§16.5): Probe shows exactly `{"chooser":{"drivers":{"thread:mara-s-map":"focus"}}}`.
   - `Anchor next scene sends the anchor handoff`: exactly `{"chooser":{"anchor":{"ref":"event:the-coronation","relation":"on"}}}`.
   - `Focus is disabled on a closed thread and absent on a merged record` (Review Focus 4): the closed thread's button is `disabled` with its hint visible. The merged node has no Focus button and has a "Merged into Mara's map" chip.
   - `Anchor is disabled on a fired event`.
-  - `the sent state is one sanitizeSeed accepts`: `sanitizeSeed(JSON.parse(probe).chooser)` is non-null for both actions.
+  - `the sent state is one sanitizeSeed accepts`: `sanitizeSeed(JSON.parse(probe))` is non-null for both actions (it takes the whole state, `{chooser}`).
   - `Open ledger entry links to the record's ledger row`: the href equals `ledgerHref("run", {section: "threads", row: "mara-s-map"})`, and for the merged node it is its own id's row.
   - `a finding links to its review address`.
   - `Filter to this arc sets ?arc= and narrows the drawing; Show the whole graph clears it`: an unrelated thread's button disappears and comes back.
