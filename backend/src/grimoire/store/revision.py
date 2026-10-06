@@ -64,8 +64,9 @@ The continuity reconciliation sweep is detached in the same way, so its two
 persists, `store.continuity.reconcile.persist_found` and `persist_proposals`,
 stamp for themselves: the route that started the sweep either answered 202
 (the explicit refresh, `@computes_only`) or was the save that ended a scene,
-which had answered before the sweep began. Each bumps inside the campaign-lock
-hold that wrote the candidate cache, and only when it did write. A sweep that
+whose answer neither waits for the sweep nor sees its writes. Each bumps
+inside the campaign-lock hold that wrote the candidate cache, and only when it
+did write. A sweep that
 found exactly what the cache already holds stamps nothing, because a time-skip
 preview re-prices on any movement of the token.
 

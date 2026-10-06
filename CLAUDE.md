@@ -294,9 +294,11 @@ subscriber. **Twenty-five handlers** start detached runs, in four classes:
   incremental sweep once a commit has completed in its request (a fresh save or
   a journalled resume, never the idempotent replay), and the save's answer does
   not wait on it or depend on it. `post_reconcile` is the explicit full sweep,
-  `@computes_only`, answering **202**. The class's other members are started by
-  no handler: a landed turn's rolling summary and scene-break check (below) and
-  the tracker's `tracker-update`.
+  `@computes_only`, answering **202**. The class's other members are not in the
+  count, because each is a follow-up a write schedules once it has landed
+  rather than the work its request asked for: a landed turn's rolling summary
+  and scene-break check (below), and the tracker's `tracker-update`, which a
+  turn or a greeting-opened scene schedules after its posts are written.
 
 - The run registry lives on **`app.state.runs`**, not at module scope: a
   `TestClient` builds an app per test, and module state would leak runs between
@@ -610,9 +612,9 @@ would answer neither question.
   at each of a turn's terminal points, which is not the same thing as "a post
   landed": a closed roll fence writes a proposal and no post at all. The
   continuity sweep's two persists (`reconcile.persist_found` and
-  `persist_proposals`) stamp the same way, since they land after a 202 or after
-  End Scene's save has already answered; one that would leave the candidate
-  cache as it was stamps nothing. A prompt
+  `persist_proposals`) stamp the same way, since the request that started the
+  sweep (a 202, or End Scene's save) never waits for them; one that would leave
+  the candidate cache as it was stamps nothing. A prompt
   capture (`routes/common._record_prompt`) bumps after its write and under the
   lock that covers it, because the one route reaching it while persisting
   nothing else is the greeting opener, which is `@computes_only` — and a token
