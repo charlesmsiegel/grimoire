@@ -67,7 +67,7 @@ import json
 import logging
 import shutil
 
-from . import atomic, branch, cascade, locks, replay, revision, scene_ids
+from . import atomic, branch, cascade, image_scopes, locks, replay, revision, scene_ids
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -303,6 +303,12 @@ def fork_campaign(cid: str, name: str, from_scene: str | None = None,
                 continue
             try:
                 _copy(cid, new_cid, name, from_scene)
+                # The source's subject tags on the shared image objects, which
+                # the directory copy cannot carry. Inside this `try`, so a
+                # failure from here on takes the copied scope away with the
+                # tree (`_discard`): a later campaign reusing the slug must not
+                # inherit it. Reentrant inside this hold of the same two locks.
+                image_scopes.copy_campaign(cid, new_cid)
             except BaseException:
                 # Everything past the claim is ours to undo. `copytree` publishes
                 # `campaign.md` partway through a copy that can still fail after it
@@ -396,6 +402,14 @@ def _discard(new_cid: str) -> None:
     silence, because a fork directory left on the shelf is a phantom campaign
     and the only trace of it would otherwise be the user finding it.
     """
+    try:
+        # The scope `image_scopes.copy_campaign` may already have written onto
+        # the shared image objects, which the `rmtree` cannot reach. Best
+        # effort like the rest: a scope left behind is logged, never raised.
+        image_scopes.strip(image_scopes.campaign_scope(new_cid))
+    except Exception:
+        log.warning("fork: could not strip the partial copy's image scope at %s",
+                    new_cid, exc_info=True)
     try:
         root = campaigns_paths.campaign_root(new_cid)
         shutil.rmtree(root, ignore_errors=True)

@@ -87,6 +87,7 @@ from . import (
     image_library,
     image_refs,
     image_sanitize,
+    image_scopes,
     image_store,
     image_subjects,
     journal,

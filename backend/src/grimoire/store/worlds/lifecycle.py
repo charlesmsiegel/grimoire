@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import shutil
+import traceback
 from pathlib import Path
 
-from .. import atomic
+from .. import atomic, image_scopes, logs
 from ..campaigns import read as campaigns_read
 from ..frontmatter import dump_frontmatter, parse_frontmatter
 from ..paths import ensure_home, now_iso, slugify, uniquify
@@ -140,6 +141,14 @@ def fork_world(wid: str, name: str) -> str:
     Not locked, because worlds have no lock — a world edited while it is being
     forked can be copied half-old and half-new, exactly as `write_bundle`
     documents for an export. The source is never written to either way.
+
+    One part of a world is not in its directory: the subject tags on the shared
+    image objects, under ``world:<wid>`` (`store.image_scopes`). Those are
+    copied onto ``world:<new id>`` after the publish -- the objects gain the
+    fork's scope and keep the source's. If that copy fails, the failure is
+    logged and the fork is returned anyway: it is on the shelf and usable, and
+    only its pictures' subject tags are missing (they read as untagged, and
+    tagging them again is the remedy).
     """
     ensure_home()
     # Canonical first: on Windows and macOS `worlds/REALM` opens `worlds/realm`,
@@ -204,7 +213,19 @@ def fork_world(wid: str, name: str) -> str:
         meta["updated"] = now
         atomic.write_text(mp, dump_frontmatter(meta, body))
         staging.repoint_urls(dest, wid, new_wid)
-        return staging.publish(dest, base, new_wid)
+        new_wid = staging.publish(dest, base, new_wid)
+    # The subject tags live on the shared image objects under `world:<wid>`,
+    # not in the directory, so the copy above did not carry them: copied onto
+    # the fork's scope here, once its id is final. The fork is published and
+    # whole by now, so a failure costs only its tags -- logged, and the fork
+    # still returned rather than reported as failed when it is on the shelf.
+    try:
+        image_scopes.copy_world(wid, new_wid)
+    except Exception as exc:  # noqa: BLE001 -- logged; the published fork stands
+        logs.record("error", __name__,
+                    f"fork {wid} -> {new_wid}: image subject tags were not copied",
+                    kind=type(exc).__name__, trace=traceback.format_exc())
+    return new_wid
 
 
 def _skip_write_temps(directory: str | Path, names: list[str]) -> set[str]:
@@ -316,4 +337,10 @@ def delete_world(wid: str) -> None:
                if w is None or paths.references_world(w, root)]
     if used_by:
         raise WorldInUse(wid, used_by)
+    # The world's subject tags live on the shared image objects, which outlive
+    # this directory; stripped first, so a world created again under this slug
+    # starts untagged (Review Focus 4). Unlocked, as worlds are: a tag written
+    # between the strip and the `rmtree` survives it, and deleting again --
+    # which a re-created world of this name would need first -- clears it (R13).
+    image_scopes.strip_world(wid)
     shutil.rmtree(root)

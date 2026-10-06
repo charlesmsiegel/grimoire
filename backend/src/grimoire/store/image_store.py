@@ -40,7 +40,7 @@ import json
 import os
 import re
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -113,6 +113,35 @@ def object_path(image_id: str) -> Path:
     if not image_hash.is_image_id(image_id):
         raise ValueError("bad image id")
     return store_root() / "objects" / image_id[4:6] / f"{image_id}.json"
+
+
+def iter_ids() -> Iterator[str]:
+    """Every object id with a sidecar under ``objects/``, sorted.
+
+    Decided from the directory listing alone: a name counts when it is a
+    well-formed id and sits in the shard `object_path` would put it in. No
+    sidecar is opened, so a garbled one is still listed (and a reader of it
+    gets None, as `read` answers); a stray name, a temp or a misplaced file
+    is skipped. For whole-store sweeps (`image_scopes`), which read each
+    object with `read_fresh`.
+    """
+    objects = store_root() / "objects"
+    found: list[str] = []
+    try:
+        shards = [d for d in objects.iterdir() if d.is_dir()]
+    except OSError:
+        return iter(())
+    for shard in shards:
+        try:
+            names = [p.name for p in shard.iterdir()]
+        except OSError:
+            continue
+        for name in names:
+            stem, dot, ext = name.rpartition(".")
+            if (dot and ext == "json" and image_hash.is_image_id(stem)
+                    and stem[4:6] == shard.name):
+                found.append(stem)
+    return iter(sorted(found))
 
 
 def blob_sha_of(path: Path) -> str | None:

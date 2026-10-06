@@ -15,6 +15,8 @@ from grimoire.store import (
     chronicle,
     entities,
     fork,
+    image_scopes,
+    image_store,
     journal,
     overlay,
     plot,
@@ -679,3 +681,58 @@ def test_forks_write_no_blob(monkeypatch, tmp_path):
         assert refs
         for p in refs:
             assert image_refs.resolve(p.parent.parent, p.stem) is not None, p
+
+
+# --- the campaign's scope on the shared image objects (Review Focus 4) -----
+
+
+def _scoped_object(cid, data=b"png-1"):
+    """An object tagged in `cid`'s scope, as a campaign-level tag would be."""
+    image_id = image_store.ingest(data, "png").id
+    scope = f"campaign:{cid}"
+
+    def seed(raw):
+        raw["associations"] = [{"kind": "character", "relation": "subject",
+                                "scope": scope, "id": "seraphine"}]
+        raw["reviews"] = {"subjects": [scope]}
+        return raw
+
+    assert image_store.update(image_id, seed)
+    return image_id
+
+
+def _scopes(image_id):
+    raw = image_store.read_fresh(image_id).raw
+    return ({a["scope"] for a in raw.get("associations", [])},
+            set(raw.get("reviews", {}).get("subjects", [])))
+
+
+def test_forking_a_campaign_copies_campaign_scope(cid):
+    image_id = _scoped_object(cid)
+
+    child = fork.fork_campaign(cid, "Branch")["id"]
+
+    assert _scopes(image_id) == ({f"campaign:{cid}", f"campaign:{child}"},
+                                 {f"campaign:{cid}", f"campaign:{child}"})
+
+
+def test_a_failed_campaign_fork_leaves_no_scope(cid, monkeypatch):
+    """The scope copy runs inside the try that discards a half-made fork, so a
+    failure after it has written takes the copied scope away with the tree --
+    or a later campaign that reuses the slug would inherit it."""
+    image_id = _scoped_object(cid)
+    real = image_scopes.copy_campaign
+    copied = []
+
+    def copy_then_die(src, dst):
+        copied.append(real(src, dst))
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(image_scopes, "copy_campaign", copy_then_die)
+    with pytest.raises(OSError):
+        fork.fork_campaign(cid, "Wreck")
+
+    assert copied == [1]
+    assert [c["id"] for c in campaigns.list_campaigns()] == [cid]
+    assert not campaigns.campaign_root("wreck").exists()
+    assert _scopes(image_id) == ({f"campaign:{cid}"}, {f"campaign:{cid}"})

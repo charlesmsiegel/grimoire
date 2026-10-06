@@ -17,6 +17,7 @@ from .. import (
     entities,
     greetings,
     image_refs,
+    image_scopes,
     locks,
     modules,
     overlay,
@@ -626,4 +627,11 @@ def delete_campaign(cid: str) -> None:
     # run for a spelling the store does not actually use (#259 review)
     if not paths.campaign_meta_path(cid).exists() or not worlds_paths.names_its_directory(root):
         raise paths.CampaignNotFound(cid)
+    # The campaign's subject tags live on the shared image objects, which
+    # outlive this directory; stripped first, so a campaign created again
+    # under this slug starts untagged. `strip_campaign` takes this campaign's
+    # lock for the sweep, so a delete can now wait on -- and, past the
+    # timeout, be refused by -- a long hold on the campaign (R13). The
+    # `rmtree` itself stays outside the lock, as it always was.
+    image_scopes.strip_campaign(cid)
     shutil.rmtree(root)

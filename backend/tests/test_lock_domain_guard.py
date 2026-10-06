@@ -162,7 +162,10 @@ Honest about its reach — the house standard set by ``test_atomic_guard.py``:
   ``image_subjects.py``) passes a CHARACTER id into the ``cid`` parameter this
   guard reads as "campaign id" — recognizing them would misclassify those
   three modules as campaign mutators on the strength of a name collision, not
-  a real one.
+  a real one. ``store.image_store``'s ``update``/``merge_projection`` are
+  enumerated the same way (``_IMAGE_STORE_WRITERS``, R7): a campaign's subject
+  tags live on the image object, and ``store.image_scopes`` edits them through
+  nothing else.
 - **Analysis is per-module, with one exception that reads and does not
   propagate.** Mutation propagates through a module's own helpers, never across
   an import, so a function whose only mutation happens inside a *different*
@@ -308,6 +311,18 @@ _ASSETS_WRITERS = ("put_in", "delete_in")
 # to match, so it is treated as a file creation UNLESS the receiver names a
 # module in this package that defines its own `touch`. Only one does.
 _TOUCH_FUNCTIONS = ("campaigns",)
+# R7: `store.image_store.update`/`merge_projection` rewrite an image object's
+# sidecar, and a campaign's subject tags live on it under `campaign:<cid>` --
+# so `store.image_scopes`, which edits that scope purely through them, would
+# otherwise be invisible to the survey and its `DOMAIN_MODULES` entry a
+# phantom. An ENUMERATION, as `_ASSETS_WRITERS` is and for its reason: most of
+# `image_store` reads (`read`, `read_fresh`, `iter_ids`, `object_path`, ...).
+# `ingest` is deliberately not here: it creates an object nobody's scope names
+# yet, and every caller of it is a record write the guard already sees.
+_IMAGE_STORE_WRITERS = ("update", "merge_projection")
+# The package-local namespaces recognized by enumeration, keyed by the module
+# name a receiver or a `from .<module> import` resolves to.
+_ENUMERATED_WRITERS = {"assets": _ASSETS_WRITERS, "image_store": _IMAGE_STORE_WRITERS}
 # The two entry points into the domain. `hold_all` counts because the
 # multi-campaign holders reach every campaign lock through it.
 _LOCK_CALLS = ("campaign_lock", "hold_all")
@@ -489,7 +504,7 @@ def _fs_namespaces(tree: ast.AST) -> dict[str, str]:
                     out[alias.asname or root] = root
         elif isinstance(node, ast.ImportFrom):
             for alias in node.names:
-                if alias.name in (*_FS_NAMESPACES, "atomic", "assets"):
+                if alias.name in (*_FS_NAMESPACES, "atomic", "assets", "image_store"):
                     out[alias.asname or alias.name] = alias.name
     # `import shutil; fs = shutil` binds the MODULE OBJECT, which the import
     # scan above cannot see. Round sixteen resolved import aliases and left
@@ -535,12 +550,13 @@ def _imported_writers(tree: ast.AST) -> set[str]:
         if not isinstance(node, ast.ImportFrom) or node.module is None:
             continue
         source = node.module.rsplit(".", 1)[-1]
-        if source == "assets":
+        if source in _ENUMERATED_WRITERS:
             # ENUMERATION, not inversion -- see `_ASSETS_WRITERS`: most of
-            # `assets` reads, so `from .assets import path_in` must not read
-            # as a writer the way `from os import truncate` does below.
+            # `assets` (and of `image_store`, R7) reads, so `from .assets
+            # import path_in` must not read as a writer the way `from os
+            # import truncate` does below.
             out |= {(a.asname or a.name) for a in node.names
-                    if a.name in _ASSETS_WRITERS}
+                    if a.name in _ENUMERATED_WRITERS[source]}
             continue
         # Inverted the same way the attribute path is: importing a name OUT of
         # a filesystem namespace does not make it safer, so `from os import
@@ -909,9 +925,10 @@ def _names_a_writer(name: str | None, receiver: str | None, namespaces: dict) ->
         return True
     if namespace == "atomic" and name not in _ATOMIC_READERS:
         return True
-    if namespace == "assets" and name in _ASSETS_WRITERS:
+    if name in _ENUMERATED_WRITERS.get(namespace, ()):
         # An ENUMERATION, unlike the `atomic` line above -- see `_ASSETS_WRITERS`
-        # for why the whole namespace is not inverted here.
+        # for why the whole namespace is not inverted here (`assets`, and
+        # `image_store` for R7).
         return True
     if name in _ATOMIC_WRITERS:
         # ANY receiver, not just `atomic`. The claim that `test_atomic_guard`
@@ -2706,6 +2723,67 @@ def test_assets_put_image_is_not_recognized_as_publication():
                 "    assets.promote_image(root, cid, vid, name)\n"):
         _f, _s, mutators = _probe(src)
         assert not mutators, f"put_image/delete_image/promote_image leaked in: {src!r}"
+
+
+def test_image_store_update_and_merge_projection_are_recognized_as_publication():
+    """R7: `image_store.update` and `merge_projection` rewrite an image
+    object's sidecar -- and a `campaign:<cid>` scope lives on it -- without the
+    caller touching `atomic`/`os`/`shutil` itself. Unrecognized, a module that
+    edits a campaign's scope through them (`store.image_scopes`) would leave
+    the survey, and its `DOMAIN_MODULES` entry would be a phantom."""
+    for src in (("from . import image_store\n"
+                 "def tag(cid):\n"
+                 "    image_store.update(image_id, change)\n"),
+                ("from . import image_store\n"
+                 "def fold(cid):\n"
+                 "    image_store.merge_projection(image_id, projected, scope)\n"),
+                ("from .image_store import update\n"
+                 "def tag(cid):\n"
+                 "    update(image_id, change)\n"),
+                ("from .image_store import merge_projection as fold_in\n"
+                 "def fold(cid):\n"
+                 "    fold_in(image_id, projected, scope)\n"),
+                ("from . import image_store\n"
+                 "objects = image_store\n"
+                 "def tag(cid):\n"
+                 "    objects.update(image_id, change)\n")):
+        _f, _s, mutators = _probe(src)
+        assert mutators, f"an image_store write was invisible: {src!r}"
+
+
+def test_image_store_reads_stay_invisible():
+    """An enumeration, as `assets`' is: most of `image_store` reads, and a
+    module that only reads objects must not read as a campaign mutator."""
+    for src in (("from . import image_store\n"
+                 "def look(cid):\n"
+                 "    return image_store.read(image_id)\n"),
+                ("from . import image_store\n"
+                 "def look(cid):\n"
+                 "    return image_store.read_fresh(image_id)\n"),
+                ("from .image_store import read\n"
+                 "def look(cid):\n"
+                 "    return read(image_id)\n")):
+        _f, _s, mutators = _probe(src)
+        assert not mutators, f"an image_store READ read as a mutation: {src!r}"
+
+
+def test_an_unlocked_image_scope_strip_is_reported():
+    """The R7 shape this recognition exists for: a campaign-scope edit through
+    `image_store.update` with no campaign lock around it is an unserialized
+    mutator, and taking the lock makes it a serialized one."""
+    unlocked = ("from . import image_store\n"
+                "def strip_campaign(cid):\n"
+                "    image_store.update(image_id, change)\n")
+    _f, serializing, mutators = _probe(unlocked)
+    assert mutators == {"strip_campaign"}
+    assert "strip_campaign" not in serializing
+
+    locked = ("from . import image_store\n"
+              "def strip_campaign(cid):\n"
+              "    with locks.campaign_lock(cid):\n"
+              "        image_store.update(image_id, change)\n")
+    _f, serializing, mutators = _probe(locked)
+    assert mutators == {"strip_campaign"} and "strip_campaign" in serializing
 
 
 def test_the_filesystem_namespace_is_a_closed_whitelist_not_an_enumeration():
