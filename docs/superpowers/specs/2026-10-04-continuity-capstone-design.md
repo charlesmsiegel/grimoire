@@ -1852,7 +1852,7 @@ It has no tail, and `GET /api/shell` gains no field. `rail.test.ts` adds `/campa
 
 - **Lens:** four rows (§19.5);
 - **Show:** toggles for actors, locations, merged records, and review candidates;
-- **Arcs:** one row per thread or commitment; selecting one selects that node.
+- **Arcs:** one row per canonical thread or commitment (a merged-away record is reached through its canonical); selecting one selects that node (Slice F plan, Decision 19; Task 9).
 
 **Main.** Main holds the drawing in a horizontally scrolling pane, and the selected node's detail **below** the drawing, outside it.
 
@@ -1945,13 +1945,13 @@ Never render an embedding score as an asserted story relation.
 The default **Story** lens is play-order oriented, not a force-directed hairball.
 
 - **Spine:** every scene, absorbed or still in play, in **scene-id order** (the order `timeline.build` emits; never `list_scenes`, which sorts by `updated`). Play order is deliberately not date order, because flashbacks exist.
-- **Now boundary:** drawn immediately after the last scene. Everything left of Now is played history.
+- **Now boundary:** drawn after the last scene and, when that column is shown, after “Reached” (below), which sits between them. Everything left of Now is played history (Slice F plan, Decision 21).
 - **Right of Now:**
   - upcoming events, holidays, birthdays and parseable deadlines, by ascending `in_days`;
   - then active saved ideas, dated ones by `in_days` and undated ones in a trailing “Unscheduled” column.
 - **Lanes:** thread and commitment nodes and arcs sit in lanes connected to the scenes that moved them.
 - **Density:** actors and locations are secondary nodes, toggled to reduce density.
-- **Fired events:** fired or passed events are not on the Story spine. They appear in the Calendar lens and in node detail. An event on today's date is the exception, by §13.5's own-day carve-out: reaching the day fires it, but its driver still reads `today` and the chooser still offers it as an anchor, so a fired event with `in_days == 0` stays on Story, right of Now.
+- **Fired events:** fired or passed events are not on the Story spine: the Story preset drops them. They appear in the Calendar lens, in node detail, and in the play axis's “Reached” column, left of Now, on the Continuity lens or under an arc filter whose link neighbours include one (below; Slice F plan, Decision 21). An event on today's date is the exception, by §13.5's own-day carve-out: reaching the day fires it, but its driver still reads `today` and the chooser still offers it as an anchor, so a fired event with `in_days == 0` is never “Reached”: it stays on Story, in its temporal slot right of Now.
 
 The **Calendar** lens places scenes by their opening date's `fixed`, and puts Now at `now.fixed`.
 
