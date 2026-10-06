@@ -372,10 +372,17 @@ MIN_ID_ROUTES = 150
 
 
 def _id_routes():
-    import os
     import tempfile
-    os.environ.setdefault("GRIMOIRE_HOME", tempfile.mkdtemp())
-    schema = create_app().openapi()
+
+    # Runs at COLLECTION, outside every test's monkeypatch, so the env var is
+    # set for this call only. A bare `os.environ.setdefault` outlived it: every
+    # later test that does not set `GRIMOIRE_HOME` itself then shared one store
+    # -- and one global image store, whose objects (and their descriptions)
+    # are keyed by bytes, so a test's text leaked into the next one's.
+    with pytest.MonkeyPatch.context() as mp:
+        if "GRIMOIRE_HOME" not in os.environ:
+            mp.setenv("GRIMOIRE_HOME", tempfile.mkdtemp())
+        schema = create_app().openapi()
     out = []
     for path, ops in schema["paths"].items():
         params = set(re.findall(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}", path))
