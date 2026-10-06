@@ -988,12 +988,15 @@ def put_campaign(cid: str, body: NameBody):
 # last precisely so a literal third segment like `fork` is still reachable.
 @router.post("/campaigns/{cid}/fork")
 @leaves_campaign_unchanged
-def post_campaign_fork(cid: str, body: ForkCampaign):
+def post_campaign_fork(cid: str, body: ForkCampaign, request: Request):
     """Fork `cid` into a new campaign, optionally cut back to an earlier scene.
 
     Returns the fork's id alongside the store's own report of the cut, which
     the client shows verbatim: a retrospective fork restores what carries the
     scene's id and reports the rest rather than pretending (`store/fork.py`).
+
+    Held against image-store maintenance for the whole fork, which copies the
+    campaign's placements and any legacy files a migration may be moving.
     """
     name = body.name.strip()
     if not name:
@@ -1008,10 +1011,11 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
         # `" job "` collide, so a client that sent the second would be answered
         # with the fork the first made (Codex review). The empty string is still
         # "no key" -- that is the store's own rule, not a normalization.
-        return store.fork.fork_campaign(cid, name, from_scene,
-                                        key=body.idempotency_key,
-                                        expect_revision=body.expect_revision,
-                                        from_index=body.from_index)
+        with runs.maintenance_excluded(request.app):
+            return store.fork.fork_campaign(cid, name, from_scene,
+                                            key=body.idempotency_key,
+                                            expect_revision=body.expect_revision,
+                                            from_index=body.from_index)
     except IndexError as e:                     # a `from_index` outside the scene
         raise HTTPException(status_code=400, detail="message index out of range") from e
     except store.campaigns.CampaignNotFound:
@@ -1038,10 +1042,13 @@ def post_campaign_fork(cid: str, body: ForkCampaign):
 
 @router.delete("/campaigns/{cid}")
 def delete_campaign(cid: str, request: Request):
-    try:
-        store.campaigns.delete_campaign(cid)
-    except store.campaigns.CampaignNotFound:
-        raise HTTPException(status_code=404, detail="campaign not found")
+    # Held against image-store maintenance for the whole delete, for the world
+    # route's reason: a pass must not have a tree removed beneath it.
+    with runs.maintenance_excluded(request.app):
+        try:
+            store.campaigns.delete_campaign(cid)
+        except store.campaigns.CampaignNotFound:
+            raise HTTPException(status_code=404, detail="campaign not found")
     # AFTER the delete, so a campaign that could not be removed keeps its runs.
     # Campaign ids are slugs and a slug is reusable, so a replacement created
     # inside the retention window would otherwise inherit this one's drafts --

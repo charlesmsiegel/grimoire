@@ -136,12 +136,16 @@ def put_world(wid: str, body: WorldUpdate):
 
 @router.delete("/worlds/{wid}")
 def delete_world(wid: str, request: Request):
-    try:
-        store.worlds.delete_world(wid)
-    except store.worlds.WorldNotFound:
-        raise HTTPException(status_code=404, detail="world not found")
-    except store.worlds.WorldInUse as exc:
-        raise HTTPException(status_code=409, detail=str(exc))
+    # Held against image-store maintenance for the whole delete: a migration
+    # placing this world's legacy files, or a collection walking its
+    # placements, must not have the tree removed beneath it.
+    with runs.maintenance_excluded(request.app):
+        try:
+            store.worlds.delete_world(wid)
+        except store.worlds.WorldNotFound:
+            raise HTTPException(status_code=404, detail="world not found")
+        except store.worlds.WorldInUse as exc:
+            raise HTTPException(status_code=409, detail=str(exc))
     # AFTER the delete, and for the campaign route's reason: world ids are
     # slugs too, so a replacement of the same name would otherwise be handed
     # this world's taglines and scenario proposals.
@@ -154,7 +158,7 @@ def delete_world(wid: str, request: Request):
 # last precisely so a literal second segment like `fork` is still reachable,
 # and `tests/test_route_order.py` fails if that ever stops being true.
 @router.post("/worlds/{wid}/fork")
-def post_world_fork(wid: str, body: NameBody):
+def post_world_fork(wid: str, body: NameBody, request: Request):
     """Copy `wid` into a brand-new world called `body.name`.
 
     A deep copy of the whole directory, not a reference: nothing the fork holds
@@ -166,12 +170,18 @@ def post_world_fork(wid: str, body: NameBody):
     A `def`, so FastAPI runs it in a threadpool: copying a world with a full
     character gallery is a gigabyte of I/O, and doing that on the event loop
     would stall every other request for its duration.
+
+    Held against image-store maintenance for the whole copy: a migration that
+    unlinked a legacy file the copy had not reached yet would leave the fork
+    without the picture, and a collection could take an object the copied
+    placements are about to need.
     """
     name = body.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
     try:
-        return {"id": store.worlds.fork_world(wid, name)}
+        with runs.maintenance_excluded(request.app):
+            return {"id": store.worlds.fork_world(wid, name)}
     except store.worlds.WorldNotFound:
         raise HTTPException(status_code=404, detail="world not found") from None
     except store.worlds.WorldIdConflictError as exc:
@@ -195,20 +205,25 @@ def get_world_campaigns(wid: str):
 
 
 @router.get("/worlds/{wid}/export.zip")
-def get_world_export(wid: str):
+def get_world_export(wid: str, request: Request):
     """The whole world directory as a bundle.
 
     Built to a temp file and streamed rather than returned as bytes: a world
     with a full character gallery runs past a gigabyte, and buffering that into
     a response is how the Android build dies. A sync `def` route, so FastAPI
     runs the zipping in its threadpool and the event loop keeps serving.
+
+    Held against image-store maintenance while the bundle is BUILT -- the walk
+    reads every placement and the object it names -- and not while it streams,
+    which reads only the finished temp file.
     """
-    _world_root_or_404(wid)
     fd, tmp_name = tempfile.mkstemp(suffix=".zip")
     os.close(fd)
     tmp = Path(tmp_name)
     try:
-        store.world_bundle.write_bundle(wid, tmp)
+        with runs.maintenance_excluded(request.app):
+            _world_root_or_404(wid)
+            store.world_bundle.write_bundle(wid, tmp)
         size = tmp.stat().st_size
     except store.world_bundle.BundleError as exc:
         # A world this grimoire cannot bundle (an image past the cap its own

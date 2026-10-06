@@ -9,13 +9,17 @@ Two axes decide how a run behaves, and they are deliberately separate:
 
 * the **subject** it acts on -- a scene, a campaign, a world, or the app --
   which is what a client asks about and what scopes every lookup;
-* the **class** of work -- ``turn``, ``review``, ``background``, ``draft`` --
-  which decides whether it excludes other work on that subject.
+* the **class** of work -- ``turn``, ``review``, ``background``, ``draft``,
+  ``maintenance`` -- which decides whether it excludes other work on that
+  subject.
 
 ``turn`` and ``review`` share one exclusion key per scene, because both rewrite
 that scene's transcript and two of them at once lose one. ``background`` and
 ``draft`` declare none: they legitimately overlap, so the subject index is a
-collection rather than a most-recent pointer.
+collection rather than a most-recent pointer. ``maintenance`` -- image-store
+migration and collection -- holds one key for the whole CLASS, whatever its
+subject, and runs its work in a worker thread the run outlives
+(`run_maintenance`).
 
 Nothing here imports ``streaming`` or ``scenes``. The registry is reachable from
 the whole route layer, and a dependency in that direction would make the module
@@ -31,6 +35,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable
+from pathlib import Path
 from typing import Literal, Protocol
 
 import anyio
@@ -39,7 +44,7 @@ from fastapi.responses import StreamingResponse
 
 from .. import runner, store
 from ..store import attempts as scenes_attempts
-from ..store import scenes
+from ..store import maintenance_reports, paths, scenes
 from ..store.campaigns import read as campaigns_read
 from ..store.campaigns.paths import CampaignNotFound
 
@@ -96,7 +101,7 @@ trivially serialisable without pydantic -- which this package has to stay
 agnostic about (``test_pydantic_guard``).
 """
 
-RunClass = Literal["turn", "review", "background", "draft"]
+RunClass = Literal["turn", "review", "background", "draft", "maintenance"]
 
 RunState = Literal["running", "landed", "failed", "cancelled"]
 
@@ -106,6 +111,16 @@ _EXCLUSIVE: frozenset[str] = frozenset({"turn", "review"})
 A turn appends to the transcript and a review reads it whole and marks it
 absorbed; either running while the other mutates loses work that cannot be
 regenerated.
+"""
+
+MAINTENANCE_KEY = "global\x00image-maintenance"
+"""The one exclusion key every `maintenance` run holds, whatever its subject.
+
+Keyed on the CLASS rather than built from the subject, unlike a turn's: a
+migration and a collection both walk the whole image store and may delete from
+it, so two of them must never overlap however they were started -- and a key
+built from `("global",)` would be shared with nothing else anyway, so no other
+global run (a model refresh) is refused by it.
 """
 
 ATTACHABLE: frozenset[str] = frozenset({"turn", "review"})
@@ -165,6 +180,24 @@ class RunInFlightError(Exception):
         self.run_id = run_id
 
 
+class MaintenanceHeldError(Exception):
+    """Raised when a `maintenance` run is reserved while a tree operation holds
+    the store against one (`RunRegistry.exclude_maintenance`).
+
+    Transient, like `StoreMovingError`: the fork or export finishes and the
+    same start succeeds, so it reaches the client as `busy`.
+    """
+
+
+class MaintenanceRunningError(Exception):
+    """Raised when a tree operation asks to hold the store while a `maintenance`
+    run is live. Carries the run's id so the refusal can name it."""
+
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"image-store maintenance is running: {run_id}")
+        self.run_id = run_id
+
+
 class _PlainEvent:
     """The default handshake event: set-once, thread-safe, no event loop.
 
@@ -198,7 +231,11 @@ def exclusion_key(subject: Subject, cls: RunClass) -> str | None:
     exists in every campaign that has a first scene. A key made from ``sid``
     would make a turn in one campaign refuse a turn in another, or worse, let
     one campaign's reply attach to the other's scene.
+
+    ``maintenance`` is the exception, and `MAINTENANCE_KEY` says why.
     """
+    if cls == "maintenance":
+        return MAINTENANCE_KEY
     if cls not in _EXCLUSIVE:
         return None
     return "\x00".join(str(part) for part in subject)
@@ -289,6 +326,11 @@ class Run:
         # a client that lost its 202, and `reap` drops them with the run.
         # Appended only under the registry lock.
         self.adopted_attempts: list[str] = []
+        # The store root a `maintenance` run pinned when it was reserved. Every
+        # path the run builds starts here rather than at the live `home()`, so a
+        # root that changes underneath is detected rather than followed. `None`
+        # for every other class.
+        self.root: Path | None = None
         self._lock = threading.Lock()
 
     def append_frame(self, frame: str) -> int:
@@ -371,6 +413,10 @@ class RunRegistry:
         # cleared it while the second was still changing the pointer. See
         # `hold_still`.
         self._store_moves = 0
+        # How many tree operations (fork, delete, export, the scheduled backup)
+        # are holding the store against maintenance. A count for the same reason
+        # `_store_moves` is one: they overlap. See `exclude_maintenance`.
+        self._maintenance_holds = 0
         self._by_key: dict[str, str] = {}
         # Records a trigger asked a campaign's reconcile to look at while one
         # was already live, keyed by subject. Here, on the per-app registry and
@@ -495,12 +541,7 @@ class RunRegistry:
             if single_live and (live := self._live_single(subject, cls, kind)) is not None:
                 return self._adopt(live, subject, attempt_id), False
 
-            key = exclusion_key(subject, cls)
-            if key is not None:
-                holder_id = self._by_key.get(key)
-                holder = self._runs.get(holder_id) if holder_id else None
-                if holder is not None and holder.state == "running":
-                    raise RunInFlightError(holder.id)
+            key = self._refuse_if_excluded(subject, cls)
 
             run = Run(subject, cls, kind, attempt_id, scene_identity, labels,
                       events, review_generation=review_generation)
@@ -544,6 +585,23 @@ class RunRegistry:
             seq = self._live_seq
         self._fire_live(crossed, seq)
         return run, True
+
+    def _refuse_if_excluded(self, subject: Subject, cls: RunClass) -> str | None:
+        """Raise if a new run of this class may not start now; else its key.
+
+        Under ``self._lock``. The maintenance-hold count is read under the same
+        lock `exclude_maintenance` counts under, so a fork that has just been
+        let in and a migration arriving now cannot both pass.
+        """
+        if cls == "maintenance" and self._maintenance_holds:
+            raise MaintenanceHeldError
+        key = exclusion_key(subject, cls)
+        if key is not None:
+            holder_id = self._by_key.get(key)
+            holder = self._runs.get(holder_id) if holder_id else None
+            if holder is not None and holder.state == "running":
+                raise RunInFlightError(holder.id)
+        return key
 
     def _by_own_attempt(self, subject: Subject, attempt_id: str | None,
                         scene_identity: str | None,
@@ -791,6 +849,41 @@ class RunRegistry:
         finally:
             with self._lock:
                 self._store_moves -= 1
+
+    @contextlib.contextmanager
+    def exclude_maintenance(self):
+        """Hold the store against image-store maintenance for this block.
+
+        The other direction of `MAINTENANCE_KEY`, for the operations that walk
+        or reshape a whole tree -- a fork, a delete, a bundle export, the
+        scheduled backup. A migration unlinking legacy files under a fork that
+        is copying them leaves the fork with neither copy; a collection running
+        while an export packs placements ships placements whose objects have
+        just gone.
+
+        `hold_still`'s shape, for `hold_still`'s reason: the refusal and the
+        count are taken in ONE acquisition, and `start_or_existing` reads the
+        count inside that same lock, so neither side can slip in between the
+        other's check and act. Raises `MaintenanceRunningError` when a
+        maintenance run is live -- including one asked to stop whose thread has
+        not yet returned, which is still walking the tree.
+        """
+        with self._lock:
+            for run in self._runs.values():
+                if run.state == "running" and run.cls == "maintenance":
+                    raise MaintenanceRunningError(run.id)
+            self._maintenance_holds += 1
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._maintenance_holds -= 1
+
+    def live_of_class(self, cls: RunClass) -> list[Run]:
+        """Every running run of this class, on any subject."""
+        with self._lock:
+            return [r for r in self._runs.values()
+                    if r.state == "running" and r.cls == cls]
 
     def live_for_key(self, key: str | None) -> Run | None:
         """The running holder of an exclusion key, if there is one."""
@@ -2092,6 +2185,115 @@ def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
     with reservation(app, run):
         start_computing(app, run, work)
         return {"run": run_payload(run)}
+
+
+@contextlib.contextmanager
+def maintenance_excluded(app):
+    """Hold the store against image-store maintenance for a whole operation.
+
+    For the routes that fork, delete or export a tree: while one holds this, a
+    `maintenance` run cannot be reserved (`busy`), and while a maintenance run
+    is live, this is refused with `maintenance_running` naming it -- the run's
+    id is what lets the client offer to stop it. Lives in the ROUTES and the
+    backup ticker, never in store modules: it is a fact about this process's
+    registry, which the store does not know about.
+
+    A context manager rather than a check, for `store_held_still`'s reason: a
+    check made first and acted on afterwards leaves room for a migration to
+    reserve in between.
+    """
+    try:
+        with app.state.runs.exclude_maintenance():
+            yield
+    except MaintenanceRunningError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "maintenance_running", "run_id": exc.run_id,
+            "detail": "image-store maintenance is running; wait for it or stop "
+                      "it first"}) from exc
+
+
+def maintenance_live(app) -> list[Run]:
+    """Every live `maintenance` run in this process."""
+    return app.state.runs.live_of_class("maintenance")
+
+
+def run_maintenance(app, kind: str, attempt_id: str | None,
+                    work_sync: Callable[[Run], dict]) -> dict:
+    """Reserve a `maintenance` run, start ``work_sync`` in a worker thread, and
+    answer the 202 body.
+
+    ``work_sync(run)`` is SYNCHRONOUS and does the whole pass: it reads
+    ``run.root`` (pinned here, at reservation) for every path, checks
+    ``run.cancel_requested`` between items, writes its report with
+    `maintenance_reports.write` in its own ``finally`` -- so a cancelled or
+    failed run still leaves one -- and returns that report, which becomes the
+    run's result.
+
+    Refusals, each as the 409 it is:
+
+    * another maintenance run is live -- ``run_in_flight``, naming it (a
+      duplicate delivery of the same attempt adopts it instead);
+    * the store root is being moved, or a fork, delete or export holds the
+      store -- ``busy``: both finish on their own and the same start succeeds;
+    * another device's marker is still beating -- ``maintenance_elsewhere``.
+
+    A ``def`` caller only: reserving builds the run's events through the
+    portal, which raises when called from the loop thread.
+    """
+    root = paths.home().resolve()
+    try:
+        run, fresh = app.state.runs.start_or_existing(
+            GLOBAL_SUBJECT, "maintenance", kind, attempt_id or uuid.uuid4().hex,
+            None, _subject_labels(GLOBAL_SUBJECT))
+    except RunInFlightError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "run_in_flight", "run_id": exc.run_id,
+            "detail": "image-store maintenance is already running"}) from exc
+    except StoreMovingError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "the storage location is being changed; try again"}) from exc
+    except MaintenanceHeldError as exc:
+        raise HTTPException(status_code=409, detail={
+            "kind": "busy",
+            "detail": "a fork, delete, export or backup is using the store; "
+                      "try again when it finishes"}) from exc
+    if not fresh:
+        return {"run": run_payload(run)}
+    with reservation(app, run):
+        run.root = root
+        device = maintenance_reports.device_key(root)
+        try:
+            maintenance_reports.claim_marker(root, run.id, device)
+        except maintenance_reports.MaintenanceElsewhereError as exc:
+            raise HTTPException(status_code=409, detail={
+                "kind": "maintenance_elsewhere",
+                "detail": "image-store maintenance is running on another device "
+                          "that shares this library; wait for it to finish",
+                "heartbeat": exc.marker.get("heartbeat")}) from exc
+
+        def body(r: Run) -> dict:
+            # The heartbeat thread runs for the WHOLE of the work, independent
+            # of its item boundaries, and clears the marker when it returns.
+            with maintenance_reports.heartbeat(root, r.id, device):
+                return work_sync(r)
+
+        try:
+            start_maintenance(app, run, body)
+        except BaseException:
+            maintenance_reports.release_marker(root, run.id, device)
+            raise
+        return {"run": run_payload(run)}
+
+
+def start_maintenance(app, run: Run, work_sync: Callable[[Run], dict]) -> None:
+    """Run ``work_sync(run)`` detached in a worker thread the run outlives.
+
+    `start_computing`'s ordering, for its reason: `run.started` after the
+    handoff, so a handoff that raises is still released by `reservation`.
+    """
+    runner.start_thread(app, run, work_sync)
+    run.started = True
 
 
 def forget_subject(app, subject: Subject) -> int:

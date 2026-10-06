@@ -20,7 +20,16 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import runner
 from .health import ProviderHealth
 from .routes import build_llm, build_openai_compatible_client, router, runs
-from .store import backups, campaigns, locks, logs, migrations, module_edit, revision
+from .store import (
+    backups,
+    campaigns,
+    config,
+    locks,
+    logs,
+    migrations,
+    module_edit,
+    revision,
+)
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
@@ -147,7 +156,34 @@ class SPAStaticFiles(StaticFiles):
 BACKUP_TICK_SECONDS = 3600.0
 
 
-async def _backup_ticker() -> None:
+def _scheduled_backup(app: FastAPI | None):
+    """One scheduled pass, holding the store against image-store maintenance.
+
+    A backup zips the tree a migration is moving files out of, so the two may
+    not overlap. While a maintenance run is live the ticker SKIPS its turn and
+    says so -- the next tick is an hour away and the schedule compares against
+    the newest archive, so a skipped pass is made up then rather than lost.
+    ``app`` is ``None`` only for a ticker driven without one (its own tests),
+    where there is no registry to hold.
+    """
+    if app is None:
+        return backups.run_scheduled()
+    # The cheap half of `run_scheduled`'s own first check, made BEFORE the hold:
+    # a store with backups off -- the default -- has nothing to keep still, and
+    # holding anyway would refuse a migration started in that instant as `busy`.
+    if not config.backup_enabled():
+        return None
+    try:
+        with app.state.runs.exclude_maintenance():
+            return backups.run_scheduled()
+    except runs.MaintenanceRunningError as exc:
+        logging.getLogger(__name__).info(
+            "scheduled backup skipped -- image-store maintenance run %s is running",
+            exc.run_id)
+        return None
+
+
+async def _backup_ticker(app: FastAPI | None = None) -> None:
     """The whole of the backup schedule (#32): check at startup, then hourly.
 
     There is no cron and no daemon — this app is a local server someone runs
@@ -167,7 +203,7 @@ async def _backup_ticker() -> None:
     log = logging.getLogger(__name__)
     while True:
         try:
-            made = await anyio.to_thread.run_sync(backups.run_scheduled)
+            made = await anyio.to_thread.run_sync(_scheduled_backup, app)
             if made is not None:
                 log.info("wrote scheduled backup %s", made.name)
         except Exception as exc:  # noqa: BLE001 — see the docstring
@@ -211,8 +247,15 @@ async def _lifespan(app: FastAPI):
                     anyio.from_thread.BlockingPortal() as portal):
             app.state.run_portal = portal
             runner.install(app, tg)
-            tg.start_soon(_backup_ticker)
-            yield
+            tg.start_soon(_backup_ticker, app)
+            try:
+                yield
+            finally:
+                # BEFORE anything is cancelled, and on every way out. A
+                # maintenance run's thread is never abandoned, so leaving the
+                # portal waits for it; this is what makes that wait one item
+                # long rather than the rest of a migration.
+                runner.stop_maintenance(app)
             tg.cancel_scope.cancel()
     finally:
         # Closing the gateway clients' `httpx` pools (#215). Worth nothing

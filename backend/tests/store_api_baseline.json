@@ -270,6 +270,7 @@
     "logs",
     "lore_fields",
     "lorebook",
+    "maintenance_reports",
     "metrics",
     "migrations",
     "module_display",

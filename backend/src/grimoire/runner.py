@@ -16,6 +16,9 @@ Three things live here:
   route uses.
 * ``_guarded`` -- the per-run failure boundary. Without it, one run raising
   takes down every sibling and the backup ticker with it.
+* ``start_thread`` / ``_guarded_thread`` / ``stop_maintenance`` -- the same
+  boundary for a ``maintenance`` run, whose work is synchronous and runs in a
+  worker thread the run is never allowed to abandon.
 """
 
 from __future__ import annotations
@@ -212,6 +215,74 @@ def start(app, run, factory: Callable[[], Any],
             "no run portal; the app's lifespan is not running. Tests that need "
             "a run to execute take a lifespan-entered client.")
     portal.start_task_soon(_guarded, app, run, factory, on_unstarted)
+
+
+def start_thread(app, run, work_sync: Callable[[Any], Any]) -> None:
+    """Schedule ``work_sync(run)`` in a worker thread as a detached run.
+
+    For the ``maintenance`` class. Thread-safe, like ``start``.
+    """
+    portal = getattr(app.state, "run_portal", None)
+    if portal is None:
+        raise RuntimeError(
+            "no run portal; the app's lifespan is not running. Tests that need "
+            "a run to execute take a lifespan-entered client.")
+    portal.start_task_soon(_guarded_thread, app, run, work_sync)
+
+
+def stop_maintenance(app) -> int:
+    """Ask every live maintenance run to stop. Returns how many were asked.
+
+    Called by the lifespan on shutdown BEFORE the task group is cancelled. The
+    thread is never abandoned (see `_guarded_thread`), so shutdown waits for it
+    -- and without this flag it would wait for a whole migration to finish.
+    With it, the pass stops at its next item boundary, writes its report and
+    returns.
+    """
+    registry = getattr(app.state, "runs", None)
+    if registry is None:
+        return 0
+    live = registry.live_of_class("maintenance")
+    for run in live:
+        run.cancel_requested = True
+    return len(live)
+
+
+async def _guarded_thread(app, run, work_sync: Callable[[Any], Any]) -> None:
+    """One maintenance run: ``work_sync(run)`` in a worker thread, SHIELDED.
+
+    The await is shielded and ``abandon_on_cancel`` is never passed, and both
+    halves are the point. A migration or collection deletes files: a thread
+    abandoned mid-item would keep deleting after the run had been recorded as
+    over -- after its exclusion key and its hold on data-dir moves had been
+    released, so a store move or a second pass could start beneath it. Shielded,
+    the run stays ``running``, and keeps everything it excludes, until the
+    thread has actually returned.
+
+    Cancellation is therefore COOPERATIVE only: there is no cancel scope for
+    ``cancel`` to reach (it sets ``run.cancel_requested`` and finds nothing else
+    to do), and the work reads that flag between items. A run whose flag was
+    set when it returned is recorded ``cancelled``, with its report as the
+    result all the same -- the work wrote it in its own ``finally``. A cancel
+    that arrived before the thread started still runs the work, which sees the
+    flag at its first item and reports that it did nothing.
+    """
+    run.ready.set()
+    try:
+        with anyio.CancelScope(shield=True):
+            report = await anyio.to_thread.run_sync(work_sync, run)
+    except Exception as exc:                                # noqa: BLE001
+        _log.exception("maintenance run %s failed", run.id)
+        error = {"kind": "run_failed", "detail": str(exc) or type(exc).__name__,
+                 "status": 500}
+        run.error = error
+        run.append_frame(_error_frame(error))
+        run.finish("failed")
+    else:
+        run.result = report if isinstance(report, dict) else None
+        run.finish("cancelled" if run.cancel_requested else "landed")
+    run.terminal.set()
+    _announce_terminal(app, run)
 
 
 def cancel(app, run) -> None:
