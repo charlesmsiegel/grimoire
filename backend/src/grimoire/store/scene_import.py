@@ -544,10 +544,14 @@ def _restore_excluded(messages: list[dict]) -> None:
             m["content"] = rest.strip()
             if not isinstance(m.get("excluded"), str) or not m.get("excluded"):
                 m["excluded"] = now_iso()
-        elif m.get("excluded") and not isinstance(m["excluded"], str):
-            m["excluded"] = now_iso()
-        elif "excluded" in m and not m["excluded"]:
-            del m["excluded"]
+        else:
+            # A visible post an export escaped because it opens with the marker
+            # text itself (`export._marked`).
+            m["content"] = scenes.unescape_marker(m.get("content", ""))
+            if m.get("excluded") and not isinstance(m["excluded"], str):
+                m["excluded"] = now_iso()
+            elif "excluded" in m and not m["excluded"]:
+                del m["excluded"]
 
 
 def _discard(cid: str, sid: str, seated: list[dict]) -> None:

@@ -578,6 +578,32 @@ def test_markdown_export_reimports_excluded(monkeypatch, tmp_path):
     assert "excluded" not in messages[0]
 
 
+def test_a_visible_post_that_opens_with_the_marker_text_round_trips_visible(
+        monkeypatch, tmp_path):
+    """A post whose first line is literally the marker is escaped on export and
+    unescaped on import, so it is not read back as hidden (codex review, PR
+    #458) -- and an escape a post really opened with survives as well."""
+    import io
+    import zipfile
+
+    from grimoire.store import export
+
+    _wid, cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "The Pier")
+    marker = scenes.EXCLUDED_MARKER
+    posts = [f"{marker}\nMara laughs.", f"\\{marker}\nWinifred frowns.",
+             f"{marker}\nhidden twice"]
+    for post in posts:
+        scenes.append_message(cid, sid, "user", post)
+    scenes.set_excluded(cid, sid, 2, True)
+    md = zipfile.ZipFile(io.BytesIO(export.build_markdown_bundle(cid)[0]))
+    name = next(n for n in md.namelist() if n != "index.md" and not n.startswith("images/"))
+
+    draft = scene_import.parse(cid, md.read(name))
+    assert [m["content"] for m in draft["messages"]] == posts
+    assert [bool(m.get("excluded")) for m in draft["messages"]] == [False, False, True]
+
+
 def test_a_stored_scene_file_import_keeps_its_stamp(monkeypatch, tmp_path):
     _wid, cid = _campaign(monkeypatch, tmp_path)
     text = STORED.replace(

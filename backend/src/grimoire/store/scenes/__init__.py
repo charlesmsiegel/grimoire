@@ -84,6 +84,7 @@ from .serialize import (  # noqa: F401
     _serialize_messages,
     _speaker_and_role,
     confusable,
+    escape_marker,
     excludable,
     excluded_since,
     in_context,
@@ -92,6 +93,7 @@ from .serialize import (  # noqa: F401
     label_preserved,
     match_name,
     speaker_base,
+    unescape_marker,
     without_excluded,
 )
 from .turns import (  # noqa: F401

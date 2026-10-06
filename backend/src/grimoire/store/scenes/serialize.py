@@ -50,6 +50,30 @@ TRANSITION_SPEAKER = "⁣Scene"
 # Exports mark a hidden post with this line, and import strips it back into the
 # flag; it lives here so neither module has to import the other.
 EXCLUDED_MARKER = "*(not in context)*"
+# A VISIBLE post whose first line is the marker text (or that text behind
+# backslashes) carries one more backslash in an export, so import cannot read
+# it as hidden; import takes one off again (codex review, PR #458).
+_ESCAPED_MARKER = re.compile(r"\\+" + re.escape(EXCLUDED_MARKER))
+
+
+def escape_marker(content: str) -> str:
+    """`content` as a text export writes a visible post: a first line that
+    import would read as the marker gains a leading backslash."""
+    first = content.partition("\n")[0]
+    bare = first.strip()
+    if bare != EXCLUDED_MARKER and not _ESCAPED_MARKER.fullmatch(bare):
+        return content
+    at = len(first) - len(first.lstrip())
+    return content[:at] + "\\" + content[at:]
+
+
+def unescape_marker(content: str) -> str:
+    """`escape_marker` undone: one backslash off an escaped marker first line."""
+    first = content.partition("\n")[0]
+    if not _ESCAPED_MARKER.fullmatch(first.strip()):
+        return content
+    at = first.index("\\")
+    return content[:at] + content[at + 1:]
 
 
 def excludable(m: dict) -> bool:

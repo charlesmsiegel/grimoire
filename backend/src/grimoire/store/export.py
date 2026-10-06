@@ -543,9 +543,13 @@ def _header_lines(ch: dict) -> list[str]:
 def _marked(messages: list[dict]) -> list[dict]:
     """A hidden post's content opened by the marker line, for the two text
     formats. `scene_import` strips the same line back into the flag, so an
-    export re-imported does not bring the post back into context."""
+    export re-imported does not bring the post back into context. A visible
+    post that itself opens with the marker text is escaped
+    (`serialize.escape_marker`), so a re-import does not hide it."""
     return [{**m, "content": f"{scenes_serialize.EXCLUDED_MARKER}\n{m['content']}"}
-            if m.get("excluded") else m for m in messages]
+            if m.get("excluded")
+            else {**m, "content": scenes_serialize.escape_marker(m["content"])}
+            for m in messages]
 
 
 def build_markdown_bundle(cid: str) -> tuple[bytes, str]:
