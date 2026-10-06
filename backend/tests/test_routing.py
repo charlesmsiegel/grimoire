@@ -221,3 +221,24 @@ def test_every_route_is_named_and_described_for_the_picker(route):
     got = routing.route_by_key(route)
     assert got.label and got.label[0].isupper()
     assert got.tasks
+
+
+def test_the_continuity_route_is_spelled_as_section_29_spells_it():
+    # Capstone spec §29, verbatim: the only home of the continuity tasks, so a
+    # third continuity call filed under another route fails here rather than
+    # quietly missing from the Continuity checks picker.
+    want = routing.Route(
+        "continuity", "Continuity checks",
+        "The duplicate check beside absorb and the reconciliation sweep after "
+        "End Scene or a refresh.",
+        ("continuity-identity", "continuity-reconcile"), True)
+    got = routing.route_by_key("continuity")
+    for field in routing.Route._fields:
+        assert getattr(got, field) == getattr(want, field), field
+    assert (routing.TASK_ROUTE["continuity-identity"]
+            == routing.TASK_ROUTE["continuity-reconcile"] == "continuity")
+    others = [t for t in routing.TASK_ROUTE
+              if t.startswith("continuity") and t not in want.tasks]
+    assert others == []
+    # §29: the scene-suggestion task keeps its name.
+    assert routing.TASK_ROUTE["suggestions"] == "suggestions"

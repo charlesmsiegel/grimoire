@@ -598,3 +598,14 @@ def test_longest_shared_run_ignores_fenced_code():
     length, offender = _longest_shared_run("alpha bravo charlie" + fence,
                                            "delta echo foxtrot" + fence)
     assert (length, offender) == (0, "")
+
+
+def test_llm_capture_doc_names_every_continuity_task():
+    """§29: the capture note says which continuity calls it records, by task. A
+    third task added to the `continuity` route fails here until the note names
+    it too."""
+    from grimoire.store import routing
+
+    text = (ROOT / "docs" / "incoming-llm-capture.md").read_text(encoding="utf-8")
+    for task in routing.route_by_key("continuity").tasks:
+        assert f"`{task}`" in text, task
