@@ -30,6 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from . import (
@@ -183,7 +184,17 @@ def journal_directory(wid: str) -> Path:
     """The harvest journals' home, the one spelling of it:
     `image_collection_imports.job_path` builds its paths from this."""
     directory(wid)  # prove world existence and id safety
-    return paths.home() / ".cache" / "image-collection-imports" / wid
+    return raw_journal_directory(paths.home(), wid)
+
+
+def raw_journal_directory(root: Path, wid: str) -> Path:
+    """`journal_directory` under store root `root`, WITHOUT proving the world
+    exists: journals outlive a deleted world, and the readers that must still
+    see them -- `has_format1`, the migration's journal pass, GC -- read this
+    (stage-4 M10). `ValueError` for an unsafe id."""
+    if not paths.safe_id(wid):
+        raise ValueError("unsafe world id")
+    return Path(root) / ".cache" / "image-collection-imports" / wid
 
 
 def _is_format2_journal(path: Path) -> bool:
@@ -206,7 +217,8 @@ def has_format1(wid: str) -> bool:
                 return True
         except (CollectionInvalidError, OSError):
             return True
-    return any(not _is_format2_journal(p) for p in journal_directory(wid).glob("*.json"))
+    journals = raw_journal_directory(paths.home(), wid).glob("*.json")
+    return any(not _is_format2_journal(p) for p in journals)
 
 
 def referenced(wid: str, name: str) -> bool:
@@ -328,6 +340,76 @@ def publish(wid: str, collection_id: str, members: list[str]) -> dict:
             target.parent.mkdir(parents=True, exist_ok=True)
             atomic.write_text(target, json.dumps(manifest, indent=2) + "\n")
     return manifest
+
+
+# ---- converting format 1 (stage-4 migration, M10) ----------------------------
+
+def manifest_path_under(root: Path, wid: str, collection_id: str) -> Path:
+    """`manifest_path` under store root `root` (a maintenance run's pinned
+    root), without proving the world through the live one."""
+    if not isinstance(collection_id, str) or not _ID.fullmatch(collection_id):
+        raise CollectionIdError("invalid image collection id")
+    if not paths.safe_id(wid):
+        raise ValueError("unsafe world id")
+    return Path(root) / "worlds" / wid / "assets" / "image-collections" / f"{collection_id}.json"
+
+
+def _resolves_under(root: Path, image_id: str) -> bool:
+    obj = image_store.read_fresh(image_id, root=root)
+    return obj is not None and image_store.blob_path(obj.blob_sha256, obj.ext,
+                                                     root=root).is_file()
+
+
+def format2_members(root: Path, wid: str, members: list[str]) -> list[str]:
+    """The image ids format-1 `members` convert to, in order (M10): each
+    name's world-library placement under `root`, which must resolve there
+    (object and blob both under `root`). A legacy member migrates to such a
+    placement only when its bytes still hash to its name, so a member whose
+    file was changed never qualifies. `CollectionInvalidError`, its message
+    the reason, when any member does not -- or when two members are one
+    picture, which format 2 cannot list twice without moving an index."""
+    libdir = Path(root) / "worlds" / wid / "assets" / "images"
+    ids: list[str] = []
+    for name in members:
+        ref = image_refs.read(libdir, name)
+        if ref is None or ref.image is None:
+            raise CollectionInvalidError("member-not-placed")
+        if not _resolves_under(root, ref.image):
+            raise CollectionInvalidError("member-not-available")
+        ids.append(ref.image)
+    if len(set(ids)) != len(ids):
+        raise CollectionInvalidError("members-share-a-picture")
+    return ids
+
+
+def convert_format1(root: Path, wid: str, collection_id: str, *,
+                    before: Callable[[list[str], list[str]], None] | None = None
+                    ) -> bool:
+    """Rewrite one format-1 manifest under `root` as format 2; True when it
+    was rewritten, False when it was already format 2 (left untouched).
+
+    Under `image_collection_lock(wid)`, so no library write checks membership
+    against a manifest half-way through changing format. Member order and
+    indices are kept (format 2 lists the same members at the same places),
+    and the members' library placements are left exactly where they are, so
+    every library URL keeps serving. `before(names, ids)` runs inside that
+    hold just before the manifest is written -- the migration rewrites the
+    greeting subject keys that named the members' library URLs there (M10).
+    `CollectionInvalidError` (from `format2_members`) leaves it format 1."""
+    path = manifest_path_under(root, wid, collection_id)
+    with locks.image_collection_lock(wid):
+        try:
+            manifest = validate(json.loads(path.read_text(encoding="utf-8")))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise CollectionInvalidError("unreadable-manifest") from exc
+        if manifest["format"] == 2:
+            return False
+        ids = format2_members(root, wid, manifest["members"])
+        converted = validate({"format": 2, "members": ids})
+        if before is not None:
+            before(manifest["members"], ids)
+        atomic.write_text(path, json.dumps(converted, indent=2) + "\n")
+    return True
 
 
 def url_for(wid: str, collection_id: str) -> str:

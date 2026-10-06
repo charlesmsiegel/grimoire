@@ -19,12 +19,19 @@ Two edges are known and left for stage 4's journal retirement: an unaccepted
 format-1 journal whose manifest an older build published, and which has since
 lost a member, does not reconcile; and an accepted format-1 journal whose
 manifest is gone is converted before it is refused.
+
+Stage 4's migration settles leftover format-1 journals (`convert_or_retire`,
+M10): one that converts is converted exactly as a first read would; one that
+cannot, and was never accepted, is retired -- renamed to
+``<job>.json.retired``, outside the ``*.json`` glob every reader and the
+`has_format1` guard use -- and an accepted one that cannot is left as it is.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import time
 import uuid
@@ -32,6 +39,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from . import atomic, fetch, image_collections, image_hash, locks
+from .worlds import paths as worlds_paths
 
 _JOB = re.compile(r"[0-9a-f]{64}\Z")
 _COUNTERS = ("requests", "valid", "added", "duplicates", "failed")
@@ -230,3 +238,47 @@ def accept(wid: str, job_id: str) -> dict:
         job["stop"] = "accepted"
         _save(target, job)
         return job
+
+
+#: What `convert_or_retire` answers.
+FORMAT2, CONVERTED, RETIRED, KEPT = "format2", "converted", "retired", "kept"
+RETIRED_SUFFIX = ".retired"
+
+
+def _raw(path: Path) -> dict | None:
+    try:
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+    return got if isinstance(got, dict) else None
+
+
+def convert_or_retire(wid: str, path: Path) -> str:
+    """Settle one harvest journal for the migration (module docstring), under
+    its job lock: `FORMAT2` for one already format 2, `CONVERTED` for a
+    format-1 one this read converted, `RETIRED` for an unaccepted one that maps
+    to nothing (renamed beside itself with `RETIRED_SUFFIX`), and `KEPT` for
+    anything else -- accepted, published as format 1, or not a journal at all.
+
+    `path` is under the caller's pinned root and is never resolved through the
+    live one; the world may be gone, which makes the journal unmappable."""
+    job_id = path.stem
+    if not _JOB.fullmatch(job_id) or path.suffix != ".json":
+        return KEPT
+    with locks.image_collection_job_lock(wid, job_id):
+        raw = _raw(path)
+        if raw is None:
+            return KEPT                 # unreadable: acceptance unknown, keep it
+        if type(raw.get("format")) is int and raw["format"] == 2:
+            return FORMAT2
+        try:
+            job = _read(wid, path)
+        except (image_collections.CollectionInvalidError, worlds_paths.WorldNotFound):
+            # Unmappable: a member that maps to nothing, or no world at all.
+            if raw.get("accepted") is False:
+                os.replace(path, path.with_name(path.name + RETIRED_SUFFIX))
+                return RETIRED
+            return KEPT
+        except (OSError, ValueError):
+            return KEPT                 # a read that failed is not "unmappable"
+        return CONVERTED if job["format"] == 2 else KEPT
