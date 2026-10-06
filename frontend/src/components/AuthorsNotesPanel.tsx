@@ -97,8 +97,9 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
       )}
       <div className="field-hint">
         The count beside the title is every note due next turn, character notes included --
-        a character's note reaches only that character's own call. The context inspector
-        describes the turn just composed; this describes the next one.
+        a character's note reaches only a call made for that character (a character turn, or
+        a reply chip naming them), so it may not reach the next turn at all. The context
+        inspector describes the turn just composed; this describes the next one.
       </div>
       <div className="tabs" role="tablist" aria-label="Author's note level">
         {TABS.map(([key, label]) => (
