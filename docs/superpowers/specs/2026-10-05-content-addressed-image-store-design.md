@@ -1274,6 +1274,11 @@ before `px1` shipped, so the version stays `px1`:
   (rebuilt as its last loop sub-block, the one browsers honour; dropped when it
   has none) are kept. `gif_loop_after_image` uses the same loop test, so the
   late-loop case sees exactly what is kept. Pinned ids did not move.
+- **Slimming never prunes a placement with a legacy file of its name beside
+  it**, even one identical to the world's. Such a file is what a placement
+  written before its image arrived kept (`_drop_if_placed`), and pruning the
+  placement would make that stale file the campaign's picture again. Both
+  stay: redundant data beats lost data.
 - **A damaged blob is not served** (§6). `image_store.blob_intact` re-hashes
   a blob against its name, memoized on its stat signature under statcache's
   racy-window rule. `assets.path_in` treats a blob that fails it as not

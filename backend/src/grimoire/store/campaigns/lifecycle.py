@@ -426,6 +426,14 @@ def _prune_duplicate_files(root: Path, wroot: Path) -> None:
                 continue
             w = wroot / rel
             if w.exists() and filecmp.cmp(p, w, shallow=False):
+                # A placement is not redundant while a legacy file of its name
+                # sits beside it: that is the file a placement written before
+                # its image arrived kept (`assets._drop_if_placed`), and with
+                # the placement gone it would be the campaign's picture again
+                # -- a stale one. Both stay; redundant data beats lost data.
+                if p.parent.name == image_refs.REFS_DIR and assets.has_legacy(
+                        p.parent.parent, p.stem):
+                    continue
                 # A focus sidecar is not redundant while a divergent campaign
                 # avatar sits beside it: overlay.read_focus treats that avatar
                 # as authoritative and won't fall back to the world focus, so
