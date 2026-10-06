@@ -8890,6 +8890,58 @@ test("⑂ on an unabsorbed scene branches and opens the sibling", async () => {
   expect(api.forkCampaign).not.toHaveBeenCalled();
 });
 
+// The sibling does not exist until the branch does, so the list the view holds
+// when ⑂ is clicked lacks it. Navigating before the relist installs hands the
+// resolver an id the installed list does not know, which it reads as stale and
+// replaces with the scene the reader was on (codex review, PR #458).
+function relistAddsSiblingLate() {
+  let release: () => void = () => {};
+  const late = new Promise<void>((resolve) => { release = resolve; });
+  let branched = false;
+  (api.branchScene as any).mockImplementation(async () => {
+    branched = true;
+    return { id: "s1-b", scene: { meta: {}, messages: [] } };
+  });
+  (api.listScenes as any).mockImplementation(async () => {
+    if (!branched) return ONE_SCENE;
+    await late;
+    return WITH_SIBLING;
+  });
+  return () => release();
+}
+
+test("⑂ waits for the relist that lists the sibling before opening it", async () => {
+  const release = relistAddsSiblingLate();
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Branch from message 1" }));
+  await waitFor(() => expect(api.branchScene).toHaveBeenCalled());
+  await act(async () => release());
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+});
+
+test("⑂ whose relist fails says so instead of opening a sibling the list lacks", async () => {
+  let branched = false;
+  (api.branchScene as any).mockImplementation(async () => {
+    branched = true;
+    return { id: "s1-b", scene: { meta: {}, messages: [] } };
+  });
+  (api.listScenes as any).mockImplementation(async () => {
+    if (branched) throw new ApiError(500, "list down");
+    return ONE_SCENE;
+  });
+  (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
+    { role: "user", content: "Mara waits." },
+    { role: "assistant", speaker: "Mara", content: "The tide turns." }] });
+  renderCampaign();
+  fireEvent.click(await screen.findByRole("button", { name: "Branch from message 1" }));
+  expect(await screen.findByText(/branch was created, but the scene list could not be refreshed: list down/i))
+    .toBeInTheDocument();
+  expect(here()).toBe("/campaigns/run/scenes/s1");
+});
+
 test("⑂ on an absorbed scene forks the campaign at that post", async () => {
   (api.listScenes as any).mockResolvedValue([{ ...ONE_SCENE[0], done: true }]);
   (api.getScene as any).mockResolvedValue({ meta: {}, messages: [
@@ -8963,6 +9015,26 @@ test("the replay dialog can branch on an unabsorbed scene, and follows the branc
   const panel = screen.getByTestId("replay-panel");
   expect(panel.getAttribute("data-branchable")).toBe("true");
   fireEvent.click(within(panel).getByText("stub-replay-branched"));
+  await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
+});
+
+test("a replay in a branch opens the sibling only once the relist lists it", async () => {
+  twoPostScene();
+  let release: () => void = () => {};
+  const late = new Promise<void>((resolve) => { release = resolve; });
+  let branched = false;
+  (api.listScenes as any).mockImplementation(async () => {
+    if (!branched) return ONE_SCENE;
+    await late;
+    return WITH_SIBLING;
+  });
+  renderCampaign();
+  await screen.findByText("a reply");
+  fireEvent.click(await screen.findByLabelText("Replay the turns after message 1"));
+  const panel = screen.getByTestId("replay-panel");
+  branched = true;
+  fireEvent.click(within(panel).getByText("stub-replay-branched"));
+  await act(async () => release());
   await waitFor(() => expect(here()).toBe("/campaigns/run/scenes/s1-b"));
 });
 

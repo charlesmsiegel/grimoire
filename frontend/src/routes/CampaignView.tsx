@@ -2365,8 +2365,29 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       fail(err, false);
       return;
     }
-    await loadScenes().catch(() => {});
-    navigate(sceneUrl(cid, made.id));
+    await openBranch(made.id);
+  }
+
+  /** Open a sibling a branch has just created -- after the relist that lists
+   *  it, as `sceneCreated` does. The resolver only opens a scene the installed
+   *  list knows, so a URL naming the sibling ahead of that list is read as a
+   *  stale id and replaced with the scene the reader was on, and nothing
+   *  navigates back (codex review, PR #458). A failed relist is reported rather
+   *  than navigated past, for the same reason: the list it left lacks the row.
+   *  Not retryable: the banner's Retry generates, and the branch exists. */
+  async function openBranch(id: string) {
+    try {
+      await loadScenes();
+    } catch (err: unknown) {
+      if (cidRef.current === cid) {
+        setError({ text: `The branch was created, but the scene list could not be `
+                         + `refreshed: ` + errorText(err), retryable: false });
+      }
+      return;
+    }
+    // The campaign is asked after the relist, as `sceneCreated` asks it.
+    if (cidRef.current !== cid) return;
+    navigate(sceneUrl(cid, id));
   }
 
   // How long to keep looking for a cancelled turn's partial. Aborting rejects
@@ -5551,10 +5572,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                          closed={!!activeClosed}
                          // The replay runs in the sibling; this scene was not
                          // touched, so the reader goes where the walk is.
-                         onBranched={(branched) => {
-                           void loadScenes();
-                           navigate(sceneUrl(cid, branched));
-                         }}
+                         onBranched={(branched) => { void openBranch(branched); }}
                          // Into the SAME scene in the copy, not the campaign's
                          // front door: a fork copies the scenes wholesale, so
                          // this id is there, and the reader asked to replay one
