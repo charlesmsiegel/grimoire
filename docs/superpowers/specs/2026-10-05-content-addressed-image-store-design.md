@@ -1266,6 +1266,14 @@ before `px1` shipped, so the version stays `px1`:
   showing.
 - **`update()` callbacks may not call back into the store** (§9); a
   thread-local latch enforces it.
+- **A damaged blob is not served** (§6). `image_store.blob_intact` re-hashes
+  a blob against its name, memoized on its stat signature under statcache's
+  racy-window rule. `assets.path_in` treats a blob that fails it as not
+  arrived, so the legacy file beside the placement answers, or the image is
+  missing as an unresolved one is. The serving path refuses it under its sha
+  ETag or an immutable `?v=` (a `?v=` naming a blob is honoured only by that
+  blob), and no thumbnail is made from it. `image_refs.resolve_ref` does not
+  ask: listings stay unhashed. Re-ingesting the picture repairs it.
 
 **Accepted as they stand**, each with its reason:
 

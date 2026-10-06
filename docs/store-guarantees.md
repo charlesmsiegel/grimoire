@@ -413,6 +413,18 @@ ingested, which are by construction the right ones, and the repair is logged as
 `image_blob_repaired`. Nothing else ever replaces a blob's contents. Pinned by
 `test_corrupt_blob_repaired` and `test_same_size_corrupt_blob_repaired`.
 
+**Until then, a damaged blob is not served.** Its sha is the ETag and the
+`?v=` token a browser caches for good, so `assets.path_in` treats a blob whose
+bytes no longer match its name as not arrived (`image_store.blob_intact`,
+memoized on the blob's stat signature and re-hashed every time inside the
+racy window): the legacy file beside its placement answers if there is one,
+and otherwise the image is missing, as an unresolved placement is. It is never
+answered under its sha as an ETag or an immutable `?v=`, and no thumbnail is
+made from it. Logged as `image_blob_damaged`, once per stat signature. Pinned
+by `test_a_damaged_blob_is_never_served_under_its_sha`,
+`test_a_damaged_blob_falls_back_to_the_legacy_file_beside_its_placement` and
+`test_no_thumbnail_is_made_from_a_damaged_blob`.
+
 An image object keeps exactly one blob. A later upload of the same pixels in a
 different encoding finds the object and discards the newcomer, so the slot goes
 on serving the format that was ingested first: re-uploading a PNG avatar as a

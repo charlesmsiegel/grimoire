@@ -207,6 +207,69 @@ def test_same_size_corrupt_blob_repaired():
     assert blob.read_bytes() == data
 
 
+
+# ---- blob_intact: a blob whose bytes no longer match its name (Codex) ----
+
+def test_blob_intact_vouches_for_a_blob_that_matches_its_name():
+    obj = image_store.ingest(_png(_img()), "png")
+    assert image_store.blob_intact(image_store.blob_path(obj.blob_sha256, "png"))
+
+
+@pytest.mark.parametrize("damage", ["same-size", "truncated"])
+def test_blob_intact_refuses_a_blob_damaged_in_place(damage):
+    data = _png(_img())
+    obj = image_store.ingest(data, "png")
+    blob = image_store.blob_path(obj.blob_sha256, "png")
+    with open(blob, "r+b") as f:        # in place: the inode stays the blob's
+        if damage == "same-size":
+            f.seek(len(data) // 2)
+            f.write(bytes([data[len(data) // 2] ^ 0xFF]))
+        else:
+            f.truncate(len(data) // 2)
+    assert not image_store.blob_intact(blob)
+
+
+def test_blob_intact_answers_false_for_a_missing_blob_or_a_non_blob(tmp_path):
+    obj = image_store.ingest(_png(_img()), "png")
+    blob = image_store.blob_path(obj.blob_sha256, "png")
+    blob.unlink()
+    assert not image_store.blob_intact(blob)
+    other = tmp_path / "avatar.png"
+    other.write_bytes(_png(_img()))
+    assert not image_store.blob_intact(other)
+
+
+def test_blob_intact_is_cached_by_stat_signature_outside_the_racy_window(monkeypatch):
+    from grimoire.store import statcache
+    obj = image_store.ingest(_png(_img()), "png")
+    blob = image_store.blob_path(obj.blob_sha256, "png")
+    hashed = []
+    real = image_store._file_sha
+    monkeypatch.setattr(image_store, "_file_sha", lambda p: hashed.append(p) or real(p))
+    # Fresh: inside the racy window, so it is hashed every time, never cached.
+    monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 10 ** 18)
+    assert image_store.blob_intact(blob) and image_store.blob_intact(blob)
+    assert len(hashed) == 2
+    monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
+    assert image_store.blob_intact(blob) and image_store.blob_intact(blob)
+    assert len(hashed) == 3                       # once more, then remembered
+
+
+def test_a_damaged_blob_is_logged_once_per_signature_and_repair_clears_it(monkeypatch):
+    from grimoire.store import statcache
+    monkeypatch.setattr(statcache, "RACY_WINDOW_NS", 0)
+    data = _png(_img())
+    obj = image_store.ingest(data, "png")
+    blob = image_store.blob_path(obj.blob_sha256, "png")
+    blob.write_bytes(bytes(len(data)))
+    rows = []
+    monkeypatch.setattr(image_store.logs, "record", lambda *a, **k: rows.append((a, k)))
+    assert not image_store.blob_intact(blob)
+    assert not image_store.blob_intact(blob)
+    assert [k.get("kind") for _a, k in rows] == ["image_blob_damaged"]
+    image_store.ingest(data, "png")             # re-ingesting the picture repairs it
+    assert image_store.blob_intact(blob)
+
 def test_index_rebuilt_after_deletion(monkeypatch):
     data = _png(_img())
     first = image_store.ingest(data, "png")

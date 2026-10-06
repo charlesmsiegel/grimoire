@@ -207,6 +207,70 @@ def _file_sha(path: Path) -> str:
     return h.hexdigest()
 
 
+#: `blob_intact`'s own statcache pool, so serving every picture in a library
+#: cannot evict the shared cache's card and entity entries.
+_INTACT_POOL: dict = {}
+_INTACT_MAX = 4096
+#: Signatures already reported damaged, so a damaged blob asked for on every
+#: render is one log row per state it is found in, not one per request.
+_DAMAGE_LOGGED: dict = {}
+_DAMAGE_LOGGED_MAX = 1024
+_DAMAGE_LOGGED_GUARD = threading.Lock()
+
+
+def _first_report(sig: tuple) -> bool:
+    with _DAMAGE_LOGGED_GUARD:
+        if sig in _DAMAGE_LOGGED:
+            return False
+        if len(_DAMAGE_LOGGED) >= _DAMAGE_LOGGED_MAX:
+            _DAMAGE_LOGGED.pop(next(iter(_DAMAGE_LOGGED)))
+        _DAMAGE_LOGGED[sig] = True
+        return True
+
+
+def _hash_matches(path: Path, sha: str, sig: tuple) -> bool:
+    try:
+        ok = _file_sha(path) == sha
+    except OSError:
+        ok = False
+    if not ok and _first_report(sig):
+        logs.record("warning", __name__,
+                    "image blob does not match its name; not served until re-ingested",
+                    kind="image_blob_damaged", blob=sha)
+    return ok
+
+
+def blob_intact(path: Path) -> bool:
+    """Whether blob file `path` still holds the bytes its name says it does.
+
+    A blob's name is its byte sha, and serving trusts that name: it is the
+    ETag and the `?v=` token, both cached for good. Bytes that stopped matching
+    it -- a truncated or damaged sync, a disk error -- would be cached under
+    that name as permanently, and kept by a 304 after the repair. So the
+    serving path and thumbnail generation ask this first.
+
+    Re-hashes the file, memoized on its stat signature (path, mtime, size,
+    inode) by `statcache.memo`, whose racy-window rule applies: a blob
+    modified within the window is hashed every time, never remembered. The
+    residual is the one `statcache.signature` accepts -- an in-place
+    same-size rewrite with its old mtime restored.
+
+    False for a missing file and for a path that is not a blob's (no name to
+    vouch for it). A damaged state is logged once per signature. Never raises.
+    `image_refs.resolve_ref` deliberately does not ask: a listing resolves
+    every placement it shows, and only bytes about to be served need this.
+    """
+    sha = blob_sha_of(path)
+    if sha is None:
+        return False
+    sig = statcache.signature(path)
+    if sig is None:
+        return False
+    return statcache.memo("image_store.blob_intact", sig,
+                          lambda: _hash_matches(path, sha, sig),
+                          pool=_INTACT_POOL, max_entries=_INTACT_MAX)
+
+
 def _publish_blob(sha: str, ext: str, data: bytes) -> None:
     """Make ``blob_path(sha, ext)`` hold `data`.
 

@@ -349,6 +349,14 @@ def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
     placement, an image-less one, or one whose object or blob has not arrived
     -- the legacy rule below answers, so redundant data beats lost data.
 
+    A blob whose bytes no longer match its name (`image_store.blob_intact`: a
+    damaged sync, a truncation) has not arrived either, as far as anything
+    that reads it is concerned: its sha is the ETag and the `?v=` token a
+    browser caches for good, so serving it would pin the damage. Asked here
+    rather than in `image_refs.resolve_ref`, which every listing row pays for;
+    this is the path whose bytes are about to be read. Re-ingesting the
+    picture repairs the blob, and this answers with it again.
+
     Legacy: newest wins, not alphabetically first: `put_in` used to write the
     new file before unlinking stale other-extension siblings (so a crash can't
     lose the image), which leaves both present for a moment -- and a plain
@@ -362,7 +370,7 @@ def path_in(d: Path, name: str, *, supported_only: bool = False) -> Path | None:
     if not _safe_name(name) or not d.exists():
         return None
     resolved = image_refs.resolve(d, name)
-    if resolved is not None:
+    if resolved is not None and image_store.blob_intact(resolved.blob_path):
         return resolved.blob_path
     return _legacy_path(d, name, supported_only)
 
