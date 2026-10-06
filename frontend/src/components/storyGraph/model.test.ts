@@ -410,7 +410,9 @@ describe("names", () => {
     expect(STATE_WORDS.due_soon).toBe("due soon");
     expect(FINDING_PHRASE.possible_thread_closure).toBe("May be finished");
     expect(RELATION_PHRASE.by).toEqual({ out: "Due by", in: "Deadline for" });
-    expect(RELATION_PHRASE.before).toEqual({ out: "Before", in: "After this:" });
+    expect(RELATION_PHRASE.before).toEqual({ out: "Before", in: "Due before this:" });
+    expect(RELATION_PHRASE.after).toEqual({ out: "After", in: "Due after this:" });
+    expect(RELATION_PHRASE.on.in).toBe("On this day:");
   });
 });
 

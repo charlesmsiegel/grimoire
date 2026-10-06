@@ -886,6 +886,34 @@ test("a serves edge shows the driver action it carries, from both ends", async (
   noTokens(d);
 });
 
+test("an inbound before/after link reads from the event's side, as an anchored idea does", async () => {
+  // `a before b` means a is due before event b (§5.3). On b's node, the link
+  // and an idea anchored `before` b both name what comes before it.
+  const g = graphFixture();
+  g.edges.push(
+    { id: "lnk-map-before", kind: "link", from: "thread:mara-s-map",
+      to: "event:the-coronation", source: "reviewed", relation: "before", candidate_id: null },
+  );
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  let r = await ready(at("event:the-coronation"));
+  let rows = entries(section(detail("The coronation"), "Linked"));
+  expect(rows).toEqual([
+    "Deadline for Mara's oath",
+    "Due before this: Mara's map",
+    "Scene idea before this: The harbour meeting",
+  ]);
+  r.unmount();
+
+  const link = g.edges.find((e) => e.id === "lnk-map-before")!;
+  if (link.kind !== "link") throw new Error("fixture moved");
+  link.relation = "after";
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  r = await ready(at("event:the-coronation"));
+  rows = entries(section(detail("The coronation"), "Linked"));
+  expect(rows).toContain("Due after this: Mara's map");
+  r.unmount();
+});
+
 test("an idea anchored to a moment with no node names it without its ref", async () => {
   const g = graphFixture();
   const letter = g.nodes.find((n) => n.id === "idea:winifred-s-letter")!;
