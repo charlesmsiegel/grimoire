@@ -346,6 +346,9 @@ export type ImageGcProtected = {
   id: string | null; blob: string | null; why: string; collectable_at: number | null;
 };
 export type ImageGcBlocker = { path: string; reason: string };
+/** One file the collector removed: the object it belonged to, its blob key, its size. */
+export interface ImageGcDeletedRow { id: string; blob: string; bytes: number }
+
 /** What the collector reports. `mode` `scan` is the dry run; `collect` the
  *  deletion. `token` is single-use and only present when something is
  *  collectable and nothing blocked the walk. Times are epoch seconds. */
@@ -369,7 +372,8 @@ export type ImageGcReport = {
   clock_skew: { id: string | null; blob: string | null; what: string }[];
   token: string | null;
   token_expires_at: number | null;
-  deleted: { objects: string[]; blobs: string[]; bytes: number };
+  /** One row per file removed, appended as each unlink lands; `bytes` is the total. */
+  deleted: { objects: ImageGcDeletedRow[]; blobs: ImageGcDeletedRow[]; bytes: number };
   skipped: { id: string | null; blob: string | null; reason: string }[];
   kept_blobs: { id: string; blob: string; reason: string }[];
   /** Reachable ids with no readable sidecar yet: orphan blobs are kept. */
