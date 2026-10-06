@@ -118,6 +118,30 @@ def test_cross_world_reference_resolves_the_world_named_in_the_image_url(client,
     assert store.assets.image_path(root, owner, vid, copied.json()["name"]).read_bytes() == b"other-world"
 
 
+def test_untagged_and_appearances_routes_expose_no_slot(client, campaign):
+    """The catalog the store tags by carries each key's slot -- a filesystem
+    directory -- and none of it may reach a response. Tagged through the route,
+    the answer lives on the image object, not in the greeting's sidecar."""
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    store.assets.put_image(root, owner, vid, "embed-art", b"png-ref", "png")
+    url = f"/api/worlds/{wid}/characters/{owner}/versions/{vid}/images/embed-art"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid, f"![Art]({url})")
+    store.assets.put_image(root, gid, "default", "art_1", b"png-own", "png", base="greetings")
+    queue = client.get(f"/api/worlds/{wid}/subjects/untagged").json()
+    assert {a["name"] for a in queue} == {url, "art_1"}
+    endpoint = f"/api/worlds/{wid}/greetings/{gid}/subjects"
+    for key in (url, "art_1"):
+        assert client.put(endpoint, json={"image": key, "subjects": [owner]}).status_code == 200
+    assert not store.image_subjects.subjects_path(root, gid).exists()
+    appearances = client.get(f"/api/worlds/{wid}/characters/{owner}/appearances").json()
+    assert {a["name"] for a in appearances} == {url, "art_1"}
+    for row in [*queue, *appearances]:
+        assert "slot" not in row and "target" not in row
+        assert not any(str(root) in str(v) for v in row.values())
+
+
 def test_collection_members_are_individually_reviewed_and_deduplicated(client, campaign):
     _cid, wid = campaign
     root = store.worlds.world_root(wid)
@@ -858,8 +882,9 @@ def test_greeting_images_need_an_assignment_until_characters_or_none_are_saved(c
     aid = _world_character(client, wid, "Mara")
     root = store.worlds.paths.world_root(wid)
     gid = store.greetings.create_greeting(root, "Saltmarch", aid, "default", "")
-    for image in ("art_1", "art_2", "art_3"):
-        store.assets.put_image(root, gid, "default", image, _png(), "png", base="greetings")
+    # Three different pictures: one picture is one object, answered once.
+    for image, color in (("art_1", "black"), ("art_2", "white"), ("art_3", "red")):
+        store.assets.put_image(root, gid, "default", image, _png(color), "png", base="greetings")
     store.image_subjects.set_image_subjects(root, gid, "art_1", [aid])
     store.image_subjects.set_image_subjects(root, gid, "art_2", [])
     row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-subjects")

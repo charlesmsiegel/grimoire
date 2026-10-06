@@ -2,14 +2,26 @@ from urllib.parse import quote
 
 import pytest
 
-from grimoire.store import assets, characters, entities, greetings, image_store, image_subjects, pcs
+from grimoire.store import (
+    assets,
+    characters,
+    entities,
+    greetings,
+    image_store,
+    image_subjects,
+    pcs,
+    worlds,
+)
 
 
 def _world(tmp_path, images=("art_1", "art_2")):
     cid, vid = characters.create_character(tmp_path, "Mira", "main")
     gid = greetings.create_greeting(tmp_path, "Opener", cid, vid, "body")
     for name in images:
-        assets.put_image(tmp_path, gid, "default", name, b"png", "png", base="greetings")
+        # Distinct bytes: identical ones are one image object, and an answer
+        # on the object answers every placement of it in the world.
+        assets.put_image(tmp_path, gid, "default", name, f"png-{name}".encode(), "png",
+                         base="greetings")
     return cid, gid
 
 
@@ -164,7 +176,7 @@ def test_appearances_tolerates_a_reference_restored_during_the_read(tmp_path, mo
     for url in (restored, old):
         greetings.update_greeting(tmp_path, gid, body=f"![Art]({url})")
         image_subjects.set_image_subjects(tmp_path, gid, url, [owner])
-    real_catalog = image_subjects.greeting_images.catalog
+    real_catalog = image_subjects.greeting_images.catalog_with_slots
     first = True
 
     def restore_after_inventory(root, greeting):
@@ -175,7 +187,7 @@ def test_appearances_tolerates_a_reference_restored_during_the_read(tmp_path, mo
             greetings.update_greeting(root, greeting, body=f"![Art]({restored})")
         return images
 
-    monkeypatch.setattr(image_subjects.greeting_images, "catalog", restore_after_inventory)
+    monkeypatch.setattr(image_subjects.greeting_images, "catalog_with_slots", restore_after_inventory)
     assert image_subjects.appearances(tmp_path, owner) == []
     assert image_subjects.appearances(tmp_path, owner)[0]["name"] == restored
 
@@ -216,7 +228,7 @@ def test_untagged_lists_only_unreviewed_images(tmp_path):
     g2 = greetings.create_greeting(tmp_path, "Two", cid, "main", "x")
     for gid, names in ((g1, ("a_tagged", "b_reviewed", "c_new")), (g2, ("d_new",))):
         for n in names:
-            assets.put_image(tmp_path, gid, "default", n, b"p", "png", base="greetings")
+            assets.put_image(tmp_path, gid, "default", n, n.encode(), "png", base="greetings")
     image_subjects.set_image_subjects(tmp_path, g1, "a_tagged", [cid])
     image_subjects.set_image_subjects(tmp_path, g1, "b_reviewed", [])  # reviewed, none
     got = image_subjects.untagged(tmp_path)
@@ -363,3 +375,218 @@ def test_copy_of_a_legacy_greeting_image_ingests_it_once(tmp_path, monkeypatch):
     assert (src_dir / "art_1.png").read_bytes() == b"legacy-art"    # the source is left as it was
     assert assets.image_path(tmp_path, cid, vid, "gallery_1").read_bytes() == b"legacy-art"
     assert assets.image_id(tmp_path, cid, vid, "gallery_1") is not None
+
+
+# ---- subjects on the image object (stage 2, spec section 9) ----
+
+def _scoped_world(monkeypatch, tmp_path, name="Realm"):
+    """A real world under a real store home, so its root names its scope."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    wid = worlds.create_world(name)
+    root = worlds.world_root(wid)
+    cid, vid = characters.create_character(root, "Seraphine", "main")
+    return root, cid, vid
+
+
+def _greeting_with(root, cid, vid, images, body="body"):
+    gid = greetings.create_greeting(root, "Opener", cid, vid, body)
+    for name, data in images.items():
+        assets.put_image(root, gid, "default", name, data, "png", base="greetings")
+    return gid
+
+
+def _object(root, gid, name):
+    image_id = assets.image_id(root, gid, "default", name, base="greetings")
+    assert image_id is not None
+    return image_store.read(image_id).raw
+
+
+def test_tagging_a_placement_writes_scoped_associations(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    assert root.name == "realm" and cid == "seraphine"
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1"})
+
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid, cid])
+
+    raw = _object(root, gid, "art_1")
+    assert raw["associations"] == [
+        {"kind": "character", "relation": "subject", "scope": "world:realm", "id": "seraphine"}]
+    assert raw["reviews"] == {"subjects": ["world:realm"]}
+    assert "art_1" not in image_subjects._read_raw(root, gid)
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [cid]}
+    # A retag REPLACES this scope's associations, it does not add to them.
+    image_subjects.set_image_subjects(root, gid, "art_1", [])
+    raw = _object(root, gid, "art_1")
+    assert raw["associations"] == []
+    assert raw["reviews"] == {"subjects": ["world:realm"]}
+    assert image_subjects.read_subjects(root, gid) == {"art_1": []}
+
+
+def test_a_tag_shows_in_every_greeting_of_the_world_that_places_the_picture(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    first = _greeting_with(root, cid, vid, {"art_1": b"shared-art"})
+    second = _greeting_with(root, cid, vid, {"scene": b"shared-art"})
+    # ...and a third greeting that shows it by reference to a character's slot.
+    assets.put_image(root, cid, vid, "gallery_1", b"shared-art", "png")
+    url = f"/api/worlds/{root.name}/characters/{cid}/versions/{vid}/images/gallery_1"
+    third = _greeting_with(root, cid, vid, {}, body=f"![Art]({url})")
+    assert len(image_subjects.untagged(root)) == 3
+
+    image_subjects.set_image_subjects(root, first, "art_1", [cid])
+
+    assert image_subjects.read_subjects(root, second) == {"scene": [cid]}
+    assert image_subjects.read_subjects(root, third) == {url: [cid]}
+    assert image_subjects.untagged(root) == []
+    assert {(a["gid"], a["name"]) for a in image_subjects.appearances(root, cid)} == {
+        (first, "art_1"), (second, "scene"), (third, url)}
+
+
+def test_a_tag_is_absent_in_another_world(tmp_path, monkeypatch):
+    """Review Focus 3: the same bytes in two worlds are one object, and a
+    subject tag stays in the world it was made in."""
+    realm, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    salt = worlds.world_root(worlds.create_world("Saltmarch"))
+    # The same character id exists in both, so a leaked tag would not be
+    # filtered out as an unknown character -- it would show.
+    assert characters.create_character(salt, "Seraphine", "main") == (cid, vid)
+    here = _greeting_with(realm, cid, vid, {"art_1": b"same-bytes"})
+    there = _greeting_with(salt, cid, vid, {"art_1": b"same-bytes"})
+    assert _object(realm, here, "art_1")["id"] == _object(salt, there, "art_1")["id"]
+
+    image_subjects.set_image_subjects(realm, here, "art_1", [cid])
+
+    assert image_subjects.read_subjects(realm, here) == {"art_1": [cid]}
+    assert image_subjects.read_subjects(salt, there) == {}
+    assert image_subjects.reviewed_names(salt, there) == set()
+    assert [(a["gid"], a["name"]) for a in image_subjects.untagged(salt)] == [(there, "art_1")]
+    assert image_subjects.appearances(salt, cid) == []
+
+
+def test_reviewed_empty_on_the_object_leaves_the_queue(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1", "art_2": b"png-2"})
+
+    image_subjects.set_image_subjects(root, gid, "art_1", [])
+
+    assert not image_subjects.subjects_path(root, gid).exists()
+    assert image_subjects.reviewed_names(root, gid) == {"art_1"}
+    assert image_subjects.read_subjects(root, gid) == {"art_1": []}
+    assert [a["name"] for a in image_subjects.untagged(root)] == ["art_2"]
+
+
+def test_a_legacy_key_wins_until_retagged(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    mara, _ = characters.create_character(root, "Mara", "main")
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1", "art_2": b"png-2"})
+    other = _greeting_with(root, cid, vid, {"copy": b"png-1"})
+    image_subjects.write_subjects(root, gid, {"art_1": [mara], "art_2": []})
+    # The object behind art_1 gets a different answer from another greeting.
+    image_subjects.set_image_subjects(root, other, "copy", [cid])
+
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [mara], "art_2": []}
+    assert image_subjects.read_subjects(root, other) == {"copy": [cid]}
+
+    image_subjects.set_image_subjects(root, gid, "art_1", [mara, cid])
+
+    assert image_subjects._read_raw(root, gid) == {"art_2": []}     # only the retagged key went
+    assert image_subjects.read_subjects(root, gid) == {"art_1": sorted([mara, cid]), "art_2": []}
+    assert image_subjects.read_subjects(root, other) == {"copy": sorted([mara, cid])}
+
+
+def test_remote_and_cross_world_keys_stay_in_the_sidecar(tmp_path, monkeypatch):
+    """R11: a reference to a picture placed in another world keeps its tag in
+    this greeting's sidecar, so the tag travels with this world's bundle."""
+    realm, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    salt = worlds.world_root(worlds.create_world("Saltmarch"))
+    characters.create_character(salt, "Seraphine", "main")
+    assets.put_image(salt, cid, vid, "avatar", b"their-art", "png")
+    remote = "https://example.test/art.png"
+    cross = f"/api/worlds/{salt.name}/characters/{cid}/versions/{vid}/images/avatar"
+    gid = _greeting_with(realm, cid, vid, {}, body=f"![A]({remote})\n![B]({cross})")
+    # A legacy file with no placement is a legacy name: the sidecar too.
+    legacy_dir = assets.version_dir(realm, gid, "default", base="greetings")
+    legacy_dir.mkdir(parents=True, exist_ok=True)
+    (legacy_dir / "old.png").write_bytes(b"legacy")
+
+    for key in (remote, cross, "old"):
+        image_subjects.set_image_subjects(realm, gid, key, [cid])
+
+    assert image_subjects._read_raw(realm, gid) == {remote: [cid], cross: [cid], "old": [cid]}
+    raw = image_store.read(assets.image_id(salt, cid, vid, "avatar")).raw
+    assert "associations" not in raw and "reviews" not in raw
+    assert image_subjects.read_subjects(realm, gid) == {remote: [cid], cross: [cid], "old": [cid]}
+
+
+def test_scope_uses_the_canonical_world_id(tmp_path, monkeypatch):
+    """R10: a root reached under another spelling of its id (`REALM` for
+    `realm` on a case-insensitive filesystem) still writes `world:realm`.
+    Simulated here, on whatever filesystem the suite runs on."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    root = tmp_path / "home" / "worlds" / "REALM"
+    cid, vid = characters.create_character(root, "Seraphine", "main")
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1"})
+    monkeypatch.setattr(worlds.paths, "canonical_id",
+                        lambda wid: "realm" if wid == "REALM" else wid)
+
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid])
+
+    raw = _object(root, gid, "art_1")
+    assert raw["reviews"] == {"subjects": ["world:realm"]}
+    assert [a["scope"] for a in raw["associations"]] == ["world:realm"]
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [cid]}
+
+
+def test_an_unconfirmed_object_write_keeps_the_sidecar_entry(tmp_path, monkeypatch):
+    """R8: nothing written to the object, so the answer goes to the sidecar
+    -- and an earlier legacy answer is replaced there, never dropped."""
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1"})
+    image_subjects.write_subjects(root, gid, {"art_1": []})
+    monkeypatch.setattr(image_subjects.image_store, "update", lambda image_id, change: False)
+
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid])
+
+    assert image_subjects._read_raw(root, gid) == {"art_1": [cid]}
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [cid]}
+
+
+def test_appearances_finds_object_tags_without_a_sidecar(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1", "art_2": b"png-2"})
+
+    image_subjects.set_image_subjects(root, gid, "art_2", [cid])
+
+    assert not image_subjects.subjects_path(root, gid).exists()
+    assert [(a["gid"], a["name"]) for a in image_subjects.appearances(root, cid)] == [(gid, "art_2")]
+
+
+@pytest.mark.parametrize("raw_edit", [
+    {"associations": "garbled", "reviews": {"subjects": ["world:realm"]}},
+    {"associations": [{"kind": "character", "relation": "subject", "scope": "world:realm",
+                       "id": ["not", "a", "string"]}, "not-a-dict"],
+     "reviews": {"subjects": ["world:realm"]}},
+])
+def test_a_malformed_object_answer_reads_as_reviewed_nobody(tmp_path, monkeypatch, raw_edit):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1"})
+    image_id = assets.image_id(root, gid, "default", "art_1", base="greetings")
+    assert image_store.update(image_id, lambda raw: {**raw, **raw_edit})
+
+    assert image_subjects.read_subjects(root, gid) == {"art_1": []}
+    assert image_subjects.untagged(root) == []
+    # ...and a write over it still lands.
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid])
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [cid]}
+
+
+@pytest.mark.parametrize("reviews", ["garbled", {"subjects": "world:realm"}, {"subjects": [["world:realm"]]}])
+def test_a_malformed_review_list_reads_as_unreviewed(tmp_path, monkeypatch, reviews):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1"})
+    image_id = assets.image_id(root, gid, "default", "art_1", base="greetings")
+    assert image_store.update(image_id, lambda raw: {**raw, "reviews": reviews})
+
+    assert image_subjects.read_subjects(root, gid) == {}
+    assert [a["name"] for a in image_subjects.untagged(root)] == ["art_1"]
+    image_subjects.set_image_subjects(root, gid, "art_1", [])
+    assert image_subjects.read_subjects(root, gid) == {"art_1": []}
