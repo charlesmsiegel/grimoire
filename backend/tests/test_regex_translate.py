@@ -170,3 +170,35 @@ def test_repeated_group_captures(body, text, replacement, js_result):
                             "replacement": replacement})
     ours = rules.compile_pattern(rule).sub(lambda m: rules.expand(replacement, m, []), text)
     assert (result["verdict"] == E) == (ours == js_result)
+
+
+def _bits(flags: str) -> int:
+    bits = 0
+    for f in flags:
+        bits |= _BITS.get(f, 0)
+    return bits
+
+
+DESERET_CAPITAL = "\N{DESERET CAPITAL LETTER LONG I}"     # U+10400
+DESERET_SMALL = "\N{DESERET SMALL LETTER LONG I}"         # U+10428
+
+
+@pytest.mark.parametrize("body", ["\\uD801\\uDC00", "[\\uD801\\uDC00]", "x\\uD801\\uDC00"])
+def test_a_surrogate_pair_under_iu_is_checked_for_case_folding(body):
+    """Under `iu` JavaScript reads the pair as one cased letter and folds it
+    (checked with Node: /\\uD801\\uDC00/iu matches U+10428), which Python's
+    ASCII-only folding here does not -- so the rule is approximate, with the
+    same note the `\\u{...}` spelling of that letter already gets."""
+    out = translate.translate(body, "iu")
+    assert out["verdict"] == A
+    assert any("folds ASCII case only" in n for n in out["notes"])
+    assert not re.search(out["pattern"], DESERET_SMALL, _bits(out["flags"]))
+
+
+def test_a_surrogate_pair_under_i_alone_is_not_folded_by_either_engine():
+    """Without u, JavaScript compares the two halves as code units and folds
+    neither (Node: /\\uD801\\uDC00/i does not match U+10428), so `i` alone
+    stays exact."""
+    out = translate.translate("\\uD801\\uDC00", "i")
+    assert out["verdict"] == E
+    assert re.search(out["pattern"], DESERET_CAPITAL, _bits(out["flags"]))
