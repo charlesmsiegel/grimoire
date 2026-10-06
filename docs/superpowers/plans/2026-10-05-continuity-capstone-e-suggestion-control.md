@@ -334,6 +334,7 @@ Out of scope:
       - **The hold also holds the button.** While held, the hook reports `held: true`, the picker disables Suggest with the hint "Reading story pressure…", and `suggest()` is a no-op. `suggest()` also sets `autoAsked.current = question` before it runs. Otherwise a press during the read makes an unsteered paid ranked call, and the release makes a second one for the same question.
     - **After every drivers read** (the first and each re-read), controls are pruned to the refs the read lists in `drivers` and `anchors`, and what was pruned is named in the note. A 409's `refs` are the server's canonical spellings, which can differ from what the chooser holds, so dropping only the named refs could leave a control the reader can no longer see, which would 409 on every press.
     - **A stale refusal is not an empty reply.** The hook reports `stale: true` until the next request. The picker then suppresses "No ideas came back…", and the note reads as the reason: "Some selections are no longer current and were reset — press Regenerate."
+    - **A reset note ends with the next request.** The hook calls `onDispatch` beside `setStale(false)`. The chooser clears a reset note (the stale one, or the failed re-read's) and the names it held, so it is not left under the cards that request brings, and a later cycle names only its own resets. A seed's note is about the seed the open call carries, so it outlives that call and clears when the reader changes a control (deviation 20).
 20. **`ScenesView` adoption is new code.** §16.5's "as it already adopts `seedPrompt`" describes `CampaignView`, which adopts. `ScenesView` only sends. The adoption copies `CampaignView`'s adopt-once-then-replace pattern.
     - A seeded open also waits for the scene list. `afterSid` is `scenes?.[0]?.id ?? null`, and opening before it lands would make the hook re-ask, a second paid ranked call, when the list arrives.
     - A malformed `chooser` state is ignored.
@@ -1314,6 +1315,7 @@ The slices above each prove one layer. This task proves they agree, through one 
 17. The batch anchor beats avoid (Decision 26).
 18. The prompt index is ordered by `SORT_ORDER`, the §16.2 order, rather than B's decision precedence `PRESSURE_STATES` (Decision 9).
 19. A saved idea anchored other than `on` a live occurrence opens the confirm form with an empty date, rather than the chooser's `nextDate` (Decision 23). §17.1 named only the live-`on` case.
+20. §16.3 step 5's "shows which selections dropped" lasts until the next suggestion request goes out, and §16.5's seed note until the reader changes a control (Decision 19). A note that says "press Regenerate" is not left under the cards Regenerate brought.
 
 **Open questions (none block execution):**
 
