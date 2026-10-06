@@ -659,11 +659,11 @@ def test_resolve_controls_refusals_carry_their_reason(monkeypatch, tmp_path):
     # a month anchor missing from the capture is judged by its ref's shape
     assert reason(time_mode="anchor", time_anchor_ref="birthday:characters:mara:month:2027-01",
                   time_anchor_relation="by")[2] == "anchor_relation"
-    # `on` (or no relation) is what a month anchor takes
+    # `on` (or no relation, which resolves to `on`) is what a month anchor takes
     for relation in ("", "on"):
         got = suggest.resolve_controls(cid, snap, time_mode="anchor", time_anchor_ref=MARA_JUNE,
                                        time_anchor_relation=relation)
-        assert (got.anchor, got.relation) == (MARA_JUNE, relation)
+        assert (got.anchor, got.relation) == (MARA_JUNE, "on")
 
 
 def test_resolve_controls_the_anchor_beats_avoid(monkeypatch, tmp_path):

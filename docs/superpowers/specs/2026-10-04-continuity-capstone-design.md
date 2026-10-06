@@ -1559,7 +1559,7 @@ All comparisons use primary-provider fixed days. An anchor's time component is s
 | `by` | now ≤ d ≤ D |
 | `after` | D < d ≤ D + `RESOLVE_WINDOW_DAYS` |
 
-**A month-only birthday anchor takes only `on`** (Slice E plan, Decision 6). Its `fixed` is null, so `before`, `by` and `after` have no D to compare against. A request pairing it with another relation is a 400 `anchor_relation` (§16.3), and a model relation for it is coerced to `on`. Its month comes from its ref (`birthday:<kind>:<id>:month:<year>-<key>`), since the pressure items carry no month key. An `on` anchor's derived date is `provider.format(D)`, the canonical spelling, not the stored text (Decision 12).
+**A month-only birthday anchor takes only `on`** (Slice E plan, Decision 6). Its `fixed` is null, so `before`, `by` and `after` have no D to compare against. A request pairing it with another relation is a 400 `anchor_relation` (§16.3); a request that sends it with no relation has that relation resolved to `on` before the prompt is built, so the controls addendum names only `on` rather than offering the model a choice; and a model relation for it is coerced to `on`. Its month comes from its ref (`birthday:<kind>:<id>:month:<year>-<key>`), since the pressure items carry no month key. An `on` anchor's derived date is `provider.format(D)`, the canonical spelling, not the stored text (Decision 12).
 
 **With no `now`** (no clock and no chronicle date), the `now ≤` lower bounds and the `near`/`move` checks are skipped, while the D bound still applies. No date is fabricated. An absent or unparseable model date is `""` and is never `date_rejected`: rejection means a date was given and fails the rule (Decision 12).
 

@@ -193,6 +193,16 @@ def test_month_only_anchor_takes_only_on(client):
     _refused(_post(client, cid, json={**body, "time_anchor_relation": "before"}),
              400, "anchor_relation")
     assert _post(client, cid, json={**body, "time_anchor_relation": "on"}).status_code == 200
+    # A blank relation is resolved to "on" before the prompt is built, so the
+    # model is never offered a choice the parser would coerce away (Decision 6).
+    snapshot = suggest.build_snapshot(cid)
+    assert suggest.resolve_controls(cid, snapshot, time_mode="anchor",
+                                    time_anchor_ref=ref).relation == "on"
+    fake = _fake(client)
+    assert _post(client, cid, json=body).status_code == 200
+    system = _system(fake)
+    assert f'set its "time_anchor" "ref" to {ref} and its "relation" to "on".' in system
+    assert "whichever of" not in system
 
 
 def test_stale_refs_are_409(client):
