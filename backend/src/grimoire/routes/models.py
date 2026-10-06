@@ -1261,3 +1261,15 @@ class AuthorsNote(BaseModel):
     text: str = ""
     depth: int = 4
     every: int = 1
+
+
+class ImageMigrationStart(BaseModel):
+    """`POST /maintenance/images/migrate`. A dry run unless it says otherwise."""
+    dry_run: bool = True
+
+
+class ImageGcStart(BaseModel):
+    """`POST /maintenance/images/gc`. A dry run (the scan) unless it says
+    otherwise; a real run (the collection) carries the token a scan issued."""
+    dry_run: bool = True
+    token: str | None = None

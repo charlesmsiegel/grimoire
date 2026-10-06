@@ -369,3 +369,20 @@ def test_the_collection_member_route_and_fallback_never_shadow_each_other():
     for path in (member, fallback):
         earlier = gets[:gets.index(path)]
         assert not [p for p in earlier if _generalizes(p, path)], path
+
+
+def test_the_image_maintenance_routes_are_mounted_and_cross_nothing():
+    """`/maintenance/images/...` opens on a literal segment no `{cid}`/`{wid}`
+    pattern can capture, so it needs no entry in CROSSING_PAIRS -- this pins
+    that it stays that way, and that the three routes are there at all."""
+    table = _table()
+    mine = {(m, p) for methods, p in table for m in methods
+            if p.startswith("/api/maintenance/images/")}
+    assert mine == {("POST", "/api/maintenance/images/migrate"),
+                    ("POST", "/api/maintenance/images/gc"),
+                    ("GET", "/api/maintenance/images/reports/{run_id}")}
+    paths = [p for _m, p in mine]
+    assert not [(a, b) for a in paths for table_path in {p for _m, p in table}
+                for b in [table_path]
+                if not b.startswith("/api/maintenance/") and
+                (_intersects(a, b) or _generalizes(b, a))]

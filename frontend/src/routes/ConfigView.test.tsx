@@ -26,6 +26,9 @@ vi.mock("../components/ModelRoutingPicker", () => ({
   ModelRoutingPicker: ({ scope }: { scope: string }) =>
     <div data-testid="model-routing-picker">{scope}</div>,
 }));
+vi.mock("../components/ImageStoreCard", () => ({
+  ImageStoreCard: () => <div data-testid="image-store-card" />,
+}));
 vi.mock("../components/RegexRulesEditor", () => ({
   RegexRulesEditor: ({ scope }: { scope: unknown }) =>
     <div data-testid="regex-rules" data-scope={JSON.stringify(scope)} />,
@@ -132,6 +135,14 @@ test("the routing section carries the global picker", async () => {
   // in the scene inspector, and mounting the wrong one here would write every
   // reader's global routes into whichever campaign was open.
   expect(screen.getByTestId("model-routing-picker")).toHaveTextContent("global");
+});
+
+test("the image store card is part of Storage and nothing else", async () => {
+  renderView();
+  expect(await screen.findByTestId("image-store-card")).toBeInTheDocument();
+
+  await open(/^Context/);
+  expect(screen.queryByTestId("image-store-card")).toBeNull();
 });
 
 test("main shows one section at a time", async () => {
