@@ -25,11 +25,13 @@ from grimoire.main import create_app
 from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import runs
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import candidates, canon, doc
+from grimoire.store.continuity import candidates, canon, doc, reconcile
 
 from . import draft_runs, review_runs
 from .llm_fakes import Cassette, HeldCassette, from_cassette, from_entries
 from .review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER
+from .test_absorb_identity import MODES as SHARED_MODES
+from .test_absorb_identity import ROW_ENVELOPE, _dumped, _leaked, _row_texts
 
 SYSTEM = "You are reviewing a campaign's story ledger"
 LEDGER = f"thread:{LEDGER_THREAD[0]}"
@@ -461,6 +463,52 @@ def test_reconcile_log_row_carries_counts_only(client):
         for text in texts:
             assert text not in str(value)
 
+
+
+#: The sweep row's keys (§29): modes, counts, the two flags, and one count per
+#: decision word.
+RECONCILE_ROW_KEYS = ({"kind", "campaign", "sweep", "matching", "embedding",
+                       "embedding_error", "llm", "continuity", "candidates",
+                       "deterministic", "semantic", "adjudicated", "pairs_capped",
+                       "superseded"} | set(continuity_routes._WORDS))
+#: field -> the values it may take: the three shared with the identity row,
+#: then the sweep's own.
+MODES = {**{k: SHARED_MODES[k] for k in ("matching", "embedding", "embedding_error")},
+         "sweep": set(reconcile.SWEEPS), "llm": {"off", "skipped", "ok", "failed"},
+         "continuity": {"ok", "malformed"}}
+_FLAGS = {"pairs_capped", "superseded"}
+_COUNTS = RECONCILE_ROW_KEYS - set(MODES) - _FLAGS - {"kind", "campaign"}
+
+
+@pytest.mark.parametrize("case", ["ok", "off", "failed"])
+def test_reconcile_log_row_is_counts_and_closed_modes_only(client, case):
+    """§29: the row's exact key set, every string field from a closed set, every
+    count an int, and no title, beat, reason or prompt line anywhere in it --
+    whether the model answered, was never asked, or answered nothing usable."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    if case != "off":
+        _key(client)
+    fake = _install(client, from_entries(
+        [_entry("no json here" if case == "failed" else _reply(_duplicate()))]))
+
+    _settled(client, cid, _refresh(client, cid))
+
+    row = _reconcile_row(cid)
+    assert row["llm"] == case, "the case set up the sweep it names"
+    assert set(row) - ROW_ENVELOPE == RECONCILE_ROW_KEYS
+    assert (row["kind"], row["campaign"]) == ("continuity-reconcile", cid)
+    for key in _COUNTS:
+        assert isinstance(row[key], int) and not isinstance(row[key], bool), key
+    for key in _FLAGS:
+        assert isinstance(row[key], bool), key
+    for field, allowed in MODES.items():
+        assert row[field] in allowed, (field, row[field])
+    dumped = _dumped(row)
+    texts = [*LEDGER_THREAD[1:], RECOVER_THE_LEDGER["title"], RECOVER_THE_LEDGER["beat"],
+             REASON, *_row_texts(fake)]
+    for text in texts:
+        assert not _leaked(text, dumped), text
 
 
 # ------------------------------------------- a malformed continuity.json

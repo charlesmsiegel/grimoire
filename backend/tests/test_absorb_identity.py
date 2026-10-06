@@ -22,7 +22,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import embeddings, routes
+from grimoire import embeddings, llm_errors, routes
 from grimoire.main import create_app
 from grimoire.store import config, llm_connections
 from grimoire.store.absorb import materializer
@@ -710,6 +710,116 @@ def test_identity_log_row_carries_counts_only(client, scene):
         for text in (RECOVER_THE_LEDGER["title"], RECOVER_THE_LEDGER["beat"],
                      "a second search"):
             assert text not in str(value)
+
+
+#: The identity row's string fields (§29): modes only, each from a closed set.
+IDENTITY_MODES = {"kind", "campaign", "scene", "status", "matching", "embedding",
+                  "embedding_error"}
+#: Its counts (§29): `Examination.counts()`, one per check decision among them.
+IDENTITY_COUNTS = ({"proposed", "examined", "candidates", "deterministic", "semantic",
+                    "embedded", "downgraded", "hint_only"} | set(identity.CHECK_DECISIONS))
+IDENTITY_ROW_KEYS = IDENTITY_MODES | IDENTITY_COUNTS
+#: What `logs.record` adds to every row.
+ROW_ENVELOPE = {"ts", "level", "module", "message"}
+
+#: field -> the values it may take. The three shared with the sweep's row, then
+#: the identity phase's own status.
+MODES = {
+    "matching": {"basic", "semantic"},
+    "embedding": {"off", "configured", "failure"},
+    "embedding_error": {""} | set(llm_errors.KINDS) | {"unexpected"},
+    "status": {"ok", "degraded", "failed", "skipped"},
+}
+
+
+def _row_texts(fake) -> list[str]:
+    """Every stripped line of 12 or more characters from every message the
+    fake received: a prompt line that leaked into a row is one of these."""
+    return [line.strip()
+            for request in fake.requests for message in request["messages"]
+            for line in str(message.get("content", "")).splitlines()
+            if len(line.strip()) >= 12]
+
+
+def _dumped(row: dict) -> str:
+    """The row as text, with non-ASCII kept: the default `json.dumps` writes an
+    em dash as an escape, and both continuity prompts put em dashes in their
+    lines, so a leaked line would never match the escaped dump."""
+    return json.dumps(row, ensure_ascii=False)
+
+
+def _leaked(text: str, dumped: str) -> bool:
+    """Whether `text` sits in a `_dumped` row, as written or as JSON spells it:
+    a prompt line holding a double quote is stored with that quote escaped, so
+    the line as written never matches the dump."""
+    return text in dumped or json.dumps(text, ensure_ascii=False)[1:-1] in dumped
+
+
+def _keyless(client):
+    keyless = client.post("/api/llm-connections",
+                          json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
+    client.put("/api/routing", json={"routes": {"continuity": keyless}})
+
+
+def _embedding_failure(monkeypatch):
+    _configure_embeddings(monkeypatch, FakeEmbeddings(
+        error=embeddings.EmbeddingsError("network", "connection refused")))
+
+
+def _examination_raised(monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("Mara's oath")
+
+    monkeypatch.setattr(identity, "examine", broken)
+
+
+@pytest.mark.parametrize("case", ["ok", "no connection", "embedding failure",
+                                  "examination raised"])
+def test_identity_log_row_is_counts_and_closed_modes_only(client, scene, monkeypatch, case):
+    """§29: the row's exact key set, every string field from a closed set, every
+    count an int, and no title, beat, reason or prompt line anywhere in it --
+    whichever way the phase went."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    setup = {"no connection": lambda: _keyless(client),
+             "embedding failure": lambda: _embedding_failure(monkeypatch),
+             "examination raised": lambda: _examination_raised(monkeypatch)}
+    setup.get(case, lambda: None)()
+    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+
+    body = _absorb(client, cid, sid)
+
+    [row] = [r for r in store.logs.scan(level="info", campaign=cid)
+             if r.get("message") == "continuity identity check"]
+    raised = case == "examination raised"
+    assert row["status"] == {"ok": "ok", "no connection": "failed",
+                             "embedding failure": "degraded",
+                             "examination raised": "failed"}[case], "the case set up its phase"
+    assert set(row) - ROW_ENVELOPE == (IDENTITY_MODES if raised else IDENTITY_ROW_KEYS)
+    assert (row["kind"], row["campaign"], row["scene"]) == ("continuity-identity", cid, sid)
+    counts = {k: row[k] for k in IDENTITY_COUNTS if k in row}
+    for key, value in counts.items():
+        assert isinstance(value, int) and not isinstance(value, bool), key
+    if not raised:
+        assert counts["deterministic"] + counts["semantic"] == counts["candidates"]
+    for field, allowed in MODES.items():
+        if raised and field == "embedding":
+            assert row[field] == ""
+        else:
+            assert row[field] in allowed, (field, row[field])
+    dumped = _dumped(row)
+    if case == "embedding failure":
+        assert row["embedding_error"] == "network"
+        assert "connection refused" not in dumped
+    if raised:
+        # The phase says why to the reader; the row keeps only that it failed.
+        assert "Mara's oath" in body["identity"]["reason"]
+        assert "Mara's oath" not in dumped
+    texts = [*LEDGER_THREAD[1:], RECOVER_THE_LEDGER["title"], RECOVER_THE_LEDGER["beat"],
+             "a second search", *_row_texts(fake)]
+    for text in texts:
+        assert not _leaked(text, dumped), text
 
 
 def test_identity_meter_files_under_its_own_task(client, scene):
