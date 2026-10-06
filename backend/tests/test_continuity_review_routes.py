@@ -627,6 +627,69 @@ def test_apply_partial_write_names_what_landed(client, monkeypatch):
     assert store.revision.current(cid) != token
 
 
+def test_a_keep_open_whose_cache_drop_fails_names_the_suppression(client, monkeypatch):
+    """Decision 16: a keep_open apply settles last, so a cache drop that fails
+    after the suppression landed is a `PartialSettleError` -- the 500 merges
+    its parts into `landed`, the token moves, and the finding is hidden by the
+    suppression that did land."""
+    cid, _sid = _stale_map(client)
+    token = store.revision.current(cid)
+
+    def broken(*args, **kwargs):
+        raise OSError("the disk failed")
+
+    monkeypatch.setattr(candidates, "drop", broken)
+    r = _apply(client, cid, CLOSE_MAP, {"op": "keep_open"})
+
+    assert r.status_code == 500, r.text
+    body = r.json()
+    assert (body["kind"], body["landed"]) == ("partial_apply", ["suppression"])
+    assert "suppression landed" in body["detail"]
+    assert store.revision.current(cid) != token
+    assert CLOSE_MAP in candidates.read(cid)["records"]
+    assert CLOSE_MAP not in _listed(client, cid)
+
+
+def test_an_alias_continuity_refusal_with_nothing_landed_is_malformed(client, monkeypatch):
+    """continuity.json refusing the alias write under the hold, before any part
+    landed, is a plain 409 `malformed`: the token stays and no file moves."""
+    cid, _sid = _seeded(client)
+    token = store.revision.current(cid)
+    before = _files(cid)
+
+    def refused(*args, **kwargs):
+        raise doc.ContinuityError("continuity.json cannot be read")
+
+    monkeypatch.setattr(doc, "put_alias", refused)
+    r = _apply(client, cid, PAIR, {"op": "alias", "canonical": LEDGER})
+
+    assert r.status_code == 409, r.text
+    assert r.json()["kind"] == "malformed"
+    assert store.revision.current(cid) == token
+    assert _files(cid) == before
+
+
+def test_an_alias_continuity_refusal_after_the_due_copy_is_partial(client, monkeypatch):
+    """The same refusal after the due copy landed is not a refusal any more: the
+    500 names the due copy, and the token moves because that write landed."""
+    cid = _twin_oaths(client)
+    token = store.revision.current(cid)
+
+    def refused(*args, **kwargs):
+        raise doc.ContinuityError("continuity.json cannot be read")
+
+    monkeypatch.setattr(doc, "put_alias", refused)
+    r = _apply(client, cid, OATHS, {"op": "alias", "canonical": OATH, "copy_due": True})
+
+    assert r.status_code == 500, r.text
+    body = r.json()
+    assert (body["kind"], body["landed"]) == ("partial_apply", ["due"])
+    assert "ContinuityError" in body["detail"]
+    assert store.commitments.get(cid, "mara-s-oath")["due"] == "by midwinter"
+    assert doc.get_alias(cid, OATH2) is None
+    assert store.revision.current(cid) != token
+
+
 def test_a_failed_dismiss_after_a_landed_write_moves_the_token(client, monkeypatch):
     """Decision 17: the suppression landed before the cache drop failed, so the
     write token moves -- and the finding is hidden by its suppression."""
