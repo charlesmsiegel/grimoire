@@ -1251,6 +1251,10 @@ def put_world_image_description(wid: str, cid: str, vid: str, name: str,
     root = _world_char_version_or_404(wid, cid, vid)
     try:
         store.image_descriptions.set_description(root, cid, vid, name, body.description)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # The strict-write rule as a status code: describing an image this
         # version does not hold is a 404, never a silently-kept orphan entry.

@@ -293,8 +293,12 @@ def read_descriptions(cid: str) -> dict[str, str]:
     name can be described twice. (The accidental collision is the one exception,
     and the campaign's own wins there for the same reason its bytes do.)
     """
-    own_names = {i["name"] for i in _own_images(cid)}
-    own = image_descriptions.read_in(images_dir(cid), names=own_names)
+    own_rows = _own_images(cid)
+    own_names = {i["name"] for i in own_rows}
+    # The listing's own ids go along: its placements are not read twice.
+    own = image_descriptions.read_in(
+        images_dir(cid), names=own_names,
+        ids={i["name"]: i["image_id"] for i in own_rows if i.get("image_id")})
     wid = _world_of(cid)
     inherited: dict[str, str] = {}
     if wid:
@@ -323,11 +327,15 @@ def own_undescribed(cid: str) -> list[dict]:
     on that world. Handing the merged listing to this would re-offer every world
     image in every campaign's backlog -- the failure
     ``GET /campaigns/{cid}/images/undescribed``'s docstring exists to prevent.
+
+    Unreviewed means nothing describes it -- no string legacy key and no string
+    on its image object -- read off ``image_library.backlog_rows``, which
+    resolves no blob.
     """
     d = images_dir(cid)
-    reviewed = image_descriptions.read_raw(d)
-    return [{"name": i["name"]} for i in _own_images(cid)
-            if i["name"] not in reviewed]
+    rows = image_library.backlog_rows(d)
+    done = image_descriptions.described_names(d, rows)
+    return [{"name": r["name"]} for r in rows if r["name"] not in done]
 
 
 def set_description(cid: str, name: str, text: str) -> None:

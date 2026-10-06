@@ -23,6 +23,13 @@ def pair(monkeypatch, tmp_path):
     return wroot, camp, cid, vid
 
 
+def _world_legacy_key(wroot, cid, vid):
+    """The fixture's world text as a legacy ``descriptions.json`` key too, the
+    way a store written before stage 2 holds it."""
+    image_descriptions.carry_legacy(assets.version_dir(wroot, cid, vid), "gallery_1",
+                                    "The world's quay.")
+
+
 def test_inherited_image_reads_the_world_description(pair):
     _wroot, camp, cid, vid = pair
     assert overlay.read_description(camp, cid, vid, "gallery_1") == "The world's quay."
@@ -53,9 +60,10 @@ def test_tombstoned_image_reads_campaign_side_only(pair):
 
 def test_read_descriptions_maps_the_visible_union(pair):
     wroot, camp, cid, vid = pair
-    assets.put_image(wroot, cid, vid, "gallery_2", b"png", "png")
+    # Distinct bytes: one picture is one object with one description.
+    assets.put_image(wroot, cid, vid, "gallery_2", b"png-2", "png")
     image_descriptions.set_description(wroot, cid, vid, "gallery_2", "")
-    assets.put_image(overlay.croot_of(camp), cid, vid, "gallery_3", b"png", "png")
+    assets.put_image(overlay.croot_of(camp), cid, vid, "gallery_3", b"png-3", "png")
     got = overlay.read_descriptions(camp, cid, vid)
     # gallery_1 described in the world; gallery_2 reviewed-empty (present, "");
     # gallery_3 campaign-side and never reviewed (absent, not "").
@@ -74,11 +82,15 @@ def test_prune_keeps_a_sidecar_beside_a_divergent_campaign_image(pair):
     authoritative and will not fall back to the world."""
     wroot, camp, cid, vid = pair
     croot = overlay.croot_of(camp)
-    # A campaign that diverged the art AND wrote a description that happens to
+    # A campaign that diverged the art AND holds a description that happens to
     # read exactly like the world's -- which is what makes the file prunable.
+    # Both as LEGACY sidecar keys, written directly: a description write onto
+    # a resolving placement now lands on the image object (stage 2) and leaves
+    # no sidecar, so the files this carve-out protects are the legacy ones.
     assets.put_image(croot, cid, vid, "gallery_1", b"other", "png")
-    overlay.set_description(camp, cid, vid, "gallery_1", "The world's quay.")
+    _world_legacy_key(wroot, cid, vid)
     d = croot / "characters" / cid / "assets" / vid
+    image_descriptions.carry_legacy(d, "gallery_1", "The world's quay.")
     assert (d / image_descriptions.DESCRIPTIONS_FILE).exists()
     lifecycle._prune_duplicate_files(croot, wroot)
     assert (d / image_descriptions.DESCRIPTIONS_FILE).exists()
@@ -92,6 +104,7 @@ def test_prune_still_drops_a_sidecar_from_a_folder_with_no_campaign_art(pair):
     croot = overlay.croot_of(camp)
     d = croot / "characters" / cid / "assets" / vid
     d.mkdir(parents=True, exist_ok=True)
+    _world_legacy_key(wroot, cid, vid)          # a legacy world sidecar to duplicate
     src = wroot / "characters" / cid / "assets" / vid / image_descriptions.DESCRIPTIONS_FILE
     (d / image_descriptions.DESCRIPTIONS_FILE).write_bytes(src.read_bytes())
     lifecycle._prune_duplicate_files(croot, wroot)
@@ -153,7 +166,8 @@ def test_a_reviewed_empty_description_travels_with_a_promotion_too(pair):
     """Key presence, not truthiness: `""` is "reviewed, nothing to say", and
     losing it walks the image back into a queue somebody already answered."""
     wroot, camp, cid, vid = pair
-    assets.put_image(wroot, cid, vid, "avatar", b"png", "png")
+    # Distinct bytes: one picture is one object with one description.
+    assets.put_image(wroot, cid, vid, "avatar", b"png-avatar", "png")
     image_descriptions.set_description(wroot, cid, vid, "avatar", "")
     overlay.promote_image(camp, cid, vid, "gallery_1")
     # the demoted avatar keeps its reviewed-empty mark in the gallery slot

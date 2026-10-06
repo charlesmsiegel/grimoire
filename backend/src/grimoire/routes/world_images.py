@@ -210,6 +210,10 @@ def put_world_library_image_description(wid: str, name: str, body: ImageDescript
     _world_or_404(wid)
     try:
         store.world_images.set_description(wid, name, body.description)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # `from None`: the strict-write ValueError is the store's own
         # implementation detail, and chaining it onto the 404 says nothing a

@@ -27,18 +27,20 @@ def world(monkeypatch, tmp_path):
     wroot = worlds.world_root(wid)
 
     cid, vid = characters.create_character(wroot, "Seraphine", "main")
-    assets.put_image(wroot, cid, vid, "gallery_1", b"png", "png")
+    # Distinct bytes per image throughout: one picture is one image object
+    # with one description, so images sharing bytes would share their text.
+    assets.put_image(wroot, cid, vid, "gallery_1", b"png-30", "png")
     image_descriptions.set_description(
         wroot, cid, vid, "gallery_1", "Half-plate, rain-soaked, a burning keep behind her.")
 
     loc = entities.create_entity(wroot, "locations", "Saltmarch Harbour", "A grey quay.")
-    assets.put_image(wroot, loc, "default", "gallery_1", b"png", "png", base="locations")
+    assets.put_image(wroot, loc, "default", "gallery_1", b"png-35", "png", base="locations")
     image_descriptions.set_description(
         wroot, loc, "default", "gallery_1", "Fishing boats at the quay under fog.",
         base="locations")
 
     camp = campaigns.create_campaign("Saltmarch", wid)
-    campaign_images.put_image(camp, "coastline", b"png", "png")
+    campaign_images.put_image(camp, "coastline", b"png-41", "png")
     image_descriptions.set_in(campaign_images.images_dir(camp), "coastline",
                              "A hand-drawn map of the northern coastline.")
     # Resolution is scene-scoped -- `sid` is required, not optional -- so the
@@ -105,8 +107,8 @@ def test_pool_excludes_undescribed_and_reviewed_empty_art(world, sid):
     camp, char, vid = world["cid"], world["char"], world["vid"]
     wroot = world["wroot"]
     _cast(camp, char, vid, sid)
-    assets.put_image(wroot, char, vid, "gallery_2", b"png", "png")          # never reviewed
-    assets.put_image(wroot, char, vid, "gallery_3", b"png", "png")
+    assets.put_image(wroot, char, vid, "gallery_2", b"png-108", "png")          # never reviewed
+    assets.put_image(wroot, char, vid, "gallery_3", b"png-109", "png")
     image_descriptions.set_description(wroot, char, vid, "gallery_3", "")   # reviewed-empty
     cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
     assert {c["name"] for c in cands} == {"gallery_1", "coastline"}
@@ -168,7 +170,7 @@ def test_every_world_version_the_campaign_lacks_passes_through_in_order(world, s
 def test_an_undescribed_base_picture_is_not_passed_through(world, sid):
     camp, char, wroot, vid = world["cid"], world["char"], world["wroot"], world["vid"]
     _lock_to_a_second_version(world, sid)
-    assets.put_image(wroot, char, vid, "gallery_2", b"png", "png")   # never reviewed
+    assets.put_image(wroot, char, vid, "gallery_2", b"png-171", "png")   # never reviewed
     cands = art.candidates(camp, [{"kind": "characters", "id": char, "role": "npc"}], None, [])
     assert {c["name"] for c in cands if c["kind"] == "characters"} == {"gallery_1"}
     assert art.resolve_handles(camp, f"[[art:characters:{char}:gallery_2]]", sid) == ""
@@ -302,7 +304,7 @@ def test_resolve_deletes_a_handle_for_a_real_but_undescribed_image(world, sid):
     composing a plausible handle for it."""
     camp, char, vid, wroot = world["cid"], world["char"], world["vid"], world["wroot"]
     _cast(camp, char, vid, sid)
-    assets.put_image(wroot, char, vid, "gallery_9", b"png", "png")
+    assets.put_image(wroot, char, vid, "gallery_9", b"png-305", "png")
     assert assets.image_path(wroot, char, vid, "gallery_9") is not None
     assert art.resolve_handles(camp, f"[[art:characters:{char}:gallery_9]]", sid) == ""
 
@@ -340,7 +342,7 @@ def test_a_link_breaking_image_name_is_percent_encoded(world, sid):
     camp, loc, wroot = world["cid"], world["loc"], world["wroot"]
     for raw, encoded in [("art(1)", "art%281%29"), ("my art", "my%20art"),
                          ("a#b", "a%23b")]:
-        assets.put_image(wroot, loc, "default", raw, b"png", "png", base="locations")
+        assets.put_image(wroot, loc, "default", raw, f"png-{raw}".encode(), "png", base="locations")
         image_descriptions.set_description(wroot, loc, "default", raw, "A quay.",
                                            base="locations")
         out = art.resolve_handles(camp, f"[[art:locations:{loc}:{raw}]]", sid)
@@ -356,7 +358,7 @@ def test_a_gm_only_entitys_art_never_resolves(world, sid):
     camp, wroot = world["cid"], world["wroot"]
     sec = entities.create_entity(wroot, "locations", "The Vault", "hidden",
                                  secrecy="gm-only")
-    assets.put_image(wroot, sec, "default", "gallery_1", b"png", "png", base="locations")
+    assets.put_image(wroot, sec, "default", "gallery_1", b"png-359", "png", base="locations")
     image_descriptions.set_description(wroot, sec, "default", "gallery_1",
                                        "A locked door.", base="locations")
     assert art.resolve_handles(camp, f"[[art:locations:{sec}:gallery_1]]", sid) == ""
@@ -369,7 +371,7 @@ def test_a_secret_entitys_art_still_resolves(world, sid):
     camp, wroot = world["cid"], world["wroot"]
     sec = entities.create_entity(wroot, "locations", "The Cellar", "quiet",
                                  secrecy="secret")
-    assets.put_image(wroot, sec, "default", "gallery_1", b"png", "png", base="locations")
+    assets.put_image(wroot, sec, "default", "gallery_1", b"png-372", "png", base="locations")
     image_descriptions.set_description(wroot, sec, "default", "gallery_1",
                                        "A cellar.", base="locations")
     assert art.resolve_handles(camp, f"[[art:locations:{sec}:gallery_1]]", sid).startswith("![A cellar.]")
@@ -548,7 +550,7 @@ def test_only_one_picture_per_reply_lands(world, sid):
     a model offered four candidates has an obvious way to use all four."""
     camp = world["cid"]
     for name in ("the-inn", "the-keep"):
-        campaign_images.put_image(camp, name, b"png", "png")
+        campaign_images.put_image(camp, name, f"png-{name}".encode(), "png")
         image_descriptions.set_in(campaign_images.images_dir(camp), name, f"A {name}.")
     out = art.resolve_handles(camp, "A. [[art:campaign:coastline]] B. [[art:campaign:the-inn]] "
                                     "C. [[art:campaign:the-keep]]", sid)

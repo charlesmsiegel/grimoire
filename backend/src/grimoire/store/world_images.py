@@ -132,9 +132,15 @@ def put_image(wid: str, name: str, data: bytes, ext: str) -> str:
 
 
 def read_descriptions(wid: str) -> dict[str, str]:
-    """What each library image depicts, for the images that are actually there."""
+    """What each library image depicts, for the images that are actually there.
+
+    The listing's own ids go along, so the placements it read are not read
+    twice (`image_descriptions.read_in`)."""
     d = images_dir(wid)
-    return image_descriptions.read_in(d, names={i["name"] for i in list_images(wid)})
+    rows = list_images(wid)
+    return image_descriptions.read_in(
+        d, names={i["name"] for i in rows},
+        ids={i["name"]: i["image_id"] for i in rows if i.get("image_id")})
 
 
 def set_description(wid: str, name: str, text: str) -> None:
@@ -150,19 +156,22 @@ def set_description(wid: str, name: str, text: str) -> None:
 
 
 def undescribed(wid: str) -> list[dict]:
-    """``[{"name"}, ...]`` for every library image with NO sidecar key.
+    """``[{"name"}, ...]`` for every library image nothing describes -- no
+    string legacy key, and no string on its image object.
 
-    Key ABSENT, never merely empty: an image reviewed and deliberately left
+    Text ABSENT, never merely empty: an image reviewed and deliberately left
     undescribed is finished, and re-offering it is how a queue never empties.
 
     This is the flat-directory twin of ``image_descriptions.undescribed``, which
     is a *base walker* -- it requires ``<root>/<base>/<record>/assets/<vid>/``
-    and so structurally cannot reach a library that hangs off no record.
+    and so structurally cannot reach a library that hangs off no record. Off
+    ``image_library.backlog_rows``, so it resolves no blob: it feeds the shell
+    badge on every navigation.
     """
     d = images_dir(wid)
-    reviewed = image_descriptions.read_raw(d)
-    return [{"name": i["name"]} for i in image_library.listing(d)
-            if i["name"] not in reviewed]
+    rows = image_library.backlog_rows(d)
+    done = image_descriptions.described_names(d, rows)
+    return [{"name": r["name"]} for r in rows if r["name"] not in done]
 
 
 def undescribed_count(wid: str) -> int:
@@ -171,16 +180,15 @@ def undescribed_count(wid: str) -> int:
 
 
 def has_undescribed(wid: str) -> bool:
-    """``undescribed_count`` stopping at the first one.
+    """Whether ``undescribed`` is non-empty.
 
     Separate from the count on purpose: ``routes/todo.py``'s ``_CHEAP`` roster
-    exists for chores whose COUNT costs far more than their presence, and
-    answering a presence question by summing the backlog is the thing that
-    roster is there to avoid.
+    exists for chores whose COUNT costs far more than their presence. For one
+    flat library the two cost the same -- one directory read, and an object
+    read (memoized) per placement with no legacy key -- so this is that list
+    tested for emptiness, and cannot disagree with it.
     """
-    d = images_dir(wid)
-    reviewed = image_descriptions.read_raw(d)
-    return any(i["name"] not in reviewed for i in image_library.listing(d))
+    return bool(undescribed(wid))
 
 
 def delete_image(wid: str, name: str) -> None:

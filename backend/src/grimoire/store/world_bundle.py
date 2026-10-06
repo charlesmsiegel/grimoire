@@ -123,8 +123,9 @@ MAX_COLLECTION_MANIFEST_BYTES = 16 * 1024 * 1024
 #: The collection manifest format this grimoire reads (`image_collections`).
 _COLLECTION_FORMAT = 1
 # The longest bundle description merged. Longer is not a description of a
-# picture; it is dropped (and logged) and the image imports undescribed.
-MAX_IMPORTED_DESCRIPTION = 4000
+# picture; it is dropped (and logged) and the image imports undescribed. The
+# store's one cap, so an import cannot carry text a description write refuses.
+MAX_IMPORTED_DESCRIPTION = image_store.MAX_DESCRIPTION
 
 # Sized for a real library rather than a module pack: worlds here run to
 # thousands of files and a gigabyte of character art, so these are a guard

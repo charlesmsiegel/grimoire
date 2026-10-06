@@ -52,9 +52,35 @@ nothing in the search page. That is the design's choice of consumer (the
 narrator turn, not the library index) rather than an oversight, and folding the
 sidecar into the corpus is a separate change with its own indexing cost.
 
-Nothing detects a description drifting from the art it describes. An image
-replaced under the same name keeps the old text, exactly the way ``focus.json``
-keeps a crop that no longer frames anything. Stated rather than solved.
+## On the image object (stage 2)
+
+A description belongs to a *picture*, and since the content-addressed store a
+picture is one image object however many places show it. So text written for a
+placement-backed image lives on that object (``description`` in its sidecar,
+written only through `image_store.update`), and one picture shows one
+description in every world that holds it (R4). ``descriptions.json`` stays as
+the *legacy* store: what a name says until migration folds it in.
+
+**Precedence (R1).** For directory `d` and name `n`: a string
+``descriptions.json[n]`` in `d` wins; otherwise the object's string
+``description`` behind `n`'s image-bearing placement; otherwise `n` is
+undescribed. A legacy name with no placement reads only its key, and a
+non-string legacy value counts as absent. `text_in` is the rule for one name;
+`read_in`, `catalog`, `described_names` and the backlog walks apply it many
+times without re-reading what their caller's listing already read.
+
+**Writes (R2).** `set_in` writes the object behind a *resolving* placement and,
+once `image_store.update` confirms the write, drops the name's legacy key here
+(and in `also_clear`, the visible placement's directory when that differs).
+Object first, keys second, so a failure in between leaves text showing rather
+than none. An unconfirmed write, an unarrived placement or a name with no
+placement writes the legacy key exactly as before: no text is ever lost.
+
+Nothing detects a description drifting from the art it describes, except one
+case: an image replaced under the same name by a *different, already
+described* picture sheds the old legacy key (`assets._sheds_caption`, R12).
+Otherwise the old text stays, exactly the way ``focus.json`` keeps a crop that
+no longer frames anything. Stated rather than solved.
 """
 
 from __future__ import annotations
@@ -64,12 +90,23 @@ import os
 from collections.abc import Iterator
 from pathlib import Path
 
-from . import assets, atomic
+from . import assets, atomic, image_refs, image_store
 from .paths import safe_id
 
 #: Re-exported from `assets`, which owns the names of the sidecars living in
 #: its directories -- see the note beside it there. One string, one place.
 DESCRIPTIONS_FILE = assets.DESCRIPTIONS_FILE
+
+#: `text_in`'s default `known_id`: "I have not read the placement -- you do".
+UNKNOWN: object = object()
+
+
+class DescriptionTooLongError(ValueError):
+    """A description over `image_store.MAX_DESCRIPTION` characters.
+
+    A `ValueError`, so a caller that only knew "refused" still refuses; its
+    own class, so a route can tell "too long" (422) from "no such image"
+    (404) -- which is what every description PUT route does."""
 
 
 def path_in(d: Path) -> Path:
@@ -110,11 +147,74 @@ def read_raw(d: Path) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def read_in(d: Path, names: set[str] | None = None) -> dict[str, str]:
-    """Tolerant: ``{}`` on a missing or garbled file; entries whose image has
+def _object_text(image_id: str | None) -> str | None:
+    """The object's string ``description``, or None (no id, no object, none
+    written, or not a string). Never resolves a blob."""
+    if not image_id:
+        return None
+    obj = image_store.read(image_id)
+    if obj is None:
+        return None
+    text = obj.raw.get("description")
+    return text if isinstance(text, str) else None
+
+
+def _text(raw: dict, name: str, image_id: str | None) -> str | None:
+    """R1 for one name, given the directory's raw sidecar and the id of the
+    name's image-bearing placement (None for none): the legacy key if it holds
+    a string, else the object's text. An object is read only without a key."""
+    legacy = raw.get(name)
+    if isinstance(legacy, str):
+        return legacy
+    return _object_text(image_id)
+
+
+def legacy_text_in(d: Path, name: str) -> str | None:
+    """Only the raw legacy key: ``descriptions.json[name]`` in `d` when it is
+    a string, else None. No placement and no object is read."""
+    legacy = read_raw(d).get(name)
+    return legacy if isinstance(legacy, str) else None
+
+
+def text_in(d: Path, name: str, *, known_id: object = UNKNOWN) -> str | None:
+    """What `name` in `d` says (R1), or None for undescribed.
+
+    `known_id` is what the caller already knows about the name's placement:
+
+    - `UNKNOWN` (the default): read the placement here;
+    - None: the caller's listing row has no id (a legacy row), so no object
+      is read;
+    - an image id: use it, and read no placement.
+
+    An explicit ``""`` is returned as ``""`` -- reviewed, nothing to say -- and
+    is not None.
+    """
+    raw = read_raw(d)
+    legacy = raw.get(name)
+    if isinstance(legacy, str):
+        return legacy
+    if known_id is UNKNOWN:
+        ref = image_refs.read(d, name)
+        image_id = ref.image if ref is not None else None
+    else:
+        image_id = known_id if isinstance(known_id, str) else None
+    return _object_text(image_id)
+
+
+def _placed_ids(d: Path) -> dict[str, str]:
+    """name -> image id for every image-bearing placement in `d`, off one scan."""
+    return {n: r.image for n, r in image_refs.scan(d).items() if r.image is not None}
+
+
+def read_in(d: Path, names: set[str] | None = None,
+            ids: dict[str, str] | None = None) -> dict[str, str]:
+    """What every present image of `d` says (R1); undescribed ones are absent.
+
+    Tolerant: ``{}`` on a missing or garbled file; entries whose image has
     vanished drop out silently, so nothing can offer a description for art that
     is not there. A non-string value drops out too — a hand-edited or
-    half-synced store must not hand a list to a template.
+    half-synced store must not hand a list to a template — and the object's
+    text, if any, answers instead.
 
     `names` overrides which images count as present. A campaign caller passes
     the overlay-resolved union (`overlay.list_images`), because a thin campaign
@@ -122,12 +222,47 @@ def read_in(d: Path, names: set[str] | None = None) -> dict[str, str]:
     its world — filtering on this directory alone would drop exactly those. The
     same override, for the same reason, as `image_subjects.copy_to_character`'s
     `taken_names`.
+
+    `ids` is name -> image id from the caller's own listing, so the placements
+    it already read are not read again; a present name missing from it is a
+    legacy row and reads only its key. Without `ids`, one `image_refs.scan(d)`
+    answers -- and only when some present name has no string key at all.
     """
     raw = read_raw(d)
-    if not raw:
-        return {}
     present = _names(d) if names is None else names
-    return {n: v for n, v in raw.items() if n in present and isinstance(v, str)}
+    if ids is None:
+        keyless = any(not isinstance(raw.get(n), str) for n in present)
+        ids = _placed_ids(d) if keyless else {}
+    out: dict[str, str] = {}
+    for n in present:
+        text = _text(raw, n, ids.get(n))
+        if text is not None:
+            out[n] = text
+    return out
+
+
+def object_id_in(d: Path, name: str) -> str | None:
+    """The image id of `name`'s placement in `d` when it RESOLVES (object and
+    blob both present), else None. The write side's question: only a resolving
+    placement's object is one a description may be written to."""
+    resolved = assets.resolve(d, name)
+    return resolved.image_id if resolved is not None else None
+
+
+def described_names(d: Path, rows: list[dict]) -> set[str]:
+    """The names among listing `rows` (``name``, optional ``image_id``) that
+    are R1-described in `d`.
+
+    Off the rows' own ids: an object is read only for a row that carries an
+    ``image_id`` and has no string legacy key, no placement is read, and no
+    blob is resolved -- which is what lets every describe backlog afford it.
+    """
+    return _described(read_raw(d), rows)
+
+
+def _described(raw: dict, rows: list[dict]) -> set[str]:
+    return {r["name"] for r in rows
+            if _text(raw, r["name"], r.get("image_id")) is not None}
 
 
 def write_in(d: Path, descriptions: dict[str, str], names: set[str] | None = None) -> None:
@@ -145,23 +280,62 @@ def write_in(d: Path, descriptions: dict[str, str], names: set[str] | None = Non
         atomic.write_text(path_in(d), json.dumps(trimmed, indent=2, sort_keys=True) + "\n")
 
 
-def set_in(d: Path, name: str, text: str, names: set[str] | None = None) -> None:
-    """Read-modify-write of one image's entry.
+def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
+           also_clear: Path | None = None) -> None:
+    """Describe one image of `d` (R2).
 
-    Raw read, then a strict write of only the key being touched: entries for
-    images we are not touching survive even if their file has since vanished,
-    while the key being written still has to name a real image. `names`
-    overrides what "real" means — see `read_in`.
+    A name whose placement resolves is described on its image object, and
+    once `image_store.update` confirms the write, the name's legacy key is
+    dropped here and in `also_clear` (the visible placement's directory, when a
+    caller edits through another one). Anything else -- the write not
+    confirmed, a placement whose object has not arrived, a name with no
+    placement -- writes the legacy key, exactly as before.
+
+    The key being written still has to name a real image (`ValueError`);
+    `names` overrides what "real" means — see `read_in`. Text over
+    `image_store.MAX_DESCRIPTION` is refused with `DescriptionTooLongError`.
     """
-    # Under the sidecar lock for the WHOLE read-modify-write, and the existence
-    # check with it: an image lifecycle event holds the same lock while it moves
+    # Under the sidecar lock for the WHOLE operation, and the existence check
+    # with it: an image lifecycle event holds the same lock while it moves
     # entries around, so a check made outside it could validate a slot that has
     # already been promoted away.
     with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
         if name not in (_names(d) if names is None else names):
             raise ValueError(f"unknown image(s): [{name!r}]")
+        text = str(text)
+        if len(text) > image_store.MAX_DESCRIPTION:
+            raise DescriptionTooLongError(
+                f"description longer than {image_store.MAX_DESCRIPTION} characters")
+        image_id = object_id_in(d, name)
+        # A pure dict edit: the callback contract (`image_store.update`).
+        if image_id is not None and image_store.update(
+                image_id, lambda raw: {**raw, "description": text}):
+            # Object first, keys second: a failure between the two leaves the
+            # old key showing (R1), never nothing.
+            assets.edit_sidecar(d, DESCRIPTIONS_FILE, {name: None})
+            if also_clear is not None and also_clear != d:
+                assets.edit_sidecar(also_clear, DESCRIPTIONS_FILE, {name: None})
+            return
+        _write_legacy(d, name, text)
+
+
+def carry_legacy(d: Path, name: str, text: str) -> None:
+    """Write `text` as `name`'s legacy key in `d` and touch nothing else -- no
+    name check, no object. For a promote carrying visible text up into a
+    campaign (R5), which must never write the shared object."""
+    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
+        _write_legacy(d, name, str(text))
+
+
+def _write_legacy(d: Path, name: str, text: str) -> None:
+    """Raw read-modify-write of one legacy key, under the sidecar lock
+    (reentrant: `set_in`'s own hold covers it at no cost).
+
+    Raw read, then a write of only the key being touched: entries for images
+    we are not touching survive even if their file has since vanished."""
+    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
         cur = read_raw(d)
-        cur[name] = str(text)
+        cur[name] = text
         # Not `write_in`: `cur` may legitimately carry entries for vanished
         # images (see the docstring), which `write_in` would reject as unknown.
         #
@@ -262,12 +436,13 @@ def catalog(root: Path, base: str = "characters") -> list[dict]:
     less of each; see ``undescribed``.
 
     One entry per logical image: ``id``, ``vid``, ``name``, the ``ext`` and
-    cache-busting ``v`` token ``assets.list_in`` resolves, and the two facts the
-    sidecar holds. ``described`` is key PRESENCE, the distinction this module's
-    docstring turns on — an image reviewed and deliberately left blank IS
-    described, and its ``description`` is then ``""``. A non-string value reads
-    as ``""`` here for the reason ``read_in`` drops it: a hand-edited or
-    half-synced store must not hand a list to a caller expecting text.
+    cache-busting ``v`` token ``assets.list_in`` resolves, and the two facts R1
+    answers. ``described`` is whether any text answers -- the legacy key or the
+    object's -- including ``""``, the distinction this module's docstring turns
+    on: an image reviewed and deliberately left blank IS described, and its
+    ``description`` is then ``""``. A non-string legacy value counts as absent
+    for the reason ``read_in`` drops it: a hand-edited or half-synced store
+    must not hand a list to a caller expecting text.
 
     Sorted by (id, vid, name), which is the order the editors list versions and
     images in.
@@ -286,20 +461,21 @@ def catalog(root: Path, base: str = "characters") -> list[dict]:
             # route answers, so a gallery tile over it is a broken image.
             if not assets.storable(img["name"]):
                 continue
-            text = reviewed.get(img["name"])
+            text = _text(reviewed, img["name"], img.get("image_id"))
             out.append({"id": rec.name, "vid": vdir.name, "name": img["name"],
                         "ext": img["ext"], "v": img["v"],
-                        "described": img["name"] in reviewed,
-                        "description": text if isinstance(text, str) else "",
+                        "described": text is not None,
+                        "description": text or "",
                         # Only a placement backed by the image store has one.
                         **({"image_id": img["image_id"]} if img.get("image_id") else {})})
     return out
 
 
 def undescribed(root: Path, base: str = "characters") -> list[dict]:
-    """Every stored image of `base` with NO sidecar key — the authoring queue.
+    """Every stored image of `base` that nothing describes (R1: no string
+    legacy key and no string on its object) — the authoring queue.
 
-    Key absent = unreviewed; an explicit ``""`` counts as reviewed. Sorted by
+    Text absent = unreviewed; an explicit ``""`` counts as reviewed. Sorted by
     (id, vid, name), which is the order the editors list versions and images in.
 
     Only the three keys the queue reads, not `catalog`'s row whole: widening a
@@ -317,10 +493,10 @@ def undescribed(root: Path, base: str = "characters") -> list[dict]:
 
 
 def undescribed_count(root: Path, base: str = "characters") -> int:
-    """How many images of `base` have no sidecar key, without building the list.
+    """How many images of `base` nothing describes, without building the list.
 
     The walk `undescribed` takes (`_undescribed_names`), with its two rules --
-    `assets.storable`, and key PRESENCE rather than non-empty text -- and
+    `assets.storable`, and R1 text PRESENCE rather than non-empty text -- and
     neither asks `assets.list_in` for an `ext` or a `v`, which are a stat per
     image. On a whole-library sweep that stat is most of the cost: the to-do
     list needs this number for every world on every read, and the list itself
@@ -344,13 +520,37 @@ def _undescribed_names(root: Path, base: str) -> Iterator[tuple[str, str, list[s
         # then a second scan for the names -- is two directory traversals per
         # version folder of every record in the store, and on the whole-library
         # sweep this exists for, that is the bulk of the time.
-        names, has_sidecar = assets.names_in(vdir, DESCRIPTIONS_FILE)
-        if not names:
-            continue
-        reviewed = read_raw(vdir) if has_sidecar else {}
-        todo = sorted(n for n in names if assets.storable(n) and n not in reviewed)
+        #
+        # The placements come from that same call (`with_refs`), so an image
+        # with no legacy key is checked against its object by the id its
+        # placement names -- an object read, never a blob resolution, and never
+        # a second scan of the placements.
+        todo = sorted(_todo_in(vdir))
         if todo:
             yield rec.name, vdir.name, todo
+
+
+def _backlog_rows(d: Path) -> tuple[list[dict], dict]:
+    """`(rows, raw sidecar)` for a backlog walk over `d`: one ``{"name",
+    "image_id"?}`` row per name `assets.names_in` reports, ids off the
+    placements that one call scanned. Unfiltered; `_todo_in` applies
+    `assets.storable`. (A flat library builds its rows with
+    `image_library.backlog_rows`, by its own name policy.)"""
+    names, has_sidecar, refs = assets.names_in(d, DESCRIPTIONS_FILE, with_refs=True)
+    rows = []
+    for n in names:
+        ref = refs.get(n)
+        image_id = ref.image if ref is not None else None
+        rows.append({"name": n, "image_id": image_id} if image_id else {"name": n})
+    return rows, (read_raw(d) if has_sidecar and names else {})
+
+
+def _todo_in(d: Path) -> list[str]:
+    """The storable names of `d` nothing describes (R1), unsorted."""
+    rows, raw = _backlog_rows(d)
+    rows = [r for r in rows if assets.storable(r["name"])]
+    done = _described(raw, rows)
+    return [r["name"] for r in rows if r["name"] not in done]
 
 
 def undescribed_by_version(root: Path, base: str = "characters") -> Iterator[tuple[str, str, int]]:
@@ -369,7 +569,7 @@ def undescribed_by_version(root: Path, base: str = "characters") -> Iterator[tup
 
 
 def has_undescribed(root: Path, base: str = "characters") -> bool:
-    """Whether ANY image of `base` lacks a sidecar key — `undescribed_count`
+    """Whether ANY image of `base` is undescribed (R1) — `undescribed_count`
     stopping at the first one.
 
     The rail's badge counts chores, not instances, so "is this backlog empty"
@@ -381,11 +581,4 @@ def has_undescribed(root: Path, base: str = "characters") -> bool:
     where the chore does not appear at all -- and a library with no undescribed
     art anywhere has little for the walk to visit.
     """
-    for _rec, vdir in _walk(root, base):
-        names, has_sidecar = assets.names_in(vdir, DESCRIPTIONS_FILE)
-        if not names:
-            continue
-        reviewed = read_raw(vdir) if has_sidecar else {}
-        if any(assets.storable(n) and n not in reviewed for n in names):
-            return True
-    return False
+    return any(_todo_in(vdir) for _rec, vdir in _walk(root, base))

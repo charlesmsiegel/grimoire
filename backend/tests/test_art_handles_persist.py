@@ -68,7 +68,9 @@ def test_a_handle_for_a_real_but_undescribed_image_is_dropped(client):
     """Statelessness' one hole, closed: art nobody wrote up cannot be reached
     by composing a plausible handle for it."""
     cid, sid = _described_campaign(client)
-    store.campaign_images.put_image(cid, "secret-map", b"\x89PNG\r\n\x1a\n", "png")
+    # Different bytes from the described `coastline`: one picture is one
+    # object with one description, and this one has none.
+    store.campaign_images.put_image(cid, "secret-map", b"\x89PNG\r\n\x1a\nsecret", "png")
     got = _reply(client, cid, sid, "Look. [[art:campaign:secret-map]]")
     assert "[[art:" not in got
     assert "secret-map" not in got

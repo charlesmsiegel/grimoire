@@ -31,8 +31,8 @@ def world(client):
     return client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
 
 
-def _upload(client, url):
-    r = client.put(url, files={"file": ("a.png", PNG, "image/png")})
+def _upload(client, url, data=PNG):
+    r = client.put(url, files={"file": ("a.png", data, "image/png")})
     assert r.status_code == 200, r.text
     return r
 
@@ -128,7 +128,8 @@ def test_described_is_key_presence_not_text(client, world):
     cid, vid = _character(client, world)
     base = f"/api/worlds/{world}/characters/{cid}/versions/{vid}/images"
     for name in ("avatar", "gallery_1", "gallery_2"):
-        _upload(client, f"{base}/{name}")
+        # Distinct bytes: one picture is one object with one description.
+        _upload(client, f"{base}/{name}", PNG + name.encode())
     client.put(f"{base}/avatar/description", json={"description": "In half-plate."})
     client.put(f"{base}/gallery_1/description", json={"description": ""})
 

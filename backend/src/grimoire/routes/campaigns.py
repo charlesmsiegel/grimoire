@@ -760,6 +760,10 @@ def put_campaign_library_image_description(cid: str, name: str, body: ImageDescr
                             detail="describe this image in its world")
     try:
         store.campaign_images.set_description(cid, name, body.description)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # `from None`: the strict-write ValueError is this module's own
         # implementation detail, and chaining it onto the 404 says nothing a
@@ -2040,6 +2044,10 @@ def put_campaign_image_description(cid: str, char: str, vid: str, name: str,
     _campaign_char_version_or_404(cid, char, vid)
     try:
         store.overlay.set_description(cid, char, vid, name, body.description)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # `from None`: the strict-write ValueError is this module's own
         # implementation detail, and chaining it onto the 404 says nothing a
@@ -2521,6 +2529,10 @@ def put_campaign_pc_image_description(cid: str, pid: str, vid: str, name: str,
     try:
         store.overlay.set_description(cid, pid, vid, name, body.description,
                                       base=store.pcs.ASSET_BASE)
+    except store.image_descriptions.DescriptionTooLongError as exc:
+        # Before the ValueError below, which it subclasses: too long is not
+        # "not found" -- the image is there and the text is refused.
+        raise HTTPException(status_code=422, detail=str(exc)) from None
     except ValueError:
         # `from None`: the strict-write ValueError is this module's own
         # implementation detail, and chaining it onto the 404 says nothing a

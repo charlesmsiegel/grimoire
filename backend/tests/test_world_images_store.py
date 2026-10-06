@@ -94,8 +94,9 @@ def test_a_file_that_is_not_ours_is_neither_listed_nor_swept(wid):
 
 
 def test_the_describe_backlog_reports_only_unreviewed_images(wid):
-    world_images.put_image(wid, "coastline", _png(), "png")
-    world_images.put_image(wid, "banner", _png(), "png")
+    # Distinct pictures: one picture is one object with one description.
+    world_images.put_image(wid, "coastline", _png(color=(10, 20, 30)), "png")
+    world_images.put_image(wid, "banner", _png(color=(40, 50, 60)), "png")
     assert world_images.has_undescribed(wid)
     assert world_images.undescribed_count(wid) == 2
 
@@ -147,3 +148,17 @@ def test_an_unknown_world_raises_and_creates_nothing(monkeypatch, tmp_path):
     with pytest.raises(worlds.WorldNotFound):
         world_images.list_images("nope")
     assert not (tmp_path / "worlds" / "nope").exists()
+
+
+def test_a_world_library_image_described_through_set_in_leaves_the_queue(wid):
+    """B1: the description lands on the image object, and the library's queue
+    reads it there -- not only off the legacy sidecar key it no longer writes."""
+    world_images.put_image(wid, "coastline", _png(), "png")
+    assert world_images.undescribed(wid) == [{"name": "coastline"}]
+    world_images.set_description(wid, "coastline", "A grey quay.")
+    d = world_images.images_dir(wid)
+    assert "coastline" not in image_descriptions.read_raw(d)
+    assert world_images.undescribed(wid) == []
+    assert world_images.undescribed_count(wid) == 0
+    assert not world_images.has_undescribed(wid)
+    assert world_images.read_descriptions(wid) == {"coastline": "A grey quay."}
