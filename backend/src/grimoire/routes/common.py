@@ -16,6 +16,7 @@ import contextlib
 import logging
 import math
 import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -971,6 +972,45 @@ def _serve_image(root, cid: str, vid: str, name: str, base: str = "characters",
     return _serve_image_file(p, request)
 
 
+#: A `?v=` token that names a content-addressed blob (its byte sha).
+_BLOB_TOKEN = re.compile(r"[0-9a-f]{64}\Z")
+
+
+def _image_source(p: Path) -> str:
+    """What `_serve_image_file`'s validators name `p` by.
+
+    A content-addressed blob is named by its byte sha: the bytes are the
+    identity, so the validator is the sha (a missing blob is still a 404, from
+    the read or the thumbnail path). That name is only as good as the bytes,
+    so they are vouched for first (`image_store.blob_intact`, memoized on the
+    blob's stat): damaged ones are never served or 304'd under the sha.
+    `assets.path_in` has already passed over such a blob to the legacy file
+    beside its placement, if there was one; this is the same check closing
+    the gap between that and here, and it answers as a placement with nothing
+    to fall back to does. A legacy file has only its stat to say what it
+    holds."""
+    source = store.image_store.blob_sha_of(p)
+    if source is not None:
+        if not store.image_store.blob_intact(p):
+            raise HTTPException(status_code=404, detail="image not found")
+        return source
+    try:
+        st = p.stat()
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="image not found")
+    return f"{st.st_mtime_ns:x}-{st.st_size:x}"
+
+
+def _honours_version(request: Request | None, source: str) -> bool:
+    """Whether this request's `?v=` makes the answer immutable.
+
+    A `?v=` that names a blob is honoured by that blob alone: anything else
+    answering it (the legacy file a damaged blob fell back to) would be kept
+    for a year under a name for other bytes."""
+    v = request.query_params.get("v") if request is not None else None
+    return v is not None and not (_BLOB_TOKEN.match(v) and v != source)
+
+
 def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     """Serve one image file with the app's caching contract.
 
@@ -1003,19 +1043,9 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
     frontend dutifully marking a valid cover broken. Those surface as a 500,
     which is what they are.
     """
-    # A content-addressed blob is named by its byte sha: the bytes are the
-    # identity, so the validator is the sha and no stat is paid (a missing
-    # blob is still a 404, from the read or the thumbnail path below). A
-    # legacy file has only its stat to say what it holds.
-    source = store.image_store.blob_sha_of(p)
-    if source is None:
-        try:
-            st = p.stat()
-        except FileNotFoundError:
-            raise HTTPException(status_code=404, detail="image not found")
-        source = f"{st.st_mtime_ns:x}-{st.st_size:x}"
+    source = _image_source(p)
     etag = f'"{source}"'
-    versioned = request is not None and "v" in request.query_params
+    versioned = _honours_version(request, source)
     cache = "public, max-age=31536000, immutable" if versioned else "no-cache"
     asked = request.headers.get("if-none-match", "") if request is not None else ""
     # ?w= asks for a downscaled variant — tiles shouldn't pull multi-MB originals.

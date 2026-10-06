@@ -935,3 +935,84 @@ def test_a_blob_key_names_no_path_and_costs_no_stat(client, tmp_path):
             raise AssertionError("a blob source is not statted")
 
     assert thumbs.thumbnail(NoStat(paths[1]), 256) is not None
+
+
+
+# ---- a blob whose bytes no longer match its name (Codex) ----
+
+def _blob_of(tmp_path):
+    (blob,) = (tmp_path / "assets" / "image-store" / "blobs").rglob("*.png")
+    return blob
+
+
+def _damage(blob, how):
+    data = blob.read_bytes()
+    with open(blob, "r+b") as f:        # in place: what a bad sync or disk leaves
+        if how == "same-size":
+            f.seek(len(data) // 2)
+            f.write(bytes([data[len(data) // 2] ^ 0xFF]))
+        else:
+            f.truncate(len(data) // 2)
+    return data
+
+
+def test_no_thumbnail_is_made_from_a_damaged_blob(tmp_path, monkeypatch):
+    """Even when what the blob now holds decodes -- another picture altogether
+    -- its name no longer says what it is, so the sha-keyed entry is not made."""
+    from grimoire.store import image_store
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    obj = image_store.ingest(_png_bytes(), "png")
+    blob = image_store.blob_path(obj.blob_sha256, "png")
+    blob.write_bytes(_png_bytes(color=(30, 30, 200)))
+    assert thumbs.thumbnail(blob, 128) is None
+    assert _cached(tmp_path) == []
+
+
+@pytest.mark.parametrize("how", ["same-size", "truncated"])
+def test_a_damaged_blob_is_never_served_under_its_sha(client, tmp_path, how):
+    base = _avatar_route(client)
+    listing = base.rsplit("/", 1)[0]
+    sha = client.get(listing).json()[0]["v"]
+    assert client.get(base).headers["etag"] == f'"{sha}"'
+    _damage(_blob_of(tmp_path), how)
+    asked = {"If-None-Match": f'"{sha}"'}
+    for url in (base, f"{base}?v={sha}", f"{base}?w=128&v={sha}"):
+        r = client.get(url, headers=asked)
+        # The same answer an unresolved placement with no legacy file gets.
+        assert r.status_code == 404, (url, r.status_code)
+        assert sha not in r.headers.get("etag", "")
+        assert "immutable" not in r.headers.get("cache-control", "")
+    assert _cached(tmp_path) == []                 # no thumbnail made from it
+
+
+def test_a_damaged_blob_falls_back_to_the_legacy_file_beside_its_placement(client, tmp_path):
+    base = _avatar_route(client)
+    listing = base.rsplit("/", 1)[0]
+    sha = client.get(listing).json()[0]["v"]
+    _damage(_blob_of(tmp_path), "same-size")
+    (legacy_dir,) = {p.parent.parent for p in tmp_path.rglob("image-refs/avatar.json")}
+    legacy = _png_bytes(color=(30, 30, 200))
+    (legacy_dir / "avatar.png").write_bytes(legacy)
+    asked = {"If-None-Match": f'"{sha}"'}
+    for url in (base, f"{base}?v={sha}"):
+        r = client.get(url, headers=asked)
+        assert r.status_code == 200 and r.content == legacy, url
+        assert sha not in r.headers["etag"]
+        assert "immutable" not in r.headers["cache-control"]
+    thumb = client.get(f"{base}?w=128&v={sha}", headers=asked)
+    assert thumb.status_code == 200 and sha not in thumb.headers["etag"]
+    assert "immutable" not in thumb.headers["cache-control"]
+
+
+def test_re_ingesting_the_picture_repairs_a_damaged_blob(client, tmp_path):
+    base = _avatar_route(client)
+    listing = base.rsplit("/", 1)[0]
+    sha = client.get(listing).json()[0]["v"]
+    original = _damage(_blob_of(tmp_path), "truncated")
+    assert client.get(f"{base}?v={sha}").status_code == 404
+    client.put(base, files={"file": ("a.png", io.BytesIO(_png_bytes()), "image/png")})
+    assert _blob_of(tmp_path).read_bytes() == original
+    r = client.get(f"{base}?v={sha}")
+    assert r.status_code == 200 and r.content == original
+    assert r.headers["etag"] == f'"{sha}"' and "immutable" in r.headers["cache-control"]
+    assert client.get(base, headers={"If-None-Match": f'"{sha}"'}).status_code == 304

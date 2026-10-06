@@ -507,6 +507,11 @@ def thumbnail(src: Path, width: int) -> Path | None:
             return out
         if flight.failed:  # ... or given up on by it: no second decode to fail
             return None
+        # The entry is keyed by the blob's sha, so it may only be made from
+        # bytes that ARE that sha: one made from a damaged blob would outlive
+        # the repair (`image_store.blob_intact`).
+        if st is None and not image_store.blob_intact(src):
+            return None
         try:
             with Image.open(src) as im:
                 if im.format in image_hash.ANIMATES and getattr(im, "is_animated", False):
