@@ -11,6 +11,7 @@ import CreationWizard from "./CreationWizard";
 import { DemotePanel } from "./DemotePanel";
 import { Field } from "./Field";
 import { ImageDescriptionField } from "./ImageDescriptionField";
+import { ImageUsage } from "./ImageUsage";
 import { GroupStatePanel } from "./GroupStatePanel";
 import { LibraryPanel } from "./LibraryPanel";
 import { OwnedLorePanel } from "./OwnedLorePanel";
@@ -460,7 +461,8 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // `description` is undefined until the listing says otherwise, and that is
   // load-bearing: undefined means never reviewed, "" means reviewed and
   // deliberately undescribed. `described` from the server is what separates them.
-  const [images, setImages] = useState<{ name: string; v: string; description?: string }[]>([]);
+  const [images, setImages] = useState<{ name: string; v: string; image_id?: string | null;
+                        description?: string }[]>([]);
   const [contentPreview, setContentPreview] = useState<ModuleContentEntry | null>(null);
   const [wizardOpen, setWizardOpen] = useState(false);
   // Whether the form's Activation disclosure is open. Its contents are drawn
@@ -640,7 +642,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
     const req = readReq.current;   // whichever select or refresh asked for these
     api.listEntityImages(scope, kind, id)
       .then((imgs) => { if (req === readReq.current) setImages(imgs.map((i) => ({
-        name: i.name, v: i.v,
+        name: i.name, v: i.v, image_id: i.image_id,
         description: i.described ? (i.description ?? "") : undefined,
       }))); })
       .catch(() => { if (req === readReq.current) setImages([]); });
@@ -910,6 +912,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
   // ?v= names the exact content state, so the browser caches these immutable;
   // uploads/promotes refresh the tokens via reloadImages/reload.
   const hasPrimary = images.some((i) => i.name === "avatar");
+  const imageIdOf = (n: string) => images.find((i) => i.name === n)?.image_id;
   const galleryNames = images
     .map((i) => i.name)
     .filter((n) => n.startsWith("gallery_"))
@@ -1330,6 +1333,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                           value={images.find((i) => i.name === "avatar")?.description}
                           onSave={(d) => describeImage("avatar", d)}
                           onDraft={scope.kind === "world" ? () => draftDescription("avatar") : undefined} />
+                        {imageIdOf("avatar") && <ImageUsage imageId={imageIdOf("avatar")!} />}
                       </figure>
                     ) : (
                       <div className="shelf-tile shelf-empty">no image</div>
@@ -1345,6 +1349,7 @@ export function EntityEditor({ wid, kind, scope: scopeProp, selected, newOwner, 
                           name={n} value={images.find((i) => i.name === n)?.description}
                           onSave={(d) => describeImage(n, d)}
                           onDraft={scope.kind === "world" ? () => draftDescription(n) : undefined} />
+                        {imageIdOf(n) && <ImageUsage imageId={imageIdOf(n)!} />}
                       </div>
                     ))}
                     <button className="shelf-add" onClick={() => shelfFileRef.current?.click()}>+ add</button>

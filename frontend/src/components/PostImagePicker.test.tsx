@@ -413,9 +413,10 @@ test("removing an inherited image is called hiding, and says the world keeps it"
   confirm.mockRestore();
 });
 
-test("an inherited image is not describable here", async () => {
-  // Describing it belongs to the world, where doing it once serves every
-  // campaign -- and the route refuses it here, so the field would always fail.
+test("an inherited legacy image is not describable here", async () => {
+  // A legacy world file has no shared image object to describe, so it is
+  // described in the WORLD, where doing it once serves every campaign -- and
+  // the route refuses it here (409), so the field would always fail.
   (api.listCampaignImages as any).mockResolvedValue({
     images: [
       { name: "handout", ext: "png", v: "a1" },
@@ -429,6 +430,29 @@ test("an inherited image is not describable here", async () => {
   await screen.findByText("From this world");
   expect(screen.queryByLabelText("Description of handout")).toBeTruthy();
   expect(screen.queryByLabelText("Description of coastline")).toBeNull();
+});
+
+test("an inherited placement-backed library image is describable", async () => {
+  // It has an image_id, so the description lives on the shared image object
+  // and the campaign route writes it (R3) -- the field is no longer a control
+  // that always fails. The legacy sibling beside it still gets none.
+  (api.listCampaignImages as any).mockResolvedValue({
+    images: [
+      { name: "coastline", ext: "png", v: "b2", inherited: true, image_id: "id-coast",
+        description: "A grey coast.", described: true },
+      { name: "old-map", ext: "png", v: "c3", inherited: true },
+    ],
+    hidden: [],
+  });
+  render(<PostImagePicker cid="run" target={{ kind: "campaign", name: "Grimoire" }}
+                          onInsert={() => {}} onClose={() => {}} />);
+
+  await screen.findByText("From this world");
+  expect(screen.queryByLabelText("Description of coastline")).toBeTruthy();
+  expect(screen.queryByLabelText("Description of old-map")).toBeNull();
+  // The usage control is there too, and needs no router: the picker is a
+  // modal over the composer, so its chips never navigate.
+  expect(screen.getAllByRole("button", { name: "Used in…" })).toHaveLength(1);
 });
 
 test("a hidden image is listed with a way back", async () => {

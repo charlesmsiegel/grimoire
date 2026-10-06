@@ -4,8 +4,9 @@ import { errorText } from "../../api/errors";
 import { thumbSet } from "../../api/thumbs";
 import { AvatarFocusPicker } from "../AvatarFocusPicker";
 import { ImageDescriptionField } from "../ImageDescriptionField";
+import { ImageUsage } from "../ImageUsage";
 
-type Image = { name: string; v: string };
+type Image = { name: string; v: string; image_id?: string | null };
 export function PCArtTab({ scope, wid, pid, vid, images, descriptions, imageError,
                            avatarFocus, onRefresh, onError }: {
   scope: EntityScope; wid: string; pid: string; vid: string; images: Image[];
@@ -61,6 +62,7 @@ export function PCArtTab({ scope, wid, pid, vid, images, descriptions, imageErro
             onDraft={scope.kind === "world" ? () =>
               api.draftPCImageDescription(wid, pid, vid, image.name).then((r) => r.description)
               : undefined} />
+          {image.image_id && <ImageUsage imageId={image.image_id} />}
         </figure>)}
         <button className="shelf-add" onClick={() => input.current?.click()}>+ add</button>
         <input ref={input} type="file" accept="image/png,image/jpeg,image/gif,image/webp"

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, type WorldImage } from "../api/client";
 import { CoverPanel } from "./CoverPanel";
 import { ImageDescriptionField } from "./ImageDescriptionField";
+import { ImageUsage } from "./ImageUsage";
 import { freeName, nameFromFile } from "./PostImagePicker";
 
 /** What went wrong, in the shape `api.request` rejects with (`{detail}`) —
@@ -126,6 +127,7 @@ export function WorldArtPanel({ wid }: { wid: string }) {
                   }}
                   onDraft={async () =>
                     (await api.draftWorldImageDescription(wid, img.name)).description} />
+                {img.image_id && <ImageUsage imageId={img.image_id} />}
                 <button className="subtle image-picker-remove" type="button"
                         disabled={busy} aria-label={`Delete ${img.name}`}
                         title={`Delete ${img.name} from this world`}

@@ -4,6 +4,7 @@ import type { CampaignImage } from "../api/types";
 import { encodeSegment } from "../urlSegment";
 import { useHotkeys } from "../shortcuts/useHotkeys";
 import { ImageDescriptionField } from "./ImageDescriptionField";
+import { ImageUsage } from "./ImageUsage";
 
 /** Who is speaking in the post the picker was opened from (#376).
  *
@@ -28,7 +29,9 @@ export type PickerTarget =
   | { kind: "campaign"; name: string };
 
 type Group = { key: string; label: string;
-               images: { name: string; url: string; description?: string }[] };
+               images: { name: string; url: string; description?: string;
+                        /** Identity in the image store; absent for a legacy file. */
+                        imageId?: string | null }[] };
 
 /** A stored name derived from an uploaded file's own name.
  *
@@ -177,14 +180,14 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
             ...(own.length ? [{
               key: "library", label: "Campaign images",
               images: own.map((i) => ({
-                name: i.name, url: api.campaignImageUrl(cid, i.name),
+                name: i.name, url: api.campaignImageUrl(cid, i.name), imageId: i.image_id,
                 description: i.described ? (i.description ?? "") : undefined,
               })),
             }] : []),
             ...(world.length ? [{
               key: "world", label: "From this world",
               images: world.map((i) => ({
-                name: i.name, url: api.campaignImageUrl(cid, i.name),
+                name: i.name, url: api.campaignImageUrl(cid, i.name), imageId: i.image_id,
                 description: i.described ? (i.description ?? "") : undefined,
               })),
             }] : []),
@@ -327,12 +330,15 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                     <img src={`${img.url}?w=${THUMB}`} alt="" />
                     <span>{img.name}</span>
                   </button>
-                  {/* Describing belongs to whoever owns the picture. An
-                      inherited one is described in its WORLD, where doing it
-                      once serves every campaign on that world -- and the route
-                      refuses it here, so offering the field would be a control
-                      that always fails. */}
-                  {isLibrary && g.key === "library" && (
+                  {/* Describing belongs to whoever owns the picture. The
+                      campaign's own is described here. An inherited one with
+                      an `image_id` is a placement of a shared image object,
+                      which the campaign route describes for every campaign on
+                      that world at once (R3), so it is offered too. An
+                      inherited LEGACY file has no object to share and the
+                      route answers 409 -- it is described in its world, so
+                      the field would be a control that always fails. */}
+                  {isLibrary && (g.key === "library" || (g.key === "world" && img.imageId)) && (
                     <ImageDescriptionField
                       key={img.name}
                       name={img.name} value={img.description}
@@ -343,6 +349,9 @@ export function PostImagePicker({ cid, target, onInsert, onClose }: {
                       onDraft={async () =>
                         (await api.draftCampaignImageDescription(cid, img.name)).description} />
                   )}
+                  {/* A modal over the composer: a chip that navigated would
+                      leave the post being written, so none does. */}
+                  {isLibrary && img.imageId && <ImageUsage imageId={img.imageId} navigable={false} />}
                   {isLibrary && (
                     <button className="subtle image-picker-remove" type="button"
                             disabled={busy}

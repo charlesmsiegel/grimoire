@@ -740,6 +740,7 @@ function CharacterRecord({ campaign }: { campaign: boolean }) {
           <ArtTab scope={scope} wid={wid} cid={eid} vid={vid}
                   hasAvatar={hasAvatar} galleryImages={galleryImages}
                   imageTokens={imageTokens}
+                  imageIds={version?.image_ids}
                   descriptions={version?.image_descriptions ?? {}}
                   appearances={imageAppearances}
                   worldScope={worldScope}

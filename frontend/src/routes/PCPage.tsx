@@ -24,7 +24,7 @@ const BLANK: Persona = {
   name: "", pronouns: "", summary: "", description: "", birthdate: "", goals: "", player_notes: "",
 };
 type Tab = "persona" | "lore" | "art" | "sheet";
-type PCImage = { name: string; v: string };
+type PCImage = { name: string; v: string; image_id?: string | null };
 
 /** A PC record is the unit of navigation and writing. The section page owns
  * only its index and creation; this page owns one record's persona, version,
