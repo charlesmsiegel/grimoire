@@ -285,7 +285,8 @@ def test_inspector_total_still_counts_the_notes(monkeypatch, tmp_path):
     with_note = context.context_breakdown(cid, sid)
     row = next(r for r in with_note["sections"] if r["id"] == "authors_note")
     assert with_note["total_tokens"] == without["total_tokens"] + row["tokens"]
-    hist = lambda d: next(r for r in d["sections"] if r["id"] == "history")  # noqa: E731
+    def hist(detail):
+        return next(r for r in detail["sections"] if r["id"] == "history")
     assert hist(with_note)["tokens"] == hist(without)["tokens"]
 
 

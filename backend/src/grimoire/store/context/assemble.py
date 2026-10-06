@@ -562,16 +562,19 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     if images > 0:
         # The newest `images` pictures stay as references (#377): projected as
         # sentinels, expanded like any other text, then split into parts.
-        refs: dict = {}
+        image_table: dict[int, dict] = {}
+        nonce = ""
 
         def project(messages: list[dict]) -> list[dict]:
-            projected, refs["table"], refs["nonce"] = story._project_history_refs(
-                messages, images=images, cid=cid)
+            nonlocal nonce
+            projected, table, nonce = story._project_history_refs(messages, images=images,
+                                                                  cid=cid)
+            image_table.update(table)
             return projected
 
         projected, positions = authors_note.inject(history, in_history, project)
         sub_history = _split_refs([{"role": m["role"], "content": _expanded(m["content"])}
-                                   for m in projected], refs["table"], refs["nonce"])
+                                   for m in projected], image_table, nonce)
     else:
         projected, positions = authors_note.inject(history, in_history)
         sub_history = [{"role": m["role"], "content": _expanded(m["content"])}

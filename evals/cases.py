@@ -670,7 +670,7 @@ def _authors_note_checks(ctx: dict) -> list[Check]:
     in_own = bool(own) and own in call(ctx["sera_ref"])
     in_other = _CHARACTER_NOTE in call(ctx["other_ref"])
     in_narrator = _CHARACTER_NOTE in graders.prompt_text(ctx["messages"])
-    return delivered + [Check(
+    return [*delivered, Check(
         "prompt.authors_note_scoped", in_own and not in_other and not in_narrator,
         f"character note in its own call: {in_own}, in another character's: {in_other}, "
         f"in the narrator's: {in_narrator}")]
