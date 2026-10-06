@@ -27,6 +27,12 @@ embedding endpoint (`matching` only reads config). Every input is read through
 `_soft`, because a calendar provider can be plugin code that raises anything
 (`aging.prepare` resolves one outside any `try`), and a garbled ledger must
 cost its own drivers rather than the read.
+
+`DRIVER_ACTIONS` is §20's action vocabulary: what a scene suggestion may claim
+to do to a driver, with `ACTIONS_BY_KIND` saying which of them a driver of each
+kind accepts. `snapshot` takes an already computed `pressure_result` so that a
+caller which needs the pressure items too (the suggestion snapshot's timeline
+and its driver index) gets both from one computation at one `now`.
 """
 
 from __future__ import annotations
@@ -41,6 +47,19 @@ from . import effective, involvement, pressure
 #: The driver kinds, which are also the tie-break order between drivers in one
 #: pressure state.
 DRIVER_KINDS = ("thread", "commitment", "event", "birthday", "holiday")
+
+#: What a suggestion may claim to do to a driver (spec §20).
+DRIVER_ACTIONS = ("advance", "close_candidate", "address", "fulfill_candidate",
+                  "break_candidate", "expire_candidate", "anchor")
+
+#: The actions a driver of each kind accepts; keyed by `DRIVER_KINDS`, in order.
+ACTIONS_BY_KIND: dict[str, tuple[str, ...]] = {
+    "thread": ("advance", "close_candidate"),
+    "commitment": ("address", "fulfill_candidate", "break_candidate", "expire_candidate"),
+    "event": ("anchor",),
+    "birthday": ("anchor",),
+    "holiday": ("anchor",),
+}
 
 _RECORD_KINDS = ("thread", "commitment")
 _TEMPORAL_KINDS = frozenset({"event", "holiday", "birthday"})
@@ -196,12 +215,16 @@ def _order(driver: dict) -> tuple:
             DRIVER_KINDS.index(driver["kind"]), in_days is None, in_days or 0, driver["ref"])
 
 
-def snapshot(cid: str, offscreen: bool = False) -> dict:
+def snapshot(cid: str, offscreen: bool = False, *,
+             pressure_result: dict | None = None) -> dict:
     """`{now, friendly, fixed, matching, drivers, anchors}` for this campaign's
-    present. `now`/`friendly`/`fixed` are `pressure.build`'s. Drivers are in
-    pressure order (`PRESSURE_STATES`), then `DRIVER_KINDS`, then `in_days`
-    (nulls last), then ref. Never raises for an existing campaign."""
-    now = _soft(pressure.build, _NO_PRESSURE, cid)
+    present. `now`/`friendly`/`fixed` are `pressure.build`'s -- or
+    `pressure_result`'s when the caller already built it, in which case
+    pressure is not computed again. Drivers are in pressure order
+    (`PRESSURE_STATES`), then `DRIVER_KINDS`, then `in_days` (nulls last), then
+    ref. Never raises for an existing campaign."""
+    now = (_soft(pressure.build, _NO_PRESSURE, cid) if pressure_result is None
+           else pressure_result)
     players = _dropped(cid, offscreen)
     found = [*_record_drivers(cid, now, offscreen, players),
              *_temporal_drivers(now["items"], offscreen, players)]
