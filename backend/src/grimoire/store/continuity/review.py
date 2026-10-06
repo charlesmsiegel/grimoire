@@ -741,7 +741,10 @@ def settle(cid: str, candidate_id: str, record: dict, fingerprint: str,
     A model-only finding set aside (`pending.model_only`) is not dropped: no
     sweep would find it again, so the cache is the only place a restore can
     bring it back from, proposal and all (§12.7). Its ``suppressed`` verdict
-    hides it, and the persists keep it while that holds.
+    hides it, and the persists keep it while that holds. It is marked with the
+    fingerprint it was set aside under instead, so once its records move -- a
+    Ledger hand edit starts no sweep -- it reads ``gone`` rather than surfacing
+    as ``stale`` while that dismissal stands.
     """
     landed: list[str] = []
     with locks.campaign_lock(cid):
@@ -752,6 +755,8 @@ def settle(cid: str, candidate_id: str, record: dict, fingerprint: str,
                     "decision": decision, "created": paths.now_iso()})
                 landed.append("suppression")
                 if pending.model_only(record):
+                    if candidates.mark_dismissed(cid, candidate_id, fingerprint):
+                        landed.append("cache")
                     return landed
             if candidates.drop(cid, candidate_id) is not None:
                 landed.append("cache")
