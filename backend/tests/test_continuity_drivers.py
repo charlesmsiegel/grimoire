@@ -365,3 +365,53 @@ def test_a_continuity_side_failure_falls_back_to_the_physical_records(monkeypatc
     assert found[MAP]["label"] == "Mara's map"
     assert found[OATH]["label"] == "Mara's oath"
 
+
+
+# ---- the action vocabulary and a shared pressure computation (Slice E) ------
+
+
+def test_driver_actions_are_pinned():
+    assert drivers.DRIVER_ACTIONS == (
+        "advance", "close_candidate", "address", "fulfill_candidate", "break_candidate",
+        "expire_candidate", "anchor")
+    assert drivers.ACTIONS_BY_KIND == {
+        "thread": ("advance", "close_candidate"),
+        "commitment": ("address", "fulfill_candidate", "break_candidate", "expire_candidate"),
+        "event": ("anchor",),
+        "birthday": ("anchor",),
+        "holiday": ("anchor",),
+    }
+    assert tuple(drivers.ACTIONS_BY_KIND) == drivers.DRIVER_KINDS
+    assert set(drivers.ACTIONS_BY_KIND) == set(drivers.DRIVER_KINDS)
+    assert {a for acts in drivers.ACTIONS_BY_KIND.values() for a in acts} == set(
+        drivers.DRIVER_ACTIONS)
+
+
+def test_snapshot_uses_a_given_pressure_result(monkeypatch, tmp_path):
+    """A caller that already computed pressure hands it in, and the snapshot
+    does not compute it again. The fixture is chosen so a fallback (empty)
+    result would change both the anchors and the commitment's pressure. The
+    stand-in records rather than raises: `_soft` would swallow a raise
+    (including an AssertionError) and the test would pass vacuously."""
+    cid = _campaign(monkeypatch, tmp_path, warn=7)
+    coronation = "event:" + events.create(cid, "The coronation", "2026-05-13")
+    _commitment(cid, due="2026-05-14")
+    p = pressure.build(cid)
+    expected = drivers.snapshot(cid)
+    assert [a["ref"] for a in expected["anchors"]] == [coronation]
+    assert {d["ref"]: d for d in expected["drivers"]}[OATH]["pressure"]["state"] == "due_soon"
+
+    calls: list[tuple] = []
+    real = pressure.build
+
+    def _recording(*args, **kw):
+        calls.append((args, kw))
+        return real(*args, **kw)
+
+    monkeypatch.setattr(pressure, "build", _recording)
+    out = drivers.snapshot(cid, pressure_result=p)
+    assert out["drivers"] == expected["drivers"]
+    assert out["anchors"] == expected["anchors"]
+    assert (out["now"], out["friendly"], out["fixed"]) == (
+        expected["now"], expected["friendly"], expected["fixed"])
+    assert calls == []
