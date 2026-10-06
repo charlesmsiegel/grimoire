@@ -220,6 +220,34 @@ def _key(src: Path, st: os.stat_result | None, width: int, root: Path) -> str:
     return hashlib.sha256(ident.encode()).hexdigest()[:32]
 
 
+#: The widths a thumbnail is asked for at: `routes.common.THUMB_BUCKETS`,
+#: spelled here because a store module may not import a route (test_thumbs.py
+#: holds the two equal). Only `legacy_keys` reads it.
+WIDTHS = (128, 256, 320, 512, 1024)
+#: Each generation this revision writes, with the suffixes its entries take.
+_SUFFIXES = {ENCODER: (".webp",), FALLBACK_ENCODER: (".jpg", ".png")}
+
+
+def legacy_keys(rel: str, st: os.stat_result) -> list[Path]:
+    """Every current-generation entry a legacy file could have been cached
+    under, as paths relative to the library root: each width in `WIDTHS`,
+    both encoders and each suffix an encoder writes.
+
+    `rel` is the file's path relative to the root in posix form, and `st` its
+    stat from before it went -- the two things `_key` named it by. Once the
+    file has migrated to a blob nothing asks for these again, and the sweep
+    retires only older generations, so the migration removes them (spec
+    section 11)."""
+    out: list[Path] = []
+    for encoder, suffixes in _SUFFIXES.items():
+        gen = Path(*_CACHE, f"r{REVISION}-{encoder}")
+        for width in WIDTHS:
+            ident = f"{rel}|{st.st_mtime_ns // 1000}|{st.st_size}|{width}|{encoder}"
+            key = hashlib.sha256(ident.encode()).hexdigest()[:32]
+            out.extend(gen / f"{key}{suffix}" for suffix in suffixes)
+    return out
+
+
 # ---- one decode per key ----
 class _Flight:
     """One entry being generated: its lock, how many requests hold or wait on

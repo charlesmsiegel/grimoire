@@ -1,7 +1,8 @@
-"""Migrating legacy images into the image store: the plan (stage 4, spec §11).
+"""Migrating legacy images into the image store (stage 4, spec §11).
 
-A maintenance operation, never a startup step. This module holds the half a
-dry run and a real run share (M7): `plan(root, cancel=...)` walks the
+A maintenance operation, never a startup step. `run(root, dry_run=...,
+cancel=...)` is the whole of it and always returns its report; the plan below
+is the half a dry run and a real run share (M7): `plan(root, cancel=...)` walks the
 inventory (`image_surfaces.occurrences`), hashes every legacy file the way
 ingest would, groups the files by picture and previews what folding their
 metadata would do; `report(plan)` is the §11 report. The dry run is exactly
@@ -46,23 +47,60 @@ choice; past `MAX_CONFLICTS` the cap is reported. A key that is not a string,
 or is over `image_store.MAX_DESCRIPTION`, stays where it is and is reported.
 Subjects are unioned per scope and a disagreement is reported. These are
 previews: a real run re-reads every value at fold time (M9).
+
+**The real run (M8-M10)** -- see the section that starts at `_RootChangedError`:
+per legacy file, re-read and re-hash, ingest outside every lock, then under
+the campaign lock (a campaign occurrence), `image_collection_lock` (a world
+library) and the name lock: never overwrite an image-bearing placement, write
+one when there is none, verify it under the pinned root, unlink exactly the
+file that was hashed, drop its legacy thumbnails, fold its keys. Then the
+metadata-only occurrences, format-1 manifests and harvest journals. Every
+campaign written is revision-bumped under its lock.
+
+**Lock domain.** Every campaign write here happens under
+`locks.campaign_lock(cid)` (`_campaign_held`), but no public function takes a
+`cid` -- `run` takes a store root -- so `test_lock_domain_guard` does not
+survey this module, and listing it in `DOMAIN_MODULES` would be the phantom
+entry that guard refuses.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import re
+import stat
 from collections.abc import Callable, Iterable
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 
-from . import assets, image_hash, image_refs, image_store, image_subjects, image_surfaces
+from . import (
+    assets,
+    atomic,
+    greeting_images,
+    image_collection_imports,
+    image_collections,
+    image_hash,
+    image_refs,
+    image_scopes,
+    image_store,
+    image_subjects,
+    image_surfaces,
+    locks,
+    paths,
+    revision,
+    thumbs,
+)
 
 #: The most `description_conflicts` entries an object keeps (M9).
 MAX_CONFLICTS = 20
 #: Identities that are not a picture anybody can show: left where they are.
 _NOT_PICTURES = frozenset({"unsniffable", "unsanitizable", "undecodable"})
 _OBJECT = "object"
+_MEMBER_NAME = re.compile(re.escape(image_collections.MEMBER_PREFIX) + r"[0-9a-f]{64}\Z")
 
 Occurrence = image_surfaces.Occurrence
 
@@ -239,6 +277,17 @@ def _stream(streams: dict[str, _Stream], data: bytes, ext: str) -> tuple[str, _S
     return p.sha, got
 
 
+def _member_differs(occ: Occurrence, data: bytes) -> bool:
+    """A world-library file named as a format-1 collection member whose bytes
+    do not hash to that name."""
+    if occ.kind != image_surfaces.LIBRARY or not occ.scope.startswith("world:"):
+        return False
+    prefix = image_collections.MEMBER_PREFIX
+    if not _MEMBER_NAME.fullmatch(occ.name.casefold()):
+        return False
+    return hashlib.sha256(data).hexdigest() != occ.name.casefold()[len(prefix):]
+
+
 def _resolves(root: Path, image_id: str) -> bool:
     """Whether `image_id`'s object and its blob are both under `root`."""
     obj = image_store.read_fresh(image_id, root=root)
@@ -260,6 +309,12 @@ def _hash(plan: MigrationPlan, files: list[Occurrence], cancel: Callable[[], boo
             _untouch(plan, occ.path, "unreadable")
             continue
         data, st = got
+        if _member_differs(occ, data):
+            # A format-1 member's name is its bytes' hash, and conversion
+            # trusts a member's placement as that identity (M10): a file the
+            # name no longer describes must never become that placement.
+            _untouch(plan, occ.path, "member-differs-from-name")
+            continue
         sha, stream = _stream(streams, data, occ.path.suffix)
         if stream.refused is not None:
             _untouch(plan, occ.path, stream.refused)
@@ -402,13 +457,16 @@ def _key_text(plan: MigrationPlan, cache: dict[Path, dict], where: Path,
 def _object_texts(obj: image_store.ImageObject | None) -> list[tuple[str, str]]:
     """``(text, from)`` from the object itself: its description, then the
     conflicts it already carries (never dropped here, M9)."""
-    if obj is None:
-        return []
+    return [] if obj is None else _raw_texts(obj.raw)
+
+
+def _raw_texts(raw: dict) -> list[tuple[str, str]]:
+    """`_object_texts` of a sidecar's raw dict."""
     out = []
-    desc = obj.raw.get("description")
+    desc = raw.get("description")
     if isinstance(desc, str):
         out.append((desc, _OBJECT))
-    held = obj.raw.get("description_conflicts")
+    held = raw.get("description_conflicts")
     out.extend((c["text"], str(c.get("from", "")))
                for c in (held if isinstance(held, list) else [])
                if isinstance(c, dict) and isinstance(c.get("text"), str))
@@ -557,3 +615,938 @@ def report(p: MigrationPlan) -> dict:
         "format1_collections": sorted(p.format1_collections),
         "cancelled": p.cancelled,
     }
+
+
+# ---- the real run (M8-M10) ---------------------------------------------------
+#
+# Everything below writes. The one rule it is arranged around: the only working
+# copy of a picture is never deleted. A legacy file goes only once a placement
+# naming its picture has been read back under the PINNED root and its blob
+# re-hashed there; it goes by identity (the exact file that was hashed, by
+# dev/inode/size/mtime), never by name; and the live root is asked to still be
+# the pinned one before every destructive step (M4), so a data-dir move mid-run
+# stops it with nothing deleted from then on, in either tree.
+
+#: How a run ended (``outcome`` in its report).
+DONE, CANCELLED, FAILED, ROOT_CHANGED = "done", "cancelled", "failed", "root-changed"
+#: How many times one key's fold is retried when its value moves under it.
+_FOLD_TRIES = 4
+_SUBJECTS = image_subjects.SUBJECTS_FILE
+_KIND, _RELATION = "character", "subject"
+
+
+class _RootChangedError(Exception):
+    """The live store root is no longer the pinned one: stop, delete nothing."""
+
+    def __init__(self, step: str):
+        super().__init__(step)
+        self.step = step
+
+
+def _run_fields(dry_run: bool) -> dict:
+    """What a run reports beyond the plan's §11 fields -- zero for a dry run,
+    so a dry run and a real run have one shape (M2)."""
+    return {
+        "dry_run": dry_run, "outcome": DONE, "error": None, "stopped_at": None,
+        "placed": 0, "already_placed": 0, "legacy_deleted": 0, "thumbnails_removed": 0,
+        "skipped": [], "errors": [], "keys_kept": [],
+        "descriptions_folded": 0, "subjects_folded": 0,
+        "focus_moved": 0, "focus_dropped": 0, "overrides_written": 0,
+        "collections_converted": [], "collections_kept": [],
+        "journals": {"converted": 0, "retired": 0, "kept": 0},
+        "url_subject_keys_kept": 0, "campaigns_written": 0,
+    }
+
+
+def _same_root(root: Path) -> bool:
+    try:
+        return paths.home().resolve() == root
+    except (OSError, RuntimeError):
+        return False
+
+
+def _snap(st: os.stat_result) -> tuple[int, int, int, int]:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def _lstat(p: Path) -> os.stat_result | None:
+    try:
+        return os.stat(p, follow_symlinks=False)
+    except OSError:
+        return None
+
+
+def _campaign_of(occ: Occurrence) -> str | None:
+    side, _, cid = occ.scope.partition(":")
+    return cid if side == "campaign" else None
+
+
+@contextmanager
+def _campaign_held(cid: str | None):
+    """The occurrence's campaign lock, when it has a campaign."""
+    if cid is None:
+        yield
+        return
+    with locks.campaign_lock(cid):
+        yield
+
+
+@contextmanager
+def _collection_held(occ: Occurrence):
+    """`image_collection_lock` for a world-library occurrence (M8): a write
+    there is what format-1 membership checks guard."""
+    side, _, wid = occ.scope.partition(":")
+    if occ.kind != image_surfaces.LIBRARY or side != "world":
+        yield
+        return
+    with locks.image_collection_lock(wid):
+        yield
+
+
+@dataclass
+class _Exec:
+    """One real run's state."""
+    plan: MigrationPlan
+    cancel: Callable[[], bool]
+    out: dict
+    #: The work map: image id -> legacy paths ingested, not yet verified.
+    pending: dict[str, list[str]] = field(default_factory=dict)
+    #: ``(dir, name)`` placements this run verified.
+    verified: set[tuple[Path, str]] = field(default_factory=set)
+    #: Campaigns this run wrote, each bumped where it was written.
+    written: set[str] = field(default_factory=set)
+
+    @property
+    def root(self) -> Path:
+        return self.plan.root
+
+    def guard(self, step: str) -> None:
+        if not _same_root(self.root):
+            raise _RootChangedError(step)
+
+    def guard_dir(self, step: str, d: Path) -> bool:
+        """`guard`, and whether `d` may be written in: never a directory the
+        walk would report as reached through a symlink."""
+        self.guard(step)
+        return not image_surfaces.linked(self.root, d)
+
+    def skip(self, p: Path, reason: str) -> None:
+        self.out["skipped"].append({"path": self.plan.rel(p), "reason": reason})
+
+    def keep(self, side: Path, key: str | None, reason: str) -> None:
+        entry = {"path": self.plan.rel(side), "key": key, "reason": reason}
+        if entry not in self.out["keys_kept"]:
+            self.out["keys_kept"].append(entry)
+
+    def bump(self, cid: str | None) -> None:
+        """Under `cid`'s lock, after its write (CLAUDE.md, revision)."""
+        if cid is not None:
+            revision.bump(cid)
+            self.written.add(cid)
+
+
+# ---- the work map ------------------------------------------------------------
+
+def _save_map(ex: _Exec) -> None:
+    p = work_map_path(ex.root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomic.write_text(p, json.dumps({"format": 1, "pending": ex.pending},
+                                    indent=2, sort_keys=True) + "\n")
+
+
+def _pend(ex: _Exec, image_id: str, rel: str) -> None:
+    """Record `rel` as about to be ingested as `image_id`: a GC root (M12)
+    until it verifies, so an object ingested and not yet placed survives a
+    crash here."""
+    ex.pending.setdefault(image_id, []).append(rel)
+    _save_map(ex)
+
+
+def _unpend(ex: _Exec, image_id: str, rel: str) -> None:
+    got = ex.pending.get(image_id, [])
+    if rel in got:
+        got.remove(rel)
+        if not got:
+            del ex.pending[image_id]
+        _save_map(ex)
+
+
+def _load_map(root: Path) -> dict[str, list[str]]:
+    """The work map's pending entries; `ValueError` when it does not read."""
+    try:
+        raw = json.loads(work_map_path(root).read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, RecursionError) as exc:
+        raise ValueError("unreadable migration work map") from exc
+    pending = raw.get("pending") if isinstance(raw, dict) else None
+    if (not isinstance(pending, dict) or raw.get("format") != 1
+            or not all(image_hash.is_image_id(k) and isinstance(v, list)
+                       and all(isinstance(r, str) for r in v) for k, v in pending.items())):
+        raise ValueError("unreadable migration work map")
+    return {k: list(v) for k, v in pending.items()}
+
+
+def pending_ids(root: Path) -> set[str]:
+    """The image ids the migration work map under `root` holds pending --
+    ingested and not yet verified, so GC roots (M12). Empty without a map;
+    `ValueError` for one that does not read, which a collector must treat as
+    a root it cannot see (fail closed)."""
+    return set(_load_map(Path(root)))
+
+
+# ---- one legacy file ------------------------------------------------------------
+
+def _write_placement(d: Path, name: str, image_id: str, focus: int | None) -> None:
+    """Publish the placement (a named step, so a crash can be injected here)."""
+    image_refs.write(d, name, image_id, focus=focus)
+
+
+def _hashes_to(p: Path, sha: str) -> bool:
+    h = hashlib.sha256()
+    try:
+        with open(p, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return False
+    return h.hexdigest() == sha
+
+
+def _object_under(root: Path, image_id: str, blob: str | None = None) -> bool:
+    """Whether `image_id`'s object is under `root` (retaining `blob`, when
+    named) and its blob there re-hashes to its name."""
+    obj = image_store.read_fresh(image_id, root=root)
+    if obj is None or (blob is not None and obj.blob_sha256 != blob):
+        return False
+    return _hashes_to(image_store.blob_path(obj.blob_sha256, obj.ext, root=root),
+                      obj.blob_sha256)
+
+
+def _verify(root: Path, d: Path, name: str, image_id: str, blob: str | None,
+            focus: int | None) -> bool:
+    """M8's verify, under the pinned root and never through `path_in`: the
+    placement reads back as written, its object is under `root` retaining the
+    intended blob, and that blob re-hashes."""
+    ref = image_refs.read(d, name)
+    if ref is None or ref.image != image_id or ref.focus != focus:
+        return False
+    return _object_under(root, image_id, blob)
+
+
+def _focus_file(d: Path) -> int | None:
+    """The legacy crop in `d`'s `focus.json` (as `assets` reads it), or None
+    for none, a garbled one, or one reached through a symlink."""
+    p = d / assets.FOCUS_FILE
+    if p.is_symlink():
+        return None
+    try:
+        val = json.loads(p.read_text(encoding="utf-8"))
+        v = val.get(assets.AVATAR) if isinstance(val, dict) else None
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            return None
+        return max(0, min(100, int(v)))
+    except (OSError, ValueError, OverflowError):
+        return None
+
+
+def _unlink_same(ex: _Exec, p: Path, snap: tuple[int, int, int, int]) -> bool:
+    """Unlink exactly the file that was hashed: the same regular file by
+    dev, inode, size and mtime, in a directory not reached through a link."""
+    if not ex.guard_dir("before-unlink", p.parent):
+        return False
+    st = _lstat(p)
+    if st is None or not stat.S_ISREG(st.st_mode) or _snap(st) != snap:
+        return False
+    p.unlink()
+    return True
+
+
+def _drop_thumbs(ex: _Exec, rel: str, st: os.stat_result) -> None:
+    """The legacy file's current-generation thumbnails (§11.F)."""
+    ex.guard("before-thumbnails")
+    for key in thumbs.legacy_keys(rel, st):
+        p = ex.root / key
+        if p.is_file() and not p.is_symlink():
+            with suppress(FileNotFoundError):
+                p.unlink()
+                ex.out["thumbnails_removed"] += 1
+
+
+def _drop_focus_file(ex: _Exec, d: Path, moved: bool) -> bool:
+    """`focus.json` beside a verified avatar placement, which answers for the
+    crop from now on (M9 d). Caller holds the AVATAR name lock."""
+    p = d / assets.FOCUS_FILE
+    if p.is_symlink():
+        ex.keep(p, assets.AVATAR, "symlinked-sidecar")
+        return False
+    if not p.is_file() or not ex.guard_dir("before-focus-delete", d):
+        return False
+    p.unlink()
+    ex.out["focus_moved" if moved else "focus_dropped"] += 1
+    return True
+
+
+def _reread(ex: _Exec, item: Item) -> bytes | None:
+    """The item's file again, when it is still exactly what was hashed."""
+    assert item.occurrence.path is not None
+    got = _read(item.occurrence.path)
+    if (got is None or _snap(got[1]) != item.stat
+            or image_store.prepare(got[0], item.occurrence.path.suffix).sha != item.stream):
+        ex.skip(item.occurrence.path, "changed-since-hashing")
+        return None
+    return got[0]
+
+
+def _item(ex: _Exec, item: Item) -> None:
+    """Ingest, place, verify, delete and fold one legacy file (M8)."""
+    occ = item.occurrence
+    assert occ.path is not None
+    rel = ex.plan.rel(occ.path)
+    ex.guard("before-ingest")
+    assets.recover_promotion(occ.dir)
+    data = _reread(ex, item)
+    if data is None:
+        return
+    _pend(ex, item.image_id, rel)
+    # Outside every lock: the decode is the slow part (M8.2).
+    obj = image_store.ingest(data, occ.path.suffix)
+    ex.guard("after-ingest")
+    if obj.id != item.image_id:
+        ex.skip(occ.path, "identity-changed")
+    elif not _object_under(ex.root, obj.id, obj.blob_sha256):
+        ex.skip(occ.path, "not-under-root")
+    else:
+        cid = _campaign_of(occ)
+        with _campaign_held(cid), _collection_held(occ), \
+                locks.image_name_lock(occ.dir, occ.name):
+            if _place_and_clean(ex, item, obj.blob_sha256):
+                ex.bump(cid)
+    # Not in a `finally`: a process that dies mid-item leaves the entry, and
+    # with it the object it ingested, a GC root until a run completes.
+    _unpend(ex, item.image_id, rel)
+
+
+def _placement_for(ex: _Exec, item: Item) -> tuple[bool, int | None, bool] | None:
+    """Under the name lock: `(written, focus, focus came from focus.json)`
+    once a placement of the item's picture is there -- written now when there
+    was none -- or None when the slot holds another picture, which is never
+    overwritten (M8.3). An image-less placement (a crop override) is filled
+    with the picture under its own crop."""
+    occ = item.occurrence
+    assert occ.path is not None
+    ref = image_refs.read(occ.dir, occ.name)
+    if ref is not None and ref.image is not None:
+        if ref.image != item.image_id:
+            ex.plan.legacy_differs.append({"path": ex.plan.rel(occ.path), "placement": ref.image,
+                                           "reason": "concurrent-placement"})
+            ex.skip(occ.path, "legacy-differs")
+            return None
+        ex.out["already_placed"] += 1
+        return False, ref.focus, False
+    legacy = ref is None and occ.name == assets.AVATAR
+    focus = ref.focus if ref is not None else (_focus_file(occ.dir) if legacy else None)
+    _write_placement(occ.dir, occ.name, item.image_id, focus)
+    ex.out["placed"] += 1
+    return True, focus, legacy and focus is not None
+
+
+def _place_and_clean(ex: _Exec, item: Item, blob: str) -> bool:
+    """Everything under the item's locks; whether anything was written."""
+    occ = item.occurrence
+    assert occ.path is not None
+    rel = ex.plan.rel(occ.path)
+    now = _lstat(occ.path)
+    if not ex.guard_dir("before-place", occ.dir):
+        ex.skip(occ.path, image_surfaces.SYMLINKED)
+        return False
+    if now is None or not stat.S_ISREG(now.st_mode) or _snap(now) != item.stat:
+        ex.skip(occ.path, "changed-since-hashing")
+        return False
+    if image_refs.read_journal(occ.dir) is not None:
+        # A promotion the recovery could not finish: a write now could make
+        # its journal stale, and with it lose the picture it moved (spec §8).
+        ex.skip(occ.path, "promotion-unfinished")
+        return False
+    placed = _placement_for(ex, item)
+    if placed is None:
+        return False
+    written, focus, moved = placed
+    if not _verify(ex.root, occ.dir, occ.name, item.image_id, blob, focus):
+        ex.skip(occ.path, "verify-failed")
+        return written
+    ex.guard("after-verify")
+    ex.verified.add((occ.dir, occ.name))
+    _unpend(ex, item.image_id, rel)
+    if _unlink_same(ex, occ.path, item.stat):
+        ex.out["legacy_deleted"] += 1
+        written = True
+        _drop_thumbs(ex, rel, now)
+    if occ.name == assets.AVATAR:
+        written = _drop_focus_file(ex, occ.dir, moved) or written
+    return _fold_keys(ex, occ, item.image_id) or written
+
+
+# ---- folding keys (M9) ------------------------------------------------------------
+
+def _sidecar_now(ex: _Exec, side: Path) -> dict | None:
+    """A sidecar as it is now, or None (reported) for one reached through a
+    symlink, which is never followed, rewritten or deleted."""
+    if side.is_symlink():
+        ex.keep(side, None, "symlinked-sidecar")
+        return None
+    try:
+        raw = json.loads(side.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, RecursionError):
+        ex.keep(side, None, "unreadable-sidecar")
+        return None
+    return raw if isinstance(raw, dict) else None
+
+
+def _delete_key_if(ex: _Exec, side: Path, key: str, value: object) -> bool | None:
+    """Compare-and-delete: drop `key` only while it still holds `value`; an
+    emptied sidecar goes with it. True when deleted, None when the key is
+    already gone, False when it now holds something else (fold again)."""
+    if not ex.guard_dir("before-key-delete", side.parent):
+        return False
+    cur = _sidecar_now(ex, side)
+    if cur is None or key not in cur:
+        return None if cur is not None else False
+    if cur[key] != value:
+        return False
+    del cur[key]
+    if cur:
+        atomic.write_text(side, json.dumps(cur, indent=2, sort_keys=True) + "\n")
+    else:
+        side.unlink()
+    return True
+
+
+def _unfoldable(value: object) -> str | None:
+    if not isinstance(value, str):
+        return "not-a-string"
+    return "too-long" if len(value) > image_store.MAX_DESCRIPTION else None
+
+
+def _with_text(raw: dict, value: str, label: str, state: dict) -> dict | None:
+    """The `update` callback folding one description key (§11.D): a pure edit."""
+    decided = _decide([*_raw_texts(raw), (value, label)])
+    new = dict(raw)
+    if "conflicts" in decided:
+        if len(decided["conflicts"]) > MAX_CONFLICTS:
+            state["outcome"] = "capped"
+            return None
+        new.pop("description", None)
+        new["description_conflicts"] = decided["conflicts"]
+    else:
+        new["description"] = decided["text"]
+        new.pop("description_conflicts", None)
+    state["outcome"] = "held" if new == raw else "written"
+    return None if new == raw else new
+
+
+def _says(root: Path, image_id: str, value: str) -> bool:
+    """Whether the object under `root` now carries `value`: as its text or a
+    conflict -- or, for ``""``, any text at all."""
+    obj = image_store.read_fresh(image_id, root=root)
+    texts = {t for t, _src in _raw_texts(obj.raw)} if obj is not None else set()
+    return bool(texts) if value == "" else value in texts
+
+
+def _fold_text_once(ex: _Exec, side: Path, key: str, image_id: str, label: str
+                    ) -> bool | None:
+    """One attempt: True folded and deleted, None stop (kept or gone), False
+    the key moved under the delete."""
+    cur = _sidecar_now(ex, side)
+    if cur is None or key not in cur:
+        return None
+    value = cur[key]
+    why = _unfoldable(value)
+    if why is not None:
+        ex.keep(side, key, why)
+        return None
+    assert isinstance(value, str)
+    ex.guard("before-fold")
+    state = {"outcome": "absent"}
+    image_store.update(image_id, lambda raw: _with_text(raw, value, label, state))
+    if state["outcome"] in ("absent", "capped"):
+        ex.keep(side, key, "conflicts-capped" if state["outcome"] == "capped"
+                else "object-absent")
+        return None
+    if not _says(ex.root, image_id, value):
+        ex.keep(side, key, "fold-not-confirmed")
+        return None
+    done = _delete_key_if(ex, side, key, value)
+    if done:
+        ex.out["descriptions_folded"] += 1
+    return done
+
+
+def _fold_description(ex: _Exec, d: Path, key: str, image_id: str, label: str) -> bool:
+    """Fold `d`'s `descriptions.json[key]` into `image_id` under the sidecar's
+    lock, held from the read through the delete (M9); whether it changed."""
+    side = d / assets.DESCRIPTIONS_FILE
+    with locks.image_sidecar_lock(d, assets.DESCRIPTIONS_FILE):
+        for _ in range(_FOLD_TRIES):
+            done = _fold_text_once(ex, side, key, image_id, label)
+            if done is not False:
+                return bool(done)
+        ex.keep(side, key, "changed-during-fold")
+    return False
+
+
+def _ours(a: object, scope: str) -> bool:
+    return (isinstance(a, dict) and a.get("kind") == _KIND
+            and a.get("relation") == _RELATION and a.get("scope") == scope)
+
+
+def _with_subjects(raw: dict, scope: str, cids: list[str]) -> dict | None:
+    """The `update` callback unioning `cids` into `scope`'s subjects and
+    marking it reviewed (§11.D); None when that changes nothing."""
+    assoc = raw.get("associations")
+    assoc = list(assoc) if isinstance(assoc, list) else []
+    have = {a["id"] for a in assoc if _ours(a, scope) and isinstance(a.get("id"), str)}
+    assoc += [{"kind": _KIND, "relation": _RELATION, "scope": scope, "id": c}
+              for c in sorted(set(cids) - have)]
+    reviews = raw.get("reviews")
+    reviews = dict(reviews) if isinstance(reviews, dict) else {}
+    done = reviews.get("subjects")
+    done = [s for s in done if isinstance(s, str)] if isinstance(done, list) else []
+    if set(cids) <= have and scope in done:
+        return None
+    reviews["subjects"] = sorted({*done, scope})
+    return {**raw, "associations": assoc, "reviews": reviews}
+
+
+def _tags(root: Path, image_id: str, scope: str) -> set[str] | None:
+    """The object's subjects in `scope` under `root`, None when unreviewed."""
+    got = _object_subjects(image_store.read_fresh(image_id, root=root), scope)
+    return None if got is None else set(got)
+
+
+def _fold_subjects_once(ex: _Exec, side: Path, key: str, image_id: str, scope: str
+                        ) -> bool | None:
+    cur = _sidecar_now(ex, side)
+    if cur is None or key not in cur:
+        return None
+    value = cur[key]
+    if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+        ex.keep(side, key, "not-a-list-of-ids")
+        return None
+    ex.guard("before-fold")
+    before = _tags(ex.root, image_id, scope)
+    image_store.update(image_id, lambda raw: _with_subjects(raw, scope, value))
+    after = _tags(ex.root, image_id, scope)
+    if after is None or not set(value) <= after:
+        ex.keep(side, key, "fold-not-confirmed")
+        return None
+    if before is not None and before != set(value):
+        ex.plan.subject_disagreements.append(
+            {"image_id": image_id, "scope": scope,
+             "sets": sorted([sorted(before), sorted(set(value))])})
+    done = _delete_key_if(ex, side, key, value)
+    if done:
+        ex.out["subjects_folded"] += 1
+    return done
+
+
+def _fold_subjects(ex: _Exec, d: Path, key: str, image_id: str, scope: str) -> bool:
+    """`_fold_description` for a world greeting's `subjects.json[key]`."""
+    side = d / _SUBJECTS
+    with locks.image_sidecar_lock(d, _SUBJECTS):
+        for _ in range(_FOLD_TRIES):
+            done = _fold_subjects_once(ex, side, key, image_id, scope)
+            if done is not False:
+                return bool(done)
+        ex.keep(side, key, "changed-during-fold")
+    return False
+
+
+def _subjects_folded_here(occ: Occurrence) -> bool:
+    """Subjects fold only in a WORLD greeting (M5)."""
+    return occ.kind == "greetings" and occ.scope.startswith("world:")
+
+
+def _fold_keys(ex: _Exec, occ: Occurrence, image_id: str) -> bool:
+    """A verified file's own keys, in its own directory."""
+    changed = _fold_description(ex, occ.dir, occ.name, image_id, _label(ex.plan, occ))
+    if _subjects_folded_here(occ):
+        changed = _fold_subjects(ex, occ.dir, occ.name, image_id, occ.scope) or changed
+    return changed
+
+
+# ---- metadata-only occurrences (M6 a-d, M9) -------------------------------------------
+
+def _target_verified(ex: _Exec, occ: Occurrence, image_id: str) -> bool:
+    """Whether the occurrence's target placement verified: in this run, or
+    now, under the pinned root."""
+    if occ.target is None:
+        return False
+    if (occ.target, occ.name) in ex.verified:
+        return True
+    ref = image_refs.read(occ.target, occ.name)
+    return (ref is not None and ref.image == image_id
+            and _object_under(ex.root, image_id))
+
+
+def _override(ex: _Exec, occ: Occurrence) -> bool:
+    """(b): a campaign's bare `focus.json` over an inherited avatar becomes
+    the image-less occurrence override, under the campaign lock (held by the
+    caller) and the campaign directory's AVATAR name lock -- only while no
+    avatar of the campaign's own is there."""
+    d = occ.dir
+    with locks.image_name_lock(d, assets.AVATAR):
+        side = d / assets.FOCUS_FILE
+        if image_refs.read(d, assets.AVATAR) is not None or assets.has_legacy(d, assets.AVATAR):
+            ex.keep(side, assets.AVATAR, "campaign-avatar-exists")
+            return False
+        focus = _focus_file(d)
+        if focus is None:
+            ex.keep(side, assets.AVATAR, "unreadable-focus")
+            return False
+        if not ex.guard_dir("before-override", d):
+            return False
+        image_refs.write(d, assets.AVATAR, None, focus=focus)
+        if image_refs.read(d, assets.AVATAR) != image_refs.Ref(assets.AVATAR, None, focus):
+            ex.keep(side, assets.AVATAR, "fold-not-confirmed")
+            return True
+        ex.out["overrides_written"] += 1
+        if _focus_file(d) == focus and ex.guard_dir("before-focus-delete", d):
+            side.unlink()
+        return True
+
+
+def _dropped_focus(ex: _Exec, occ: Occurrence) -> bool:
+    """(d): the placement's focus is authoritative; `focus.json` goes, under
+    the AVATAR name lock, and nothing folds."""
+    with locks.image_name_lock(occ.dir, assets.AVATAR):
+        ref = image_refs.read(occ.dir, assets.AVATAR)
+        if ref is None or ref.image is None:
+            return False            # the placement went meanwhile: leave the crop
+        return _drop_focus_file(ex, occ.dir, False)
+
+
+def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
+    side = occ.dir / (occ.sidecar or "")
+    if image_id is None or not _target_verified(ex, occ, image_id):
+        ex.keep(side, occ.name, "target-not-verified")
+        return
+    cid = _campaign_of(occ)
+    with _campaign_held(cid):
+        if occ.metadata_only == "b":
+            changed = _override(ex, occ)
+        elif occ.metadata_only == "d":
+            changed = _dropped_focus(ex, occ)
+        elif occ.sidecar == _SUBJECTS:
+            changed = _fold_subjects(ex, occ.dir, occ.name, image_id, occ.scope)
+        else:
+            changed = _fold_description(ex, occ.dir, occ.name, image_id, _label(ex.plan, occ))
+        if changed:
+            ex.bump(cid)
+
+
+# ---- collections and journals (M10) -----------------------------------------------------
+
+def _world_roots(root: Path) -> list[Path]:
+    """Every world directory under `root` the walk would enter."""
+    try:
+        found = sorted(p for p in (root / "worlds").iterdir() if p.is_dir())
+    except OSError:
+        return []
+    return [p for p in found if paths.safe_id(p.name) and not image_surfaces.linked(root, p)]
+
+
+def _greeting_dirs(root: Path) -> list[tuple[Path, str, Path]]:
+    """``(world root, greeting id, its image dir)`` for every world greeting
+    image directory holding a `subjects.json`."""
+    out = []
+    for wroot in _world_roots(root):
+        try:
+            gids = sorted(p.name for p in (wroot / "greetings").iterdir() if p.is_dir())
+        except OSError:
+            continue
+        for gid in gids:
+            try:
+                d = assets.version_dir(wroot, gid, "default", base="greetings")
+            except ValueError:
+                continue
+            if (d / _SUBJECTS).is_file() and not image_surfaces.linked(root, d):
+                out.append((wroot, gid, d))
+    return out
+
+
+def _same_dir(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
+@dataclass(frozen=True)
+class _Member:
+    """One converted member: its library name, index and image id."""
+    name: str
+    index: int
+    image_id: str
+
+
+def _member_keys(wroot: Path, gid: str, wid: str, collection: str, m: _Member
+                 ) -> tuple[str, str]:
+    """``(library-URL key, member-URL key)`` as a greeting's catalog spells them."""
+    lib = greeting_images.image_key(wroot, gid, f"/api/worlds/{wid}/images/{m.name}")
+    member = greeting_images.image_key(
+        wroot, gid, f"/api/worlds/{wid}/image-collections/{collection}/members/{m.index}")
+    return lib, member
+
+
+def _carry_member_key(ex: _Exec, cur: dict, same: bool, scope: str, keys: tuple[str, str],
+                      m: _Member) -> bool | None:
+    """Make the member key say what the library key says: on the object for
+    the same world, in the sidecar (`cur`, written by the caller) for another
+    (R11). True when `cur` changed, None when the library key cannot move."""
+    value = cur[keys[0]]
+    if not isinstance(value, list) or not all(isinstance(c, str) for c in value):
+        return None
+    if same:
+        image_store.update(m.image_id, lambda raw: _with_subjects(raw, scope, value))
+        tags = _tags(ex.root, m.image_id, scope)
+        return False if tags is not None and set(value) <= tags else None
+    if keys[1] not in cur:
+        cur[keys[1]] = list(value)
+        return True
+    return False if cur[keys[1]] == value else None
+
+
+def _rekey_one(ex: _Exec, where: tuple[Path, str, Path], wid: str, collection: str,
+               members: list[_Member], delete: bool) -> None:
+    """One greeting's library-URL keys for `members`, under its sidecar lock:
+    carried to the member (before the manifest is written), and -- once it is,
+    `delete` -- dropped where the member holds them and the library URL is
+    no longer one of the greeting's pictures (M10)."""
+    wroot, gid, d = where
+    side = d / _SUBJECTS
+    same = _same_dir(wroot, ex.root / "worlds" / wid)
+    scope = image_scopes.world_scope_of_dir(wroot.name)
+    with locks.image_sidecar_lock(d, _SUBJECTS):
+        cur = _sidecar_now(ex, side)
+        if not cur:
+            return
+        shown = set(greeting_images.catalog_with_slots(wroot, gid)) if delete else set()
+        dirty = False
+        for m in members:
+            keys = _member_keys(wroot, gid, wid, collection, m)
+            if keys[0] not in cur:
+                continue
+            carried = _carry_member_key(ex, cur, same, scope, keys, m)
+            if carried is None:
+                ex.keep(side, keys[0], "member-key-not-carried")
+                continue
+            dirty = carried or dirty
+            if delete and keys[0] not in shown:
+                del cur[keys[0]]
+                dirty = True
+        if dirty and ex.guard_dir("before-key-delete", d):
+            if cur:
+                atomic.write_text(side, json.dumps(cur, indent=2, sort_keys=True) + "\n")
+            else:
+                side.unlink()
+
+
+def _rekey(ex: _Exec, wid: str, collection: str, members: list[_Member], *,
+           delete: bool) -> None:
+    for where in _greeting_dirs(ex.root):
+        _rekey_one(ex, where, wid, collection, members, delete)
+
+
+def _converted_members(ex: _Exec, wid: str, ids: list[str]) -> list[_Member]:
+    """The members of a format-2 manifest that a format-1 one named by their
+    library placements: what its greetings' library-URL keys pointed at."""
+    lib = ex.root / "worlds" / wid / "assets" / "images"
+    by_id = {r.image: n for n, r in image_refs.scan(lib).items()
+             if r.image is not None and _MEMBER_NAME.fullmatch(n)}
+    return [_Member(by_id[i], n, i) for n, i in enumerate(ids) if i in by_id]
+
+
+def _convert(ex: _Exec, rel: str) -> None:
+    path = ex.root / rel
+    wid, collection = path.parent.parent.parent.name, path.stem
+    if not ex.guard_dir("before-collection", path.parent):
+        ex.out["collections_kept"].append({"path": rel, "reason": image_surfaces.SYMLINKED})
+        return
+
+    def carry(names: list[str], ids: list[str]) -> None:
+        members = [_Member(n, i, x) for i, (n, x) in enumerate(zip(names, ids, strict=True))]
+        _rekey(ex, wid, collection, members, delete=False)
+
+    try:
+        if image_collections.convert_format1(ex.root, wid, collection, before=carry):
+            ex.out["collections_converted"].append(rel)
+    except image_collections.CollectionInvalidError as exc:
+        ex.out["collections_kept"].append({"path": rel, "reason": str(exc)})
+
+
+def _format2_manifests(ex: _Exec) -> list[tuple[str, str, list[str]]]:
+    """``(world, collection id, member ids)`` of every format-2 manifest
+    under the pinned root."""
+    out = []
+    for wroot in _world_roots(ex.root):
+        d = wroot.joinpath(*image_surfaces.COLLECTIONS_DIR)
+        if image_surfaces.linked(ex.root, d):
+            continue
+        for p in sorted(d.glob("*.json")):
+            try:
+                got = image_collections.validate(json.loads(p.read_text(encoding="utf-8")))
+            except (OSError, ValueError, RecursionError):
+                continue
+            if got["format"] == 2:
+                out.append((wroot.name, p.stem, got["members"]))
+    return out
+
+
+def _settle_converted(ex: _Exec) -> None:
+    """Drop the greeting keys that named a converted member's library URL,
+    where the member now holds them (M10). Over EVERY format-2 manifest whose
+    members a format-1 one named, not only this run's: a run that stopped
+    between a manifest and this pass leaves keys a rerun has to find."""
+    for wid, collection, ids in _format2_manifests(ex):
+        members = _converted_members(ex, wid, ids)
+        if members:
+            _rekey(ex, wid, collection, members, delete=True)
+
+
+def _collections(ex: _Exec) -> None:
+    """Every format-1 manifest the plan listed, converted where M10 allows,
+    then the greeting keys the conversions moved."""
+    for rel in ex.plan.format1_collections:
+        if ex.cancel():
+            ex.out["outcome"] = CANCELLED
+            return
+        _attempt(ex, ex.root / rel, partial(_convert, ex, rel))
+    _attempt(ex, None, partial(_settle_converted, ex))
+
+
+def _journals(ex: _Exec) -> None:
+    """Leftover format-1 harvest journals, converted or retired (M10)."""
+    base = ex.root / ".cache" / "image-collection-imports"
+    try:
+        wids = sorted(p.name for p in base.iterdir() if p.is_dir() and paths.safe_id(p.name))
+    except OSError:
+        return
+    for wid in wids:
+        d = image_collections.raw_journal_directory(ex.root, wid)
+        if image_surfaces.linked(ex.root, d):
+            continue
+        for p in sorted(d.glob("*.json")):
+            _attempt(ex, p, partial(_journal, ex, wid, p))
+
+
+def _journal(ex: _Exec, wid: str, p: Path) -> None:
+    if ex.guard_dir("before-journal", p.parent):
+        got = image_collection_imports.convert_or_retire(wid, p)
+        if got != image_collection_imports.FORMAT2:
+            ex.out["journals"][got] += 1
+
+
+def _url_keys_kept(root: Path) -> int:
+    """Same-world URL keys in world greetings' `subjects.json`: no ruling
+    folds them, so they stay, and are counted (stage-4 Task 8 records it)."""
+    count = 0
+    for wroot, _gid, d in _greeting_dirs(root):
+        try:
+            raw = json.loads((d / _SUBJECTS).read_text(encoding="utf-8"))
+        except (OSError, ValueError, RecursionError):
+            continue
+        prefix = f"/api/worlds/{wroot.name}/"
+        count += sum(1 for k in (raw if isinstance(raw, dict) else {}) if k.startswith(prefix))
+    return count
+
+
+# ---- the run -----------------------------------------------------------------------
+
+def _attempt(ex: _Exec, where: Path | None, step: Callable[[], object]) -> None:
+    """Run one step; a failure there is reported and the run goes on to the
+    next (one corrupt file does not stop the rest). A moved root is not a
+    failure of the step: it stops the run."""
+    try:
+        step()
+    except _RootChangedError:
+        raise
+    except Exception as exc:  # noqa: BLE001 -- reported per step; the rest still runs
+        ex.out["errors"].append({"path": ex.plan.rel(where) if where is not None else None,
+                                 "error": f"{type(exc).__name__}: {exc}"[:300]})
+
+
+def _stopped(ex: _Exec) -> bool:
+    if ex.cancel():
+        ex.out["outcome"] = CANCELLED
+        return True
+    return False
+
+
+def _execute(ex: _Exec) -> None:
+    ex.guard("start")
+    ex.pending = _safe_map(ex.root)
+    for item in ex.plan.items:
+        if _stopped(ex):
+            return
+        _attempt(ex, item.occurrence.path, partial(_item, ex, item))
+    for occ, image_id in ex.plan.metadata:
+        if _stopped(ex):
+            return
+        _attempt(ex, occ.dir / (occ.sidecar or ""), partial(_metadata_one, ex, occ, image_id))
+    _collections(ex)
+    if ex.out["outcome"] != DONE or _stopped(ex):
+        return
+    _attempt(ex, None, partial(_journals, ex))
+    ex.guard("before-map-delete")
+    work_map_path(ex.root).unlink(missing_ok=True)
+
+
+def _safe_map(root: Path) -> dict[str, list[str]]:
+    """The work map a crashed run left (its entries stay roots until this run
+    completes), or nothing for one that does not read -- it is rewritten."""
+    try:
+        return _load_map(root)
+    except ValueError:
+        return {}
+
+
+def run(root: Path, *, dry_run: bool, cancel: Callable[[], bool] | None = None) -> dict:
+    """Migrate the legacy images under store root `root` (spec §11, M7-M10);
+    the report, always -- on success, on cancel and on failure alike.
+
+    `root` is the pinned root (``paths.home().resolve()`` as the run captured
+    it, M4); a live root that is not it stops the run before anything is
+    written, and one that moves mid-run stops it with nothing deleted after.
+    A dry run is the plan's report and writes nothing. `cancel` is asked
+    between files and between steps; a cancelled run reports what it did.
+
+    The report is the plan's §11 fields plus what the run did
+    (`_run_fields`), with ``outcome`` one of ``done``, ``cancelled``,
+    ``failed`` (``error`` says why) or ``root-changed`` (``stopped_at`` says
+    where). A step that fails is listed under ``errors`` and the run goes on.
+    Persisting the report is the caller's (M2)."""
+    root = Path(root)
+    asked = cancel if cancel is not None else (lambda: False)
+    fields = _run_fields(dry_run)
+    p = MigrationPlan(root)
+    try:
+        if not _same_root(root):
+            raise _RootChangedError("start")
+        p = plan(root, cancel=asked)
+        if p.cancelled:
+            fields["outcome"] = CANCELLED
+        elif not dry_run:
+            ex = _Exec(p, asked, fields)
+            try:
+                _execute(ex)
+            finally:
+                fields["campaigns_written"] = len(ex.written)
+        fields["url_subject_keys_kept"] = _url_keys_kept(root)
+    except _RootChangedError as exc:
+        fields["outcome"], fields["stopped_at"] = ROOT_CHANGED, exc.step
+    except Exception as exc:  # noqa: BLE001 -- a failed run still reports (M1)
+        fields["outcome"], fields["error"] = FAILED, f"{type(exc).__name__}: {exc}"[:300]
+    return {**report(p), **fields}

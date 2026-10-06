@@ -168,7 +168,7 @@ def _subdirs(d: Path) -> tuple[list[Path], list[_Bad]]:
     """`(subdirectories of d, entries it could not test)`, each sorted.
 
     A symlinked subdirectory is listed too, so that a rostered directory
-    reached through it can be REPORTED (`_linked`): it is never planned.
+    reached through it can be REPORTED (`linked`): it is never planned.
     Listing through a link is a read; the walk is a fixed depth, so a loop
     cannot run away with it. Each entry is tested on its own: one that cannot
     be (a `loop -> loop` link, a target behind a closed directory) is
@@ -191,7 +191,7 @@ def _subdirs(d: Path) -> tuple[list[Path], list[_Bad]]:
     return [d / n for n in sorted(good)], sorted(bad)
 
 
-def _linked(root: Path, d: Path) -> bool:
+def linked(root: Path, d: Path) -> bool:
     """Whether any component between `root` and `d` (inclusive) is a
     symlink -- or `d` is not under `root` at all. Such a directory may hold
     files outside the pinned root, and a run would unlink them there (M4)."""
@@ -260,7 +260,7 @@ def _dirs_of(surface: Surface, side: str, sroot: Path) -> Iterator[tuple[Path, s
         yield from _version_dirs(sroot, surface.kind)
         return
     # A symlink that is not a directory to `is_dir` (a loop) is still
-    # reported: `_walk` sees it as `_linked`.
+    # reported: `_walk` sees it as `linked`.
     if found.is_dir() or found.is_symlink():
         yield found, None
 
@@ -277,8 +277,8 @@ def _walk(root: Path) -> Iterator[tuple[Surface | None, str, Path, str | None]]:
         for surface in SURFACES.values():
             if side in surface.scopes:
                 for d, bad in _dirs_of(surface, side, sroot):
-                    linked = bad is None and _linked(root, d)
-                    yield surface, scope, d, SYMLINKED if linked else bad
+                    via_link = bad is None and linked(root, d)
+                    yield surface, scope, d, SYMLINKED if via_link else bad
 
 
 def directories(root: Path) -> Iterator[tuple[Surface, str, Path]]:
@@ -460,7 +460,7 @@ def _inherited(surface: Surface, scope: str, d: Path, inh: _Inherits | None
     if side is None or inh is None:
         return
     wdir, prefix, record = side
-    if _linked(inh.root, wdir):
+    if linked(inh.root, wdir):
         return              # the world side is reached through a symlink
     own = assets.names_in(d)[0]
     theirs = assets.names_in(wdir)[0] if wdir.is_dir() else set()
