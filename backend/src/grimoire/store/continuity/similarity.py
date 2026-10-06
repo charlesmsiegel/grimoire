@@ -286,10 +286,17 @@ def body(text: str) -> str:
 
 class Subject:
     """One record as similarity sees it: its identity text and the structure
-    (actors, scenes, reviewed event anchors) it shares with others."""
+    (actors, scenes, reviewed event anchors) it shares with others.
 
-    __slots__ = ("actors", "anchors", "kind", "live", "record", "ref", "scenes", "status",
-                 "text", "title")
+    Its lexical features are built on first use and kept (§25.2): a pool's
+    every pair is scored, and normalizing both texts per pair would make a
+    sweep's string work grow with the pairs rather than the records. They live
+    as long as the subject -- one pool, for one sweep or one examination -- so
+    the memory is the pool times the identity-text clip, and nothing is cached
+    across runs."""
+
+    __slots__ = ("_features", "actors", "anchors", "kind", "live", "record", "ref", "scenes",
+                 "status", "text", "title")
 
     def __init__(self, ref: str, kind: Kind, title: str, status: str, live: bool,
                  text: str, actors: frozenset[str], scenes: frozenset[str],
@@ -304,6 +311,14 @@ class Subject:
         self.scenes = scenes
         self.anchors = anchors
         self.record = record
+        self._features: tuple[frozenset[str], frozenset[str]] | None = None
+
+    def features(self) -> tuple[frozenset[str], frozenset[str]]:
+        """The identity text's body as (tokens, trigrams), built once."""
+        if self._features is None:
+            text = body(self.text)
+            self._features = (tokens(text), trigrams(text))
+        return self._features
 
     def __repr__(self) -> str:
         return f"Subject({self.ref!r})"
@@ -361,13 +376,16 @@ def pool(cid: str, kind: Kind) -> list[Subject]:
 
 
 def lexical(a: Subject, b: Subject) -> dict:
-    """The deterministic signals between two subjects (spec §9.2)."""
-    body_a, body_b = body(a.text), body(b.text)
+    """The deterministic signals between two subjects (spec §9.2). Each
+    subject's token and trigram sets come from `Subject.features`, built once
+    per subject; only the titles are compared afresh, being a few words."""
+    tokens_a, chars_a = a.features()
+    tokens_b, chars_b = b.features()
     return {
         "title_equal": titles_equal(a.title, b.title),
         "slug_equal": slug_equal(a.title, b.title),
-        "tokens": round(jaccard(tokens(body_a), tokens(body_b)), 4),
-        "chars": round(jaccard(trigrams(body_a), trigrams(body_b)), 4),
+        "tokens": round(jaccard(tokens_a, tokens_b), 4),
+        "chars": round(jaccard(chars_a, chars_b), 4),
         "cosine": None,
         "actors": sorted(a.actors & b.actors),
         "scenes": sorted(a.scenes & b.scenes),

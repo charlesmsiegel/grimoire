@@ -13,6 +13,7 @@ sleep.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 
@@ -1173,3 +1174,98 @@ def test_the_suite_switch_keeps_saves_quiet(client):
     assert _save(client, cid, sid, body).status_code == 200
 
     assert _sweeps(client, cid) == []
+
+
+# ------------------------------------------------------- the per-run call bound
+#
+# §25.1 (Slice G Decision 4): a run makes at most one model call per pass and
+# has at most two passes -- its own, and one follow-on carrying every ref the
+# adopters pended before it took them. §25.2: the sweep's work runs on a worker
+# thread, never on the event loop the turn loop shares.
+
+MAP_REF = "thread:mara-s-map"
+
+
+def _map(cid: str, sid: str) -> None:
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "The map turned up in Saltmarch.", sid)
+
+
+@pytest.mark.reconcile
+def test_a_burst_of_adopters_coalesces_into_one_follow_on(client):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _map(cid, sid)
+    _key(client)
+    held = _install(client, _held())
+    first = _refresh(client, cid)
+    held.await_held()
+    try:
+        for pid in (LEDGER_THREAD[0], "recover-the-harbour-ledger", "mara-s-map"):
+            edit = _plot_edit(pid)
+            continuity_routes.schedule_reconcile(client.app, cid, held, edits=[edit],
+                                                 progress=_applied(edit))
+        assert len(client.app.state.runs.for_subject(runs.campaign_subject(cid))) == 1
+    finally:
+        held.release()
+
+    run = _settled(client, cid, first)
+    assert run["state"] == "landed", run
+    assert run["result"]["follow_on"] is True
+    requests = _reconcile_requests(held)
+    assert len(requests) == 2
+    user = requests[1]["messages"][1]["content"]
+    assert TOUCHED in user
+    for title in (LEDGER_THREAD[1], RECOVER_THE_LEDGER["title"], "Mara's map"):
+        assert title in user, title
+    assert client.app.state.runs.take_touched(runs.campaign_subject(cid)) == set()
+
+
+def test_a_capped_sweep_says_so_in_its_run_and_log_row(client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _map(cid, sid)
+    monkeypatch.setattr(reconcile, "RECONCILE_MAX_PAIRS", 1)
+    _install(client, from_entries([_entry(_reply())]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["pairs_capped"] is True
+    assert _reconcile_row(cid)["pairs_capped"] is True
+
+
+def _off_loop() -> bool:
+    """True when the calling thread runs no event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return True
+    return False
+
+
+def _recorder(record: list, real):
+    def recorded(*args, **kwargs):
+        record.append(_off_loop())
+        return real(*args, **kwargs)
+    return recorded
+
+
+def test_sweep_work_runs_off_the_event_loop(client, monkeypatch):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _key(client)
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+    seen: dict[str, list[bool]] = {}
+    for name in ("discover", "persist_found", "select", "build_payload",
+                 "persist_proposals"):
+        seen[name] = []
+        monkeypatch.setattr(reconcile, name, _recorder(seen[name], getattr(reconcile, name)))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert len(_reconcile_requests(fake)) == 1
+    for name, record in seen.items():
+        assert record, f"{name} never ran"
+        assert all(record), f"{name} ran on the event loop"

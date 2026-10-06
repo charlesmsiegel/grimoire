@@ -1606,3 +1606,63 @@ def test_a_malformed_cache_is_overwritten_by_a_sweep_that_found_nothing(cid):
     out = reconcile.persist_found(cid, reconcile.Sweep(_stamp(10), True))
     assert out["written"] is True
     assert not candidates.malformed(cid)
+
+
+# ------------------------------------------------------------- sweep cost
+#
+# §25.1 and §25.2 (Slice G Decisions 5 and 6): a sweep builds each record's
+# identity text once, and a text the provider answers with no direction costs
+# one re-send per sweep, inside the warm limit, and holds back nothing else.
+
+
+def test_a_sweep_builds_each_identity_text_once(cid, s0, monkeypatch):
+    _ledger(cid, s0)
+    _recover(cid, s0)
+    _tithe(cid, s0)
+    _map(cid, s0)
+    commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                             "before the bells stop", "Mara swore it.", s0)
+    calls = {"thread": 0, "commitment": 0}
+    for kind in calls:
+        real = similarity._TEXT[kind]
+
+        def counted(record, _real=real, _kind=kind):
+            calls[_kind] += 1
+            return _real(record)
+
+        monkeypatch.setitem(similarity._TEXT, kind, counted)
+
+    sweep = _sweep(cid)
+
+    assert sweep.pairs_scored > 0
+    assert calls == {"thread": 4, "commitment": 1}
+
+
+def test_a_zero_vector_text_costs_one_resend_per_sweep(cid, s0, monkeypatch):
+    """Decision 5: `vectors.save` never caches a vector with no direction, so a
+    changed ref whose text the provider answers with zeros stays required and
+    is sent again on the next sweep -- once, within the warm limit -- while the
+    other changed ref is embedded, cached and rescored on the first."""
+    _configure()
+    _chores(cid, s0)
+    zero, other = "thread:saltmarch-errand-3", "thread:saltmarch-errand-7"
+    double = FakeEmbeddings(
+        vector_for=lambda t: [0.0, 0.0] if "Saltmarch errand 3\n" in t else [1.0, 0.0])
+    monkeypatch.setattr(similarity, "_CLIENT", double)
+    warmed = _embedded(cid)                     # caches every text but the zero one
+    _persisted(cid, warmed)
+    plot.set_movement(cid, "saltmarch-errand-3", "", "advanced", "Errand 3 went astray.", s0)
+    plot.set_movement(cid, "saltmarch-errand-7", "", "advanced", "Errand 7 reached the gate.",
+                      s0)
+    texts = {s.ref: s.text for s in similarity.pool(cid, "thread")}
+
+    sweeps = []
+    for stamp in ("00000000000000000020-b", "00000000000000000030-c"):
+        before = len(double.calls)
+        sweeps.append(_embedded(cid, full=False, stamp=stamp))
+        sent = [text for call in double.calls[before:] for text in call]
+        assert sent.count(texts[zero]) == 1, stamp
+        assert len(sent) <= reconcile.RECONCILE_WARM_LIMIT
+    assert other in sweeps[0].rescored
+    assert zero not in sweeps[0].rescored
+    assert vectors.load(_vector_space(), [texts[zero]]) == {}

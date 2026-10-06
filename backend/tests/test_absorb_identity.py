@@ -14,6 +14,7 @@ absorbed scene), never the one being absorbed.
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import json
 import time
@@ -832,3 +833,31 @@ def test_identity_meter_files_under_its_own_task(client, scene):
 
     tasks = [r.get("task") for r in store.usage.calls(campaign=cid)]
     assert "continuity-identity" in tasks
+
+
+def test_the_identity_examination_runs_off_the_event_loop(client, scene, monkeypatch):
+    """§25.2: the examination reads the ledgers and scores pairs, so it runs on
+    a worker thread rather than on the event loop the turn loop shares."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _assert_lexical_candidate(cid, sid, "thread", RECOVER_THE_LEDGER, "thread:find-the-ledger")
+    _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+         _decisions({"row": "r1", "decision": "new"}))
+    seen: list[bool] = []
+    real = identity.examine
+
+    def recorded(*args, **kwargs):
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            seen.append(True)
+        else:
+            seen.append(False)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(identity, "examine", recorded)
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["counts"]["examined"] == 1
+    assert seen == [True]
