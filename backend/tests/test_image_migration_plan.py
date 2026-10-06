@@ -466,3 +466,117 @@ def test_dry_run_writes_nothing_but_its_report(tmp_path):
     assert json.loads(json.dumps(rep)) == rep
     assert rep["legacy_files"] >= 3 and rep["bytes_before"] > 0
     assert rep["bytes_reclaimed"] == rep["bytes_before"] - rep["bytes_after"]
+
+
+# ---- fix round 1 --------------------------------------------------------------
+
+_SIDECARS = ("descriptions.json", "focus.json", "subjects.json")
+
+
+def test_sidecars_are_never_files_of_the_inventory():
+    """`descriptions.json`, `focus.json` and `subjects.json` sit beside the
+    images, world-side and campaign-side; none of them is an occurrence's file
+    or an untouched one -- even when a picture's name globs it."""
+    wid, wroot, char, wchar = _world()
+    _cid, croot = _campaign(wid)
+    cchar = assets.version_dir(croot, char, "default")
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body="Come in.")
+    gdir = assets.version_dir(wroot, gid, "default", base="greetings")
+    cgdir = assets.version_dir(croot, gid, "default", base="greetings")
+    clib = croot / "assets" / "images"
+    for d in (wchar, cchar, gdir, cgdir, clib, wroot / "assets" / world_images.DIRNAME):
+        _legacy(d, "focus.png", _png(1))
+        _legacy(d, "gallery_1.png", _png(2))
+        _sidecar(d, "descriptions.json", {"gallery_1": "One."})
+        _sidecar(d, "focus.json", {"avatar": 20})
+        _sidecar(d, "subjects.json", {"gallery_1": [char]})
+    occs = _occurrences()
+    assert not [o for o in occs if o.path is not None and o.path.name in _SIDECARS]
+    rep = image_migration.report(_plan())
+    assert not [u for u in rep["untouched"] if u["path"].endswith(_SIDECARS)]
+    assert rep["untouched"] == []
+    assert rep["legacy_files"] == 12
+
+
+def test_a_symlinked_directory_is_reported_and_never_planned(tmp_path_factory):
+    """A rostered directory reached through a symlink may hold files outside
+    the pinned root, where a run would unlink them: it is untouched."""
+    wid, wroot, char, wchar = _world()
+    _cid, croot = _campaign(wid)
+    outside = tmp_path_factory.mktemp("outside")
+    lib_target = outside / "images"
+    _legacy(lib_target, "harbour.png", _png(1))
+    chars_target = outside / "characters"
+    _legacy(chars_target / char / "assets" / "default", "avatar.png", _png(2))
+    lib = wroot / "assets" / world_images.DIRNAME
+    lib.parent.mkdir(parents=True, exist_ok=True)
+    lib.symlink_to(lib_target, target_is_directory=True)
+    (croot / "characters").symlink_to(chars_target, target_is_directory=True)
+    own = _legacy(wchar, "avatar.png", _png(3))
+
+    walked = {d for _s, _scope, d in image_surfaces.directories(_root())}
+    assert lib not in walked
+    assert assets.version_dir(croot, char, "default") not in walked
+    plan = _plan()
+    assert [i.occurrence.path for i in plan.items] == [own]
+    untouched = _untouched(image_migration.report(plan))
+    assert untouched[lib.relative_to(_root()).as_posix()] == "symlinked-directory"
+    assert untouched[(croot / "characters" / char / "assets" / "default").relative_to(
+        _root()).as_posix()] == "symlinked-directory"
+
+
+def test_a_plan_cancelled_while_hashing_is_empty(monkeypatch):
+    _wid, _wroot, _char, wchar = _world()
+    _legacy(wchar, "avatar.png", _png(1))
+    _legacy(wchar, "gallery_1.png", _png(2))
+    _legacy(wchar, "gallery_2.png", b"garbage")
+    hashed = []
+    real = image_store.prepare
+
+    def counting(data, ext):
+        hashed.append(ext)
+        return real(data, ext)
+
+    monkeypatch.setattr(image_store, "prepare", counting)
+    plan = image_migration.plan(_root(), cancel=lambda: bool(hashed))
+    assert hashed                      # cancelled mid-hash, not before it
+    assert plan.cancelled
+    assert (plan.items, plan.groups, plan.untouched, plan.metadata) == ([], {}, [], [])
+    assert image_migration.report(plan)["legacy_files"] == 0
+
+
+def test_a_plan_reads_its_pinned_root_not_the_live_one(tmp_path_factory, monkeypatch):
+    """M4: the root captured at the start is the only tree a plan reads, so
+    a data-dir move mid-run changes nothing -- and writes nothing there."""
+    _wid, wroot, char, wchar = _world()
+    assets.put_image(wroot, char, "default", "avatar", _png(1), "png")
+    _legacy(wchar, "avatar.png", _png(1))           # beside its own placement
+    _legacy(wchar, "gallery_1.png", _png(2))
+    _sidecar(wchar, "descriptions.json", {"gallery_1": "One."})
+    stored = image_store.ingest(_png(3, compress_level=0), "png")
+    _legacy(wchar, "gallery_2.png", _png(3, compress_level=9))
+    root = _root()
+    before = image_migration.report(image_migration.plan(root))
+    elsewhere = tmp_path_factory.mktemp("elsewhere")
+    monkeypatch.setenv("GRIMOIRE_HOME", str(elsewhere))
+    assert paths.home().resolve() != root
+    after_plan = image_migration.plan(root)
+    assert image_migration.report(after_plan) == before
+    assert after_plan.groups[stored.id].existing
+    assert list(elsewhere.rglob("*")) == []
+
+
+def test_campaign_greeting_subjects_are_not_folded():
+    """M5: subjects are world-scoped; a campaign greeting's `subjects.json`
+    is folded nowhere and previews nothing under a campaign scope."""
+    wid, wroot, char, _wchar = _world()
+    _cid, croot = _campaign(wid)
+    gid = greetings.create_greeting(wroot, "The Gala", char, "default", body="Come in.")
+    cgdir = assets.version_dir(croot, gid, "default", base="greetings")
+    _legacy(cgdir, "embed-1.png", _png(1))
+    assets.put_in(cgdir, "embed-2", _png(2), "png")
+    _sidecar(cgdir, "subjects.json", {"embed-1": [char], "embed-2": [char]})
+    assert not [o for o in _occurrences() if o.sidecar == "subjects.json"]
+    plan = _plan()
+    assert all(g.subjects == {} for g in plan.groups.values())
+    assert image_migration.report(plan)["subject_disagreements"] == []

@@ -599,7 +599,7 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
     is no way around it. `ext` is used only when the bytes do not sniff as one
     of the four served formats; such bytes are stored verbatim under it with
     opaque identity, as is a container that sniffs but does not parse
-    (`_identity`).
+    (`identity_of`).
     """
     _no_reentry("ingest")
     p = prepare(data, ext)

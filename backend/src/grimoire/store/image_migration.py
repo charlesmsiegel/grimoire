@@ -183,7 +183,7 @@ def _manifest(plan: MigrationPlan, occ: Occurrence) -> None:
     assert occ.path is not None
     try:
         raw = json.loads(occ.path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError, RecursionError):
         _untouch(plan, occ.path, "unreadable-manifest")
         return
     fmt = raw.get("format") if isinstance(raw, dict) else None
@@ -341,7 +341,7 @@ def _sidecar(cache: dict[Path, dict], path: Path) -> dict:
     if got is None:
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except (OSError, ValueError, RecursionError):
             raw = {}
         got = cache[path] = raw if isinstance(raw, dict) else {}
     return got
@@ -366,7 +366,8 @@ def _sources(plan: MigrationPlan) -> _Sources:
         occ = item.occurrence
         out.texts.setdefault(item.image_id, []).append(
             (_label(plan, occ), occ.dir / assets.DESCRIPTIONS_FILE, occ.name))
-        if occ.kind == "greetings":
+        if occ.kind == "greetings" and occ.scope.startswith("world:"):
+            # A campaign greeting's subjects are never folded (M5).
             out.subjects.setdefault(item.image_id, []).append(
                 (occ.scope, occ.dir / image_subjects.SUBJECTS_FILE, occ.name))
     for occ, image_id in plan.metadata:
@@ -488,24 +489,28 @@ def _subjects(plan: MigrationPlan, sources: _Sources) -> None:
 
 # ---- plan and report ------------------------------------------------------
 
+def _cancelled(p: MigrationPlan) -> MigrationPlan:
+    """An empty plan that says it was cancelled: nothing gathered before the
+    cancel survives, so nothing half-walked can be mistaken for the store."""
+    return MigrationPlan(p.root, cancelled=True)
+
+
 def plan(root: Path, *, cancel: Callable[[], bool] | None = None) -> MigrationPlan:
     """The migration plan for store root `root` (module docstring).
 
     `root` is the caller's pinned root (M4); nothing is resolved through
     `paths.home()`. `cancel` is asked between occurrences and between files:
-    once it answers True the plan stops where it is, says ``cancelled`` and
-    must not be run. Reads only -- writes nothing anywhere."""
+    once it answers True the plan is empty, says ``cancelled`` and must not
+    be run. Reads only -- writes nothing anywhere."""
     asked = cancel if cancel is not None else (lambda: False)
     out = MigrationPlan(Path(root))
     walked = _inventory(out, asked)
     if walked is None:
-        out.cancelled = True
-        return out
+        return _cancelled(out)
     out.legacy_files = len(walked[0])
     files, meta = _aliases(out, *walked)
     if not _hash(out, files, asked):
-        out.cancelled = True
-        return out
+        return _cancelled(out)
     _groups(out)
     _metadata(out, meta)
     sources = _sources(out)
