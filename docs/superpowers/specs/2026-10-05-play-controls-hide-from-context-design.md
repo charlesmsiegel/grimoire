@@ -107,6 +107,7 @@ two functions.
 | `_assemble` content inputs: voice examples (`history[-4:]`), `recent_text` (world info, mechanics, art catalogue, recall), `birthday_text`, `speaker.nominate`, `length_drift.measure_contributions` | computed from `without_excluded(history)`; the index-based steps (`pins.active`, `actor.observed_history`) still run on the full list first |
 | Speaker selector — `character_turns._selector_messages` | last 12 *in-context* posts |
 | Speaker-order planner — `character_turns._plan`, `_follow_on` | plans over in-context posts only, so a hidden post neither names a speaker nor counts as one having spoken |
+| World-info activation — the `posts` `_assemble` hands `world_state._world_info` | a hidden post is not scanned, so its words wake no entry (transcript indices are kept for timed entries) |
 | Image-slot picker — `context/story._chosen_images` | a hidden post takes no image slot; the slots go to the most recent in-context posts |
 | `chronicle.transcript_text` (audit, absorb, rolling summary, scene-break, dossiers) | filters by default; `include_excluded=True` for the markdown and plain-text exports |
 | Absorb evidence — `store.absorb.materialize(..., messages)` and `absorb/routing.speaker_index` | given the same filtered list the model was shown, so a quote from an excluded post does not check out as evidence |

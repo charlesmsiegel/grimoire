@@ -189,10 +189,11 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
     packer tiers -- see the comment at the return statement.
 
     `posts` are the transcript's own `(index, text)` pairs, director notes
-    included, and `seed` is this turn's un-persisted input (an opener's prompt,
-    a director's note); `activation.run` reads them per entry window. `present`
-    is the base present set, ref -> reason, built by the caller; the engine
-    grows it structurally and by activation. `recall_text` is the joined scan
+    included and posts hidden from context left out, and `seed` is this
+    turn's un-persisted input (an opener's prompt, a director's note);
+    `activation.run` reads them per entry window. `present` is the base present
+    set, ref -> reason, built by the caller; the engine grows it structurally
+    and by activation. `recall_text` is the joined scan
     window the similarity query has always used.
 
     Two different exclusions meet here, deliberately spelled apart. `exclude` is

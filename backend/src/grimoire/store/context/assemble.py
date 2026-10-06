@@ -340,8 +340,9 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
     # reason cites. An NPC call reads only what that NPC observed, and
     # `observed_history` returns elements of the list it was handed, so the
     # filter is by identity and keeps each post's own index rather than
-    # renumbering the observed tail from 0.
-    observed = {id(m) for m in history}
+    # renumbering the observed tail from 0. A post hidden from context is not
+    # read: its words must not wake an entry the prompt then carries.
+    observed = {id(m) for m in visible}
     posts = [(i, m["content"]) for i, m in enumerate(full_history) if id(m) in observed]
     # Birthday names belong to the current question. World-info activation
     # deliberately scans several turns, but an earlier name must not widen a
