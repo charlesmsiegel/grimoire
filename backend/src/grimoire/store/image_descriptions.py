@@ -303,7 +303,15 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
     # with it: an image lifecycle event holds the same lock while it moves
     # entries around, so a check made outside it could validate a slot that has
     # already been promoted away.
-    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
+    #
+    # And under the OTHER directory's sidecar lock too -- the one `also_clear`
+    # or `fallback_dir` names -- taken with this one, sorted, up front. Taken
+    # inside it instead, a save editing world art through a campaign and one
+    # crossing the same two directories the other way would each hold one and
+    # wait for the other; with striped locks, two unrelated directories can be
+    # those two.
+    others = [p for p in (also_clear, fallback_dir) if p is not None]
+    with assets.sidecar_locks_held(*[(p, DESCRIPTIONS_FILE) for p in (d, *others)]):
         if name not in (_names(d) if names is None else names):
             raise ValueError(f"unknown image(s): [{name!r}]")
         text = str(text)

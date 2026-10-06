@@ -92,6 +92,16 @@ Ordering rules (deadlock avoidance):
 - image ingest/GC lock -> image-object stripe lock, never reversed
   (``store/image_store.py``). Both are leaves: either may be taken under a
   campaign lock, and nothing takes a campaign lock while holding one.
+- The image locks as a whole, outermost first: campaign ->
+  ``image_collection_job_lock`` -> ``image_collection_lock`` -> image NAME
+  stripes -> image SIDECAR stripes -> ingest/GC -> object stripe. The name and
+  sidecar families are striped (``IMAGE_NAME_STRIPES`` each), so two unrelated
+  names can share a lock; that is safe only because a holder of several stripes
+  of one family takes them sorted and deduplicated, all up front
+  (``image_name_locks`` / ``image_sidecar_locks``), and because a stripe taken
+  while another is already held without being part of that up-front set is
+  taken NON-blocking (``assets._locks_if_free``: the read-side promotion
+  recovery and a nested heal).
 
 The lock is an ``RLock`` so a caller can compose lower-level mutators —
 ``audit.apply_delta`` calls ``sheets.set_field`` under an already-held lock —
@@ -119,10 +129,13 @@ Spec: docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md
 
 from __future__ import annotations
 
+import hashlib
 import os
 import threading
 import time
+from collections.abc import Iterable
 from contextlib import ExitStack, contextmanager
+from pathlib import Path
 from typing import Literal
 
 from . import paths, proclock
@@ -526,10 +539,16 @@ LOCK_TIMEOUT = 30.0
 
 
 class StoreBusy(Exception):
-    """Another *process* holds a store lock. One handler maps this to HTTP 409."""
+    """A store lock stayed held past ``LOCK_TIMEOUT``. One handler maps this to
+    HTTP 409.
+
+    The message does not say who holds it, because nothing here knows: the
+    holder may be another process, a long write in this one, or -- for the
+    striped image locks -- a write to an unrelated name that shares a stripe.
+    """
 
     def __init__(self, name: str, what: str = "resource"):
-        super().__init__(f"another grimoire process is editing this {what}")
+        super().__init__(f"this {what} is busy; try again in a moment")
         self.name = name
 
 
@@ -769,6 +788,107 @@ def image_ingest_gc_lock() -> _ProcessScopedLock:
             lock = _image_ingest_gc_locks[key] = _ProcessScopedLock(
                 "image-store", "ingest-gc", StoreBusy)
         return lock
+
+
+#: Stripes per family of the per-name image locks (`image_name_lock`,
+#: `image_sidecar_lock`). Bounded for the reason `IMAGE_OBJECT_STRIPES` is: a
+#: lock per name would leave one lock file per image name ever written.
+IMAGE_NAME_STRIPES = 256
+_NAME_DOMAIN = "image-names"
+_SIDECAR_DOMAIN = "image-sidecars"
+_image_stripe_locks: dict[tuple[str, str, int], StripeLock] = {}
+#: How many stripe acquisitions (either family, reentrant ones included) the
+#: current thread holds -- what `image_stripes_held` answers from.
+_stripe_holds = threading.local()
+
+
+class StripeLock(_ProcessScopedLock):
+    """A `_ProcessScopedLock` that keeps a per-thread count of its holds, so a
+    caller can ask whether this thread already holds ANY image stripe before it
+    decides to wait on one (`image_stripes_held`)."""
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        ok = super().acquire(blocking, timeout)
+        if ok:
+            _stripe_holds.n = getattr(_stripe_holds, "n", 0) + 1
+        return ok
+
+    def release(self) -> None:
+        owned = self._is_owned()
+        try:
+            super().release()
+        finally:
+            if owned:
+                _stripe_holds.n -= 1
+
+
+def image_stripes_held() -> bool:
+    """Whether the current thread holds any image name or sidecar stripe.
+
+    A stripe this thread takes while already holding one, outside an up-front
+    sorted set, could be BELOW the one it holds -- the order that wedges against
+    a holder going the other way. Callers that can be reached that way (the
+    stranded-promotion heal) ask this and then never wait."""
+    return getattr(_stripe_holds, "n", 0) > 0
+
+
+def _image_stripe(d: Path, key: str) -> int:
+    """The stripe of `key` (an image name or a sidecar filename) in directory
+    `d`: the resolved, case-normalised directory and the case-FOLDED key, so a
+    name and its case variant -- one file on a case-insensitive filesystem --
+    are always one lock, and the same directory spelled two ways is one too."""
+    where = os.path.normcase(str(Path(d).resolve()))
+    digest = hashlib.sha256(
+        f"{where}\0{key.casefold()}".encode("utf-8", "surrogateescape")).digest()
+    return int.from_bytes(digest[:8], "big") % IMAGE_NAME_STRIPES
+
+
+def _stripe_lock(domain: str, stripe: int) -> StripeLock:
+    key = (_store_key(), domain, stripe)
+    with _registry_guard:
+        lock = _image_stripe_locks.get(key)
+        if lock is None:
+            lock = _image_stripe_locks[key] = StripeLock(
+                domain, f"stripe-{stripe:03d}", StoreBusy)
+        return lock
+
+
+def _stripe_set(domain: str, keyed: Iterable[tuple[Path, str]]) -> list[StripeLock]:
+    return [_stripe_lock(domain, s) for s in sorted({_image_stripe(d, k) for d, k in keyed})]
+
+
+def image_name_lock(d: Path, name: str) -> StripeLock:
+    """Serialize writes to logical image `name` in directory `d`
+    (`store.assets._image_lock`): every extension, its placement and its
+    legacy siblings.
+
+    Process-scoped, so a second server on the same store serializes too, and
+    striped (`IMAGE_NAME_STRIPES`, keyed by `_image_stripe`), so unrelated
+    names may share a stripe and wait on each other -- a spurious wait, never a
+    lost update. Reentrant. A thread holding one name stripe must not BLOCK on
+    another outside one up-front sorted set: take several through
+    `image_name_locks`."""
+    return _stripe_lock(_NAME_DOMAIN, _image_stripe(d, name))
+
+
+def image_name_locks(d: Path, names: Iterable[str]) -> list[StripeLock]:
+    """The name stripes of `names` in `d`, deduplicated and in stripe order --
+    the one order every holder of several takes them in, whatever the names."""
+    return _stripe_set(_NAME_DOMAIN, [(d, n) for n in names])
+
+
+def image_sidecar_lock(d: Path, filename: str) -> StripeLock:
+    """Serialize read-modify-writes of sidecar `filename` in `d`
+    (`store.assets.sidecar_lock`). A family of its own, taken AFTER any name
+    stripe and never before one; striped and process-scoped like
+    `image_name_lock`."""
+    return _stripe_lock(_SIDECAR_DOMAIN, _image_stripe(d, filename))
+
+
+def image_sidecar_locks(keyed: Iterable[tuple[Path, str]]) -> list[StripeLock]:
+    """The sidecar stripes of `(d, filename)` pairs, deduplicated and in stripe
+    order, for a caller that rewrites sidecars in more than one directory."""
+    return _stripe_set(_SIDECAR_DOMAIN, list(keyed))
 
 
 def world_actor_lock(wid: str) -> _ProcessScopedLock:

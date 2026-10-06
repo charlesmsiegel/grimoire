@@ -1354,12 +1354,20 @@ def _replace_gallery(root: Path, cid: str, vid: str, fresh: list[tuple[int, str]
     # Before the hold: `list_images`, which also runs the read-side repairs.
     covered = set(_gallery_names(assets.list_images(root, cid, vid))) | set(wanted)
     while True:
-        with assets._image_locks_held(d, *sorted(covered)):
+        # The sidecar lock with them, up front (names, then sidecar): every
+        # caption drop below is then a reentrant acquisition that cannot time
+        # out, so a `StoreBusy` stops this before its first write or not at
+        # all -- never between a slot's new image and the drop of the old
+        # image's caption, which a re-run would find nothing left to redo.
+        with (assets._image_locks_held(d, *sorted(covered)),
+              assets.sidecar_lock(d, assets.DESCRIPTIONS_FILE)):
             # Under the hold: `list_in`, which repairs nothing. `list_images`
             # heals a stranded promotion, and that takes {avatar, a gallery
             # slot, promote-tmp} BLOCKING -- while these gallery locks are held,
             # against a promotion holding `avatar` and waiting for one of them,
-            # that is an ABBA wedge.
+            # that is an ABBA wedge. (A heal reached under a held stripe no
+            # longer waits -- `assets._heal_locks` -- but it would only ever
+            # skip here, so the listing that repairs stays outside.)
             existing = _gallery_names(assets.list_in(d))
             if set(existing) <= covered:
                 _replace_held_gallery(root, cid, vid, d, existing, wanted)

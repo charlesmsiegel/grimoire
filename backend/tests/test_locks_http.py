@@ -32,7 +32,11 @@ def test_store_busy_becomes_a_409(client, monkeypatch, tmp_path):
     monkeypatch.setattr(store.scenes, "create_scene", busy)
     r = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S1"})
     assert r.status_code == 409
-    assert "another grimoire process" in r.json()["detail"]
+    # Names what is busy and not who holds it: the timeout cannot tell another
+    # process from a long write in this one (or, for the striped image locks,
+    # from an unrelated name sharing the stripe).
+    assert "this campaign is busy" in r.json()["detail"]
+    assert "another" not in r.json()["detail"]
 
 
 def test_module_edit_busy_becomes_a_409_too(client, monkeypatch, tmp_path):
@@ -46,7 +50,7 @@ def test_module_edit_busy_becomes_a_409_too(client, monkeypatch, tmp_path):
     monkeypatch.setattr(store.module_edit, "create_module", busy)
     r = client.post("/api/modules", json={"name": "Whatever"})
     assert r.status_code == 409
-    assert "another grimoire process" in r.json()["detail"]
+    assert "this module library is busy" in r.json()["detail"]
 
 
 def test_startup_survives_a_busy_recover(monkeypatch, tmp_path):

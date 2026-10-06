@@ -22,13 +22,12 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import threading
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager, suppress
 from pathlib import Path
 from typing import Literal, overload
 
-from . import atomic, image_hash, image_refs, image_store, statcache
+from . import atomic, image_hash, image_refs, image_store, locks, statcache
 from .paths import safe_id
 
 AVATAR = "avatar"
@@ -104,11 +103,7 @@ def version_dir(root: Path, cid: str, vid: str, base: str = "characters") -> Pat
     return _dir(root, cid, vid, base)
 
 
-_registry_guard = threading.Lock()
-_image_locks: dict[str, threading.RLock] = {}
-
-
-def _image_lock(d: Path, name: str) -> threading.RLock:
+def _image_lock(d: Path, name: str) -> locks.StripeLock:
     """Serialize writes to one logical image (all extensions of `name` in `d`).
 
     Cleanup is inherently multi-step -- publish the new extension, then remove
@@ -119,19 +114,19 @@ def _image_lock(d: Path, name: str) -> threading.RLock:
     the exact outcome the write-before-cleanup ordering exists to prevent
     (PR review). Serializing the sequence is what actually closes it.
 
-    In-process only, like every other lock in this app; two processes on one
-    synced store still race, as they do everywhere else.
+    `locks.image_name_lock`: process-scoped (a second server on the store
+    waits too), case-folded (``Gallery_1`` and ``gallery_1`` are one file on a
+    case-insensitive filesystem, so they are one lock), and striped -- an
+    unrelated name may share the stripe, which is a spurious wait and never a
+    lost update, but does mean a thread holding this lock must not BLOCK on
+    another name's outside one up-front set (`_image_locks_held`).
 
     Reentrant, matching ``locks.campaign_lock``: a non-reentrant lock turns
     any future same-thread nesting (a delete invoked from inside a put, say)
-    into a deadlock, which is a worse failure than the race it guards.
-
-    Get-or-create under a guard: a plain ``if key not in ...`` is a
-    check-then-act race that hands two first-ever callers different locks.
+    into a deadlock, which is a worse failure than the race it guards. Raises
+    ``StoreBusy`` past ``LOCK_TIMEOUT``.
     """
-    key = str(d / name)
-    with _registry_guard:
-        return _image_locks.setdefault(key, threading.RLock())
+    return locks.image_name_lock(d, name)
 
 
 @contextmanager
@@ -142,38 +137,27 @@ def _image_locks_held(d: Path, *names: str):
     slot), so it has to hold both for the whole swap or an upload can land in
     the middle of it.
 
-    Sorted acquisition is discipline, not a fix for a cycle that exists today:
-    every other caller takes exactly one image lock, and two promotions of
-    different names share only ``avatar`` -- neither ever waits on the other's
-    gallery lock -- so nothing can currently deadlock whatever order is used
-    (PR review corrected the original claim here). It is the *second*
-    multi-lock caller that would introduce a cycle, and a fixed global order
-    means that caller is safe by construction rather than by review.
+    Taken as ONE set, all up front: the names' stripes, deduplicated (two names
+    on one stripe are one acquisition) and in stripe order
+    (`locks.image_name_locks`). Stripe order, not name order, because the
+    stripe is the lock: two holders sorting by name could take the same two
+    stripes in opposite orders. One global order is what makes every holder of
+    several safe by construction rather than by review, and sorting the WHOLE
+    set, never appending to a set already held, is the property that has to
+    survive future edits.
 
-    That second caller already exists: ``_heal_stranded_promotion`` takes
-    ``{promote-tmp, avatar, gallery_N}``, and can be entered NESTED --
-    ``delete_image`` of the avatar holds ``avatar`` and looks the slot up
-    through ``image_path``. No cycle, because every set sorts as a whole and
-    contains ``avatar``. Sorting the whole set, not appending to a held set,
-    is the property that has to survive future edits. ``promote_image`` runs
-    both repairs before taking its own locks, and the read-side promotion
-    recovery (``_recover_promotion``), which ``image_path`` enters for ANY
-    name, never waits at all (``_locks_if_free``): ``delete_image`` of a
-    gallery slot holds that slot while it looks, and a blocking acquisition
-    of ``avatar`` there could wedge against a promotion of that very slot,
-    holding ``avatar`` and waiting for the slot.
-
-    What sorting cannot do is serialize names that differ only by case:
-    ``_image_lock`` keys on the exact string, so on a case-insensitive
-    filesystem ``gallery_1`` and ``Gallery_1`` are one file behind two locks.
-    That is this module's own pre-existing gap -- two ``put_image`` calls
-    spelled that way have raced since the lock was added in #233 -- not
-    something promotion introduces, and closing it means re-keying every caller
-    (PR review).
+    A stripe this thread takes while already holding another, outside such a
+    set, is taken non-blocking (`_locks_if_free`): the read-side promotion
+    recovery (`_recover_promotion`), which every writer and `image_path` enter
+    under whatever their caller holds, and a heal reached nested
+    (`_heal_stranded_promotion` from ``delete_image`` of the avatar, which looks
+    the slot up while holding it, or from a listing under a sidecar lock).
+    Blocking there could wedge against a holder that took the same two stripes
+    the other way round.
     """
     with ExitStack() as stack:
-        for n in sorted(set(names)):
-            stack.enter_context(_image_lock(d, n))
+        for lock in locks.image_name_locks(d, names):
+            stack.enter_context(lock)
         yield
 
 
@@ -267,7 +251,9 @@ def _heal_stranded_promotion(d: Path) -> None:
         slot = _heal_slot(d)
         # Both choices above were read unlocked, so lock every name they name --
         # in the module's one global order -- and only then act on them.
-        with _image_locks_held(d, _PROMOTE_TMP, AVATAR, slot):
+        with _heal_locks(d, (_PROMOTE_TMP, AVATAR, slot)) as held:
+            if not held:
+                return  # busy, nested or not lockable: the next scan retries
             target = d / f"{slot}{stray.suffix}"
             # Recompute the decision while holding the names it depends on: the
             # temp may have been rescued by another thread, an avatar may have
@@ -282,6 +268,34 @@ def _heal_stranded_promotion(d: Path) -> None:
                     return  # read-only store or a held file; the next scan retries
                 continue  # progress: only lost races spend the retry budget
         retries -= 1
+
+
+@contextmanager
+def _heal_locks(d: Path, names: tuple[str, ...]):
+    """Yield whether the heal holds `names`' stripes.
+
+    From a thread holding no image stripe, it waits for them like any writer
+    (`_image_locks_held`). Reached NESTED -- ``delete_image`` of the avatar
+    looks the slot up while holding it, and a greeting's subject save lists its
+    pictures under the sidecar lock -- it never waits (`_locks_if_free`): the
+    set it needs can sort below a stripe the thread already holds, and waiting
+    there wedges against a holder taking the two the other way round.
+
+    Either way a failure to lock (busy past the timeout, an unusable lock
+    directory) is "not now" rather than an error: the heal runs from reads,
+    and the next scan retries."""
+    if locks.image_stripes_held():
+        with _locks_if_free(locks.image_name_locks(d, names)) as free:
+            yield free
+        return
+    with ExitStack() as stack:
+        try:
+            stack.enter_context(_image_locks_held(d, *names))
+        except (locks.StoreBusy, OSError):
+            held = False
+        else:
+            held = True
+        yield held
 
 
 def _heal_slot(d: Path) -> str:
@@ -1161,7 +1175,7 @@ def _clear_focus_in(d: Path) -> None:
         _unlink_focus_file(d)
 
 
-def sidecar_lock(d: Path, filename: str) -> threading.RLock:
+def sidecar_lock(d: Path, filename: str) -> locks.StripeLock:
     """Serialize read-modify-writes of one sidecar file.
 
     A sidecar is rewritten whole, so every writer of it needs the SAME lock or
@@ -1175,12 +1189,25 @@ def sidecar_lock(d: Path, filename: str) -> threading.RLock:
     being rewritten: a save for `gallery_1` and a promotion of `gallery_2` both
     rewrite the whole mapping.
 
-    In-process only, like every other lock in this module; two processes on one
-    synced store still race, as they do everywhere else here. Reentrant, so a
-    caller already holding it (promotion edits the sidecar inside its own image
-    locks) pays nothing.
+    `locks.image_sidecar_lock`: a family of its own, taken after any name lock
+    and never before one; process-scoped, case-folded and striped like the
+    name locks (`_image_lock`). Reentrant, so a caller already holding it
+    (promotion edits the sidecar inside its own image locks) pays nothing. A
+    caller rewriting the sidecars of two directories takes both up front
+    (`sidecar_locks_held`), never the second inside the first.
     """
-    return _image_lock(d, f"\x00sidecar\x00{filename}")
+    return locks.image_sidecar_lock(d, filename)
+
+
+@contextmanager
+def sidecar_locks_held(*keyed: tuple[Path, str]):
+    """Hold the sidecar locks of several ``(directory, filename)`` pairs at
+    once: deduplicated and in stripe order, all up front, as
+    `_image_locks_held` holds names -- the only safe way to hold two."""
+    with ExitStack() as stack:
+        for lock in locks.image_sidecar_locks(keyed):
+            stack.enter_context(lock)
+        yield
 
 
 def _read_sidecar(d: Path, filename: str) -> dict:
@@ -1287,13 +1314,20 @@ def delete_image(root: Path, cid: str, vid: str, name: str, base: str = "charact
     # publish replacement bytes, which reads here as "the delete failed" and
     # leaves the removed picture's sentence captioning the new one. Reentrant,
     # so `delete_in` taking it again inside costs nothing.
-    with _image_locks_held(d, name):
+    #
+    # The sidecar lock is taken with it, up front (name, then sidecar: the
+    # order everything takes them in), and the crop is cleared inside the same
+    # hold. Both locks can time out (`StoreBusy`), and one that did between the
+    # unlink and the caption drop would strand the sentence for good: a re-run
+    # finds no image to delete and never reaches the drop, and the next upload
+    # under this name inherits it.
+    with _image_locks_held(d, name), sidecar_lock(d, DESCRIPTIONS_FILE):
         _recover_promotion(d)
         delete_in(d, name)
         if image_path(root, cid, vid, name, base) is None:
             drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
-    if name == AVATAR:
-        clear_focus(root, cid, vid, base)
+        if name == AVATAR:
+            clear_focus(root, cid, vid, base)
 
 
 def delete_version_images(root: Path, cid: str, vid: str, base: str = "characters") -> None:
@@ -1515,18 +1549,35 @@ def _journal_ok(journal: dict) -> str | None:
 
 
 @contextmanager
-def _locks_if_free(locks: list[threading.RLock]):
-    """Yield whether every lock in `locks` was free to take, holding them if
+def _locks_if_free(wanted: list[locks.StripeLock]):
+    """Yield whether every lock in `wanted` was free to take, holding them if
     so. Never waits: a read that repairs must not block behind the write it
     would repair, nor deadlock against a caller already holding one slot's
-    lock (`delete_image` looks its slot up while holding it)."""
-    held: list[threading.RLock] = []
+    lock (`delete_image` looks its slot up while holding it) -- a stripe taken
+    here may sort below one the caller holds, which only a non-blocking attempt
+    makes safe.
+
+    Never raises either: a lock held elsewhere and an `OSError` from the lock
+    file (an unusable lock directory) both mean "not free", and the repair is
+    left for a later read. A lock listed twice is taken once."""
+    unique = list({id(lk): lk for lk in wanted}.values())
+    held: list[locks.StripeLock] = []
     try:
-        for lk in locks:
-            if not lk.acquire(blocking=False):
+        for lk in unique:
+            try:
+                got = lk.acquire(blocking=False)
+            except OSError:
+                got = False
+            if not got:
                 break
             held.append(lk)
-        yield len(held) == len(locks)
+        free = len(held) == len(unique)
+    except BaseException:
+        for lk in reversed(held):
+            lk.release()
+        raise
+    try:
+        yield free
     finally:
         for lk in reversed(held):
             lk.release()
@@ -1587,8 +1638,8 @@ def _recover_promotion(d: Path) -> None:
             if free and image_refs.read_journal(d) == journal:
                 image_refs.clear_journal(d)
         return
-    locks = [_image_lock(d, n) for n in sorted({name, AVATAR})]
-    with _locks_if_free([*locks, sidecar_lock(d, DESCRIPTIONS_FILE)]) as free:
+    names = locks.image_name_locks(d, {name, AVATAR})
+    with _locks_if_free([*names, sidecar_lock(d, DESCRIPTIONS_FILE)]) as free:
         if not free or image_refs.read_journal(d) != journal:
             return   # busy, or another reader got here first
         try:
