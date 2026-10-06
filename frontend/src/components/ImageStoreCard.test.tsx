@@ -174,6 +174,36 @@ test("a rediscovered run that finishes shows its report", async () => {
   expect(api.getImageMaintenanceReport).toHaveBeenCalledWith("l".repeat(32));
 });
 
+/** A finished collection rediscovered on mount, with `deleted` as given. */
+function showCollection(deleted: Record<string, unknown>) {
+  (api.listGlobalRuns as any).mockResolvedValue({ runs: [
+    run({ id: "l".repeat(32), state: "running", kind: "gc" }) ] });
+  (api.getGlobalRun as any).mockResolvedValue({ run: run({ id: "l".repeat(32), kind: "gc" }) });
+  (api.getImageMaintenanceReport as any).mockResolvedValue(scan({
+    mode: "collect", token: null, token_expires_at: null, deleted }));
+  render(<ImageStoreCard />);
+}
+
+test("a collection that deleted only orphan blobs counts them", async () => {
+  showCollection({
+    objects: [],
+    blobs: [{ id: null, blob: "x", bytes: 1024 }, { id: null, blob: "y", bytes: 2048 }],
+    bytes: 3072,
+  });
+
+  expect(await screen.findByText(/Deleted 2 unused images, freeing 3\.0 KB/)).toBeInTheDocument();
+});
+
+test("a mixed collection counts objects and orphan blobs, not an object's own blob", async () => {
+  showCollection({
+    objects: [{ id: "a", blob: "x", bytes: 100 }, { id: "b", blob: "y", bytes: 100 }],
+    blobs: [{ id: "a", blob: "x", bytes: 1024 }, { id: null, blob: "z", bytes: 1024 }],
+    bytes: 2248,
+  });
+
+  expect(await screen.findByText(/Deleted 3 unused images/)).toBeInTheDocument();
+});
+
 test("cancel calls the global cancel route", async () => {
   (api.listGlobalRuns as any).mockResolvedValue({ runs: [
     run({ id: "l".repeat(32), state: "running", kind: "migrate" }) ] });
