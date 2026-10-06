@@ -60,7 +60,7 @@ import {
   type SceneLocation,
   type SceneBreak, type SceneBreakAnswer,
   type SceneMeta, type ScenePage, type SceneSuggestion, type SceneSuggestionsOptions,
-  type SceneUsage, type DriversSnapshot,
+  type SceneUsage, type DriversSnapshot, type StoryGraph,
   type SceneWeather, type ScheduledEvent, type SearchMode,
   type SearchResult, type Sheet, type SheetBulkResult, type SheetCoverage,
   type SheetExpected, type SheetRoster, type StagedEdit, type Stats,
@@ -1425,6 +1425,11 @@ export const api = {
   continuityDrivers: (cid: string) =>
     request<DriversSnapshot>("GET", `/api/campaigns/${encodeSegment(cid)}/continuity/drivers`,
                              undefined, { fresh: true }),
+  /** The story graph (§19). `fresh`: a lens change never re-reads, so the one
+   *  read a mount makes must be its own rather than a shared, older one. */
+  continuityGraph: (cid: string) =>
+    request<StoryGraph>("GET", `/api/campaigns/${encodeSegment(cid)}/continuity/graph`,
+                        undefined, { fresh: true }),
   continuityCandidates: (cid: string) =>
     request<ContinuityCandidates>(
       "GET", `/api/campaigns/${encodeSegment(cid)}/continuity/candidates`,

@@ -1861,7 +1861,9 @@ export type AnchorRelation = "before" | "on" | "after" | "by";
 /** What the reader set on one driver. Not a server vocabulary: the request
  *  carries it as three ref lists. */
 export type DriverControl = "normal" | "focus" | "avoid" | "must";
-export type DriverLink = { id: string; relation: string; other: string;
+/** A reviewed link on a driver; `relation` is the story graph's `LinkRelation`
+ *  (the server sends only `effective.LINK_RELATIONS` values here). */
+export type DriverLink = { id: string; relation: LinkRelation; other: string;
                            direction: "out" | "in" | "both" };
 /** One row of `GET /continuity/drivers`. */
 export type Driver = {
@@ -2251,6 +2253,86 @@ export type ContinuityState = {
   diagnostics: ContinuityDiagnostics;
   malformed: string[]; unreadable: string[];
   matching: "basic" | "semantic";
+};
+
+// ---- the story graph (capstone Slice F) --------------------------------
+//
+// `GET /continuity/graph` (§19, §20): one read-only payload of nodes and edges
+// the page draws under four client-side lenses. The wire shapes are
+// `store/continuity/graph.py`'s. A dated node is placed only by `fixed` and
+// `in_days`; `native` is calendar text and is never parsed here.
+//
+// Each vocabulary below is held to its Python tuple by
+// `backend/tests/test_continuity_graph.py`, which parses this file -- so each
+// stays a plain union of string literals, in the tuple's order. The chooser's
+// `DriverKind`, `DriverAction`, `PressureState`, `AnchorRelation` and the
+// review's `CandidateKind` are reused, never redeclared.
+
+export type NodeKind =
+  | "scene" | "character" | "pc" | "location" | "thread" | "commitment" | "event" | "idea"
+  | "birthday" | "holiday";
+export type EdgeKind =
+  | "appeared_in" | "occurred_at" | "opened_in" | "advanced_in" | "touched_in" | "closed_in"
+  | "resolved_in" | "involves" | "serves" | "anchored_to" | "feeling" | "bond"
+  | "birthday_of" | "link" | "merged_into" | "possible_duplicate" | "possible_relation";
+export type EdgeSource = "structural" | "reviewed" | "candidate" | "alias";
+/** A reviewed link's relation (`effective.LINK_RELATIONS`). */
+export type LinkRelation =
+  | "continues" | "subthread_of" | "pays_off" | "before" | "on" | "after" | "by"
+  | "related_to";
+export type EventStatus = "scheduled" | "fired" | "passed" | "undated";
+/** A source the read could not use; named in `omitted` so a broken read never
+ *  looks like an empty campaign. */
+export type GraphPart =
+  | "calendar" | "scenes" | "chronicle" | "plot" | "commitments" | "events" | "continuity"
+  | "candidates" | "relationships" | "scene_ideas" | "names";
+
+/** A dated node's four fields. A null `fixed` is undated (no calendar, or a
+ *  date the calendar cannot read), never day zero. */
+export type GraphDate = { native: string; friendly: string; fixed: number | null;
+                          in_days: number | null };
+export type NodePressure = { state: PressureState; in_days: number | null; friendly: string };
+/** A visible review finding on the node it names; `other` is the pair's other
+ *  end, null for a lifecycle finding. */
+export type GraphFinding = { id: string; kind: CandidateKind; other: string | null };
+/** A thread or commitment, canonical or merged away (`merged_into` set). */
+export type ArcFields = {
+  status: string; live: boolean; merged_into: string | null; aliases: LedgerAlias[];
+  latest_beat: string; pressure: NodePressure | null; focusable: boolean;
+  findings: GraphFinding[];
+};
+export type GraphNode = { id: string; label: string } & (
+  | ({ kind: "scene"; order: number; done: boolean; pcless: boolean; place: string }
+     & GraphDate)
+  | { kind: "character" | "pc" | "location" }
+  | ({ kind: "thread" } & ArcFields)
+  | ({ kind: "commitment"; commitment_kind: string; due: string } & ArcFields & GraphDate)
+  | ({ kind: "event"; status: EventStatus; pressure: NodePressure | null; anchorable: boolean;
+       findings: GraphFinding[] } & GraphDate)
+  | ({ kind: "holiday"; pressure: NodePressure; anchorable: boolean } & GraphDate)
+  | ({ kind: "birthday"; actor: string; precision: "exact" | "yearless" | "month";
+       age: number | null; pressure: NodePressure; anchorable: boolean } & GraphDate)
+  | ({ kind: "idea"; premise: string; source: string; pcless: boolean;
+       time_anchor: { ref: string; relation: AnchorRelation; native: string } | null }
+     & GraphDate)
+);
+/** `relation` is typed by `kind` (§20: typed unions, not open string bags):
+ *  only a link, a `serves` and an `anchored_to` edge carry one. */
+export type GraphEdge = {
+  id: string; from: string; to: string; source: EdgeSource; candidate_id: string | null;
+} & (
+  | { kind: "link"; relation: LinkRelation }
+  | { kind: "serves"; relation: DriverAction }
+  | { kind: "anchored_to"; relation: AnchorRelation }
+  | { kind: "feeling"; relation: null; trust: number; affection: number; tension: number;
+      note: string }
+  | { kind: "bond"; relation: null; bond_type: string; since_scene: string }
+  | { kind: Exclude<EdgeKind, "link" | "serves" | "anchored_to" | "feeling" | "bond">;
+      relation: null }
+);
+export type StoryGraph = {
+  now: { native: string; friendly: string; fixed: number | null };
+  nodes: GraphNode[]; edges: GraphEdge[]; omitted: GraphPart[];
 };
 
 // keyword search (#33)
