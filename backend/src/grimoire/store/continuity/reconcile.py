@@ -138,12 +138,15 @@ from . import candidates, canon, effective, involvement, pending, pressure, simi
 #: rest rotate in over later runs. To be tuned against real prompts later.
 RECONCILE_WARM_LIMIT = embeddings.BATCH * 4
 
-#: Pairs one sweep scores. A pair is one token/trigram Jaccard plus, with
-#: vectors, one pure-Python dot product (no numpy on Android); at embedding
-#: widths in the low thousands this is a few seconds of one worker thread, which
-#: keeps the storage-move refusal window short, and it covers every pair of
-#: roughly two hundred same-type records in one sweep. To be tuned against real
-#: prompts later.
+#: Pairs one sweep scores. A pair costs two comparisons of sets built once per
+#: record (`similarity.Subject.features`: the token and trigram sets), plus at
+#: most one pure-Python dot product when both texts have vectors (no numpy on
+#: Android). Normalization is per record, not per pair, so the pair cost is the
+#: comparisons and the dot product; at embedding widths in the low thousands the
+#: dot product dominates, and the bound keeps the work to one worker thread for
+#: a short while -- which keeps the storage-move refusal window short -- while
+#: covering every pair of roughly two hundred same-type records in one sweep. To
+#: be tuned against real prompts later.
 RECONCILE_MAX_PAIRS = 20_000
 
 #: Neighbours kept per record and type: the bound identity sets (§9.3), so a

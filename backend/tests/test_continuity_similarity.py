@@ -9,6 +9,7 @@ silently somewhere else.
 """
 
 import importlib
+import itertools
 import json
 import math
 import time
@@ -608,3 +609,51 @@ def test_nearest_uses_cosine_when_both_vectors_present(home, monkeypatch):
     assert other.ref == "thread:b"
     assert signals["cosine"] == pytest.approx(0.9, abs=1e-3)
     assert signals["via"] == "semantic"
+
+
+# ------------------------------------------------- one normalization per record
+
+
+def test_lexical_normalizes_each_text_once(monkeypatch):
+    """§25.2, Decision 6: a subject's token and trigram sets are built once, on
+    its first comparison, so scoring every pair of a pool costs one
+    normalization per record rather than two per pair -- and the signals are
+    the ones the primitives give, pair for pair."""
+    subjects = [_thread(f"thread:mara-s-errand-{i}", f"Mara's errand {i}",
+                        f"Mara crossed Saltmarch market on day {i}.",
+                        "The Realm road was flooded.")
+                for i in range(6)]
+    pairs = list(itertools.combinations(subjects, 2))
+    assert len(pairs) == 15
+
+    def expected(a, b):
+        body_a, body_b = similarity.body(a.text), similarity.body(b.text)
+        return {
+            "title_equal": similarity.titles_equal(a.title, b.title),
+            "slug_equal": similarity.slug_equal(a.title, b.title),
+            "tokens": round(similarity.jaccard(similarity.tokens(body_a),
+                                               similarity.tokens(body_b)), 4),
+            "chars": round(similarity.jaccard(similarity.trigrams(body_a),
+                                              similarity.trigrams(body_b)), 4),
+            "cosine": None,
+            "actors": sorted(a.actors & b.actors),
+            "scenes": sorted(a.scenes & b.scenes),
+            "anchors": sorted(a.anchors & b.anchors),
+        }
+
+    reference = [expected(a, b) for a, b in pairs]
+    calls = {"tokens": 0, "trigrams": 0}
+    for name in calls:
+        real = getattr(similarity, name)
+
+        def counted(text, _real=real, _name=name):
+            calls[_name] += 1
+            return _real(text)
+
+        monkeypatch.setattr(similarity, name, counted)
+
+    first = [similarity.lexical(a, b) for a, b in pairs]
+    assert calls == {"tokens": 6, "trigrams": 6}
+    again = [similarity.lexical(a, b) for a, b in pairs]
+    assert calls == {"tokens": 6, "trigrams": 6}
+    assert first == again == reference
