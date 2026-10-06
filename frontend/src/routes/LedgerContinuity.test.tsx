@@ -1025,6 +1025,41 @@ describe("the finding detail", () => {
     });
   });
 
+  test("a beat's scene renamed under the form re-reads, and the dead id is not offered",
+       async () => {
+    // §12.9: a scene that moved is a re-read, never a dead end; §30: the
+    // refusal reads as words, and the select never resends the old id.
+    const SAID = "That scene has been renamed or removed; pick it again.";
+    (api.applyCandidate as any).mockRejectedValueOnce(new ApiError(400, SAID, "bad_scene",
+      { kind: "bad_scene", detail: SAID }));
+    renderLedger(at(CLOSE_ME));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Closing beat" }),
+                     { target: { value: "The crown is placed." } });
+    fireEvent.change(screen.getByRole("combobox", { name: "Evidence scene" }),
+                     { target: { value: "002--saltmarch-eve" } });
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, scenes: [{ id: "002--winifred-harbour", title: "Winifred harbour" },
+                          { id: "001--realm-road", title: "Realm road" }] });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    expect(await screen.findByText(SAID)).toBeInTheDocument();
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+    const select = await screen.findByRole("combobox", { name: "Evidence scene" });
+    await waitFor(() => expect(within(select).getAllByRole("option")
+      .map((o) => o.textContent)).toEqual(["No scene", "Winifred harbour", "Realm road"]));
+    expect((select as HTMLSelectElement).value).toBe("");
+    expect(screen.getByRole("textbox", { name: "Closing beat" }))
+      .toHaveValue("The crown is placed.");
+    expect(screen.getByRole("button", { name: "Apply" })).toBeDisabled();
+    fireEvent.change(select, { target: { value: "002--winifred-harbour" } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(2));
+    expect(applied()[1][2]).toEqual({
+      op: "close", beat: "The crown is placed.", scene: "002--winifred-harbour",
+      expect_fingerprint: CLOSE_ME.fingerprint,
+    });
+  });
+
   test("a closure with no beat sends no scene, and a beat needs a scene", async () => {
     (api.continuityCandidates as any).mockResolvedValue({
       ...DETAIL, candidates: [{ ...CLOSE_ME, proposal: null }] });
