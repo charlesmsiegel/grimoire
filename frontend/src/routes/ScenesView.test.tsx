@@ -25,8 +25,12 @@ vi.mock("../components/SceneImport", () => ({
 // The chooser is driven end-to-end by its own suite; here it only has to be
 // reachable, and to report back the two ways it can end.
 vi.mock("../components/NewSceneChooser", () => ({
-  NewSceneChooser: ({ onClose, onCreated }: any) => (
+  NewSceneChooser: ({ onClose, onCreated, seed, afterSid }: any) => (
     <div data-testid="scene-chooser">
+      {/* What the chooser was opened with: a Story Graph handoff's seed, and
+          the ranking reference a seeded open has to wait for. */}
+      <pre data-testid="seed">{JSON.stringify(seed ?? null)}</pre>
+      <pre data-testid="after">{JSON.stringify(afterSid ?? null)}</pre>
       {/* Two picks, because the premise is the second argument and only some
           drafts carry one: a greeting hands over nothing, and a blank scene
           must not arrive somewhere with a premise it never had. */}
@@ -95,10 +99,20 @@ function WithShell({ children }: { children: ReactNode }) {
   return <ShellPayloadProvider value={{ ...shell, cid: "run" }}>{children}</ShellPayloadProvider>;
 }
 
-function renderScenes() {
+/** The history entry's state as the page leaves it, so a test can see that a
+ *  handoff was cleared off the entry rather than only ignored. */
+function StateProbe() {
+  return <pre data-testid="history-state">{JSON.stringify(useLocation().state ?? null)}</pre>;
+}
+
+function renderScenes(opts: { state?: unknown } = {}) {
+  const entry = "state" in opts
+    ? { pathname: "/campaigns/run/scenes", state: opts.state }
+    : "/campaigns/run/scenes";
   return render(
-    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+    <MemoryRouter initialEntries={[entry]}>
       <WithShell>
+        {"state" in opts && <StateProbe />}
         <Routes>
           <Route path="/campaigns/:cid/scenes" element={<ScenesView />} />
           <Route path="/campaigns/:cid/scenes/:sid" element={<Landed />} />
@@ -516,4 +530,68 @@ test("a closed branch is not counted or listed as open", async () => {
   fireEvent.click(screen.getByRole("button", { name: /^Open/ }));
   await screen.findByText("Other");
   expect(screen.queryByText("Alt")).toBeNull();
+});
+
+// The Story Graph's handoff (§16.5): a driver or an anchor arrives as history
+// state and opens the chooser already steered. Adopted once and cleared off
+// the entry, like `CampaignView`'s seedPrompt -- left in place, Back into this
+// entry or a reload would reopen a chooser the reader had already closed.
+test("a chooser handoff opens the chooser seeded once", async () => {
+  const { rerender } = renderScenes(
+    { state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
+  const chooser = await screen.findByTestId("scene-chooser");
+  expect(within(chooser).getByTestId("seed"))
+    .toHaveTextContent(JSON.stringify({ drivers: { "thread:mara-s-map": "focus" } }));
+  expect(screen.getByTestId("history-state")).toHaveTextContent("null");
+
+  fireEvent.click(screen.getByText("stub-close"));
+  await waitFor(() => expect(screen.queryByTestId("scene-chooser")).toBeNull());
+  rerender(
+    <MemoryRouter initialEntries={["/campaigns/run/scenes"]}>
+      <WithShell>
+        <StateProbe />
+        <Routes>
+          <Route path="/campaigns/:cid/scenes" element={<ScenesView />} />
+        </Routes>
+      </WithShell>
+    </MemoryRouter>);
+  await screen.findByText("The third");
+  expect(screen.queryByTestId("scene-chooser")).toBeNull();
+
+  // The ordinary entry point is unchanged: it carries no seed, not the one
+  // the reader just closed.
+  fireEvent.click(screen.getByRole("button", { name: /\+ new scene/i }));
+  expect(within(await screen.findByTestId("scene-chooser")).getByTestId("seed"))
+    .toHaveTextContent("null");
+});
+
+test("an anchor handoff seeds the anchor", async () => {
+  renderScenes(
+    { state: { chooser: { anchor: { ref: "event:the-coronation", relation: "on" } } } });
+  const chooser = await screen.findByTestId("scene-chooser");
+  expect(within(chooser).getByTestId("seed")).toHaveTextContent(
+    JSON.stringify({ anchor: { ref: "event:the-coronation", relation: "on" } }));
+});
+
+test("a malformed chooser state is ignored and cleared", async () => {
+  renderScenes({ state: { chooser: { drivers: 3 } } });
+  await screen.findByText("The third");
+  expect(screen.queryByTestId("scene-chooser")).toBeNull();
+  expect(screen.getByTestId("history-state")).toHaveTextContent("null");
+});
+
+test("a seeded open waits for the scene list", async () => {
+  // Opening before the list lands would rank against no scene, then re-ask
+  // when `afterSid` arrives -- a second paid ranked call (Decision 20).
+  let resolve!: (v: unknown) => void;
+  (api.listScenes as any).mockReturnValue(new Promise((r) => { resolve = r; }));
+  renderScenes({ state: { chooser: { drivers: { "thread:mara-s-map": "focus" } } } });
+  await waitFor(() =>
+    expect(screen.getByTestId("history-state")).toHaveTextContent("null"));
+  expect(screen.queryByTestId("scene-chooser")).toBeNull();
+
+  resolve([scene({ id: "003--third", title: "The third" })]);
+  const chooser = await screen.findByTestId("scene-chooser");
+  expect(within(chooser).getByTestId("after")).toHaveTextContent('"003--third"');
+  expect(within(chooser).getByTestId("seed")).toHaveTextContent("thread:mara-s-map");
 });

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { NewSceneChooser } from "../components/NewSceneChooser";
+import { sanitizeSeed, type ChooserSeed } from "../components/pressureControls";
 import { SceneImport } from "../components/SceneImport";
 import { api, type CampaignMeta, type CampaignSceneCosts,
          type SceneMeta } from "../api/client";
@@ -70,7 +71,12 @@ function actionFor(s: SceneMeta, waiting: Map<string, number>,
 export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const { cid = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [choosing, setChoosing] = useState(false);
+  /** A Story Graph handoff's seed for the chooser, or null for an ordinary
+   *  open. Cleared when the chooser closes, so `+ New scene` never inherits
+   *  steering the reader has already walked away from. */
+  const [seed, setSeed] = useState<ChooserSeed | null>(null);
   const [importing, setImporting] = useState(false);
   /** Per-scene spend, or null until it lands. A second effect on purpose: the
    *  read behind it scans the ledger's whole history, which is the right cost
@@ -89,6 +95,26 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
   const [q, setQ] = useState("");
 
   usePublishShellContext(meta ? { campaign: meta.name, scene: "" } : null);
+
+  // The Story Graph opens this page with the chooser already steered -- a
+  // driver to focus, or an anchor to set -- as history state (§16.5). The
+  // graph's sending side is Slice F's; this is the receiving side, and it
+  // copies `CampaignView`'s seedPrompt adoption: adopted once, then cleared
+  // off the entry, because history outlives the visit. Left in place, Back
+  // into this entry or a reload of it would reopen a chooser the reader had
+  // already closed, steered the way they had since undone. A state that is not
+  // one of the two shapes is someone else's to write, so it opens nothing --
+  // but it is cleared all the same.
+  const rawHandoff = (location.state as { chooser?: unknown } | null)?.chooser;
+  const handoff = useMemo(() => sanitizeSeed(location.state), [location.state]);
+  useEffect(() => {
+    if (rawHandoff === undefined) return;
+    setSeed(handoff);
+    if (handoff) setChoosing(true);
+    // Search and hash carried along: the replace exists to drop the STATE.
+    navigate(location.pathname + location.search + location.hash,
+             { replace: true, state: null });
+  }, [rawHandoff, handoff, location.pathname, location.search, location.hash, navigate]);
 
   useEffect(() => {
     if (!cid) return;
@@ -252,13 +278,18 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
           </div>
         )}
 
-        {choosing && (
+        {/* A seeded open also waits for the scene list (Decision 20): the
+            chooser ranks against `afterSid`, and opening before the list lands
+            would make it re-ask when the newest scene arrives -- a second
+            paid ranked call. A failed list opens it anyway, with no reference. */}
+        {choosing && !(seed && scenes === null && !failed) && (
           <NewSceneChooser
-            cid={cid} ready={ready}
+            cid={cid} ready={ready} seed={seed ?? undefined}
             // Ranking reference: the newest scene, or none in a fresh campaign.
             afterSid={scenes?.[0]?.id ?? null}
             onClose={(createdSid) => {
               setChoosing(false);
+              setSeed(null);
               // A scene salvaged from a soft failure still exists, so the list
               // has to learn about it even though the reader backed out.
               if (createdSid) api.listScenes(cid).then(setScenes).catch(() => {});
@@ -272,6 +303,7 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
             // route change; `CampaignView` adopts it once and clears it.
             onCreated={(sid, initialPrompt) => {
               setChoosing(false);
+              setSeed(null);
               navigate(`/campaigns/${cid}/scenes/${sid}`,
                        initialPrompt ? { state: { seedPrompt: initialPrompt } } : undefined);
             }} />
