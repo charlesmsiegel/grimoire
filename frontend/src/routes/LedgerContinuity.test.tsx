@@ -12,7 +12,7 @@ import type {
 import LedgerView from "./LedgerView";
 import { DECISION_LABELS } from "../components/continuity/labels";
 import {
-  EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, installLedgerMocks, renderLedger,
+  EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, Here, installLedgerMocks, renderLedger,
 } from "../testkit/ledgerHarness";
 
 const scene = (id: string, title: string) => ({ id, title, date: "" });
@@ -1062,5 +1062,179 @@ describe("the finding detail", () => {
     for (const b of actions) expect(b).toBeDisabled();
     expect(aside().getByRole("button", { name: "Refresh" })).toBeEnabled();
     expect(api.applyCandidate).not.toHaveBeenCalled();
+  });
+  // ---- review fixes (Task 17) ----------------------------------------------
+
+  test("a closure apply re-reads the ledger, and the Threads count drops", async () => {
+    const thread = (status: string) => ({
+      ...EMPTY_LEDGER,
+      plot: [{ id: "the-coronation", title: "The coronation", status, last_scene: "",
+               latest_beat: "", scene: scene("", ""), aliases: [] }],
+    });
+    (api.campaignLedger as any).mockResolvedValue(thread("open"));
+    renderLedger(at(CLOSE_ME));
+    await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
+      .toHaveTextContent("1"));
+    (api.campaignLedger as any).mockResolvedValue(thread("closed"));
+    const ledgerReads = (api.campaignLedger as any).mock.calls.length;
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Close thread" }));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+    await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+      .toBeGreaterThan(ledgerReads));
+    await waitFor(() => expect(column().getByRole("button", { name: /^threads/i }))
+      .toHaveTextContent("0"));
+  });
+
+  /** The Ledger with a way to switch campaign while staying mounted. */
+  const renderSwitchable = (path: string, to: string) => render(
+    <MemoryRouter initialEntries={[path]}>
+      <SwitchTo to={to} />
+      <Here />
+      <Routes>
+        <Route path="/campaigns/:cid/ledger/*" element={<LedgerView />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+  const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 0)); });
+
+  test("an apply that lands after a campaign switch leaves the reader where they are",
+       async () => {
+    const write = deferred<{ ok: true }>();
+    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    renderSwitchable(at(PAIR), "/campaigns/other/ledger/continuity/overlaps");
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledWith("other"));
+    await act(async () => { write.resolve({ ok: true }); });
+    await settle();
+    expect(screen.getByTestId("here"))
+      .toHaveTextContent(/^\/campaigns\/other\/ledger\/continuity\/overlaps$/);
+    expect(main().queryByText(/^Merged/)).toBeNull();
+  });
+
+  test("a refusal that lands after a campaign switch lays nothing over the new campaign",
+       async () => {
+    // A fork shares candidate ids, so the same id may be open on the new one.
+    const write = deferred<never>();
+    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    renderSwitchable(at(PAIR), `/campaigns/other/ledger/continuity/overlaps/${PAIR.id}`);
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    fireEvent.click(screen.getByRole("button", { name: "switch campaign" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledWith("other"));
+    await act(async () => {
+      write.reject(new ApiError(
+        409, "Records have changed since this was found.", "stale_candidate", {
+          kind: "stale_candidate", reason: "records",
+          current: { fingerprint: "fp-now",
+                     records: [{ ...MAP_D, title: "Mara's sea map" }, CHART_D] },
+        }));
+    });
+    await settle();
+    expect(screen.getByTestId("here")).toHaveTextContent(
+      `/campaigns/other/ledger/continuity/overlaps/${PAIR.id}`);
+    expect(await main().findByRole("link", { name: "Mara's map" })).toBeInTheDocument();
+    expect(main().queryByRole("link", { name: "Mara's sea map" })).toBeNull();
+    expect(screen.queryByText(/Records have changed since this was found/)).toBeNull();
+  });
+
+  test("a refusal that lands after another finding is opened stays off it", async () => {
+    const write = deferred<never>();
+    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    fireEvent.click(main().getByRole("button", { name: "‹ All findings" }));
+    fireEvent.click(await main().findByRole("button", { name: /mara's oath \/ seraphine's oath/i }));
+    expect(await (await sidebar()).findByRole("button", { name: "Keep Mara's oath" }))
+      .toBeInTheDocument();
+    await act(async () => {
+      write.reject(new ApiError(
+        409, "Mara's map is open but Winifred's chart is closed", "liveness_mismatch", {
+          kind: "liveness_mismatch", detail: "Mara's map is open but Winifred's chart is closed",
+          source: { status: "open", kind: "", due: "" },
+          canonical: { ref: CHART_D.ref, status: "closed", kind: "", due: "" },
+        }));
+    });
+    await settle();
+    expect(screen.getByTestId("here")).toHaveTextContent(at(OATHS));
+    expect(screen.queryByRole("button", { name: "Merge anyway" })).toBeNull();
+    expect(screen.queryByText(/Merging will hide/)).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(api.applyCandidate).toHaveBeenCalledTimes(1);
+  });
+
+  test("an apply that lands after another finding is opened leaves the reader on it",
+       async () => {
+    const write = deferred<{ ok: true }>();
+    (api.applyCandidate as any).mockReturnValueOnce(write.promise);
+    renderLedger(at(PAIR));
+    fireEvent.click(await (await sidebar()).findByRole("button", { name: "Keep Winifred's chart" }));
+    fireEvent.click(main().getByRole("button", { name: "‹ All findings" }));
+    fireEvent.click(await main().findByRole("button", { name: /mara's oath \/ seraphine's oath/i }));
+    await sidebar();
+    const ledgerReads = (api.campaignLedger as any).mock.calls.length;
+    await act(async () => { write.resolve({ ok: true }); });
+    await settle();
+    expect(screen.getByTestId("here")).toHaveTextContent(at(OATHS));
+    expect(await (await sidebar()).findByRole("button", { name: "Keep Mara's oath" }))
+      .toBeInTheDocument();
+    // The write landed on this campaign all the same: the ledger re-reads.
+    await waitFor(() => expect((api.campaignLedger as any).mock.calls.length)
+      .toBeGreaterThan(ledgerReads));
+  });
+
+  test("a same-title pair tells its two sides apart", async () => {
+    const twin = record("thread:mara-s-map-2", "Mara's map");
+    const twins = finding("possible_duplicate-9898989898989898", "possible_duplicate",
+                          "overlaps", [MAP_D, twin], { signals: { title_exact: true } });
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, candidates: [...DETAIL.candidates, twins] });
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderLedger(at(twins));
+      const first = await (await sidebar()).findByRole("button", { name: "Keep Mara's map (first)" });
+      const second = aside().getByRole("button", { name: "Keep Mara's map (second)" });
+      expect(first).not.toBe(second);
+      expect(main().getByRole("link", { name: "Mara's map (first)" }))
+        .toHaveAttribute("href", "/campaigns/run/ledger/threads/mara%2Fmap");
+      expect(main().getByRole("link", { name: "Mara's map (second)" }))
+        .toHaveAttribute("href", "/campaigns/run/ledger/threads/mara-s-map-2");
+      expect(aside().getByRole("button", {
+        name: "Mara's map (second) continues Mara's map (first)" })).toBeInTheDocument();
+      fireEvent.click(second);
+      await waitFor(() => expect(api.applyCandidate).toHaveBeenCalledTimes(1));
+      expect(applied()[0][2]).toEqual({
+        op: "alias", canonical: twin.ref, expect_fingerprint: twins.fingerprint });
+      expect(errors.mock.calls.filter((c) => /same key/.test(String(c[0])))).toHaveLength(0);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  test("a scene the read could not name is left out; an untitled one says so", async () => {
+    const gone = "003--the-dock";
+    const untitled = "004--untitled";
+    const coronation = record("thread:the-coronation", "The coronation", {
+      last_scene: { id: gone, title: "" },
+      beats: [{ scene: gone, text: "The crown was carried in." }],
+    });
+    const quiet = finding("possible_thread_closure-7777777777777777",
+                          "possible_thread_closure", "closures", [coronation], {
+      stale: true, stale_reason: "evidence",
+      proposal: { decision: "close", from: "", to: "", relation: "", status: "",
+                  reason: "The crown was placed.", evidence_scenes: [gone, untitled] },
+    });
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, scenes: [...SCENES, { id: untitled, title: "" }],
+      candidates: [...DETAIL.candidates, quiet] });
+    renderLedger(at(quiet));
+    await sidebar();
+    expect(main().getByText("The crown was carried in.")).toBeInTheDocument();
+    expect(screen.getByRole("main").textContent).not.toMatch(/\d{3}--/);
+    for (const link of main().getAllByRole("link")) {
+      expect(link.getAttribute("href")).not.toContain(gone);
+    }
+    expect(main().getByRole("link", { name: "Untitled scene" }))
+      .toHaveAttribute("href", `/campaigns/run/scenes/${untitled}`);
   });
 });

@@ -13,8 +13,19 @@
  *  actions land here: this pane sends them, reads what a refusal means
  *  (`ApiError.kind`), and on a 2xx returns to the group with one line saying
  *  what was done (Decision 24).
+ *
+ *  AN ANSWER BELONGS TO WHAT WAS ASKED. Nothing holds the reader still while
+ *  an action is in flight -- "‹ All findings", the list, the rail and a
+ *  campaign switch all stay live -- so an answer may land on a page that is
+ *  showing something else. What it says about the campaign it was sent to
+ *  still holds (the write landed, so the ledger re-reads; a 409's current
+ *  records are that finding's); what it says to the reader -- a confirmation,
+ *  a refusal, "Merge anyway", the move back to the group -- is shown only if
+ *  the finding it was about is still the one open. An answer for a campaign
+ *  the reader has left touches nothing: the review hook already belongs to
+ *  the new one, and a fork shares candidate ids.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { errorText } from "../../api/errors";
 import type {
@@ -182,6 +193,9 @@ export function ContinuityReview(
   /** The line a landed action leaves on its group's list. */
   const [done, setDone] = useState<{ cid: string; group: ContinuityGroup; text: string } | null>(
     null);
+  /** What is open now, read by an answer that lands after the reader moved. */
+  const openRef = useRef({ cid, candidate });
+  openRef.current = { cid, candidate };
 
   // Opening a finding (or another one) starts it clean.
   useEffect(() => {
@@ -213,11 +227,13 @@ export function ContinuityReview(
     setDetailError(null);
     try {
       await write();
+      if (openRef.current.cid !== cid) return;
       review.wrote();
+      if (openRef.current.candidate !== c.id) return;
       setDone({ cid, group: c.group, text: confirmation(c, said) });
       navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
     } catch (err: unknown) {
-      refused(c, err, said);
+      if (openRef.current.cid === cid) refused(c, err, said);
     } finally {
       setBusy(false);
     }
@@ -227,10 +243,14 @@ export function ContinuityReview(
     void decide(c, () => api.applyCandidate(cid, c.id, body), body);
   }
 
+  /** A refusal for this campaign. What it says about the finding is kept;
+   *  what it says to the reader waits on that finding still being open. */
   function refused(c: ContinuityCandidate, err: unknown,
                    said: ContinuityApply | "dismiss" | "keep_open") {
     const { kind, body } = refusal(err);
+    const here = openRef.current.candidate === c.id;
     if (kind === "liveness_mismatch" && typeof said === "object") {
+      if (!here) return;
       setDetailError({
         text: `${livenessSentence(body) ?? errorText(err)}.`,
         action: { label: "Merge anyway",
@@ -244,7 +264,7 @@ export function ContinuityReview(
         const current = api.staleCurrent(err);
         if (current) {
           review.applyCurrent(c.id, current);
-          setDetailError({ text: "Records have changed since this was found. They are "
+          if (here) setDetailError({ text: "Records have changed since this was found. They are "
             + "shown as they are now; act again if the finding still holds." });
         }
       }
@@ -252,7 +272,7 @@ export function ContinuityReview(
     } else if (kind === "not_found") {
       setGone((g) => ({ cid, ids: [...(g.cid === cid ? g.ids : []), c.id] }));
       review.reread();
-    } else {
+    } else if (here) {
       setDetailError({ text: errorText(err) });
     }
   }
