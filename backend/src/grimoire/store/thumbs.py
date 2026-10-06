@@ -221,8 +221,9 @@ def _key(src: Path, st: os.stat_result | None, width: int, root: Path) -> str:
 
 
 #: The widths a thumbnail is asked for at: `routes.common.THUMB_BUCKETS`,
-#: spelled here because a store module may not import a route (test_thumbs.py
-#: holds the two equal). Only `legacy_keys` reads it.
+#: spelled here because a store module may not import a route
+#: (test_image_migration_run.py's `test_legacy_thumbnails_are_removed` holds
+#: the two equal). Only `legacy_keys` reads it.
 WIDTHS = (128, 256, 320, 512, 1024)
 #: Each generation this revision writes, with the suffixes its entries take.
 _SUFFIXES = {ENCODER: (".webp",), FALLBACK_ENCODER: (".jpg", ".png")}

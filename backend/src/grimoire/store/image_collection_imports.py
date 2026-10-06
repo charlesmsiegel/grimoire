@@ -253,7 +253,8 @@ def _raw(path: Path) -> dict | None:
     return got if isinstance(got, dict) else None
 
 
-def convert_or_retire(wid: str, path: Path) -> str:
+def convert_or_retire(wid: str, path: Path, *,
+                      guard: Callable[[], None] | None = None) -> str:
     """Settle one harvest journal for the migration (module docstring), under
     its job lock: `FORMAT2` for one already format 2, `CONVERTED` for a
     format-1 one this read converted, `RETIRED` for an unaccepted one that maps
@@ -261,7 +262,8 @@ def convert_or_retire(wid: str, path: Path) -> str:
     anything else -- accepted, published as format 1, or not a journal at all.
 
     `path` is under the caller's pinned root and is never resolved through the
-    live one; the world may be gone, which makes the journal unmappable."""
+    live one; the world may be gone, which makes the journal unmappable.
+    `guard()` runs right before a retirement's rename and raises to stop it."""
     job_id = path.stem
     if not _JOB.fullmatch(job_id) or path.suffix != ".json":
         return KEPT
@@ -276,6 +278,8 @@ def convert_or_retire(wid: str, path: Path) -> str:
         except (image_collections.CollectionInvalidError, worlds_paths.WorldNotFound):
             # Unmappable: a member that maps to nothing, or no world at all.
             if raw.get("accepted") is False:
+                if guard is not None:
+                    guard()
                 os.replace(path, path.with_name(path.name + RETIRED_SUFFIX))
                 return RETIRED
             return KEPT

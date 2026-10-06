@@ -383,8 +383,8 @@ def format2_members(root: Path, wid: str, members: list[str]) -> list[str]:
 
 
 def convert_format1(root: Path, wid: str, collection_id: str, *,
-                    before: Callable[[list[str], list[str]], None] | None = None
-                    ) -> bool:
+                    before: Callable[[list[str], list[str]], None] | None = None,
+                    guard: Callable[[], None] | None = None) -> bool:
     """Rewrite one format-1 manifest under `root` as format 2; True when it
     was rewritten, False when it was already format 2 (left untouched).
 
@@ -395,6 +395,8 @@ def convert_format1(root: Path, wid: str, collection_id: str, *,
     every library URL keeps serving. `before(names, ids)` runs inside that
     hold just before the manifest is written -- the migration rewrites the
     greeting subject keys that named the members' library URLs there (M10).
+    `guard()` runs after `before` and just before the write, and raises to
+    stop it (a maintenance run's pinned-root check, M4).
     `CollectionInvalidError` (from `format2_members`) leaves it format 1."""
     path = manifest_path_under(root, wid, collection_id)
     with locks.image_collection_lock(wid):
@@ -408,6 +410,8 @@ def convert_format1(root: Path, wid: str, collection_id: str, *,
         converted = validate({"format": 2, "members": ids})
         if before is not None:
             before(manifest["members"], ids)
+        if guard is not None:
+            guard()
         atomic.write_text(path, json.dumps(converted, indent=2) + "\n")
     return True
 
