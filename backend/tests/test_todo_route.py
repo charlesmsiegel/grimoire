@@ -142,6 +142,54 @@ def test_untagged_and_appearances_routes_expose_no_slot(client, campaign):
         assert not any(str(root) in str(v) for v in row.values())
 
 
+def test_the_subjects_chore_reads_no_placement_its_catalog_already_read(client, campaign, monkeypatch):
+    """`/api/todo` sweeps every greeting of every world. Answering a key off
+    its object uses the id the catalog carried; reading the placement again
+    would double the cost of the sweep."""
+    _cid, wid = campaign
+    root = store.worlds.world_root(wid)
+    owner, vid = store.characters.create_character(root, "Seraphine", "default")
+    store.assets.put_image(root, owner, vid, "embed-art", b"png-ref", "png")
+    url = f"/api/worlds/{wid}/characters/{owner}/versions/{vid}/images/embed-art"
+    gid = store.greetings.create_greeting(root, "Saltmarch", owner, vid, f"![Art]({url})")
+    for name in ("art_1", "art_2"):
+        store.assets.put_image(root, gid, "default", name, f"png-{name}".encode(), "png",
+                               base="greetings")
+    endpoint = f"/api/worlds/{wid}/greetings/{gid}/subjects"
+    for key in (url, "art_1"):
+        assert client.put(endpoint, json={"image": key, "subjects": [owner]}).status_code == 200
+
+    # Other chores read placements of their own (covers); only a slot some
+    # catalog already listed is off limits, outside the building of a catalog.
+    listed: set = set()
+    building = False
+    real_catalog = store.greeting_images.catalog_with_slots
+    real_read = store.image_refs.read
+
+    def catalog(root, gid):
+        nonlocal building
+        building = True
+        try:
+            items = real_catalog(root, gid)
+        finally:
+            building = False
+        listed.update(target[1] for _entry, target in items.values() if target is not None)
+        return items
+
+    def read(d, name):
+        if not building and (d, name) in listed:
+            raise AssertionError(f"placement {name!r} read again after the catalog")
+        return real_read(d, name)
+
+    monkeypatch.setattr(store.greeting_images, "catalog_with_slots", catalog)
+    monkeypatch.setattr(store.image_refs, "read", read)
+    row = next(c for c in _todo(client, "")["chores"] if c["id"] == "world-subjects")
+    assert row["n"] == 1
+    # The queue itself, too. (Its ROUTE then builds image URLs per row, which
+    # is presentation and resolves what it serves; the chore count does not.)
+    assert [a["name"] for a in store.image_subjects.untagged(root)] == ["art_2"]
+
+
 def test_collection_members_are_individually_reviewed_and_deduplicated(client, campaign):
     _cid, wid = campaign
     root = store.worlds.world_root(wid)

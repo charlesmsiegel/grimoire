@@ -7,6 +7,7 @@ from grimoire.store import (
     characters,
     entities,
     greetings,
+    image_refs,
     image_store,
     image_subjects,
     pcs,
@@ -590,3 +591,74 @@ def test_a_malformed_review_list_reads_as_unreviewed(tmp_path, monkeypatch, revi
     assert [a["name"] for a in image_subjects.untagged(root)] == ["art_1"]
     image_subjects.set_image_subjects(root, gid, "art_1", [])
     assert image_subjects.read_subjects(root, gid) == {"art_1": []}
+
+
+def _trap_placement_reads(monkeypatch):
+    """Make `image_refs.read` raise once a catalog has been built: whatever
+    answers after that must use the ids the catalog carried (the listing
+    already read every placement it lists)."""
+    armed = False
+    real_catalog = image_subjects.greeting_images.catalog_with_slots
+    real_read = image_refs.read
+
+    def catalog(root, gid):
+        nonlocal armed
+        armed = False
+        try:
+            return real_catalog(root, gid)
+        finally:
+            armed = True
+
+    def read(d, name):
+        if armed:
+            raise AssertionError(f"placement {name!r} read again after the catalog")
+        return real_read(d, name)
+
+    monkeypatch.setattr(image_subjects.greeting_images, "catalog_with_slots", catalog)
+    monkeypatch.setattr(image_refs, "read", read)
+
+
+def test_answers_never_reread_a_placement_the_catalog_read(tmp_path, monkeypatch):
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    assets.put_image(root, cid, vid, "gallery_1", b"ref-art", "png")
+    url = f"/api/worlds/{root.name}/characters/{cid}/versions/{vid}/images/gallery_1"
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1", "art_2": b"png-2"},
+                         body=f"![Art]({url})")
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid])
+    image_subjects.set_image_subjects(root, gid, url, [])
+    assert not image_subjects.subjects_path(root, gid).exists()
+
+    _trap_placement_reads(monkeypatch)
+
+    assert [a["name"] for a in image_subjects.untagged(root)] == ["art_2"]
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [cid], url: []}
+    assert image_subjects.reviewed_names(root, gid) == {"art_1", url}
+    assert [a["name"] for a in image_subjects.appearances(root, cid)] == ["art_1"]
+
+
+def test_an_unarrived_placement_beside_a_legacy_file_answers_from_the_sidecar(tmp_path, monkeypatch):
+    """A placement whose blob has not arrived is not the picture anybody sees:
+    the legacy file of the same name is (`assets.path_in`'s fallback). So the
+    key answers from the sidecar alone -- the object's answer, made for the
+    picture that has not arrived, is not read -- and a write goes to the
+    sidecar, leaving the object as it was (R2: not arrived, legacy path)."""
+    root, cid, vid = _scoped_world(monkeypatch, tmp_path)
+    mara, _ = characters.create_character(root, "Mara", "main")
+    gid = _greeting_with(root, cid, vid, {"art_1": b"png-1"})
+    image_subjects.set_image_subjects(root, gid, "art_1", [cid])
+    image_id = assets.image_id(root, gid, "default", "art_1", base="greetings")
+    obj = image_store.read(image_id)
+    image_store.blob_path(obj.blob_sha256, obj.ext).unlink()
+    d = assets.version_dir(root, gid, "default", base="greetings")
+    (d / "art_1.png").write_bytes(b"legacy-art")
+    assert assets.resolve(d, "art_1") is None and image_refs.read(d, "art_1").image == image_id
+
+    assert image_subjects.read_subjects(root, gid) == {}
+    assert [a["name"] for a in image_subjects.untagged(root)] == ["art_1"]
+
+    image_subjects.set_image_subjects(root, gid, "art_1", [mara])
+
+    assert image_subjects._read_raw(root, gid) == {"art_1": [mara]}
+    assert image_subjects.read_subjects(root, gid) == {"art_1": [mara]}
+    raw = image_store.read(image_id).raw
+    assert [a["id"] for a in raw["associations"]] == [cid]
