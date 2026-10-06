@@ -188,7 +188,7 @@ cannot fail a test run.
 | `test_path_guard_store.py` | the store never joins a caller-supplied id onto a path unchecked | — |
 | `test_absorb_writer_guard.py` | the absorb pass never edits or deletes a fact — only the user may | — |
 | `test_continuity_writer_guard.py` | continuity's discovery and projection modules, the Story Graph's included, never write plot or commitment records, events, scene ideas, reviewed aliases and links, or suppressions — only `continuity.review` and the routes apply a reviewed decision | — |
-| `test_continuity_wording.py` | no reader-visible source (non-test files under `backend/src/grimoire/` and `frontend/src/`, and `README.md`) uses a phrase the continuity spec's §30 avoids; the list is §30's four and their rewordings, and why is in §30 of `docs/superpowers/specs/2026-10-04-continuity-capstone-design.md` | — |
+| `test_continuity_wording.py` | no reader-visible source (non-test files under `backend/src/grimoire/` and `frontend/src/`, and `README.md`) makes a claim the continuity spec avoids by name — §30's four phrases and §3.3's “continuity disabled” — in any plain rewording (an article, a plural, a verb form), and nothing broader; why is in §30 of `docs/superpowers/specs/2026-10-04-continuity-capstone-design.md` | — |
 | `test_docs_guard.py` | this page, `AGENTS.md`, `docs/store-guarantees.md`, and the claims of `CLAUDE.md` and `templates/README.md` it can check, still match the code | — |
 | `test_ratchet_guard.py` | the lint baselines are canonical, positive, and name files that exist | — |
 
