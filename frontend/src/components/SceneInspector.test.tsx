@@ -2400,3 +2400,29 @@ test("a later part of a response opens its own record, by the key the scene read
   expect(within(detail).getByText("Second part...")).toBeInTheDocument();
   expect(within(detail).queryByText("First part...")).not.toBeInTheDocument();
 });
+
+// ---- quick replies share the two manual tasks ----
+
+test("a task the strip is running disables its manual button", async () => {
+  const { rerender } = render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} stripTasks={{ rolling_summary: true }} /></MemoryRouter>);
+  expect(await screen.findByRole("button", { name: /refresh now/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /ask now/i })).toBeEnabled();
+  rerender(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} stripTasks={{ scene_break: true }} /></MemoryRouter>);
+  expect(await screen.findByRole("button", { name: /ask now/i })).toBeDisabled();
+  expect(screen.getByRole("button", { name: /refresh now/i })).toBeEnabled();
+});
+
+test("its manual buttons report themselves busy", async () => {
+  const onTaskBusy = vi.fn();
+  render(<MemoryRouter><SceneInspector cid="c" sid="s" refreshKey={0}
+    onSceneChanged={() => {}} onTaskBusy={onTaskBusy} /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole("button", { name: /refresh now/i }));
+  await waitFor(() => expect(onTaskBusy).toHaveBeenLastCalledWith("rolling_summary", false));
+  expect(onTaskBusy.mock.calls[0]).toEqual(["rolling_summary", true]);
+  onTaskBusy.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: /ask now/i }));
+  await waitFor(() => expect(onTaskBusy).toHaveBeenLastCalledWith("scene_break", false));
+  expect(onTaskBusy.mock.calls[0]).toEqual(["scene_break", true]);
+});

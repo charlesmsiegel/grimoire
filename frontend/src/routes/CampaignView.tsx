@@ -11,7 +11,7 @@ import {
   type CampaignBudget,
   type IncomingRef,
   type SceneUsage,
-  type TrackerSummary, type UsagePostBucket, type QuickReply,
+  type TrackerSummary, type UsagePostBucket, type QuickReply, type QuickReplyTask,
 } from "../api/client";
 import { THUMB } from "../api/thumbs";
 import { isAbortError, newAttemptId, type ChatEvent } from "../api/stream";
@@ -221,6 +221,11 @@ function useStableHandlers<T extends { [K in keyof T]: (...args: never[]) => voi
     return out as T;
   });
   return stable;
+}
+
+/** A manual task in flight: which surface started it, in which scene. */
+function taskKey(origin: "strip" | "inspector", cid: string, sid: string, task: string): string {
+  return `${origin}:${cid}/${sid}:${task}`;
 }
 
 export default function CampaignView({ ready }: { ready: boolean }) {
@@ -787,6 +792,19 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // scoped to the scene it was tapped in.
   const [quickNotice, setQuickNotice] =
     useState<{ cid: string; sid: string; text: string } | null>(null);
+  // The two manual tasks in flight, from the strip or the inspector, keyed
+  // `${origin}:${cid}/${sid}:${task}` -- so the same task is never started
+  // twice from two surfaces, and a run in one scene never holds another's.
+  const [taskBusy, setTaskBusy] = useState<Record<string, true>>({});
+  const markTask = useCallback((key: string, on: boolean) => {
+    setTaskBusy((cur) => {
+      if (on === !!cur[key]) return cur;
+      const next = { ...cur };
+      if (on) next[key] = true;
+      else delete next[key];
+      return next;
+    });
+  }, []);
   useEffect(() => {
     let live = true;
     api.getEffectiveQuickReplies(cid)
@@ -796,6 +814,21 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       .catch(() => { if (live) setQuickSet({ cid, replies: [] }); });
     return () => { live = false; };
   }, [cid]);
+  const stripSummary = !!activeId && !!taskBusy[taskKey("strip", cid, activeId, "rolling_summary")];
+  const stripBreak = !!activeId && !!taskBusy[taskKey("strip", cid, activeId, "scene_break")];
+  // Stable unless one of the two flags moves: the inspector is memoized.
+  const stripTasks = useMemo(() => ({ rolling_summary: stripSummary, scene_break: stripBreak }),
+    [stripSummary, stripBreak]);
+  // Keyed on the scene it was handed to, so a run the inspector started in one
+  // scene clears its own flag even after the reader has moved on.
+  const onInspectorTaskBusy = useCallback(
+    (task: "rolling_summary" | "scene_break", on: boolean) => {
+      if (activeId) markTask(taskKey("inspector", cid, activeId, task), on);
+    }, [cid, activeId, markTask]);
+  function taskRunning(task: "rolling_summary" | "scene_break"): boolean {
+    return !!activeId && (!!taskBusy[taskKey("strip", cid, activeId, task)]
+      || !!taskBusy[taskKey("inspector", cid, activeId, task)]);
+  }
   const streamRef = useRef<HTMLDivElement>(null);
   /** The scene inspector, which used to be a permanently-open third column.
    *
@@ -3512,6 +3545,50 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     setParkedTick((n) => n + 1);
   }
 
+  /** A saved roll: the dice button's route, with its own notice on failure. */
+  async function rollQuick(notation: string, label: string | undefined) {
+    const forCid = cid;
+    const sid = activeId;
+    const outcome = await doRoll(notation, label);
+    if (sid && typeof outcome === "object")
+      setQuickNotice({ cid: forCid, sid, text: `Roll failed: ${outcome.error}` });
+  }
+
+  /** A task on the strip: the rolling summary or the scene-break check run now
+   *  (forced, and bounded at the transcript on screen so a fold cannot swallow
+   *  a post the reply to which has not landed), or the next-scene chooser. */
+  async function runQuickTask(task: QuickReplyTask) {
+    if (task === "next_scene") {
+      newScene();
+      return;
+    }
+    if (!activeId || sceneLocked || !ready || messages.length === 0 || taskRunning(task)) return;
+    const forCid = cid;
+    const sid = activeId;
+    const key = taskKey("strip", forCid, sid, task);
+    // Absolute: the transcript is read in windows, and `messages[0]` is post
+    // `firstIndex`.
+    const upto = firstIndex + messages.length;
+    const here = () => cidRef.current === forCid && activeIdRef.current === sid;
+    const notice = (text: string) => { if (here()) setQuickNotice({ cid: forCid, sid, text }); };
+    markTask(key, true);
+    try {
+      if (task === "rolling_summary") {
+        const r = await api.refreshRollingSummary(forCid, sid, true, upto);
+        if (r.refreshed) { if (here()) setCtxKey((n) => n + 1); }
+        else notice("Summary already current — nothing new to fold");
+      } else {
+        const r = await api.askSceneBreak(forCid, sid, true, upto);
+        if (r.asked) { if (here()) setCtxKey((n) => n + 1); }
+        else notice("No scene-break question asked");
+      }
+    } catch (err: unknown) {
+      notice(`${task === "rolling_summary" ? "Summary" : "Scene-break check"} failed: ${errorText(err)}`);
+    } finally {
+      markTask(key, false);
+    }
+  }
+
   function runQuickReply(r: QuickReply) {
     setQuickNotice(null);
     switch (r.kind) {
@@ -3519,6 +3596,12 @@ export default function CampaignView({ ready }: { ready: boolean }) {
       case "direct":
         if (r.mode === "insert") insertQuick(r.text ?? "", r.kind === "direct");
         else void sendQuick(r.text ?? "", r.kind === "direct");
+        return;
+      case "roll":
+        void rollQuick(r.notation ?? "", r.roll_label);
+        return;
+      case "task":
+        if (r.task) void runQuickTask(r.task);
         return;
       default:
         return;
@@ -4004,24 +4087,39 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   // line has to stay in lockstep with rolls.json — so a roll landing in the
   // flush window makes the restore refuse and the rerolled reply is gone for
   // good. The backend cannot rescue that one; only not racing it can (#95).
-  async function doRoll() {
-    if (!activeId || busy || sceneLocked || rolling || !rollForm) return;
-    const notation = rollForm.notation.trim();
-    if (!notation) return;
-    const releaseLatch = takeRollLatch(activeId);
+  /** Roll `notation` into the active scene: the popover's Roll ▸ and a saved
+   *  roll on the strip both come here. Takes the roll latch and asks for the
+   *  follow-ups exactly as before; says how it went rather than writing the
+   *  popover's form error itself, since the strip has no form. */
+  async function doRoll(notation: string, label: string | undefined):
+      Promise<"skipped" | "ok" | { error: string }> {
+    if (!activeId || busy || sceneLocked || rolling) return "skipped";
+    if (!notation.trim()) return "skipped";
+    const sid = activeId;
+    const releaseLatch = takeRollLatch(sid);
     try {
-      await api.roll(cid, activeId, notation, rollForm.label.trim() || undefined);
-      setRollForm(null);
-      const seen = await selectScene(activeId);
+      await api.roll(cid, sid, notation.trim(), label);
+      const seen = await selectScene(sid);
       // The length the re-read saw is this write's boundary, for the reason the
       // turn loop passes one: nothing holds the scene once this returns.
-      askAfterPost(activeId, seen);   // a roll is a post too (#85, #84)
-    } catch (err: any) {
-      setRollForm({ ...rollForm, error: err.detail ?? String(err) });
+      askAfterPost(sid, seen);   // a roll is a post too (#85, #84)
+      return "ok";
+    } catch (err: unknown) {
+      return { error: errorText(err) };
     } finally {
       releaseLatch();
     }
   }
+
+  /** The popover's Enter / Roll ▸. */
+  async function rollFromForm() {
+    if (!rollForm) return;
+    const form = rollForm;
+    const outcome = await doRoll(form.notation.trim(), form.label.trim() || undefined);
+    if (outcome === "ok") setRollForm(null);
+    else if (outcome !== "skipped") setRollForm({ ...form, error: outcome.error });
+  }
+
 
   // Unbinding the pack removes the dice button, which is the popover's only
   // way in and its only way out -- left open it would be a form nothing can
@@ -4498,7 +4596,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
   const quickCtx: QuickReplyContext = {
     busy, rolling, renaming: renamesInFlight > 0, sceneLocked, posts: messages.length,
     moduleKnown: moduleBound !== null, pcless: activePcless, ready,
-    openerOffered: false, taskRunning: () => false,
+    openerOffered: false, taskRunning,
   };
 
   // The ledger's arrows, worked out once for the row, the keys and the gesture.
@@ -5263,7 +5361,9 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                               budget={budget}
                               onBudgetSaved={onBudgetSaved}
                               rewritten={rewrittenPosts}
-                              onTranscriptEdited={onInspectorTranscriptEdited} />
+                              onTranscriptEdited={onInspectorTranscriptEdited}
+                              stripTasks={stripTasks}
+                              onTaskBusy={onInspectorTaskBusy} />
             </div>
           )}
           {activeId && !focus && (
@@ -5657,7 +5757,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   onChange={(e) => setRollForm({ ...rollForm, notation: e.target.value })}
                   onKeyDown={(e) => {
                     // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); doRoll(); }
+                    if (e.key === "Enter") { e.preventDefault(); void rollFromForm(); }
                     if (e.key === "Escape") setRollForm(null);
                   }}
                 />
@@ -5669,11 +5769,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                   onChange={(e) => setRollForm({ ...rollForm, label: e.target.value })}
                   onKeyDown={(e) => {
                     // See the reroll box: an inline Enter is claimed, not shared.
-                    if (e.key === "Enter") { e.preventDefault(); doRoll(); }
+                    if (e.key === "Enter") { e.preventDefault(); void rollFromForm(); }
                     if (e.key === "Escape") setRollForm(null);
                   }}
                 />
-                <button className="btn-chrome" onClick={doRoll} disabled={rolling}>Roll ▸</button>
+                <button className="btn-chrome" onClick={() => void rollFromForm()} disabled={rolling}>Roll ▸</button>
                 <button type="button" className="roll-syntax-help" aria-label="Dice notation syntax"
                         aria-expanded={showRollSyntax}
                         onClick={() => setShowRollSyntax((v) => !v)}>syntax {showRollSyntax ? "▾" : "▸"}</button>

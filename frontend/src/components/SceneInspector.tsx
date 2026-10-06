@@ -235,7 +235,7 @@ function RewriteDetail({ cid, sid, post, locked, onRestored, onStale }: {
  *  character and per location. */
 export const SceneInspector = memo(function SceneInspector({
   cid, sid, refreshKey, onSceneChanged, onSceneRenamed, pcless, sceneLocked, onRenaming, posts,
-  usage, budget, onBudgetSaved, rewritten, onTranscriptEdited,
+  usage, budget, onBudgetSaved, rewritten, onTranscriptEdited, stripTasks, onTaskBusy,
 }:
   { cid: string; sid: string; refreshKey: number; onSceneChanged: () => void;
     onSceneRenamed?: (id: string) => void; pcless?: boolean;
@@ -266,7 +266,13 @@ export const SceneInspector = memo(function SceneInspector({
     /** A restore rewrote the transcript. Left out, `onSceneChanged` stands in;
      *  the play view passes its own so a restore asks for the follow-ups any
      *  edit does. */
-    onTranscriptEdited?: () => void }) {
+    onTranscriptEdited?: () => void;
+    /** The manual tasks a composer quick reply is running for this scene, so
+     *  the same task cannot be started twice from two surfaces. */
+    stripTasks?: { rolling_summary?: boolean; scene_break?: boolean };
+    /** Reports this panel's own Refresh now / Ask now in and out of flight,
+     *  for the same reason in the other direction. */
+    onTaskBusy?: (task: "rolling_summary" | "scene_break", busy: boolean) => void }) {
   const [cast, setCast] = useState<Actor[]>([]);
   // Which author's notes apply to the NEXT turn (play controls V), for the
   // section's count. Stamped with its scene, like the briefing, so a late answer
@@ -1112,6 +1118,7 @@ export const SceneInspector = memo(function SceneInspector({
     // pressed may not overwrite what the button installs, however late it lands.
     const ticket = ++writeTicket.current;
     setRollingBusy(key);
+    onTaskBusy?.("rolling_summary", true);
     try {
       // `force`, always: this button exists so the player can ask for a summary
       // *now*, including when the automatic refresh is switched off. The
@@ -1145,6 +1152,7 @@ export const SceneInspector = memo(function SceneInspector({
       // another record while this one is out, and clearing unconditionally
       // would free that one's button while its call is still running.
       setRollingBusy((busy) => (busy === key ? null : busy));
+      onTaskBusy?.("rolling_summary", false);
     }
   }
 
@@ -1174,6 +1182,7 @@ export const SceneInspector = memo(function SceneInspector({
     const key = `${cid}/${sid}`;
     setBreakError(null);
     setBreakBusy(key);
+    onTaskBusy?.("scene_break", true);
     try {
       const data = await api.askSceneBreak(cid, sid, true);
       // Guarded on the reader still being on this record, like every other
@@ -1191,6 +1200,7 @@ export const SceneInspector = memo(function SceneInspector({
       setBreakError({ key, err });
     } finally {
       setBreakBusy((busy) => (busy === key ? null : busy));
+      onTaskBusy?.("scene_break", false);
     }
   }
 
@@ -1329,7 +1339,7 @@ export const SceneInspector = memo(function SceneInspector({
               digest valid, so it would stay out of the "current" summary until
               the next threshold came round. */}
           <button className="primary" onClick={refreshRolling}
-                  disabled={rollingBusy === `${cid}/${sid}` || sceneLocked}
+                  disabled={rollingBusy === `${cid}/${sid}` || sceneLocked || !!stripTasks?.rolling_summary}
                   title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
             {rollingBusy === `${cid}/${sid}` ? "Summarizing…" : "Refresh now"}
           </button>
@@ -1420,7 +1430,7 @@ export const SceneInspector = memo(function SceneInspector({
               half-written turn is asking about a beat whose reply has not
               arrived. */}
           <button className="primary" onClick={askBreakNow}
-                  disabled={breakBusy === `${cid}/${sid}` || sceneLocked}
+                  disabled={breakBusy === `${cid}/${sid}` || sceneLocked || !!stripTasks?.scene_break}
                   title={sceneLocked ? LOCKED_WHILE_GENERATING : undefined}>
             {breakBusy === `${cid}/${sid}` ? "Asking…" : "Ask now"}
           </button>
