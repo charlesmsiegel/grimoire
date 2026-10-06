@@ -2096,10 +2096,16 @@ async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, wh
     if not continuity_identity.has_proposals(parsed):
         return parsed, block
     exam: continuity_identity.Examination | None = None
+    # With no connection the resolver can never run, so the step is
+    # deterministic neighbours only (§10.4): no deadline embeds nothing, and
+    # vectors already cached still score. Embedding would send campaign prose
+    # to the provider, on the extraction's critical path, for no decision.
+    embed_deadline = (None if conn is None
+                      else continuity_similarity.deadline(budget.remaining()))
     try:
         exam = await run_in_threadpool(
             continuity_identity.examine, cid, sid, parsed, prepared.facts,
-            embed_deadline=continuity_similarity.deadline(budget.remaining()))
+            embed_deadline=embed_deadline)
         block["matching"] = exam.matching
         if exam.proposed == 0:
             # Every row moves a stored record or was dropped: nothing was
