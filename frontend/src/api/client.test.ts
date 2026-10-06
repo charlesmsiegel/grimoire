@@ -2475,6 +2475,31 @@ test("writes that change what is imminent announce it on the notices channel", a
   off();
 });
 
+test("an event delete answered partial_delete still announces on the notices channel", async () => {
+  // The 500 says the delete landed and only its link cleanup did not: the
+  // event and its acknowledgements are gone, so the inspector and the chooser
+  // would keep showing its notice. Any other refusal changed nothing.
+  const { onNoticesChanged } = await import("../appEvents");
+  const heard = vi.fn();
+  const off = onNoticesChanged(heard);
+
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: false, status: 500,
+    json: async () => ({ kind: "partial_delete", landed: ["event"],
+                         detail: "the event was deleted" }) });
+  await expect(api.deleteCampaignEvent("c", "the-coronation"))
+    .rejects.toMatchObject({ kind: "partial_delete" });
+  expect(heard).toHaveBeenCalledTimes(1);
+
+  globalThis.fetch = vi.fn().mockResolvedValue({
+    ok: false, status: 409,
+    json: async () => ({ kind: "malformed", detail: "repair it first" }) });
+  await expect(api.deleteCampaignEvent("c", "the-coronation"))
+    .rejects.toMatchObject({ kind: "malformed" });
+  expect(heard).toHaveBeenCalledTimes(1);
+  off();
+});
+
 test("a scene datetime write announces only when it moved the clock", async () => {
   // `clock.observe` runs on this path, so a scene carrying the campaign present
   // forward fires the events it crossed — but a flashback or a re-date changes
