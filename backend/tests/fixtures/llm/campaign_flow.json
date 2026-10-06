@@ -31,7 +31,7 @@
     },
     {
       "when": {"system_contains": "propose 3-4 DISTINCT scene openings"},
-      "reply": "{\"suggestions\": [{\"title\": \"The ledger reopened\", \"premise\": \"Seraphine sends word that the tide ledger has an entry Winifred has not seen. The keep is reachable for two hours either side of low water.\", \"cast\": [\"characters:seraphine\", \"pcs:winifred\"], \"location\": \"tidewatch-keep\"}]}"
+      "reply": "{\"suggestions\": [{\"title\": \"The ledger reopened\", \"premise\": \"Seraphine sends word that the tide ledger has an entry Winifred has not seen. The keep is reachable for two hours either side of low water.\", \"cast\": [\"characters:seraphine\", \"pcs:winifred\"], \"location\": \"tidewatch-keep\", \"drivers\": [{\"ref\": \"thread:the-debt\", \"action\": \"advance\"}]}]}"
     },
     {
       "when": {"system_contains": "Summarize this character in a single vivid sentence"},

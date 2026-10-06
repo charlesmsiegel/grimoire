@@ -4,14 +4,30 @@
           holidays_today,
           events_today ([str] — this campaign's scheduled events falling today,
           #101), upcoming ({name, in_days} | None — the sooner of the next
-          holiday and the next scheduled event),
+          holiday and the next scheduled event; only in the `drivers=False`
+          snapshot, and only read when `drivers` is false),
           birthdays ([{name, age, when}]),
           story_so_far ([{one_line, location, date}]),
-          open_threads ([{title, status, latest_beat, dormancy}]),
+          open_threads ([{id, title, status, latest_beat, dormancy}]),
           cast ([{token, name, tagline, status, role}]),
-          available_locations ([{id, name}])
+          available_locations ([{id, name}]);
+          and, in the `drivers=True` snapshot only: commitments ([{id, title,
+          kind, status, due, latest_beat, dormancy, pressure: {state, in_days,
+          friendly}}]), timeline, driver_index, anchors, links, fixed,
+          near_days, sooner_ref — rendered through `view`, not read here
+          directly (except commitments)
+      drivers — bool. True (the suggestion prompt): thread lines carry their
+          refs, the Upcoming line gives way to the timeline, and the
+          commitments, timeline, driver index and links blocks render. False
+          (scene_intent, which includes this file): today's text exactly.
+      view — suggest.driver_view's dict (index, more, timeline, timeline_more,
+          links, ...), read only under `drivers`; None otherwise
       greeting_candidates — [{id, name, excerpt}] | None
       direction — str (the game master's steering instruction, "" when absent) -#}
+{%- macro days(n) -%}
+{%- if n == 0 -%}today{%- elif n == 1 -%}in 1 day{%- elif n > 0 -%}in {{ n }} days
+{%- elif n == -1 -%}1 day ago{%- else -%}{{ -n }} days ago{%- endif -%}
+{%- endmacro -%}
 {%- set parts = [] -%}
 {%- if s.story_so_far -%}
 {%- set lines = [] -%}
@@ -32,7 +48,7 @@
    if s.notation.example and s.notation.example != shown else "") ~ "." -%}
 {%- if s.holidays_today -%}{%- set line = line ~ " Today: " ~ (s.holidays_today | join(", ")) ~ "." -%}{%- endif -%}
 {%- if s.events_today -%}{%- set line = line ~ " Scheduled today: " ~ (s.events_today | join(", ")) ~ "." -%}{%- endif -%}
-{%- if s.upcoming -%}{%- set line = line ~ " Upcoming: " ~ s.upcoming.name ~ " in " ~ s.upcoming.in_days ~ " days." -%}{%- endif -%}
+{%- if not drivers and s.upcoming -%}{%- set line = line ~ " Upcoming: " ~ s.upcoming.name ~ " in " ~ s.upcoming.in_days ~ " days." -%}{%- endif -%}
 {%- set _ = parts.append(line) -%}
 {%- endif -%}
 {%- if s.birthdays -%}
@@ -47,9 +63,42 @@
 {%- elif t.dormancy is defined and t.dormancy == 1 -%}{%- set dz = "advanced 1 scene ago" -%}
 {%- elif t.dormancy is defined -%}{%- set dz = "cold — " ~ t.dormancy ~ " scenes" -%}
 {%- else -%}{%- set dz = t.status -%}{%- endif -%}
-{%- set _ = lines.append(("- " ~ t.title ~ " (" ~ dz ~ "): " ~ t.latest_beat).rstrip(": ")) -%}
+{%- set head = ("thread:" ~ t.id ~ " = " ~ t.title) if drivers else t.title -%}
+{%- set _ = lines.append(("- " ~ head ~ " (" ~ dz ~ "): " ~ t.latest_beat).rstrip(": ")) -%}
 {%- endfor -%}
 {%- set _ = parts.append("Open plot threads (cold threads are especially worth reviving):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if drivers and s.commitments -%}
+{%- set lines = [] -%}
+{%- for c in s.commitments -%}
+{%- set cline -%}{%- include "snippets/commitment_line/absorb.j2" -%}{%- endset -%}
+{%- set p = c.pressure -%}
+{%- set tail = "" if p.state == "ok" else (" [" ~ p.state ~ ((", " ~ days(p.in_days)) if p.in_days is not none else "") ~ "]") -%}
+{%- set _ = lines.append("- commitment:" ~ cline ~ tail) -%}
+{%- endfor -%}
+{%- set _ = parts.append("Open commitments (use these refs):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if drivers and view.timeline -%}
+{%- set lines = [] -%}
+{%- for i in view.timeline -%}
+{%- if i.kind in ("deadline", "linked_deadline") -%}
+{%- set what = "deadline for " ~ i.subject ~ " = " ~ i.label ~ ((" (" ~ i.relation ~ " " ~ i.ref ~ ")") if i.kind == "linked_deadline" else "") -%}
+{%- else -%}{%- set what = i.ref ~ " = " ~ i.label -%}{%- endif -%}
+{%- set _ = lines.append("- " ~ (i.friendly or i.native or "undated") ~ " (" ~ i.when ~ "; " ~ i.state ~ "): " ~ what) -%}
+{%- endfor -%}
+{%- if view.timeline_more -%}{%- set _ = lines.append("…and " ~ view.timeline_more ~ " more dated items not listed.") -%}{%- endif -%}
+{%- set _ = parts.append("Timeline (computed from the calendar; never recompute these dates):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if drivers and view.index -%}
+{%- set lines = [] -%}
+{%- for d in view.index -%}{%- set _ = lines.append("- " ~ d.ref ~ " = " ~ d.label ~ " (" ~ d.kind ~ ", " ~ d.state ~ ((", " ~ d.when) if d.when else "") ~ ")") -%}{%- endfor -%}
+{%- if view.more -%}{%- set _ = lines.append("…and " ~ view.more ~ " more drivers not listed.") -%}{%- endif -%}
+{%- set _ = parts.append("Story drivers (cite these refs in \"drivers\"):\n" ~ (lines | join("\n"))) -%}
+{%- endif -%}
+{%- if drivers and view.links -%}
+{%- set lines = [] -%}
+{%- for l in view.links -%}{%- set _ = lines.append("- " ~ l.a ~ " " ~ l.relation ~ " " ~ l.b) -%}{%- endfor -%}
+{%- set _ = parts.append("Reviewed links between drivers:\n" ~ (lines | join("\n"))) -%}
 {%- endif -%}
 {%- if s.cast -%}
 {%- set present = [] -%}{%- set offstage = [] -%}{%- set unseen = [] -%}

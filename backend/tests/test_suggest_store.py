@@ -56,6 +56,18 @@ def _campaign_with_player_character(monkeypatch, tmp_path):
     return cid
 
 
+def _snap(**over) -> dict:
+    """A hand-built suggestion snapshot: today's keys, plus the driver keys
+    `build_snapshot` adds (empty), so the templates render it under
+    StrictUndefined exactly as they render a real one."""
+    base = {"now": "", "friendly": "", "notation": {"example": "", "months": []},
+            "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
+            "story_so_far": [], "open_threads": [], "cast": [], "available_locations": [],
+            "commitments": [], "timeline": [], "driver_index": [], "anchors": [],
+            "links": [], "fixed": None, "near_days": 7, "sooner_ref": ""}
+    return {**base, **over}
+
+
 def test_build_snapshot_classifies_cast_and_annotates_threads(monkeypatch, tmp_path):
     wid = _world(monkeypatch, tmp_path)
     wroot = worlds.world_root(wid)
@@ -189,25 +201,25 @@ def test_a_continuity_side_failure_still_lists_the_physical_threads(monkeypatch,
 
 
 def test_build_prompt_includes_signals():
-    snap = {"now": "2026-01-01", "friendly": "Jan 1",
-            "notation": {"example": "", "months": []}, "holidays_today": ["New Year"],
-            # A campaign-scheduled event (#101) beside the calendar's holiday:
-            # the prompt line carries both, from two different sources.
-            "events_today": ["The envoy arrives"],
-            "upcoming": {"name": "Festival", "in_days": 5},
-            "birthdays": [{"name": "Ann", "age": 30, "when": "today"}],
-            "story_so_far": [{"one_line": "They met at the keep.", "location": "The Keep", "date": "2026-01-01"}],
-            "open_threads": [{"id": "the-map", "title": "The map", "status": "open",
-                              "latest_beat": "found it", "dormancy": 2}],
-            "cast": [{"token": "characters:ann", "name": "Ann", "tagline": "a healer",
-                      "status": "present", "role": "npc"},
-                     {"token": "characters:doran", "name": "Doran", "tagline": "a sellsword",
-                      "status": "unseen", "role": "npc"},
-                     {"token": "characters:mira", "name": "Mira", "tagline": "an old ally",
-                      "status": "appeared", "role": "npc"},
-                     {"token": "pcs:kit", "name": "Kit", "tagline": "",
-                      "status": "present", "role": "player"}],
-            "available_locations": [{"id": "keep", "name": "The Keep"}]}
+    snap = _snap(
+        now="2026-01-01", friendly="Jan 1", holidays_today=["New Year"],
+        # A campaign-scheduled event (#101) beside the calendar's holiday:
+        # the prompt line carries both, from two different sources.
+        events_today=["The envoy arrives"],
+        upcoming={"name": "Festival", "in_days": 5},
+        birthdays=[{"name": "Ann", "age": 30, "when": "today"}],
+        story_so_far=[{"one_line": "They met at the keep.", "location": "The Keep", "date": "2026-01-01"}],
+        open_threads=[{"id": "the-map", "title": "The map", "status": "open",
+                       "latest_beat": "found it", "dormancy": 2}],
+        cast=[{"token": "characters:ann", "name": "Ann", "tagline": "a healer",
+               "status": "present", "role": "npc"},
+              {"token": "characters:doran", "name": "Doran", "tagline": "a sellsword",
+               "status": "unseen", "role": "npc"},
+              {"token": "characters:mira", "name": "Mira", "tagline": "an old ally",
+               "status": "appeared", "role": "npc"},
+              {"token": "pcs:kit", "name": "Kit", "tagline": "",
+               "status": "present", "role": "player"}],
+        available_locations=[{"id": "keep", "name": "The Keep"}])
     user = suggest.build_prompt(snap)[1]["content"]
     assert "The map" in user and "cold — 2 scenes" in user
     assert "Ann" in user and "a healer" in user
@@ -222,18 +234,14 @@ def test_build_prompt_includes_signals():
 
 
 def test_standard_instruction_enforces_presence_and_gender():
-    snap = {"now": "", "friendly": "",
-            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
-            "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
+    snap = _snap()
     system = suggest.build_prompt(snap)[0]["content"]
     assert "Never assume a character is present" in system
     assert "gender" in system and "reviving" in system
 
 
 def test_offscreen_instruction_keeps_presence_discipline():
-    snap = {"now": "", "friendly": "",
-            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None, "birthdays": [],
-            "story_so_far": [], "open_threads": [], "cast": [], "available_locations": []}
+    snap = _snap()
     system = suggest.build_prompt(snap, offscreen=True)[0]["content"]
     assert "OFFSCREEN" in system
     assert "Never include the player character" in system
@@ -356,10 +364,7 @@ def test_parse_greeting_picks_validates_dedupes_and_keeps_order(monkeypatch, tmp
 
 # ---- suggested dates (per-suggestion "date" + top-level "next_date") ----
 def test_build_prompt_requests_dates_only_with_a_current_date():
-    snap = {"now": "2026-01-01", "friendly": "Jan 1",
-            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
-            "birthdays": [], "open_threads": [], "story_so_far": [],
-            "cast": [], "available_locations": []}
+    snap = _snap(now="2026-01-01", friendly="Jan 1")
     assert "next_date" in suggest.build_prompt(snap)[0]["content"]
     snap["now"] = ""
     assert "next_date" not in suggest.build_prompt(snap)[0]["content"]
@@ -447,30 +452,21 @@ def test_parse_intent_treats_a_non_string_field_as_missing(monkeypatch, tmp_path
 
 # ---- direction (#316) ----
 def test_direction_reaches_the_prompt():
-    snap = {"now": "", "friendly": "",
-            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
-            "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
-            "available_locations": []}
+    snap = _snap()
     msgs = suggest.build_prompt(snap, None, direction="something at sea")
     assert "something at sea" in msgs[1]["content"]
     assert "Direction" in msgs[0]["content"]      # the instruction addendum
 
 
 def test_no_direction_omits_the_direction_block():
-    snap = {"now": "", "friendly": "",
-            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
-            "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
-            "available_locations": []}
+    snap = _snap()
     msgs = suggest.build_prompt(snap, None, direction="")
     assert "Direction" not in msgs[0]["content"]
     assert "Direction" not in msgs[1]["content"]
 
 
 def test_direction_is_truncated_to_the_limit():
-    snap = {"now": "", "friendly": "",
-            "notation": {"example": "", "months": []}, "holidays_today": [], "events_today": [], "upcoming": None,
-            "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
-            "available_locations": []}
+    snap = _snap()
     msgs = suggest.build_prompt(snap, None, direction="x" * 900)
     assert ("x" * suggest.DIRECTION_LIMIT) in msgs[1]["content"]
     assert ("x" * (suggest.DIRECTION_LIMIT + 1)) not in msgs[1]["content"]
@@ -960,3 +956,111 @@ def test_offscreen_keeps_a_pc_birthday_driver_but_never_its_cast_token(monkeypat
     assert len(births) == 1
     assert births[0]["dormancy"] is None
     assert f"pcs:{wid}" not in {c["token"] for c in snap["cast"]}
+
+
+# ---- Task 3: the prompt renders the driver capture ----
+DRIVER_KEYS = {"commitments", "timeline", "driver_index", "anchors", "links", "fixed",
+               "near_days", "sooner_ref"}
+
+#: Global Constraints' drivers-addendum sentence needles (§15.1). Pinned here
+#: only; a reword edits the plan's list and the template together.
+DRIVERS_ADDENDUM_NEEDLES = (
+    'Each suggestion also includes key "drivers"',
+    '"time_anchor"',
+    "High pressure means a driver whose state is",
+    "Not every suggestion should serve the same drivers",
+    "At least one suggestion should address a high-pressure driver, if any exists",
+    "Near-future temporal anchors are worth using",
+    "A quiet character or relationship scene is welcome when nothing urgent dominates",
+)
+
+
+def _store_campaign(monkeypatch, tmp_path):
+    """Mara's map, Mara's oath (due 2026-05-14) and the coronation on
+    2026-05-13, the clock at 2026-05-10."""
+    cid = _pressure_campaign(monkeypatch, tmp_path)
+    _map(cid)
+    _oath(cid)
+    eid = events.create(cid, "The coronation", "2026-05-13")
+    return cid, f"event:{eid}"
+
+
+def test_prompt_renders_refs_commitments_timeline_and_index(monkeypatch, tmp_path):
+    cid, _event = _store_campaign(monkeypatch, tmp_path)
+    user = suggest.build_prompt(suggest.build_snapshot(cid))[1]["content"]
+    assert "- thread:mara-s-map = Mara's map (" in user
+    assert "commitment:mara-s-oath: Mara's oath (promise, open), due 2026-05-14" in user
+    assert "Timeline (computed from the calendar" in user
+    assert "event:the-coronation = The coronation" in user
+    assert "Story drivers (cite these refs" in user
+    assert "Upcoming:" not in user
+
+
+def test_intent_prompt_still_has_its_upcoming_line(monkeypatch, tmp_path):
+    cid, _event = _store_campaign(monkeypatch, tmp_path)
+    user = suggest.build_intent_prompt(cid, "x")[1]["content"]
+    assert "Upcoming: The coronation in 3 days." in user
+    assert "Story drivers" not in user and "thread:mara-s-map" not in user
+
+
+def test_intent_prompt_does_no_driver_work(monkeypatch, tmp_path):
+    cid, _event = _store_campaign(monkeypatch, tmp_path)
+    # Recorders that delegate, not raisers: the new reads sit inside broad
+    # catches, which would swallow an AssertionError and pass.
+    builds = _recorder(monkeypatch, pressure, "build")
+    snaps = _recorder(monkeypatch, continuity_drivers, "snapshot")
+    assert suggest.build_intent_prompt(cid, "x")
+    assert (len(builds), len(snaps)) == (0, 0)
+
+
+def test_snapshot_drops_only_upcoming(monkeypatch, tmp_path):
+    cid, _event = _store_campaign(monkeypatch, tmp_path)
+    legacy = set(suggest.build_snapshot(cid, drivers=False))
+    assert "upcoming" in legacy
+    assert set(suggest.build_snapshot(cid)) == (legacy - {"upcoming"}) | DRIVER_KEYS
+
+
+def test_drivers_addendum_names_every_action_and_high_pressure(monkeypatch, tmp_path):
+    cid, _event = _store_campaign(monkeypatch, tmp_path)
+    system = suggest.build_prompt(suggest.build_snapshot(cid))[0]["content"]
+    for action in continuity_drivers.DRIVER_ACTIONS:
+        assert f'"{action}"' in system, action
+    for needle in DRIVERS_ADDENDUM_NEEDLES:
+        assert needle in system, needle
+    assert 'High pressure means a driver whose state is "overdue", "today" or "due_soon"' \
+        in system
+
+
+def test_controls_addendum_needles(monkeypatch, tmp_path):
+    cid, event = _store_campaign(monkeypatch, tmp_path)
+    snap = suggest.build_snapshot(cid)
+
+    def system(controls):
+        return suggest.build_prompt(snap, controls=controls)[0]["content"]
+
+    plain = system(None)
+    for needle in ("Focus drivers:", "Avoid drivers:", "Must-include drivers:",
+                   "between the current date and", "later than the current date",
+                   "Anchor every suggestion to"):
+        assert needle not in plain, needle
+
+    near = system(suggest.Controls(time_mode="near"))
+    assert "between the current date and" in near and "7 days" in near
+    assert "later than the current date" in system(suggest.Controls(time_mode="move"))
+    anchored = system(suggest.Controls(time_mode="anchor", anchor=event, relation="before"))
+    assert "Anchor every suggestion to" in anchored
+    assert f"{event} (The coronation" in anchored and '"before"' in anchored
+
+    steered = system(suggest.Controls(focus=(MAP,), avoid=(event,), must=(OATH,)))
+    assert f"Focus drivers: {MAP} = Mara's map" in steered
+    assert "Spread the focus drivers across the suggestions" in steered
+    assert f"Avoid drivers: {event} = The coronation" in steered
+    assert f"Must-include drivers: {OATH} = Mara's oath" in steered
+    assert "Every suggestion must serve each must-include driver" in steered
+
+
+def test_an_empty_campaign_keeps_todays_system_message(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    system = suggest.build_prompt(suggest.build_snapshot(cid))[0]["content"]
+    assert system == suggest.build_prompt(_snap())[0]["content"]
+    assert 'key "drivers"' not in system

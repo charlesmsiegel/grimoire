@@ -257,12 +257,36 @@ for signals in ([], BREAK_SIGNALS):
                   render("scene_break/user.j2", transcript=transcript, signals=signals,
                          facts=facts, title=title))
 
+#: The driver keys of the suggestion snapshot (`build_snapshot(drivers=True)`,
+#: which has no `upcoming`), empty.
+DRIVER_KEYS = {"commitments": [], "timeline": [], "driver_index": [], "anchors": [],
+               "links": [], "fixed": None, "near_days": 7, "sooner_ref": ""}
 EMPTY_SNAP = {"now": "", "friendly": "",
               "notation": {"example": "", "months": []},
               "holidays_today": [], "events_today": [],
-              "upcoming": None,
               "birthdays": [], "story_so_far": [], "open_threads": [], "cast": [],
-              "available_locations": []}
+              "available_locations": [], **DRIVER_KEYS}
+
+
+def _pressure_item(ref, kind, label, in_days, state, **extra):
+    """One `pressure.build` item, in its shape, on a fixed day 1000 + in_days."""
+    item = {"ref": ref, "kind": kind, "label": label, "native": "", "friendly": "",
+            "fixed": None, "in_days": in_days, "relation": "on", "state": state,
+            "subject": None, "due_text": "", "precision": None, "actor": None, "age": None}
+    if in_days is not None:
+        item.update(native=f"1492-Mirtul-{5 + in_days:02d}",
+                    friendly=f"{5 + in_days} Mirtul 1492", fixed=1000 + in_days,
+                    precision="exact")
+    item.update(extra)
+    return item
+
+
+def _driver_row(ref, label, state, in_days=None, dormancy=None, links=()):
+    """One `driver_index` row: a `drivers.snapshot` driver plus `dormancy`."""
+    return {"ref": ref, "kind": ref.split(":", 1)[0], "label": label, "summary": "",
+            "actors": [], "status": "",
+            "pressure": {"state": state, "in_days": in_days, "friendly": ""},
+            "time_anchors": [], "links": list(links), "dormancy": dormancy}
 FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026",
              # A non-Gregorian notation on purpose: the format lesson exists
              # because `friendly` is not a form the parser reads back, and a
@@ -275,15 +299,16 @@ FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026",
              # the snapshot merges the two, so a fixture with only holidays
              # would leave the merged half of the line unrendered here.
              "events_today": ["The Envoy arrives"],
-             "upcoming": {"name": "The Regatta", "in_days": 3},
              "birthdays": [{"name": "Hero", "age": 26, "when": "today"},
                            {"name": "Mora", "age": 51, "when": "in 2 days"}],
              "story_so_far": [{"one_line": "Hero followed Seraphine into the fog.",
                                "location": "Night Dock", "date": "2026-07-05"},
                               {"one_line": "Hero met Kessler.", "location": "", "date": "2026-07-01"}],
-             "open_threads": [{"title": "Find the ledger", "status": "open",
+             "open_threads": [{"id": "find-the-ledger", "ref": "thread:find-the-ledger",
+                               "title": "Find the ledger", "status": "open",
                                "latest_beat": "Hero learned it exists.", "dormancy": 0},
-                              {"title": "The Guild debt", "status": "advanced", "latest_beat": "",
+                              {"id": "the-debt", "ref": "thread:the-debt",
+                               "title": "The Guild debt", "status": "advanced", "latest_beat": "",
                                "dormancy": 3}],
              "cast": [{"token": "characters:mora", "name": "Mora",
                        "tagline": "A fortune-teller who deals in secrets.",
@@ -292,24 +317,89 @@ FULL_SNAP = {"now": "2026-07-05", "friendly": "July 5, 2026",
                        "status": "unseen", "role": "npc"},
                       {"token": "pcs:hero", "name": "Hero", "tagline": "", "status": "present",
                        "role": "player"}],
-             "available_locations": [{"id": "night-dock", "name": "Night Dock"}]}
+             "available_locations": [{"id": "night-dock", "name": "Night Dock"}],
+             # The driver half: a commitment, a timeline holding every item
+             # kind's line (an event, a holiday, a month-only birthday, a
+             # deadline and a linked one), a three-row index, its anchor and
+             # one reviewed link.
+             "commitments": [{"id": "mara-s-oath", "ref": "commitment:mara-s-oath",
+                              "title": "Mara's oath", "kind": "promise", "status": "open",
+                              "due": "1492-Mirtul-07", "latest_beat": "Mara swore it.",
+                              "dormancy": 1,
+                              "pressure": {"state": "due_soon", "in_days": 2,
+                                           "friendly": "7 Mirtul 1492"}},
+                             {"id": "salt-owed", "ref": "commitment:salt-owed",
+                              "title": "Salt owed", "kind": "debt", "status": "open",
+                              "due": "", "latest_beat": "", "dormancy": 6,
+                              "pressure": {"state": "due_soon", "in_days": 2,
+                                           "friendly": "7 Mirtul 1492"}}],
+             "timeline": [
+                 _pressure_item("holiday:1001:Saltmarch Eve", "holiday", "Saltmarch Eve", 1,
+                                "upcoming"),
+                 _pressure_item("commitment:mara-s-oath", "deadline", "Mara's oath", 2,
+                                "due_soon", subject="commitment:mara-s-oath",
+                                due_text="1492-Mirtul-07"),
+                 _pressure_item("event:the-coronation", "linked_deadline", "Salt owed", 2,
+                                "due_soon", subject="commitment:salt-owed", relation="before"),
+                 _pressure_item("event:the-coronation", "event", "The coronation", 3, "upcoming"),
+                 _pressure_item("birthday:characters:winifred:month:1492-Mirtul", "birthday",
+                                "Winifred", None, "ok", precision="month", friendly="Mirtul 1492",
+                                actor="characters:winifred")],
+             "driver_index": [
+                 _driver_row("commitment:mara-s-oath", "Mara's oath", "due_soon", 2, 1,
+                             links=[{"id": "l-1", "relation": "pays_off",
+                                     "other": "thread:find-the-ledger", "direction": "in"}]),
+                 _driver_row("event:the-coronation", "The coronation", "upcoming", 3),
+                 _driver_row("thread:find-the-ledger", "Find the ledger", "ok", None, 0,
+                             links=[{"id": "l-1", "relation": "pays_off",
+                                     "other": "commitment:mara-s-oath", "direction": "out"}])],
+             "anchors": [{"ref": "event:the-coronation", "kind": "event",
+                          "label": "The coronation", "native": "1492-Mirtul-08",
+                          "friendly": "8 Mirtul 1492", "fixed": 1003, "in_days": 3,
+                          "precision": "exact"}],
+             "links": [{"id": "l-1", "a": "thread:find-the-ledger",
+                        "b": "commitment:mara-s-oath", "relation": "pays_off"}],
+             "fixed": 1000, "near_days": 7, "sooner_ref": "holiday:1001:Saltmarch Eve"}
+#: Past the cap on both axes: 45 thread drivers and a 45-item timeline, the
+#: Upcoming pick the LAST item in rank order, so a focus row renders both "and
+#: N more" lines and the pinned pick past the cut.
+CAPPED_SNAP = {**EMPTY_SNAP, "now": "2026-07-05", "friendly": "July 5, 2026",
+               "driver_index": [_driver_row(f"thread:saltmarch-{n}", f"Saltmarch thread {n}",
+                                            "ok", None, 100 - n) for n in range(45)],
+               "timeline": [_pressure_item(f"event:saltmarch-fair-{n}", "event",
+                                           f"Saltmarch fair {n}", n + 1, "upcoming")
+                            for n in range(45)],
+               "sooner_ref": "event:saltmarch-fair-44"}
 GREETINGS = [{"id": "g1", "name": "Storm greeting", "excerpt": "Rain hammers the piers."},
              {"id": "g2", "name": "Quiet morning", "excerpt": "The dock sleeps."},
              {"id": "g3", "name": "Debt call", "excerpt": "A collector knocks."}]
-for label, snap, cands, off, direction in (
-        ("empty", EMPTY_SNAP, None, False, ""),
-        ("full", FULL_SNAP, None, False, ""),
-        ("full+greetings", FULL_SNAP, GREETINGS, False, ""),
-        ("offscreen", FULL_SNAP, None, True, ""),
-        ("direction", FULL_SNAP, None, False, "something at sea"),
-        ("direction+greetings", FULL_SNAP, GREETINGS, False, "something at sea")):
-    exp = suggest.build_prompt(snap, cands, offscreen=off, direction=direction)
+NONE = suggest.NO_CONTROLS
+STEERED = suggest.Controls(focus=("thread:find-the-ledger",), avoid=("event:the-coronation",),
+                           must=("commitment:mara-s-oath",))
+for label, snap, cands, off, direction, controls in (
+        ("empty", EMPTY_SNAP, None, False, "", NONE),
+        ("full", FULL_SNAP, None, False, "", NONE),
+        ("full+greetings", FULL_SNAP, GREETINGS, False, "", NONE),
+        ("offscreen", FULL_SNAP, None, True, "", NONE),
+        ("direction", FULL_SNAP, None, False, "something at sea", NONE),
+        ("direction+greetings", FULL_SNAP, GREETINGS, False, "something at sea", NONE),
+        ("full+focus/avoid/must", FULL_SNAP, None, False, "", STEERED),
+        ("full+near", FULL_SNAP, None, False, "", suggest.Controls(time_mode="near")),
+        ("full+move", FULL_SNAP, None, False, "", suggest.Controls(time_mode="move")),
+        ("full+anchor", FULL_SNAP, None, False, "",
+         suggest.Controls(time_mode="anchor", anchor="event:the-coronation",
+                          relation="before")),
+        ("capped+focus", CAPPED_SNAP, None, False, "",
+         suggest.Controls(focus=("thread:saltmarch-44",)))):
+    exp = suggest.build_prompt(snap, cands, offscreen=off, direction=direction,
+                               controls=controls)
+    view = suggest.driver_view(snap, controls)
     check(f"suggestions system ({label})", exp[0]["content"],
           render("scene_suggestions/system.j2", s=snap, offscreen=off,
-                 greeting_candidates=cands, direction=direction))
+                 greeting_candidates=cands, direction=direction, drivers=True, view=view))
     check(f"suggestions user ({label})", exp[1]["content"],
           render("scene_suggestions/user.j2", s=snap, offscreen=off,
-                 greeting_candidates=cands, direction=direction))
+                 greeting_candidates=cands, direction=direction, drivers=True, view=view))
 
 #: The scene tracker's final state as `routes.scenes._absorb_tracked` hands it
 #: over (`tracker.view.lines_for` for the narrator, empty lines dropped).
@@ -1327,28 +1417,30 @@ check_messages("offscreen adapted opener",
 
 snap = suggest.build_snapshot(cid)
 exp = suggest.build_prompt(snap, None)
+store_view = suggest.driver_view(snap, suggest.NO_CONTROLS)
 check("suggestions system (store)", exp[0]["content"],
       render("scene_suggestions/system.j2", s=snap, offscreen=False,
-             greeting_candidates=None, direction=""))
+             greeting_candidates=None, direction="", drivers=True, view=store_view))
 check("suggestions user (store)", exp[1]["content"],
       render("scene_suggestions/user.j2", s=snap, offscreen=False,
-             greeting_candidates=None, direction=""))
+             greeting_candidates=None, direction="", drivers=True, view=store_view))
 
+# The intent prompt renders the legacy snapshot with `drivers` off (spec §15).
 TYPED = "the morning after, back at the marsh house"
 iexp = suggest.build_intent_prompt(cid, TYPED)
-isnap = suggest.build_snapshot(cid)
+isnap = suggest.build_snapshot(cid, drivers=False)
 check("intent system (store)", iexp[0]["content"],
       render("scene_intent/system.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, direction="", typed=TYPED))
+             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
 check("intent user (store)", iexp[1]["content"],
       render("scene_intent/user.j2", s=isnap, offscreen=False,
-             greeting_candidates=None, direction="", typed=TYPED))
+             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
 
 ioff_exp = suggest.build_intent_prompt(cid, TYPED, offscreen=True)
-ioff_snap = suggest.build_snapshot(cid, offscreen=True)
+ioff_snap = suggest.build_snapshot(cid, offscreen=True, drivers=False)
 check("intent user (store, offscreen)", ioff_exp[1]["content"],
       render("scene_intent/user.j2", s=ioff_snap, offscreen=True,
-             greeting_candidates=None, direction="", typed=TYPED))
+             greeting_candidates=None, direction="", drivers=False, view=None, typed=TYPED))
 
 scene_msgs = scenes.read_scene(cid, sid)["messages"]
 tr = render("snippets/transcript.j2", messages=scene_msgs)
