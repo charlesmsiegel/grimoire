@@ -569,7 +569,7 @@ So `backend/src/grimoire/store/continuity/` is split:
 | `pending` | what a cached finding means now: its current fingerprint and verdict, and the live filter the review read, Todo, apply and both persists share. Read-only. (Slice D plan, Decision 1) | `fieldtext`, `candidates`, `canon`, `doc`, `effective` |
 | `reconcile` | §11 discovery, prompt build/parse and persist | `embeddings`, `prompts`, `aging`, `calendars`, `chronicle`, `clock`, `embed_space`, `errors`, `fieldtext`, `locks`, `paths`, `relationships`, `revision`, `scene_ids`, `vectors`, `absorb.parse`, `campaigns.paths`, `scenes.read`, `candidates`, `canon`, `effective`, `involvement`, `pending`, `pressure`, `similarity`. It reads continuity.json only through `pending` and imports no writer the §11.6 guard forbids (Slice D plan, deviation 22) |
 | `review` | §12 apply/dismiss orchestration; journalled alias/link writes and `forget_ref` (§5.7) | `commitments`, `events`, `fieldtext`, `locks`, `paths`, `plot`, `undo`, `scenes.read`, `candidates`, `canon`, `doc`, `effective`, `pending` (Slice A's edges plus Slice D's; Slice D plan, deviation 22) |
-| `graph` | §19 | the readers above |
+| `graph` | §19. Read-only: in no lock-domain list, scanned by the §11.6 writer guard. It takes `best_effort_campaign_lock` itself, because only it knows which reads go inside the hold (the campaign files) and which run plugin code outside it (`calendars.primary_provider`, `pressure.build`, `drivers.snapshot`, `events.list_events`, `calendars.fixed_of`, `calendars.friendly`) (Slice F plan, Decision 1) | `calendars`, `chronicle`, `events`, `fieldtext`, `locks`, `overlay`, `relationships`, `scene_ideas`, `campaigns.paths`, `scenes.read`, `candidates`, `canon`, `doc`, `drivers`, `effective`, `involvement`, `pending`, `pressure`. Never `suggest`, `briefing`, `context`, `timeline`, `chores`, `scene_refs`, `undo`, `review` or `reconcile`; imported only by `routes/continuity.py` and the frozen sweep (Slice F plan, Decision 1) |
 
 `continuity/__init__.py` imports no submodule that reaches `scenes`, `undo` or `scene_refs`. `plot.render_open` and `commitments.render_open` stay physical. Context assembly, the absorb snapshot and the advance digest call the new `effective` render functions over the same snippets. `scripts/verify_templates.py`'s render_open checks are extended to cover the effective form.
 
@@ -1856,7 +1856,11 @@ It has no tail, and `GET /api/shell` gains no field. `rail.test.ts` adds `/campa
 
 **Main.** Main holds the drawing in a horizontally scrolling pane, and the selected node's detail **below** the drawing, outside it.
 
-**URL state.** `?lens=`, `?arc=` and `?node=` live in the URL.
+**URL state.** `?lens=`, `?arc=` and `?node=` live in the URL. An unknown lens reads as Story, an `?arc=` that names no canonical thread or commitment as no filter, and a `?node=` that names no node as no selection. A lens or arc change pushes a history entry; a node pick replaces it. The Show toggles are local state, and each lens restores its own defaults (Slice F plan, Decision 19).
+
+**Phone column.** `PageShell` gains an optional `dismissKey`: when its value changes, the phone column closes, as it already does on a pathname change. An Arcs row changes only `?node=`, so the page passes `` `${node}#${pick}` ``, where `pick` counts every Arcs-row and node click. Re-tapping the selected row therefore still closes the sheet over the detail, while Lens and Show rows (filters) keep it up (Slice F plan, Decision 22).
+
+**Campaign name.** The page reads it from `useCampaignShell(cid, { demand: false })`, which skips the arrival `retry()` and reads only what the shell context already holds. Every existing caller keeps the default, `demand: true`. This keeps the graph read the page's only API call (§28.9; Slice F plan, Decision 18).
 
 ## 19.2 Node types
 
@@ -1884,6 +1888,15 @@ Relationships are actor–actor edges, not nodes.
 
 Do not dump all lore/items/creatures by default.
 
+**Which nodes exist** (Slice F plan, Decisions 6 and 11):
+
+- **Ideas:** only stored ideas whose status is `active`. A used idea became a scene, which is already on the spine, and a dismissed idea is the reader's own “no”.
+- **Actors:** only actors some edge names (appearances, involvement, relationships, birthdays). **Locations:** only locations named in some scene's location history.
+- **Threads and commitments:** every effective record, closed and resolved included, plus every alias source as its own node (§19.3).
+- **Events:** every stored event, fired, passed and undated included.
+- **Holidays and birthdays:** exactly pressure's occurrence items (§13), so only occurrences inside its horizon (`calendars.UPCOMING_WINDOW_DAYS`) and not in the past. Their ids are byte-identical to the anchor refs. A node is never synthesized by parsing a ref back apart.
+- **Groups and standing facts** are not built in this milestone. They are deferred to Slice G as optional node families.
+
 **Dates.** Every dated node carries `native`, `friendly`, `fixed: number | null` (the primary provider's fixed day) and `in_days: number | null` (relative to the campaign clock). The payload has a top-level `now: {native, friendly, fixed}`. The frontend positions dated nodes only by `fixed` / `in_days` and **never parses `native`**: native dates are provider strings, and sorting them is alphabetical by month name. A node whose `fixed` is null goes in an “Undated” bucket, never at a guessed position.
 
 ## 19.3 Edge types
@@ -1902,9 +1915,16 @@ Deterministic (`source: "structural"`):
 - `bond` (actor ↔ actor);
 - `birthday_of` (birthday → actor).
 
-Beats carry no status, so `opened_in`, `advanced_in` and `closed_in` are derived exactly as described.
+Beats carry no status, so `opened_in`, `advanced_in` and `closed_in` are derived exactly as described. Concretely (Slice F plan, Decision 8), from each effective record's merged beats in play order:
 
-Reviewed continuity links (`source: "reviewed"`, `relation` set):
+- `opened_in` targets the **first** beat's scene when that scene is listed. A first beat in a deleted scene gives no `opened_in`, and the edge never moves on to the next beat;
+- `advanced_in` / `touched_in` targets each distinct listed beat scene **other than** the opening scene;
+- `closed_in` / `resolved_in` applies when `not effective.is_live(kind, status)` and targets the effective `last_scene` when it is listed. It may coexist with an `advanced_in` edge to the same scene;
+- movement edges are unique per `(kind, from, to)`.
+
+`serves` carries the stored driver action (`DriverAction`) as its `relation`, and `anchored_to` the stored anchor relation. Both are kept only when the target is a node (Slice F plan, Decision 12). `feeling` carries typed `trust`, `affection`, `tension` (each clamped to 0–5) and `note`; `bond` carries `bond_type` and `since_scene`, kept even when that scene is deleted (it is provenance). A token whose prefix is not `characters` or `pcs` gives no edge (Slice F plan, Decision 14).
+
+Reviewed continuity links (`source: "reviewed"`, `relation` set) are edges of `kind: "link"`, with the stored link id as `id`, and are kept only when both ends are nodes (Slice F plan, Decision 13). The relations are:
 
 - continues;
 - subthread_of;
@@ -1912,9 +1932,9 @@ Reviewed continuity links (`source: "reviewed"`, `relation` set):
 - related_to;
 - before/on/after/by.
 
-Alias provenance (`source: "alias"`): `merged_into`, shown only when “Show merged” is enabled.
+Alias provenance (`source: "alias"`): `merged_into`, shown only when “Show merged” is enabled. The one exception is the arc filter, which shows the arc's own merged nodes and `merged_into` edges whatever the toggle says, because §19.6 asks it to show “its aliases” and that is the more specific rule (Slice F plan, Decision 20).
 
-Candidates (`source: "candidate"`, `candidate_id` set) render as dashed suggestion edges when “Show review candidates” is enabled.
+Candidates (`source: "candidate"`, `candidate_id` set) render as dashed suggestion edges when “Show review candidates” is enabled. A pair finding (`possible_duplicate`, `possible_relation`) becomes an edge whose `kind` is the candidate kind and whose `id` is the candidate id. Only verdicts in `pending.VISIBLE` are drawn. Every visible finding is also listed on the nodes it names (§20), so the edge carries no information of its own (Slice F plan, Decision 13).
 
 Never render an embedding score as an asserted story relation.
 
@@ -1932,6 +1952,21 @@ The default **Story** lens is play-order oriented, not a force-directed hairball
 - **Fired events:** fired or passed events are not on the Story spine. They appear in the Calendar lens and in node detail.
 
 The **Calendar** lens places scenes by their opening date's `fixed`, and puts Now at `now.fixed`.
+
+**Columns** (Slice F plan, Decision 21; Task 10). Both axes are **ordinal**: one column per distinct slot, never a linear day scale, which would put a year's gap between two scenes a flashback apart. Coordinates come from a pure layout function, so tests can assert them.
+
+- The **play axis** serves Story, Cast and Continuity. Left to right:
+  - a leading **“Not in a scene”** column, for a node with no visible scene column (an arc in a view that shows no scene, an actor with no appearance);
+  - **“Reached”**, for fired and passed events in the Cast and Continuity lenses (the Story lens drops them);
+  - the scenes in play order, one column each, headed by ordinal (“Scene 1”, …). An ordinal stays true under an arc filter that hides the scenes between;
+  - **Now**, which holds only its marker, so the marker never runs through a button;
+  - the temporal slots right of Now by `in_days` (upcoming events, holidays, birthdays, and deadlines still ahead);
+  - **“Undated”**, for unfired events and birthdays whose `fixed` is null (an undated non-idea node);
+  - the idea slots, one per distinct date (a dated idea in the past still takes one);
+  - **“Unscheduled”**, kept for ideas with no date, as above.
+- The **calendar axis** serves Calendar. Left to right: the days by `fixed`, with Now ordered among them (first on a tie), then “Undated”, then **“Not dated”** for record nodes that carry no date by nature (threads, commitments without a deadline, and merged nodes, which an arc filter or the Merged toggle can bring onto this lens), then **“People and places”** for actors and locations.
+- Threads and commitments take lanes. A thread sits in the column of the latest scene that moved it; a commitment whose deadline is still ahead takes its temporal slot instead. A merged node is laned **directly below** its canonical, in its canonical's column, whenever that canonical is drawn.
+- Node buttons are a fixed 44px tall (the touch target), with a one-line ellipsized label and status, so a long title can never grow into the next lane. Every geometry constant is justified structurally and is to be tuned against real campaigns later.
 
 The layout is hand-built: absolutely positioned HTML node buttons over one SVG edge layer, following the precedent of `PlotMapEditor`, with no new dependency. It must stay useful on Android and narrow screens:
 
@@ -1953,6 +1988,16 @@ Required lenses:
 
 Lenses and toggles are **client-side presets over one payload**, and switching them issues no request.
 
+How the presets read the list above (Slice F plan, Decision 20):
+
+- **Story** also shows saved ideas with their `serves` and `anchored_to` edges (§19.4 places them right of Now), and drops fired and passed events (§19.4).
+- **Cast** lists no actors of its own: its actors and their edges come only from the Actors toggle, which Cast turns on by default, so unchecking Actors in Cast does what it says.
+- **Calendar** shows a commitment **only when it has a deadline** (`native` non-empty), because the list says “deadlines”, not every commitment; a deadline the calendar cannot parse still goes under “Undated” (§19.2). It shows **no ideas**, so it has no `anchored_to` edges.
+- **Continuity** shows threads, commitments and events, with links, `merged_into` and candidate edges; Merged and Review candidates are on by default.
+- **Show toggles** work on top of every lens: Actors adds actors and the actor edges, Locations adds locations and `occurred_at`, Merged records adds merged nodes and `merged_into` edges (on every lens, Calendar included), and Review candidates adds candidate edges. An edge is visible only when both its ends are.
+- **Arc filter:** with `?arc=` set, the visible nodes are the arc, its merged nodes, its reviewed-link neighbours, the scenes its movement edges reach and the actors its `involves` edges reach. That set replaces the lens's node kinds and toggles; the arc's aliases show **whatever the Merged toggle says** (recorded against §19.3), the lens still chooses the layout, and candidate edges still need their toggle.
+- **Pending lifecycle findings** (`possible_thread_closure`, `possible_commitment_resolution`) are named, in §30's wording, on the node's status line, and so in its button's accessible name, on **every** lens, whatever the toggles say. A pair finding is an edge, and is restated in the detail of both its ends (§19.6).
+
 Page-level keyboard bindings (switching lens, Escape to clear the selection) go through `useHotkeys`, with a label and group so the `?` sheet lists them. A node is activated by its own button.
 
 ## 19.6 Node detail
@@ -1973,16 +2018,18 @@ Actions:
 
 - Focus next scene (§16.5);
 - Open ledger entry (§12.1 address);
-- Filter to this arc: sets `?arc=` and shows that record, its aliases and link neighbours, the scenes it touched, and the actors it involves.
+- Filter to this arc: sets `?arc=` and shows that record, its aliases and link neighbours, the scenes it touched, and the actors it involves. On a merged record it filters to the **canonical** (`merged_into`), since a non-canonical `?arc=` reads as no filter; it reads “Show the whole graph” when that canonical is already the filter (Slice F plan, Decision 23).
 
-Selecting an event, birthday or holiday shows its date, in-days, linked records, and **Anchor next scene** (§16.5).
+Focus next scene is shown unless the record is merged, and is enabled only when the record is among `drivers.snapshot`'s thread and commitment drivers (the node's `focusable`), so the graph never sends a ref the chooser would drop. Open ledger entry is built only with `ledgerHref` (§12.1). Each candidate finding reads “<finding phrase> with <the other record>” for a pair kind, and links to its Ledger address.
+
+Selecting an event, birthday or holiday shows its date, in-days, linked records, and **Anchor next scene** (§16.5). Anchor is enabled only when the ref is among `drivers.snapshot`'s `anchors` (the node's `anchorable`).
 
 Selecting an actor shows:
 
 - scenes;
 - related active drivers;
 - relationships;
-- an upcoming birthday, if one is recorded.
+- an upcoming birthday, if one is recorded. “Upcoming” means inside `calendars.UPCOMING_WINDOW_DAYS`, because birthday nodes exist only inside pressure's horizon (§19.2). An actor whose recorded birthday falls beyond it, or already passed this year, has no Birthday section at all, never a “no birthday” line, which would be false (Slice F plan, Decision 11).
 
 Selecting a scene shows:
 
@@ -1999,6 +2046,13 @@ This is a deterministic endpoint. Its response is normalized nodes and edges, no
 
 - **No lens parameter.** The endpoint returns one uncapped payload. There is no `truncated` field in v1: lenses are client-side, so a cap would silently omit nodes from a lens.
 - **Cost:** it walks scenes, chronicle and the ledgers once per request, and uses `best_effort_campaign_lock`. Actor names come from roster and overlay summaries, never from per-node full card reads. There are no image-directory scans.
+- **“Once” is a constant number of whole-file reads, with no N+1** (Slice F plan, Decision 4). Literally one read of each file would mean threading one `Ledgers` through `pressure`, `drivers`, `involvement` and `effective.records`, a cross-slice refactor handed to Slice G's performance audit. What is guaranteed is no per-node card read, no image scan and no per-record ledger read, pinned by a test that counts `plot.read` and `chronicle.read_chronicle` for one thread and for five and requires the counts to be equal. Per request, the graph reads:
+  - outside the hold: the primary provider, `pressure.build`, `drivers.snapshot(cid, pressure_result=…)` over that same result, and `events.list_events`;
+  - inside one hold: the scene list and one frontmatter-head location history per scene (never a transcript), the chronicle, `effective.Ledgers`, the effective records, links and live canon, involvement, the continuity doc's malformed check, the candidate cache and pending findings, `relationships.json` and `scene_ideas.json`;
+  - outside again: the three name rosters, and the per-row `calendars.fixed_of` / `calendars.friendly` on scene, event and idea dates.
+- **Names:** characters from `overlay.character_roster`; PCs from `overlay.pc_roster`, a new image-free listing, because `overlay.list_pcs` scans images per PC; locations from a whole-kind `overlay.list_entities(cid, "locations")` read, which parses every location file but is constant per request. Narrowing it to the locations a history names is handed to Slice G. The three are read separately, so one unreadable location file costs only location labels. A ref missing from its roster is labelled with its bare id (Slice F plan, Decision 5). For the same rule, `birthdays.gather` names a PC from its meta (`pcs.name_of`) rather than through `pcs.read_pc`, which scans images; the birthday line is byte-identical.
+- **Fail soft (§3.9, §26):** every source and every family builder runs through one helper, so a source that raises costs only its own nodes and edges and never fails the read. The response's top-level `omitted` names which source was lost (§20), so a reader can tell an empty campaign from a broken file. A free-text date such as “midsummer” is ordinary data and records nothing (Slice F plan, Decision 16).
+- **Every edge names two nodes**, and node and edge order are deterministic, so two reads of an unchanged campaign are equal (Slice F plan, Decision 15).
 
 ---
 
@@ -2014,6 +2068,20 @@ Python declares the tuples `NODE_KINDS`, `EDGE_KINDS`, `EDGE_SOURCES`, `DRIVER_K
 
 - `id` is the §4 canonical ref, with the kind→prefix mapping stated once (§4).
 - Each kind has typed fields; there is no `meta` bag.
+
+**Where each tuple lives** (Slice F plan, Decision 17): `NODE_KINDS`, `EDGE_KINDS`, `EDGE_SOURCES`, and two the graph adds, `EVENT_STATUSES` (`scheduled | fired | passed | undated`) and `PARTS` (the sources `omitted` may name), live in `store/continuity/graph.py`. `LINK_RELATIONS = tuple(RELATIONS)` lives in `store/continuity/effective.py`, beside the table it names. `DRIVER_KINDS` and `DRIVER_ACTIONS` live in `drivers.py`, and `PRESSURE_STATES` in `pressure.py`. The TS unions `NodeKind`, `EdgeKind`, `EdgeSource`, `LinkRelation`, `EventStatus` and `GraphPart` are hand-written in `api/types.ts` and pinned to their tuples by a backend test that parses that file. The chooser's `DriverKind`, `DriverAction`, `PressureState` and `AnchorRelation`, and the review's `CandidateKind`, are reused, never redeclared. `DriverLink.relation` is narrowed from `string` to `LinkRelation`.
+
+**Node fields beyond the example** (Slice F plan, Decisions 9, 13 and 16). Every dated kind carries §19.2's `native`, `friendly`, `fixed` and `in_days`. In addition:
+
+- `scene`: `order` (its index in play order), `done` (absorbed), `pcless`, and `place` (the chronicle record's flat location name, which the detail shows when the scene has no location history);
+- `thread` and `commitment`: `status`, `live`, `merged_into` (the canonical ref, or null), `aliases`, `latest_beat`, `pressure` (`{state, in_days, friendly}` from the record's driver, or null when it is not one), `focusable`, and `findings`. A commitment adds `commitment_kind` and `due`, and dates from its own deadline item. A merged node carries its own title and status, `pressure: null`, `focusable: false`, and no movement or involvement edges;
+- `event`: `status` (`EVENT_STATUSES`, first match of fired, passed, undated, then scheduled), `pressure` (or null), `anchorable` and `findings`, because a `possible_relation` can pair a commitment with an event;
+- `holiday` and `birthday`: `pressure` and `anchorable`; a birthday adds `actor`, `precision` and `age`;
+- `idea`: `premise`, `source`, `pcless` and its stored `time_anchor: {ref, relation, native} | null`, kept even when the anchor has no node.
+
+`findings` is a list of `{id, kind, other}`: a visible review finding on the node it names, where `other` is the canonical ref at the pair's other end (when it is a node; else null) and null for a lifecycle kind. `focusable` is membership in `drivers.snapshot`'s thread and commitment drivers, and `anchorable` membership in its `anchors`.
+
+**Top level:** the payload is `{now: {native, friendly, fixed}, nodes, edges, omitted}`. `omitted` is a list of `PARTS` (`calendar | scenes | chronicle | plot | commitments | events | continuity | candidates | relationships | scene_ideas | names`), in that order: the sources this read could not use (§19.7). It is additive, and the page names them in one note, so a broken file never reads as an empty campaign.
 
 Example:
 
@@ -2039,6 +2107,8 @@ Example:
     }
 
 `source` ∈ structural | reviewed | candidate | alias.
+
+**`relation` is typed per edge kind** (Slice F plan, Decisions 12, 13 and 14). In TS, `GraphEdge` is discriminated on `kind`: a `link` carries a `LinkRelation`, a `serves` a `DriverAction`, an `anchored_to` an `AnchorRelation`, and every other kind `null`. A hand-edited action or relation outside its vocabulary draws no edge. Two kinds carry typed extras beyond the seven keys: `feeling` adds `trust`, `affection`, `tension` and `note`, and `bond` adds `bond_type` and `since_scene`. Candidate edges take the candidate kind (`possible_duplicate | possible_relation`) as `kind`. A structural or alias edge id is `"e" + sha256(kind \0 from \0 to)[:20]`, the `link_id` recipe; a link edge uses the link id and a candidate edge the candidate id.
 
 Do not put rendered prose into node fields when the frontend can derive it from typed fields.
 
