@@ -8,7 +8,7 @@ import { SceneIdeaPicker } from "./SceneIdeaPicker";
 import { SceneImport } from "./SceneImport";
 import type { SceneDraft } from "./sceneDraft";
 import { StoryPressure } from "./StoryPressure";
-import { NO_PRESSURE, applySeed, dropRefs, isActive, pruneControls, toRequest,
+import { NO_PRESSURE, applySeed, dropRefs, isActive, pruneControls, timeLabel, toRequest,
          type ChooserSeed, type PressureControls } from "./pressureControls";
 import { useSceneSuggestions } from "./useSceneSuggestions";
 
@@ -16,9 +16,12 @@ import { useSceneSuggestions } from "./useSceneSuggestions";
  *  one thing to do about it. */
 const STALE_NOTE = "Some selections are no longer current and were reset — press Regenerate.";
 const SEED_UNREAD = "Story pressure could not be read; the Story Graph selection was not applied.";
+/** A re-read that failed while controls were held: the disclosure is hidden,
+ *  so what it held is reset rather than sent unseen. */
+const PRESSURE_UNREAD = "Story pressure could not be read, so its selections were reset.";
 
-function staleNote(names: string[]): string {
-  return names.length ? `${STALE_NOTE} Reset: ${names.join(", ")}.` : STALE_NOTE;
+function staleNote(names: string[], note = STALE_NOTE): string {
+  return names.length ? `${note} Reset: ${names.join(", ")}.` : note;
 }
 
 /** Mode → pick → confirm → create. Props are unchanged from the
@@ -171,6 +174,21 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
         if (seedRef.current && !seedApplied.current) {
           seedApplied.current = true;
           setPressureNote(SEED_UNREAD);
+        } else if (isActive(pressureRef.current)) {
+          // A re-read (after a stale refusal) failed with controls still held
+          // -- a refusal spelled differently clears nothing. The disclosure is
+          // about to be hidden, and a control nobody can see or reset must not
+          // keep steering, or keep drawing the same refusal.
+          const held = pressureRef.current;
+          const names = [
+            ...Object.keys(held.drivers).filter((ref) => held.drivers[ref] !== "normal")
+              .map(labelOf),
+            ...(held.time === "anchor" && held.anchor ? [labelOf(held.anchor)]
+              : held.time !== "auto" ? [timeLabel(held)] : []),
+          ];
+          setPressure(NO_PRESSURE);
+          resetNames.current = [...new Set([...resetNames.current, ...names])];
+          setPressureNote(staleNote(resetNames.current, PRESSURE_UNREAD));
         }
         setDriversRead({ cid, snap: null, failed: true });
       });
@@ -196,14 +214,16 @@ export function NewSceneChooser({ cid, afterSid, ready, onClose, onCreated, seed
   // cast and transcript, so there is nothing to rank (#92). A seeded open
   // holds that call until the drivers read settles, so it carries the seed.
   const playable = mode === "pc" || mode === "offscreen";
+  const pressureSnap = driversRead && driversRead.cid === cid && !driversRead.failed
+    ? driversRead.snap : null;
   const suggestionsState = useSceneSuggestions(
     cid, afterSid, ready && playable, mode === "offscreen", {
-      controls: () => toRequest(pressure, driversRead?.snap ?? null),
+      // Only what the reader can see steers: with the disclosure hidden (no
+      // read, or a failed one) the request carries no pressure at all.
+      controls: () => toRequest(pressureSnap ? pressure : NO_PRESSURE, pressureSnap),
       hold: !!seed && !seedApplied.current,
       onStale,
     });
-  const pressureSnap = driversRead && driversRead.cid === cid && !driversRead.failed
-    ? driversRead.snap : null;
 
   // CampaignView reuses this component across a `cid` navigation -- it stays
   // mounted, `chooserOpen` is untouched by the switch, so without an explicit
