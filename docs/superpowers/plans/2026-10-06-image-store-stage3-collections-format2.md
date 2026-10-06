@@ -23,7 +23,7 @@
 - §13 "Collections, export, bundles, backups";
 - every amendment section, including stage 2's.
 
-**Precondition:** stage 2 (all of its tasks) is complete on this branch. Stage 2 Task 3's `greeting_images.catalog_with_slots` returns values `(entry, target)` with `target = ("slot", (dir, name)) | None`. This stage adds `("object", image_id)`. A code map is at `.superpowers/sdd/stage3-notes/code-map.md`.
+**Precondition:** stage 2 (all of its tasks) is complete on this branch. Stage 2 Task 3's `greeting_images.catalog_with_slots` returns values `(entry, target)` with the tagged `target = ("slot", (dir, name)) | None`. That was a controller ruling given to its implementer, and Task 4 verifies it. If `_placement_of` is untagged, Task 4 makes it target-aware. This stage adds `("object", image_id)`. A code map is at `.superpowers/sdd/stage3-notes/code-map.md`.
 
 ## Stage-3 rulings (the spec gains them in Task 6)
 
@@ -55,6 +55,8 @@
   - any harvest journal under `.cache/image-collection-imports/<wid>/` that is still format 1.
 - `guard_write` and `check_member_name` return immediately when `has_format1` is false.
 - `referenced` considers format-1 manifests only.
+- An unparseable journal counts as format-1 state (fail closed).
+- Nothing in the app converts a journal except `sample()` and `accept()`, so a leftover or unmappable format-1 journal keeps the guard on in its world until stage 4 retires it (C13).
 - Deleting the guard code waits for stage 4.
 
 **C5. Harvest journals hold ids.**
@@ -64,6 +66,7 @@
   - For a legacy file, the bytes' `sha256` is checked against the name first (as format-1 `publish` does), then the file is ingested.
   - The converted journal keeps the original names as `legacy_members`, and is saved as format 2 immediately.
   - A name that maps to nothing refuses the journal, as today's corrupt-journal rule does.
+  - **An accepted journal whose format-1 manifest is already published is not converted.** It reconciles against its names exactly as today (the manifest is authoritative), even if a member file is now missing.
 - **`_reconcile_publication`** compares in the manifest's own format: `legacy_members` against a format-1 manifest, `members` against a format-2 one.
 - Journal ids are GC roots (stage 4).
 
@@ -85,7 +88,9 @@
 - **World used:** always the campaign's world, as today.
 
 **C9. Bundles.**
-- **The format written:** `FORMAT` is 3 only when the export packs a format-2 manifest; otherwise the bundle is written as format 2, so collection-free worlds stay importable by older builds. `_READABLE` is `{1, 2, 3}`.
+- **The format written:** the bundle is format 3 only when the export packs a format-2 manifest; otherwise it is written as format 2, so collection-free worlds stay importable by older builds.
+- **Format constants:** `_READABLE` is `{1, 2, 3}`, and a module constant `MAX_FORMAT = 3` (the highest format this build reads) drives `_read_manifest`'s "newer than this grimoire" refusal.
+- **Export validates manifests:** it runs the store's manifest validation over every manifest it packs, and refuses with `BundleError` naming the manifest before writing anything. An export therefore never writes a manifest its own import refuses.
 - **Export:**
   - adds the ids named by format-2 manifests to the image entries;
   - checks their blobs in `_check_blob_sizes`.
@@ -114,6 +119,7 @@
 
 **C13. Stage-4 notes** (recorded, not built):
 - migration must keep member order and indices, including those of missing members, because index URLs are cached immutable;
+- migration converts or retires leftover format-1 harvest journals (they hold the C4 guard on);
 - journals live in `.cache`, which sync excludes, so one device's GC cannot see another device's in-flight journals.
 
 ## Global Constraints
@@ -200,6 +206,8 @@
   - `test_a_case_variant_manifest_path_is_contained`.
   - `test_an_invalid_format_2_manifest_refuses_the_import`.
   - `test_export_refuses_an_oversized_member_blob`.
+  - `test_export_refuses_an_invalid_format_2_manifest`.
+  - `test_the_newer_than_this_grimoire_message_names_max_format`.
   - `test_bundle_format_2_still_refuses_a_format_2_manifest`.
   - Update the parameters of the existing newer- and unknown-format tests.
 - [ ] **Step 2:** run them; they fail.
@@ -227,6 +235,8 @@
   - `test_a_format_1_journal_with_a_mismatched_legacy_file_refuses`.
   - `test_a_crashed_format_1_publication_reconciles_after_the_upgrade` (Review Focus 5).
   - `test_an_unmappable_format_1_journal_refuses`.
+  - `test_an_accepted_format_1_journal_with_a_missing_member_still_reconciles`.
+  - `test_an_unparseable_journal_keeps_the_guard_on`.
   - In `test_image_surfaces.py`: keep the format-1 `collection-member` surface (built on `collection_fixtures.format1`), and add `test_a_format_2_member_writes_no_library_file_or_placement` outside `SURFACES`.
   - `test_a_format_2_member_is_not_in_the_describe_queue` (C11).
 - [ ] **Step 2:** run them; they fail.
@@ -258,6 +268,7 @@
   - `test_a_format_2_member_tile_has_v_thumb_and_image_id`.
   - `test_copy_from_greeting_links_a_format_2_member` (200).
   - `test_export_resolves_a_format_2_collection_and_a_direct_member_url`.
+  - `test_export_resolves_a_direct_format_1_member_url_with_the_campaign_rule`.
   - `test_export_keeps_campaign_tombstones_for_format_1`.
   - `test_export_resolves_through_the_campaigns_world`.
   - `test_usage_lists_a_format_2_collection_member`.
