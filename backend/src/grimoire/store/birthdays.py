@@ -67,7 +67,7 @@ def gather(cid: str, roster: list[dict], *, visible_characters: bool = False,
         try:
             if a["kind"] == "pcs":
                 birth = pcs.read_persona(aroot, a["id"], a["version"]).get("birthdate", "")
-                name = pcs.read_pc(aroot, a["id"])["meta"].get("name", a["id"])
+                name = pcs.name_of(aroot, a["id"])
             else:
                 name, birth = characters.birthdate_meta(aroot, a["id"])
         except (characters.CharacterNotFound, pcs.PCNotFound, pcs.PCVersionNotFound):
