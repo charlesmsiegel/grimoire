@@ -151,6 +151,52 @@ export function recordName(title: string, ref: string, unreadable: string[] = []
   return missingName(ref);
 }
 
+// ---- a continuity.json that does not read (§4, §26) -------------------------
+//
+// A malformed section reads as empty on the server, and both reads say which
+// (`doc.malformed`: "file", or a section's name). A group that drew that empty
+// read as its own "nothing yet" would tell the reader no merge exists while
+// the merge is still in the file and every writer refuses to overwrite it --
+// the Story Graph's rule (§20: a broken file never reads as an empty
+// campaign), kept on the page where merges are undone. So each group names
+// what it could not read, and its count is a dash.
+
+/** Reviewed links / merges: what of it `malformed` cost, or null. */
+export function reviewedUnreadable(malformed: string[]): string | null {
+  const file = malformed.includes("file");
+  const merges = file || malformed.includes("aliases");
+  const links = file || malformed.includes("links");
+  if (!merges && !links) return null;
+  const what = merges && links ? "merges and links" : merges ? "merges" : "links";
+  return `The saved ${what} could not be read, so they are not listed here. They can `
+    + "be listed and changed again once continuity.json is repaired.";
+}
+
+/** Dismissed findings: what `malformed` cost it, or null. */
+export function dismissedUnreadable(malformed: string[]): string | null {
+  if (!malformed.includes("file") && !malformed.includes("suppressions")) return null;
+  return "The saved dismissals could not be read, so they are not listed here. They can "
+    + "be listed and restored again once continuity.json is repaired.";
+}
+
+/** A findings group. While any of continuity.json does not read, every
+ *  cached finding is held back (it cannot be told whether it was already
+ *  merged, linked or dismissed); a findings cache that does not read is
+ *  simply rebuilt by the next sweep. */
+export function findingsUnreadable(
+  diagnostics: { malformed: string[]; cache_malformed: boolean },
+): string | null {
+  if (diagnostics.malformed.length) {
+    return "Findings are not listed while continuity.json cannot be read, because "
+      + "whether one was already merged, linked or dismissed cannot be told. They are "
+      + "listed again once it is repaired.";
+  }
+  if (diagnostics.cache_malformed) {
+    return "The saved findings could not be read. A refresh rebuilds them.";
+  }
+  return null;
+}
+
 /** What a dismissal decided, for the Dismissed findings group (§12.7). */
 export const SUPPRESSION_LABELS: Record<string, string> = {
   dismiss: "Dismissed",

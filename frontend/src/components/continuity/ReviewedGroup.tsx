@@ -8,7 +8,7 @@
  *  place a reader can find it and take it out.
  */
 import type { ContinuityState } from "../../api/client";
-import { brokenReason, recordName, RELATION_PHRASES } from "./labels";
+import { brokenReason, recordName, RELATION_PHRASES, reviewedUnreadable } from "./labels";
 
 const phrase = (relation: string) => RELATION_PHRASES[relation] ?? relation;
 
@@ -29,8 +29,11 @@ export function ReviewedGroup(
   const broken = state.raw_links.filter((l) => l.state === "broken");
   // A ref-titled record is missing only if its ledger read (`recordName`).
   const name = (title: string, ref: string) => recordName(title, ref, state.unreadable);
+  // A section that did not read is empty here, never "nothing yet" (§26).
+  const unread = reviewedUnreadable(state.malformed);
+  const note = unread ? <p className="continuity-note" role="status">{unread}</p> : null;
   if (!state.aliases.length && !state.links.length && !broken.length) {
-    return (
+    return note ?? (
       <p className="empty-state">
         <span className="empty-what">Nothing merged or linked yet.</span> A merge or a link
         made from a finding is listed here, with the way to undo it.
@@ -38,65 +41,68 @@ export function ReviewedGroup(
     );
   }
   return (
-    <ul className="continuity-list">
-      {state.aliases.map((a) => {
-        const title = name(a.title, a.ref);
-        return (
-          <li key={`alias:${a.ref}`} className="continuity-item" aria-label={title}>
-            <div className="continuity-item-text">
-              <span className="continuity-item-title">{title}</span>
-              <span className="continuity-item-meta">
-                Merged into {name(a.to_title, a.to)}
-              </span>
-              {a.dangling && <span className="chip on continuity-broken">Broken</span>}
-              {a.dangling && <p className="field-hint">{brokenReason(a.reason)}</p>}
-            </div>
-            <button type="button" className="subtle" disabled={busy}
-                    aria-label={`Unmerge ${title}`} onClick={() => onUnmerge(a.ref)}>
-              Unmerge
-            </button>
-          </li>
-        );
-      })}
-      {state.links.map((l) => {
-        const [a, b] = [name(l.a_title, l.a), name(l.b_title, l.b)];
-        const label = `${a} ${phrase(l.relation)} ${b}`;
-        return (
-          <li key={`link:${l.id}`} className="continuity-item" aria-label={label}>
-            <div className="continuity-item-text">
-              <span className="continuity-item-title">{a}</span>
-              <span className="continuity-item-meta">
-                {phrase(l.relation)} {b}
-              </span>
-            </div>
-            <button type="button" className="subtle" disabled={busy}
-                    aria-label={`Remove link ${label}`} onClick={() => onRemoveLink(l.id)}>
-              Remove link
-            </button>
-          </li>
-        );
-      })}
-      {broken.map((l) => {
-        // A broken link's end that no longer resolves is titled by its ref,
-        // which `name` words by kind: no ref reaches the reader (§30).
-        const [a, b] = [name(l.a_title, l.a), name(l.b_title, l.b)];
-        const label = `${a} ${phrase(l.relation)} ${b}`;
-        return (
-          <li key={`broken:${l.id}`} className="continuity-item" aria-label={label}>
-            <div className="continuity-item-text">
-              <span className="continuity-item-title">{a}</span>
-              <span className="continuity-item-meta">{phrase(l.relation)} {b}</span>
-              <span className="chip on continuity-broken">Broken</span>
-              <p className="field-hint">{brokenReason(l.reason)}</p>
-            </div>
-            <button type="button" className="subtle" disabled={busy}
-                    aria-label={`Remove link ${label}`} onClick={() => onRemoveLink(l.id)}>
-              Remove link
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <>
+      {note}
+      <ul className="continuity-list">
+        {state.aliases.map((a) => {
+          const title = name(a.title, a.ref);
+          return (
+            <li key={`alias:${a.ref}`} className="continuity-item" aria-label={title}>
+              <div className="continuity-item-text">
+                <span className="continuity-item-title">{title}</span>
+                <span className="continuity-item-meta">
+                  Merged into {name(a.to_title, a.to)}
+                </span>
+                {a.dangling && <span className="chip on continuity-broken">Broken</span>}
+                {a.dangling && <p className="field-hint">{brokenReason(a.reason)}</p>}
+              </div>
+              <button type="button" className="subtle" disabled={busy}
+                      aria-label={`Unmerge ${title}`} onClick={() => onUnmerge(a.ref)}>
+                Unmerge
+              </button>
+            </li>
+          );
+        })}
+        {state.links.map((l) => {
+          const [a, b] = [name(l.a_title, l.a), name(l.b_title, l.b)];
+          const label = `${a} ${phrase(l.relation)} ${b}`;
+          return (
+            <li key={`link:${l.id}`} className="continuity-item" aria-label={label}>
+              <div className="continuity-item-text">
+                <span className="continuity-item-title">{a}</span>
+                <span className="continuity-item-meta">
+                  {phrase(l.relation)} {b}
+                </span>
+              </div>
+              <button type="button" className="subtle" disabled={busy}
+                      aria-label={`Remove link ${label}`} onClick={() => onRemoveLink(l.id)}>
+                Remove link
+              </button>
+            </li>
+          );
+        })}
+        {broken.map((l) => {
+          // A broken link's end that no longer resolves is titled by its ref,
+          // which `name` words by kind: no ref reaches the reader (§30).
+          const [a, b] = [name(l.a_title, l.a), name(l.b_title, l.b)];
+          const label = `${a} ${phrase(l.relation)} ${b}`;
+          return (
+            <li key={`broken:${l.id}`} className="continuity-item" aria-label={label}>
+              <div className="continuity-item-text">
+                <span className="continuity-item-title">{a}</span>
+                <span className="continuity-item-meta">{phrase(l.relation)} {b}</span>
+                <span className="chip on continuity-broken">Broken</span>
+                <p className="field-hint">{brokenReason(l.reason)}</p>
+              </div>
+              <button type="button" className="subtle" disabled={busy}
+                      aria-label={`Remove link ${label}`} onClick={() => onRemoveLink(l.id)}>
+                Remove link
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
 

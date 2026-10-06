@@ -685,6 +685,73 @@ test("a dismissed finding is restorable", async () => {
     .toBeGreaterThan(reads));
 });
 
+// ---- a continuity.json that cannot be read (§4, §26) ----------------------
+
+/** Both reads as the server answers them when continuity.json's sections in
+ *  `sections` are not objects: each reads as empty, and both say which. */
+function brokenContinuity(sections: string[], state: Partial<ContinuityState> = {}) {
+  (api.getContinuity as any).mockResolvedValue({
+    ...EMPTY_CONTINUITY, ...state, malformed: sections });
+  (api.continuityCandidates as any).mockResolvedValue({
+    ...EMPTY_CANDIDATES,
+    diagnostics: { ...EMPTY_CANDIDATES.diagnostics, malformed: sections } });
+}
+
+test("a merges section that cannot be read is named, never shown as nothing merged",
+     async () => {
+  brokenContinuity(["aliases"]);
+  renderLedger("/campaigns/run/ledger/continuity/reviewed");
+  expect(await main().findByText(/The saved merges could not be read/))
+    .toBeInTheDocument();
+  expect(main().getByText(/continuity\.json is repaired/)).toBeInTheDocument();
+  expect(main().queryByText(/Nothing merged or linked yet/)).toBeNull();
+  // A count nobody can answer is a dash, never 0.
+  await waitFor(() => expect(groupRow(/reviewed links \/ merges/i)).toHaveTextContent("—"));
+  expect(groupRow(/reviewed links \/ merges/i)).not.toHaveTextContent("0");
+  // Every finding is held back while a merge cannot be read: not "none found".
+  expect(groupRow(/possible overlaps/i)).toHaveTextContent("—");
+  fireEvent.click(groupRow(/possible overlaps/i));
+  expect(await main().findByText(/Findings are not listed while continuity\.json/))
+    .toBeInTheDocument();
+  expect(main().queryByText(/No possible overlaps/)).toBeNull();
+  // The dismissals still read, so their group says what it holds.
+  expect(groupRow(/dismissed findings/i)).toHaveTextContent("0");
+  fireEvent.click(groupRow(/dismissed findings/i));
+  expect(await main().findByText(/Nothing dismissed\./)).toBeInTheDocument();
+});
+
+test("a links section that cannot be read keeps the merges that can", async () => {
+  brokenContinuity(["links"], { aliases: [REVIEWED.aliases[0]] });
+  renderLedger("/campaigns/run/ledger/continuity/reviewed");
+  expect(await main().findByRole("listitem", { name: /mara's map/i })).toBeInTheDocument();
+  expect(main().getByText(/The saved links could not be read/)).toBeInTheDocument();
+});
+
+test("a whole continuity.json that cannot be read names merges, links and dismissals",
+     async () => {
+  brokenContinuity(["file"]);
+  renderLedger("/campaigns/run/ledger/continuity/dismissed");
+  expect(await main().findByText(/The saved dismissals could not be read/))
+    .toBeInTheDocument();
+  expect(main().queryByText(/Nothing dismissed\./)).toBeNull();
+  await waitFor(() => expect(groupRow(/dismissed findings/i)).toHaveTextContent("—"));
+  fireEvent.click(groupRow(/reviewed links \/ merges/i));
+  expect(await main().findByText(/The saved merges and links could not be read/))
+    .toBeInTheDocument();
+  expect(main().queryByText(/Nothing merged or linked yet/)).toBeNull();
+});
+
+test("a findings cache that cannot be read says a refresh rebuilds it", async () => {
+  (api.continuityCandidates as any).mockResolvedValue({
+    ...EMPTY_CANDIDATES,
+    diagnostics: { ...EMPTY_CANDIDATES.diagnostics, cache_malformed: true } });
+  renderLedger("/campaigns/run/ledger/continuity/closures");
+  expect(await main().findByText(/The saved findings could not be read\. A refresh rebuilds them\./))
+    .toBeInTheDocument();
+  expect(main().queryByText(/Nothing here may be finished/)).toBeNull();
+  await waitFor(() => expect(groupRow(/possible closures/i)).toHaveTextContent("—"));
+});
+
 /** The reviewed group, with a way to switch campaign while staying mounted. */
 function renderReviewedSwitchable() {
   return render(
