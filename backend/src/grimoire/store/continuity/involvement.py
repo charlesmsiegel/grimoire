@@ -98,28 +98,40 @@ def stage_history(cid: str, refs: set[str]) -> dict[str, set[str]]:
     return out
 
 
-def scene_actors(cid: str) -> dict[str, set[str]]:
+def scene_actors(cid: str, *, unreadable: set[str] | None = None) -> dict[str, set[str]]:
     """Scene id -> every actor (``<kind>:<id>``) known to have stood in it, from
     the appearance record and the chronicle's cast snapshots, unioned.
 
     Each source is guarded on its own: one that will not read contributes
     nothing and the other still answers, and a wrongly shaped entry is stepped
     over rather than trusted (`stage_history` explains why a non-string in a
-    set raises rather than missing)."""
+    set raises rather than missing). A caller that must tell a source that
+    contributed nothing from one that would not read passes `unreadable`, and
+    each source stepped over adds its name ("appearances" | "chronicle")."""
     out: dict[str, set[str]] = {}
-    try:
-        for a in appearances_cast.roster(cid):
-            ref = canon.actor_ref(f"{a['kind']}/{a['id']}")
-            scenes = a.get("scenes")
-            for sid in scenes if isinstance(scenes, list) else ():
-                if isinstance(sid, str) and sid:
-                    out.setdefault(sid, set()).add(ref)
-    except Exception:  # noqa: BLE001 -- garbled appearances.json: the chronicle still answers
-        pass
-    try:
-        chron = chronicle.read_chronicle(cid)
-    except Exception:  # noqa: BLE001 -- garbled chronicle.json: the appearance record still answers
-        chron = {}
+    for name, add in (("appearances", _roster_actors), ("chronicle", _cast_actors)):
+        try:
+            add(cid, out)
+        except Exception:  # noqa: BLE001 -- one garbled file: the other source still answers
+            if unreadable is not None:
+                unreadable.add(name)
+    return out
+
+
+def _roster_actors(cid: str, out: dict[str, set[str]]) -> None:
+    """The appearance record's half of `scene_actors`."""
+    for a in appearances_cast.roster(cid):
+        ref = canon.actor_ref(f"{a['kind']}/{a['id']}")
+        scenes = a.get("scenes")
+        for sid in scenes if isinstance(scenes, list) else ():
+            if isinstance(sid, str) and sid:
+                out.setdefault(sid, set()).add(ref)
+
+
+def _cast_actors(cid: str, out: dict[str, set[str]]) -> None:
+    """The chronicle's cast snapshots' half of `scene_actors`. Only the read
+    can raise; every row's shape is guarded."""
+    chron = chronicle.read_chronicle(cid)
     for sid, rec in (chron.items() if isinstance(chron, dict) else ()):
         if not isinstance(sid, str) or not isinstance(rec, dict):
             continue
@@ -127,7 +139,6 @@ def scene_actors(cid: str) -> dict[str, set[str]]:
         for token in (cast if isinstance(cast, list) else ()):
             if isinstance(token, str) and token:
                 out.setdefault(sid, set()).add(canon.actor_ref(token))
-    return out
 
 
 def of(cid: str, refs) -> dict[str, dict]:

@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import textwrap
 
+import pytest
+
 from grimoire import store
 from grimoire.store import (
     appearances,
@@ -402,3 +404,18 @@ def test_an_unreadable_location_costs_only_location_labels(monkeypatch, tmp_path
     assert nodes[f"locations:{harbour}"]["label"] == harbour
     assert _pairs(g, "occurred_at") == {(f"scene:{sid}", f"locations:{harbour}")}
     assert "names" in g["omitted"]
+
+
+@pytest.mark.parametrize("body", ["{garbled", "[]"])
+def test_a_garbled_appearance_record_is_reported(monkeypatch, tmp_path, body):
+    cid = _campaign(monkeypatch, tmp_path)
+    mara, mara_v = overlay.create_character(cid, "Mara")
+    s1 = store.scenes.create_scene(cid, "Saltmarch harbour")
+    s2 = store.scenes.create_scene(cid, "Mara's map")
+    _seat(cid, s1, "characters", mara, mara_v)
+    _cast(cid, s2, ["characters/winifred"])
+    (campaigns.campaign_root(cid) / "appearances.json").write_text(body, encoding="utf-8")
+
+    g = graph.build(cid)
+    assert _pairs(g, "appeared_in") == {("characters:winifred", f"scene:{s2}")}
+    assert "chronicle" in g["omitted"]
