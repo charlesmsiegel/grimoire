@@ -177,6 +177,22 @@ RECONCILE_TEMPORAL_EVENTS = 3
 #: dominate the one prompt. To be tuned against real prompts later.
 RECONCILE_ACTORS = 4
 
+#: Bytes of stored text one record shows -- its id, kind, status, title, due,
+#: beats, link titles and actor names together. The counts above bound how
+#: many of each are sent, not how long they are, and a ledger route takes a
+#: title or beat of any length; this is the bound the identity resolver puts on
+#: the same records (`similarity.CONTINUITY_IDENTITY_BYTES`), so a pasted note
+#: can neither push the one call past the model's context nor, by failing it
+#: on every pass, keep the other candidates in it from ever being decided. To
+#: be tuned against real prompts later.
+RECONCILE_RECORD_BYTES = similarity.CONTINUITY_IDENTITY_BYTES
+
+#: Bytes of one chronicle one-line, which the absorb pass writes as a single
+#: sentence but a reader may rewrite at any length (the Ledger's chronicle
+#: edit, the review save). A long sentence fits even in a three-byte script. To be tuned against real prompts
+#: later.
+RECONCILE_SCENE_LINE_BYTES = 500
+
 #: A proposal's reason, clipped -- the bound identity's resolver uses
 #: (`identity.REASON_CHARS`), one short sentence.
 RECONCILE_REASON_CHARS = 280
@@ -1093,24 +1109,45 @@ def _beats(rec: dict) -> list[dict]:
 def _record_view(ctx: _Context, letter: str, ref: str) -> dict:
     """One record as the prompt shows it (§11.2): its line, last beats with
     their scenes, pressure, effective links and involvement actors. An event
-    carries a line only."""
-    view: dict[str, Any] = {"letter": letter, "ref": ref,
-                            "type": _TYPE_OF.get(ref.partition(":")[0], ""), "line": ref,
+    carries a line only.
+
+    The stored text it shows shares one `RECONCILE_RECORD_BYTES` budget
+    (`similarity.clip_fields`), in priority: the id, kind, status, title and
+    due its line is made of, then its beats newest first, then its links and
+    actor names. A beat, link or name the budget no longer reaches is left out
+    rather than shown blank. The reply names a record by its letter, never its
+    id, so a cut id loses nothing `parse_output` reads."""
+    prefix, _, rid = ref.partition(":")
+    view: dict[str, Any] = {"letter": letter, "ref": ref, "type": _TYPE_OF.get(prefix, ""),
+                            "line": similarity.clip_fields([ref], RECONCILE_RECORD_BYTES)[0],
                             "beats": [], "pressure": "", "links": [], "actors": []}
     side = pending.side(ctx.current, ref)
     if side is None:
         return view
-    view["line"] = snippet_line(ref, side)
-    rec = ctx.current.records.get(ref)
-    if rec is None:                             # an event
+    rec = ctx.current.records.get(ref)          # None for an event
+    newest: list[dict] = []
+    links: list[str] = []
+    names: list[str] = []
+    if rec is not None:
+        actors = ctx.involved.get(ref, {}).get("actors") or []
+        newest = [{**b, "scene": b["scene"] if b["scene"] in ctx.live else ""}
+                  for b in reversed(_beats(rec))]
+        links = [f"{ctx.title(link['a'])} {link['relation']} {ctx.title(link['b'])}"
+                 for link in ctx.current.links if ref in (link["a"], link["b"])]
+        names = [ctx.name(a) for a in actors[:RECONCILE_ACTORS]]
+    rid, kind, status, title, due, *rest = similarity.clip_fields(
+        [rid, side["kind"], side["status"], side["title"], side["due"],
+         *(b["text"] for b in newest), *links, *names], RECONCILE_RECORD_BYTES)
+    texts, rest = rest[:len(newest)], rest[len(newest):]
+    view["line"] = snippet_line(f"{prefix}:{rid}", {**side, "kind": kind, "status": status,
+                                                     "title": title, "due": due})
+    if rec is None:
         return view
-    actors = ctx.involved.get(ref, {}).get("actors") or []
-    beats = [{**b, "scene": b["scene"] if b["scene"] in ctx.live else ""}
-             for b in _beats(rec)]
-    view.update(beats=beats, pressure=_pressure_text(ctx.pressure.get(ref)),
-                links=[f"{ctx.title(link['a'])} {link['relation']} {ctx.title(link['b'])}"
-                       for link in ctx.current.links if ref in (link["a"], link["b"])],
-                actors=[ctx.name(a) for a in actors[:RECONCILE_ACTORS]])
+    beats = [{**b, "text": text} for b, text in zip(newest, texts, strict=True)
+             if text or not b["text"]]
+    view.update(beats=beats[::-1], pressure=_pressure_text(ctx.pressure.get(ref)),
+                links=[text for text in rest[:len(links)] if text],
+                actors=[text for text in rest[len(links):] if text])
     return view
 
 
@@ -1173,7 +1210,8 @@ def _campaign_date(cid: str) -> str:
 
 def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]:
     """Chronicle one-lines for every beat scene shown and the last
-    `RECONCILE_RECENT_SCENES` live scenes, in play order. Only scenes that
+    `RECONCILE_RECENT_SCENES` live scenes, in play order, each cut to
+    `RECONCILE_SCENE_LINE_BYTES`. Only scenes that
     exist are shown (`delete_scene` leaves the chronicle line behind), and a
     scene with no line is not."""
     read: Any = _soft(chronicle.read_chronicle, {}, cid)
@@ -1185,6 +1223,7 @@ def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]
             continue
         rec = chron.get(sid)
         line = fieldtext.text(rec.get("one_line")).strip() if isinstance(rec, dict) else ""
+        line = embed_space.clip(line, RECONCILE_SCENE_LINE_BYTES)
         if line:
             out.append({"id": sid, "one_line": line})
     return out
@@ -1194,7 +1233,9 @@ def build_payload(cid: str, selected: list[dict]) -> dict:
     """The one call's bounded input (§11.2, Decision 13) for `select`'s items,
     keyed ``c1``... in selection order. Only the records the candidates name
     are sent, with their last beats and the chronicle lines around them --
-    never a transcript. `known_scenes` (beat scenes and chronicle lines shown)
+    never a transcript -- and every stored text is cut to a byte bound
+    (`_record_view`, `_scene_lines`; a signal line to `RECONCILE_RECORD_BYTES`),
+    so the counts that bound the selection bound the prompt too. `known_scenes` (beat scenes and chronicle lines shown)
     is the only evidence `parse_output` accepts (§11.4). Both come from the
     scenes that exist: a beat in a deleted scene is shown without its scene,
     so the parser never accepts evidence persist 1 would void."""
@@ -1204,7 +1245,9 @@ def build_payload(cid: str, selected: list[dict]) -> dict:
     for n, item in enumerate(selected, 1):
         records = [_record_view(ctx, letter, ref) for letter, ref in zip(_LETTERS, item["refs"], strict=False)]
         out.append({"key": f"c{n}", "id": item["id"], "vocabulary": vocabulary(item),
-                    "records": records, "signal_text": _signal_text(ctx, item)})
+                    "records": records,
+                    "signal_text": embed_space.clip(_signal_text(ctx, item),
+                                                    RECONCILE_RECORD_BYTES)})
     beat_scenes = {b["scene"] for c in out for r in c["records"] for b in r["beats"]} - {""}
     lines = _scene_lines(cid, beat_scenes, live)
     return {"now": _campaign_date(cid), "chronicle": lines, "candidates": out,
