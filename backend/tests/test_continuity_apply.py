@@ -350,6 +350,28 @@ def test_a_gone_evidence_scene_is_stale(cid, s0):
     assert key not in candidates.read(cid)["records"]
 
 
+def test_cited_evidence_against_an_unreadable_scene_list_is_refused(cid, s0, monkeypatch):
+    """§22 steps 3 and 5: an evidence check that cannot be made has not passed.
+    A proposal citing no scene has nothing to check, and dismiss never checks."""
+    cited = _cache(cid, CLOSURE, [MAP], signals={"reason": "stale"},
+                   proposal=_proposal("close", reason="It was answered.",
+                                      evidence_scenes=[s0]))
+    uncited = _cache(cid, RESOLUTION, [OATH], signals={"reason": "stale"},
+                     proposal=_proposal("resolve", reason="It was kept."))
+
+    def unreadable(_cid):
+        raise PermissionError("scenes")
+
+    monkeypatch.setattr(review.scenes_read, "list_scenes", unreadable)
+    before = _files(cid)
+    refused = _refused(_check, cid, cited)
+    assert (refused.status, refused.kind) == (409, "unreadable")
+    assert refused.detail == "the scene list cannot be read right now"
+    assert _files(cid) == before
+    assert _check(cid, uncited)["scenes"] is None
+    assert review.dismiss(cid, cited, "dismiss")["ok"] is True
+
+
 def test_apply_on_a_finding_no_longer_cached_is_not_found(cid):
     refused = _refused(_check, cid, canon.candidate_id(DUP, [MAP, CHART]))
     assert (refused.status, refused.kind) == (404, "not_found")
