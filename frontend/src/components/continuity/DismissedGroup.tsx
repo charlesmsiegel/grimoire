@@ -10,7 +10,7 @@
  *  aside and is back at once.
  */
 import type { ContinuityState } from "../../api/client";
-import { dismissedUnreadable, SUPPRESSION_LABELS } from "./labels";
+import { dismissedUnreadable, recordName, SUPPRESSION_LABELS } from "./labels";
 
 export function DismissedGroup(
   { state, busy, onRestore }: {
@@ -38,7 +38,10 @@ export function DismissedGroup(
   return (
     <ul className="continuity-list">
       {live.map((s) => {
-        const label = (s.titles.length ? s.titles : s.refs).join(" / ") || s.fingerprint;
+        // Each record in words, as the server names it (`review.reader_name`);
+        // never a ref or a fingerprint (§30).
+        const label = s.refs.map((ref, i) => recordName(s.titles[i] ?? "", ref, state.unreadable))
+          .join(" / ");
         return (
           <li key={s.fingerprint} className="continuity-item" aria-label={label}>
             <div className="continuity-item-text">

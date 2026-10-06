@@ -19,7 +19,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
-from grimoire.store.continuity import doc, drivers, graph
+from grimoire.store.continuity import doc, drivers, graph, pending
 from tests.llm_fakes import from_entries
 from tests.test_continuity_apply import _cache
 from tests.test_continuity_graph import _recorded
@@ -182,7 +182,36 @@ def test_raw_links_carry_their_ends_titles(client, cid):
     assert raw["l1"]["state"] == "broken"
     assert (raw["l1"]["a_title"], raw["l1"]["b_title"]) == ("Winifred's chart", "Mara's map")
     assert raw["l2"]["state"] == "broken"
-    assert (raw["l2"]["a_title"], raw["l2"]["b_title"]) == ("Mara's oath", "event:gone")
+    assert (raw["l2"]["a_title"], raw["l2"]["b_title"]) == ("Mara's oath", "a missing event")
+
+
+def test_an_untitled_record_is_named_untitled_in_every_review_group(client, cid):
+    """§12.8, §30: a record that is there with no title reads "an untitled
+    thread" on every surface the read feeds -- Dismissed findings, Reviewed
+    links / merges -- never its ref, and never "a missing thread"."""
+    data = store.plot.read(cid)
+    data["mara-s-map"]["title"] = ""
+    (_root(cid) / "plot.json").write_text(json.dumps(data), encoding="utf-8")
+    refs = ["thread:mara-s-map", "thread:winifred-s-chart"]
+    fp = pending.fingerprint(pending.Current.load(cid), "possible_duplicate", refs)
+    assert fp
+    doc.put_suppression(cid, fp, {"kind": "possible_duplicate", "refs": refs,
+                                  "decision": "dismiss", "created": ""})
+    doc.put_link(cid, "l1", {"a": "thread:mara-s-map", "b": "commitment:mara-s-oath",
+                             "relation": "related_to"})
+    body = _get(client, cid)
+    (entry,) = body["suppressions"]
+    assert entry["live"] is True
+    assert entry["titles"] == ["an untitled thread", "Winifred's chart"]
+    (link,) = body["links"]
+    assert (link["a_title"], link["b_title"]) == ("an untitled thread", "Mara's oath")
+    (raw,) = body["raw_links"]
+    assert (raw["a_title"], raw["b_title"]) == ("an untitled thread", "Mara's oath")
+
+    doc.put_alias(cid, "thread:mara-s-map", {"to": "thread:winifred-s-chart"})
+    (alias,) = _get(client, cid)["aliases"]
+    assert alias["dangling"] is False
+    assert (alias["title"], alias["to_title"]) == ("an untitled thread", "Winifred's chart")
 
 
 def test_get_continuity_survives_garbled_plot(client, cid):
@@ -196,7 +225,7 @@ def test_get_continuity_survives_garbled_plot(client, cid):
                                         "unreadable"}
     (alias,) = body["aliases"]
     assert alias["dangling"] is False
-    assert alias["title"] == "thread:mara-s-map"
+    assert alias["title"] == "a thread that cannot be read right now"
     assert body["raw_links"][0]["state"] == "ok"
 
 
