@@ -247,8 +247,13 @@ test("summary task forces a bounded fold and bumps the context on success", asyn
     summary: "Folded.", at: 2, total: 2, stale: false, every: 10, due: false, refreshed: true });
   renderCampaign();
   await screen.findByText("a reply");
+  // A `ctxKey` beat is what re-reads everything keyed on it; the budget read
+  // is one of those, so its call count is the beat made visible.
+  const reads = () => (api.getCampaignBudget as any).mock.calls.length;
+  const before = reads();
   fireEvent.click(await screen.findByRole("button", { name: "Summarize" }));
   await waitFor(() => expect(api.refreshRollingSummary).toHaveBeenCalledWith("run", "s1", true, 2));
+  await waitFor(() => expect(reads()).toBeGreaterThan(before));
   expect(screen.queryByRole("status")).toBeNull();
 });
 
