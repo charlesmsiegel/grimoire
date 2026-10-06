@@ -557,6 +557,23 @@ def test_delete_alias_target_refused_then_forced(client, cid):
     assert sorted(kinds) == ["continuity_alias", "plot"]
 
 
+def test_delete_target_of_a_dangling_merge_is_not_refused(client, cid):
+    """A source removed outside the delete cascade (an undo of its create) leaves
+    a stored alias the Ledger shows no "Merged:" note for; the delete guard asks
+    the same question, so it does not refuse over it -- and the cascade still
+    clears the dangling alias, as a forced delete would."""
+    src, canonical = _thread_ids(client, cid, "Mara's map", "Winifred's chart")
+    _merge(client, cid, f"thread:{src}", f"thread:{canonical}")
+    store.plot.restore(cid, src, None)
+    row = next(t for t in client.get(f"/api/campaigns/{cid}/ledger").json()["plot"]
+               if t["id"] == canonical)
+    assert row["aliases"] == []
+    r = client.delete(f"/api/campaigns/{cid}/ledger/threads/{canonical}")
+    assert r.status_code == 200, r.text
+    assert store.plot.get(cid, canonical) is None
+    assert continuity_doc.get_alias(cid, f"thread:{src}") is None
+
+
 def test_delete_source_removes_its_alias_and_links(client, cid):
     src, canonical = _thread_ids(client, cid, "Mara's map", "Winifred's chart")
     mid = client.post(f"/api/campaigns/{cid}/ledger/commitments",
