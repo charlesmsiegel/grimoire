@@ -505,15 +505,22 @@ def get_scene_ideas(cid: str, greetings: bool = True):
 @router.post("/campaigns/{cid}/scene-ideas")
 def post_scene_idea(cid: str, body: SceneIdeaCreate):
     """Save an idea. References are validated here as well as on every read, so
-    a token this campaign never had cannot enter the file at all."""
+    a token this campaign never had cannot enter the file at all.
+
+    Driver provenance is validated here too (`suggest.idea_provenance`, spec
+    §17): existence rather than activity, so a card whose anchor fired while it
+    was on screen keeps that anchor as the evidence its staleness is read from.
+    `scene_ideas` only stores it -- it may not import continuity."""
     _campaign_root_or_404(cid)
     if not body.title.strip() and not body.premise.strip():
         raise HTTPException(status_code=400, detail="an idea needs a title or a premise")
     refs = store.suggest.valid_refs(cid, body.cast, body.location, body.date,
                                     offscreen=body.pcless)
+    prov = store.suggest.idea_provenance(cid, body.drivers, body.time_anchor)
     return {"id": store.scene_ideas.add(cid, body.title, body.premise, refs["cast"],
                                         refs["location"], refs["date"], body.pcless,
-                                        body.source)}
+                                        body.source, drivers=prov["drivers"],
+                                        time_anchor=prov["time_anchor"])}
 
 
 @router.put("/campaigns/{cid}/scene-ideas/{lid}")

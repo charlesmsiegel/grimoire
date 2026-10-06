@@ -9689,7 +9689,9 @@ def test_saving_an_idea_resolves_its_references_on_the_way_back(client):
                       "cast": [{"kind": "characters", "id": "mara", "name": "Mara"}],
                       "location": {"id": "saltmarch", "name": "Saltmarch"},
                       "date": "", "pcless": False, "source": "llm", "status": "active",
-                      "created": saved[0]["created"], "used_scene": ""}]
+                      "created": saved[0]["created"], "used_scene": "",
+                      "drivers": [], "time_anchor": None, "stale_reason": "",
+                      "anchor_date": ""}]
 
 
 def test_an_idea_needs_something_to_go_on(client):
