@@ -235,6 +235,7 @@ a stale field; refusing would cost the turn.
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
 | `locks.image_object_lock(image_id)`, `locks.image_ingest_gc_lock()` | the image store | leaves; see [The image store](#the-image-store) |
+| `locks.image_collection_job_lock(wid, job)`, `locks.image_collection_lock(wid)` | one harvest journal; one world's collection manifests and library-name checks | taken in that order, and before any image lock; see [Collections](#collections-members-by-id) |
 
 The backup lock's exclusion is the interesting one: an archive of a hundred
 campaigns cannot hold a hundred locks for the length of a zip without stalling
@@ -388,11 +389,14 @@ engineering reason it cannot be fixed at this layer.
 
 **Modules:** `store/image_store.py`, `store/image_refs.py`, `store/assets.py`,
 `store/image_descriptions.py`, `store/image_subjects.py`,
-`store/image_scopes.py`, `store/image_usage.py` ·
+`store/image_scopes.py`, `store/image_usage.py`,
+`store/image_collections.py`, `store/image_collection_imports.py` ·
 **Spec:** [the content-addressed image store](superpowers/specs/2026-10-05-content-addressed-image-store-design.md) ·
 **Tests:** `test_image_store.py`, `test_image_refs.py`, `test_assets_store.py`,
 `test_image_surfaces.py`, `test_image_descriptions_store.py`,
-`test_image_subjects_store.py`, `test_image_scopes.py`, `test_image_usage.py`
+`test_image_subjects_store.py`, `test_image_scopes.py`, `test_image_usage.py`,
+`test_image_collections.py`, `test_image_collection_imports.py`,
+`test_image_collection_routes.py`
 
 A picture's bytes are kept once, under `<home>/assets/image-store/`, and
 everything that shows one holds a small placement naming it. Two kinds of file
@@ -461,6 +465,86 @@ it may not call back into the store: `ingest`, `update` and `identify` raise
 `RuntimeError` from inside one (`test_update_callback_may_not_reenter_the_store`). Contention
 raises the base `StoreBusy`, which the same handler turns into a 409. No
 collector exists yet, so for now the second lock only serializes ingests.
+
+### Collections: members by id
+
+A collection is an immutable, ordered manifest under the world,
+`<world>/image-collections/<id>.json`. Two formats are read and only one is
+written. **Format 1**, left by an older grimoire, names world-library images
+(`collection-image-<sha256>`) and is served under the library's URLs. **Format
+2**, the only one written now, is `{"format": 2, "members": [<image id>, ...]}`:
+a member is its image object and never a library file, `put_member` returns the
+id and places nothing, and `publish` refuses a member whose object does not
+resolve. A published manifest is immutable; publishing again must be equal in
+format and members (`test_a_published_manifest_is_immutable_across_formats`).
+The collection's JSON keeps its `"id"` in both formats.
+
+Member `n` of a format-2 collection is served at
+`/api/worlds/{wid}/image-collections/{id}/members/{n}?v=<blob sha>`. **An index
+is never reused.** A member whose picture is missing is skipped by
+`available()`, every other member keeps its index, and the missing member's own
+URL answers 404 rather than another picture, because those URLs are cached
+immutable (`test_available_keeps_indices_stable_when_a_member_is_missing`). The
+index is canonical ASCII decimal (`0` or a digit string with no leading zero,
+length-capped), parsed by `image_collections.member_index`, which the route,
+greeting `local_path`/`local_target` and export all share, so one picture has
+one URL: `/members/01`, `-1`, `abc` and an index past the end are all 404
+(`test_member_index_is_canonical_decimal`). Format-1 members keep their
+library URLs, and the member route serves a format-1 index too.
+
+**Locks.** Two process-scoped locks, both keyed by the live store root:
+`locks.image_collection_lock(wid)` serializes one world's manifest
+publication and the library-name checks that read manifests;
+`locks.image_collection_job_lock(wid, job)` serializes one transient harvest
+journal. The order is the job lock, then the collection lock, then any image
+lock (the two leaf locks above), never the reverse. A world's two spellings
+on a case-insensitive volume share both locks
+(`test_windows_world_aliases_share_both_locks`).
+
+**The library guard is retired by condition.** `guard_write` and
+`check_member_name` protect format-1 names, which are library files, and do
+nothing for a format-2 member, which is not one. They therefore return at once
+unless `image_collections.has_format1(wid)`: the world holds a format-1
+manifest, a manifest that does not read (it fails closed, as `referenced`
+does) or a harvest journal that is not format 2 (one that does not parse
+counts as format 1). A world holding both formats guards its format-1 names
+and never lets its format-2 manifest fail a library write
+(`test_format_2_manifests_never_guard_library_names`,
+`test_format_1_members_stay_guarded_beside_format_2`,
+`test_has_format1_fails_closed`). Nothing converts a journal but `sample()` and
+`accept()`, so a leftover format-1 journal keeps the guard on until stage 4
+removes the guard code.
+
+**Harvest journals hold ids.** A new journal is format 2 and `accept` publishes
+format 2. A format-1 journal in flight across the upgrade is converted when it
+is first read, under the job lock and then the collection lock: a name becomes
+the id of its library placement (a legacy file's bytes are hashed against the
+name first, then ingested), the names are kept as `legacy_members`, and the
+journal is saved as format 2 at once. A name that maps to nothing refuses the
+journal. An accepted journal whose format-1 manifest is already published is
+the exception: the manifest is authoritative, so it reconciles against the
+names it already holds. Reconciling a crashed publication compares in the
+manifest's own format (`test_image_collection_imports.py`).
+
+**World bundles.** An export packs a format-2 manifest and the blobs of the ids
+it names, and the bundle is format 3 only when it does (otherwise it is written
+as format 2, so a collection-free world still opens on an older build). Export
+validates only the manifests its import would refuse: a file that is not a JSON
+object, or that says format 1, is packed unchecked as before; anything else
+must read as strict UTF-8 and pass `image_collections.validate`, or the export
+is refused before anything is written. Import contains manifests by folded
+path and rewrites members through the bundle's id map; **a member id the
+bundle does not carry is dropped, which shifts the index of every later
+member**, a duplicate the rewrite creates keeps its first place, and a
+manifest left empty is deleted. A format-1 or format-2 bundle still refuses any
+manifest whose format is not 1.
+
+**What a format-2 member is not.** Because it is not a library image, it is
+absent from the library listing, the gallery, the world describe queue and art
+recall, and cannot be hidden per campaign. It is tagged through greetings like
+any picture, harvest deduplicates it by pixel identity rather than by bytes,
+and an older grimoire sharing the store through a synced folder raises on that
+world's library writes: upgrade every device, as stage 1 already asks.
 
 ### Placements are deterministic
 
@@ -590,6 +674,12 @@ Pinned by `test_a_local_legacy_key_wins_over_the_object`,
 - **`delete_world` takes no lock.** A tag written between the strip and the
   removal survives on the object. It is rare, and running the delete again
   clears it.
+- **Two journal edges stay open until stage 4.** An unaccepted format-1
+  journal whose manifest an older build published, and which has since lost a
+  member, does not reconcile. An accepted format-1 journal whose manifest is
+  gone is converted before it is refused. Stage 4's journal retirement covers
+  both, and migration there must keep every member's index, including the
+  missing ones.
 - **Usage is not cached.** Each request walks every world and campaign, so it
   costs the size of the library and is asked for only when someone opens the
   control.

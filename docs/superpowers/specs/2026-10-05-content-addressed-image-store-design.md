@@ -955,8 +955,10 @@ incidental property: three writers ingest first and place later, or never --
 
 - a Chub gallery download, which ingests every image before it replaces the
   gallery's refs (§5);
-- a collection member upload refused by its guard after ingest, which leaves
-  an orphan object (stage 1 keeps ingest-then-guard);
+- a harvested collection member, which `put_member` ingests and places
+  nowhere: the object is unreachable until a manifest names it, and stays so if
+  the harvest never publishes. (The library guard no longer ingests a refused
+  upload; it asks `identify`, which stores nothing.)
 - world-bundle import, which ingests blobs while its tree is still staged.
 
 **Candidates** must meet all of these:
@@ -1423,3 +1425,123 @@ stands. A failed campaign fork strips the new scope. **Reads:** a greeting's
 image catalog carries each placement's image id, so answering for a subject
 never re-reads a placement, and an unarrived placement beside a legacy file
 answers its subjects from the greeting's sidecar (R2's state).
+
+### Stage-3 amendments
+
+Stage 3 moves collections to format 2. C1 to C13 were decided before the plan,
+and the rulings after them came from review of the implementation. Together
+they refine §10, and where they differ from the text above, they win.
+
+- **C1, format 2 is the only format written.** `publish(wid, id, members)`
+  takes image ids and writes `{"format": 2, "members": [...]}`; it refuses a
+  member whose object does not resolve, and a published manifest is immutable
+  (an existing one must be equal in format and members). `put_member(wid,
+  data) -> str` validates as before (`image_library.validate_size`,
+  `covers.validate`), ingests, returns the image id and writes no library
+  placement.
+- **C2, both formats are read.** `read` returns `{"format": 1 | 2, "members":
+  [...]}`. The format is checked with `type(fmt) is int`, so JSON `true` is
+  refused. Format 1 keeps its validation; format 2 needs every member to match
+  `image_hash.ID_RE`, non-empty, at most 10000, unique. Anything else raises
+  `CollectionInvalidError`. A format-2 member resolves through
+  `image_refs.resolve_ref` with a nameless `Ref`.
+- **C3, member URLs per format.** Format 1 keeps its library URLs, so subject
+  keys, the to-do dedupe and export are unchanged for every existing
+  collection. Format 2 member `n` (0-based) is
+  `/api/worlds/{wid}/image-collections/{id}/members/{n}?v=<blob sha>`;
+  `available()` skips a member that does not resolve and never reuses its
+  index. The member route serves index `n` for either format. The index is a
+  `str` path parameter and anything that is not a valid index below
+  `len(members)` answers 404. *Amended: the index is canonical ASCII decimal,
+  `0|[1-9][0-9]*` with a length cap, not `^\d+$`.* One parser,
+  `image_collections.member_index`, serves the route, greeting
+  `local_path`/`local_target` and export, so `/members/01` is a 404 and one
+  picture has one URL and one subject key. The frontend mirrors it.
+- **C4, `guard_write` is retired by condition.** `has_format1(wid)` is true
+  for any format-1 manifest, any manifest that does not read (fail closed, as
+  `referenced` does), or any harvest journal under
+  `.cache/image-collection-imports/<wid>/` that is still format 1 or does not
+  parse. `guard_write` and `check_member_name` return at once when it is
+  false; `referenced` considers format-1 manifests only. Nothing converts a
+  journal but `sample()` and `accept()`, so a leftover format-1 journal keeps
+  the guard on until stage 4. Deleting the guard code waits for stage 4.
+- **C5, harvest journals hold ids.** New journals are format 2 and `accept`
+  publishes format 2. A format-1 journal converts when first read, under the
+  job lock and then the collection lock: a name maps to the id of its library
+  placement (a legacy file's bytes are checked against the name's `sha256`,
+  then ingested), the names are kept as `legacy_members`, and the journal is
+  saved as format 2 at once. A name that maps to nothing refuses the journal.
+  An accepted journal whose format-1 manifest is already published is not
+  converted; it reconciles against its names, the manifest being
+  authoritative. `_reconcile_publication` compares in the manifest's own
+  format (`legacy_members` against format 1, `members` against format 2).
+  Journal ids are GC roots (stage 4).
+- **C6, greeting subjects for format-2 members.** The catalog key is the
+  member URL without its query. When the collection's world is the greeting's
+  own world, `catalog_with_slots` gives it the target `("object", image_id)`
+  and `image_subjects` writes straight to the object (R1, R2, R8, no
+  placement step). For another world the key stays in the greeting's
+  `subjects.json` (R11). Format-1 keys are unchanged.
+- **C7, greeting tiles and copy.** `greeting_images.local_path` and a
+  target-aware `local_target` resolve a member URL through
+  `image_collections.member_path`; `routes/greetings._greeting_image_urls`
+  gives a member row a `v`, a `thumb` and an `image_id`; and
+  `image_subjects.copy_to_character` links by object id for an object target.
+- **C8, export.** `export._COLLECTION_URL` also matches
+  `/image-collections/{id}/members/{n}` with an optional query. Format 1 keeps
+  the campaign-library rule (tombstones respected) on the first available
+  member, or member `n`; format 2 takes the blob path of that member. The
+  world used is always the campaign's.
+- **C9, bundles.** A bundle is format 3 only when the export packs a format-2
+  manifest, and is otherwise written as format 2 so a collection-free world
+  stays importable by an older build. `_READABLE` is `{1, 2, 3}` and
+  `MAX_FORMAT = 3` drives the "newer than this grimoire" refusal. Export adds
+  the ids named by format-2 manifests to the image entries and checks their
+  blobs in `_check_blob_sizes`. A format-3 import accepts manifest formats 1
+  and 2: `_check_collections` validates format-2 manifests and refuses the
+  bundle on an invalid one, and `_contain_manifests` finds manifests by folded
+  path, rewrites members through `id_map`, drops a member the bundle does not
+  carry (logged), keeps the first of any duplicates the rewrite creates and
+  deletes a manifest left empty (logged). A format-1 or format-2 bundle still
+  refuses any manifest whose format is not 1. *Amended: export does not
+  validate every manifest it packs, only the ones its import would refuse.* A
+  file that is not a JSON object, or that says format 1, is packed unchecked
+  as before. Anything else must read under strict UTF-8 and
+  `image_collections.validate`, or the export is refused with `BundleError`
+  before writing anything. Import parses a format-2 manifest as strict UTF-8
+  too.
+- **C10, usage.** `image_usage.find`'s `collections` bucket lists format-2
+  members by id and format-1 members by their library placement.
+- **C11, accepted changes for format-2 members.** A member is not a
+  world-library image, so it is absent from the library listing, the gallery,
+  the world describe queue and art recall, and cannot be hidden per campaign.
+  It is tagged through greetings like any picture. Harvest deduplicates it by
+  pixel id, not by bytes. An older grimoire sharing the store through a synced
+  folder raises on that world's library writes, so every device must be
+  upgraded (the stage-1 release note already says so).
+- **C12, frontend.** `localMembers` checks the member shape per format:
+  format 1 keeps the library prefix plus 64 hex; format 2 requires the prefix
+  `/api/worlds/${world}/image-collections/${id}/members/` compared as a
+  string, then a canonical index and an optional `?v=...`. Anything else
+  throws and the viewer falls back to `/image`. The subject key is the URL
+  without its query.
+- **C13, stage-4 notes (recorded, not built).** Migration must keep member
+  order and indices, including those of missing members, because index URLs
+  are cached immutable. It converts or retires leftover format-1 harvest
+  journals, which hold the C4 guard on. Journals live in `.cache`, which sync
+  excludes, so one device's GC cannot see another device's in-flight journals.
+  *Beside this: an import that drops a member id its bundle does not carry
+  shifts the indices of every later member (C9).*
+
+Rulings made while implementing:
+
+- **The format-2 collection JSON keeps `"id"`,** as format 1 does. The frontend
+  accepts its absence but refuses a mismatch.
+- **Single spellings.** `image_collections.journal_directory(wid)` is the one
+  spelling of the journal directory (the harvest module's `job_path` uses it),
+  and `image_collections.validate(raw)` is the public, content-only manifest
+  validator that world bundles call.
+- **Known deferred edges, for stage 4.** An unaccepted format-1 journal whose
+  manifest an older build published, and which has since lost a member, does
+  not reconcile. An accepted format-1 journal whose manifest is gone is
+  converted before it is refused. Stage 4's journal retirement covers both.
