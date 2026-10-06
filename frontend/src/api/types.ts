@@ -372,6 +372,10 @@ export type ImageGcReport = {
   deleted: { objects: string[]; blobs: string[]; bytes: number };
   skipped: { id: string | null; blob: string | null; reason: string }[];
   kept_blobs: { id: string; blob: string; reason: string }[];
+  /** Reachable ids with no readable sidecar yet: orphan blobs are kept. */
+  unarrived_objects: string[];
+  /** Thumbnails or index entries a collection could not remove (best effort). */
+  cache_cleanup: { path: string; reason: string }[];
   error: string | null;
 };
 export type ImageMaintenanceReport = ImageMigrationReport | ImageGcReport;
