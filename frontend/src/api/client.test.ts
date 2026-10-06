@@ -2613,3 +2613,40 @@ test("a ledger delete asks for force only when told to", async () => {
     "/api/campaigns/run/ledger/commitments/mara-s-oath?force=true",
     expect.objectContaining({ method: "DELETE" }));
 });
+
+test("sceneSuggestions sends its options as one JSON body", async () => {
+  // A body rather than a query string: the controls are lists, and the server
+  // ignores the query whenever a body is present (§16.3).
+  const fetchMock = vi.fn().mockResolvedValue(
+    draftRunResponse("landed", { kind: "scene-suggestions", result: { suggestions: [] } }));
+  globalThis.fetch = fetchMock;
+
+  await api.sceneSuggestions("c", { after: "s1", focus_refs: ["thread:mara-s-map"] });
+
+  const [url, init] = fetchMock.mock.calls[0] as [string, { method: string; body: string }];
+  expect(url).toBe("/api/campaigns/c/scene-suggestions");
+  expect(init.method).toBe("POST");
+  expect(JSON.parse(init.body)).toEqual({
+    offscreen: false, direction: "", rank: true, focus_refs: ["thread:mara-s-map"],
+    avoid_refs: [], must_refs: [], time_mode: "auto", time_anchor_ref: "",
+    time_anchor_relation: "", after: "s1",
+  });
+
+  await api.sceneSuggestions("c");
+  const last = fetchMock.mock.calls[fetchMock.mock.calls.length - 1] as [string, { body: string }];
+  const bare = JSON.parse(last[1].body);
+  expect(bare).not.toHaveProperty("after");
+});
+
+test("continuityDrivers reads fresh", async () => {
+  // The chooser reads again after a stale refusal; a shared read would hand it
+  // the answer it was refused against.
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({ drivers: [], anchors: [] }));
+  globalThis.fetch = fetchMock;
+
+  await Promise.all([api.continuityDrivers("c"), api.continuityDrivers("c")]);
+
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/c/continuity/drivers");
+  expect((fetchMock.mock.calls[0][1] as { method: string }).method).toBe("GET");
+});
