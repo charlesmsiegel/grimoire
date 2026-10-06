@@ -3,7 +3,7 @@ import {
   ACTION_LABELS, ANCHOR_RELATIONS, applySeed, chooseAnchor, controlOf, DRIVER_ACTIONS,
   DRIVER_KINDS, dropRefs, groupDrivers, isActive, KIND_HEADINGS, MUST_CAP, mustAllowed,
   NO_PRESSURE, pruneControls, sanitizeSeed, SORT_ORDER, steeredCount, TIME_MODES, timeLabel,
-  toRequest, whenPhrase, type PressureControls,
+  timeModeAvailable, toRequest, whenPhrase, type PressureControls,
 } from "./pressureControls";
 
 const MAP = "thread:mara-s-map";
@@ -172,6 +172,26 @@ test("toRequest sends anchor fields only in anchor mode, never a blank anchor", 
                    SNAP).avoid_refs).toEqual([]);
 });
 
+test("near and move need a current date; anchor needs an anchor", () => {
+  const undated = { ...SNAP, now: "", friendly: "", fixed: null };
+  for (const mode of ["near", "move"] as const) {
+    expect(timeModeAvailable(mode, SNAP)).toBe(true);
+    expect(timeModeAvailable(mode, undated)).toBe(false);
+  }
+  expect(timeModeAvailable("auto", undated)).toBe(true);
+  expect(timeModeAvailable("anchor", SNAP)).toBe(true);
+  expect(timeModeAvailable("anchor", snap([], []))).toBe(false);
+});
+
+test("toRequest never sends near or move for an undated campaign", () => {
+  const undated = { ...SNAP, now: "", friendly: "", fixed: null };
+  for (const time of ["near", "move"] as const) {
+    expect(toRequest(controls({}, { time }), SNAP).time_mode).toBe(time);
+    expect(toRequest(controls({}, { time }), undated).time_mode).toBe("auto");
+    expect(toRequest(controls({}, { time }), null).time_mode).toBe("auto");
+  }
+});
+
 test("sanitizeSeed accepts only the two chooser shapes", () => {
   expect(sanitizeSeed({ chooser: { drivers: { [MAP]: "focus" } } }))
     .toEqual({ drivers: { [MAP]: "focus" } });
@@ -230,6 +250,16 @@ test("pruneControls resets what a fresh read no longer lists", () => {
 
   const kept = controls({ [OATH]: "must" }, { time: "anchor", anchor: CORONATION });
   expect(pruneControls(kept, SNAP)).toEqual({ controls: kept, dropped: [] });
+});
+
+test("pruneControls resets near or move once the read has no current date", () => {
+  const undated = { ...SNAP, now: "", friendly: "", fixed: null };
+  for (const time of ["near", "move"] as const) {
+    const held = controls({ [MAP]: "focus" }, { time });
+    expect(pruneControls(held, undated)).toEqual(
+      { controls: controls({ [MAP]: "focus" }), dropped: [timeLabel(held)] });
+    expect(pruneControls(held, SNAP)).toEqual({ controls: held, dropped: [] });
+  }
 });
 
 test("dropRefs returns the named refs to normal and clears a named anchor", () => {

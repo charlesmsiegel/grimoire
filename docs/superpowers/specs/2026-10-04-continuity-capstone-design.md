@@ -1608,6 +1608,7 @@ The controls render inside the **Generated** group, under Direction, as a disclo
   - **Stay near current date** (`near`);
   - **Let time move** (`move`);
   - **Choose anchor…** (`anchor`): the anchors list, with friendly date and in-days, plus a before/on/after/by select.
+- **Stay near current date** and **Let time move** are disabled, with a visible hint, when the drivers read's `now` is empty: no clock and no chronicle date. That is the same `now` the suggestion snapshot resolves (both go through `clock.now`, which falls back to the newest chronicle date), and without it `near`/`move` ask for nothing (§15.3). **Choose anchor…** is disabled when there are no anchors. A `near`/`move` held from a read that had a date falls back to Any date when a re-read has none, and is named in the reset note; the request never sends either without a date (Slice E plan, deviation 21).
 - The anchors list is separate from the NoticeBanner, and both may show the same event.
 - Story Pressure state lives in NewSceneChooser beside `direction`. It survives Back, and it resets when the campaign changes.
 - The chooser reads `GET /continuity/drivers` **once** when it opens. If that read fails, the Story Pressure controls are hidden, and Direction and Suggest keep working.
