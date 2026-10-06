@@ -39,20 +39,20 @@ function recordTo(scope: string, at: RecordSection, rid: string): string | null 
 function buckets(r: ImageUsageReport): { id: string; heading: string; chips: Chip[] }[] {
   return [
     { id: "characters", heading: "Characters", chips: r.characters.map((e) => ({
-        key: `${e.scope}/${e.id}/${e.vid}`, label: `${e.id} · ${e.name}`,
+        key: `${e.scope}/${e.id}/${e.vid}/${e.name}`, label: `${e.id} · ${e.name}`,
         to: recordTo(e.scope, "characters", e.id), title: scopeTitle(e.scope) })) },
     { id: "pcs", heading: "Player characters", chips: r.pcs.map((e) => ({
-        key: `${e.scope}/${e.id}/${e.vid}`, label: `${e.id} · ${e.name}`,
+        key: `${e.scope}/${e.id}/${e.vid}/${e.name}`, label: `${e.id} · ${e.name}`,
         to: recordTo(e.scope, "pcs", e.id), title: scopeTitle(e.scope) })) },
     { id: "entities", heading: "Records", chips: r.entities.map((e) => ({
-        key: `${e.scope}/${e.kind}/${e.id}/${e.vid}`, label: `${e.id} · ${e.name}`,
+        key: `${e.scope}/${e.kind}/${e.id}/${e.vid}/${e.name}`, label: `${e.id} · ${e.name}`,
         // An unknown kind is not guessed at: it is a chip with nowhere to go.
         to: (RECORD_SECTIONS as readonly string[]).includes(e.kind)
           && e.kind !== "characters" && e.kind !== "pcs"
           ? recordTo(e.scope, e.kind as RecordSection, e.id) : null,
         title: `${scopeTitle(e.scope)} · ${e.kind}` })) },
     { id: "greetings", heading: "Greetings", chips: r.greetings.map((e) => ({
-        key: `${e.scope}/${e.id}`, label: `${e.id} · ${e.name}`,
+        key: `${e.scope}/${e.id}/${e.name}`, label: `${e.id} · ${e.name}`,
         to: recordTo(e.scope, "greetings", e.id), title: scopeTitle(e.scope) })) },
     { id: "world_images", heading: "World images", chips: r.world_images.map((e) => ({
         key: `${e.wid}/${e.name}`, label: e.name,

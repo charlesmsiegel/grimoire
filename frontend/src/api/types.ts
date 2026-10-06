@@ -2930,7 +2930,8 @@ export type WorldImage = {
 };
 
 /** A character or PC that places an image. `scope` is `world:<wid>` or
- *  `campaign:<cid>`; `name` is the record's display name. */
+ *  `campaign:<cid>`; `name` is the placement's name within that record's version
+ *  (`avatar`, `gallery_1`), not the record's display name. */
 export type ImageUsageActor = { scope: string; id: string; vid: string; name: string };
 /** A location, item, group, creature or lore entry that places an image. */
 export type ImageUsageEntity = { scope: string; kind: string; id: string; vid: string; name: string };

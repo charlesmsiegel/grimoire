@@ -11,6 +11,7 @@ vi.mock("../api/client", () => ({
     draftCampaignImageDescription: vi.fn(),
     readCharacter: vi.fn(),
     readPC: vi.fn(),
+    getImageUsage: vi.fn(),
     campaignImageUrl: (cid: string, name: string) => `/api/campaigns/${cid}/images/${name}`,
     actorImageUrl: (sc: { id: string }, k: string, a: string, v: string, n: string) =>
       `/api/campaigns/${sc.id}/${k}/${a}/versions/${v}/images/${n}`,
@@ -453,6 +454,16 @@ test("an inherited placement-backed library image is describable", async () => {
   // The usage control is there too, and needs no router: the picker is a
   // modal over the composer, so its chips never navigate.
   expect(screen.getAllByRole("button", { name: "Used in…" })).toHaveLength(1);
+  (api.getImageUsage as any).mockResolvedValue({
+    characters: [{ scope: "world:realm", id: "seraphine", vid: "default", name: "avatar" }],
+    pcs: [], entities: [], greetings: [], world_images: [],
+    campaign_images: [], covers: [], collections: [],
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
+  const chip = await screen.findByText("seraphine · avatar");
+  expect(api.getImageUsage).toHaveBeenCalledWith("id-coast");
+  expect(chip.tagName).toBe("SPAN");
+  expect(chip).toHaveClass("chip", "on");
 });
 
 test("a hidden image is listed with a way back", async () => {
