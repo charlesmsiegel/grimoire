@@ -680,6 +680,8 @@ def normalize_date(provider, near: str, text) -> str:
         return calendars.resolve(provider, text.strip(), near)
     except calendars.CalendarError:
         return ""
+    except Exception:  # noqa: BLE001 -- user calendar plugin code can raise anything; an unreadable date is no date
+        return ""
 
 
 def ref_validator(cid: str):
@@ -864,15 +866,16 @@ def claim(entry: dict, snapshot: dict, controls: Controls) -> dict:
     unmet_must: [ref], avoided: [ref]}`.
 
     Model refs canonicalize through the captured rows' aliases, and an unknown
-    ref or a wrong action for its kind is dropped. The time anchor is added to
-    `drivers` as `anchor` when missing, and an `anchor` entry naming anything
-    else is dropped, so a card never claims two anchors (as a saved idea never
-    does, Decision 16). Avoided refs are reported and left out of `drivers`;
-    an avoided anchor stays the anchor. Nothing here drops the suggestion."""
+    ref or a wrong action for its kind is dropped -- and nothing else is: a
+    temporal driver claimed as `anchor` in `drivers` stays, so a passed or
+    undated event (a driver, never an anchor) can be claimed at all. The time
+    anchor is added to `drivers` as `anchor` when missing. "A record never
+    claims two anchors" is the save's rule (`idea_provenance`, Decision 16),
+    not the card's. Avoided refs are reported and left out of `drivers`; an
+    avoided anchor stays the anchor. Nothing here drops the suggestion."""
     anchor = _anchor_of(entry, snapshot, controls)
     kept = anchor["ref"] if anchor else None
-    pairs = [p for p in _valid_pairs(entry, snapshot)
-             if p["action"] != "anchor" or p["ref"] == kept]
+    pairs = _valid_pairs(entry, snapshot)
     if kept is not None and kept not in {p["ref"] for p in pairs}:
         pairs.append({"ref": kept, "action": "anchor"})
     claimed = {p["ref"] for p in pairs}
@@ -928,13 +931,17 @@ def _month_key(provider, fixed: int) -> tuple[int, str] | None:
         return None
 
 
-def _in_month(provider, month: tuple[int, str], date: str) -> tuple[str, bool]:
-    """A month-only `on`: the date is kept only inside the anchor's month."""
+def _in_month(provider, month: tuple[int, str], now: int | None,
+              date: str) -> tuple[str, bool]:
+    """A month-only `on`: the date is kept only inside the anchor's month, and
+    not behind `now` -- the anchor month can be the present one, and every
+    other anchored relation already holds that lower bound."""
     d = _fixed(provider, date)
     if d is None:
         return "", False
     year, key = month
-    return (date, False) if _month_key(provider, d) == (year, key.casefold()) else ("", True)
+    ok = _lower_ok(d, now) and _month_key(provider, d) == (year, key.casefold())
+    return (date, False) if ok else ("", True)
 
 
 def _lower_ok(d: int, now: int | None) -> bool:
@@ -954,7 +961,7 @@ def _against_anchor(provider, anchor: dict, relation: str, now: int | None,
                     date: str) -> tuple[str, bool]:
     month = _month_of(anchor["ref"])
     if month is not None:
-        return _in_month(provider, month, date) if date else ("", False)
+        return _in_month(provider, month, now, date) if date else ("", False)
     big_d = _anchor_day(provider, anchor)
     if big_d is None:
         return date, False

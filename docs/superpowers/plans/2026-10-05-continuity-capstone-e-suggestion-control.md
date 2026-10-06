@@ -89,7 +89,7 @@ Out of scope:
     - `anchor`: requires `time_anchor_ref`.
   - Anchor relations are `before` | `on` | `after` | `by`. With D the anchor's fixed day and d the suggestion's:
     - `on`: the date is derived from the anchor;
-    - `on` with a month-only birthday: the model's date is kept only if its month key matches;
+    - `on` with a month-only birthday: the model's date is kept only if its month key matches and it is not behind `now` (skipped with no `now`);
     - `before`: now ≤ d < D;
     - `by`: now ≤ d ≤ D;
     - `after`: D < d ≤ D + `calendars.RESOLVE_WINDOW_DAYS` (400).
@@ -630,7 +630,7 @@ The snapshot gains its new keys here, while `upcoming` and the templates stay as
   - `check_date(provider, snapshot: dict, controls: Controls, time_anchor: dict | None, date: str) -> tuple[str, bool]` returns `(date, rejected)`, applying Global Constraints §15.3, `near` and `move`, and Decision 12.
     - `date` is an **already normalized** native (`normalize_date`'s output), never raw model text.
     - An `on` anchor returns `(provider.format(anchor["fixed"]), False)`, with `anchor` the option in `snapshot["anchors"]`.
-    - A month-only `on` keeps `date` iff `provider.describe(fixed)`'s year and `months(year)[month-1]["key"]` (case-folded) equal `_month_of(anchor ref)`. Nothing is read from `timeline`, whose items carry no month key.
+    - A month-only `on` keeps `date` iff `provider.describe(fixed)`'s year and `months(year)[month-1]["key"]` (case-folded) equal `_month_of(anchor ref)`, and `now ≤ d` when there is a `now`. Nothing is read from `timeline`, whose items carry no month key.
     - `provider is None` returns `("", False)`.
   - `order_cards(rows: list[dict], snapshot: dict, controls: Controls) -> list[dict]`, per Decision 13. It reads driver states from `snapshot["driver_index"]`.
   - `parse_output(text, cid, offscreen=False, *, snapshot: dict | None = None, controls: Controls | None = None) -> list[dict]` (store-reading: `valid_ids`, the provider). It resolves the provider once through `_soft_provider`, not `date_normalizer`, and normalizes each date with `normalize_date(provider, now, raw)` before `check_date`. `now` is the snapshot's, or `clock.now(cid)` without a snapshot, which is today's anchor. It labels from the snapshot (`snapshot=None` means an empty index and `NO_CONTROLS`). Each row is:
