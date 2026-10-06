@@ -788,14 +788,17 @@ finds them unreferenced for long enough. A run is a **scan** (a dry run) or a
 **collection** (which needs the scan's token), and it **fails closed**: when it
 cannot be sure what is reachable it deletes nothing.
 
-- **Roots are strict.** Every file in every `image-refs/` folder counts, whatever
-  it is called, so a sync client's conflict copy of a placement keeps its image
+- **Roots are strict.** Every file in every `image-refs/` folder below an
+  `assets/` component counts, whatever it is called, so a sync client's conflict copy of a placement keeps its image
   (`test_a_sync_conflict_copy_of_a_placement_is_a_root`); so do promotion
   journals, format-2 manifests, harvest journals, the migration's pending work
   and staged world and module trees. An unreadable directory, an unparseable
   file, an unknown format, a symlink or a folder spelled `Image-Refs` stops the
   run, naming the path
-  (`test_an_unreadable_dir_an_unknown_format_and_a_symlink_abort`). A staged
+  (`test_an_unreadable_dir_an_unknown_format_and_a_symlink_abort`). A record
+  whose own slug is `image-refs`, outside any `assets/`, is not a placement
+  folder and stops nothing
+  (`test_a_record_named_image_refs_is_not_a_placement_folder`). A staged
   tree younger than an hour, or a `.cache` that is a link, stops it too.
 - **A candidate is old and seen twice.** It must be unreachable, with sidecar
   and blob both older than the **grace period** (30 days by default, never
@@ -831,11 +834,13 @@ period can bring back a placement whose image the collector has already
 deleted: the grace period is the bound, and nothing here can see an offline
 device. The refcount is rebuilt per batch, so a sidecar a sync client delivers
 mid-batch is a residual risk. A stray non-JSON file inside an `objects/` shard
-keeps every blob until it is removed, which is safe and can be noisy.
+keeps every blob until it is removed, which is safe and can be noisy. A case
+variant is checked only for `image-refs`: a folder spelled `Image-Collections`
+stops nothing, and the manifests in it are not counted as references.
 
 ### Maintenance runs
 
-**Modules:** `routes/runs.py`, `routes/runner.py`, `routes/maintenance.py`,
+**Modules:** `routes/runs.py`, `runner.py`, `routes/maintenance.py`,
 `store/maintenance_reports.py`
 
 Migration and collection are the `maintenance` run class, started from
@@ -861,7 +866,10 @@ exclude.
   (`test_another_devices_live_marker_refuses_a_start`); both answer
   `maintenance_elsewhere`. The marker is refreshed every 30 seconds by its own
   thread. The device id is machine-local, outside the store, so a copied
-  `.cache` never shares one.
+  `.cache` never shares one. The proclock excludes maintenance from
+  maintenance only: the hold on tree operations is `runs.maintenance_excluded`,
+  which lives in one process, so a second grimoire process on the same machine
+  can still fork or delete a world or campaign while a run goes on in the first.
 - **Cancel and shutdown wait.** The work runs in a thread whose await is
   shielded; cancellation is a flag the work reads between items, and the run
   stays live, with its exclusions held, until the thread returns. Shutdown sets
