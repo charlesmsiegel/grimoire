@@ -772,3 +772,129 @@ def test_backlogs_never_resolve_blobs(tmp_path, monkeypatch):
     assert world_images.undescribed(wid) == []
     assert world_images.has_undescribed(wid) is False
     assert campaign_images.own_undescribed(cid) == []
+
+
+def test_a_legacy_key_that_cannot_be_cleared_fails_the_save(tmp_path, monkeypatch):
+    """After the object write is confirmed, the legacy key is cleared strictly:
+    a key left behind would keep masking the new text (R1), so the save says it
+    failed rather than answering ok over the old words. The object already
+    holds the new text, and a retry clears the key."""
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-strict", "png")
+    _legacy_keys(d, {"avatar": "Old", "gallery_1": "Other"})
+    real = image_descriptions.atomic.write_text
+
+    def refuse_sidecar(path, *a, **kw):
+        if path.name == image_descriptions.DESCRIPTIONS_FILE:
+            raise OSError("read-only sidecar")
+        return real(path, *a, **kw)
+
+    with monkeypatch.context() as m:
+        m.setattr(image_descriptions.atomic, "write_text", refuse_sidecar)
+        with pytest.raises(OSError):
+            image_descriptions.set_in(d, "avatar", "New")
+    assert _object_text(d, "avatar") == "New"
+    assert image_descriptions.read_raw(d)["avatar"] == "Old"
+    image_descriptions.set_in(d, "avatar", "New")
+    assert image_descriptions.read_raw(d) == {"gallery_1": "Other"}
+    assert image_descriptions.text_in(d, "avatar") == "New"
+
+
+def test_clearing_the_last_legacy_key_removes_the_sidecar(tmp_path):
+    d, visible = tmp_path / "campaign", tmp_path / "world"
+    assets.put_in(d, "avatar", b"png-last", "png")
+    _legacy_keys(d, {"avatar": "Old"})
+    _legacy_keys(visible, {"avatar": "Older"})
+    image_descriptions.set_in(d, "avatar", "New", also_clear=visible)
+    assert not image_descriptions.path_in(d).exists()
+    assert not image_descriptions.path_in(visible).exists()
+
+
+def test_an_also_clear_key_that_cannot_be_cleared_fails_the_save(tmp_path, monkeypatch):
+    d, visible = tmp_path / "campaign", tmp_path / "world"
+    assets.put_in(d, "avatar", b"png-strict-2", "png")
+    _legacy_keys(visible, {"avatar": "Old", "gallery_1": "Other"})
+    real = image_descriptions.atomic.write_text
+
+    def refuse_visible(path, *a, **kw):
+        if path.parent == visible:
+            raise OSError("read-only sidecar")
+        return real(path, *a, **kw)
+
+    monkeypatch.setattr(image_descriptions.atomic, "write_text", refuse_visible)
+    with pytest.raises(OSError):
+        image_descriptions.set_in(d, "avatar", "New", also_clear=visible)
+    assert _object_text(d, "avatar") == "New"
+    assert image_descriptions.read_raw(visible)["avatar"] == "Old"
+
+
+def _count(monkeypatch, module, name):
+    calls = []
+    real = getattr(module, name)
+
+    def counted(*a, **kw):
+        calls.append(a)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(module, name, counted)
+    return calls
+
+
+def test_reading_a_character_resolves_and_scans_nothing_extra_for_descriptions(
+        tmp_path, monkeypatch):
+    """`read_character` builds its version's image listing anyway; the
+    description read takes its names and ids from that listing rather than
+    listing (and resolving) the folder a second time and scanning placements
+    a third. Measured against the same read with descriptions stubbed out."""
+    from grimoire.store import pcs
+
+    cid, vid = _chars(tmp_path)
+    d = _dir_of(tmp_path, cid, vid)
+    image_descriptions.set_in(d, "avatar", "On the object.")
+    _legacy_keys(d, {"gallery_1": "Legacy."})
+    pid, pvid = pcs.create_pc(tmp_path, "Mara", [])
+    assets.put_image(tmp_path, pid, pvid, "avatar", b"png-pc", "png", pcs.ASSET_BASE)
+    image_descriptions.set_description(tmp_path, pid, pvid, "avatar", "Mara, hooded.",
+                                       pcs.ASSET_BASE)
+
+    def costs(read):
+        with monkeypatch.context() as m:
+            resolves = _count(m, image_refs, "resolve_ref")
+            scans = _count(m, image_refs, "scan")
+            got = read()
+        return len(resolves), len(scans), got
+
+    with_desc = costs(lambda: characters.read_character(tmp_path, cid))
+    pc_with_desc = costs(lambda: pcs.read_pc(tmp_path, pid))
+    with monkeypatch.context() as m:
+        m.setattr(image_descriptions, "read_all", lambda *a, **kw: {})
+        without = costs(lambda: characters.read_character(tmp_path, cid))
+        pc_without = costs(lambda: pcs.read_pc(tmp_path, pid))
+    assert with_desc[:2] == without[:2]
+    assert pc_with_desc[:2] == pc_without[:2]
+    (version,) = with_desc[2]["versions"]
+    assert version["image_descriptions"] == {"avatar": "On the object.",
+                                             "gallery_1": "Legacy."}
+    assert pc_with_desc[2]["versions"][0]["image_descriptions"] == {"avatar": "Mara, hooded."}
+
+
+def test_the_r12_decision_and_drop_hold_the_sidecar_lock(tmp_path, monkeypatch):
+    """Decide and drop under one hold: a description saved between the
+    decision and the drop would otherwise be the key the drop removes."""
+    d = tmp_path / "v"
+    assets.put_in(d, "avatar", b"png-r12-old", "png")
+    _legacy_keys(d, {"avatar": "Old caption"})
+    new = image_store.ingest(b"png-r12-new", "png")
+    _describe_object(new.id, "New caption")
+    held = []
+    real = assets._sheds_caption
+
+    def observe(dd, *a, **kw):
+        lock = assets.sidecar_lock(dd, image_descriptions.DESCRIPTIONS_FILE)
+        held.append(lock._is_owned())
+        return real(dd, *a, **kw)
+
+    monkeypatch.setattr(assets, "_sheds_caption", observe)
+    assets.put_in(d, "avatar", b"png-r12-new", "png")
+    assert held == [True]
+    assert "avatar" not in image_descriptions.read_raw(d)

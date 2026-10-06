@@ -569,11 +569,15 @@ def test_import_accepts_a_hand_built_minimal_bundle(monkeypatch, tmp_path):
 
 
 def test_image_descriptions_survive_a_round_trip(monkeypatch, tmp_path):
-    """A description lives in a sidecar under `assets/`, so it travels with the
-    bundle only because the export carries every file. Pinned because the
-    failure mode is silent: an exclusion filter added to `_world_members` later
-    would lose every description in the world and leave the pictures behind,
-    with nothing to show for it but art nobody can search or offer any more.
+    """Descriptions travel in the bundle, into a store that never held them.
+
+    Two homes for the text, so two ways in: a placement-backed picture's
+    description lives on its image object and travels in the bundle's object
+    projection; a legacy key lives in a sidecar under `assets/` and travels
+    only because the export carries every file. The world is deleted and the
+    image store wiped before the import, so nothing here can be read back off
+    the exporter's own objects. Pinned because the failure mode is silent: art
+    imported with its words lost is art nobody can search or offer any more.
     """
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("Realm")
@@ -585,11 +589,25 @@ def test_image_descriptions_survive_a_round_trip(monkeypatch, tmp_path):
     # ...and the reviewed-empty marker, which is a decision and not an absence
     assets.put_image(wroot, cid, vid, "gallery_2", b"\x89PNG\r\n\x1a\n-2", "png")
     image_descriptions.set_description(wroot, cid, vid, "gallery_2", "")
+    # ...and a legacy sidecar key, as a store written before stage 2 holds it
+    assets.put_image(wroot, cid, vid, "gallery_3", b"\x89PNG\r\n\x1a\n-3", "png")
+    image_descriptions.carry_legacy(assets.version_dir(wroot, cid, vid), "gallery_3",
+                                    "Mara at the gate.")
+    assert "gallery_1" not in image_descriptions.read_raw(assets.version_dir(wroot, cid, vid))
 
-    imported = world_bundle.import_bundle(_export(wid, tmp_path))
+    bundle = _export(wid, tmp_path)
+    worlds.delete_world(wid)
+    _wipe_image_store(tmp_path)
+
+    imported = world_bundle.import_bundle(bundle)
     nroot = worlds.world_root(imported)
     assert image_descriptions.read_all(nroot, cid, vid) == {
-        "gallery_1": "A grey quay at dusk.", "gallery_2": ""}
+        "gallery_1": "A grey quay at dusk.", "gallery_2": "",
+        "gallery_3": "Mara at the gate."}
+    # The reviewed-empty marker arrived as a decision: on the object, as "".
+    ndir = assets.version_dir(nroot, cid, vid)
+    assert image_store.read(image_refs.read(ndir, "gallery_2").image).raw["description"] == ""
+    assert image_descriptions.undescribed(nroot) == []
 
 
 # ---- format 2: image dependencies (spec section 10) ----
