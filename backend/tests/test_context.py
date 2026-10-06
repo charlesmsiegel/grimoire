@@ -5000,3 +5000,32 @@ def test_no_notes_is_unchanged():
     assert out["history_trimmed"] == 1 and out["notes_trimmed"] == 0
     assert [m["content"] for m in out["history"]] == ["P1", "R1", "P2", "R2"]
     assert context_pack.pack([], hist, budget=0)["notes_trimmed"] == 0
+
+
+from grimoire.store import commitments  # noqa: E402
+from grimoire.store.continuity import doc as continuity_doc  # noqa: E402
+
+
+def test_the_play_prompt_lists_a_merged_record_once_under_its_canonical(monkeypatch, tmp_path):
+    """§7.3, AC6: the play prompt's open threads and commitments are the
+    canonical projection, so a reviewed merge reads as one live record there,
+    never as the merged-away record beside its canonical."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    plot.set_movement(cid, "winifreds-chart", "Winifred's chart", "open", "Winifred inks it.", sid)
+    plot.set_movement(cid, "maras-map", "Mara's map", "open", "Mara finds it.", sid)
+    commitments.set_movement(cid, "winifreds-promise", "Winifred's promise", "promise", "open",
+                             "", "Winifred swore it.", sid)
+    commitments.set_movement(cid, "maras-oath", "Mara's oath", "promise", "open",
+                             "", "Mara swore it.", sid)
+    before = context.build_messages(cid, sid)[0]["content"]
+    assert "Mara's map (open)" in before and "Mara's oath (promise, open)" in before
+
+    for kind, source, to in (("thread", "maras-map", "winifreds-chart"),
+                             ("commitment", "maras-oath", "winifreds-promise")):
+        continuity_doc.put_alias(cid, f"{kind}:{source}", {
+            "to": f"{kind}:{to}", "created": "", "source": "manual", "note": ""})
+
+    system = context.build_messages(cid, sid)[0]["content"]
+    assert system.count("Winifred's chart (open)") == 1
+    assert system.count("Winifred's promise (promise, open)") == 1
+    assert "Mara's map (" not in system and "Mara's oath (" not in system
