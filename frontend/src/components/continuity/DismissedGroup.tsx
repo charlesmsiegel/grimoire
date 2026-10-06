@@ -10,7 +10,7 @@
  *  aside and is back at once.
  */
 import type { ContinuityState } from "../../api/client";
-import { SUPPRESSION_LABELS } from "./labels";
+import { dismissedUnreadable, SUPPRESSION_LABELS } from "./labels";
 
 export function DismissedGroup(
   { state, busy, onRestore }: {
@@ -24,6 +24,9 @@ export function DismissedGroup(
     return <p className="empty-state">The dismissed findings could not be read.</p>;
   }
   const live = state.suppressions.filter((s) => s.live);
+  // A section that did not read is empty here, never "nothing dismissed" (§26).
+  const unread = dismissedUnreadable(state.malformed);
+  if (unread) return <p className="continuity-note" role="status">{unread}</p>;
   if (!live.length) {
     return (
       <p className="empty-state">

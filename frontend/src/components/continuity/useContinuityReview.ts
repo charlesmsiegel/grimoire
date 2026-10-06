@@ -31,6 +31,7 @@ import {
 import type { RunHandle } from "../../api/stream";
 import type { ContinuityGroup } from "../../api/types";
 import { errorText } from "../../api/errors";
+import { dismissedUnreadable, findingsUnreadable, reviewedUnreadable } from "./labels";
 
 /** What a landed sweep with no model connection did (§12.9). */
 export const NO_MODEL_NOTE =
@@ -75,7 +76,9 @@ export type ContinuityReview = {
   candidates: ContinuityCandidates | null | "failed";
   state: ContinuityState | null | "failed";
   /** Per group; null where the read behind that group has not answered --
-   *  still reading, or failed -- which the column draws as "—", never 0. */
+   *  still reading, or failed -- or answered without being able to read what
+   *  the group lists (a malformed continuity.json or findings cache, §26),
+   *  which the column draws as "—", never 0. */
   counts: Record<ContinuityGroup, number | null>;
   /** A sweep is in hand: a Refresh, or a followed run. Disables Refresh. */
   refreshing: boolean;
@@ -278,21 +281,24 @@ export function useContinuityReview(cid: string, epoch: number,
   }, [rawCandidates, overrides, moved]);
 
   const counts = useMemo((): Record<ContinuityGroup, number | null> => {
-    const found = candidates && candidates !== "failed" ? candidates.candidates : null;
+    const read = candidates && candidates !== "failed" ? candidates : null;
+    const found = read && !findingsUnreadable(read.diagnostics) ? read.candidates : null;
     const inGroup = (g: ContinuityGroup) =>
       found ? found.filter((c) => c.group === g).length : null;
     const st = state && state !== "failed" ? state : null;
+    const reviewed = st && !reviewedUnreadable(st.malformed) ? st : null;
+    const dismissed = st && !dismissedUnreadable(st.malformed) ? st : null;
     return {
       overlaps: inGroup("overlaps"),
       closures: inGroup("closures"),
       resolutions: inGroup("resolutions"),
       // Dangling aliases are in `aliases`; a broken link is not an effective
       // one, so it is only in `raw_links` (§12.6 lists both, marked Broken).
-      reviewed: st
-        ? st.aliases.length + st.links.length
-          + st.raw_links.filter((l) => l.state === "broken").length
+      reviewed: reviewed
+        ? reviewed.aliases.length + reviewed.links.length
+          + reviewed.raw_links.filter((l) => l.state === "broken").length
         : null,
-      dismissed: st ? st.suppressions.filter((s) => s.live).length : null,
+      dismissed: dismissed ? dismissed.suppressions.filter((s) => s.live).length : null,
     };
   }, [candidates, state]);
 

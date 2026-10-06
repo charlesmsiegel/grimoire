@@ -2314,7 +2314,7 @@ The rule binds what the capstone adds to Todo and the shell (Slice G plan, Decis
 | Identity resolver LLM fails / undecodable | Stage first-pass rows; identity block `failed`; rows carry hints and alternatives; no hidden data loss |
 | Reconciliation LLM fails / undecodable | Deterministic candidates persist (first persist already landed); run `failed` with `error.saved: true`; wrap-up succeeds |
 | Reconcile run cannot be reserved | Save response unaffected; logged; next End Scene or refresh catches up |
-| continuity.json malformed | Read enhancements omit per section; mutators refuse overwrite; `malformed` reported |
+| continuity.json malformed | Read enhancements omit per section; mutators refuse overwrite; `malformed` reported, and each Ledger review group it empties names what could not be read, with a "—" count, rather than reading as nothing yet (§20's rule) |
 | candidate cache malformed | Treat as empty/rebuildable; no campaign failure |
 | dangling alias | Source record remains visible/effective; Continuity review lists it as Broken |
 | dangling or self-collapsing reviewed link | Omitted from drivers and graph edges; listed in `diagnostics.broken_links`; Broken in review |

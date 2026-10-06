@@ -35,8 +35,8 @@ import { ledgerHref } from "../../ledgerPaths";
 import { CandidateDetail, formKey, type DetailError } from "./CandidateDetail";
 import { DismissedGroup } from "./DismissedGroup";
 import {
-  GROUP_LABELS, isLive, KIND_PHRASES, LIVENESS_SENTENCES, MATCHING_LINES, proposalLabel,
-  RELATION_PHRASES, STALE_TEXT,
+  findingsUnreadable, GROUP_LABELS, isLive, KIND_PHRASES, LIVENESS_SENTENCES, MATCHING_LINES,
+  proposalLabel, RELATION_PHRASES, STALE_TEXT,
 } from "./labels";
 import { ReviewedGroup } from "./ReviewedGroup";
 import type { ContinuityReview as Review } from "./useContinuityReview";
@@ -102,32 +102,39 @@ function FindingList(
     );
   }
   const found = candidates.candidates.filter((c) => c.group === group);
+  // What did not read leaves this group empty, which is not "none found" (§26).
+  const unread = findingsUnreadable(candidates.diagnostics);
+  const note = unread ? <p className="continuity-note" role="status">{unread}</p> : null;
   if (!found.length) {
-    return <p className="empty-state"><span className="empty-what">{NOTHING[group]}</span></p>;
+    return note
+      ?? <p className="empty-state"><span className="empty-what">{NOTHING[group]}</span></p>;
   }
   return (
-    <ul className="continuity-list">
-      {found.map((c) => {
-        const suggested = proposalLabel(c.proposal?.decision);
-        return (
-          <li key={c.id}>
-            <button type="button" className="continuity-finding"
-                    onClick={() => navigate(ledgerHref(cid, {
-                      section: "continuity", group, candidate: c.id }))}>
-              <span className="continuity-item-title">{titlesOf(c)}</span>
-              <span className="continuity-item-meta">
-                {KIND_PHRASES[c.kind]}{suggested && ` · ${suggested}`}
-              </span>
-              {c.stale && (
-                <span className="continuity-stale">
-                  {STALE_TEXT[c.stale_reason ?? "records"]}
+    <>
+      {note}
+      <ul className="continuity-list">
+        {found.map((c) => {
+          const suggested = proposalLabel(c.proposal?.decision);
+          return (
+            <li key={c.id}>
+              <button type="button" className="continuity-finding"
+                      onClick={() => navigate(ledgerHref(cid, {
+                        section: "continuity", group, candidate: c.id }))}>
+                <span className="continuity-item-title">{titlesOf(c)}</span>
+                <span className="continuity-item-meta">
+                  {KIND_PHRASES[c.kind]}{suggested && ` · ${suggested}`}
                 </span>
-              )}
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+                {c.stale && (
+                  <span className="continuity-stale">
+                    {STALE_TEXT[c.stale_reason ?? "records"]}
+                  </span>
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
 
