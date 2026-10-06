@@ -193,8 +193,12 @@ def test_a_pass_that_raises_still_leaves_a_report(client, monkeypatch):
     assert run["state"] == "failed"
     stored = client.get(f"/api/maintenance/images/reports/{run['id']}").json()
     assert stored["kind"] == "image-migration"
-    assert stored["state"] == "failed"
+    assert stored["state"] == "failed" and stored["outcome"] == "failed"
     assert "disk on fire" not in str(stored)       # a class name, never a message
+    # The full report shape, so the Settings card can render it as it is.
+    assert stored["mode"] == "migrate" and stored["dry_run"] is False
+    assert stored["untouched"] == [] and stored["errors"] == []
+    assert stored["legacy_files"] == 0 and stored["placed"] == 0
 
 
 def test_a_hold_on_the_store_refuses_a_start_as_busy(client):

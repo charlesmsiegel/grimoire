@@ -13,6 +13,7 @@ runs against a temp `GRIMOIRE_HOME`; none of them touches the frozen campaign
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import io
 import json
@@ -603,6 +604,28 @@ def test_campaigns_written_are_revision_bumped():
     assert revision.current(cid) != before
 
 
+def test_a_campaign_write_stopped_part_way_still_bumps_its_revision(monkeypatch):
+    """The placement is written, then the step is stopped (a busy lock before
+    the legacy file goes): the campaign's files changed, so its token must
+    move even though the step never returned."""
+    wid, _wroot, _char, _wchar = _world()
+    cid, croot = _campaign(wid)
+    library = croot / "assets" / "images"
+    quay = _legacy(library, "quay.png", _png(2))
+    before = revision.current(cid)
+
+    def busy(*_a, **_k):
+        raise locks.StoreBusy("image")
+    monkeypatch.setattr(image_migration, "_unlink_same", busy)
+
+    rep = _run()
+
+    assert [e["error"] for e in rep["errors"]] == ["StoreBusy"]
+    assert image_refs.read(library, "quay") is not None and quay.exists()
+    assert revision.current(cid) != before
+    assert rep["campaigns_written"] == 1
+
+
 def test_legacy_thumbnails_are_removed():
     assert thumbs.WIDTHS == THUMB_BUCKETS
     _wid, _wroot, _char, wchar = _world()
@@ -827,8 +850,31 @@ def test_a_failed_run_still_reports(monkeypatch):
 
     rep = _run()
 
-    assert rep["outcome"] == "failed" and "RuntimeError" in rep["error"]
+    # The type only: a message is free text, and an OS error's names a path.
+    assert rep["outcome"] == "failed" and rep["error"] == "RuntimeError"
     assert "legacy_files" in rep and rep["placed"] == 0
+
+
+def test_a_failure_is_reported_by_type_and_never_by_its_path(monkeypatch):
+    """M2: a report holds relative paths only. An OS error's message carries the
+    absolute path it failed on, so neither a step's error nor a run's says
+    more than the exception's type and errno."""
+    _wid, _wroot, _char, wchar = _world()
+    avatar = _legacy(wchar, "avatar.png", _png(1))
+
+    def denied(*_a, **_k):
+        raise PermissionError(errno.EACCES, "Permission denied", str(avatar.resolve()))
+    monkeypatch.setattr(image_migration, "_write_placement", denied)
+
+    rep = _run()
+
+    assert [e["error"] for e in rep["errors"]] == ["PermissionError [EACCES]"]
+    assert str(_root()) not in json.dumps(rep)
+
+    monkeypatch.setattr(image_migration, "plan", denied)
+    failed = _run()
+    assert failed["outcome"] == "failed" and failed["error"] == "PermissionError [EACCES]"
+    assert str(_root()) not in json.dumps(failed)
 
 
 def test_a_cancelled_run_still_reports():

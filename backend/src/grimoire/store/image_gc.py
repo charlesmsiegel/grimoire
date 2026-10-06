@@ -724,9 +724,14 @@ def _judge(now: float, grace: float, mtimes: list[float], prior: float | None) -
 
 # ---- reports and tokens ----------------------------------------------------------
 
-def _new_report(mode: str, run_id: str, now: float, grace_days: float | None) -> dict:
+#: The ``kind`` a stored collection report carries (`maintenance_reports`).
+KIND = "image-gc"
+
+
+def _new_report(mode: str | None, run_id: str, now: float,
+                grace_days: float | None) -> dict:
     return {
-        "kind": "image-gc", "mode": mode, "run_id": run_id, "state": "running",
+        "kind": KIND, "mode": mode, "run_id": run_id, "state": "running",
         "started_at": now, "finished_at": None, "grace_days": grace_days,
         "counts": {"placements": 0, "objects": 0, "blobs": 0, "unreferenced": 0,
                    "collectable": 0, "collectable_blobs": 0, "protected": 0},
@@ -737,6 +742,17 @@ def _new_report(mode: str, run_id: str, now: float, grace_days: float | None) ->
         "skipped": [], "kept_blobs": [], "unarrived_objects": [],
         "cache_cleanup": [], "error": None,
     }
+
+
+def failed_report(mode: str | None, run_id: str, error: str) -> dict:
+    """A scan's or a collection's report when the pass raised before it could
+    write its own: `_new_report`'s full shape, every count zero and every list
+    empty, ended as failed. `error` is the exception's type, never its
+    message."""
+    now = time.time()
+    report = _new_report(mode, run_id, now, None)
+    report.update(state=FAILED, error=error, finished_at=now)
+    return report
 
 
 def _finish(root: Path, run_id: str, report: dict) -> None:

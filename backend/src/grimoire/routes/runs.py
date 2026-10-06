@@ -2218,7 +2218,7 @@ def maintenance_live(app) -> list[Run]:
 
 
 def run_maintenance(app, kind: str, attempt_id: str | None,
-                    work_sync: Callable[[Run], dict]) -> dict:
+                    work_sync: Callable[[Run], dict], *, mode: str | None = None) -> dict:
     """Reserve a `maintenance` run, start ``work_sync`` in a worker thread, and
     answer the 202 body.
 
@@ -2227,7 +2227,9 @@ def run_maintenance(app, kind: str, attempt_id: str | None,
     ``run.cancel_requested`` between items, writes its report with
     `maintenance_reports.write` in its own ``finally`` -- so a cancelled or
     failed run still leaves one -- and returns that report, which becomes the
-    run's result.
+    run's result. ``mode`` (``plan``/``migrate``, ``scan``/``collect``) is
+    what the minimal report of a pass that raised before writing its own
+    says it was (`_report_failure`).
 
     Refusals, each as the 409 it is:
 
@@ -2284,7 +2286,7 @@ def run_maintenance(app, kind: str, attempt_id: str | None,
                 try:
                     return work_sync(r)
                 except BaseException as exc:
-                    _report_failure(root, r, exc)
+                    _report_failure(root, r, exc, mode)
                     raise
 
         try:
@@ -2329,7 +2331,21 @@ def _claim_maintenance(root: Path, run_id: str) -> tuple[int, str]:
     return lock_fd, device
 
 
-def _report_failure(root: Path, run: Run, exc: BaseException) -> None:
+def _failure_report(run: Run, mode: str | None, error: str) -> dict:
+    """The stored report of a pass that raised before writing its own, in the
+    full shape its kind's own reports have -- every count zero, every list
+    empty -- so the Settings card reading it back meets no missing field. The
+    ``kind`` is the report's (``image-migration``/``image-gc``), not the
+    run's (``migrate``/``gc``)."""
+    if run.kind == "migrate":
+        return {**store.image_migration.failed_report(error, dry_run=mode != "migrate"),
+                "kind": store.image_migration.KIND, "run_id": run.id, "mode": mode,
+                "state": "failed"}
+    return store.image_gc.failed_report(mode, run.id, error)
+
+
+def _report_failure(root: Path, run: Run, exc: BaseException,
+                    mode: str | None = None) -> None:
     """Leave a minimal report for a pass that raised without writing its own.
 
     The work's own ``finally`` is what normally writes the report; this covers
@@ -2340,8 +2356,8 @@ def _report_failure(root: Path, run: Run, exc: BaseException) -> None:
     """
     try:
         if maintenance_reports.read(root, run.id) is None:
-            maintenance_reports.write(root, run.id, {
-                "kind": run.kind, "state": "failed", "error": type(exc).__name__})
+            maintenance_reports.write(
+                root, run.id, _failure_report(run, mode, type(exc).__name__))
     except Exception:                                        # noqa: BLE001
         _log.warning("could not write a failure report for maintenance run %s",
                      run.id, exc_info=True)

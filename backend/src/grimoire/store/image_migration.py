@@ -66,6 +66,7 @@ entry that guard refuses.
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -629,6 +630,8 @@ def report(p: MigrationPlan) -> dict:
 
 #: How a run ended (``outcome`` in its report).
 DONE, CANCELLED, FAILED, ROOT_CHANGED = "done", "cancelled", "failed", "root-changed"
+#: The ``kind`` a stored migration report carries (`maintenance_reports`).
+KIND = "image-migration"
 #: How many times one key's fold is retried when its value moves under it.
 _FOLD_TRIES = 4
 _SUBJECTS = image_subjects.SUBJECTS_FILE
@@ -656,6 +659,15 @@ def _run_fields(dry_run: bool) -> dict:
         "journals": {"converted": 0, "retired": 0, "kept": 0},
         "url_subject_keys_kept": 0, "campaigns_written": 0,
     }
+
+
+def failed_report(error: str, *, dry_run: bool) -> dict:
+    """A run's report when the pass raised before it could write its own: the
+    full shape (M2) with every count zero and every list empty, so a reader
+    of the stored report never meets a missing field. `error` is what
+    `_error_text` would say -- a type, never a message."""
+    return {**report(MigrationPlan(Path())), **_run_fields(dry_run),
+            "outcome": FAILED, "error": error}
 
 
 def _linked_slot(root: Path, d: Path, name: str | None = None) -> bool:
@@ -707,6 +719,23 @@ def _campaign_held(cid: str | None):
 
 
 @contextmanager
+def _campaign_write(ex: _Exec, cid: str | None):
+    """`_campaign_held`, and the revision bump for whatever the step inside it
+    wrote -- in a ``finally`` still under the lock, so a step that writes and
+    is then stopped (a `locks.StoreBusy`, a moved root, an I/O error) leaves
+    the campaign's token moved past the write rather than vouching for the
+    state before it (CLAUDE.md, revision)."""
+    with _campaign_held(cid):
+        ex.wrote = False
+        try:
+            yield
+        finally:
+            if ex.wrote:
+                ex.bump(cid)
+            ex.wrote = False
+
+
+@contextmanager
 def _collection_held(occ: Occurrence):
     """`image_collection_lock` for a world-library occurrence (M8): a write
     there is what format-1 membership checks guard."""
@@ -730,6 +759,9 @@ class _Exec:
     verified: set[tuple[Path, str]] = field(default_factory=set)
     #: Campaigns this run wrote, each bumped where it was written.
     written: set[str] = field(default_factory=set)
+    #: Set by each write to a record's files inside `_campaign_write`, and read
+    #: in its ``finally``: a step stopped part-way after a write still bumps.
+    wrote: bool = False
 
     @property
     def root(self) -> Path:
@@ -873,6 +905,7 @@ def _unlink_same(ex: _Exec, p: Path, snap: tuple[int, int, int, int]) -> bool:
     if st is None or not stat.S_ISREG(st.st_mode) or _snap(st) != snap:
         return False
     p.unlink()
+    ex.wrote = True
     return True
 
 
@@ -897,6 +930,7 @@ def _drop_focus_file(ex: _Exec, d: Path, moved: bool) -> bool:
     if not p.is_file() or not ex.guard_dir("before-focus-delete", d):
         return False
     p.unlink()
+    ex.wrote = True
     ex.out["focus_moved" if moved else "focus_dropped"] += 1
     return True
 
@@ -948,11 +982,10 @@ def _item(ex: _Exec, item: Item) -> None:
     elif not _object_under(ex.root, obj.id, obj.blob_sha256):
         ex.skip(occ.path, "not-under-root")
     else:
-        cid = _campaign_of(occ)
-        with _campaign_held(cid), _collection_held(occ), \
+        with _campaign_write(ex, _campaign_of(occ)), _collection_held(occ), \
                 locks.image_name_lock(occ.dir, occ.name):
             if _place_and_clean(ex, item, obj.blob_sha256):
-                ex.bump(cid)
+                ex.wrote = True
     # Not in a `finally`: a process that dies mid-item leaves the entry, and
     # with it the object it ingested, a GC root until a run completes.
     _unpend(ex, item.image_id, rel)
@@ -978,6 +1011,7 @@ def _placement_for(ex: _Exec, item: Item) -> tuple[bool, int | None, bool] | Non
     legacy = ref is None and occ.name == assets.AVATAR
     focus = ref.focus if ref is not None else (_focus_file(occ.dir) if legacy else None)
     _write_placement(occ.dir, occ.name, item.image_id, focus)
+    ex.wrote = True
     ex.out["placed"] += 1
     return True, focus, legacy
 
@@ -1055,6 +1089,7 @@ def _delete_key_if(ex: _Exec, side: Path, key: str, value: object) -> bool | Non
         atomic.write_text(side, json.dumps(cur, indent=2, sort_keys=True) + "\n")
     else:
         side.unlink()
+    ex.wrote = True
     return True
 
 
@@ -1246,6 +1281,7 @@ def _override(ex: _Exec, occ: Occurrence) -> bool:
             ex.keep(side, assets.AVATAR, image_surfaces.SYMLINKED)
             return False
         image_refs.write(d, assets.AVATAR, None, focus=focus)
+        ex.wrote = True
         if image_refs.read(d, assets.AVATAR) != image_refs.Ref(assets.AVATAR, None, focus):
             ex.keep(side, assets.AVATAR, "fold-not-confirmed")
             return True
@@ -1270,8 +1306,7 @@ def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
     if image_id is None or not _target_verified(ex, occ, image_id):
         ex.keep(side, occ.name, "target-not-verified")
         return
-    cid = _campaign_of(occ)
-    with _campaign_held(cid):
+    with _campaign_write(ex, _campaign_of(occ)):
         if occ.metadata_only == "b":
             changed = _override(ex, occ)
         elif occ.metadata_only == "d":
@@ -1281,7 +1316,7 @@ def _metadata_one(ex: _Exec, occ: Occurrence, image_id: str | None) -> None:
         else:
             changed = _fold_description(ex, occ.dir, occ.name, image_id, _label(ex.plan, occ))
         if changed:
-            ex.bump(cid)
+            ex.wrote = True
 
 
 # ---- collections and journals (M10) -----------------------------------------------------
@@ -1504,6 +1539,20 @@ def _url_keys_kept(root: Path) -> int:
 
 # ---- the run -----------------------------------------------------------------------
 
+def _error_text(exc: BaseException) -> str:
+    """What a report says about a failure: the exception's type, and an
+    `OSError`'s errno name when it has one -- never its message. An OS error's
+    message carries the absolute path it failed on, which names the store's
+    location and, below it, a world or a character; a report is a file a
+    person may hand to someone else, and its paths are relative for that
+    reason (M2)."""
+    name = type(exc).__name__
+    code = getattr(exc, "errno", None) if isinstance(exc, OSError) else None
+    if isinstance(code, int):
+        return f"{name} [{errno.errorcode.get(code, code)}]"
+    return name
+
+
 def _attempt(ex: _Exec, where: Path | None, step: Callable[[], object]) -> None:
     """Run one step; a failure there is reported and the run goes on to the
     next (one corrupt file does not stop the rest). A moved root is not a
@@ -1514,7 +1563,7 @@ def _attempt(ex: _Exec, where: Path | None, step: Callable[[], object]) -> None:
         raise
     except Exception as exc:  # noqa: BLE001 -- reported per step; the rest still runs
         ex.out["errors"].append({"path": ex.plan.rel(where) if where is not None else None,
-                                 "error": f"{type(exc).__name__}: {exc}"[:300]})
+                                 "error": _error_text(exc)})
 
 
 def _stopped(ex: _Exec) -> bool:
@@ -1588,5 +1637,5 @@ def run(root: Path, *, dry_run: bool, cancel: Callable[[], bool] | None = None) 
     except _RootChangedError as exc:
         fields["outcome"], fields["stopped_at"] = ROOT_CHANGED, exc.step
     except Exception as exc:  # noqa: BLE001 -- a failed run still reports (M1)
-        fields["outcome"], fields["error"] = FAILED, f"{type(exc).__name__}: {exc}"[:300]
+        fields["outcome"], fields["error"] = FAILED, _error_text(exc)
     return {**report(p), **fields}

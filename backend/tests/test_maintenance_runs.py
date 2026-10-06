@@ -31,7 +31,7 @@ import grimoire.store as store
 from grimoire import main, routes, runner
 from grimoire.main import create_app
 from grimoire.routes import runs
-from grimoire.store import maintenance_reports, paths, proclock
+from grimoire.store import image_gc, image_migration, maintenance_reports, paths, proclock
 from tests.llm_fakes import FakeCatalog, FakeOpenRouter
 
 WAIT = 10.0
@@ -422,7 +422,32 @@ def test_a_pass_that_raised_before_reporting_still_leaves_a_minimal_report(clien
     assert run.state == "failed"
     report = maintenance_reports.read(run.root, run.id)
     # The exception's CLASS only: its message can carry a path or a name.
-    assert report == {"kind": "migrate", "state": "failed", "error": "OSError"}
+    assert report["error"] == "OSError" and "Mara" not in json.dumps(report)
+    # And the whole shape of a migration report, under the report's own kind,
+    # so the card reading it back meets no missing list or count.
+    assert report["kind"] == "image-migration" and report["state"] == "failed"
+    assert report["outcome"] == "failed"
+    assert set(image_migration.failed_report("x", dry_run=True)) <= set(report)
+    assert report["untouched"] == [] and report["errors"] == []
+    assert report["legacy_files"] == 0 and report["placed"] == 0
+
+
+def test_a_gc_pass_that_raised_before_reporting_leaves_a_full_gc_report(client):
+    def broken(run):
+        raise OSError("/somewhere/private/Mara.png vanished")
+
+    body = runs.run_maintenance(client.app, "gc", None, broken, mode="scan")
+    run = client.app.state.runs.get(body["run"]["id"], runs.GLOBAL_SUBJECT)
+    _wait_terminal(run)
+
+    assert run.state == "failed"
+    report = maintenance_reports.read(run.root, run.id)
+    assert report["kind"] == "image-gc" and report["mode"] == "scan"
+    assert report["state"] == "failed" and report["error"] == "OSError"
+    assert "Mara" not in json.dumps(report)
+    assert set(image_gc.failed_report("scan", run.id, "x")) <= set(report)
+    assert report["counts"]["collectable"] == 0 and report["collectable"] == []
+    assert report["blocking"] == [] and report["deleted"]["objects"] == []
 
 
 def test_this_devices_own_marker_does_not_refuse(client):

@@ -346,8 +346,9 @@ export type ImageGcProtected = {
   id: string | null; blob: string | null; why: string; collectable_at: number | null;
 };
 export type ImageGcBlocker = { path: string; reason: string };
-/** One file the collector removed: the object it belonged to, its blob key, its size. */
-export interface ImageGcDeletedRow { id: string; blob: string; bytes: number }
+/** One file the collector removed: the object it belonged to, its blob key, its
+ *  size. `id` is null for an orphan blob, which no sidecar named. */
+export interface ImageGcDeletedRow { id: string | null; blob: string; bytes: number }
 
 /** What the collector reports. `mode` `scan` is the dry run; `collect` the
  *  deletion. `token` is single-use and only present when something is
