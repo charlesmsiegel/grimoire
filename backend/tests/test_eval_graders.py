@@ -798,7 +798,8 @@ def test_suggest_compliant_passes():
     # `on_derived` is asked only of a batch anchored `on`
     assert {c.name for c in checks} == {
         "suggest.json", "suggest.known_refs", "suggest.anchor_known",
-        "suggest.focus_coverage", "suggest.distinct", "suggest.date_consistent"}
+        "suggest.focus_coverage", "suggest.focus_spread", "suggest.distinct",
+        "suggest.date_consistent"}
     # a bare array is the app's tolerated deviation, and so the grader's
     assert failed(graders.grade_scene_suggestions(
         json.dumps(_compliant()), _suggest_snapshot(), SUGGEST_BEFORE, GREG)) == set()
@@ -854,6 +855,44 @@ def test_suggest_clone_fails_coverage_and_distinct():
             _suggestion("Mara's map again", "2026-05-13", (MAP, "advance"),
                         (CORONATION, "anchor"))]
     assert "suggest.distinct" in _suggest(rows)
+
+
+def test_suggest_one_premise_fails_distinct_and_spread():
+    """§28.10 case 9 is about premises and spread, not titles and claim sets:
+    a batch of one premise under three titles, its one focused card holding
+    both drivers, covers every focus ref and differs in every title and
+    claim, and is still a clone."""
+    premise = "Mara spreads her torn map across a crate and asks after the ledger."
+    rows = [_suggestion("Mara's map", "2026-05-12", (MAP, "advance"), (LEDGER, "advance")),
+            _suggestion("Mara's map, by lamplight", "2026-05-13"),
+            _suggestion("Mara's map, at dawn", "2026-05-14")]
+    for row in rows:
+        row["premise"] = premise
+    assert _suggest(rows) == {"suggest.distinct", "suggest.focus_spread"}
+    # both focus drivers on one card, every premise its own: the spread alone
+    rows = _compliant()
+    rows[0]["drivers"].append({"ref": LEDGER, "action": "advance"})
+    rows[1]["drivers"] = []
+    assert _suggest(rows) == {"suggest.focus_spread"}
+    # focus spread over two cards, two premises one reworded clause apart
+    rows = _compliant()
+    rows[0]["premise"] = "Mara spreads her torn map across a crate on the docks."
+    rows[1]["premise"] = "Mara spreads her torn map across a barrel on the docks."
+    assert _suggest(rows) == {"suggest.distinct"}
+    # premise text is compared casefolded and by word, not by spelling
+    rows = _compliant()
+    rows[1]["premise"] = rows[0]["premise"].upper() + "!"
+    assert _suggest(rows) == {"suggest.distinct"}
+    # a card that claims one focus ref beside a card that claims both is spread
+    rows = _compliant()
+    rows[0]["drivers"].append({"ref": LEDGER, "action": "advance"})
+    assert _suggest(rows) == set()
+    # with one focus ref there is nothing to spread
+    one = suggest.Controls(focus=(MAP,), time_mode="anchor", anchor=CORONATION,
+                           relation="before")
+    rows = _compliant()
+    rows[1]["drivers"] = []
+    assert _suggest(rows, one) == set()
 
 
 def test_suggest_dropped_card_does_not_cover_focus():

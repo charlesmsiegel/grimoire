@@ -19,6 +19,7 @@ Each grader returns a list of Check. A case passes when every check passes.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from grimoire.store import absorb, fence, length_drift, scenes, suggest
@@ -37,6 +38,14 @@ COLLAPSE_RATIO = 0.25
 # fixture length, so the recorded output crosses chunk boundaries mid-opener
 # and exercises FenceWatcher's split-delta holdback the way a real stream does.
 CHUNK = 7
+
+# Eval-owned too: two suggestion premises sharing at least this share of their
+# combined words (casefolded, by word) are one premise reworded, §28.10 case
+# 9's clone. Distinct scenes in one campaign share a cast and a setting, so
+# some overlap is expected; a reworded clone keeps the sentence and swaps a
+# verb or a noun, which leaves well over half of it in common. Tune it against
+# live replies if it ever misjudges one.
+PREMISE_OVERLAP = 0.5
 
 
 @dataclass(frozen=True)
@@ -577,9 +586,39 @@ def _on_derived(checked: list[str], snapshot: dict, controls, provider) -> Check
                  f"dates {wrong} are not the anchor's own {want!r}")
 
 
+def _premise_words(entry: dict) -> frozenset[str]:
+    return frozenset(re.findall(r"\w+", str(entry.get("premise", "")).casefold()))
+
+
+def _premise_clones(entries: list[dict]) -> list[tuple[int, int]]:
+    """Pairs of suggestions (1-based) whose premises are one premise reworded:
+    their word sets overlap by at least `PREMISE_OVERLAP` of their union."""
+    words = [_premise_words(e) for e in entries]
+    pairs: list[tuple[int, int]] = []
+    for i, a in enumerate(words):
+        for j in range(i + 1, len(words)):
+            union = a | words[j]
+            if union and len(a & words[j]) / len(union) >= PREMISE_OVERLAP:
+                pairs.append((i + 1, j + 1))
+    return pairs
+
+
+def _focus_holders(focus, claimed: list[set[str]]) -> list[int]:
+    """The suggestions (1-based) that claim at least one focus ref."""
+    return [n for n, refs in enumerate(claimed, 1) if refs & set(focus)]
+
+
 def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> list[Check]:
     """Do the suggestions spread the focus, cite only known drivers, and carry
     dates the anchor rule accepts, in the calendar's own notation?
+
+    §28.10 case 9 is read off the premises and the spread, not only titles and
+    claims: `distinct` also fails two premises that are one reworded
+    (`PREMISE_OVERLAP`), and `focus_spread` fails a batch of two or more cards
+    whose two or more covered focus refs one card holds alone. A spread asks
+    for two holders, not one card per ref: a card serving both beside one
+    serving either is spread. It reads only the covered refs, so a ref no card
+    serves is `focus_coverage`'s miss and never a spread miss too.
 
     Pure: the snapshot, the controls and the calendar provider are handed in.
     The reply is decoded by the app's `suggest.raw_suggestions`, a claim is
@@ -610,7 +649,9 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
     claimed = [{d["ref"] for d in c["drivers"]}
                | ({c["time_anchor"]["ref"]} if c["time_anchor"] else set()) for c in claims]
     uncovered = [r for r in controls.focus if not any(r in refs for refs in claimed)]
+    holders = _focus_holders(controls.focus, claimed)
     titles = [str(e.get("title", "")).strip().casefold() for e in entries]
+    clones = _premise_clones(entries)
     served = [frozenset(d["ref"] for d in c["drivers"] if d["action"] != "anchor")
               for c in claims]
     unknown = _raw_driver_misses(entries, kinds)
@@ -623,10 +664,14 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
               f"time anchors outside the anchor options: {invented}"),
         Check("suggest.focus_coverage", not uncovered,
               f"focus drivers no suggestion claims: {uncovered}"),
+        Check("suggest.focus_spread",
+              len(controls.focus) - len(uncovered) < 2 or len(entries) < 2 or len(holders) >= 2,
+              f"every focus driver is claimed by suggestion {holders} alone"),
         Check("suggest.distinct",
-              len(entries) >= 2 and len(set(titles)) == len(titles) and len(set(served)) > 1,
+              len(entries) >= 2 and len(set(titles)) == len(titles) and len(set(served)) > 1
+              and not clones,
               f"{len(entries)} suggestions, titles {titles}, "
-              f"claims {[sorted(s) for s in served]}"),
+              f"claims {[sorted(s) for s in served]}, one premise reworded: {clones}"),
         Check("suggest.date_consistent", not bad_dates, f"dates: {bad_dates}"),
     ]
     if controls.anchor and controls.relation == "on":

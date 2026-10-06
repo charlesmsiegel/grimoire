@@ -1466,6 +1466,11 @@ CASES: tuple[Case, ...] = (
              # Three takes on Mara's map: the ledger is never served, and no
              # two suggestions differ in what they claim.
              Recording("cloned", ("suggest.focus_coverage", "suggest.distinct"), "json"),
+             # One premise under three titles, the first card claiming both
+             # focus drivers and the other two nothing: every focus ref is
+             # covered and the titles and claim sets all differ, so what trips
+             # is exactly the premise half of `distinct` and the spread.
+             Recording("one-premise", ("suggest.distinct", "suggest.focus_spread"), "json"),
              # The compliant claims, every date after the coronation.
              Recording("bad-date", ("suggest.date_consistent",), "json"),
              # The compliant reply plus one driver the index never listed:
