@@ -1622,26 +1622,65 @@ def test_export_refuses_an_oversized_member_blob(monkeypatch, tmp_path):
     assert not dest.exists()
 
 
+_STOLEN_LIKE = "px1-" + "a" * 64
+
+
 @pytest.mark.parametrize("label, body", [
-    ("duplicates", json.dumps({"format": 2, "members": ["px1-" + "a" * 64] * 2})),
-    ("empty", json.dumps({"format": 2, "members": []})),
-    ("unknown-format", json.dumps({"format": 9, "members": ["px1-" + "a" * 64]})),
-    ("format-1-shape", json.dumps({"format": 1, "members": ["px1-" + "a" * 64]})),
-    ("unparseable", "{broken"),
+    ("duplicates", json.dumps({"format": 2, "members": [_STOLEN_LIKE] * 2}).encode()),
+    ("empty", json.dumps({"format": 2, "members": []}).encode()),
+    ("unknown-format", json.dumps({"format": 9, "members": [_STOLEN_LIKE]}).encode()),
+    ("boolean-format", json.dumps({"format": True, "members": [_STOLEN_LIKE]}).encode()),
+    ("utf-16", json.dumps({"format": 2, "members": [_STOLEN_LIKE]}).encode("utf-16")),
+    ("utf-8-bom", json.dumps({"format": 2, "members": [_STOLEN_LIKE]}).encode("utf-8-sig")),
 ])
 def test_export_refuses_an_invalid_format_2_manifest(monkeypatch, tmp_path, label, body):
-    """An export runs the store's own manifest validation over every manifest
-    it packs, so it never writes one its import refuses -- and says which."""
+    """An export validates, with the store's own rule, every manifest its
+    import would refuse, so it never writes one -- and says which."""
     _home(monkeypatch, tmp_path)
     wid = worlds.create_world("Realm")
     format2(wid, "f" * 32, _pixels(74))                    # a valid one beside it
-    image_collections.manifest_path(wid, COLL).write_text(body, encoding="utf-8")
+    image_collections.manifest_path(wid, COLL).write_bytes(body)
     dest = tmp_path / "out" / "bundle.zip"
     dest.parent.mkdir()
     with pytest.raises(world_bundle.BundleError,
                        match=f"invalid collection manifest: assets/image-collections/{COLL}.json"):
         world_bundle.write_bundle(wid, dest)
     assert not dest.exists()
+
+
+@pytest.mark.parametrize("label, body", [
+    ("format-1-shape", json.dumps({"format": 1, "members": [_STOLEN_LIKE]})),
+    ("format-1-empty", json.dumps({"format": 1, "members": []})),
+    ("unparseable", "{broken"),
+    ("not-an-object", "[]"),
+])
+def test_a_manifest_import_takes_unchecked_still_exports_and_imports(monkeypatch, tmp_path,
+                                                                     label, body):
+    """A manifest the import leaves alone -- one that says format 1, or is no
+    JSON object -- is packed as it is, as it always was, and comes back
+    byte-identical: export refuses only what import would."""
+    _home(monkeypatch, tmp_path)
+    wid = worlds.create_world("Realm")
+    format2(wid, "f" * 32, _pixels(79))
+    image_collections.manifest_path(wid, COLL).write_text(body, encoding="utf-8")
+    new = world_bundle.import_bundle(_export(wid, tmp_path))
+    got = image_collections.manifest_path(new, COLL).read_text(encoding="utf-8")
+    assert got == body
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig"])
+def test_a_format_2_manifest_not_in_strict_utf8_refuses_the_import(monkeypatch, tmp_path,
+                                                                   encoding):
+    """`json.loads(bytes)` reads UTF-16 and a BOM; the store and the
+    containment read strict UTF-8 -- so such a manifest would skip containment
+    and keep naming a picture the bundle lacks. It is refused instead."""
+    _home(monkeypatch, tmp_path)
+    stolen = _local_picture(80)
+    bundle = _hand_bundle(tmp_path, encoding, {
+        COLL_MEMBER: _format2(stolen).encode(encoding)}, fmt=3)
+    with pytest.raises(world_bundle.BundleError, match="invalid collection manifest"):
+        world_bundle.import_bundle(bundle)
+    assert worlds.list_worlds() == []
 
 
 def test_the_newer_than_this_grimoire_message_names_max_format(monkeypatch, tmp_path):
