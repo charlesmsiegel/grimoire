@@ -1,6 +1,7 @@
 import type { EdgeKind, GraphNode, NodeKind, StoryGraph } from "../../api/types";
 import { ledgerHref } from "../../ledgerPaths";
 import { graphFixture, noPresentFixture, NOW_FIXED } from "../../testkit/storyGraph";
+import { RELATION_PHRASES } from "../continuity/labels";
 import { sanitizeSeed } from "../pressureControls";
 import {
   accessibleName, arcNeighbourhood, arcRows, FINDING_PHRASE, indexGraph, isLens, KIND_NOUN,
@@ -410,6 +411,16 @@ describe("names", () => {
     expect(FINDING_PHRASE.possible_thread_closure).toBe("May be finished");
     expect(RELATION_PHRASE.by).toEqual({ out: "Due by", in: "Deadline for" });
     expect(RELATION_PHRASE.before).toEqual({ out: "Before", in: "After this:" });
+  });
+});
+
+describe("one wording per relation", () => {
+  it("the Ledger and the graph lead a link with one phrase", () => {
+    expect(new Set(Object.keys(RELATION_PHRASE))).toEqual(new Set(Object.keys(RELATION_PHRASES)));
+    for (const r of Object.keys(RELATION_PHRASE) as (keyof typeof RELATION_PHRASE)[]) {
+      expect([r, RELATION_PHRASE[r].out]).toEqual([r, RELATION_PHRASES[r]]);
+    }
+    expect(RELATION_PHRASES.by).toBe("Due by");
   });
 });
 

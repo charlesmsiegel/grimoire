@@ -50,6 +50,31 @@ class RefusedError(Exception):
 
 _LEDGER_FILE = {"thread": "plot", "commitment": "commitments", "event": "events"}
 
+#: How a journal label says a link's relation (§30: no store token reaches a
+#: reader). A label is read as one sentence in the History rail -- "Mara's oath
+#: is due by The coronation" -- so these are the sentence forms of §5.3's
+#: Meaning column, where the Ledger and the Story Graph lead a line with the
+#: phrase form ("Due by The coronation"). Held to `effective.RELATIONS` by
+#: `test_continuity_wording.py`.
+RELATION_WORDS: dict[str, str] = {
+    "continues": "continues",
+    "subthread_of": "is a subthread of",
+    "pays_off": "pays off",
+    "before": "is due before",
+    "on": "is due on",
+    "after": "is due after",
+    "by": "is due by",
+    "related_to": "is related to",
+}
+
+
+def _relation_words(relation) -> str:
+    """`RELATION_WORDS`' entry, or "is linked to" for a relation it does not
+    hold -- a hand-edited one, which a label still must not show raw."""
+    if isinstance(relation, str) and relation in RELATION_WORDS:
+        return RELATION_WORDS[relation]
+    return "is linked to"
+
 
 def describe(cid: str, ref: str, ledgers: effective.Ledgers | None = None) -> str:
     """A record's display name -- a title, an event's name -- or the ref itself.
@@ -225,7 +250,7 @@ def create_link(cid: str, a: str, b: str, relation: str, *, scene: str = "",
         rule = effective.RELATIONS.get(relation)
         if rule is None or ap not in rule[0] or bp not in rule[1]:
             raise RefusedError(400, "invalid_relation",
-                          f"{relation!r} cannot join a {ap} to a {bp}")
+                               "That kind of link cannot join these two records.")
         _require_wellformed(cid, {"aliases", "links"})
         ledgers = effective.Ledgers.load(cid)
         _require_readable(ledgers, ap, bp)
@@ -248,23 +273,22 @@ def create_link(cid: str, a: str, b: str, relation: str, *, scene: str = "",
             raise RefusedError(409, "link_exists", "that link already exists", {"id": lid})
         record = {"a": ca, "b": cb, "relation": relation, "created": paths.now_iso(),
                   "scene": scene, "note": note}
-        with _journal_link(cid, lid, f"{describe(cid, ca)} {relation} {describe(cid, cb)}"):
+        with _journal_link(cid, lid, f"{describe(cid, ca)} {_relation_words(relation)} "
+                                     f"{describe(cid, cb)}"):
             doc.put_link(cid, lid, record)
         return {"link": {"id": lid, **record}, "given": {"a": a, "b": b}}
 
 
 def _link_label(cid: str, record) -> str:
-    """``<a> <relation> <b>`` for a stored link of any shape."""
+    """``<a> <relation words> <b>`` for a stored link of any shape."""
     if not isinstance(record, dict):
         return "link"
 
-    def part(value, name: bool) -> str:
-        if not isinstance(value, str):
-            return "?"
-        return describe(cid, value) if name else value
+    def part(value) -> str:
+        return describe(cid, value) if isinstance(value, str) else "?"
 
-    return " ".join((part(record.get("a"), True), part(record.get("relation"), False),
-                     part(record.get("b"), True)))
+    return " ".join((part(record.get("a")), _relation_words(record.get("relation")),
+                     part(record.get("b"))))
 
 
 def remove_link(cid: str, lid: str) -> dict:
@@ -374,7 +398,7 @@ def forget_ref(cid: str, ref: str, name: str = "") -> list[str]:
                 continue
             parts = [label_of(record[k]) if isinstance(record.get(k), str) else "?"
                      for k in ("a", "b")]
-            rel = record.get("relation") if isinstance(record.get("relation"), str) else "?"
+            rel = _relation_words(record.get("relation"))
             with _journal_link(cid, lid,
                                f"{parts[0]} {rel} {parts[1]} — removed with deleted record"):
                 doc.drop_link(cid, lid)
@@ -567,7 +591,7 @@ def _plan_link(record: dict, body: dict) -> dict:
     a, b, relation = body.get("from", ""), body.get("to", ""), body.get("relation", "")
     if not _link_allowed(record, a, b, relation):
         raise RefusedError(400, "invalid_relation",
-                           f"{relation!r} cannot join these records in that direction")
+                           "That kind of link cannot join these records in that direction.")
     return {"link": {"a": a, "b": b, "relation": relation}}
 
 
