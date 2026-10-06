@@ -115,9 +115,14 @@ export function ImageUsage({ imageId, navigable = true }: {
   return (
     <div className="side-section image-usage">
       <h4>Used in</h4>
-      {error && <p className="field-hint">{error}</p>}
+      {error && (
+        <>
+          <p className="field-hint">{error}</p>
+          <button className="subtle" type="button" onClick={() => setError(null)}>Try again</button>
+        </>
+      )}
       {!error && !report && <p className="field-hint">Reading…</p>}
-      {report && groups.length === 0 && <p className="field-hint">Not used anywhere else.</p>}
+      {report && groups.length === 0 && <p className="field-hint">No placements found.</p>}
       {groups.map((g) => (
         <div key={g.id}>
           <p className="field-hint">{g.heading}</p>

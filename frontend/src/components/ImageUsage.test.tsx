@@ -89,11 +89,11 @@ test("two placements of one picture in one record version are two chips", async 
   spy.mockRestore();
 });
 
-test("an image placed nowhere says so", async () => {
+test("an image with no placements says so", async () => {
   (api.getImageUsage as any).mockResolvedValue(empty);
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
-  expect(await screen.findByText("Not used anywhere else.")).toHaveClass("field-hint");
+  expect(await screen.findByText("No placements found.")).toHaveClass("field-hint");
 });
 
 // One case per bucket that has a page: the path is the route App.tsx declares.
@@ -167,4 +167,20 @@ test("shows an error hint when the request fails", async () => {
   mount();
   fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
   expect(await screen.findByText("usage unavailable")).toHaveClass("field-hint");
+});
+
+test("an error offers a retry that clears it and asks again", async () => {
+  (api.getImageUsage as any)
+    .mockRejectedValueOnce({ detail: "usage unavailable" })
+    .mockResolvedValueOnce(report({
+      characters: [{ scope: "world:realm", id: "seraphine", vid: "v", name: "avatar" }],
+    }));
+  mount();
+  fireEvent.click(screen.getByRole("button", { name: "Used in…" }));
+  expect(await screen.findByText("usage unavailable")).toBeInTheDocument();
+  expect(api.getImageUsage).toHaveBeenCalledTimes(1);
+  fireEvent.click(screen.getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("seraphine · avatar")).toBeInTheDocument();
+  expect(screen.queryByText("usage unavailable")).toBeNull();
+  expect(api.getImageUsage).toHaveBeenCalledTimes(2);
 });
