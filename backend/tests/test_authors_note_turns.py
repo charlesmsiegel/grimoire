@@ -12,6 +12,7 @@ from grimoire.store import (
     authors_notes,
     campaign_images,
     campaigns,
+    config,
     context,
     scenes,
     worlds,
@@ -251,3 +252,69 @@ def test_notes_ride_the_image_reference_projection(monkeypatch, tmp_path):
     i = _note_at(list(rich))
     assert rich[i]["role"] == "system"
     assert [r["alt"] for r in cp.image_refs(rich[i + 1]["content"])] == ["the hall"]
+
+
+# --- the inspector row -------------------------------------------------------
+
+
+def test_inspector_lists_applied_and_skipped(monkeypatch, tmp_path):
+    _, cid, sid = _campaign(monkeypatch, tmp_path)
+    _play(cid, sid, 2)
+    authors_notes.set_campaign(cid, {"text": TEXT, "depth": 0, "every": 1})
+    authors_notes.set_scene(cid, scenes.ensure_identity(cid, sid),
+                            {"text": "Rain.", "depth": 2, "every": 3})
+    sections = context.context_breakdown(cid, sid)["sections"]
+    rows = {r["id"]: r for r in sections}
+    row = rows["authors_note"]
+    assert row["tier"] == "history" and row["label"] == "Author's notes"
+    assert [(n["level"], n["status"]) for n in row["notes"]] == [("campaign", "applied"),
+                                                                 ("scene", "skipped")]
+    assert row["notes"][1]["tokens"] == 0 and "skipped (every 3)" in row["text"]
+    assert "[Campaign · depth 0]" in row["text"]
+    assert TEXT not in rows["history"]["text"]
+    assert row["tokens"] > 0 and row["notes"][0]["tokens"] == row["tokens"]
+    ids = [r["id"] for r in sections]
+    assert ids.index("authors_note") == ids.index("history") + 1
+
+
+def test_inspector_total_still_counts_the_notes(monkeypatch, tmp_path):
+    _, cid, sid = _campaign(monkeypatch, tmp_path)
+    _play(cid, sid, 2)
+    without = context.context_breakdown(cid, sid)
+    authors_notes.set_campaign(cid, {"text": TEXT, "depth": 0, "every": 1})
+    with_note = context.context_breakdown(cid, sid)
+    row = next(r for r in with_note["sections"] if r["id"] == "authors_note")
+    assert with_note["total_tokens"] == without["total_tokens"] + row["tokens"]
+    hist = lambda d: next(r for r in d["sections"] if r["id"] == "history")  # noqa: E731
+    assert hist(with_note)["tokens"] == hist(without)["tokens"]
+
+
+def test_trimmed_note_is_reported(monkeypatch, tmp_path):
+    _, cid, sid = _campaign(monkeypatch, tmp_path)
+    for i in range(1, 13):
+        scenes.append_message(cid, sid, "user", f"P{i} " + "word " * 60)
+        scenes.append_message(cid, sid, "assistant", f"R{i} " + "word " * 60)
+    authors_notes.set_campaign(cid, {"text": TEXT, "depth": 50, "every": 1})
+    base = context.context_breakdown(cid, sid)["total_tokens"]
+    config.write_config(context_budget=str(base // 3))
+    detail = context.context_breakdown(cid, sid)
+    rows = {r["id"]: r for r in detail["sections"]}
+    row = rows["authors_note"]
+    assert row["notes"][0]["status"] == "trimmed" and row["tokens"] == 0
+    assert row["trimmed"] == 1 and "· trimmed]" in row["text"]
+    assert rows["history"]["trimmed"] >= 1
+
+
+def test_no_configured_notes_no_row(monkeypatch, tmp_path):
+    _, cid, sid = _campaign(monkeypatch, tmp_path)
+    _play(cid, sid)
+    assert "authors_note" not in [r["id"] for r in context.context_sections(cid, sid)]
+
+
+def test_a_note_row_without_history_goes_before_post_history(monkeypatch, tmp_path):
+    _, cid, sid = _campaign(monkeypatch, tmp_path)
+    authors_notes.set_campaign(cid, {"text": TEXT, "depth": 0, "every": 3})
+    ids = [r["id"] for r in context.context_sections(cid, sid)]
+    assert "authors_note" in ids and "history" not in ids
+    if "post_history" in ids:
+        assert ids.index("authors_note") == ids.index("post_history") - 1

@@ -1739,7 +1739,8 @@ def build_director_messages(cid: str, sid: str, note: str, turn: dict | None = N
                                  images=images)[0]
 
 
-def _history_rows(p: dict, count) -> list[dict]:
+def _history_rows(p: dict, count, notes: frozenset[int] = frozenset(),
+                  notes_trimmed: int = 0) -> list[dict]:
     """The history's inspector rows: the conversation, then -- when the kept
     history carries image references (#377) -- an Images row.
 
@@ -1751,8 +1752,13 @@ def _history_rows(p: dict, count) -> list[dict]:
     in the Conversation bucket rather than leaving them out of a prompt whose
     whole size it claims to show. A carrier has no text and adds no blank line
     to the joined conversation.
+
+    `notes` are the packed-history indices of author's-note messages, which
+    the Author's notes row reports instead (`_notes_row`): the conversation
+    row neither shows nor counts them, and its `trimmed` counts only the
+    conversation messages the trim took (`notes_trimmed` were notes).
     """
-    kept = p["history"]
+    kept = [m for i, m in enumerate(p["history"]) if i not in notes]
     texts = [content_parts.text_of(m["content"]) for m in kept
              if not m.get(content_parts.CARRIER)]
     refs = [r for m in kept for r in content_parts.image_refs(m["content"])]
@@ -1763,7 +1769,7 @@ def _history_rows(p: dict, count) -> list[dict]:
         # same per-message framing allowance the packer charges.
         rows.append({"id": "history", "label": "Conversation history", "text": hist,
                      "tier": pack.HISTORY, "dropped": False, "pinned": False,
-                     "trimmed": p["history_trimmed"],
+                     "trimmed": p["history_trimmed"] - notes_trimmed,
                      "tokens": sum(pack.message_cost(content_parts.text_of(m["content"]), count)
                                    for m in kept if not m.get(content_parts.CARRIER))})
     if refs:
@@ -1791,6 +1797,49 @@ def _lore_row(section: dict) -> dict:
     if "held_back" in detail:
         row["held_back"] = deepcopy(detail["held_back"])
     return row
+
+
+def _notes_row(notes: list[dict], p: dict, count) -> tuple[dict, frozenset[int]]:
+    """The Author's notes row (play controls V), and the packed-history indices
+    of the notes it reports.
+
+    `notes` are `_assemble`'s positions (indices into the history BEFORE
+    packing) plus the notes this turn's cadence skipped. The packer only trims
+    from the front, so a note at index `i` is at `i - history_trimmed` when it
+    survived, and was trimmed when `i` fell inside the cut. Each note is listed
+    as applied (with the text that went out), trimmed, or skipped with its
+    cadence, which is how the reader sees why a configured note is absent.
+    Tier `history`: the notes are sent inside the conversation and the packer
+    trims them with it, so a lock-in label would describe a protection they do
+    not have.
+    """
+    cut = p["history_trimmed"]
+    kept: set[int] = set()
+    entries: list[dict] = []
+    blocks: list[str] = []
+    labels = {"campaign": "Campaign", "scene": "Scene"}
+    for n in notes:
+        label = labels.get(n["level"]) or f"Character: {n['name']}"
+        entry = {"level": n["level"], "name": n["name"], "depth": n["depth"],
+                 "every": n["every"], "status": n["status"], "tokens": 0}
+        if n["status"] == "skipped":
+            blocks.append(f"[{label} · skipped (every {n['every']})]")
+        elif n["index"] < cut:
+            entry["status"] = "trimmed"
+            blocks.append(f"[{label} · depth {n['depth']} · trimmed]")
+        else:
+            at = n["index"] - cut
+            kept.add(at)
+            text = content_parts.text_of(p["history"][at]["content"])
+            entry["tokens"] = pack.message_cost(text, count)
+            blocks.append(f"[{label} · depth {n['depth']}]\n{text}")
+        entries.append(entry)
+    row = {"id": "authors_note", "label": "Author's notes", "tier": pack.HISTORY,
+           "dropped": False, "pinned": False,
+           "trimmed": sum(1 for e in entries if e["status"] == "trimmed"),
+           "tokens": sum(e["tokens"] for e in entries), "text": "\n\n".join(blocks),
+           "notes": entries}
+    return row, frozenset(kept)
 
 
 def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
@@ -1837,8 +1886,18 @@ def _breakdown(a: dict, p: dict, extra: list[tuple[str, str]] | None = None,
              "tokens": count(s["text"]), **_lore_row(s)}
             for s in p["sections"]]
 
+    # Every history message, notes included: they are sent, so they cost.
     hist_tokens = sum(pack.message_cost(m["content"], count) for m in p["history"])
-    rows += _history_rows(p, count)
+    notes = a.get("notes") or []
+    if notes:
+        # Only when a note is configured, so a campaign with none describes
+        # its turns exactly as it did before notes existed.
+        note_row, note_index = _notes_row(notes, p, count)
+        history_rows = _history_rows(p, count, note_index, p.get("notes_trimmed", 0))
+        at = next((n + 1 for n, r in enumerate(history_rows) if r["id"] == "history"), 0)
+        rows += [*history_rows[:at], note_row, *history_rows[at:]]
+    else:
+        rows += _history_rows(p, count)
     if a["post_history"]:
         rows.append({"id": "post_history", "label": "Post-history instructions",
                      "text": a["post_history"], "pinned": False,
