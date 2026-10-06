@@ -447,6 +447,38 @@ def _assert_reachable_as_art(client, ids: dict, surface: Surface, name: str,
     assert got.status_code == 200 and got.content == blob
 
 
+# ---- format-2 collection members: objects, never library images ------------
+#
+# Not a SURFACES entry: a format-2 member has no placement and no record
+# directory, so the walk's placement and listing reads do not apply. What it
+# does promise (stage 3, C11) is pinned here instead.
+
+def _format2_member(ids) -> tuple[str, str]:
+    image_id = image_collections.put_member(ids["wid"], ids["png"])
+    image_collections.publish(ids["wid"], COLLECTION, [image_id])
+    return image_id, f"/api/worlds/{ids['wid']}/image-collections/{COLLECTION}/members/0"
+
+
+def test_a_format_2_member_writes_no_library_file_or_placement(client, ids):
+    image_id, url = _format2_member(ids)
+    library = image_collections.image_directory(ids["wid"])
+    assert _image_files(ids["wroot"]) == [] and _image_files(ids["croot"]) == []
+    assert not library.exists() or not any(library.rglob("*"))
+    assert client.get(f"/api/worlds/{ids['wid']}/images").json() == []
+    blob = _blob(image_id)
+    got = client.get(url)
+    assert got.status_code == 200 and got.content == blob
+    listed = client.get(f"/api/worlds/{ids['wid']}/image-collections/{COLLECTION}").json()
+    assert listed["format"] == 2
+    assert [m.split("?")[0] for m in listed["members"]] == [url]
+
+
+def test_a_format_2_member_is_not_in_the_describe_queue(client, ids):
+    before = {scope: _queue(client, ids, scope) for scope in ("world", "campaign")}
+    _format2_member(ids)
+    assert {scope: _queue(client, ids, scope) for scope in ("world", "campaign")} == before
+
+
 # ---- invariant 13, across surfaces -----------------------------------------
 
 def test_one_picture_on_two_records_packs_once(client, ids):
