@@ -2,7 +2,7 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { GraphNode, ShellPayload, StoryGraph } from "../api/types";
-import { sanitizeSeed } from "../components/pressureControls";
+import { ACTION_LABELS, sanitizeSeed } from "../components/pressureControls";
 import {
   FINDING_PHRASE, RELATION_PHRASE, STATE_WORDS, accessibleName, indexGraph, statusOf,
 } from "../components/storyGraph/model";
@@ -797,6 +797,56 @@ test("actor, scene, event, idea and location details show their sections", async
   await ready(at("locations:saltmarch-harbour"));
   d = detail("Saltmarch harbour");
   chip(section(d, "Scenes"), "Saltmarch harbour");
+  noTokens(d);
+});
+
+test("a serves edge shows the driver action it carries, from both ends", async () => {
+  // Two ideas serve one thread with different actions; a third serves an
+  // event. The edge layer is aria-hidden, so the action is read here or nowhere.
+  const g = graphFixture();
+  g.edges.push(
+    { id: "e-letter-map", kind: "serves", from: "idea:winifred-s-letter",
+      to: "thread:mara-s-map", source: "structural", relation: "close_candidate",
+      candidate_id: null },
+    { id: "e-letter-coronation", kind: "serves", from: "idea:winifred-s-letter",
+      to: "event:the-coronation", source: "structural", relation: "address",
+      candidate_id: null },
+  );
+  vi.mocked(api.continuityGraph).mockResolvedValue(g);
+  const ix = indexGraph(g);
+  const status = (id: string) => statusOf(ix.byId.get(id)!, ix);
+
+  let r = await ready(at("idea:the-harbour-meeting"));
+  let d = detail("The harbour meeting");
+  expect(entries(section(d, "Serves")))
+    .toEqual([`${ACTION_LABELS.advance} Mara's map ${status("thread:mara-s-map")}`]);
+  noTokens(d);
+  r.unmount();
+
+  r = await ready(at("idea:winifred-s-letter"));
+  d = detail("Winifred's letter");
+  expect(entries(section(d, "Serves"))).toEqual([
+    `${ACTION_LABELS.close_candidate} Mara's map ${status("thread:mara-s-map")}`,
+    `${ACTION_LABELS.address} The coronation ${status("event:the-coronation")}`,
+  ]);
+  noTokens(d);
+  r.unmount();
+
+  r = await ready(at("thread:mara-s-map"));
+  d = detail("Mara's map");
+  const served = section(d, "Served by");
+  expect(entries(served)).toEqual([
+    `The harbour meeting ${ACTION_LABELS.advance}`,
+    `Winifred's letter ${ACTION_LABELS.close_candidate}`,
+  ]);
+  fireEvent.click(chip(served, "Winifred's letter"));
+  expect(detail("Winifred's letter")).toBeInTheDocument();
+  r.unmount();
+
+  await ready(at("event:the-coronation"));
+  d = detail("The coronation");
+  expect(entries(section(d, "Linked")))
+    .toContain(`Served by Winifred's letter ${ACTION_LABELS.address}`);
   noTokens(d);
 });
 

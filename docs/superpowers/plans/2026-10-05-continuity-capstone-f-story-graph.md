@@ -319,6 +319,7 @@ Five input classes that are most likely to hurt a user, and that the spec's own 
 - Location names come from a whole-kind `overlay.list_entities` read (constant per request, not N+1; Decision 5). Narrowing it is handed to G.
 - `useCampaignShell` gains `{ demand: false }`, so the page reads the campaign name without issuing a shell read (Decision 18).
 - `PageShell` gains `dismissKey` (Decision 22).
+- A thread or commitment detail gains a "Served by" section §19.6 does not list, and every `serves` row, at either end, names the edge's driver action with `ACTION_LABELS` (Decision 26: `serves.relation` is otherwise only on an `aria-hidden` path, so two ideas serving one driver differently would read alike).
 - `birthdays.gather` reads a PC's name from meta (Decision 5). It is a B module, changed here because the graph's §19.7 cost rule reaches through it.
 
 ---
@@ -1046,17 +1047,17 @@ Backend paths below are relative to `backend/src/grimoire/` and tests to `backen
 - Per kind (§19.6, Decision 23). Every chip that names a record is a `<button className="chip">` that calls `onSelect(ref)`. Plain attributes are `<span className="chip on">` or `.field-hint`.
   - **Thread and commitment:**
     - facts: canonical title, status, latest beat, pressure, commitment kind and due. The pressure line is `STATE_WORDS[state]`, then `whenPhrase(in_days)` **only when `in_days !== null`**, then `friendly` **only when it is non-empty**. A stale or ok reading, and every driver reading without a date, carries `in_days: null` (B Decision 10: "aging `stale` gives `stale` … with `in_days: None` and `friendly: ""`"), and E's `whenPhrase(null)` returns "undated", so an unconditional call would make a stale open thread read "stale … undated", as though a date were missing;
-    - side sections: "Merged" (the aliases), "Scenes" (movement edges in scene order, each chip prefixed with its verb: opened, advanced, touched, closed or resolved), "Involves", "Links" (`RELATION_PHRASE[relation].out` for an outgoing link and `.in` for an incoming one, then a chip to the other end), and "Findings": each is `FINDING_PHRASE[kind]`, then, for a pair kind, "with" and a chip to `other` (when `other` is a node), then `<Link to={ledgerHref(cid, {section: "continuity", group: GROUP_OF[kind], candidate: id})}>`;
+    - side sections: "Merged" (the aliases), "Scenes" (movement edges in scene order, each chip prefixed with its verb: opened, advanced, touched, closed or resolved), "Involves", "Links" (`RELATION_PHRASE[relation].out` for an outgoing link and `.in` for an incoming one, then a chip to the other end), "Served by" (incoming `serves`: a chip to the idea, then `ACTION_LABELS[relation]` as a `chip on`), and "Findings": each is `FINDING_PHRASE[kind]`, then, for a pair kind, "with" and a chip to `other` (when `other` is a node), then `<Link to={ledgerHref(cid, {section: "continuity", group: GROUP_OF[kind], candidate: id})}>`;
     - a merged node shows "Merged into <canonical>" as a chip;
     - actions as in Decision 23.
   - **Event, holiday and birthday:**
     - facts: date (`friendly`, else `native`, else "Undated"), `whenPhrase(in_days, precision)`, the event status, and the birthday actor;
-    - side section "Linked": the far ends of `link` (with `RELATION_PHRASE`), `anchored_to`, `serves` and `birthday_of`; an event also shows "Findings" as above (a temporal `possible_relation`);
+    - side section "Linked": the far ends of `link` (with `RELATION_PHRASE`), `anchored_to`, `serves` (as "Served by", with the action as in "Served by" above) and `birthday_of`; an event also shows "Findings" as above (a temporal `possible_relation`);
     - the action "Anchor next scene".
   - **Character and pc:** "Scenes" (from `appeared_in`), "Active drivers" (`involves` sources whose node is `focusable`), "Relationships" (feelings with their three meters and note; bonds with type and since when: a chip to `scene:<since_scene>` when that node exists, else "a deleted scene", never the filename), and "Birthday" (a birthday node whose `actor` is this ref; rendered only when one exists, so an actor whose birthday falls outside pressure's horizon shows no Birthday section, Decision 11).
   - **Location:** "Scenes".
   - **Scene:** "Cast" (incoming `appeared_in`), "Where" (`occurred_at`, else `place`), "When" (`friendly` / "Undated"), "Moved here" (incoming movement edges with their verbs), and an "Open scene" link.
-  - **Idea:** premise, date, "Serves" (with each target's current `statusOf`), "Anchored to" (the chip; or, when the anchor has no node, its noun from `ANCHOR_NOUN[splitRef(ref)[0]]` (a three-entry table in `model.ts`: `event` → "an event", `birthday` → "a birthday", `holiday` → "a holiday"; anything else → "a date") plus the stored `native`, or "no longer upcoming" when `native` is empty, never the ref itself).
+  - **Idea:** premise, date, "Serves" (`ACTION_LABELS[relation]`, the chip, then the target's current `statusOf`), "Anchored to" (the chip; or, when the anchor has no node, its noun from `ANCHOR_NOUN[splitRef(ref)[0]]` (a three-entry table in `model.ts`: `event` → "an event", `birthday` → "a birthday", `holiday` → "a holiday"; anything else → "a date") plus the stored `native`, or "no longer upcoming" when `native` is empty, never the ref itself).
 - **Actions:**
   - Focus: `navigate(\`/campaigns/${encodeSegment(cid)}/scenes\`, { state: seedFor(node, "focus") })`;
   - Anchor: the same, with `"anchor"`;

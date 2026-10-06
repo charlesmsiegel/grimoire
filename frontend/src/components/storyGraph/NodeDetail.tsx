@@ -22,7 +22,7 @@ import type {
 } from "../../api/types";
 import { GROUP_OF, ledgerHref } from "../../ledgerPaths";
 import { encodeSegment } from "../../urlSegment";
-import { whenPhrase } from "../pressureControls";
+import { ACTION_LABELS, whenPhrase } from "../pressureControls";
 import {
   FINDING_PHRASE, RELATION_PHRASE, STATE_WORDS, anchorNoun, ledgerTarget, seedFor, splitRef,
   statusOf, type GraphIndex,
@@ -118,6 +118,13 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
     rows([...edges].sort((a, b) => order(far(a)) - order(far(b))), far,
          (_e, other) => chip(other));
 
+  /** The driver action a `serves` edge carries (Decision 12), in the
+   *  chooser's own words. The edge layer is aria-hidden, so two ideas that
+   *  serve one driver differently differ here or nowhere. */
+  const served = () => rows(intoOf("serves"), (e) => e.from, (e, other) => (
+    <>{chip(other)}{e.kind === "serves" && <> <span className="chip on">
+      {ACTION_LABELS[e.relation]}</span></>}</>));
+
   const links = () => [
     ...rows(outOf("link"), (e) => e.to, (e, other) => (
       <>{e.kind === "link" ? RELATION_PHRASE[e.relation].out : ""} {chip(other)}</>)),
@@ -189,6 +196,7 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
           <>{MOVED[e.kind]} {chip(other)}</>))),
         side("Involves", rows(outOf("involves"), (e) => e.to, (_e, other) => chip(other))),
         side("Links", links()),
+        side("Served by", served()),
         side("Findings", findings(node.findings)),
       ];
       actions = (
@@ -226,8 +234,7 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
           ...links(),
           ...rows(intoOf("anchored_to"), (e) => e.from, (e, other) => (
             <>{e.kind === "anchored_to" ? ANCHORED_HERE[e.relation] : ""} {chip(other)}</>)),
-          ...rows(intoOf("serves"), (e) => e.from, (_e, other) => (
-            <>Served by {chip(other)}</>)),
+          ...served().map((it) => ({ ...it, body: <>Served by {it.body}</> })),
           ...rows(outOf("birthday_of"), (e) => e.to, (_e, other) => (
             <>Birthday of {chip(other)}</>)),
         ]),
@@ -328,10 +335,13 @@ export const NodeDetail = forwardRef<HTMLElement, Props>(function NodeDetail(
         node.in_days !== null ? ["When", whenPhrase(node.in_days)] : null,
       ]);
       sections = [
-        side("Serves", rows(outOf("serves"), (e) => e.to, (_e, other) => {
+        side("Serves", rows(outOf("serves"), (e) => e.to, (e, other) => {
           const target = ix.byId.get(other);
           return (
-            <>{chip(other)} {target && <span className="field-hint">{statusOf(target, ix)}</span>}</>
+            <>
+              {e.kind === "serves" && <>{ACTION_LABELS[e.relation]} </>}{chip(other)}{" "}
+              {target && <span className="field-hint">{statusOf(target, ix)}</span>}
+            </>
           );
         })),
         side("Anchored to", anchoredTo),
