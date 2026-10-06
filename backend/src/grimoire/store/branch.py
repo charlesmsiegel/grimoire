@@ -135,11 +135,19 @@ def _sid(cid: str, sid: str, meta: dict, title: str) -> str:
 def snap(messages: list[dict], through: int) -> int:
     """`through` moved forward to the last part of the response it lands in --
     a response's parts are one reply, and a branch that kept half of one would
-    hold a reply nobody wrote."""
+    hold a reply nobody wrote.
+
+    The LAST later message carrying the response id, not the end of an
+    unbroken run of them: an accepted roll splits a reply into its first part,
+    the roll line, and the continuation under the same id, and stopping at the
+    roll line would drop the continuation while the cloned record still holds
+    the whole active variant (codex review, PR #458). The roll line inside is
+    then kept, and `match_rolls` copies its log entry like any kept roll line."""
     rid = messages[through].get("response_id")
-    while rid and through + 1 < len(messages) and messages[through + 1].get("response_id") == rid:
-        through += 1
-    return through
+    if not rid:
+        return through
+    return max(i for i in range(through, len(messages))
+               if messages[i].get("response_id") == rid)
 
 
 def _locked(kept: list[dict], rid_map: dict[str, str]) -> set[str]:

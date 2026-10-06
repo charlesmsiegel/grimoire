@@ -269,6 +269,34 @@ def test_a_point_inside_a_multi_part_response_snaps_to_its_last_part(cid):
         ["Mara post 0", "One.", "Two."]
 
 
+def test_a_point_before_a_roll_split_snaps_past_the_roll_to_the_continuation(cid):
+    """An accepted roll splits a reply: its first part, the roll line, then the
+    continuation under the same response id. Branching at the first part keeps
+    the whole reply -- and so the roll line inside it, with its log entry
+    (codex review, PR #458)."""
+    sid = _played(cid, "Mara", posts=1)
+    rid = uuid.uuid4().hex
+    scenes.append_reply(cid, sid, [
+        {"role": "assistant", "speaker": "Mara", "content": "Mara swings.", "response_id": rid,
+         "response_part": "", "response_status": "complete"}])
+    r = dice.roll("1d20", 7)
+    entry = store.rolls.append(cid, sid, None, r)
+    scenes.append_message(cid, sid, "assistant", dice.format_roll(r),
+                          speaker=scenes.serialize.ROLL_SPEAKER)
+    scenes.append_reply(cid, sid, [
+        {"role": "assistant", "speaker": "Mara", "content": "It lands.", "response_id": rid,
+         "response_part": "p1", "response_status": "complete"}])
+    scenes.append_message(cid, sid, "user", "After.")
+    assert branch.snap(scenes.read_scene(cid, sid)["messages"], 1) == 3
+    new = branch.branch_scene(cid, sid, 1)
+    kept = scenes.read_scene(cid, new)["messages"]
+    assert [m["content"] for m in kept] == \
+        ["Mara post 0", "Mara swings.", dice.format_roll(r), "It lands."]
+    assert kept[1]["response_id"] == kept[3]["response_id"] != rid
+    copied = [e for e in store.rolls.read(cid) if e.get("scene") == new]
+    assert [e["result"] for e in copied] == [entry["result"]]
+
+
 def test_deleting_the_source_leaves_the_siblings_responses(client):
     cid, sid = _two_turns(client)
     new = store.branch.branch_scene(cid, sid, 3)
