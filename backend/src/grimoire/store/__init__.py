@@ -90,6 +90,7 @@ from . import (
     image_scopes,
     image_store,
     image_subjects,
+    image_usage,
     journal,
     length_drift,
     lengths,

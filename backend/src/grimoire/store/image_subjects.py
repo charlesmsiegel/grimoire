@@ -64,11 +64,14 @@ def _read_raw(root: Path, gid: str) -> dict:
     return raw if isinstance(raw, dict) else {}
 
 
-def _scope(root: Path) -> str:
+def world_scope(root: Path) -> str:
     """This world's scope (R10): the id as the filesystem spells it, so a root
     reached as `REALM` keeps its tags where `realm` does. Spelled once, in
     `image_scopes`, which strips and copies the same scope."""
     return image_scopes.world_scope(root.name)
+
+
+_scope = world_scope
 
 
 def _slot_of(root: Path, item: _Item) -> tuple[Path, str] | None:

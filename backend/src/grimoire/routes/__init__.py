@@ -72,6 +72,7 @@ from . import (
     continuity,
     entities,
     greetings,
+    images,
     ledger,
     mechanics,
     models,
@@ -174,7 +175,7 @@ def _compose(domain: APIRouter) -> None:
 # `world_images` AFTER `characters`: `/worlds/{wid}/images/{name}` generalizes
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
-for _domain in (config, modules, worlds, characters, world_images, greetings,
+for _domain in (config, modules, worlds, characters, world_images, images, greetings,
                 runs, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
                 campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
     _compose(_domain.router)
