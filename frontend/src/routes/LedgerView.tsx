@@ -8,7 +8,12 @@ import {
   api, ApiError, type Ledger, type PlotThread, type RecordChange, type RelationshipChange,
   type RetiredFact, type StandingFact,
 } from "../api/client";
-import { ledgerHref, parseLedgerTail } from "../ledgerPaths";
+import { CONTINUITY_GROUPS, ledgerHref, parseLedgerTail } from "../ledgerPaths";
+import {
+  ContinuityReview, matchingLine, RefreshControl,
+} from "../components/continuity/ContinuityReview";
+import { GROUP_LABELS } from "../components/continuity/labels";
+import { useContinuityReview } from "../components/continuity/useContinuityReview";
 import { LedgerRowEditor, type Draft } from "../components/ledger/LedgerRowEditor";
 import {
   blankSpec, chronicleSpec, commitmentSpec, factSpec, relationshipSpec, threadSpec,
@@ -308,13 +313,6 @@ const NOTHING: Record<SectionKey, string> = {
   timeline: "No scenes absorbed yet. The chronicle fills in as you end scenes.",
 };
 
-/** What the main pane is headed with while the continuity review is open.
- *  The review itself is its own component; this page only routes to it. */
-const CONTINUITY_HEAD = {
-  label: "Continuity review", eyebrow: "POSSIBLE OVERLAPS AND CLOSURES",
-  columns: ["", "", "", ""] as [string, string, string, string],
-};
-
 /** The refusal a delete gets for a record others were merged into (§5.7). */
 const MERGED_DELETE = "This record has merged records: unmerge them first, or delete anyway";
 
@@ -366,6 +364,14 @@ export default function LedgerView() {
    *  them at once (a retired fact leaves `facts` and joins `retired`, and every
    *  edit adds a row to Recent changes). */
   const [epoch, setEpoch] = useState(0);
+  const bump = useCallback(() => setEpoch((n) => n + 1), []);
+  /** The continuity review (§12): its two reads ride this page's epoch, so a
+   *  hand edit here re-reads the findings and a continuity write re-reads the
+   *  ledger -- a closure applied moves the Threads count, and a thread closed
+   *  in the table drops its closure finding. */
+  const review = useContinuityReview(cid, epoch, bump);
+  const activeGroup = target?.section === "continuity" ? target.group : null;
+  const matching = matchingLine(review);
 
   usePublishShellContext(name ? { campaign: name, scene: "" } : null);
 
@@ -582,8 +588,7 @@ export default function LedgerView() {
     })), [cid, counts, navigate]);
   usePaletteSource(paletteSource);
 
-  const current = tableSection
-    ? (SECTIONS.find((s) => s.key === tableSection) ?? SECTIONS[0]) : CONTINUITY_HEAD;
+  const current = SECTIONS.find((s) => s.key === tableSection) ?? SECTIONS[0];
   // The two logs get no actions column at all rather than an empty one: a
   // column of blanks reads as a feature that failed to load.
   const editable = tableSection !== "standings" && tableSection !== "changes";
@@ -656,6 +661,23 @@ export default function LedgerView() {
           </button>
         ))}
       </ColumnSection>
+      <ColumnSection label="Continuity review">
+        {CONTINUITY_GROUPS.map((g) => (
+          <button key={g}
+                  className={"column-row" + (activeGroup === g ? " active" : "")}
+                  // Dismissed findings is collapsed: its count is all the
+                  // column shows, and its list opens only when chosen.
+                  aria-expanded={g === "dismissed" ? activeGroup === g : undefined}
+                  onClick={() => navigate(ledgerHref(cid, { section: "continuity", group: g }))}>
+            <span className="column-row-label">{GROUP_LABELS[g]}</span>
+            {/* Per group: the two reads answer apart, and a group whose read
+                has not answered -- or failed -- has no number to show. */}
+            <span className="column-row-count">{review.counts[g] ?? "—"}</span>
+          </button>
+        ))}
+        {matching && <p className="field-hint continuity-matching">{matching}</p>}
+        <RefreshControl review={review} />
+      </ColumnSection>
     </>
   );
 
@@ -691,7 +713,8 @@ export default function LedgerView() {
   return (
     <PageShell column={column} footer={footer} columnLabel="Ledger sections">
       <div className="page-wide view-anim">
-        <div className="shelf-head">
+        {activeGroup && <ContinuityReview cid={cid} group={activeGroup} review={review} />}
+        {tableSection && <div className="shelf-head">
           <div>
             <div className="eyebrow">{current.eyebrow}</div>
             <h1 className="screen-title">{current.label}</h1>
@@ -709,7 +732,7 @@ export default function LedgerView() {
               + New {NEW_LABEL[tableSection]}
             </button>
           )}
-        </div>
+        </div>}
 
         {creating && (
           <div className="ledger-create">
