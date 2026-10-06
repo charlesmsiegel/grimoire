@@ -431,7 +431,8 @@ def _apply_plan(cid: str, key: str, checked: dict, plan: dict, landed: list[str]
     if "alias" in plan:
         alias = plan["alias"]
         made = review.create_alias(cid, alias["ref"], alias["to"],
-                                   accept_status_change=alias["accept"], source="review")
+                                   accept_status_change=alias["accept"], source="review",
+                                   replace_broken=True)
         landed.append("alias")
         out["alias"] = made["alias"]
         if "dues" in made:

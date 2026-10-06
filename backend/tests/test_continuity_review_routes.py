@@ -511,6 +511,38 @@ def test_applying_a_duplicate_writes_an_alias_only(client):
     assert written[-1]["kind"] == "continuity_alias"
 
 
+def test_applying_a_duplicate_replaces_the_sources_broken_merge(client):
+    """§26: a merge whose target is gone leaves the source its own record, so
+    the review offers it as a duplicate -- and keeping the other record has to
+    work, not answer that the source "is already merged elsewhere". The broken
+    merge is replaced in one journalled row whose undo restores it."""
+    cid, sid = _campaign(client)
+    _threads(cid, sid)
+    store.plot.set_movement(cid, "winifred-s-chart", "Winifred's chart", "open",
+                            "Winifred lost the chart.", sid)
+    chart = "thread:winifred-s-chart"
+    r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
+                    json={"ref": RECOVER, "to": chart})
+    assert r.status_code == 200, r.text
+    # Removed outside the §5.7 cascade, as an undo of its creating row does.
+    store.plot.restore(cid, "winifred-s-chart", None)
+    assert RECOVER not in effective.live_canon(cid)
+    broken = doc.get_alias(cid, RECOVER)
+    _sweep(cid)
+    assert PAIR in candidates.read(cid)["records"]
+    rows = len(store.journal.read(cid))
+
+    r = _apply(client, cid, PAIR, {"op": "alias", "canonical": LEDGER})
+
+    assert r.status_code == 200, r.text
+    assert doc.get_alias(cid, RECOVER)["to"] == LEDGER
+    assert effective.live_canon(cid)[RECOVER] == LEDGER
+    written = store.journal.read(cid)
+    assert len(written) == rows + 1 and written[-1]["kind"] == "continuity_alias"
+    store.undo.undo(cid, written[-1]["id"])
+    assert doc.get_alias(cid, RECOVER) == broken
+
+
 def test_apply_liveness_mismatch_then_accept(client):
     """§12.3: merging an open thread behind a closed one is confirmed first."""
     cid, sid = _campaign(client)

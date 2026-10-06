@@ -281,6 +281,20 @@ def test_create_alias_refusals_unchanged(cid):
     assert doc.read(cid)["aliases"] == {}
 
 
+def test_replace_broken_still_refuses_a_live_merge(cid):
+    """Only a stored alias that does not resolve is replaceable from a review;
+    a live one is still `alias_exists`, and only an unresolved one gives way."""
+    review.create_alias(cid, MAP, CHART)
+    refused = _refused(review.validate_alias, cid, MAP, FEUD,
+                       accept_status_change=True, replace_broken=True)
+    assert (refused.status, refused.kind) == (409, "alias_exists")
+    plot.restore(cid, "winifred-s-chart", None)
+    out = review.validate_alias(cid, MAP, FEUD, accept_status_change=True,
+                                replace_broken=True)
+    assert out["canonical"]["ref"] == FEUD
+    assert doc.read(cid)["aliases"][MAP]["to"] == CHART
+
+
 # ------------------------------------------------------------ check_candidate
 
 
