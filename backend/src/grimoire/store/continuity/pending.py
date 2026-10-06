@@ -321,8 +321,8 @@ def _kind_of(ref) -> str:
 
 def _empty_row(ref: str, title: str) -> dict:
     return {"ref": ref, "kind": _kind_of(ref), "title": title, "status": "",
-            "latest_beat": "", "last_scene": {"id": "", "title": ""}, "pressure": None,
-            "aliases": [], "due": "", "beats": [], "gone": False}
+            "commitment_kind": "", "latest_beat": "", "last_scene": {"id": "", "title": ""},
+            "pressure": None, "aliases": [], "due": "", "beats": [], "gone": False}
 
 
 def _row(current: Current, ref: str, scene_title: Callable[[str], str],
@@ -337,6 +337,12 @@ def _row(current: Current, ref: str, scene_title: Callable[[str], str],
     last = fieldtext.text(rec.get("last_scene"))
     beats = [{"scene": fieldtext.text(b.get("scene")), "text": fieldtext.text(b.get("text"))}
              for b in (rec.get("beats") or [])[-ROW_BEATS:]]
+    if _kind_of(ref) == "commitment":
+        # The commitment's OWN kind, which a merge's canonical overrides
+        # (§5.1, §7.1). `kind` above is the record type; this is the effective
+        # record's, already projected the way the play prompt prints it (a
+        # missing one reads as a promise).
+        row["commitment_kind"] = fieldtext.text(rec.get("kind"))
     row.update(status=s["status"], latest_beat=fieldtext.text(rec.get("latest_beat")),
                last_scene={"id": last, "title": scene_title(last) if last else ""},
                aliases=list(rec.get("aliases") or []), beats=beats)

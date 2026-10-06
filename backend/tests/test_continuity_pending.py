@@ -431,6 +431,25 @@ def test_rows_join_current_records(cid):
     assert event["status"] == "" and event["beats"] == [] and event["due"]
 
 
+def test_rows_carry_a_commitments_own_kind(cid):
+    """§5.1: the review shows, before apply, the kind a merge's canonical will
+    override -- a commitment row carries promise/threat/foreshadowing beside
+    the ref-prefix `kind`, read the way the play prompt reads it (a missing
+    one is a promise). A thread, an event and a gone ref carry none."""
+    store.commitments.set_movement(cid, "maras-threat", "Mara's oath", "threat", "open",
+                                   "spring", "She swore it at the gate.", S1)
+    raw = json.loads((_root(cid) / "commitments.json").read_text(encoding="utf-8"))
+    del raw["maras-oath"]["kind"]
+    (_root(cid) / "commitments.json").write_text(json.dumps(raw), encoding="utf-8")
+    ev = _event(cid)
+    rows = pending.rows(pending.Current.load(cid),
+                        ["commitment:maras-threat", OATH, MAP, ev, "commitment:nobody"])
+    assert [(r["kind"], r["commitment_kind"]) for r in rows] == [
+        ("commitment", "threat"), ("commitment", "promise"), ("thread", ""), ("event", ""),
+        ("commitment", ""),
+    ]
+
+
 def test_label_joins_titles(cid):
     current = pending.Current.load(cid)
     assert pending.label(current, [MAP, CHART]) == "Mara's map / Winifred's chart"
