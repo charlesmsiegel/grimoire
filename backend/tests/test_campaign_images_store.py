@@ -389,6 +389,24 @@ def test_a_campaign_describes_an_inherited_placement_on_the_shared_image(cid, wi
     assert "coastline" not in image_descriptions.read_raw(world_images.images_dir(wid))
 
 
+def test_an_unconfirmed_library_edit_lands_on_the_campaigns_own_key(cid, wid, monkeypatch):
+    """R2/R8: an unconfirmed object write falls back to the campaign
+    library's own legacy key, never the world library's."""
+    from grimoire.store import image_store
+    world_images.put_image(wid, "coastline", _png(), "png")
+    wdir = world_images.images_dir(wid)
+    image_descriptions.carry_legacy(wdir, "coastline", "the world's words")
+    monkeypatch.setattr(image_store, "update", lambda *a, **kw: False)
+
+    campaign_images.set_description(cid, "coastline", "a rocky shore")
+
+    cdir = campaign_images.images_dir(cid)
+    assert image_descriptions.read_raw(cdir)["coastline"] == "a rocky shore"
+    assert image_descriptions.read_raw(wdir)["coastline"] == "the world's words"
+    assert campaign_images.read_descriptions(cid) == {"coastline": "a rocky shore"}
+    assert world_images.read_descriptions(wid) == {"coastline": "the world's words"}
+
+
 def test_a_campaign_may_not_describe_an_inherited_legacy_file(cid, wid):
     """No resolving world placement, no shared object to write: inherited
     legacy art is still described in the WORLD's editor."""

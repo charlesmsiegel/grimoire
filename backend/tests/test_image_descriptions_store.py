@@ -585,6 +585,23 @@ def test_an_unconfirmed_object_write_keeps_the_text_on_the_legacy_key(tmp_path, 
     assert _object_text(d, "avatar") is None
 
 
+def test_fallback_dir_takes_the_legacy_key_when_the_object_write_is_not_confirmed(
+        tmp_path, monkeypatch):
+    """`fallback_dir` names the directory whose legacy key a write falls back
+    to -- for an unconfirmed `update` and for a name with no resolving
+    placement alike -- and `d` keeps its own key untouched."""
+    d, edited = tmp_path / "v", tmp_path / "edited"
+    assets.put_in(d, "avatar", b"png-fallback", "png")
+    (d / "map.png").write_bytes(b"png-fallback-map")          # legacy: no placement
+    _legacy_keys(d, {"avatar": "Old", "map": "Old map"})
+    monkeypatch.setattr(image_store, "update", lambda image_id, change: False)
+    image_descriptions.set_in(d, "avatar", "New", fallback_dir=edited)
+    image_descriptions.set_in(d, "map", "New map", fallback_dir=edited)
+    assert image_descriptions.read_raw(edited) == {"avatar": "New", "map": "New map"}
+    assert image_descriptions.read_raw(d) == {"avatar": "Old", "map": "Old map"}
+    assert _object_text(d, "avatar") is None
+
+
 def test_an_object_deleted_before_update_keeps_the_text(tmp_path, monkeypatch):
     d = tmp_path / "v"
     assets.put_in(d, "avatar", b"png-4", "png")

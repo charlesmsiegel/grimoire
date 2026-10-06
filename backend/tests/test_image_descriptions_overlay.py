@@ -378,3 +378,22 @@ def test_read_descriptions_scans_only_what_the_listing_scans(pair, monkeypatch):
     got = overlay.read_descriptions(camp, cid, vid)
     assert got == {"gallery_1": "The world's quay.", "gallery_3": "Mine."}
     assert len(scans) == len(listing)
+
+
+def test_an_unconfirmed_campaign_edit_lands_on_the_campaigns_own_key(pair, monkeypatch):
+    """R2/R8: when `image_store.update` does not confirm, the fallback is the
+    legacy key of the EDITED directory -- the campaign's -- never the world's,
+    so the campaign shows its edit and the world is left as it was."""
+    from grimoire.store import image_store
+    wroot, camp, cid, vid = pair
+    wdir = _vdir(wroot, cid, vid)
+    image_descriptions.carry_legacy(wdir, "gallery_1", "W")
+    monkeypatch.setattr(image_store, "update", lambda *a, **kw: False)
+
+    overlay.set_description(camp, cid, vid, "gallery_1", "New")
+
+    cdir = _vdir(overlay.croot_of(camp), cid, vid)
+    assert image_descriptions.read_raw(cdir)["gallery_1"] == "New"
+    assert image_descriptions.read_raw(wdir)["gallery_1"] == "W"
+    assert overlay.read_description(camp, cid, vid, "gallery_1") == "New"
+    assert _object_text(wroot, cid, vid, "gallery_1") == "The world's quay."
