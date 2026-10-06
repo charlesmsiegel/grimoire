@@ -14,7 +14,7 @@ const PATHS = [
   "/connections", "/library", "/search", "/stats", "/config", "/open",
   "/campaigns/c1", "/campaigns/c1/scenes/s1", "/campaigns/c1/ledger",
   "/campaigns/c1/sheets", "/campaigns/c1/costs", "/campaigns/c1/world",
-  "/campaigns/c1/timeline", "/campaigns/c1/scenes/s1/wrap-up",
+  "/campaigns/c1/timeline", "/campaigns/c1/scenes/s1/wrap-up", "/campaigns/c1/graph",
   "/welcome", "/campaigns/new",
   "/modules-of-my-own",
 ];
@@ -63,6 +63,8 @@ test("Library survives its own redirect", () => {
 test("a campaign child lights its own row and not Overview", () => {
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/ledger")).toEqual(["ledger"]);
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/sheets")).toEqual(["sheets"]);
+  // The Story graph is its own room, beside the Ledger rather than under it.
+  expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1/graph")).toEqual(["graph"]);
   // Overview is the hub and only the hub. Every other campaign page lives
   // under its path, so a prefix test would light it on all of them.
   expect(activeIn(CAMPAIGN_ROWS, "/campaigns/c1")).toEqual(["overview"]);

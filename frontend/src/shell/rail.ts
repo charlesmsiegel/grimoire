@@ -238,6 +238,15 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     tailLabel: (s) => lbl(s?.campaign?.ledger_open, "open commitments"),
   },
   {
+    // The campaign's story graph (capstone §19.1): one projection of the
+    // continuity substrate, drawn through four lenses. No tail and no field on
+    // `GET /api/shell` -- a node count says nothing a reader would act on, and
+    // counting would make the shell read pay for the graph's.
+    id: "graph", label: "Story graph", icon: "⋈",
+    to: (ctx) => campaignPath(ctx, "/graph"),
+    match: (p, ctx) => !!ctx.cid && isUnder(p, `/campaigns/${ctx.cid}/graph`),
+  },
+  {
     // Only where the campaign binds a mechanics module. `sheets` is null when
     // it does not, and a Sheets row on a campaign with no mechanics is an
     // offer to look at a page that can only say "nothing here" -- the rail
