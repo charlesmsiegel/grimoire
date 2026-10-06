@@ -34,8 +34,10 @@ from grimoire.store import (
     image_collections,
     image_hash,
     image_store,
+    image_surfaces,
     localize,
     overlay,
+    paths,
     scenes,
     worlds,
 )
@@ -308,6 +310,27 @@ def _flatten(routes) -> list[tuple[set[str], str]]:
         elif hasattr(r, "methods") and hasattr(r, "path"):
             out.append((set(r.methods or ()), r.path))
     return out
+
+
+def test_roster_matches_the_surface_tests(client, ids):
+    """The migration's inventory (`store.image_surfaces`) walks the same
+    surfaces this file drives, by the code's own path builders: the same ids,
+    and -- once every surface holds an image -- the very directory each one
+    stores into, found under that surface by a walk of the store root."""
+    assert set(image_surfaces.SURFACES) == set(_BY_ID)
+    # Campaign side first: a campaign library refuses a name its world holds.
+    for surface in sorted(SURFACES, key=lambda s: not s.id.startswith("campaign-")):
+        r = surface.upload(client, ids)
+        assert 200 <= r.status_code < 300, getattr(r, "text", r)
+    found = {(s.id, d) for s, _scope, d in image_surfaces.directories(paths.home())}
+    for surface in SURFACES:
+        if surface.id == "collection-member":
+            # Its members are world-library images; what the surface adds is
+            # the manifest, in the collections directory.
+            want = image_collections.directory(ids["wid"])
+        else:
+            want = surface.image_dir(ids)
+        assert (surface.id, want) in found, surface.id
 
 
 def test_every_image_upload_route_is_rostered(client):
