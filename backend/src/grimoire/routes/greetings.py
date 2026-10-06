@@ -344,24 +344,25 @@ def _greeting_image_urls(root, wid: str, a: dict) -> dict:
 
     Plus `image_id` where the picture served is a placement, as every other
     listing carries it (`image_id_field`): the greeting's own, or the world
-    image a body reference points at. Reported only when the placement
-    resolves to the very file the URLs were versioned from."""
+    image a body reference points at -- or a format-2 collection member, which
+    is its object (its `v` is then the blob's sha). Reported only when the
+    picture resolves to the very file the URLs were versioned from."""
     if "url" in a:
         base = a["url"]
         p = store.greeting_images.local_path(root, base) if base.startswith("/api/worlds/") else None
         if p is None:
             return {"url": base, "copyable": False}
-        slot = store.greeting_images.local_slot(root, base)
+        target = store.greeting_images.local_target(root, base)
     else:
         base = f"/api/worlds/{quote(wid, safe='')}/greetings/{quote(a['gid'], safe='')}/images/{quote(a['name'], safe='')}"
         p = store.assets.image_path(root, a["gid"], "default", a["name"], base="greetings")
         # `image_path` answering at all proves both ids safe
-        slot = (store.assets.version_dir(root, a["gid"], "default", base="greetings"),
-                a["name"]) if p is not None else None
+        target = ("slot", (store.assets.version_dir(root, a["gid"], "default", base="greetings"),
+                           a["name"]), None) if p is not None else None
     if p is None:  # vanished between sweep and stat: bare URLs, still renderable
         return {"url": base, "thumb": base}
     v = store.assets.image_version(p)
-    placed = store.assets.resolve(*slot) if slot is not None else None
+    placed = store.greeting_images.resolve(target)
     ident = image_id_field(placed.image_id) if placed is not None and placed.blob_path == p else {}
     return {"url": f"{base}?v={v}", "thumb": f"{base}{thumb_query(v)}", **ident}
 

@@ -83,17 +83,24 @@ def _slot_of(root: Path, item: _Item) -> tuple[Path, str] | None:
 
 def _id_of(root: Path, item: _Item) -> str | None:
     """The image the item's slot resolved to while the catalog was built, when
-    that slot is this world's (`_slot_of`). The read side's question: carried
-    by the catalog, so no placement is read a second time and no blob is
-    resolved."""
+    that slot is this world's (`_slot_of`), or the object an object target
+    names (the catalog gives one only for this world's collections, C6). The
+    read side's question: carried by the catalog, so no placement is read a
+    second time and no blob is resolved."""
     target = item[1]
+    if target is not None and target[0] == "object":
+        return target[1]
     return target[2] if target is not None and _slot_of(root, item) is not None else None
 
 
 def _placement_of(root: Path, item: _Item) -> image_refs.ResolvedImage | None:
-    """The placement behind `_slot_of`, resolved NOW (object and blob) -- the
-    write side's question, as `image_descriptions.object_id_in` is for text:
-    only a picture that is there may have its object written."""
+    """The picture behind `_slot_of`, or behind an object target, resolved NOW
+    (object and blob) -- the write side's question, as
+    `image_descriptions.object_id_in` is for text: only a picture that is
+    there may have its object written."""
+    target = item[1]
+    if target is not None and target[0] == "object":
+        return greeting_images.resolve(target)
     slot = _slot_of(root, item)
     return assets.resolve(*slot) if slot is not None else None
 
@@ -325,9 +332,10 @@ def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot:
     """Place a greeting image in a character version's assets -- by reference.
 
     The character's slot names the very image the source holds (spec section
-    8), so no bytes are written: a ref-backed source is linked as it stands,
-    and a legacy source file is ingested once (the store keeps its blob) and
-    then linked; the source itself is left as it was.
+    8), so no bytes are written: a ref-backed source -- or a format-2
+    collection member, which is its object -- is linked as it stands, and a
+    legacy source file is ingested once (the store keeps its blob) and then
+    linked; the source itself is left as it was.
     slot 'avatar' overwrites the avatar (focus resets, as a new avatar's does);
     slot 'gallery' takes the next free gallery_N. Returns the stored name.
     `src_root` defaults to `root`; a campaign caller passes the overlay-resolved
@@ -339,20 +347,27 @@ def copy_to_character(root: Path, gid: str, name: str, cid: str, vid: str, slot:
     if slot not in ("avatar", "gallery"):
         raise ValueError(f"unknown slot: {slot}")
     source = root if src_root is None else src_root
+    target: greeting_images.Target
     if name.startswith("/api/worlds/"):
         if name not in greeting_images.catalog(source, gid):
             raise FileNotFoundError(name)
         src = greeting_images.local_path(source, name)
-        held = greeting_images.local_slot(source, name) if src is not None else None
+        target = greeting_images.local_target(source, name) if src is not None else None
     else:
         src = assets.image_path(source, gid, _VID, name, base=_BASE)
         # `image_path` answering at all proves both ids safe
-        held = (assets.version_dir(source, gid, _VID, base=_BASE), name) if src is not None else None
-    if src is None or held is None:
+        target = (("slot", (assets.version_dir(source, gid, _VID, base=_BASE), name), None)
+                  if src is not None else None)
+    if src is None or target is None:
         raise FileNotFoundError(name)
-    placed = assets.resolve(*held)
-    image_id = (placed.image_id if placed is not None
-                else image_store.ingest(src.read_bytes(), src.suffix[1:]).id)
+    if target[0] == "object":
+        # A format-2 collection member is its object, resolved by
+        # `local_target`: linked by that id, from any world.
+        image_id = target[1]
+    else:
+        placed = assets.resolve(*target[1])
+        image_id = (placed.image_id if placed is not None
+                    else image_store.ingest(src.read_bytes(), src.suffix[1:]).id)
     dst = assets.version_dir(root, cid, vid)
     if slot == "avatar":
         assets.link_in(dst, assets.AVATAR, image_id)

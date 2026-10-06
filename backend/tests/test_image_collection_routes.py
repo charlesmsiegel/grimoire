@@ -9,6 +9,7 @@ from PIL import Image
 
 from grimoire.store import (
     assets,
+    campaign_images,
     campaigns,
     export,
     image_refs,
@@ -81,6 +82,69 @@ def test_missing_world_export_degrades_to_alt_text(client, collection, monkeypat
     monkeypatch.setattr(read, 'world_root_of', lambda _: worlds.world_root('missing-world'))
     assert export.rewrite_images(f'![Scene]({collections.url_for(wid, cid)})',
                                  campaign, export.Images()) == 'Scene'
+
+
+def _export(campaign, url):
+    """The packed file's bytes a markdown image of `url` exports to, or None
+    when it degrades to its alt text."""
+    registry = export.Images()
+    out = export.rewrite_images(f'![Scene]({url})', campaign, registry)
+    if out == 'Scene':
+        return None
+    assert out == '![Scene](images/img-000.png)', out
+    return next(iter(registry.by_path)).read_bytes()
+
+
+def test_export_resolves_a_format_2_collection_and_a_direct_member_url(client):
+    wid = worlds.create_world('Realm')
+    ids = format2(wid, CID, png('red'), png('blue'), png('green'))
+    campaign = campaigns.create_campaign('Saltmarch', wid)
+    base = f'/api/worlds/{wid}/image-collections/{CID}'
+    assert _export(campaign, f'{base}/image') == png('red')
+    assert export.resolve_url(campaign, f'{base}/image') == _resolved(ids[0]).blob_path
+    assert _export(campaign, f'{base}/members/1') == png('blue')
+    v = _resolved(ids[2]).blob_sha256
+    assert _export(campaign, f'{base}/members/2?v={v}') == png('green')
+    # The first AVAILABLE member, and a missing member is never another one.
+    _resolved(ids[0]).blob_path.unlink()
+    assert _export(campaign, f'{base}/image') == png('blue')
+    for n in ('0', '3', '01', '-1', 'abc'):
+        assert _export(campaign, f'{base}/members/{n}') is None, n
+    assert export.resolve_url(campaign, f'{base}/members/1') == _resolved(ids[1]).blob_path
+
+
+def test_export_resolves_a_direct_format_1_member_url_with_the_campaign_rule(client, collection):
+    wid, cid, names = collection
+    campaign = campaigns.create_campaign('Saltmarch', wid)
+    base = f'/api/worlds/{wid}/image-collections/{cid}'
+    assert _export(campaign, f'{base}/members/1?v=x') == png('blue')
+    assert _export(campaign, f'{base}/members/0') == png('red')
+    assert _export(campaign, f'{base}/members/2') is None
+    assert export.resolve_url(campaign, f'{base}/members/1') == campaign_images.image_path(campaign, names[1])
+
+
+def test_export_keeps_campaign_tombstones_for_format_1(client, collection):
+    wid, cid, names = collection
+    campaign = campaigns.create_campaign('Saltmarch', wid)
+    campaign_images.delete_image(campaign, names[0])    # the campaign hid the first member
+    base = f'/api/worlds/{wid}/image-collections/{cid}'
+    assert _export(campaign, f'{base}/image') == png('blue')
+    assert _export(campaign, f'{base}/members/0') is None
+    assert _export(campaign, f'{base}/members/1') == png('blue')
+
+
+def test_export_resolves_through_the_campaigns_world(client):
+    """The URL's world is not consulted: a post carried into a fork, or a URL
+    naming another world, resolves in the exported campaign's world."""
+    wid = worlds.create_world('Realm')
+    format2(wid, CID, png('red'), png('blue'))
+    other = worlds.create_world('Saltmarch')
+    format2(other, CID, png('green'), png('white'))
+    campaign = campaigns.create_campaign('Winifred', wid)
+    for world in (other, 'nowhere'):
+        base = f'/api/worlds/{world}/image-collections/{CID}'
+        assert _export(campaign, f'{base}/image') == png('red')
+        assert _export(campaign, f'{base}/members/1') == png('blue')
 
 
 def test_world_forks_and_bundles_keep_all_members_and_repoint_links(client, collection, tmp_path):

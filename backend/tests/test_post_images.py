@@ -152,7 +152,16 @@ import io  # noqa: E402
 
 from PIL import Image  # noqa: E402
 
-from grimoire.store import campaign_images, campaigns, export, image_drafts, worlds  # noqa: E402
+from grimoire.store import (  # noqa: E402
+    campaign_images,
+    campaigns,
+    export,
+    image_drafts,
+    image_refs,
+    worlds,
+)
+from grimoire.store.campaigns import read as campaigns_read  # noqa: E402
+from tests.collection_fixtures import format2  # noqa: E402
 
 
 def _image(size=(4, 4), mode="RGB", fmt="PNG", exif=None) -> bytes:
@@ -198,6 +207,21 @@ def test_eligible_needs_a_resolvable_sniffable_image(cid):
     path = export.resolve_url(cid, _url(cid, "coastline"))
     path.write_bytes(b"not an image at all")
     assert not post_images.eligible(cid, _url(cid, "coastline"))
+
+
+def test_a_format_2_collection_is_sendable_by_its_image_and_member_urls(cid):
+    """`/image` is the collection's first available member, `/members/{n}`
+    that member: both resolve to the member's blob, never by library name."""
+    wid = campaigns_read.world_root_of(cid).name
+    ids = format2(wid, "0123456789abcdef0123456789abcdef", _image(), _image((6, 6)))
+    blobs = [image_refs.resolve_ref(image_refs.Ref(name="", image=i, focus=None)).blob_path
+             for i in ids]
+    base = f"/api/worlds/{wid}/image-collections/0123456789abcdef0123456789abcdef"
+    assert export.resolve_url(cid, f"{base}/image") == blobs[0]
+    assert export.resolve_url(cid, f"{base}/members/1?v=x") == blobs[1]
+    assert post_images.eligible(cid, f"{base}/image")
+    assert post_images.eligible(cid, f"{base}/members/1")
+    assert not post_images.eligible(cid, f"{base}/members/2")
 
 
 def test_eligible_refuses_what_load_would_refuse(cid, monkeypatch):
