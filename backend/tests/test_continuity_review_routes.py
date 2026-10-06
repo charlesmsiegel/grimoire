@@ -344,6 +344,33 @@ def test_candidates_read_names_scenes_and_actors(client):
     assert body["scenes"][0]["title"] == "Winifred's study"
 
 
+def test_the_read_leaves_out_what_it_cannot_name(client):
+    """Decision 23: `names` never stands an id in for a name. A gone evidence
+    scene, an actor nobody can resolve and an event with no record get no
+    entry -- the detail leaves them out rather than show a filename or a ref."""
+    cid, sid = _campaign(client)
+    _threads(cid, sid)
+    sweep = _sweep(cid)
+    reconcile.persist_proposals(cid, sweep, {PAIR: _proposal(
+        "duplicate", **{"from": RECOVER, "to": LEDGER}, reason="Same hunt.",
+        evidence_scenes=[sid])})
+    cache = candidates.read(cid)
+    cache["records"][PAIR]["signals"] = {
+        **cache["records"][PAIR]["signals"],
+        "shared_actors": ["characters:nobody-at-all"],
+        "shared_anchors": ["event:no-such-day"]}
+    candidates.write(cid, cache)
+    store.scenes.rename_scene(cid, sid, "The Saltmarch quay")
+
+    body = _read(client, cid)
+    found = {c["id"]: c for c in body["candidates"]}[PAIR]
+    assert found["proposal"]["evidence_scenes"] == [sid]
+    assert sid not in body["names"]
+    assert "characters:nobody-at-all" not in body["names"]
+    assert "event:no-such-day" not in body["names"]
+    assert all(name != key for key, name in body["names"].items())
+
+
 def test_pressure_is_computed_outside_the_hold(client, monkeypatch):
     """§11.1: pressure can run calendar-plugin code, which never runs under a
     campaign lock -- a slow plugin must not hold up a save behind a read."""

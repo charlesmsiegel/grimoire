@@ -10,7 +10,14 @@
  *  NEVER A RAW ID. A record is named by its title and links to its Ledger row;
  *  a scene, an actor or a dated event is named from the read's `names` (or its
  *  scene list), so a scene filename or `characters:mara` never reaches the
- *  reader. One the read could not name is left out rather than shown raw.
+ *  reader. One the read could not name is left out rather than shown raw; a
+ *  scene that exists but has no title is "Untitled scene".
+ *
+ *  TWO SIDES ARE NEVER ONE NAME. A same-title pair is the commonest duplicate
+ *  there is, so when both records carry one title each is told apart by its
+ *  place ("(first)", "(second)") -- in its heading in main and in every action
+ *  that names it -- since a Keep the reader cannot attribute is a merge they
+ *  cannot choose.
  *
  *  A stale finding has every action disabled: its records moved since the
  *  sweep found it, so acting on it would be acting on a meaning nobody has
@@ -51,6 +58,17 @@ function titleOf(r: CandidateRecord | undefined, fallback: string): string {
   return r?.title || fallback;
 }
 
+const ORDINALS = ["first", "second", "third"];
+
+/** Each record's title as this finding shows it: told apart by its place when
+ *  another record in the finding has the same one. */
+function toldApart(records: CandidateRecord[]): CandidateRecord[] {
+  return records.map((r, i) =>
+    r.title && records.some((o, j) => j !== i && o.title === r.title)
+      ? { ...r, title: `${r.title} (${ORDINALS[i] ?? String(i + 1)})` }
+      : r);
+}
+
 type Props = {
   cid: string;
   candidate: ContinuityCandidate;
@@ -67,7 +85,8 @@ type Props = {
 };
 
 export function CandidateDetail(props: Props) {
-  const { cid, candidate, names, scenes, busy, refreshing, error } = props;
+  const { cid, names, scenes, busy, refreshing, error } = props;
+  const candidate = { ...props.candidate, records: toldApart(props.candidate.records) };
   const [form, setForm] = useState<Form | null>(null);
   const [beat, setBeat] = useState("");
   const firstEvidence = (candidate.proposal?.evidence_scenes ?? [])
@@ -82,8 +101,11 @@ export function CandidateDetail(props: Props) {
   const stale = candidate.stale;
   const off = busy || stale;
   /** A scene's display name, or null for one nobody can name. */
-  const sceneName = (sid: string): string | null =>
-    names[sid] || scenes.find((s) => s.id === sid)?.title || null;
+  const sceneName = (sid: string): string | null => {
+    if (names[sid]) return names[sid];
+    const listed = scenes.find((s) => s.id === sid);
+    return listed ? listed.title || "Untitled scene" : null;
+  };
   const sceneLink = (sid: string) => {
     const label = sceneName(sid);
     return label
@@ -108,41 +130,48 @@ export function CandidateDetail(props: Props) {
     return null;
   })();
 
-  /** The finding's actions, by its shape (§12.3, §12.4). */
-  function actions(): { label: string; run: () => void }[] {
-    const dismiss = { label: "Dismiss", run: () => props.onDismiss("dismiss") };
-    const link = (from: string, to: string, rel: string) => () =>
-      props.onApply({ op: "link", from, to, relation: rel, ...expect });
+  /** The finding's actions, by its shape (§12.3, §12.4). Each is keyed by
+   *  what it does, not by its label: a label is for the reader. */
+  function actions(): { key: string; label: string; run: () => void }[] {
+    const dismiss = { key: "dismiss", label: "Dismiss", run: () => props.onDismiss("dismiss") };
+    const link = (from: string, to: string, rel: string, label: string) => ({
+      key: `link\u0000${from}\u0000${to}\u0000${rel}`, label,
+      run: () => props.onApply({ op: "link", from, to, relation: rel, ...expect }),
+    });
+    const keepOpen = { key: "keep_open", label: "Keep open",
+                       run: () => props.onDismiss("keep_open") };
+    const dismissFinding = { key: "dismiss", label: "Dismiss finding",
+                             run: () => props.onDismiss("dismiss") };
     if (candidate.kind === "possible_thread_closure") {
       return [
-        { label: "Close thread", run: () => setForm({ kind: "close" }) },
-        { label: "Keep open", run: () => props.onDismiss("keep_open") },
-        { label: "Dismiss finding", run: () => props.onDismiss("dismiss") },
+        { key: "close", label: "Close thread", run: () => setForm({ kind: "close" }) },
+        keepOpen, dismissFinding,
       ];
     }
     if (candidate.kind === "possible_commitment_resolution") {
       return [
         ...RESOLUTIONS.map(({ status, label }) => ({
-          label, run: () => setForm({ kind: "resolve", status, label }),
+          key: `resolve\u0000${status}`, label,
+          run: () => setForm({ kind: "resolve", status, label }),
         })),
-        { label: "Keep open", run: () => props.onDismiss("keep_open") },
-        { label: "Dismiss finding", run: () => props.onDismiss("dismiss") },
+        keepOpen, dismissFinding,
       ];
     }
     if (!A || !B) return [dismiss];
-    const related = { label: "Related", run: link(A.ref, B.ref, "related_to") };
+    const related = link(A.ref, B.ref, "related_to", "Related");
     if (candidate.kind === "possible_relation") {
       const event = candidate.records.find((r) => typeOf(r.ref) === "event");
       if (event || candidate.signals.reason === "temporal") {
-        return [{ label: "Accept", run: () => setForm({ kind: "temporal" }) }, related, dismiss];
+        return [{ key: "temporal", label: "Accept", run: () => setForm({ kind: "temporal" }) },
+                related, dismiss];
       }
       // Thread → commitment, whichever side the finding listed first (§5.3).
       const thread = typeOf(A.ref) === "thread" ? A : B;
       const owed = thread === A ? B : A;
-      return [{ label: "Pays off", run: link(thread.ref, owed.ref, "pays_off") }, related,
-              dismiss];
+      return [link(thread.ref, owed.ref, "pays_off", "Pays off"), related, dismiss];
     }
     const keep = (kept: CandidateRecord, label: string) => ({
+      key: `alias\u0000${kept.ref}`,
       label: `Keep ${label}`,
       run: () => props.onApply({
         op: "alias", canonical: kept.ref,
@@ -153,10 +182,10 @@ export function CandidateDetail(props: Props) {
     const merges = [keep(A, nameA), keep(B, nameB)];
     // `continues` and `subthread_of` join threads only (§5.3).
     const threads = typeOf(A.ref) === "thread" && typeOf(B.ref) === "thread" ? [
-      { label: `${nameA} continues ${nameB}`, run: link(A.ref, B.ref, "continues") },
-      { label: `${nameB} continues ${nameA}`, run: link(B.ref, A.ref, "continues") },
-      { label: `${nameA} is a subthread of ${nameB}`, run: link(A.ref, B.ref, "subthread_of") },
-      { label: `${nameB} is a subthread of ${nameA}`, run: link(B.ref, A.ref, "subthread_of") },
+      link(A.ref, B.ref, "continues", `${nameA} continues ${nameB}`),
+      link(B.ref, A.ref, "continues", `${nameB} continues ${nameA}`),
+      link(A.ref, B.ref, "subthread_of", `${nameA} is a subthread of ${nameB}`),
+      link(B.ref, A.ref, "subthread_of", `${nameB} is a subthread of ${nameA}`),
     ] : [];
     return [...merges, ...threads, related, dismiss];
   }
@@ -250,7 +279,7 @@ export function CandidateDetail(props: Props) {
         )}
         <div className="form-actions continuity-actions">
           {actions().map((a) => (
-            <button key={a.label} type="button" disabled={off} onClick={a.run}>{a.label}</button>
+            <button key={a.key} type="button" disabled={off} onClick={a.run}>{a.label}</button>
           ))}
         </div>
         {due && (

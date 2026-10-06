@@ -261,10 +261,14 @@ def _candidate(current: pending.Current, key: str, record: dict, verdict: str,
 
 
 def _actor_name(cid: str, actor: str) -> str:
+    """The actor's name, or "" when nobody can say: `actor_name` answers an
+    unresolved token with its bare id, which is not a name."""
+    _kind, _, aid = actor.partition(":")
     try:
-        return store.relationships.actor_name(cid, actor) or actor
+        name = store.relationships.actor_name(cid, actor) or ""
     except Exception:  # noqa: BLE001 -- a label must never be the thing that fails the read
-        return actor
+        return ""
+    return "" if name in (aid, actor) else name
 
 
 def _mentioned(found: list[dict]) -> tuple[set[str], set[str], set[str]]:
@@ -287,12 +291,15 @@ def _mentioned(found: list[dict]) -> tuple[set[str], set[str], set[str]]:
 def _names(cid: str, current: pending.Current, found: list[dict],
            titles: dict[str, str]) -> dict[str, str]:
     """A display name for every scene, actor and event the response mentions
-    (Decision 23), so the detail never shows a scene filename or an actor ref."""
+    (Decision 23), so the detail never shows a scene filename or an actor ref.
+    One it cannot name -- a scene that is gone or has no title, an actor nobody
+    resolves, an event `describe` could only answer with its ref -- gets no
+    entry, so the detail leaves it out rather than show the id as its name."""
     scenes, actors, events = _mentioned(found)
-    names = {sid: titles.get(sid) or sid for sid in sorted(scenes)}
-    names.update((a, _actor_name(cid, a)) for a in sorted(actors))
-    names.update((e, review.describe(cid, e, current.ledgers)) for e in sorted(events))
-    return names
+    named = [(sid, titles.get(sid, "")) for sid in sorted(scenes)]
+    named += [(a, _actor_name(cid, a)) for a in sorted(actors)]
+    named += [(e, review.describe(cid, e, current.ledgers)) for e in sorted(events)]
+    return {key: name for key, name in named if name and name != key}
 
 
 def _live_reconcile(request: Request, cid: str) -> dict | None:
@@ -310,7 +317,8 @@ def get_candidates(cid: str, request: Request):
     # calendar-plugin code that §11.1 keeps out of every lock hold -- a slow
     # plugin must not hold up a save or an apply behind a read.
     rows = _scene_rows(cid)
-    titles = {r["id"]: store.fieldtext.text(r.get("title")) or r["id"] for r in rows or []}
+    # An untitled scene has no name, not its id for one (Decision 23).
+    titles = {r["id"]: store.fieldtext.text(r.get("title")) for r in rows or []}
     scene_ids = None if rows is None else set(titles)
     pressure = reconcile.pressure_by_ref(cid)
     with store.locks.best_effort_campaign_lock(cid):
