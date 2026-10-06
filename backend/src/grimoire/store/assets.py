@@ -460,17 +460,21 @@ def _place(d: Path, name: str, image_id: str, *, keep_focus: bool,
     (`_drop_if_placed`). `keep_focus` keeps the old placement's focus;
     otherwise a focus survives only when the placement already held this very
     image. A replaced picture sheds a stale caption (`_sheds_caption`), in the
-    same operation and only once the new placement is written. Caller holds
-    `_image_lock(d, name)`.
+    same operation and only once the new placement is written: the decision,
+    the placement and the drop under one hold of the description sidecar's
+    lock, so a description saved in between cannot be the key the drop
+    removes. Caller holds `_image_lock(d, name)`; image lock then sidecar lock
+    is the order promotion takes them in.
     """
     stale = _snapshot_siblings(d, name, supported_only)
-    old = image_refs.read(d, name)
-    shed = _sheds_caption(d, name, old, supported_only, image_id)
-    focus = (old.focus if old is not None and (keep_focus or old.image == image_id)
-             else None)
-    image_refs.write(d, name, image_id, focus=focus)
-    if shed:
-        drop_sidecar_entry(d, DESCRIPTIONS_FILE, name)
+    with sidecar_lock(d, DESCRIPTIONS_FILE):
+        old = image_refs.read(d, name)
+        shed = _sheds_caption(d, name, old, supported_only, image_id)
+        focus = (old.focus if old is not None and (keep_focus or old.image == image_id)
+                 else None)
+        image_refs.write(d, name, image_id, focus=focus)
+        if shed:
+            _edit_sidecar_locked(d, DESCRIPTIONS_FILE, {name: None})
     _drop_if_placed(d, name, image_id, stale)
 
 

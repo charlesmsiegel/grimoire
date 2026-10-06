@@ -388,3 +388,19 @@ def test_description_put_over_the_cap_is_422(client, world):
     r = client.put(f"/api/worlds/{world}/images/coastline/description",
                    json={"description": "x" * 4000})
     assert r.status_code == 200
+
+
+def test_description_put_over_the_cap_is_422_on_the_campaign_side(client, world):
+    """The overlay path and the campaign library: both reach `set_in`, so both
+    answer "too long" rather than "not found"."""
+    cid, vid = _char(client, world)
+    camp = client.post("/api/campaigns",
+                       json={"name": "Saltmarch", "world": world}).json()["id"]
+    too_long = {"description": "x" * 4001}
+    r = client.put(f"/api/campaigns/{camp}/characters/{cid}/versions/{vid}/images/gallery_1"
+                   "/description", json=too_long)
+    assert r.status_code == 422
+    client.put(f"/api/campaigns/{camp}/images/coastline",
+               files={"file": ("a.png", b"\x89PNG\r\n\x1a\n-camp", "image/png")})
+    r = client.put(f"/api/campaigns/{camp}/images/coastline/description", json=too_long)
+    assert r.status_code == 422

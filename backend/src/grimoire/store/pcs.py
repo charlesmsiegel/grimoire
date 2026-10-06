@@ -367,13 +367,17 @@ def read_pc(root: Path, pid: str) -> dict:
     versions = []
     for v in version_ids:
         persona = read_persona(root, pid, v)
+        version_images = assets.list_images(root, pid, v, ASSET_BASE)
         versions.append({
             "id": v, "name": persona["name"], "persona": persona,
             # Same shape characters.read_character returns, so the editor's
             # image handling is one code path for both actor kinds (#219).
-            "images": [i["name"] for i in assets.list_images(root, pid, v, ASSET_BASE)],
+            "images": [i["name"] for i in version_images],
             "avatar_focus": assets.read_focus(root, pid, v, ASSET_BASE),
-            "image_descriptions": image_descriptions.read_all(root, pid, v, ASSET_BASE),
+            # Off the listing above: no second listing, no placement scan.
+            "image_descriptions": image_descriptions.read_all(
+                root, pid, v, ASSET_BASE,
+                *image_descriptions.listing_names_ids(version_images)),
         })
     default = meta.get("default_version", "")
     return {"meta": {"id": pid, "name": meta.get("name", pid), "tags": _tags_of(meta),

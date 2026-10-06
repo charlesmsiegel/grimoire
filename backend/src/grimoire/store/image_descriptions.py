@@ -311,12 +311,30 @@ def set_in(d: Path, name: str, text: str, names: set[str] | None = None, *,
         if image_id is not None and image_store.update(
                 image_id, lambda raw: {**raw, "description": text}):
             # Object first, keys second: a failure between the two leaves the
-            # old key showing (R1), never nothing.
-            assets.edit_sidecar(d, DESCRIPTIONS_FILE, {name: None})
+            # old key showing (R1), never nothing. Cleared STRICTLY, not with
+            # `assets.edit_sidecar` (which swallows a failed write): a key left
+            # behind keeps masking the new text, so the save must say it failed
+            # rather than answer ok over the old words. A retry finishes it.
+            _clear_legacy(d, name)
             if also_clear is not None and also_clear != d:
-                assets.edit_sidecar(also_clear, DESCRIPTIONS_FILE, {name: None})
+                _clear_legacy(also_clear, name)
             return
         _write_legacy(d, name, text)
+
+
+def _clear_legacy(d: Path, name: str) -> None:
+    """Remove `name`'s legacy key from `d`'s sidecar, under its lock; the file
+    goes when that empties it. `OSError` propagates. A missing or garbled
+    sidecar holds no string key to mask anything, and is left as found."""
+    with assets.sidecar_lock(d, DESCRIPTIONS_FILE):
+        cur = read_raw(d)
+        if name not in cur:
+            return
+        del cur[name]
+        if cur:
+            atomic.write_text(path_in(d), json.dumps(cur, indent=2, sort_keys=True) + "\n")
+        else:
+            path_in(d).unlink(missing_ok=True)
 
 
 def carry_legacy(d: Path, name: str, text: str) -> None:
@@ -357,10 +375,21 @@ def _dir(root: Path, aid: str, vid: str, base: str) -> Path:
 
 
 def read_all(root: Path, aid: str, vid: str, base: str = "characters",
-             names: set[str] | None = None) -> dict[str, str]:
+             names: set[str] | None = None,
+             ids: dict[str, str] | None = None) -> dict[str, str]:
     if not (safe_id(aid) and safe_id(vid)):
         return {}
-    return read_in(_dir(root, aid, vid, base), names)
+    return read_in(_dir(root, aid, vid, base), names, ids)
+
+
+def listing_names_ids(rows: list[dict]) -> tuple[set[str], dict[str, str]]:
+    """`(names, ids)` for `read_all`/`read_in` from an image listing the caller
+    already built (`assets.list_images`/`list_in` rows), so the description
+    read neither lists the folder again nor scans its placements. Filtered by
+    `assets.storable`, the rule `_names` applies to its own listing."""
+    names = {r["name"] for r in rows if assets.storable(r["name"])}
+    return names, {r["name"]: r["image_id"] for r in rows
+                   if r["name"] in names and r.get("image_id")}
 
 
 def read(root: Path, aid: str, vid: str, name: str, base: str = "characters",

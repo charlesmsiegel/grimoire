@@ -435,7 +435,10 @@ def read_character(root: Path, cid: str) -> dict:
             "avatar_focus": assets.read_focus(root, cid, vid),
             # Beside `images`/`image_v`/`avatar_focus`: asset-derived, so it
             # travels with them rather than through a second round trip.
-            "image_descriptions": image_descriptions.read_all(root, cid, vid),
+            # Off the listing above: no second listing, no placement scan.
+            "image_descriptions": image_descriptions.read_all(
+                root, cid, vid, "characters",
+                *image_descriptions.listing_names_ids(version_images)),
             "chub_source": chub_source,
             "is_chub": bool(chub_source) and chub.parse_full_path(chub_source) is not None,
             "importable_lore": _importable_lore(card),
