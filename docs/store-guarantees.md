@@ -528,7 +528,10 @@ Collected, so that nothing here has to be inferred from an absence.
   or the campaign underneath it moves on. `store/taglines.py`,
   `store/voice_anchors.py` and `store/dossiers.py` each record the reason
   beside the code — three absences with two different arguments behind them,
-  and all three deliberate (#57).
+  and all three deliberate (#57). Unlike these three, the continuity candidate
+  cache does notice: each finding keeps the fingerprint of the records it was
+  found against, and one whose records have since changed is shown as stale
+  until the next sweep (`store/continuity/pending.py`).
 - **The campaign write token is evidence, not proof.** `store/revision.py`
   gives each campaign one opaque value that changes whenever this app records a
   write to it, so a caller can price an operation against a state and be refused

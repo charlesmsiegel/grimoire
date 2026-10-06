@@ -89,6 +89,13 @@ threads, and character state — so the next scene starts from an up-to-date wor
   Settings → Model routing and overridable per campaign from the scene
   inspector. Anything left on inherit uses the active connection, so an install
   that never opens the page keeps the single model it always had.
+- **Continuity review and the Story Graph** — after each wrap-up Grimoire looks
+  over the campaign's plot threads and commitments for ones that may be the
+  same business, belong together, or be finished, and lists what it finds in
+  the Ledger to merge, link, close or set aside; nothing changes until you
+  choose. It works with no embeddings connection and catches more with one.
+  The Story Graph draws the scenes played so far beside what is still owed and
+  what is coming up.
 - **EPUB export** — turn a finished campaign into a readable book.
 - **Editable prompts** — every prompt Grimoire sends to the model lives as a
   Jinja2 template under [`templates/`](templates/README.md). Edit a template and
