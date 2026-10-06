@@ -16,6 +16,7 @@ swallowed and the test passes with the read still made.
 
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 from collections import Counter
 
@@ -23,7 +24,7 @@ import pytest
 
 import grimoire.embeddings
 from grimoire import routes
-from grimoire.routes import todo
+from grimoire.routes import common, todo
 from grimoire.store import (
     appearances,
     assets,
@@ -330,9 +331,16 @@ _NO_MODEL = {
 }
 
 
-@pytest.mark.parametrize("name", list(_NO_MODEL))
-def test_no_read_only_path_reaches_a_model_or_an_embedding(client, monkeypatch, name):
-    cid, sids = _seed(client, 2)
+def _armed(client, monkeypatch):
+    """Every way a read could reach a model or an embedding, recorded.
+
+    The connection is configured first: every model call in the app resolves
+    it (`_require_connection`) before it reaches the client, so without one a
+    call on a tolerant path (`_soft`, `_attempt`, a section's `_tolerant`) is
+    stopped by the 409 and swallowed before the fake can count it -- the
+    raiser-inside-`_soft` trap one layer up."""
+    r = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
+    assert 200 <= r.status_code < 300, r.text
     monkeypatch.setattr(embed_space, "resolve", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
     fake_embeddings = llm_fakes.FakeEmbeddings()
@@ -348,6 +356,13 @@ def test_no_read_only_path_reaches_a_model_or_an_embedding(client, monkeypatch, 
     fake = llm_fakes.from_entries([{"when": {"system_contains": "\x00no request matches"},
                                     "reply": ""}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    return fake, fake_embeddings, class_calls
+
+
+@pytest.mark.parametrize("name", list(_NO_MODEL))
+def test_no_read_only_path_reaches_a_model_or_an_embedding(client, monkeypatch, name):
+    cid, sids = _seed(client, 2)
+    fake, fake_embeddings, class_calls = _armed(client, monkeypatch)
 
     method, path, body = _NO_MODEL[name]
     url = "/api/" + path.format(cid=cid, sid=sids[0])
@@ -356,6 +371,35 @@ def test_no_read_only_path_reaches_a_model_or_an_embedding(client, monkeypatch, 
     assert fake.calls == 0
     assert fake_embeddings.calls == []
     assert class_calls == []
+
+
+def test_the_no_model_recorders_fire_on_a_tolerant_path(client, monkeypatch):
+    """Positive control for the test above: a model call and an embedding
+    made the app's way (resolve the connection, then call) inside the real
+    `drivers._soft`, on a read path, under the same arming, move both
+    recorders. Were either still stopped before its fake, the test above
+    would pass with the call made."""
+    cid, _sids = _seed(client, 2)
+    fake, fake_embeddings, _class_calls = _armed(client, monkeypatch)
+
+    def model_call():
+        conn = common._require_connection("continuity_reconcile", cid)
+        asyncio.run(fake.complete([{"role": "system", "content": "control"}], conn))
+
+    def embedding_call():
+        space = embed_space.resolve()
+        similarity._CLIENT.embed(["control"], space["model"], space["key"], space["base_url"])
+
+    def tolerant_matching():
+        drivers._soft(model_call, None)
+        drivers._soft(embedding_call, None)
+        return "basic"
+
+    monkeypatch.setattr(drivers, "matching", tolerant_matching)
+    r = client.get(_url(cid, "continuity/drivers"))
+    assert r.status_code == 200, r.text
+    assert fake.calls == 1
+    assert fake_embeddings.calls == [["control"]]
 
 
 # ---- §25.4, Decision 17: the shell does no continuity review work ---------------
