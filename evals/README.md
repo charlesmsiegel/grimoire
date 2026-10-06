@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is eight pass/fail
+This suite closes that. It is not an eval framework; it is ten pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -22,6 +22,8 @@ stake in:
 | `natural-prose` | a reply contains none of the stock names or literal banned phrases the selected Natural Prose (Legacy) guide lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
 | `continuity-identity` | the identity resolver maps a reworded duplicate to the existing record and keeps a same-topic question and a concrete continuation new; a row is only ever offered records of its own type |
 | `continuity-reconcile` | the reconciliation sweep keeps a same-topic question apart (distinct or related), reads a concrete question as a continuation or subthread of the broad one, never merges a thread with a commitment, closes a thread or resolves a commitment only on a shown beat, and keeps an old or overdue record open when nothing shown settles it |
+| `scene-suggestions` | with two focused drivers and a batch anchor in a custom calendar, the suggestions spread focus coverage instead of cloning one premise, cite only known drivers, and carry dates the anchor rule accepts, written in the calendar's own notation |
+| `scene-suggestions-anchor-on` | with a batch anchor `on` an event in a custom calendar, every parsed date is the anchor's own date in the calendar's notation, whatever the model wrote |
 
 ## Running it
 
@@ -163,6 +165,19 @@ change there fails at build rather than leaving a recording citing a scene the
 parser would refuse. A verdict check reads the decision word alone, and
 `reconcile.evidence` judges the citation, so "the wrong call" and "the right
 call, unfounded" stay separable.
+`scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`
+and judges claims and dates with `suggest.claim` and `suggest.check_date`, but
+scores two things raw: `suggest.known_refs` and `suggest.anchor_known` read the
+model's own `drivers` and `time_anchor`, because `claim` drops an unknown ref
+and the batch anchor overrides the model's, so the claimed result could never
+show either miss. `suggest.date_consistent` also requires the raw date string
+to round-trip the calendar's own `parse` and `format` (outside an `on` batch,
+whose date is derived rather than the model's), because the tolerant
+normalizer reads the friendly form ("9 Thaw 5") too. Both cases run on an
+eval-owned plugin calendar written into the throwaway store, so the date rules
+are exercised in a notation no built-in provider knows; the prompt side
+requires the quoted action words, keys, high-pressure states and control refs,
+and renders the drivers and controls addenda whole.
 
 ## Recordings
 
@@ -175,7 +190,7 @@ call, unfounded" stay separable.
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
   `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`,
-  `eager`, `unfounded`)
+  `eager`, `unfounded`, `cloned`, `bad-date`, `unknown-ref`)
   and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —

@@ -1,0 +1,62 @@
+{
+  "suggestions": [
+    {
+      "title": "Mara's map at the crowning",
+      "premise": "On coronation day the harbour is closed to everyone but the crown's ships, and Mara's map marks a cove just past the chain. She wants to slip out while every eye is on the ceremony.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-09",
+      "drivers": [
+        {
+          "ref": "thread:maras-map",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "on"
+      }
+    },
+    {
+      "title": "The ledger changes hands",
+      "premise": "The harbour ledger is to be handed to the new crown's treasurer during the coronation. Seraphine Vale knows the route the courier will walk.",
+      "cast": [
+        "characters:seraphine-vale"
+      ],
+      "location": "",
+      "drivers": [
+        {
+          "ref": "thread:find-the-ledger",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "on"
+      }
+    },
+    {
+      "title": "Debts called in at the feast",
+      "premise": "Every creditor on the Saltmarch waterfront turns up to the coronation feast. Seraphine's debts are the talk of the long tables.",
+      "cast": [
+        "characters:seraphine-vale",
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "17 Thaw 5",
+      "drivers": [
+        {
+          "ref": "thread:seraphines-debts",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "on"
+      }
+    }
+  ],
+  "next_date": "5-Thaw-08"
+}

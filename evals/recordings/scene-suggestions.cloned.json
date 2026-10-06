@@ -1,0 +1,62 @@
+{
+  "suggestions": [
+    {
+      "title": "The torn corner",
+      "premise": "Mara spreads her torn map across a crate and asks for help matching the missing corner.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-09",
+      "drivers": [
+        {
+          "ref": "thread:maras-map",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    },
+    {
+      "title": "Mara's map, again",
+      "premise": "Mara brings her torn map to the docks and asks for help matching the missing corner.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-10",
+      "drivers": [
+        {
+          "ref": "thread:maras-map",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    },
+    {
+      "title": "Where the map leads",
+      "premise": "Mara unrolls her torn map once more and asks who can match the missing corner.",
+      "cast": [
+        "characters:mara"
+      ],
+      "location": "",
+      "date": "5-Thaw-11",
+      "drivers": [
+        {
+          "ref": "thread:maras-map",
+          "action": "advance"
+        }
+      ],
+      "time_anchor": {
+        "ref": "event:the-coronation",
+        "relation": "before"
+      }
+    }
+  ],
+  "next_date": "5-Thaw-09"
+}

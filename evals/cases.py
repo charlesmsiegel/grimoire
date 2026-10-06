@@ -41,6 +41,7 @@ from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
     authors_notes,
+    calendars,
     campaigns,
     characters,
     checks,
@@ -50,6 +51,7 @@ from grimoire.store import (
     config,
     context,
     entities,
+    events,
     facts,
     groupstate,
     pcs,
@@ -63,10 +65,12 @@ from grimoire.store import (
     state_fence,
     steering,
     styles,
+    suggest,
     worlds,
 )
 from grimoire.store.absorb import parse as absorb_parse
-from grimoire.store.continuity import canon, identity, pending, reconcile
+from grimoire.store.continuity import canon, identity, pending, pressure, reconcile
+from grimoire.store.continuity import drivers as continuity_drivers
 from grimoire.store.tracker import records as tracker_records
 from grimoire.store.tracker import walk as tracker_walk
 
@@ -1153,6 +1157,151 @@ def grade_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
                                               ctx["known"])]
 
 
+# ------------------------------------------- case 9: scene-suggestion control
+
+# §28.10 cases 9-10: two focused drivers and a batch time anchor, in a calendar
+# no built-in provider knows. The calendar is eval-owned -- the same shape as
+# the test suite's wide test provider (evals does not import tests), with a few
+# named months so its friendly form and its native form differ visibly.
+_SALTMARCH_CALENDAR_SRC = '''
+from grimoire.store.calendars.base import CalendarError, CalendarProvider, register
+
+MONTHS = ["Frost", "Thaw", "Bloom", "Highsun", "Harvest", "Ember"]   # 30 days each
+DAYS = 30
+
+
+class _SaltmarchReckoning(CalendarProvider):
+    def __init__(self, config):
+        self.custom_holidays = []
+
+    def parse(self, native):
+        try:
+            y, m, d = str(native).split("-")
+            day = int(d)
+            if not 1 <= day <= DAYS:
+                raise ValueError(day)
+            return int(y) * DAYS * len(MONTHS) + MONTHS.index(m) * DAYS + day - 1
+        except (ValueError, IndexError) as e:
+            raise CalendarError(f"bad Saltmarch date: {native!r}") from e
+
+    def _split(self, fixed):
+        y, rest = divmod(fixed, DAYS * len(MONTHS))
+        m, d = divmod(rest, DAYS)
+        return y, m, d + 1
+
+    def format(self, fixed):
+        y, m, d = self._split(fixed)
+        return f"{y}-{MONTHS[m]}-{d:02d}"
+
+    def describe(self, fixed):
+        y, m, d = self._split(fixed)
+        return {"year": y, "month": m + 1, "month_name": MONTHS[m], "day": d,
+                "weekday_name": "Tideday", "weekday_index": 0,
+                "friendly": f"{d} {MONTHS[m]} {y}"}
+
+    def holidays(self, start_fixed, end_fixed):
+        return []
+
+    def months(self, year):
+        return [{"key": k, "name": k, "days": DAYS} for k in MONTHS]
+
+
+register("saltmarch-reckoning", _SaltmarchReckoning, "Saltmarch Reckoning")
+'''
+
+#: The present, and the coronation ten days after it, in the plugin's notation.
+SUGGEST_NOW, SUGGEST_CORONATION = "5-Thaw-07", "5-Thaw-17"
+SUGGEST_THREADS = (
+    ("maras-map", "Mara's map", "Mara's map is torn, and nobody knows where it leads."),
+    ("find-the-ledger", "Find the ledger", "Winifred learned the harbour ledger exists."),
+    ("seraphines-debts", "Seraphine's debts",
+     "Seraphine owes money all along the Saltmarch waterfront."),
+)
+SUGGEST_FOCUS = ("thread:maras-map", "thread:find-the-ledger")
+SUGGEST_ANCHOR = "event:the-coronation"
+
+
+def _build_suggestions(**controls) -> dict:
+    """Realm with Seraphine and Mara; a campaign on the Saltmarch Reckoning,
+    its clock set in that calendar's notation; three open threads and the
+    coronation ten days out. `controls` go to the production
+    `suggest.resolve_controls`, against the snapshot the prompt renders."""
+    from grimoire.store.paths import home
+
+    plugins = home() / "calendars"
+    plugins.mkdir(parents=True, exist_ok=True)
+    (plugins / "saltmarch_reckoning.py").write_text(_SALTMARCH_CALENDAR_SRC, encoding="utf-8")
+    wid, wroot, _ = _world_with_sera()
+    characters.create_character(wroot, "Mara", "default", characters.blank_card("Mara"))
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    croot = campaigns.campaign_root(cid)
+    cfg = calendars.read_calendar(croot)
+    cfg["primary"] = {"provider": "saltmarch-reckoning", "region": "",
+                      "custom_holidays": [], "anchor": None}
+    calendars.write_calendar(croot, cfg)
+    clock.advance(cid, to=SUGGEST_NOW, reason="setup")
+    sid = scenes.create_scene(cid, "Saltmarch docks")
+    for tid, title, beat in SUGGEST_THREADS:
+        plot.set_movement(cid, tid, title, "open", beat, sid)
+    eid = events.create(cid, "The coronation", SUGGEST_CORONATION)
+    assert f"event:{eid}" == SUGGEST_ANCHOR, eid
+
+    snapshot = suggest.build_snapshot(cid)
+    # The fixture this case was written around: every focus ref is a driver,
+    # and the coronation is an anchor option in the plugin's own notation.
+    index = {d["ref"] for d in snapshot["driver_index"]}
+    assert set(SUGGEST_FOCUS) <= index, index
+    assert [(a["ref"], a["native"]) for a in snapshot["anchors"]] == [
+        (SUGGEST_ANCHOR, SUGGEST_CORONATION)], snapshot["anchors"]
+    return {"cid": cid, "snapshot": snapshot,
+            "controls": suggest.resolve_controls(cid, snapshot, time_mode="anchor",
+                                                 time_anchor_ref=SUGGEST_ANCHOR, **controls),
+            "provider": calendars.primary_provider(croot)}
+
+
+def build_scene_suggestions() -> dict:
+    return _build_suggestions(focus_refs=list(SUGGEST_FOCUS), time_anchor_relation="before")
+
+
+def build_scene_suggestions_on() -> dict:
+    """The same campaign anchored `on` the coronation with no focus: §28.10
+    case 10's derivation half, an `on` date derived in the plugin's notation
+    through the production parser, whatever the recording wrote."""
+    return _build_suggestions(time_anchor_relation="on")
+
+
+def _suggestions_prompt(ctx: dict) -> list[dict]:
+    return suggest.build_prompt(ctx["snapshot"], None, controls=ctx["controls"])
+
+
+def grade_scene_suggestions(ctx: dict, output: str) -> list[Check]:
+    # Ids, keys and values only (grade_prompt's contract): the quoted action
+    # words, the two keys, the high-pressure states, and the refs the
+    # controls name. The sentences around them are covered whole by the two
+    # rendered addenda, so a reword moves both sides together.
+    controls = ctx["controls"]
+    needles = {
+        **{f"asks_{a}": f'"{a}"' for a in continuity_drivers.DRIVER_ACTIONS},
+        "asks_drivers_key": '"drivers"',
+        "asks_time_anchor_key": '"time_anchor"',
+        **{f"state_{s}": f'"{s}"' for s in pressure.SORT_ORDER if s in pressure.HIGH_PRESSURE},
+        **{f"focus_{ref}": ref for ref in controls.focus},
+        # an empty needle is in every prompt, so an unanchored batch asks none
+        **({"anchor_ref": controls.anchor} if controls.anchor else {}),
+    }
+    view = suggest.driver_view(ctx["snapshot"], controls)
+    return [
+        *graders.grade_prompt(ctx["messages"], needles),
+        *graders.grade_prompt_section(ctx["messages"], "drivers_addendum",
+                                      "scene_suggestions/instruction/drivers_addendum.j2",
+                                      view=view),
+        *graders.grade_prompt_section(ctx["messages"], "controls_addendum",
+                                      "scene_suggestions/instruction/controls_addendum.j2",
+                                      view=view),
+        *graders.grade_scene_suggestions(output, ctx["snapshot"], controls, ctx["provider"]),
+    ]
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1297,6 +1446,32 @@ CASES: tuple[Case, ...] = (
              Recording("eager", ("reconcile.keep_open", "reconcile.unproven"), "json"),
              # The right word on the answered thread, with no scene cited.
              Recording("unfounded", ("reconcile.evidence",), "json"))),
+    Case(id="scene-suggestions",
+         hypothesis="with two focused drivers and a batch anchor in a custom calendar, "
+                    "the suggestions spread focus coverage instead of cloning one premise, "
+                    "cite only known drivers, and carry dates the anchor rule accepts",
+         build=build_scene_suggestions, prompt=_suggestions_prompt,
+         grade=grade_scene_suggestions,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("suggest.json",), "json"),
+             # Three takes on Mara's map: the ledger is never served, and no
+             # two suggestions differ in what they claim.
+             Recording("cloned", ("suggest.focus_coverage", "suggest.distinct"), "json"),
+             # The compliant claims, every date after the coronation.
+             Recording("bad-date", ("suggest.date_consistent",), "json"),
+             # The compliant reply plus one driver the index never listed:
+             # `claim` drops it, so only the raw reply shows it.
+             Recording("unknown-ref", ("suggest.known_refs",), "json"))),
+    Case(id="scene-suggestions-anchor-on",
+         hypothesis="with a batch anchor 'on' an event in a custom calendar, every parsed "
+                    "date is the anchor's own date in the calendar's notation, whatever the "
+                    "model wrote",
+         build=build_scene_suggestions_on, prompt=_suggestions_prompt,
+         grade=grade_scene_suggestions,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             Recording("undecodable", ("suggest.json",), "json"))),
 )
 
 BY_ID = {c.id: c for c in CASES}
