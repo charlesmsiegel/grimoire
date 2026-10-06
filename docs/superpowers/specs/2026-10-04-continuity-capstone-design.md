@@ -1657,7 +1657,7 @@ The routing task stays `suggestions`.
 A generated card renders validated provenance:
 
 - `date_friendly · <relation> <anchor label>` when anchored;
-- one chip per driver, labelled by action: Advances / May close / Addresses / May fulfil / May break / May expire;
+- one chip per driver, labelled by action: Advances / May close / Addresses / May fulfil / May break / May expire / Anchored to. The time anchor's own `anchor` entry draws no chip, since the dated line says it; an `anchor` claim on any other ref (a passed or undated event the card is about) does. A save keeps one anchor per record (§17, Decision 16), so such a claim is shown on the card and not stored with the idea (Slice E plan, deviation 23);
 - warning chips for `unmet_must` and `avoided`, worded “Doesn't claim to address <label>” and “Claims to address <label> (avoided)” (Slice E plan, deviation 15);
 - “date not consistent with anchor” when `date_rejected_by` is `"anchor"`, and “date not consistent with the time setting” when it is `"time"`, i.e. a `near` or `move` check blanked the date, anchored or not (§15.3; Slice E plan, deviation 22). A reply from before the field falls back to whether the card is anchored.
 

@@ -636,6 +636,39 @@ test("a generated card shows its validated reasons", async () => {
   expect(screen.queryByText(/Anchored to/)).toBeNull();
 });
 
+test("an anchor claim beyond the time anchor shows as provenance", async () => {
+  const FAIR = { ref: "event:saltmarch-fair", kind: "event" as const, action: "anchor" as const,
+                 label: "The Saltmarch fair" };
+  renderPicker({ suggestions: [
+    { ...REASONED, drivers: [...REASONED.drivers!, FAIR] },
+    // a card with no time anchor at all: a passed or undated event is claimed
+    // as `anchor` without one, and that claim is all the card says about it
+    { ...SUGGESTION, title: "At the fair", drivers: [FAIR] },
+  ] });
+  const anchored = (await screen.findByText("Before the bells")).closest("button")!;
+  const unanchored = screen.getByText("At the fair").closest("button")!;
+  const chip = within(anchored).getByText("Anchored to: The Saltmarch fair");
+  expect(chip.tagName).toBe("SPAN");
+  expect(chip).toHaveClass("chip", "on");
+  // the time anchor's own entry is still said once, by the dated line
+  expect(within(anchored).queryByText("Anchored to: The coronation")).toBeNull();
+  expect(within(unanchored).getByText("Anchored to: The Saltmarch fair")).toBeInTheDocument();
+});
+
+test("saving a card leaves a stray anchor claim to the dated line's rule", async () => {
+  // The save keeps one anchor per record (Decision 16): an `anchor` entry
+  // naming any ref but the kept time anchor's is dropped on write, so the
+  // draft does not send one the server would discard.
+  renderPicker({ suggestions: [{ ...REASONED, drivers: [...REASONED.drivers!,
+    { ref: "event:saltmarch-fair", kind: "event", action: "anchor",
+      label: "The Saltmarch fair" }] }] });
+  fireEvent.click(await screen.findByRole("button", { name: "Save Before the bells" }));
+  await waitFor(() => expect(api.saveSceneIdea).toHaveBeenCalledWith("c", expect.objectContaining({
+    drivers: [{ ref: "thread:find-the-ledger", action: "advance" },
+              { ref: "commitment:salt-owed", action: "address" }],
+    time_anchor: { ref: "event:the-coronation", relation: "before" } })));
+});
+
 test("constraint misses show warning chips", async () => {
   renderPicker({ suggestions: [{
     ...SUGGESTION,

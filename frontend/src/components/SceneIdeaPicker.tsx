@@ -230,9 +230,11 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
                                     cast: s.cast.map((c) => `${c.kind}:${c.id}`),
                                     location: s.location?.id ?? "", source: "llm" };
     // Provenance, as refs and actions only: the server re-validates both and
-    // derives labels and staleness on every read (§17). The anchor's own
-    // `anchor` entry is not sent -- `time_anchor` already says it, and the
-    // write would drop a second one. Both keys are omitted when empty, so a
+    // derives labels and staleness on every read (§17). No `anchor` entry is
+    // sent: the time anchor's own is what `time_anchor` says, and the write
+    // keeps one anchor per record, dropping an `anchor` entry that names any
+    // other ref (Decision 16) -- so a claim the card shows as "Anchored to"
+    // beside its time anchor is not saved. Both keys are omitted when empty, so a
     // card that claims nothing saves exactly today's body.
     const drivers = (s.drivers ?? []).filter((d) => d.action !== "anchor")
       .map(({ ref, action }) => ({ ref, action }));
@@ -370,7 +372,11 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
                   .filter(Boolean).join(" · ")}
               </span>
             )}
-            {(s.drivers ?? []).filter((d) => d.action !== "anchor").map((d) => (
+            {/* Only the time anchor's own entry is left out -- the dated line
+                above says it. Any other `anchor` claim (a passed or undated
+                event the card is about) is provenance like the rest. */}
+            {(s.drivers ?? [])
+              .filter((d) => !(d.action === "anchor" && d.ref === s.time_anchor?.ref)).map((d) => (
               <span className="chip on" key={d.ref}>{`${ACTION_LABELS[d.action]}: ${d.label}`}</span>
             ))}
             {(s.unmet_must ?? []).map((m) => (
