@@ -27,6 +27,8 @@ export function ReviewedGroup(
   // A broken link is not an effective one, so `links` never carries it; the
   // raw list is where it is, and only its broken rows are new here.
   const broken = state.raw_links.filter((l) => l.state === "broken");
+  // A ref-titled record is missing only if its ledger read (`recordName`).
+  const name = (title: string, ref: string) => recordName(title, ref, state.unreadable);
   if (!state.aliases.length && !state.links.length && !broken.length) {
     return (
       <p className="empty-state">
@@ -38,13 +40,13 @@ export function ReviewedGroup(
   return (
     <ul className="continuity-list">
       {state.aliases.map((a) => {
-        const title = recordName(a.title, a.ref);
+        const title = name(a.title, a.ref);
         return (
           <li key={`alias:${a.ref}`} className="continuity-item" aria-label={title}>
             <div className="continuity-item-text">
               <span className="continuity-item-title">{title}</span>
               <span className="continuity-item-meta">
-                Merged into {recordName(a.to_title, a.to)}
+                Merged into {name(a.to_title, a.to)}
               </span>
               {a.dangling && <span className="chip on continuity-broken">Broken</span>}
               {a.dangling && <p className="field-hint">{brokenReason(a.reason)}</p>}
@@ -57,7 +59,7 @@ export function ReviewedGroup(
         );
       })}
       {state.links.map((l) => {
-        const [a, b] = [recordName(l.a_title, l.a), recordName(l.b_title, l.b)];
+        const [a, b] = [name(l.a_title, l.a), name(l.b_title, l.b)];
         const label = `${a} ${phrase(l.relation)} ${b}`;
         return (
           <li key={`link:${l.id}`} className="continuity-item" aria-label={label}>
@@ -76,8 +78,8 @@ export function ReviewedGroup(
       })}
       {broken.map((l) => {
         // A broken link's end that no longer resolves is titled by its ref,
-        // which `recordName` words by kind: no ref reaches the reader (§30).
-        const [a, b] = [recordName(l.a_title, l.a), recordName(l.b_title, l.b)];
+        // which `name` words by kind: no ref reaches the reader (§30).
+        const [a, b] = [name(l.a_title, l.a), name(l.b_title, l.b)];
         const label = `${a} ${phrase(l.relation)} ${b}`;
         return (
           <li key={`broken:${l.id}`} className="continuity-item" aria-label={label}>

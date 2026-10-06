@@ -618,6 +618,37 @@ test("a dangling merge says why in words", async () => {
   expect(dangling).toHaveTextContent("Merged into a missing thread");
 });
 
+test("a record whose ledger cannot be read is not called missing", async () => {
+  // With plot.json unreadable the server titles every thread by its ref
+  // (`review.describe` cannot look it up), although the thread may exist; the
+  // alias is not dangling and the link is not broken.
+  (api.getContinuity as any).mockResolvedValue({
+    ...REVIEWED,
+    unreadable: ["plot"],
+    aliases: [
+      { ...REVIEWED.aliases[0], title: MAP.ref, to_title: CHART.ref },
+    ],
+    links: [
+      { id: "l3", relation: "pays_off", a: MAP.ref, b: OATH.ref, a_raw: MAP.ref,
+        b_raw: OATH.ref, scene: "", note: "", created: "", a_title: MAP.ref,
+        b_title: "Mara's oath" },
+    ],
+    raw_links: [],
+  });
+  renderLedger("/campaigns/run/ledger/continuity/reviewed");
+  const rows = await main().findAllByRole("listitem");
+  expect(rows).toHaveLength(2);
+  const [alias, link] = rows;
+  expect(alias).not.toHaveTextContent(/missing/i);
+  expect(alias).toHaveTextContent(
+    "a thread that cannot be read right nowMerged into a thread that cannot be read right now");
+  expect(within(alias).queryByText("Broken")).toBeNull();
+  expect(link).not.toHaveTextContent(/missing/i);
+  expect(link).toHaveTextContent("Pays off Mara's oath");
+  expect(link).toHaveTextContent("a thread that cannot be read right now");
+  for (const row of rows) expect(row).not.toHaveTextContent(MAP.ref);
+});
+
 test("an unknown reason code is never shown", async () => {
   (api.getContinuity as any).mockResolvedValue({
     ...REVIEWED,
