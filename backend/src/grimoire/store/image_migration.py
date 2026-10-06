@@ -168,12 +168,12 @@ def _inventory(plan: MigrationPlan, cancel: Callable[[], bool]
     for occ in image_surfaces.occurrences(plan.root):
         if cancel():
             return None
-        if occ.kind == image_surfaces.COLLECTION:
+        if occ.path is not None and occ.untouched is not None:
+            _untouch(plan, occ.path, occ.untouched)
+        elif occ.kind == image_surfaces.COLLECTION:
             _manifest(plan, occ)
         elif occ.metadata_only is not None:
             meta.append(occ)
-        elif occ.path is not None and occ.untouched is not None:
-            _untouch(plan, occ.path, occ.untouched)
         elif occ.path is not None:
             files.append(occ)
     return files, meta
