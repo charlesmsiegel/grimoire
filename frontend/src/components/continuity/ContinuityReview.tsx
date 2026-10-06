@@ -201,7 +201,7 @@ export function ContinuityReview(
   // Opening a finding (or another one) starts it clean.
   useEffect(() => {
     setDetailError(null);
-    if (candidate) setDone(null);
+    if (candidate) { setDone(null); setError(null); }
   }, [candidate]);
 
   /** One reviewed or dismissed write, then the shared re-read (one epoch).
@@ -275,6 +275,16 @@ export function ContinuityReview(
     } else if (kind === "not_found") {
       setGone((g) => ({ cid, ids: [...(g.cid === cid ? g.ids : []), c.id] }));
       review.reread();
+    } else if (kind === "partial_apply" || kind === "partial_dismiss") {
+      // §22: a 500 that names parts that landed is a write. Drawing the
+      // finding from the old read would leave it actionable after the thread
+      // closed or the suppression landed, and a second click would only draw
+      // a 409; so re-read as a 2xx does, back to the group, and keep the
+      // server's sentence about what did not land where the list shows it.
+      review.wrote();
+      if (!here) return;
+      setError({ cid, text: errorText(err) });
+      navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
     } else if (here) {
       setDetailError({ text: errorText(err) });
     }

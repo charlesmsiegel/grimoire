@@ -114,6 +114,18 @@ function notifyShell<T>(result: T): T {
   return result;
 }
 
+/** The exception to "a rejected request never reaches here": a 500 whose
+ *  kind is one of `kinds` names parts that landed (§22 partial writes), so
+ *  the badges move as on a success before the refusal is passed on. */
+function notifyShellOnLanded(kinds: readonly string[]) {
+  return (err: unknown): never => {
+    if (err instanceof ApiError && err.kind !== undefined && kinds.includes(err.kind)) {
+      shellChanged();
+    }
+    throw err;
+  };
+}
+
 export class ApiError extends Error {
   /** `body` is the whole decoded error payload. Most callers only need
    *  `detail`/`kind`, but a route can attach structured data a retry has to act
@@ -1499,21 +1511,23 @@ export const api = {
     return wellFormed ? { fingerprint, records: records as CandidateRecord[] } : null;
   },
   /** Act on one finding. `notifyShell` because Todo's continuity chores and
-   *  the rail count what is pending. */
+   *  the rail count what is pending -- on a `partial_apply` 500 too, whose
+   *  landed parts move them all the same. */
   applyCandidate: (cid: string, id: string, body: ContinuityApply) =>
     request<{ ok: boolean; applied: string[] }>(
       "POST",
       `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/apply`,
-      body).then(notifyShell),
+      body).then(notifyShell, notifyShellOnLanded(["partial_apply"])),
   /** `expectFingerprint` is the current fingerprint a reader saw on a 409
-   *  `stale_candidate` and chose to dismiss against (Decision 17). */
+   *  `stale_candidate` and chose to dismiss against (Decision 17). A
+   *  `partial_dismiss` 500 set the finding aside, so it tells the shell. */
   dismissCandidate: (cid: string, id: string, decision: "dismiss" | "keep_open",
                      expectFingerprint?: string) =>
     request<{ ok: boolean; fingerprint: string }>(
       "POST",
       `/api/campaigns/${encodeSegment(cid)}/continuity/candidates/${encodeSegment(id)}/dismiss`,
       { decision, ...(expectFingerprint ? { expect_fingerprint: expectFingerprint } : {}) },
-    ).then(notifyShell),
+    ).then(notifyShell, notifyShellOnLanded(["partial_dismiss"])),
   restoreSuppression: (cid: string, fp: string) =>
     request<{ ok: boolean }>(
       "DELETE",
