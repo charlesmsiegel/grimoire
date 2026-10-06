@@ -134,6 +134,12 @@ def member_index(n: str) -> int | None:
 
 def member_url(wid: str, collection_id: str, index: int, v: str) -> str:
     manifest_path(wid, collection_id)
+    return _member_url(wid, collection_id, index, v)
+
+
+def _member_url(wid: str, collection_id: str, index: int, v: str) -> str:
+    """`member_url` without its checks, for a caller that has already read the
+    manifest: the one spelling of a format-2 member URL."""
     return f"/api/worlds/{wid}/image-collections/{collection_id}/members/{index}?v={v}"
 
 
@@ -157,7 +163,7 @@ def available(wid: str, collection_id: str) -> list[dict]:
             # Built here, not by `member_url`: `read` already proved the world
             # and the id, and that would re-prove them for every row.
             out.append({"index": index, "path": path, "image_id": image_id, "url":
-                        f"/api/worlds/{wid}/image-collections/{collection_id}/members/{index}?v={v}"})
+                        _member_url(wid, collection_id, index, v)})
     return out
 
 
