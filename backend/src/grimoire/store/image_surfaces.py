@@ -144,19 +144,51 @@ class Occurrence:
 
 # ---- directories --------------------------------------------------------
 
-def _subdirs(d: Path) -> list[Path]:
-    """Subdirectories of `d`, sorted; none for one that cannot be listed.
+#: Why a directory the walk met is reported instead of walked.
+SYMLINKED = "symlinked-directory"
+UNREADABLE = "unreadable"
+#: The kind of a reported entry directly under ``worlds/`` or ``campaigns/``,
+#: which belongs to no surface.
+ROOT = "root"
 
-    A symlinked one is listed too, so that a rostered directory reached
-    through it can be REPORTED (`_linked`): it is never planned. Listing
-    through a link is a read; the walk is a fixed depth, so a loop cannot
-    run away with it."""
+#: A directory the walk cannot enter, with the reason.
+_Bad = tuple[Path, str]
+
+
+def _why(p: Path) -> str:
+    """The reason to report `p`, a directory entry the walk could not test or
+    list: a symlink (a loop, a target nobody may stat) or plainly unreadable."""
+    try:
+        return SYMLINKED if p.is_symlink() else UNREADABLE
+    except OSError:
+        return UNREADABLE
+
+
+def _subdirs(d: Path) -> tuple[list[Path], list[_Bad]]:
+    """`(subdirectories of d, entries it could not test)`, each sorted.
+
+    A symlinked subdirectory is listed too, so that a rostered directory
+    reached through it can be REPORTED (`_linked`): it is never planned.
+    Listing through a link is a read; the walk is a fixed depth, so a loop
+    cannot run away with it. Each entry is tested on its own: one that cannot
+    be (a `loop -> loop` link, a target behind a closed directory) is
+    reported and the rest of the listing stands. A `d` that is not there
+    lists nothing; one that is there and cannot be listed is reported."""
+    good: list[str] = []
+    bad: list[_Bad] = []
     try:
         with os.scandir(d) as it:
-            names = [e.name for e in it if e.is_dir()]
+            for e in it:
+                try:
+                    if e.is_dir():
+                        good.append(e.name)
+                except OSError:
+                    bad.append((d / e.name, _why(d / e.name)))
+    except (FileNotFoundError, NotADirectoryError):
+        return [], []
     except OSError:
-        return []
-    return [d / n for n in sorted(names)]
+        return [], [(d, _why(d))]
+    return [d / n for n in sorted(good)], sorted(bad)
 
 
 def _linked(root: Path, d: Path) -> bool:
@@ -175,13 +207,18 @@ def _linked(root: Path, d: Path) -> bool:
     return False
 
 
-def _roots(root: Path) -> Iterator[tuple[str, Path]]:
-    """``(world|campaign, its root)`` for every safe-named directory directly
-    under ``worlds/`` and ``campaigns/``, as `image_usage` walks them."""
+def _roots(root: Path) -> Iterator[tuple[str, Path, str | None]]:
+    """``(world|campaign, its root, None)`` for every safe-named directory
+    directly under ``worlds/`` and ``campaigns/``, as `image_usage` walks
+    them -- and ``(side, entry, reason)`` for an entry there (or the parent
+    itself) that could not be tested."""
     for side, dirname in ((_WORLD, "worlds"), (_CAMPAIGN, "campaigns")):
-        for d in _subdirs(root / dirname):
+        good, bad = _subdirs(root / dirname)
+        for d, why in bad:
+            yield side, d, why
+        for d in good:
             if safe_id(d.name):
-                yield side, d
+                yield side, d, None
 
 
 def _scope(side: str, sroot: Path) -> str:
@@ -195,47 +232,62 @@ def _library_dir(side: str, sroot: Path) -> Path:
     return sroot / "assets" / name
 
 
-def _version_dirs(sroot: Path, base: str) -> Iterator[Path]:
-    for rec in _subdirs(sroot / base):
-        for v in _subdirs(rec / "assets"):
+def _version_dirs(sroot: Path, base: str) -> Iterator[tuple[Path, str | None]]:
+    recs, bad = _subdirs(sroot / base)
+    yield from bad
+    for rec in recs:
+        vids, bad = _subdirs(rec / "assets")
+        yield from bad
+        for v in vids:
             try:
                 d = assets.version_dir(sroot, rec.name, v.name, base=base)
             except ValueError:
                 continue
             if d == v:
-                yield d
+                yield d, None
 
 
-def _dirs_of(surface: Surface, side: str, sroot: Path) -> Iterator[Path]:
+def _dirs_of(surface: Surface, side: str, sroot: Path) -> Iterator[tuple[Path, str | None]]:
+    """`(directory, None)` for each of the surface's directories under
+    `sroot`, or `(path, reason)` for one the walk could not enter."""
     if surface.kind == LIBRARY:
-        found = [_library_dir(side, sroot)]
+        found = _library_dir(side, sroot)
     elif surface.kind == COVER:
-        found = [sroot / "assets"]
+        found = sroot / "assets"
     elif surface.kind == COLLECTION:
-        found = [sroot.joinpath(*COLLECTIONS_DIR)]
+        found = sroot.joinpath(*COLLECTIONS_DIR)
     else:
         yield from _version_dirs(sroot, surface.kind)
         return
-    yield from (d for d in found if d.is_dir())
+    # A symlink that is not a directory to `is_dir` (a loop) is still
+    # reported: `_walk` sees it as `_linked`.
+    if found.is_dir() or found.is_symlink():
+        yield found, None
 
 
-def _walk(root: Path) -> Iterator[tuple[Surface, str, Path, bool]]:
-    """`directories`' walk, each directory with whether it is `_linked`."""
-    for side, sroot in _roots(root):
+def _walk(root: Path) -> Iterator[tuple[Surface | None, str, Path, str | None]]:
+    """`directories`' walk: each directory with None, or with the reason it is
+    reported instead (`SYMLINKED`, `UNREADABLE`). A root-level entry that
+    could not be tested has no surface."""
+    for side, sroot, why in _roots(root):
         scope = _scope(side, sroot)
+        if why is not None:
+            yield None, scope, sroot, why
+            continue
         for surface in SURFACES.values():
             if side in surface.scopes:
-                for d in _dirs_of(surface, side, sroot):
-                    yield surface, scope, d, _linked(root, d)
+                for d, bad in _dirs_of(surface, side, sroot):
+                    linked = bad is None and _linked(root, d)
+                    yield surface, scope, d, SYMLINKED if linked else bad
 
 
 def directories(root: Path) -> Iterator[tuple[Surface, str, Path]]:
     """``(surface, scope, directory)`` for every rostered directory that
     exists under `root`, world roots first, then campaigns, in name order.
-    A directory reached through a symlink is not one of them
-    (`occurrences` reports it as untouched)."""
-    for surface, scope, d, linked in _walk(Path(root)):
-        if not linked:
+    A directory reached through a symlink, or one the walk could not test,
+    is not one of them (`occurrences` reports it as untouched)."""
+    for surface, scope, d, why in _walk(Path(root)):
+        if surface is not None and why is None:
             yield surface, scope, d
 
 
@@ -440,11 +492,11 @@ def occurrences(root: Path) -> Iterator[Occurrence]:
     by directory in `directories` order. Reads only; writes nothing."""
     root = Path(root)
     inherits: dict[Path, _Inherits | None] = {}
-    for surface, scope, d, linked in _walk(root):
-        if linked:
-            yield Occurrence(surface.kind, scope, d, d.name, d,
-                             untouched="symlinked-directory",
-                             supported_only=surface.supported_only)
+    for surface, scope, d, why in _walk(root):
+        if surface is None or why is not None:
+            yield Occurrence(surface.kind if surface is not None else ROOT, scope, d,
+                             d.name, d, untouched=why or UNREADABLE,
+                             supported_only=surface is not None and surface.supported_only)
             continue
         if surface.kind == COLLECTION:
             yield from _manifests(scope, d)

@@ -580,3 +580,52 @@ def test_campaign_greeting_subjects_are_not_folded():
     plan = _plan()
     assert all(g.subjects == {} for g in plan.groups.values())
     assert image_migration.report(plan)["subject_disagreements"] == []
+
+
+# ---- fix round 2: an entry the walk cannot test hides nothing else -----------
+
+def test_a_symlink_loop_is_reported_and_everything_else_still_plans():
+    """`loop -> loop` raises when tested as a directory. It is reported, and
+    the rest of its listing -- every other world, every other record -- is
+    still walked."""
+    wid, wroot, char, wchar = _world()
+    _cid, croot = _campaign(wid)
+    own = _legacy(wchar, "avatar.png", _png(1))
+    theirs = _legacy(assets.version_dir(croot, char, "default"), "gallery_1.png", _png(2))
+    worlds_loop = _root() / "worlds" / "loop"
+    worlds_loop.symlink_to(worlds_loop, target_is_directory=True)
+    chars_loop = wroot / "characters" / "loop"
+    chars_loop.symlink_to(chars_loop, target_is_directory=True)
+    lib_loop = wroot / "assets" / world_images.DIRNAME
+    lib_loop.parent.mkdir(parents=True, exist_ok=True)
+    lib_loop.symlink_to(lib_loop, target_is_directory=True)
+
+    plan = _plan()
+    assert sorted(i.occurrence.path for i in plan.items) == sorted([own, theirs])
+    untouched = _untouched(image_migration.report(plan))
+    for p in (worlds_loop, chars_loop, lib_loop):
+        assert untouched[p.relative_to(_root()).as_posix()] == "symlinked-directory"
+
+
+def test_a_symlink_to_a_target_nobody_may_stat_is_reported(tmp_path_factory):
+    _wid, wroot, _char, wchar = _world()
+    own = _legacy(wchar, "avatar.png", _png(1))
+    outside = tmp_path_factory.mktemp("outside")
+    closed = outside / "closed"
+    (closed / "inner").mkdir(parents=True)
+    link = wroot / "characters" / "behind"
+    link.symlink_to(closed / "inner", target_is_directory=True)
+    closed.chmod(0)
+    try:
+        try:
+            (closed / "inner").stat()
+        except PermissionError:
+            pass
+        else:
+            pytest.skip("this user bypasses directory permissions (root)")
+        plan = _plan()
+        assert [i.occurrence.path for i in plan.items] == [own]
+        untouched = _untouched(image_migration.report(plan))
+        assert untouched[link.relative_to(_root()).as_posix()] == "symlinked-directory"
+    finally:
+        closed.chmod(0o755)
