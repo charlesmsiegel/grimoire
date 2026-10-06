@@ -135,6 +135,65 @@ def _refuse_unsafe_delete(cid: str, ref: str, force: bool) -> None:
             "refs": merged})
 
 
+# ------------------------------------------------------------- moving a record
+
+
+def _stored_scene(record) -> str:
+    """A record's stored ``last_scene``, as the PUT routes have always passed it
+    back to `set_movement` when the payload names none."""
+    return (record or {}).get("last_scene", "") if isinstance(record, dict) else ""
+
+
+def move_thread(cid: str, pid: str, *, title: str = "", status: str = "", beat: str = "",
+                scene: str | None = None, keep_later_scene: bool = False,
+                label: str) -> None:
+    """Move one thread -- the physical record `pid`, no redirect -- in one
+    journalled write. The caller holds `campaign_lock(cid)`.
+
+    The ledger's PUT and the continuity review's closure both come through
+    here, so a hand edit to a thread still has exactly one home (capstone
+    §12.4). ``title=""`` and an unknown ``status`` keep what is stored, as
+    `plot.set_movement` reads them. ``scene=None`` keeps the stored
+    ``last_scene``. ``keep_later_scene`` is the closure's rule: the beat is
+    filed under the evidence scene the reader chose, but ``last_scene`` stays
+    at the later of that scene and the stored one by play order, inside the
+    same journalled block, so the journal still shows one row and undo puts
+    the record back exactly.
+    """
+    stored = _stored_scene(store.plot.get(cid, pid))
+    with store.undo.journalled(cid, {"w": "plot", "id": pid},
+                               kind="plot", ref={"kind": "plot", "id": pid},
+                               field="thread", label=label):
+        store.plot.set_movement(cid, pid, title, status, beat,
+                                scene if scene is not None else stored)
+        if keep_later_scene and scene is not None:
+            later = continuity_effective.later_scene(stored, scene)
+            record = store.plot.get(cid, pid)
+            if later != scene and isinstance(record, dict):
+                store.plot.restore(cid, pid, {**record, "last_scene": later})
+
+
+def move_commitment(cid: str, mid: str, *, title: str = "", kind: str = "",
+                    status: str = "", due: str | None = None, beat: str = "",
+                    scene: str | None = None, keep_later_scene: bool = False,
+                    label: str) -> None:
+    """`move_thread` for a commitment. ``kind=""`` keeps the stored kind, and
+    `due` is three-valued as `commitments.set_movement` documents: None keeps
+    the stored deadline, ``""`` clears it, text sets it -- which is how the
+    review's explicit due copy lands as its own journalled row (§5.1)."""
+    stored = _stored_scene(store.commitments.get(cid, mid))
+    with store.undo.journalled(cid, {"w": "commitment", "id": mid},
+                               kind="commitment", ref={"kind": "commitment", "id": mid},
+                               field="commitment", label=label):
+        store.commitments.set_movement(cid, mid, title, kind, status, due, beat,
+                                       scene if scene is not None else stored)
+        if keep_later_scene and scene is not None:
+            later = continuity_effective.later_scene(stored, scene)
+            record = store.commitments.get(cid, mid)
+            if later != scene and isinstance(record, dict):
+                store.commitments.restore(cid, mid, {**record, "last_scene": later})
+
+
 # --------------------------------------------------------------------- threads
 
 
@@ -179,15 +238,11 @@ def put_thread(cid: str, pid: str, body: ThreadSave, physical: bool = False):
         label = (_label(title or pid, "thread") if target == pid else
                  f"{continuity_review.describe(cid, 'thread:' + target)} — thread "
                  f"(via merged {continuity_review.describe(cid, 'thread:' + pid)})")
-        with store.undo.journalled(cid, {"w": "plot", "id": target},
-                                   kind="plot", ref={"kind": "plot", "id": target},
-                                   field="thread", label=label):
-            # `set_movement` reads a blank title or an unknown status as "keep
-            # what is stored", which is the behaviour this route wants too: a
-            # payload that only closes a thread must not blank its title.
-            store.plot.set_movement(cid, target, title, body.status or "",
-                                    body.beat or "", body.scene if body.scene is not None
-                                    else (store.plot.get(cid, target) or {}).get("last_scene", ""))
+        # `set_movement` reads a blank title or an unknown status as "keep what
+        # is stored", which is the behaviour this route wants too: a payload
+        # that only closes a thread must not blank its title.
+        move_thread(cid, target, title=title, status=body.status or "",
+                    beat=body.beat or "", scene=body.scene, label=label)
     return {"ok": True, "id": target}
 
 
@@ -245,18 +300,13 @@ def put_commitment(cid: str, mid: str, body: CommitmentSave, physical: bool = Fa
         if store.commitments.get(cid, mid) is None:
             raise HTTPException(status_code=404, detail="commitment not found")
         target = _live_target(cid, "commitment", mid, physical)
-        record = store.commitments.get(cid, target) or {}
         title = body.title.strip()
         label = (_label(title or mid, "commitment") if target == mid else
                  f"{continuity_review.describe(cid, 'commitment:' + target)} — commitment "
                  f"(via merged {continuity_review.describe(cid, 'commitment:' + mid)})")
-        with store.undo.journalled(cid, {"w": "commitment", "id": target},
-                                   kind="commitment", ref={"kind": "commitment", "id": target},
-                                   field="commitment", label=label):
-            store.commitments.set_movement(
-                cid, target, title, body.kind or "", body.status or "", body.due,
-                body.beat or "",
-                body.scene if body.scene is not None else record.get("last_scene", ""))
+        move_commitment(cid, target, title=title, kind=body.kind or "",
+                        status=body.status or "", due=body.due, beat=body.beat or "",
+                        scene=body.scene, label=label)
     return {"ok": True, "id": target}
 
 

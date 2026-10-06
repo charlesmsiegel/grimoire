@@ -1205,6 +1205,14 @@ class ContinuityLinkCreate(BaseModel):
     note: str | None = None
 
 
+class ContinuityDismiss(BaseModel):
+    """`POST .../continuity/candidates/{id}/dismiss` (spec §21's ``{decision}``).
+    `expect_fingerprint` is additive: the current fingerprint a reader saw in a
+    409 ``stale_candidate`` and chose to dismiss against (Decision 17)."""
+    decision: str | None = None
+    expect_fingerprint: str | None = None
+
+
 class SamplerPresetBody(BaseModel):
     """A sampler preset as written. `params` is a bare `dict`, checked by hand
     in `llm_sampling.validate`: pydantic 1.10 coerces 40.7 into an `int` field
