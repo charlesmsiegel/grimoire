@@ -165,10 +165,20 @@ def forget_or_partial(cid: str, ref: str, *, name: str, noun: str) -> None:
     neither. Without the bump a write that landed would leave the campaign's
     token where it was, and a `POST /advance` expectation taken before the
     delete would still pass (CLAUDE.md, "A campaign carries a write token").
+
+    The error row is explicit for the same reason: an unhandled raise reached
+    the terminal and the error store, and an `HTTPException` reaches neither,
+    so without it nothing would record that continuity.json was left half
+    cleaned. It names ids only -- the campaign, the ref and the exception's
+    class, with its frames -- never ``name``, which is the record's title.
     """
     try:
         continuity_review.forget_ref(cid, ref, name=name)
     except (OSError, continuity_doc.ContinuityError) as e:
+        store.errors.record_exception(
+            e, "ledger", campaign=cid,
+            detail=f"delete of {ref} landed, but its merges and links could not all "
+                   f"be removed ({type(e).__name__})")
         store.revision.bump(cid)
         raise HTTPException(status_code=500, detail={
             "kind": "partial_delete", "landed": [noun],
