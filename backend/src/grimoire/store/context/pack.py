@@ -239,7 +239,9 @@ def pack(sections: list[dict], history: list[dict], reserved: int = 0,
     other messages only, so a depth-0 note cannot push out the post being
     answered, and a note at the front of the trim goes out together with the
     post it sits before -- a note left standing ahead of nothing it steers is
-    tokens spent on a dangling instruction.
+    tokens spent on a dangling instruction. The flip side: a note among the
+    floor's own messages is never trimmed, so notes (up to three, at most 2000
+    characters each) can carry a floor-sized history over the budget.
 
     Returns ``{"sections", "history", "history_trimmed", "notes_trimmed"}``:
     the same sections in the same order with a ``dropped`` flag added (dropped
