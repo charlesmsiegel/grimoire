@@ -36,6 +36,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from grimoire import prompts
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
@@ -650,8 +651,6 @@ def _authors_note_checks(ctx: dict) -> list[Check]:
     """The campaign note reaches the narrator's prompt verbatim, and the
     character note reaches Seraphine's own call and neither Tobin's nor the
     narrator's. Rendered from the template, so a reword moves both sides."""
-    from grimoire import prompts
-
     # `grade_prompt_section`'s own rule, spelled out: the template's `name`
     # variable collides with that function's `name` parameter.
     campaign = prompts.render("scene/authors_note.j2", level="campaign", name="",
