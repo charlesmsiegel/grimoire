@@ -14,7 +14,7 @@ import type {
   StoryGraph,
 } from "../../api/types";
 import type { LedgerTarget } from "../../ledgerPaths";
-import { KIND_PHRASES as FINDING_PHRASE } from "../continuity/labels";
+import { KIND_PHRASES as FINDING_PHRASE, RELATION_PHRASES } from "../continuity/labels";
 import { whenPhrase, type ChooserSeed } from "../pressureControls";
 
 /** What a finding is, in D's words: one table for Todo, the Ledger and here. */
@@ -207,16 +207,17 @@ export const PART_LABELS: Record<GraphPart, string> = {
 };
 
 /** A reviewed link read from either end: `out` from the link's `from`, `in`
- *  from its `to`. */
+ *  from its `to`. `out` is the Ledger's own phrase (`RELATION_PHRASES`), so a
+ *  link reads one way on both pages; `in` has no Ledger counterpart. */
 export const RELATION_PHRASE: Record<LinkRelation, { out: string; in: string }> = {
-  continues: { out: "Continuation of", in: "Continued by" },
-  subthread_of: { out: "Subthread of", in: "Has subthread" },
-  pays_off: { out: "Pays off", in: "Paid off by" },
-  before: { out: "Before", in: "After this:" },
-  on: { out: "On", in: "On this day:" },
-  after: { out: "After", in: "Before this:" },
-  by: { out: "Due by", in: "Deadline for" },
-  related_to: { out: "Related to", in: "Related to" },
+  continues: { out: RELATION_PHRASES.continues, in: "Continued by" },
+  subthread_of: { out: RELATION_PHRASES.subthread_of, in: "Has subthread" },
+  pays_off: { out: RELATION_PHRASES.pays_off, in: "Paid off by" },
+  before: { out: RELATION_PHRASES.before, in: "After this:" },
+  on: { out: RELATION_PHRASES.on, in: "On this day:" },
+  after: { out: RELATION_PHRASES.after, in: "Before this:" },
+  by: { out: RELATION_PHRASES.by, in: "Deadline for" },
+  related_to: { out: RELATION_PHRASES.related_to, in: "Related to" },
 };
 
 /** What an idea's anchor was, when its moment has no node any more (past, or

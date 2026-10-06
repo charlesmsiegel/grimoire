@@ -68,7 +68,7 @@ const REVIEWED: ContinuityState = {
       dangling: false, reason: "" },
     { ref: "thread:saltmarch-road", to: "thread:realm-road", canonical: "thread:realm-road",
       title: "Saltmarch road", to_title: "thread:realm-road", created: "", source: "review",
-      note: "", dangling: true, reason: "target missing" },
+      note: "", dangling: true, reason: "missing_target" },
   ],
   links: [
     { id: "l1", relation: "continues", a: CORONATION.ref, b: CHART.ref,
@@ -77,9 +77,13 @@ const REVIEWED: ContinuityState = {
   ],
   raw_links: [
     { id: "l1", a: CORONATION.ref, b: CHART.ref, relation: "continues", scene: "",
-      note: "", created: "", state: "ok", reason: "" },
-    { id: "l2", a: MAP.ref, b: OATH.ref, relation: "pays_off", scene: "", note: "",
-      created: "", state: "broken", reason: "endpoint missing" },
+      note: "", created: "", state: "ok", reason: "",
+      a_title: "The coronation", b_title: "Winifred's chart" },
+    // The server's own reason code, and a missing end titled by its ref, which
+    // is what `describe` answers for a record that is gone.
+    { id: "l2", a: "thread:seraphine-s-errand", b: OATH.ref, relation: "pays_off", scene: "",
+      note: "", created: "", state: "broken", reason: "missing_endpoint",
+      a_title: "Seraphine's errand", b_title: OATH.ref },
   ],
   suppressions: [
     { fingerprint: "s1", kind: "possible_duplicate", refs: [MAP.ref, CHART.ref],
@@ -587,12 +591,43 @@ test("reviewed links offer Unmerge and Remove link, and mark broken ones", async
   await waitFor(() => expect(api.removeLink).toHaveBeenCalledWith("run", "l1"));
 
   const broken = main().getAllByRole("listitem").find((li) =>
-    li.textContent?.includes("endpoint missing")) as HTMLElement;
+    li.textContent?.includes("One of its records no longer exists.")) as HTMLElement;
   expect(within(broken).getByText("Broken")).toBeInTheDocument();
   fireEvent.click(within(broken).getByRole("button", { name: /^Remove link/ }));
   await waitFor(() => expect(api.removeLink).toHaveBeenCalledWith("run", "l2"));
   // The ok raw link is the effective one, listed once.
   expect(main().getAllByRole("button", { name: /^Remove link/ })).toHaveLength(2);
+});
+
+test("a broken entry says why in words and names a missing record by its kind", async () => {
+  renderLedger("/campaigns/run/ledger/continuity/reviewed");
+  const broken = (await main().findAllByRole("listitem")).find((li) =>
+    li.textContent?.includes("One of its records no longer exists.")) as HTMLElement;
+  expect(broken).toBeDefined();
+  expect(broken).toHaveTextContent("Seraphine's errand");
+  expect(broken).toHaveTextContent("Pays off a missing commitment");
+  expect(broken).not.toHaveTextContent("missing_endpoint");
+  expect(broken).not.toHaveTextContent(OATH.ref);
+});
+
+test("a dangling merge says why in words", async () => {
+  renderLedger("/campaigns/run/ledger/continuity/reviewed");
+  const dangling = await main().findByRole("listitem", { name: /saltmarch road/i });
+  expect(dangling).toHaveTextContent("The record it was merged into no longer exists.");
+  expect(dangling).not.toHaveTextContent("missing_target");
+  expect(dangling).toHaveTextContent("Merged into a missing thread");
+});
+
+test("an unknown reason code is never shown", async () => {
+  (api.getContinuity as any).mockResolvedValue({
+    ...REVIEWED,
+    raw_links: REVIEWED.raw_links.map((l) => (l.id === "l2" ? { ...l, reason: "frobbed" } : l)),
+  });
+  renderLedger("/campaigns/run/ledger/continuity/reviewed");
+  const broken = (await main().findAllByRole("listitem")).find((li) =>
+    li.textContent?.includes("This entry can no longer be followed.")) as HTMLElement;
+  expect(broken).toBeDefined();
+  expect(broken).not.toHaveTextContent("frobbed");
 });
 
 test("a refused remove shows why and keeps the row", async () => {

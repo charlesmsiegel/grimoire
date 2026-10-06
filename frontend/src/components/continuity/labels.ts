@@ -75,7 +75,9 @@ export const MATCHING_LINES: Record<"basic" | "semantic", string> = {
 
 /** How a stored link reads, `a <phrase> b` (§30: "Continuation of"). A
  *  relation this table does not hold reads as itself, since a link's relation
- *  is a store word the reader chose rather than a model's proposal. */
+ *  is a store word the reader chose rather than a model's proposal. The Story
+ *  Graph leads a link with these same phrases (`storyGraph/model.ts`), so one
+ *  relation reads one way on both pages; `by` is "Due by", §5.3's own form. */
 export const RELATION_PHRASES: Record<string, string> = {
   continues: "Continuation of",
   subthread_of: "Subthread of",
@@ -84,8 +86,49 @@ export const RELATION_PHRASES: Record<string, string> = {
   before: "Before",
   on: "On",
   after: "After",
-  by: "By",
+  by: "Due by",
 };
+
+/** Why a merge or a link in Reviewed links / merges is broken, by the code
+ *  `effective.diagnostics` gives it. The code itself never reaches a reader
+ *  (§30): one this table does not hold reads as the generic sentence. */
+export const BROKEN_REASONS: Record<string, string> = {
+  missing_source: "The merged record no longer exists.",
+  missing_target: "The record it was merged into no longer exists.",
+  wrong_type: "It joins two different kinds of record.",
+  cycle: "It is part of a loop of merges.",
+  malformed_record: "The stored entry could not be read.",
+  missing_endpoint: "One of its records no longer exists.",
+  self_collapsing: "Both ends are now the same record.",
+  invalid_relation: "This kind of link cannot join these records.",
+};
+
+/** A broken entry's reason in words. An own-property check, so a code like
+ *  `constructor` is not an entry. */
+export function brokenReason(code: string): string {
+  return Object.prototype.hasOwnProperty.call(BROKEN_REASONS, code)
+    ? BROKEN_REASONS[code]
+    : "This entry can no longer be followed.";
+}
+
+const MISSING: Record<string, string> = {
+  thread: "a missing thread", commitment: "a missing commitment", event: "a missing event",
+};
+
+/** A record that is gone, named by its kind rather than by its ref. */
+export function missingName(ref: string): string {
+  const prefix = ref.split(":")[0];
+  return Object.prototype.hasOwnProperty.call(MISSING, prefix)
+    ? MISSING[prefix]
+    : "a missing record";
+}
+
+/** A record's name on a review surface. The server titles a record it cannot
+ *  find with its ref (`review.describe`), so a title that is empty or is the
+ *  ref names a missing record, by kind. */
+export function recordName(title: string, ref: string): string {
+  return title && title !== ref ? title : missingName(ref);
+}
 
 /** What a dismissal decided, for the Dismissed findings group (§12.7). */
 export const SUPPRESSION_LABELS: Record<string, string> = {

@@ -2248,6 +2248,8 @@ export type ContinuityLinkRow = {
 export type ContinuityRawLink = {
   id: string; a: string; b: string; relation: string; scene: string; note: string;
   created: string; state: "ok" | "broken" | "hidden"; reason: string;
+  /** Each end's title, or its ref when the record is gone (`review.describe`). */
+  a_title: string; b_title: string;
 };
 /** A stored dismissal. `live` is whether it still names the records as they
  *  are; one whose records have since changed suppresses nothing (§12.7). */

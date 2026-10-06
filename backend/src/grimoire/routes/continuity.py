@@ -164,9 +164,13 @@ def get_continuity(cid: str):
         record = data["links"][lid]
         meta = record if isinstance(record, dict) else {}
         state, reason = states.get(lid, ("ok", ""))
-        raw_links.append({"id": lid, **{k: _text(meta.get(k)) for k in
-                                        ("a", "b", "relation", "scene", "note", "created")},
-                          "state": state, "reason": reason})
+        row = {k: _text(meta.get(k)) for k in ("a", "b", "relation", "scene", "note", "created")}
+        # Titled as effective links are (§30): a broken link's ends are the
+        # ones a reader most needs named. `describe` answers a missing record
+        # with its ref, which the client words by kind.
+        raw_links.append({"id": lid, **row, "state": state, "reason": reason,
+                          "a_title": review.describe(cid, row["a"], ledgers) if row["a"] else "",
+                          "b_title": review.describe(cid, row["b"], ledgers) if row["b"] else ""})
     suppressions = []
     for fp in sorted(k for k in data["suppressions"] if isinstance(k, str)):
         meta = data["suppressions"][fp]

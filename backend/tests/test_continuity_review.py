@@ -181,11 +181,38 @@ def test_create_link_journals_and_round_trips(cid):
     link = result["link"]
     assert link["id"].startswith("l")
     assert (link["a"], link["b"], link["scene"]) == ("thread:maras-map", "commitment:mara-oath", S1)
-    assert store.journal.read(cid)[-1]["label"] == "Mara's map pays_off Mara's oath"
+    assert store.journal.read(cid)[-1]["label"] == "Mara's map pays off Mara's oath"
     review.remove_link(cid, link["id"])
     assert doc.get_link(cid, link["id"]) is None
     refused = _refused(review.remove_link, cid, link["id"])
     assert (refused.status, refused.kind) == (404, "not_found")
+
+
+@pytest.mark.parametrize("a,b,relation,words", [
+    ("thread:maras-map", "commitment:mara-oath", "pays_off", "pays off"),
+    ("thread:maras-map", "thread:winifreds-chart", "subthread_of", "is a subthread of"),
+    ("thread:maras-map", "commitment:mara-oath", "related_to", "is related to"),
+])
+def test_link_journal_labels_use_relation_words(client, cid, a, b, relation, words):
+    """§30: a journal label reads as a sentence in the History rail, so the
+    relation is written in words, never as the store's token."""
+    titles = {"thread:maras-map": "Mara's map", "thread:winifreds-chart": "Winifred's chart",
+              "commitment:mara-oath": "Mara's oath"}
+    sentence = f"{titles[a]} {words} {titles[b]}"
+    lid = review.create_link(cid, a, b, relation)["link"]["id"]
+    created = store.journal.read(cid)[-1]["label"]
+    review.remove_link(cid, lid)
+    removed = store.journal.read(cid)[-1]["label"]
+    review.create_link(cid, a, b, relation)
+    before = len(store.journal.read(cid))
+    r = client.delete(f"/api/campaigns/{cid}/ledger/threads/maras-map")
+    assert r.status_code == 200, r.text
+    forgotten = [row["label"] for row in store.journal.read(cid)[before:]
+                 if row.get("kind") == "continuity_link"]
+    assert created == sentence
+    assert removed == f"{sentence} — removed"
+    assert forgotten == [f"{sentence} — removed with deleted record"]
+    assert not any("_" in label for label in (created, removed, *forgotten))
 
 
 def test_create_link_dedupes_against_effective(cid):

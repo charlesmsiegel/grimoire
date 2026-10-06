@@ -21,6 +21,7 @@ from grimoire.main import create_app
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import doc, drivers, graph
 from tests.llm_fakes import from_entries
+from tests.test_continuity_apply import _cache
 from tests.test_continuity_graph import _recorded
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC, _plugin, _primary
 
@@ -143,6 +144,45 @@ def test_links_round_trip(client, cid):
     assert r.status_code == 409 and r.json()["kind"] == "link_exists"
     assert client.delete(f"/api/campaigns/{cid}/continuity/links/{lid}").status_code == 200
     assert client.delete(f"/api/campaigns/{cid}/continuity/links/{lid}").status_code == 404
+
+
+def test_link_refusals_carry_no_store_token(client, cid):
+    """§30: a refusal is the reader's sentence -- no relation token, no quoted
+    store word. `detail` is the copy; the app's handler hoists `kind` beside it."""
+    r = client.post(f"/api/campaigns/{cid}/continuity/links",
+                    json={"a": "thread:mara-s-map", "b": "event:the-coronation",
+                          "relation": "pays_off"})
+    assert r.status_code == 400, r.text
+    assert r.json()["kind"] == "invalid_relation"
+    created = r.json()["detail"]
+    assert created == "That kind of link cannot join these two records."
+    key = _cache(cid, "possible_relation", ["thread:mara-s-map", "commitment:mara-s-oath"])
+    r = client.post(f"/api/campaigns/{cid}/continuity/candidates/{key}/apply",
+                    json={"op": "link", "from": "commitment:mara-s-oath",
+                          "to": "thread:mara-s-map", "relation": "pays_off"})
+    assert r.status_code == 400, r.text
+    assert r.json()["kind"] == "invalid_relation"
+    applied = r.json()["detail"]
+    assert applied == "That kind of link cannot join these records in that direction."
+    for detail in (created, applied):
+        assert "_" not in detail and "'" not in detail
+
+
+def test_raw_links_carry_their_ends_titles(client, cid):
+    """A raw link names its ends the way an effective one does (d3), so a
+    broken link is not left to show its refs."""
+    r = client.post(f"/api/campaigns/{cid}/continuity/aliases",
+                    json={"ref": "thread:winifred-s-chart", "to": "thread:mara-s-map"})
+    assert r.status_code == 200, r.text
+    doc.put_link(cid, "l1", {"a": "thread:winifred-s-chart", "b": "thread:mara-s-map",
+                             "relation": "related_to"})
+    doc.put_link(cid, "l2", {"a": "commitment:mara-s-oath", "b": "event:gone",
+                             "relation": "before"})
+    raw = {link["id"]: link for link in _get(client, cid)["raw_links"]}
+    assert raw["l1"]["state"] == "broken"
+    assert (raw["l1"]["a_title"], raw["l1"]["b_title"]) == ("Winifred's chart", "Mara's map")
+    assert raw["l2"]["state"] == "broken"
+    assert (raw["l2"]["a_title"], raw["l2"]["b_title"]) == ("Mara's oath", "event:gone")
 
 
 def test_get_continuity_survives_garbled_plot(client, cid):
