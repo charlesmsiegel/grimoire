@@ -1213,3 +1213,11 @@ class SamplerImportBody(BaseModel):
     name: str = ""
     data: Any = None
     include_max_tokens: bool = False
+
+
+class AuthorsNote(BaseModel):
+    """An author's note (play controls V). Ranges are checked by the route, so
+    a bad field answers a 400 naming it rather than a 422 from the model."""
+    text: str = ""
+    depth: int = 4
+    every: int = 1
