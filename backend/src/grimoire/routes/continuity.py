@@ -111,6 +111,23 @@ def _refusal(e: review.RefusedError) -> HTTPException:
                          detail={"kind": e.kind, "detail": e.detail, **e.extra})
 
 
+def _stale_refusal(cid: str, e: review.RefusedError) -> HTTPException:
+    """`_refusal`, with a ``stale_candidate``'s rows given their pressure.
+
+    §22 step 5's rows are the read's rows (§12.2), pressure included, so the
+    detail laid over from them still says what is overdue. The refusal is built
+    under the campaign lock, and pressure can run calendar-plugin code that
+    §11.1 keeps out of every hold, so it joins here, after the hold is gone --
+    and only on a 409, so an apply that lands never pays for it."""
+    rows = e.extra.get("current", {}).get("records") if e.kind == "stale_candidate" else None
+    if rows:
+        by_ref = reconcile.pressure_by_ref(cid)
+        for row in rows:
+            if not row.get("gone"):              # as `pending.rows` leaves one
+                row["pressure"] = by_ref.get(row["ref"])
+    return _refusal(e)
+
+
 def _text(value) -> str:
     return value if isinstance(value, str) else ""
 
@@ -481,7 +498,7 @@ def post_apply(cid: str, candidate_id: str, body: dict):
             plan = review.plan_apply(cid, checked, body)
             out = _apply_plan(cid, candidate_id, checked, plan, landed)
     except review.RefusedError as e:
-        raise _refusal(e) from e
+        raise _stale_refusal(cid, e) from e
     except doc.ContinuityError as e:
         # continuity.json refused a write under the hold that checked it well
         # formed. Nothing landed is a plain refusal; otherwise it is partial.
@@ -502,7 +519,7 @@ def post_dismiss(cid: str, candidate_id: str, body: ContinuityDismiss):
         return review.dismiss(cid, candidate_id, body.decision or "dismiss",
                               body.expect_fingerprint)
     except review.RefusedError as e:
-        raise _refusal(e) from e
+        raise _stale_refusal(cid, e) from e
     except review.PartialSettleError as e:
         # The suppression landed (so the finding is hidden) and the drop did
         # not: a write answered non-2xx, which the middleware cannot see.
