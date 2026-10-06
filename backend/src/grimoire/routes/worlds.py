@@ -192,7 +192,6 @@ def get_world_campaigns(wid: str):
 # `export.zip` is a literal third segment and `entities` registers the generic
 # `/worlds/{wid}/{kind}` that would swallow it -- safe because `entities` is
 # included last (see routes/__init__), and pinned by tests/test_route_order.py.
-IMPORT_CAP = 4 * 1024 * 1024 * 1024
 
 
 @router.get("/worlds/{wid}/export.zip")
@@ -249,7 +248,9 @@ async def post_world_import(request: Request):
     Raw rather than multipart, matching `POST /modules/import`: the two are the
     same operation, and a gigabyte of multipart framing buys nothing.
     """
-    async with _spooled_upload(request, IMPORT_CAP, "bundle too large") as tmp:
+    # One cap, the store's: export refuses to write a bundle past it.
+    async with _spooled_upload(request, store.world_bundle.MAX_BUNDLE_BYTES,
+                               "bundle too large") as tmp:
         try:
             # In a worker thread: unzipping a large world would otherwise block
             # the event loop for the whole import (see post_module_import).

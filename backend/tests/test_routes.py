@@ -15024,6 +15024,20 @@ def test_world_export_answers_an_image_too_large_to_bundle_with_422(client, monk
     assert r.json()["detail"].startswith("image too large to bundle: ")
     assert f"characters/{cid}/assets/default/avatar" in r.json()["detail"]
 
+def test_world_export_answers_a_bundle_too_large_to_import_with_422(client, monkeypatch):
+    wid = _world(client, "Saltmarch")
+    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BYTES", 64)
+    r = client.get(f"/api/worlds/{wid}/export.zip")
+    assert r.status_code == 422 and "too large to import" in r.json()["detail"]
+
+
+def test_world_import_route_refuses_past_the_bundle_cap(client, monkeypatch):
+    """The route's upload cap IS the export cap: one constant."""
+    monkeypatch.setattr(store.world_bundle, "MAX_BUNDLE_BYTES", 16)
+    r = client.post("/api/worlds/import", content=b"x" * 64,
+                    headers={"content-type": "application/zip"})
+    assert r.status_code == 413
+
 def test_world_export_unknown_world_404(client):
     assert client.get("/api/worlds/nope/export.zip").status_code == 404
 
