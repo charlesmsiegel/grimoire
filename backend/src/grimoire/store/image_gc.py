@@ -49,7 +49,10 @@ the ``blob -> sidecars`` map is built over every file in ``objects/`` and
 rebuilt under the ingest/GC lock at each batch. One sidecar that does not
 read (or an ``objects/`` folder that does not list) keeps EVERY blob, because
 it may name any of them. A blob nothing names is a candidate under the same
-grace and sighting rules as an object. A blob-index entry is deleted only if
+grace and sighting rules as an object -- except while some placement names an
+object with no readable sidecar (one that has not arrived yet, mid-sync), when
+every orphan blob is kept: the unarrived object's blob may be among them. An
+``objects/`` folder that is absent beside a ``blobs/`` one blocks outright. A blob-index entry is deleted only if
 it names the object being collected; a blob's thumbnails go with the blob.
 
 **Deleting** (M15) needs the token of a dry run made on THIS device for THIS
@@ -59,6 +62,8 @@ holds `locks.image_ingest_gc_lock` and then, per object, its stripe, the order
 ingest takes them in. Under them every candidate is re-checked (mtime, root,
 reachability by the fresh walk, the blob refcount) and then the sidecar goes,
 then -- refcount permitting -- the blob, its index entry and its thumbnails.
+Each deletion is in the report the moment it happens; the cache entries are
+best effort, reported and never a reason to stop.
 An ingest that waited on the lock finds no sidecar and recreates the object;
 one that got in first touched the mtime, and the re-check skips the object.
 
@@ -79,7 +84,6 @@ state.
 from __future__ import annotations
 
 import contextlib
-import hashlib
 import json
 import logging
 import os
@@ -132,17 +136,9 @@ STAGING_MIN_AGE_SECONDS = 3600
 TOKEN_HOURS = 24
 """How long a dry run's token stays good."""
 
-THUMB_WIDTHS = (128, 256, 320, 512, 1024)
-"""The widths a thumbnail is ever made at (`routes.common.THUMB_BUCKETS`,
-which a store module may not import; the test holds the two equal)."""
-
 STAGING_DIRS = (".world-staging", ".module-staging")
 """Where whole trees are built before they are published
 (`worlds.staging.staging_root`, `module_edit.staging`)."""
-
-JOURNALS_DIR = (".cache", "image-collection-imports")
-"""Where harvest journals live, one folder per world
-(`image_collections.journal_directory`)."""
 
 FORMAT = 1
 
@@ -204,13 +200,7 @@ def blob_thumbnails(root: Path, sha: str) -> list[Path]:
     """Every thumbnail path `thumbs` could have made of blob `sha` at this
     revision: each bucket width, both encoders, every suffix. Most are not
     there; the caller deletes the ones that are."""
-    out: list[Path] = []
-    for enc in (thumbs.ENCODER, thumbs.FALLBACK_ENCODER):
-        gen = Path(root).joinpath(*_THUMBS_DIR, f"r{thumbs.REVISION}-{enc}")
-        for width in THUMB_WIDTHS:
-            key = hashlib.sha256(f"cas|{sha}|{width}|{enc}".encode()).hexdigest()[:32]
-            out.extend(gen / f"{key}{suffix}" for suffix in (".webp", ".jpg", ".png"))
-    return out
+    return [Path(root) / rel for rel in thumbs.blob_keys(sha)]
 
 
 def _rel(root: Path, path: Path) -> str:
@@ -407,13 +397,18 @@ def _journal(root: Path, path: Path, r: _Roots) -> None:
 def _journals(root: Path, r: _Roots) -> None:
     """Every world's journals, from the raw directory (M10): a world deleted
     with a harvest unaccepted still has members nobody has published."""
-    base = root.joinpath(*JOURNALS_DIR)
+    base = image_collections.raw_journals_root(root)
     if not _lstat_dir(root, base, r):
         return
     for w in _strict_listing(root, base, r) or []:
         if not w.is_dir(follow_symlinks=False):
             continue
-        for e in _strict_listing(root, Path(w.path), r) or []:
+        try:
+            folder = image_collections.raw_journal_directory(root, w.name)
+        except ValueError:
+            r.block(root, Path(w.path), "unsafe-name")
+            continue
+        for e in _strict_listing(root, folder, r) or []:
             path = Path(e.path)
             if not e.name.endswith(".json") or atomic.is_write_temp(path):
                 continue                # `.json.retired`, a temp mid-write
@@ -536,12 +531,40 @@ class _Sidecars:
             self.refs.get(key, set()).discard(path)
 
 
-def _store_links(root: Path) -> list[Path]:
-    """Links between the root and the store's own folders: a deletion
-    through one would land outside the pinned root."""
+def _unarrived(roots: _Roots, side: _Sidecars) -> list[str]:
+    """Reachable ids with no readable sidecar: a placement whose object has
+    not arrived yet (mid-sync). Its blob may well be here already, named by
+    nothing that reads, so while there is one no orphan blob is collected --
+    the same rule as an unreadable sidecar."""
+    return sorted(i for i in roots.reachable
+                  if side.ids.get(i) is None or side.names.get(side.ids[i]) is None)
+
+
+def _orphan_hold(side: _Sidecars, unarrived: list[str]) -> str | None:
+    """Why no orphan blob may go this run, or None."""
+    if side.keep_all_blobs():
+        return "unreadable-sidecars"
+    if unarrived:
+        return "unarrived-objects"
+    return None
+
+
+def _store_blocks(root: Path) -> list[tuple[Path, str]]:
+    """What about the store's own folders blocks a run: a link between the
+    root and them, or the cache this writes and deletes in -- a deletion
+    through one would land outside the pinned root -- and an ``objects/``
+    that is absent while ``blobs/`` is there, which is a store whose
+    sidecars have not arrived (mid-sync), not one whose blobs nothing names."""
     store = image_store.store_root(root)
-    candidates = [store.parent, store, store / "objects", store / "blobs"]
-    return [p for p in candidates if p.is_symlink()]
+    cache = Path(root) / ".cache"
+    candidates = [store.parent, store, store / "objects", store / "blobs",
+                  cache, cache / "image-store", _gc_dir(root),
+                  image_store.index_path("0" * 64, root=root).parent.parent,
+                  Path(root).joinpath(*_THUMBS_DIR)]
+    out = [(p, image_refs.SYMLINK) for p in candidates if p.is_symlink()]
+    if not os.path.lexists(store / "objects") and os.path.lexists(store / "blobs"):
+        out.append((store / "objects", "objects-missing"))
+    return out
 
 
 def _shards(base: Path, s: _Sidecars) -> Iterator[Path]:
@@ -711,7 +734,8 @@ def _new_report(mode: str, run_id: str, now: float, grace_days: float | None) ->
         "reclaimable_bytes": 0, "blocking": [], "unreadable_sidecars": [],
         "clock_skew": [], "token": None, "token_expires_at": None,
         "deleted": {"objects": [], "blobs": [], "bytes": 0},
-        "skipped": [], "kept_blobs": [], "error": None,
+        "skipped": [], "kept_blobs": [], "unarrived_objects": [],
+        "cache_cleanup": [], "error": None,
     }
 
 
@@ -835,13 +859,14 @@ def scan(root: Path, *, cancel: Callable[[], bool], run_id: str | None = None,
     `collect`. Records this device's sightings unless blocked or cancelled.
     Writes nothing else but its report and the token. `root` is the pinned
     store root (``paths.home().resolve()`` when the run started)."""
-    grace_days = _check_grace(grace_days)
     root = Path(root)
     run_id = _run_id(root, run_id)
     at = time.time() if now is None else now
-    report = _new_report("scan", run_id, at, grace_days)
+    report = _new_report("scan", run_id, at, None)
     try:
-        report["state"] = _scan(root, report, cancel, grace_days, at)
+        grace = _check_grace(grace_days)       # a refused grace still reports
+        report["grace_days"] = grace
+        report["state"] = _scan(root, report, cancel, grace, at)
     except BaseException as exc:
         report["state"], report["error"] = FAILED, type(exc).__name__
         raise
@@ -857,7 +882,8 @@ def _classify(root: Path, report: dict, roots: _Roots, side: _Sidecars,
     seen: dict[str, dict[str, float]] = {
         "objects": _classify_objects(report, roots, side, blobs, sightings["objects"],
                                      grace, at),
-        "blobs": _classify_blobs(report, side, blobs, sightings["blobs"], grace, at)}
+        "blobs": _classify_blobs(report, side, blobs, sightings["blobs"], grace, at,
+                                 _orphan_hold(side, report["unarrived_objects"]))}
     return seen
 
 
@@ -905,9 +931,8 @@ def _reclaimable(report: dict, side: _Sidecars, blobs: dict[str, os.stat_result]
 
 
 def _classify_blobs(report: dict, side: _Sidecars, blobs: dict[str, os.stat_result],
-                    sightings: dict[str, float], grace: float, at: float
-                    ) -> dict[str, float]:
-    keep_all = side.keep_all_blobs()
+                    sightings: dict[str, float], grace: float, at: float,
+                    hold: str | None) -> dict[str, float]:
     seen: dict[str, float] = {}
     for key, st in sorted(blobs.items()):
         if side.refs.get(key):
@@ -916,9 +941,9 @@ def _classify_blobs(report: dict, side: _Sidecars, blobs: dict[str, os.stat_resu
         seen[key] = v.first
         if v.skew:
             report["clock_skew"].append({"id": None, "blob": key, "what": v.skew})
-        if keep_all:
+        if hold is not None:
             report["protected"].append({"id": None, "blob": key,
-                                        "why": "unreadable-sidecars", "collectable_at": None})
+                                        "why": hold, "collectable_at": None})
         elif v.why is None:
             report["collectable_blobs"].append({"id": None, "blob": key, "bytes": st.st_size})
             report["reclaimable_bytes"] += st.st_size
@@ -942,11 +967,12 @@ def _scan(root: Path, report: dict, cancel: Callable[[], bool], grace_days: floa
     blobs = _list_blobs(root, side)
     if cancel():
         return CANCELLED
-    for link in [*_store_links(root), *side.links]:
-        roots.block(root, link, image_refs.SYMLINK)
+    for path, why in [*_store_blocks(root), *((p, image_refs.SYMLINK) for p in side.links)]:
+        roots.block(root, path, why)
     report["blocking"] = roots.blocking
     report["unreadable_sidecars"] = [_rel(root, p) for p in side.unreadable()]
     report["unreadable_sidecars"] += [_rel(root, p) for p in side.unlisted]
+    report["unarrived_objects"] = _unarrived(roots, side)
     counts = report["counts"]
     counts.update(placements=len(roots.placements), objects=len(side.ids), blobs=len(blobs))
     if roots.blocking:
@@ -1001,6 +1027,8 @@ class _Run:
     side: _Sidecars
     grace: float
     now: float
+    #: `_unarrived`, recomputed after each refresh under the lock.
+    unarrived: list[str] = field(default_factory=list)
 
     def skip(self, image_id: str | None, blob: str | None, reason: str) -> None:
         self.report["skipped"].append({"id": image_id, "blob": blob, "reason": reason})
@@ -1023,8 +1051,8 @@ def _collect(root: Path, token: str, report: dict, cancel: Callable[[], bool],
     if roots is None:
         return CANCELLED
     side = _list_objects(root)
-    for link in [*_store_links(root), *side.links]:
-        roots.block(root, link, image_refs.SYMLINK)
+    for path, why in [*_store_blocks(root), *((p, image_refs.SYMLINK) for p in side.links)]:
+        roots.block(root, path, why)
     if roots.blocking:
         report["blocking"] = roots.blocking
         return BLOCKED
@@ -1055,6 +1083,8 @@ def _batches(run: _Run, queue: list[tuple[str, str]], cancel: Callable[[], bool]
             run.side = _list_objects(run.root, run.side)   # the refcount, under the lock
             if run.side.links:
                 raise _UnsafePathError(run.side.links[0])
+            run.unarrived = _unarrived(run.roots, run.side)
+            run.report["unarrived_objects"] = run.unarrived
             started, done = time.monotonic(), 0
             while queue:
                 if cancel():
@@ -1080,7 +1110,9 @@ def _young(run: _Run, mtimes: list[float]) -> str | None:
 
 def _collect_object(run: _Run, image_id: str) -> None:
     """One object, under its stripe: re-check, then the sidecar, then -- when
-    nothing else names it -- the blob, its index entry and thumbnails."""
+    nothing else names it -- the blob, and best effort its index entry and
+    thumbnails. Each deletion is in the report the moment it has happened, so
+    a run stopped between two of them (a root change) never under-reports."""
     root = run.root
     with locks.image_object_lock(image_id):
         _check_root(root)
@@ -1106,39 +1138,54 @@ def _collect_object(run: _Run, image_id: str) -> None:
             return
         freed = _delete_file(root, path)
         run.side.drop(path)
-        blob_freed = 0
+        _deleted(run, "objects", image_id, key, freed)
         if run.side.keep_all_blobs():
             run.report["kept_blobs"].append({"id": image_id, "blob": key,
                                              "reason": "unreadable-sidecars"})
         elif run.side.refs.get(key):
             run.report["kept_blobs"].append({"id": image_id, "blob": key, "reason": "shared"})
-        elif len(mtimes) > 1:             # the blob was there when re-checked
-            blob_freed = _delete_blob(root, obj.blob_sha256, obj.ext)
-            if not blob.exists():
-                run.report["deleted"]["blobs"].append(
-                    {"id": image_id, "blob": key, "bytes": blob_freed})
-        _drop_index_entry(root, obj.blob_sha256, image_id)
-        run.report["deleted"]["objects"].append(
-            {"id": image_id, "blob": key, "bytes": freed + blob_freed})
-        run.report["deleted"]["bytes"] += freed + blob_freed
+        else:
+            _delete_blob(run, image_id, obj.blob_sha256, obj.ext)
+        _drop_index_entry(run, obj.blob_sha256, image_id)
 
 
-def _delete_blob(root: Path, sha: str, ext: str) -> int:
-    freed = _delete_file(root, image_store.blob_path(sha, ext, root=root))
-    for thumb in blob_thumbnails(root, sha):
-        _delete_file(root, thumb)
-    return freed
+def _deleted(run: _Run, what: str, image_id: str | None, key: str, freed: int) -> None:
+    run.report["deleted"][what].append({"id": image_id, "blob": key, "bytes": freed})
+    run.report["deleted"]["bytes"] += freed
 
 
-def _drop_index_entry(root: Path, sha: str, image_id: str) -> None:
+def _delete_blob(run: _Run, image_id: str | None, sha: str, ext: str) -> None:
+    """The blob (reported once it is gone), then its thumbnails -- those even
+    when the blob was gone already, since nothing else will ask for them."""
+    blob = image_store.blob_path(sha, ext, root=run.root)
+    existed = os.path.lexists(blob)
+    freed = _delete_file(run.root, blob)
+    if existed:
+        _deleted(run, "blobs", image_id, _blob_key(sha, ext), freed)
+    for thumb in blob_thumbnails(run.root, sha):
+        _cache_delete(run, thumb)
+
+
+def _cache_delete(run: _Run, path: Path) -> None:
+    """Delete one derived cache entry, best effort: a thumbnail or index entry
+    that will not go is reported, never a reason to stop collecting. A root
+    change still stops the run (`_delete_file` deletes nothing then)."""
+    try:
+        _delete_file(run.root, path)
+    except (OSError, _UnsafePathError) as exc:
+        run.report["cache_cleanup"].append({"path": _rel(run.root, path),
+                                            "reason": type(exc).__name__})
+
+
+def _drop_index_entry(run: _Run, sha: str, image_id: str) -> None:
     """The blob-index entry, only when it names the collected object."""
-    path = image_store.index_path(sha, root=root)
+    path = image_store.index_path(sha, root=run.root)
     try:
         named = path.read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return
     if named == image_id:
-        _delete_file(root, path)
+        _cache_delete(run, path)
 
 
 def _collect_blob(run: _Run, key: str) -> None:
@@ -1150,8 +1197,8 @@ def _collect_blob(run: _Run, key: str) -> None:
     if split is None:
         return
     sha, ext = split
-    if run.side.keep_all_blobs():
-        run.skip(None, key, "unreadable-sidecars")
+    if (hold := _orphan_hold(run.side, run.unarrived)) is not None:
+        run.skip(None, key, hold)
         return
     if run.side.refs.get(key):
         run.skip(None, key, "named")
@@ -1165,6 +1212,4 @@ def _collect_blob(run: _Run, key: str) -> None:
     if (why := _young(run, [mtime])) is not None:
         run.skip(None, key, why)
         return
-    freed = _delete_blob(root, sha, ext)
-    run.report["deleted"]["blobs"].append({"id": None, "blob": key, "bytes": freed})
-    run.report["deleted"]["bytes"] += freed
+    _delete_blob(run, None, sha, ext)

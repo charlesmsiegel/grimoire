@@ -233,6 +233,15 @@ UNPARSEABLE = "unparseable"
 UNKNOWN_FORMAT = "unknown-format"
 NOT_A_FILE = "not-a-regular-file"
 NOT_A_DIRECTORY = "not-a-directory"
+CASE_VARIANT = "case-variant"
+
+
+def _fold(name: str) -> str:
+    """`name` as a case-insensitive filesystem compares it -- `world_bundle`'s
+    rule, spelled again because this module sits below it. Upper-casing first
+    catches a dotless i (U+0131), which ``casefold`` leaves alone and NTFS
+    upper-cases to ``I``."""
+    return name.upper().casefold()
 
 #: Files an OS or a file browser drops into any folder it shows. Grimoire never
 #: writes one, and none can hold a placement, so a strict walk passes them by
@@ -353,7 +362,9 @@ def walk_strict(root: Path) -> Iterator[tuple[Path, str]]:
     that does not parse as a placement or names an unknown ``format``, a
     directory that does not list (`os.scandir` failing anywhere), any symlink
     or junction under `root`, `root` itself a link or not a directory, and a
-    non-regular file in an ``image-refs/`` folder. A missing `root` holds
+    non-regular file in an ``image-refs/`` folder, and a folder whose name is
+    a case variant of ``image-refs`` (`CASE_VARIANT`) -- a case-insensitive
+    filesystem reads its placements, and skipping it would collect them. A missing `root` holds
     nothing. Nothing is followed, written or cached.
 
     A generator: the error surfaces when iteration reaches the bad entry, so
@@ -362,8 +373,13 @@ def walk_strict(root: Path) -> Iterator[tuple[Path, str]]:
     root = Path(root)
     if not _strict_root(root):
         return
+    folded = _fold(REFS_DIR)
     for d, entries in strict_dirs(root):
         if d.name != REFS_DIR:
+            if _fold(d.name) == folded:
+                # One folder to a case-insensitive reader, which serves its
+                # placements; skipped here, its pictures would be collected.
+                raise ImageRefParseError(d, CASE_VARIANT)
             continue
         for e in entries:
             for image_id in _strict_entry(e):
