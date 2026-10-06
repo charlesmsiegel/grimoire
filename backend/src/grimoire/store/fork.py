@@ -153,8 +153,8 @@ class ForkContentionError(Exception):
 
     A `StoreBusy` sibling in spirit -- the route answers 409, the caller retries
     -- but not a subclass of it: nothing here timed out on a lock, and the whole
-    value of that class is that one handler can say "another grimoire process is
-    editing this" and be right. Nothing has been created by the time this is
+    value of that class is that one handler can say "this is busy" -- a lock
+    stayed held past its timeout -- and be right. Nothing has been created by the time this is
     raised, so a caller that gives up leaves no debris.
     """
 

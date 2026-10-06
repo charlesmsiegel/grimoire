@@ -9,7 +9,7 @@ import time
 import pytest
 from PIL import Image
 
-from grimoire.store import assets, image_refs, image_store, statcache
+from grimoire.store import assets, image_refs, image_store, locks, statcache
 
 
 @pytest.fixture(autouse=True)
@@ -1444,6 +1444,12 @@ def test_promote_never_overwrites_a_journal_it_could_not_finish(tmp_path, monkey
     d = _vdir(tmp_path)
     journal = image_refs.read_journal(d)
     assert journal is not None and journal["pre"]["avatar"] == a
+    # The name locks are striped, so `gallery_1` could share a stripe with
+    # `gallery_2` or `avatar` and this promotion would wait on the holder
+    # rather than meet the journal. Pin the three to stripes of their own.
+    stripes = {"avatar": 1, "gallery_1": 2, "gallery_2": 3}
+    monkeypatch.setattr(locks, "_image_stripe",
+                        lambda dd, key: stripes.get(key.casefold(), 0))
 
     held, release = threading.Event(), threading.Event()
 
