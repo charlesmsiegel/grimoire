@@ -1247,3 +1247,46 @@ def test_a_sidecar_written_before_the_stamp_existed_still_reads(monkeypatch, tmp
         "Fog over the pilings.", "Gulls over the pilings."]
     assert [r.get("model", "") for r in state["runs"]] == ["", ""]
     assert state["runs"][1]["guidance"] == "colder"
+
+
+def _conn_seg(text, connection):
+    return {"speaker": None, "content": text, "connection": connection}
+
+
+def test_the_same_words_from_two_connections_are_two_takes(monkeypatch, tmp_path):
+    """Which connection served a take decides which connection-level rules
+    apply to it, so a reroll on connection B that reproduces prose archived
+    from A is a take of its own -- promoting it back must not hand it A."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = scenes.create_scene(cid, "Saltmarch")
+    scenes.append_message(cid, sid, "user", "Describe the harbour.")
+    scenes.append_reply(cid, sid, [_conn_seg("Fog over the pilings.", "conn-a")])
+    _reroll(cid, sid, [_conn_seg("Gulls over the pilings.", "conn-a")])
+    _reroll(cid, sid, [_conn_seg("Fog over the pilings.", "conn-b")])
+
+    state = alternates.state(cid, sid)
+    assert [[s.get("connection") for s in r["segments"]] for r in state["runs"]] == [
+        ["conn-a"], ["conn-a"], ["conn-b"]]
+    assert state["active"] == 2
+    ids = [alternates.variant_id(r) for r in state["runs"]]
+    assert len(set(ids)) == 3
+
+    alternates.promote(cid, sid, 1)
+    alternates.promote(cid, sid, 2)
+    assert scenes.read_scene(cid, sid)["messages"][-1]["connection"] == "conn-b"
+    assert alternates.state(cid, sid)["active"] == 2
+
+
+def test_a_take_with_no_connection_still_matches_its_twin(monkeypatch, tmp_path):
+    """A run archived before connections were carried has none; it is still
+    the same take as its live twin, and its variant id is the one it had."""
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _scene_with_reply(cid)
+    before = alternates.variant_id({"segments": [_seg("Fog over the pilings.")]})
+    _reroll(cid, sid, [_seg("Gulls over the pilings.")])
+    alternates.promote(cid, sid, 0)
+    # The live run now says the same thing again, and from a connection.
+    _reroll(cid, sid, [_conn_seg("Fog over the pilings.", "conn-a")])
+    state = alternates.state(cid, sid)
+    assert len(state["runs"]) == 2 and state["active"] == 0
+    assert alternates.variant_id(state["runs"][0]) == before
