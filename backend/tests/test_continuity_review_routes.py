@@ -603,6 +603,28 @@ def test_applying_a_closure_closes_and_keeps_last_scene(client, beat):
     assert CLOSE_MAP not in candidates.read(cid)["records"]
 
 
+def test_a_closing_beat_whose_scene_moved_is_refused_in_words(client):
+    """§12.9, §30: the scene the reader picked for a beat was renamed under the
+    open form. The refusal says so in words and names no scene id, and the
+    candidates read the client re-reads on it offers the scene's new id."""
+    cid, early = _stale_map(client)
+    renamed = client.put(f"/api/campaigns/{cid}/scenes/{early}",
+                         json={"title": "Winifred harbour"})
+    assert renamed.status_code == 200, renamed.text
+    moved = renamed.json()["id"]
+    assert moved != early
+
+    r = _apply(client, cid, CLOSE_MAP, {"op": "close", "beat": "Mara burned the map.",
+                                        "scene": early})
+
+    assert r.status_code == 400, r.text
+    assert r.json()["kind"] == "bad_scene"
+    assert early not in r.json()["detail"]
+    assert r.json()["detail"] == "That scene has been renamed or removed; pick it again."
+    assert store.plot.get(cid, "mara-s-map")["status"] != "closed"
+    assert [s["id"] for s in _read(client, cid)["scenes"]] == [moved]
+
+
 def test_applying_a_resolution_sets_the_status(client):
     cid, sid = _campaign(client)
     store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",

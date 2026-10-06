@@ -593,7 +593,9 @@ def _body(body) -> dict:
 
 def _beat(cid: str, body: dict, scenes: dict[str, str] | None) -> tuple[str, str]:
     """The optional beat and its scene, which come as a pair; a scene named
-    must exist (a link's scene too)."""
+    must exist (a link's scene too). A scene that is gone was most often
+    renamed under the open form, so the refusal says that in words and names
+    no scene id (§30), and the client re-reads the scene list on it (§12.9)."""
     beat = body.get("beat", "").strip()
     scene = body.get("scene", "").strip()
     if beat and not scene:
@@ -602,7 +604,8 @@ def _beat(cid: str, body: dict, scenes: dict[str, str] | None) -> tuple[str, str
         if scenes is None:
             raise RefusedError(409, "unreadable", "the scene list cannot be read right now")
         if scene not in scenes:
-            raise RefusedError(400, "bad_scene", f"no scene {scene!r}")
+            raise RefusedError(400, "bad_scene",
+                              "That scene has been renamed or removed; pick it again.")
     return beat, scene
 
 

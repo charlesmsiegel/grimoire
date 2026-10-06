@@ -285,6 +285,12 @@ export function ContinuityReview(
       if (!here) return;
       setError({ cid, text: errorText(err) });
       navigate(ledgerHref(cid, { section: "continuity", group: c.group }), { replace: true });
+    } else if (kind === "bad_scene") {
+      // The beat's scene was renamed or removed under the open form (§12.9):
+      // re-read, so the select offers the scenes as they are now rather than
+      // an id the server will only refuse again.
+      review.reread();
+      if (here) setDetailError({ text: errorText(err) });
     } else if (here) {
       setDetailError({ text: errorText(err) });
     }

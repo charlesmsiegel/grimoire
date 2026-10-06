@@ -107,7 +107,11 @@ export function CandidateDetail(props: Props) {
   const [beat, setBeat] = useState("");
   const firstEvidence = (candidate.proposal?.evidence_scenes ?? [])
     .find((sid) => scenes.some((s) => s.id === sid)) ?? "";
-  const [scene, setScene] = useState(firstEvidence);
+  const [picked, setScene] = useState(firstEvidence);
+  // A pick the scene list no longer holds (renamed or removed, then re-read)
+  // reads as no pick, so a beat asks for its scene again rather than resending
+  // an id the server can only refuse.
+  const scene = scenes.some((s) => s.id === picked) ? picked : "";
   const proposed = [candidate.proposal?.relation, candidate.proposal?.decision]
     .find((w): w is (typeof TEMPORAL)[number] =>
       (TEMPORAL as readonly (string | undefined)[]).includes(w));
