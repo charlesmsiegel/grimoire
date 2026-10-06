@@ -496,14 +496,14 @@ def _check_must(must: tuple[str, ...], avoid: tuple[str, ...]) -> None:
                                 "use the time anchor for a date")
 
 
-def _check_anchor(snapshot: dict, time_mode: str, anchor: str, relation: str) -> None:
-    """Decisions 5 and 6: the anchor's structure, judged before staleness. A
-    month-only anchor's precision comes from its option when the capture has
-    one, else from the ref's own shape."""
+def _check_anchor(snapshot: dict, time_mode: str, anchor: str, relation: str) -> bool:
+    """Decisions 5 and 6: the anchor's structure, judged before staleness, and
+    whether the anchor is month-only. A month-only anchor's precision comes
+    from its option when the capture has one, else from the ref's own shape."""
     if time_mode == "anchor" and not anchor:
         raise _bad("anchor_missing", "an anchored time mode needs an anchor")
     if not anchor:
-        return
+        return False
     if time_mode != "anchor":
         raise _bad("anchor_without_mode", "an anchor needs the anchored time mode")
     prefix, sep, rest = anchor.partition(":")
@@ -514,6 +514,7 @@ def _check_anchor(snapshot: dict, time_mode: str, anchor: str, relation: str) ->
              else _month_of(anchor) is not None)
     if month and relation not in ("", "on"):
         raise _bad("anchor_relation", "a birthday known only by its month takes only \"on\"")
+    return month
 
 
 def _stale(snapshot: dict, refs: tuple[str, ...], anchor: str) -> list[str]:
@@ -540,7 +541,9 @@ def resolve_controls(cid: str, snapshot: dict, *, focus_refs=(), avoid_refs=(), 
     and for the anchor; then one 409 `stale_drivers` naming every ref the
     capture does not hold. Precedence runs last: the anchor leaves `avoid`
     (Decision 26), then `focus` loses what `must` or `avoid` holds (Decision 8).
-    A relation without an anchor means nothing and is dropped."""
+    A relation without an anchor means nothing and is dropped; a month-only
+    anchor's blank relation resolves to `on` here, so the prompt never offers
+    the model a relation the parser would coerce away (Decision 6)."""
     canon = _live_canon_or_identity(cid)
 
     def canonical(refs) -> tuple[str, ...]:
@@ -549,7 +552,7 @@ def resolve_controls(cid: str, snapshot: dict, *, focus_refs=(), avoid_refs=(), 
     focus, avoid, must = canonical(focus_refs), canonical(avoid_refs), canonical(must_refs)
     anchor = next(iter(canonical([time_anchor_ref])), "")
     _check_must(must, avoid)
-    _check_anchor(snapshot, time_mode, anchor, time_anchor_relation)
+    month = _check_anchor(snapshot, time_mode, anchor, time_anchor_relation)
     stale = _stale(snapshot, (*focus, *avoid, *must), anchor)
     if stale:
         raise ControlsError(409, "stale_drivers",
@@ -557,7 +560,7 @@ def resolve_controls(cid: str, snapshot: dict, *, focus_refs=(), avoid_refs=(), 
     avoid = tuple(ref for ref in avoid if ref != anchor)
     focus = tuple(ref for ref in focus if ref not in must and ref not in avoid)
     return Controls(focus=focus, avoid=avoid, must=must, time_mode=time_mode, anchor=anchor,
-                    relation=time_anchor_relation if anchor else "")
+                    relation=("on" if month else time_anchor_relation) if anchor else "")
 
 
 def _when(in_days: int | None, precision: str | None = None) -> str:
