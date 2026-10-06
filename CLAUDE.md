@@ -630,7 +630,9 @@ would answer neither question.
   reached by a recovery that heals a transcript and then answers 409, and a
   continuity review apply or dismiss that an I/O error stops after one of its
   writes landed answers 500 naming the parts that did (`partial_apply`,
-  `partial_dismiss` in `routes/continuity.py`). A route
+  `partial_dismiss` in `routes/continuity.py`), and a thread, commitment or
+  event delete whose continuity clean-up fails after the delete landed answers
+  500 `partial_delete` (`routes/ledger.forget_or_partial`). A route
   that mutates a *different*
   campaign than the one in its path says so with `@leaves_campaign_unchanged`
   (`POST /fork`, whose source is never written to) — otherwise a fork would
