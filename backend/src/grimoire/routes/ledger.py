@@ -278,8 +278,9 @@ def put_thread(cid: str, pid: str, body: ThreadSave, physical: bool = False):
         target = _live_target(cid, "thread", pid, physical)
         title = body.title.strip()
         label = (_label(title or pid, "thread") if target == pid else
-                 f"{continuity_review.describe(cid, 'thread:' + target)} — thread "
-                 f"(via merged {continuity_review.describe(cid, 'thread:' + pid)})")
+                 f"{continuity_review.reader_name(cid, 'thread:' + target, start=True)}"
+                 f" — thread (via merged "
+                 f"{continuity_review.reader_name(cid, 'thread:' + pid)})")
         # `set_movement` reads a blank title or an unknown status as "keep what
         # is stored", which is the behaviour this route wants too: a payload
         # that only closes a thread must not blank its title.
@@ -344,8 +345,9 @@ def put_commitment(cid: str, mid: str, body: CommitmentSave, physical: bool = Fa
         target = _live_target(cid, "commitment", mid, physical)
         title = body.title.strip()
         label = (_label(title or mid, "commitment") if target == mid else
-                 f"{continuity_review.describe(cid, 'commitment:' + target)} — commitment "
-                 f"(via merged {continuity_review.describe(cid, 'commitment:' + mid)})")
+                 f"{continuity_review.reader_name(cid, 'commitment:' + target, start=True)}"
+                 f" — commitment (via merged "
+                 f"{continuity_review.reader_name(cid, 'commitment:' + mid)})")
         move_commitment(cid, target, title=title, kind=body.kind or "",
                         status=body.status or "", due=body.due, beat=body.beat or "",
                         scene=body.scene, label=label)

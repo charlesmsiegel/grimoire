@@ -4502,7 +4502,7 @@ def _merged_detail(cid: str, merged: list[dict]) -> str:
     into which, and what to do about it. The panel shows it verbatim through
     its generic save-error path, so it has to say everything on its own."""
     names = "; ".join(
-        f"{continuity_review.describe(cid, m['source'])} was merged into "
+        f"{continuity_review.reader_name(cid, m['source'], start=True)} was merged into "
         f"{m['canonical_title']}" for m in merged)
     rows = "that row" if len(merged) == 1 else "those rows"
     return (f"{names} after this review was staged. "

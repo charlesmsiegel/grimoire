@@ -6,6 +6,7 @@ write lands in the journal so it can be undone from the Changes panel.
 
 import importlib
 import json
+import re
 
 import pytest
 from fastapi.testclient import TestClient
@@ -281,6 +282,51 @@ def test_describe_falls_back_to_ref(cid):
     assert review.describe(cid, "nocolon") == "nocolon"
     (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
     assert review.describe(cid, "thread:maras-map") == "thread:maras-map"
+
+
+#: A store ref -- a kind, a colon, a slug -- anywhere in reader-facing text.
+_REF = re.compile(r"\b(?:thread|commitment|event):[a-z0-9]")
+
+
+def test_labels_and_refusals_about_missing_records_carry_no_ref(cid):
+    """§30: no store token reaches a reader. The Reviewed group offers Remove
+    link and Unmerge on a broken entry, and the History rail shows the journal
+    rows those write -- so a missing end is named by its kind, as the review
+    names it, never by the ref `describe` falls back to."""
+    from grimoire.store.continuity import canon
+    lid = canon.link_id("before", "commitment:mara-oath", "event:gone")
+    doc.put_link(cid, lid, {"a": "commitment:mara-oath", "b": "event:gone",
+                            "relation": "before", "created": "", "scene": "", "note": ""})
+    doc.put_alias(cid, "thread:gone-thread", {"to": "thread:maras-map", "created": "",
+                                              "source": "manual", "note": ""})
+    doc.put_alias(cid, "commitment:mara-oath", {"to": "commitment:gone-vow", "created": "",
+                                                "source": "manual", "note": ""})
+    before = len(store.journal.read(cid))
+    review.remove_link(cid, lid)
+    review.remove_alias(cid, "thread:gone-thread")
+    again = _refused(review.remove_alias, cid, "thread:gone-thread")
+    review.forget_ref(cid, "commitment:mara-oath", name="Mara's oath")
+    missing = _refused(review.create_alias, cid, "thread:gone-thread", "thread:maras-map")
+    labels = [row["label"] for row in store.journal.read(cid)[before:]]
+    assert labels == [
+        "Mara's oath is due before a missing event — removed",
+        "A missing thread — unmerged from Mara's map",
+        "Mara's oath → merged into a missing commitment — removed with deleted record",
+    ]
+    assert again.detail == "A missing thread is not merged"
+    assert missing.detail == "That thread does not exist"
+    assert not [text for text in (*labels, again.detail, missing.detail) if _REF.search(text)]
+
+
+def test_a_record_whose_ledger_will_not_read_is_named_as_unreadable(cid):
+    """A ref `describe` answered with because its ledger did not read is not a
+    missing record -- it may well exist -- so the label says it cannot be read."""
+    review.create_alias(cid, "thread:maras-map", "thread:winifreds-chart")
+    (_root(cid) / "plot.json").write_text("{ no", encoding="utf-8")
+    review.remove_alias(cid, "thread:maras-map")
+    assert store.journal.read(cid)[-1]["label"] == (
+        "A thread that cannot be read right now — unmerged from "
+        "a thread that cannot be read right now")
 
 
 def test_forget_event_ref_needs_only_readable_links(cid):
