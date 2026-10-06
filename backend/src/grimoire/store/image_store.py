@@ -733,8 +733,9 @@ def merge_projection(image_id: str, projected: dict, scope: str) -> None:
 
     def change(raw: dict) -> dict | None:
         dirty = False
+        held = raw.get("description_conflicts")
         if (isinstance(desc, str) and not isinstance(raw.get("description"), str)
-                and not raw.get("description_conflicts")):
+                and not (isinstance(held, list) and held)):
             raw["description"] = desc
             dirty = True
         if assoc:
