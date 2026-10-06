@@ -7,6 +7,8 @@ already exist. Dates are asserted on the campaign's own fixed-day axis
 
 from __future__ import annotations
 
+import textwrap
+
 from grimoire import store
 from grimoire.store import calendars, chronicle
 from grimoire.store.continuity import canon, drivers, effective, graph, pressure
@@ -19,6 +21,36 @@ from tests.test_continuity_pressure import (
     _plugin,
     _primary,
     _provider,
+)
+
+#: A plugin that loads but cannot read a date: `__init__` succeeds, so
+#: `primary_provider` answers it, and `parse`/`describe` raise something that is
+#: not a CalendarError -- the per-row failure no provider read reports.
+_UNPARSING_PROVIDER_SRC = textwrap.dedent(
+    """
+    from grimoire.store.calendars.base import CalendarProvider, register
+
+    class _UnparsingProvider(CalendarProvider):
+        def __init__(self, config):
+            pass
+
+        def parse(self, native):
+            raise RuntimeError("this calendar plugin cannot parse")
+
+        def format(self, fixed):
+            return ""
+
+        def describe(self, fixed):
+            raise RuntimeError("this calendar plugin cannot describe")
+
+        def holidays(self, start_fixed, end_fixed):
+            return []
+
+        def months(self, year):
+            return []
+
+    register("unparsing-test-calendar", _UnparsingProvider, "Unparsing Test Calendar")
+    """
 )
 
 
@@ -157,6 +189,20 @@ def test_a_raising_plugin_leaves_scenes_undated(monkeypatch, tmp_path):
     assert "calendar" in g["omitted"]
 
 
+def test_a_plugin_that_loads_but_cannot_parse_is_a_broken_calendar(monkeypatch, tmp_path):
+    cid = _campaign(monkeypatch, tmp_path)
+    sid = _stamp(cid, store.scenes.create_scene(cid, "Saltmarch harbour"), "2026-05-12")
+    _plugin(tmp_path, "unparsing_test", _UNPARSING_PROVIDER_SRC)
+    _primary(cid, "unparsing-test-calendar")
+
+    g = graph.build(cid)
+    node = _node(g, sid)
+    assert node["native"] == "2026-05-12"
+    assert node["fixed"] is None and node["in_days"] is None
+    assert g["now"]["native"] == "2026-05-10" and g["now"]["fixed"] is None
+    assert "calendar" in g["omitted"]
+
+
 def test_build_is_deterministic(monkeypatch, tmp_path):
     cid = _campaign(monkeypatch, tmp_path)
     s1 = _stamp(cid, store.scenes.create_scene(cid, "Saltmarch harbour"), "2026-05-12")
@@ -174,4 +220,16 @@ def test_a_free_text_scene_date_is_undated_not_a_broken_calendar(monkeypatch, tm
     node = _node(g, sid)
     assert node["native"] == "midsummer"
     assert node["fixed"] is None and node["in_days"] is None
+    assert g["omitted"] == []
+
+
+def test_a_free_text_seeded_present_is_not_a_broken_calendar(monkeypatch, tmp_path):
+    # No clock: the present is seeded from the chronicle's latest date, which is
+    # free text -- the provider's CalendarError is data, not a broken plugin.
+    cid = _campaign(monkeypatch, tmp_path, now=None)
+    sid = store.scenes.create_scene(cid, "Saltmarch harbour")
+    chronicle.absorb(cid, {"id": sid, "date": "midsummer"})
+
+    g = graph.build(cid)
+    assert g["now"] == {"native": "midsummer", "friendly": "", "fixed": None}
     assert g["omitted"] == []

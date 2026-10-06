@@ -13,9 +13,9 @@ pairs one writer's two files a moment apart, and calendar plugin code -- user
 code that can do anything, including wait -- must never run under that hold
 (spec §11.1; D's reconcile and B's drivers route keep the same rule).
 
-- (A) `_temporal`, outside the hold: the primary provider and `pressure.build`
-  (later the driver snapshot and the event list), each of which can run plugin
-  code.
+- (A) `_temporal`, outside the hold: the primary provider, `pressure.build`
+  and one `_probe` of the present through the provider (later the driver
+  snapshot and the event list), each of which can run plugin code.
 - (B) `_files`, inside one `best_effort_campaign_lock` hold: every campaign file
   the graph projects. Best effort, never `campaign_lock`, because a read that
   can raise `StoreBusy` is a new way for opening a page to fail (§19.7,
@@ -51,6 +51,7 @@ which would be a second definition of a ref grammar someone else owns.
 nodes and edges and adds its `PARTS` name to `omitted`, so a reader can tell an
 empty campaign from a broken file. Per-row date softening passes `part=None`:
 a free-text date such as "midsummer" is ordinary data, not a broken calendar.
+A plugin that loads but cannot read a date is caught once, by `_probe`.
 Ids and order are deterministic, so two reads of an unchanged campaign are
 equal.
 """
@@ -124,11 +125,29 @@ def _primary(cid: str):
     return provider
 
 
+def _probe(provider, native: str) -> None:
+    """Run the present through the provider once, so a plugin that loads but
+    cannot read a date reports as a broken calendar rather than as a campaign
+    with no dates. `pressure.build` softens that failure into `fixed: None`
+    and the per-row reads soften theirs on purpose (`part=None`), so without
+    this nothing would name it. `CalendarError` is the contract's answer to
+    text the calendar cannot read -- an unclocked campaign's present is seeded
+    from the chronicle's free-text date -- and is data; anything else escapes
+    to `_attempt`, which records "calendar"."""
+    try:
+        calendars.fixed_of(provider, native)
+        calendars.friendly(provider, native)
+    except calendars.CalendarError:
+        pass
+
+
 def _temporal(cid: str, omitted: set[str]) -> dict:
-    return {
-        "provider": _attempt(omitted, "calendar", _primary, None, cid),
-        "pressure": _attempt(omitted, "calendar", pressure.build, None, cid),
-    }
+    provider = _attempt(omitted, "calendar", _primary, None, cid)
+    p = _attempt(omitted, "calendar", pressure.build, None, cid)
+    native = fieldtext.text(p.get("now")) if isinstance(p, dict) else ""
+    if provider is not None and native:
+        _attempt(omitted, "calendar", _probe, None, provider, native)
+    return {"provider": provider, "pressure": p}
 
 
 # ---- phase B: campaign files, inside one hold -------------------------------
