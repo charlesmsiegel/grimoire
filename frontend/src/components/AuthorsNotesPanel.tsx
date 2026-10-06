@@ -55,12 +55,13 @@ export function AuthorsNotesPanel({ cid, sid, cast, next, onSaved }: {
     return note ?? BLANK;
   }, [tab, sid, charRef]);
 
+  // On `sid` too: a rename moves the key the scene tab reads the note under.
   useEffect(() => {
     const n = (ticket.current += 1);
     api.getAuthorsNotes(cid)
       .then((data) => { if (n === ticket.current) { setError(null); setNotes(data); } })
       .catch((err: unknown) => { if (n === ticket.current) setError(reason(err)); });
-  }, [cid]);
+  }, [cid, sid]);
 
   // The form follows what is stored for the level (and character) on show.
   useEffect(() => { setDraft(stored(notes)); }, [notes, stored]);

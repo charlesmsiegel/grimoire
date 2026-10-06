@@ -70,6 +70,19 @@ describe("AuthorsNotesPanel", () => {
       "c", { text: "Keep the storm audible.", depth: 6, every: 2 });
   });
 
+  it("re-reads the notes when the scene is renamed under it", async () => {
+    const { rerender } = render(
+      <AuthorsNotesPanel cid="c" sid="s" cast={CAST} next={null} onSaved={vi.fn()} />);
+    await screen.findByLabelText("Author's note");
+    // A rename moves the sid; the server answers keyed by the new one.
+    mocked.getAuthorsNotes.mockResolvedValue({ ...NOTES, scenes: { s2: NOTES.scenes.s } });
+    rerender(<AuthorsNotesPanel cid="c" sid="s2" cast={CAST} next={null} onSaved={vi.fn()} />);
+    fireEvent.click(screen.getByRole("tab", { name: "This scene" }));
+    await waitFor(() => expect(
+      screen.getByLabelText<HTMLTextAreaElement>("Author's note").value).toBe("Rain on the roof."));
+    expect(mocked.getAuthorsNotes).toHaveBeenCalledTimes(2);
+  });
+
   it("saves the scene's note through the scene route", async () => {
     renderPanel();
     await screen.findByLabelText("Author's note");
