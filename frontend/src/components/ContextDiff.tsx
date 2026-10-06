@@ -216,6 +216,11 @@ function flagNotes(section: PromptDiffSection,
                    counters: [string, string] | null = null): string[] {
   const { base, head } = section;
   const only = head ?? base;
+  // The Author's notes row counts the NOTES trimmed with the history's front,
+  // not messages; worded as the history row's count, it would read as one.
+  const trim = section.id === "authors_note"
+    ? { what: "Author's notes trimmed", unit: "notes cut with the front of the history" }
+    : { what: "History trimmed", unit: "messages cut from the front" };
   if (!base || !head) {
     // A section only one side has still carries facts, and the early return
     // used to keep just one of them. History present on one side alone — an
@@ -234,7 +239,7 @@ function flagNotes(section: PromptDiffSection,
     // it, which is not the same as why the section exists.
     if (only?.pinned) solo.push(PINNED);
     if (only?.trimmed)
-      solo.push(`History trimmed: ${only.trimmed} messages cut from the front,`
+      solo.push(`${trim.what}: ${only.trimmed} ${trim.unit},`
                 + " so these lines are not the whole of it.");
     return solo;
   }
@@ -257,8 +262,7 @@ function flagNotes(section: PromptDiffSection,
   if (base.pinned !== head.pinned)
     notes.push(head.pinned ? PINNED : "No longer pinned.");
   if (base.trimmed !== head.trimmed)
-    notes.push(`History trimmed: ${base.trimmed} → ${head.trimmed} messages`
-               + " cut from the front.");
+    notes.push(`${trim.what}: ${base.trimmed} → ${head.trimmed} ${trim.unit}.`);
   // Identical words, different cost, and nothing above accounted for it. The
   // note names the SYMPTOM and stops there, because none of the candidate
   // causes is in the payload. Message regrouping is one (history counts per

@@ -237,6 +237,15 @@ test("history trimmed off the front reports both counts", () => {
   screen.getByText(/History trimmed: 0 → 4 messages cut from the front/);
 });
 
+test("the author's notes row counts trimmed notes, not messages", () => {
+  render(<ContextDiff diff={diff({
+    sections: [section({ id: "authors_note", label: "Author's notes", status: "changed",
+                         base: facts({ trimmed: 0 }), head: facts({ trimmed: 1 }) })],
+  })} />);
+  screen.getByText(/Author's notes trimmed: 0 → 1 notes cut with the front of the history/);
+  expect(screen.queryByText(/messages cut from the front/)).toBeNull();
+});
+
 test("a section the packer kept this time says the packer had dropped it", () => {
   render(<ContextDiff diff={diff({
     sections: [section({ status: "changed",
