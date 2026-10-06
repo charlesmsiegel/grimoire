@@ -167,7 +167,8 @@ def test_get_continuity_reports_non_dict_records(client, cid):
     (raw,) = body["raw_links"]
     assert (raw["id"], raw["state"], raw["reason"]) == ("l1", "broken", "malformed_record")
     assert body["suppressions"] == [{"fingerprint": "fp1_x", "kind": "", "refs": [],
-                                     "decision": "", "created": ""}]
+                                     "decision": "", "created": "", "live": False,
+                                     "titles": []}]
 
 
 def test_get_continuity_reports_malformed_sections(client, cid):
@@ -183,6 +184,11 @@ def test_get_continuity_reports_malformed_sections(client, cid):
     ("post", "/continuity/links", {"a": "thread:a", "b": "thread:b", "relation": "continues"}),
     ("delete", "/continuity/links/l1", None),
     ("post", "/continuity/reconcile", None),
+    ("get", "/continuity/candidates", None),
+    ("post", "/continuity/candidates/possible_duplicate-0123456789abcdef/apply",
+     {"op": "alias", "canonical": "thread:a"}),
+    ("post", "/continuity/candidates/possible_duplicate-0123456789abcdef/dismiss", {}),
+    ("delete", "/continuity/suppressions/fp1_x", None),
 ])
 def test_unknown_campaign_404_on_every_route(client, method, path, body):
     kwargs = {"json": body} if body is not None else {}
@@ -192,6 +198,9 @@ def test_unknown_campaign_404_on_every_route(client, method, path, body):
 
 def test_continuity_routes_not_captured_by_entities(client, cid):
     assert "aliases" in _get(client, cid)
+    r = client.get(f"/api/campaigns/{cid}/continuity/candidates")
+    assert r.status_code == 200, r.text
+    assert r.json()["candidates"] == []
 
 
 def test_get_continuity_reads_each_ledger_once(client, cid, monkeypatch):

@@ -44,7 +44,8 @@ from starlette.concurrency import run_in_threadpool
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store.continuity import doc, drivers, effective, reconcile, review
+from ..store.continuity import candidates, doc, drivers, effective, pending, reconcile, review
+from . import ledger as ledger_routes
 from . import runs
 from .common import (
     _bounded_call,
@@ -56,7 +57,7 @@ from .common import (
     get_llm,
     run_error,
 )
-from .models import ContinuityAliasCreate, ContinuityLinkCreate
+from .models import ContinuityAliasCreate, ContinuityDismiss, ContinuityLinkCreate
 
 router = APIRouter()
 log = logging.getLogger(__name__)
@@ -97,6 +98,18 @@ def _text(value) -> str:
     return value if isinstance(value, str) else ""
 
 
+def _suppresses(current: pending.Current | None, fp: str, kind: str, refs: list[str]) -> bool:
+    """Whether a stored dismissal still names the records as they are (§12.7):
+    its fingerprint recomputed now. One for records that have since changed
+    suppresses nothing, and a record of the wrong shape is never live."""
+    if current is None or kind not in candidates.KINDS or not refs:
+        return False
+    try:
+        return pending.fingerprint(current, kind, refs) == fp
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return False
+
+
 @router.get("/campaigns/{cid}/continuity")
 def get_continuity(cid: str):
     _campaign_or_404(cid)
@@ -107,6 +120,10 @@ def get_continuity(cid: str):
         diagnostics = effective.diagnostics(cid, ledgers)
         kept = effective.links(cid, ledgers)
         malformed = doc.malformed(cid)
+        # Built only when there is a dismissal to judge, and from the ledgers
+        # already loaded: a read with none costs what it always did.
+        current = (pending.Current.load(cid, ledgers=ledgers)
+                   if data["suppressions"] else None)
     dangling = {d["ref"]: d["reason"] for d in diagnostics["dangling_aliases"]}
     aliases = []
     for ref in sorted(k for k in data["aliases"] if isinstance(k, str)):
@@ -138,10 +155,13 @@ def get_continuity(cid: str):
         meta = data["suppressions"][fp]
         meta = meta if isinstance(meta, dict) else {}
         refs = meta.get("refs")
+        refs = [r for r in refs if isinstance(r, str)] if isinstance(refs, list) else []
+        kind = _text(meta.get("kind"))
         suppressions.append({
-            "fingerprint": fp, "kind": _text(meta.get("kind")),
-            "refs": [r for r in refs if isinstance(r, str)] if isinstance(refs, list) else [],
-            "decision": _text(meta.get("decision")), "created": _text(meta.get("created"))})
+            "fingerprint": fp, "kind": kind, "refs": refs,
+            "decision": _text(meta.get("decision")), "created": _text(meta.get("created")),
+            "live": _suppresses(current, fp, kind, refs),
+            "titles": [review.describe(cid, ref, ledgers) for ref in refs]})
     return {"aliases": aliases, "links": links, "raw_links": raw_links,
             "suppressions": suppressions, "diagnostics": diagnostics,
             "malformed": malformed, "unreadable": diagnostics["unreadable"],
@@ -191,6 +211,264 @@ def delete_link(cid: str, lid: str):
     _campaign_or_404(cid)
     try:
         return review.remove_link(cid, lid)
+    except review.RefusedError as e:
+        raise _refusal(e) from e
+
+
+# --------------------------------------------------------- the review read
+#
+# `GET .../continuity/candidates` (§12.2): every cached finding joined, at read
+# time, to the records it names as they are now. Pure -- no model, no
+# embedding, no run, no write. The one definition of what a finding means now
+# is `pending`'s, so this read, Todo, apply and both persists cannot disagree.
+
+
+def _scene_rows(cid: str) -> list[dict] | None:
+    """The scenes that exist, or None when the list cannot be read (nothing can
+    then be said about a proposal's evidence either way)."""
+    try:
+        return store.scenes.list_scenes(cid)
+    except OSError:
+        return None
+
+
+def _strings(value) -> list[str]:
+    return [v for v in value if isinstance(v, str) and v] if isinstance(value, list) else []
+
+
+def _stale_reason(verdict: str, record: dict, scene_ids: set[str] | None) -> str | None:
+    """Why a visible finding cannot be acted on as it stands: its records moved
+    (``records``), or its proposal cites a scene that is gone (``evidence``) --
+    in the order apply checks them, so the read and apply's 409 agree."""
+    if verdict == "stale":
+        return "records"
+    if scene_ids is not None and not pending.evidence_ok(record["proposal"], scene_ids):
+        return "evidence"
+    return None
+
+
+def _candidate(current: pending.Current, key: str, record: dict, verdict: str,
+               titles: dict[str, str], scene_ids: set[str] | None, pressure: dict) -> dict:
+    reason = _stale_reason(verdict, record, scene_ids)
+    return {"id": key, "kind": record["kind"], "group": pending.GROUP_OF[record["kind"]],
+            "refs": list(record["refs"]), "fingerprint": record["fingerprint"],
+            "stale": reason is not None, "stale_reason": reason,
+            "signals": record["signals"], "proposal": record["proposal"],
+            "created": record["created"],
+            "records": pending.rows(current, record["refs"],
+                                    scene_title=lambda sid: titles.get(sid, ""),
+                                    pressure=pressure)}
+
+
+def _actor_name(cid: str, actor: str) -> str:
+    try:
+        return store.relationships.actor_name(cid, actor) or actor
+    except Exception:  # noqa: BLE001 -- a label must never be the thing that fails the read
+        return actor
+
+
+def _mentioned(found: list[dict]) -> tuple[set[str], set[str], set[str]]:
+    """The scene ids, actor refs and event refs the listed findings mention."""
+    scenes: set[str] = set()
+    actors: set[str] = set()
+    events: set[str] = set()
+    for c in found:
+        for row in c["records"]:
+            scenes.add(row["last_scene"]["id"])
+            scenes.update(b["scene"] for b in row["beats"])
+        scenes.update(_strings((c["proposal"] or {}).get("evidence_scenes")))
+        scenes.update(_strings(c["signals"].get("shared_scenes")))
+        actors.update(_strings(c["signals"].get("shared_actors")))
+        events.update(_strings(c["signals"].get("shared_anchors")))
+    scenes.discard("")
+    return scenes, actors, events
+
+
+def _names(cid: str, current: pending.Current, found: list[dict],
+           titles: dict[str, str]) -> dict[str, str]:
+    """A display name for every scene, actor and event the response mentions
+    (Decision 23), so the detail never shows a scene filename or an actor ref."""
+    scenes, actors, events = _mentioned(found)
+    names = {sid: titles.get(sid) or sid for sid in sorted(scenes)}
+    names.update((a, _actor_name(cid, a)) for a in sorted(actors))
+    names.update((e, review.describe(cid, e, current.ledgers)) for e in sorted(events))
+    return names
+
+
+def _live_reconcile(request: Request, cid: str) -> dict | None:
+    """The newest running sweep on the campaign, so the section can follow one
+    already running when it loads (End Scene's, typically)."""
+    live = [r for r in request.app.state.runs.for_subject(runs.campaign_subject(cid))
+            if r.kind == _KIND and r.state == "running"]
+    return runs.run_payload(live[-1]) if live else None
+
+
+@router.get("/campaigns/{cid}/continuity/candidates")
+def get_candidates(cid: str, request: Request):
+    _campaign_or_404(cid)
+    # Outside the hold: the scene list, and pressure, which can run user
+    # calendar-plugin code that §11.1 keeps out of every lock hold -- a slow
+    # plugin must not hold up a save or an apply behind a read.
+    rows = _scene_rows(cid)
+    titles = {r["id"]: store.fieldtext.text(r.get("title")) or r["id"] for r in rows or []}
+    scene_ids = None if rows is None else set(titles)
+    pressure = reconcile.pressure_by_ref(cid)
+    with store.locks.best_effort_campaign_lock(cid):
+        current = pending.Current.load(cid)
+        found = [_candidate(current, key, record, verdict, titles, scene_ids, pressure)
+                 for key, record, verdict in pending.findings(cid, current)
+                 if verdict in pending.VISIBLE]
+    diagnostics = {**effective.diagnostics(cid, current.ledgers),
+                   "malformed": doc.malformed(cid),
+                   "cache_malformed": candidates.malformed(cid)}
+    scenes = [{"id": r["id"], "title": titles[r["id"]]}
+              for r in reversed(reconcile.play_order(rows or []))]
+    return {"generated": candidates.read(cid)["generated"], "matching": drivers.matching(),
+            "diagnostics": diagnostics, "run": _live_reconcile(request, cid),
+            "names": _names(cid, current, found, titles), "scenes": scenes,
+            "candidates": found}
+
+
+# --------------------------------------------------- acting on one finding
+#
+# Apply, dismiss and restore (§12.3, §12.4, §12.7, §22). Each runs in one
+# campaign-lock hold; every refusal is a `review.RefusedError`. A write that
+# lands part-way answers 500 naming the parts that landed -- and stamps the
+# write token itself, because the activity middleware stamps only a 2xx.
+
+
+def _closure_label(current: pending.Current, ref: str, status: str) -> str:
+    return f"{pending.label(current, [ref])} — {status}"
+
+
+def _write_status(cid: str, checked: dict, plan: dict) -> None:
+    """A closure's or a resolution's status, on the canonical physical record,
+    with the optional beat under the reader's evidence scene and `last_scene`
+    never moved backwards (§12.4)."""
+    ref = checked["record"]["refs"][0]
+    move = (ledger_routes.move_thread if ref.startswith("thread:")
+            else ledger_routes.move_commitment)
+    move(cid, plan["target"], status=plan["status"], beat=plan["beat"],
+         scene=plan["scene"] or None, keep_later_scene=True,
+         label=_closure_label(checked["current"], ref, plan["status"]))
+
+
+def _copy_due(cid: str, checked: dict, plan: dict) -> None:
+    """The explicit due copy (§5.1): its own journalled ledger row, before the
+    merge, through the ledger's helper."""
+    canonical = plan["alias"]["to"]
+    source = review.describe(cid, plan["alias"]["ref"], checked["current"].ledgers)
+    move_label = (f"{pending.label(checked['current'], [canonical])} — "
+                  f"due copied from {source}")
+    ledger_routes.move_commitment(cid, plan["target"], due=plan["copy_due"],
+                                  label=move_label)
+
+
+def _apply_plan(cid: str, key: str, checked: dict, plan: dict, landed: list[str]) -> dict:
+    """Decision 16's write order: status, the due copy, the alias or link, then
+    the cache cleanup (`review.settle`). `landed` grows as each part lands, so
+    a failure part-way can say what did."""
+    out: dict = {}
+    if "status" in plan:
+        _write_status(cid, checked, plan)
+        landed.append("status")
+    if "copy_due" in plan:
+        _copy_due(cid, checked, plan)
+        landed.append("due")
+    if "alias" in plan:
+        alias = plan["alias"]
+        made = review.create_alias(cid, alias["ref"], alias["to"],
+                                   accept_status_change=alias["accept"], source="review")
+        landed.append("alias")
+        out["alias"] = made["alias"]
+        if "dues" in made:
+            out["dues"] = made["dues"]
+    if "link" in plan:
+        link = plan["link"]
+        out["link"] = review.create_link(cid, link["a"], link["b"], link["relation"],
+                                         scene=plan["scene"])["link"]
+        landed.append("link")
+    landed.extend(review.settle(cid, key, checked["record"], checked["fingerprint"],
+                                plan.get("decision")))
+    return out
+
+
+def _expected(body: dict) -> str | None:
+    expect = body.get("expect_fingerprint")
+    if expect is not None and not isinstance(expect, str):
+        raise review.RefusedError(400, "bad_body", "'expect_fingerprint' must be a str")
+    return expect
+
+
+def _partial_apply(cid: str, exc: Exception, landed: list[str]) -> HTTPException:
+    """The 500 for an apply an I/O error stopped part-way (§22 "partial
+    writes"), naming the parts that landed -- a `keep_open`'s settle reports
+    its own. The token is bumped here: the write may have landed, and a non-2xx
+    answer is invisible to the activity middleware."""
+    if isinstance(exc, review.PartialSettleError):
+        landed.extend(part for part in exc.landed if part not in landed)
+    store.revision.bump(cid)
+    return HTTPException(status_code=500, detail={
+        "kind": "partial_apply", "landed": landed,
+        "detail": "the finding was only partly applied: "
+                  f"{', '.join(landed) or 'nothing'} landed ({type(exc).__name__}); "
+                  "each part that did can be undone"})
+
+
+@router.post("/campaigns/{cid}/continuity/candidates/{candidate_id}/apply")
+def post_apply(cid: str, candidate_id: str, body: dict):
+    """Act on one finding (§21's flat body, a `dict` because a key is named
+    ``from`` -- Decision 15). Every part is validated before the first write."""
+    _campaign_or_404(cid)
+    landed: list[str] = []
+    try:
+        with store.locks.campaign_lock(cid):
+            checked = review.check_candidate(cid, candidate_id, _expected(body))
+            plan = review.plan_apply(cid, checked, body)
+            out = _apply_plan(cid, candidate_id, checked, plan, landed)
+    except review.RefusedError as e:
+        raise _refusal(e) from e
+    except doc.ContinuityError as e:
+        # continuity.json refused a write under the hold that checked it well
+        # formed. Nothing landed is a plain refusal; otherwise it is partial.
+        if not landed:
+            raise _refusal(review.RefusedError(409, "malformed", str(e))) from e
+        raise _partial_apply(cid, e, landed) from e
+    except OSError as e:
+        raise _partial_apply(cid, e, landed) from e
+    return {"ok": True, "applied": landed, **out}
+
+
+@router.post("/campaigns/{cid}/continuity/candidates/{candidate_id}/dismiss")
+def post_dismiss(cid: str, candidate_id: str, body: ContinuityDismiss):
+    """Set a finding aside (Decision 17): a suppression keyed by its current
+    fingerprint, then the cache drop."""
+    _campaign_or_404(cid)
+    try:
+        return review.dismiss(cid, candidate_id, body.decision or "dismiss",
+                              body.expect_fingerprint)
+    except review.RefusedError as e:
+        raise _refusal(e) from e
+    except review.PartialSettleError as e:
+        # The suppression landed (so the finding is hidden) and the drop did
+        # not: a write answered non-2xx, which the middleware cannot see.
+        store.revision.bump(cid)
+        raise HTTPException(status_code=500, detail={
+            "kind": "partial_dismiss", "landed": e.landed,
+            "detail": "the finding was set aside but could not be removed from the "
+                      "review cache; the next refresh clears it"}) from e
+    except OSError as e:
+        raise HTTPException(status_code=500, detail={
+            "kind": "io", "detail": f"the finding could not be set aside ({type(e).__name__})"},
+        ) from e
+
+
+@router.delete("/campaigns/{cid}/continuity/suppressions/{fingerprint}")
+def delete_suppression(cid: str, fingerprint: str):
+    """Restore a dismissed finding (§12.7); it returns at the next refresh."""
+    _campaign_or_404(cid)
+    try:
+        return review.restore_suppression(cid, fingerprint)
     except review.RefusedError as e:
         raise _refusal(e) from e
 

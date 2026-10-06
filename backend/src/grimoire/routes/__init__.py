@@ -14,8 +14,10 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``greetings``   /worlds/{wid}/greetings and /campaigns/{cid}/greetings
   ``campaigns``   /campaigns
   ``continuity``  /campaigns/{cid}/continuity, reviewed aliases and links,
-                  /campaigns/{cid}/continuity/drivers, and the reconciliation
-                  sweep (/campaigns/{cid}/continuity/reconcile)
+                  /campaigns/{cid}/continuity/drivers, the reconciliation
+                  sweep (/campaigns/{cid}/continuity/reconcile), and the
+                  review of its findings (/continuity/candidates, their
+                  apply and dismiss, /continuity/suppressions)
   ``scenes``      /campaigns/{cid}/scenes
   ``authors_notes`` /campaigns/{cid}/authors-notes and a scene's author's note
   ``weather``     /campaigns/{cid}/weather
