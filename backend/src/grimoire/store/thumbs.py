@@ -488,7 +488,11 @@ def thumbnail(src: Path, width: int) -> Path | None:
     """Path to a cached downscale of `src` fitted in width x width (never
     upscaled), upright and in its own colours, generating it on first request.
     None if the source is missing, not a decodable image, or animated -- each
-    a case where the caller serves the original."""
+    a case where the caller serves the original -- or a blob whose bytes no
+    longer match its name, which the caller does not serve either.
+
+    An entry already made is returned without reading the source at all,
+    integrity included: one keyed by a blob's sha was made from intact bytes."""
     st: os.stat_result | None = None
     if image_store.blob_sha_of(src) is None:
         try:

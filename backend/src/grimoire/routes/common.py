@@ -980,19 +980,11 @@ def _image_source(p: Path) -> str:
     """What `_serve_image_file`'s validators name `p` by.
 
     A content-addressed blob is named by its byte sha: the bytes are the
-    identity, so the validator is the sha (a missing blob is still a 404, from
-    the read or the thumbnail path). That name is only as good as the bytes,
-    so they are vouched for first (`image_store.blob_intact`, memoized on the
-    blob's stat): damaged ones are never served or 304'd under the sha.
-    `assets.path_in` has already passed over such a blob to the legacy file
-    beside its placement, if there was one; this is the same check closing
-    the gap between that and here, and it answers as a placement with nothing
-    to fall back to does. A legacy file has only its stat to say what it
-    holds."""
+    identity, so the validator is the sha and no stat is paid (a missing blob
+    is still a 404, from the read or the thumbnail path). A legacy file has
+    only its stat to say what it holds."""
     source = store.image_store.blob_sha_of(p)
     if source is not None:
-        if not store.image_store.blob_intact(p):
-            raise HTTPException(status_code=404, detail="image not found")
         return source
     try:
         st = p.stat()
@@ -1001,12 +993,26 @@ def _image_source(p: Path) -> str:
     return f"{st.st_mtime_ns:x}-{st.st_size:x}"
 
 
+def _require_intact(p: Path) -> None:
+    """404 for a blob whose bytes no longer match its name, before its own
+    bytes are answered for -- by a 304 or a read.
+
+    The sha is the ETag and the `?v=` token a browser keeps for good, so
+    damaged bytes served under it would be cached past the repair. Asked only
+    where the ORIGINAL is served: a thumbnail already made under the sha was
+    made from intact bytes (`thumbs.thumbnail` asks before it makes one), so
+    it is served without hashing. Every lookup that is not serving -- a
+    listing, an existence check, a promote -- sees the placement as it is."""
+    if store.image_store.blob_sha_of(p) is not None and not store.image_store.blob_intact(p):
+        raise HTTPException(status_code=404, detail="image not found")
+
+
 def _honours_version(request: Request | None, source: str) -> bool:
     """Whether this request's `?v=` makes the answer immutable.
 
     A `?v=` that names a blob is honoured by that blob alone: anything else
-    answering it (the legacy file a damaged blob fell back to) would be kept
-    for a year under a name for other bytes."""
+    answering it (a slot that has moved on to other bytes since the URL was
+    built) would be kept for a year under a name for other bytes."""
     v = request.query_params.get("v") if request is not None else None
     return v is not None and not (_BLOB_TOKEN.match(v) and v != source)
 
@@ -1066,6 +1072,7 @@ def _serve_image_file(p: Path, request: Request | None = None) -> Response:
                                 headers=headers)
         # No thumbnail: the original stands in, revalidated every time.
         cache, etag = "no-cache", f'"{source}-full"'
+    _require_intact(p)
     headers = {"Cache-Control": cache, "ETag": etag}
     if etag in asked:
         return Response(status_code=304, headers=headers)

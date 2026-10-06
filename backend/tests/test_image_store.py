@@ -270,6 +270,23 @@ def test_a_damaged_blob_is_logged_once_per_signature_and_repair_clears_it(monkey
     image_store.ingest(data, "png")             # re-ingesting the picture repairs it
     assert image_store.blob_intact(blob)
 
+def test_ingest_adopts_another_encoding_over_a_damaged_retained_blob():
+    """The same picture in another encoding names the same object; when the
+    blob it retains no longer matches its name, the newcomer's bytes are
+    adopted, exactly as for a blob that is missing."""
+    im = Image.effect_noise((32, 32), 50).convert("RGB")
+    a, b = _png(im, compress_level=9), _png(im, compress_level=0)
+    assert a != b
+    first = image_store.ingest(a, "png")
+    old = image_store.blob_path(first.blob_sha256, "png")
+    old.write_bytes(old.read_bytes()[:-5])
+    again = image_store.ingest(b, "png")
+    assert again.id == first.id
+    assert again.blob_sha256 == _sha(image_store._prepared(b, "png").data) != first.blob_sha256
+    fresh = image_store.blob_path(again.blob_sha256, "png")
+    assert image_store.blob_intact(fresh)
+    assert image_store.read(first.id).blob_sha256 == again.blob_sha256
+
 def test_index_rebuilt_after_deletion(monkeypatch):
     data = _png(_img())
     first = image_store.ingest(data, "png")

@@ -246,8 +246,11 @@ def blob_intact(path: Path) -> bool:
     A blob's name is its byte sha, and serving trusts that name: it is the
     ETag and the `?v=` token, both cached for good. Bytes that stopped matching
     it -- a truncated or damaged sync, a disk error -- would be cached under
-    that name as permanently, and kept by a 304 after the repair. So the
-    serving path and thumbnail generation ask this first.
+    that name as permanently, and kept by a 304 after the repair. So exactly
+    four places ask: serving an original (`routes.common`), making a new
+    thumbnail (`thumbs.thumbnail`; one already made is served unasked), ingest
+    (which adopts a same-id newcomer's bytes over a damaged blob, the repair)
+    and bundle export (which leaves a damaged blob out).
 
     Re-hashes the file, memoized on its stat signature (path, mtime, size,
     inode) by `statcache.memo`, whose racy-window rule applies: a blob
@@ -257,8 +260,12 @@ def blob_intact(path: Path) -> bool:
 
     False for a missing file and for a path that is not a blob's (no name to
     vouch for it). A damaged state is logged once per signature. Never raises.
-    `image_refs.resolve_ref` deliberately does not ask: a listing resolves
-    every placement it shows, and only bytes about to be served need this.
+
+    Integrity is not an existence question: `image_refs.resolve_ref`,
+    `assets.path_in` and everything built on them -- listings, existence
+    checks, promote, delete, tombstones -- see a damaged blob's placement as
+    it is, because answering "absent" there turns a serving fault into a
+    change to the store.
     """
     sha = blob_sha_of(path)
     if sha is None:
@@ -549,9 +556,12 @@ def ingest(data: bytes, ext: str, *, source_url: str | None = None) -> ImageObje
             dirty = False
             if found.blob_sha256 == sha:
                 _publish_blob(sha, found.ext, data)
-            elif not _blob_present(found):
-                # The retained blob is gone (mid-sync, partial GC): adopt these
-                # bytes rather than "succeed" into an unresolvable image.
+            elif not _blob_present(found) or not blob_intact(
+                    blob_path(found.blob_sha256, found.ext)):
+                # The retained blob is gone (mid-sync, partial GC), or its
+                # bytes no longer match its name (a damaged sync): adopt these
+                # bytes -- the same picture, by its id -- rather than "succeed"
+                # into an image that cannot be served.
                 _publish_blob(sha, ext, data)
                 raw["blob"] = _blob_fields(sha, ext, len(data), pid)
                 dirty = True
