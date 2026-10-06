@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type Availability, type SceneIdea, type SceneIdeaDraft,
+import { api, type Availability, type DriverKind, type SceneIdea, type SceneIdeaDraft,
          type SceneSuggestion } from "../api/client";
 import { errorText } from "../api/errors";
 import { ErrorNote } from "./ErrorNote";
@@ -11,6 +11,18 @@ import type { SceneSuggestionsState } from "./useSceneSuggestions";
 /** How many saved ideas the picker shows before the "show all" toggle — the
  *  same 4-slot budget the greeting and generated groups share between them. */
 const SAVED_SLOTS = 4;
+
+/** What a finished driver or anchor has become, by kind, on a saved idea's row
+ *  (§17's `finished`): a thread closes, a commitment resolves, and a day --
+ *  an event, a birthday or a holiday occurrence -- passes. */
+const FINISHED_WORDS: Record<DriverKind, string> = {
+  thread: "closed", commitment: "resolved", event: "passed", birthday: "passed",
+  holiday: "passed",
+};
+
+function finishedSuffix(r: { kind: DriverKind; state: "live" | "finished" }): string {
+  return r.state === "finished" ? ` (${FINISHED_WORDS[r.kind]})` : "";
+}
 
 /** The generated half of the picker (suggestions/picks/nextDate/busy/error/
  *  suggest) and the typed `direction` both live in `NewSceneChooser` now, not
@@ -257,6 +269,21 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
           <span className="field-hint">
             {i.cast.map((c) => c.name).join(", ")}{i.location ? ` · ${i.location.name}` : ""}
           </span>
+          {/* Why it was kept, as the read derives it on every load (§17): the
+              same lines a generated card draws (§16.4), less the date the
+              stored idea no longer vouches for. A finished driver stays, as
+              provenance, but drops `on` and says what it became. */}
+          {i.time_anchor && (
+            <span className="field-hint">
+              {`${i.time_anchor.relation} ${i.time_anchor.label}${finishedSuffix(i.time_anchor)}`}
+            </span>
+          )}
+          {(i.drivers ?? [])
+            .filter((d) => !(d.action === "anchor" && d.ref === i.time_anchor?.ref)).map((d) => (
+            <span className={d.state === "finished" ? "chip" : "chip on"} key={d.ref}>
+              {`${ACTION_LABELS[d.action]}: ${d.label}${finishedSuffix(d)}`}
+            </span>
+          ))}
           {i.stale_reason && <span className="field-hint">{i.stale_reason}</span>}
         </button>
         <button className="subtle" aria-label={`Dismiss ${i.title}`}
