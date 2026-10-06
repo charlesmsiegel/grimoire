@@ -589,13 +589,21 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
     ref and the batch anchor overrides the model's, so the claimed result
     could never show either miss; and the notation half of `date_consistent`,
     because the tolerant normalizer reads the friendly form too.
+
+    Every check reads only the entries the app keeps (`suggest.is_card`: a
+    title and a premise). A dropped entry is no card the player sees, so it
+    covers no focus and makes no batch distinct; and its raw refs, anchor and
+    date are not graded either, since none of them reaches the player. A reply
+    whose every entry is dropped fails `suggest.json`, as one that decodes to
+    nothing does.
     """
     raw = suggest.raw_suggestions(text)
-    if not raw:
+    entries = [e for e in raw or [] if suggest.is_card(e)]
+    if not entries:
         return [Check("suggest.json", False,
                       "no suggestion list recoverable from the reply" if raw is None
-                      else "the reply decoded to no suggestions")]
-    entries = [e for e in raw if isinstance(e, dict)]
+                      else "the reply decoded to no suggestions" if not raw
+                      else "every suggestion lacks a title or a premise")]
     claims = [suggest.claim(e, snapshot, controls) for e in entries]
     kinds = {d["ref"]: d["kind"] for d in snapshot.get("driver_index", [])}
     anchors = {a["ref"] for a in snapshot.get("anchors", [])}

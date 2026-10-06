@@ -165,8 +165,10 @@ change there fails at build rather than leaving a recording citing a scene the
 parser would refuse. A verdict check reads the decision word alone, and
 `reconcile.evidence` judges the citation, so "the wrong call" and "the right
 call, unfounded" stay separable.
-`scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`
-and judges claims and dates with `suggest.claim` and `suggest.check_date`, but
+`scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`,
+keeps only the entries `suggest.is_card` keeps (a title and a premise, the
+cards the player is shown), and judges claims and dates with `suggest.claim`
+and `suggest.check_date`, but
 scores two things raw: `suggest.known_refs` and `suggest.anchor_known` read the
 model's own `drivers` and `time_anchor`, because `claim` drops an unknown ref
 and the batch anchor overrides the model's, so the claimed result could never

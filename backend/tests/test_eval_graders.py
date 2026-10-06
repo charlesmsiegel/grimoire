@@ -856,6 +856,41 @@ def test_suggest_clone_fails_coverage_and_distinct():
     assert "suggest.distinct" in _suggest(rows)
 
 
+def test_suggest_dropped_card_does_not_cover_focus():
+    """A card the app drops (blank title or premise) is no card the player
+    sees, so it serves no focus and makes no batch distinct -- the grader
+    reads the set `suggest.parse_output` keeps, through the same predicate."""
+    rows = _compliant()
+    rows[1]["premise"] = ""                                 # the only ledger card
+    assert _suggest(rows) == {"suggest.focus_coverage"}
+    rows = _compliant()
+    rows[1]["title"] = "   "
+    assert _suggest(rows) == {"suggest.focus_coverage"}
+    # two of three dropped leaves a single card: no spread either
+    rows = _compliant()
+    rows[1]["premise"] = rows[2]["premise"] = ""
+    assert _suggest(rows) == {"suggest.focus_coverage", "suggest.distinct"}
+    # every card dropped: nothing the app would show
+    rows = _compliant()
+    for row in rows:
+        row["premise"] = ""
+    checks = graders.grade_scene_suggestions(json.dumps({"suggestions": rows}),
+                                             _suggest_snapshot(), SUGGEST_BEFORE, GREG)
+    assert [(c.name, c.ok) for c in checks] == [("suggest.json", False)]
+    # a dropped card's raw content is not graded: it never reaches the player
+    rows = _compliant()
+    rows.append(_suggestion("", "2026-05-30", ("thread:maras-compass", "advance"),
+                            anchor="event:the-debt"))
+    assert _suggest(rows) == set()
+
+
+def test_suggest_is_card_matches_what_parse_output_keeps():
+    assert suggest.is_card({"title": "Mara's map", "premise": "Played out."})
+    for entry in ({"title": "", "premise": "x"}, {"title": "x", "premise": "  "},
+                  {"title": "x"}, "Mara's map", None, ["x"]):
+        assert not suggest.is_card(entry), entry
+
+
 def test_suggest_bad_date_fails_date_consistent():
     """After D under `before` is rejected; so is no date at all, since a
     `before` batch has nothing to derive one from."""
