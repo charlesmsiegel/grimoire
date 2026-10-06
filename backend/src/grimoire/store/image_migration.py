@@ -658,6 +658,21 @@ def _run_fields(dry_run: bool) -> dict:
     }
 
 
+def _linked_slot(root: Path, d: Path, name: str | None = None) -> bool:
+    """Whether a write in `d` could land outside `root`: `d` reached through
+    a symlink (`image_surfaces.linked`), its ``image-refs/`` folder a symlink,
+    or -- for `name` -- that placement file itself one. `linked` checks the
+    components from the root down to `d` only; a placement is written one
+    and two levels below it, and a link there would put the placement the
+    legacy file is then deleted behind somewhere else entirely."""
+    if image_surfaces.linked(root, d) or (d / image_refs.REFS_DIR).is_symlink():
+        return True
+    try:
+        return name is not None and image_refs.ref_path(d, name).is_symlink()
+    except ValueError:
+        return True
+
+
 def _same_root(root: Path) -> bool:
     try:
         return paths.home().resolve() == root
@@ -724,11 +739,10 @@ class _Exec:
         if not _same_root(self.root):
             raise _RootChangedError(step)
 
-    def guard_dir(self, step: str, d: Path) -> bool:
-        """`guard`, and whether `d` may be written in: never a directory the
-        walk would report as reached through a symlink."""
+    def guard_dir(self, step: str, d: Path, name: str | None = None) -> bool:
+        """`guard`, and whether `d` may be written in (`_linked_slot`)."""
         self.guard(step)
-        return not image_surfaces.linked(self.root, d)
+        return not _linked_slot(self.root, d, name)
 
     def skip(self, p: Path, reason: str) -> None:
         self.out["skipped"].append({"path": self.plan.rel(p), "reason": reason})
@@ -867,7 +881,7 @@ def _drop_thumbs(ex: _Exec, rel: str, st: os.stat_result) -> None:
     ex.guard("before-thumbnails")
     for key in thumbs.legacy_keys(rel, st):
         p = ex.root / key
-        if p.is_file() and not p.is_symlink():
+        if p.is_file() and not image_surfaces.linked(ex.root, p):
             with suppress(FileNotFoundError):
                 p.unlink()
                 ex.out["thumbnails_removed"] += 1
@@ -887,6 +901,20 @@ def _drop_focus_file(ex: _Exec, d: Path, moved: bool) -> bool:
     return True
 
 
+def _move_focus(ex: _Exec, d: Path, focus: int | None) -> bool:
+    """`focus.json` after its crop moved onto a placement written over a
+    legacy avatar: dropped only while it still reads as that crop. One that
+    did not read (unreadable, garbled, changed since) stays, reported: the
+    placement was written without it, and it is the only copy of the crop."""
+    p = d / assets.FOCUS_FILE
+    if not (p.exists() or p.is_symlink()):
+        return False
+    if focus is None or _focus_file(d) != focus:
+        ex.keep(p, assets.AVATAR, "focus-not-moved")
+        return False
+    return _drop_focus_file(ex, d, True)
+
+
 def _reread(ex: _Exec, item: Item) -> bytes | None:
     """The item's file again, when it is still exactly what was hashed."""
     assert item.occurrence.path is not None
@@ -903,7 +931,10 @@ def _item(ex: _Exec, item: Item) -> None:
     occ = item.occurrence
     assert occ.path is not None
     rel = ex.plan.rel(occ.path)
-    ex.guard("before-ingest")
+    if not ex.guard_dir("before-ingest", occ.dir, occ.name):
+        # Not even a promotion recovery: it writes placements in there.
+        ex.skip(occ.path, image_surfaces.SYMLINKED)
+        return
     assets.recover_promotion(occ.dir)
     data = _reread(ex, item)
     if data is None:
@@ -928,7 +959,7 @@ def _item(ex: _Exec, item: Item) -> None:
 
 
 def _placement_for(ex: _Exec, item: Item) -> tuple[bool, int | None, bool] | None:
-    """Under the name lock: `(written, focus, focus came from focus.json)`
+    """Under the name lock: `(written, focus, written over a legacy avatar)`
     once a placement of the item's picture is there -- written now when there
     was none -- or None when the slot holds another picture, which is never
     overwritten (M8.3). An image-less placement (a crop override) is filled
@@ -948,7 +979,7 @@ def _placement_for(ex: _Exec, item: Item) -> tuple[bool, int | None, bool] | Non
     focus = ref.focus if ref is not None else (_focus_file(occ.dir) if legacy else None)
     _write_placement(occ.dir, occ.name, item.image_id, focus)
     ex.out["placed"] += 1
-    return True, focus, legacy and focus is not None
+    return True, focus, legacy
 
 
 def _place_and_clean(ex: _Exec, item: Item, blob: str) -> bool:
@@ -957,7 +988,7 @@ def _place_and_clean(ex: _Exec, item: Item, blob: str) -> bool:
     assert occ.path is not None
     rel = ex.plan.rel(occ.path)
     now = _lstat(occ.path)
-    if not ex.guard_dir("before-place", occ.dir):
+    if not ex.guard_dir("before-place", occ.dir, occ.name):
         ex.skip(occ.path, image_surfaces.SYMLINKED)
         return False
     if now is None or not stat.S_ISREG(now.st_mode) or _snap(now) != item.stat:
@@ -983,7 +1014,9 @@ def _place_and_clean(ex: _Exec, item: Item, blob: str) -> bool:
         written = True
         _drop_thumbs(ex, rel, now)
     if occ.name == assets.AVATAR:
-        written = _drop_focus_file(ex, occ.dir, moved) or written
+        dropped = (_move_focus(ex, occ.dir, focus) if moved
+                   else _drop_focus_file(ex, occ.dir, False))
+        written = dropped or written
     return _fold_keys(ex, occ, item.image_id) or written
 
 
@@ -1010,7 +1043,8 @@ def _delete_key_if(ex: _Exec, side: Path, key: str, value: object) -> bool | Non
     emptied sidecar goes with it. True when deleted, None when the key is
     already gone, False when it now holds something else (fold again)."""
     if not ex.guard_dir("before-key-delete", side.parent):
-        return False
+        ex.keep(side, key, image_surfaces.SYMLINKED)
+        return None
     cur = _sidecar_now(ex, side)
     if cur is None or key not in cur:
         return None if cur is not None else False
@@ -1186,6 +1220,8 @@ def _target_verified(ex: _Exec, occ: Occurrence, image_id: str) -> bool:
         return False
     if (occ.target, occ.name) in ex.verified:
         return True
+    if _linked_slot(ex.root, occ.target, occ.name):
+        return False
     ref = image_refs.read(occ.target, occ.name)
     return (ref is not None and ref.image == image_id
             and _object_under(ex.root, image_id))
@@ -1206,7 +1242,8 @@ def _override(ex: _Exec, occ: Occurrence) -> bool:
         if focus is None:
             ex.keep(side, assets.AVATAR, "unreadable-focus")
             return False
-        if not ex.guard_dir("before-override", d):
+        if not ex.guard_dir("before-override", d, assets.AVATAR):
+            ex.keep(side, assets.AVATAR, image_surfaces.SYMLINKED)
             return False
         image_refs.write(d, assets.AVATAR, None, focus=focus)
         if image_refs.read(d, assets.AVATAR) != image_refs.Ref(assets.AVATAR, None, focus):
@@ -1223,8 +1260,8 @@ def _dropped_focus(ex: _Exec, occ: Occurrence) -> bool:
     the AVATAR name lock, and nothing folds."""
     with locks.image_name_lock(occ.dir, assets.AVATAR):
         ref = image_refs.read(occ.dir, assets.AVATAR)
-        if ref is None or ref.image is None:
-            return False            # the placement went meanwhile: leave the crop
+        if ref is None or ref.image is None or _linked_slot(ex.root, occ.dir, assets.AVATAR):
+            return False            # gone meanwhile, or not ours to trust: leave the crop
         return _drop_focus_file(ex, occ.dir, False)
 
 
@@ -1381,7 +1418,8 @@ def _convert(ex: _Exec, rel: str) -> None:
         _rekey(ex, wid, collection, members, delete=False)
 
     try:
-        if image_collections.convert_format1(ex.root, wid, collection, before=carry):
+        if image_collections.convert_format1(ex.root, wid, collection, before=carry,
+                                             guard=partial(ex.guard, "before-manifest")):
             ex.out["collections_converted"].append(rel)
     except image_collections.CollectionInvalidError as exc:
         ex.out["collections_kept"].append({"path": rel, "reason": str(exc)})
@@ -1444,7 +1482,8 @@ def _journals(ex: _Exec) -> None:
 
 def _journal(ex: _Exec, wid: str, p: Path) -> None:
     if ex.guard_dir("before-journal", p.parent):
-        got = image_collection_imports.convert_or_retire(wid, p)
+        got = image_collection_imports.convert_or_retire(
+            wid, p, guard=partial(ex.guard, "before-journal-retire"))
         if got != image_collection_imports.FORMAT2:
             ex.out["journals"][got] += 1
 
@@ -1501,7 +1540,8 @@ def _execute(ex: _Exec) -> None:
         return
     _attempt(ex, None, partial(_journals, ex))
     ex.guard("before-map-delete")
-    work_map_path(ex.root).unlink(missing_ok=True)
+    if not image_surfaces.linked(ex.root, work_map_path(ex.root)):
+        work_map_path(ex.root).unlink(missing_ok=True)
 
 
 def _safe_map(root: Path) -> dict[str, list[str]]:

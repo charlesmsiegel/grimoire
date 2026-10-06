@@ -47,20 +47,19 @@ from grimoire.store import (
 )
 from tests.collection_fixtures import format1_journal, place
 
-_DEFAULT_STORE = Path.home() / ".grimoire"
+#: The temp store every test here runs against; `_run` refuses any other.
+_HOME: list[Path] = []
 
 
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):
-    """Every run here is against a temp store, and nothing outside `tmp_path`
-    changes: the default store a stray `paths.home()` would fall back to is
-    compared before and after each test (read only)."""
+    """Every run here is against a temp store under `tmp_path`."""
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("GRIMOIRE_HOME", str(home))
-    before = _tree(_DEFAULT_STORE)
+    _HOME[:] = [home.resolve()]
     yield
-    assert _tree(_DEFAULT_STORE) == before
+    _HOME.clear()
 
 
 def _img(seed: int = 0, size=(24, 16)) -> Image.Image:
@@ -112,7 +111,7 @@ def _root() -> Path:
 
 def _run(**kw) -> dict:
     root = _root()
-    assert root != _DEFAULT_STORE.resolve()
+    assert _HOME and root == _HOME[0], "a run here only ever migrates the test's own store"
     return image_migration.run(root, dry_run=kw.pop("dry_run", False), **kw)
 
 
@@ -462,16 +461,25 @@ def test_an_edit_during_the_fold_is_not_lost(monkeypatch):
     _legacy(gdir, "art_1.png", _png(4))
     _sidecar(gdir, "descriptions.json", {"art_1": "Original"})
     _sidecar(gdir, "subjects.json", {"art_1": ["seraphine"]})
-    real = image_store.update
-    edited = []
+    calls = {"text": 0, "subjects": 0}
+    real_text, real_subjects = image_migration._with_text, image_migration._with_subjects
 
-    def edit_then_update(image_id, change):
-        if not edited:
-            edited.append(True)
+    # Each edit lands inside ITS OWN fold's `update` -- after the key was
+    # read, before its compare-and-delete -- as a sync client writing the
+    # sidecar behind the lock would.
+    def text_edited(raw, value, label, state):
+        calls["text"] += 1
+        if calls["text"] == 1:
             _sidecar(gdir, "descriptions.json", {"art_1": "Edited"})
+        return real_text(raw, value, label, state)
+
+    def subjects_edited(raw, scope, cids):
+        calls["subjects"] += 1
+        if calls["subjects"] == 1:
             _sidecar(gdir, "subjects.json", {"art_1": ["seraphine", "mara"]})
-        return real(image_id, change)
-    monkeypatch.setattr(image_migration.image_store, "update", edit_then_update)
+        return real_subjects(raw, scope, cids)
+    monkeypatch.setattr(image_migration, "_with_text", text_edited)
+    monkeypatch.setattr(image_migration, "_with_subjects", subjects_edited)
 
     rep = _run()
 
@@ -482,6 +490,8 @@ def test_an_edit_during_the_fold_is_not_lost(monkeypatch):
     for f in ("descriptions.json", "subjects.json"):
         left = _json(gdir / f) if (gdir / f).exists() else {}
         assert "art_1" not in left
+    # Both compare-and-deletes saw the edit and folded again.
+    assert calls == {"text": 2, "subjects": 2}
 
 
 def test_a_concurrent_upload_during_migration_is_kept(monkeypatch):
@@ -836,6 +846,79 @@ def test_a_cancelled_run_still_reports():
 
     assert rep["outcome"] == "cancelled" and rep["placed"] == 1
     assert first.exists() != second.exists()
+
+
+@pytest.mark.parametrize("linked", ["refs-folder", "ref-file"])
+def test_a_symlinked_placement_is_never_written_through(tmp_path, linked):
+    """`image-refs/` (or the placement file in it) linked outside the pinned
+    root: the placement would land there and the legacy file go behind it."""
+    _wid, _wroot, _char, wchar = _world()
+    avatar = _legacy(wchar, "avatar.png", _png(1))
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    if linked == "refs-folder":
+        (wchar / image_refs.REFS_DIR).symlink_to(outside, target_is_directory=True)
+    else:
+        (wchar / image_refs.REFS_DIR).mkdir()
+        (wchar / image_refs.REFS_DIR / "avatar.json").symlink_to(outside / "avatar.json")
+
+    rep = _run()
+
+    assert list(outside.iterdir()) == []
+    assert avatar.read_bytes() == _png(1)
+    assert rep["legacy_deleted"] == 0 and rep["placed"] == 0
+    assert {s["reason"] for s in rep["skipped"]} == {"symlinked-directory"}
+
+
+def test_an_unreadable_legacy_focus_is_kept(monkeypatch):
+    """The crop could not be read when the placement was written: the file
+    is its only copy, so it stays."""
+    _wid, _wroot, _char, wchar = _world()
+    avatar = _legacy(wchar, "avatar.png", _png(1))
+    focus = _sidecar(wchar, "focus.json", {"avatar": 40})
+    monkeypatch.setattr(image_migration, "_focus_file", lambda d: None)   # EACCES, say
+
+    rep = _run()
+
+    assert not avatar.exists() and image_refs.read(wchar, "avatar").focus is None
+    assert _json(focus) == {"avatar": 40}
+    assert any(k["reason"] == "focus-not-moved" for k in rep["keys_kept"])
+    assert rep["focus_moved"] == 0 and rep["focus_dropped"] == 0
+
+
+def test_a_root_flip_during_a_conversion_leaves_the_manifest_format_1(tmp_path, monkeypatch):
+    wid, wroot, _char, _wchar = _world()
+    lib = wroot / "assets" / world_images.DIRNAME
+    manifest = _manifest(wroot, [_member_file(lib, _png(11))])
+    other, _theirs = _other_root(tmp_path)
+    real = image_migration._rekey
+
+    def flip(ex, *a, **kw):
+        real(ex, *a, **kw)
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+    monkeypatch.setattr(image_migration, "_rekey", flip)
+
+    rep = _run()
+
+    assert rep["outcome"] == "root-changed" and rep["stopped_at"] == "before-manifest"
+    assert _json(manifest)["format"] == 1 and wid
+
+
+def test_a_root_flip_before_a_journal_retires_keeps_it(tmp_path, monkeypatch):
+    wid, _wroot, _char, _wchar = _world()
+    journal = format1_journal(wid, "https://example.test/b", "b" * 32,
+                              [image_collections.MEMBER_PREFIX + "0" * 64])
+    other, _theirs = _other_root(tmp_path)
+
+    def unmappable(*_a, **_k):
+        monkeypatch.setenv("GRIMOIRE_HOME", str(other))
+        raise image_collections.CollectionInvalidError("collection member is missing")
+    monkeypatch.setattr(image_collection_imports, "_read", unmappable)
+
+    rep = _run()
+
+    assert rep["outcome"] == "root-changed" and rep["stopped_at"] == "before-journal-retire"
+    assert journal.exists()
 
 
 # ---- what may never migrate ---------------------------------------------------------

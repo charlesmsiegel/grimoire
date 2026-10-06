@@ -34,9 +34,17 @@ def _default_home_never_the_real_one(tmp_path_factory):
     A test that calls `monkeypatch.undo()` mid-test (to lift a fault it
     injected) also undoes that per-test patch, and the rest of the test would
     then resolve the real `~/.grimoire`. Patched once for the session, outside
-    every test's `monkeypatch`, what an undo restores is this directory."""
+    every test's `monkeypatch`, what an undo restores is this directory.
+
+    The bootstrap pointer gets the same floor: an undo also restores
+    `paths.pointer_path`, and the real one names the developer's own library
+    (`~/.grimoire.json`), which a stray `paths.home()` would then follow. A
+    session pointer that is never written resolves nothing but this tree."""
+    floor = tmp_path_factory.mktemp("default-home")
+    pointer = tmp_path_factory.mktemp("bootstrap-pointer") / ".grimoire.json"
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(paths, "DEFAULT_HOME", tmp_path_factory.mktemp("default-home"))
+        mp.setattr(paths, "DEFAULT_HOME", floor)
+        mp.setattr(paths, "pointer_path", lambda: pointer)
         yield
 
 
