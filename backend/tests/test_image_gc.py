@@ -58,15 +58,6 @@ def _machine(monkeypatch, tmp_path_factory):
     return machine
 
 
-@pytest.fixture(autouse=True)
-def _pending(monkeypatch):
-    """The migration's pending entries (Task 4's `image_migration.pending_ids`).
-    Stood in only where this tree predates it; where it exists, the real one
-    reads the (absent) map."""
-    if not hasattr(image_migration, "pending_ids"):
-        monkeypatch.setattr(image_migration, "pending_ids", lambda root: set(), raising=False)
-
-
 @pytest.fixture
 def root(tmp_path, monkeypatch) -> Path:
     home = tmp_path / "home"
@@ -280,7 +271,7 @@ def test_manifests_journals_staging_and_pending_map_entries_are_roots(root, monk
         asked.append(r)
         return {pending.id}
 
-    monkeypatch.setattr(image_migration, "pending_ids", pending_ids, raising=False)
+    monkeypatch.setattr(image_migration, "pending_ids", pending_ids)
 
     _scan(root, now=T)
     report = _scan(root, now=LATER)
@@ -305,7 +296,7 @@ def test_an_unreadable_manifest_journal_or_map_aborts(root, monkeypatch, what):
         def garbled(r):
             raise ValueError("the work map does not parse")
 
-        monkeypatch.setattr(image_migration, "pending_ids", garbled, raising=False)
+        monkeypatch.setattr(image_migration, "pending_ids", garbled)
     p.parent.mkdir(parents=True)
     p.write_text(body, encoding="utf-8")
     _scan(root, now=T)
