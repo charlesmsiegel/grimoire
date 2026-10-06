@@ -667,6 +667,58 @@ def test_stale_apply_returns_409_with_current_records(client):
     assert _files(cid) == before
 
 
+def _overdue_oath_moved(client) -> tuple[str, dict]:
+    """An overdue oath's resolution finding, read, and then made stale by a new
+    beat. Returns the campaign and the row the read showed for the oath."""
+    cid, sid = _campaign(client)
+    store.clock.advance(cid, to="2026-05-01")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "2026-05-05", "Mara swore it.", sid)
+    store.clock.advance(cid, to="2026-05-10")
+    _sweep(cid)
+    (read,) = _listed(client, cid)[RESOLVE_OATH]["records"]
+    assert read["pressure"]["state"] == "overdue"
+    store.commitments.set_movement(cid, "mara-s-oath", "", "", "", None,
+                                   "Mara hesitated.", sid)
+    return cid, read
+
+
+@pytest.mark.parametrize("act", ["apply", "dismiss"])
+def test_a_stale_409_carries_each_rows_pressure(client, monkeypatch, act):
+    """§12.9, §22 step 5: the 409's records are the read's rows (§12.2), so
+    the detail laid over from them still says the oath is overdue -- and the
+    pressure behind them is computed outside the hold, as the read's is."""
+    cid, read = _overdue_oath_moved(client)
+    calls = []
+    real = reconcile.pressure_by_ref
+
+    def watched(c):
+        assert not locks.campaign_lock(c)._is_owned()
+        calls.append(c)
+        return real(c)
+
+    monkeypatch.setattr(reconcile, "pressure_by_ref", watched)
+    r = (_apply(client, cid, RESOLVE_OATH, {"op": "resolve", "status": "fulfilled"})
+         if act == "apply" else _dismiss(client, cid, RESOLVE_OATH))
+
+    assert r.status_code == 409, r.text
+    assert r.json()["kind"] == "stale_candidate"
+    (row,) = r.json()["current"]["records"]
+    assert row["pressure"] == read["pressure"]
+    assert calls == [cid]
+
+
+def test_an_apply_that_lands_runs_no_pressure_pass(client, monkeypatch):
+    """Pressure is only for a 409's rows: an apply that lands never pays for
+    a calendar-plugin pass it has no row to put it on."""
+    cid, _sid = _seeded(client)
+    monkeypatch.setattr(reconcile, "pressure_by_ref", lambda c: pytest.fail("no pressure"))
+
+    r = _apply(client, cid, PAIR, {"op": "alias", "canonical": LEDGER})
+
+    assert r.status_code == 200, r.text
+
+
 def test_resubmitting_against_the_current_fingerprint_applies(client):
     """§12.9: the reader looked at the 409's records and resubmits."""
     cid, _sid = _seeded(client)
