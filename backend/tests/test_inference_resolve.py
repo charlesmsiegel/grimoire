@@ -651,13 +651,16 @@ def test_each_attempt_carries_its_provider_facts_and_capabilities(at_state):
     # The same answer the standalone resolver gives, read once per attempt.
     assert local.capabilities == capabilities.caps_for(raw)
     assert tuple(local.capabilities) == capabilities.NAMES
-    assert local.controls == {}
+    # Its controls are the gateway's decision for the lowered connection.
+    assert local.controls == llm_sampling.effective(local.conn)
+    assert list(local.controls["controls"]) == list(llm_sampling.CONTROLS)
     spare_raw = store.llm_connections.read_connection_raw("spare")
     # OpenRouter's URL is its preset's: the connection carries none of its own.
     assert (spare.provider_kind, spare.base_url, spare.rev, spare.billing,
             spare.provider_preset) == ("openrouter", "https://openrouter.ai/api/v1",
                                        spare_raw["rev"], "metered", "openrouter")
     assert spare.capabilities == capabilities.caps_for(spare_raw, "vendor/spare")
+    assert spare.controls == llm_sampling.effective(spare.conn)
 
 
 def test_a_subscription_connection_reports_its_billing(at_state):

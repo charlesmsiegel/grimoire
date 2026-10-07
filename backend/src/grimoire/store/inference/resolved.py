@@ -51,7 +51,9 @@ class Attempt:
     facts: dict = field(default_factory=dict)
     #: Every capability name -> `Cap(value, source)` (`capabilities.resolve_caps`).
     capabilities: dict[str, Cap] = field(default_factory=dict)
-    #: Effective controls (spec 8); empty until they are resolved.
+    #: Effective controls (spec 8): `llm_sampling.effective(conn)` -- what each
+    #: preset control sends on this attempt and why. Empty only on an attempt
+    #: built by hand.
     controls: dict = field(default_factory=dict)
 
 

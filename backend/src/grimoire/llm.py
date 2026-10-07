@@ -488,10 +488,14 @@ def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
     # also what a context-length overflow or an unknown model id gets, and with
     # a preset attached those must still reach the fallback and the health
     # verdict exactly as they did before presets existed. Matched on every
-    # spelling a provider might echo back: the canonical name, the wire
-    # duplicate (`repeat_penalty`), and the hyphen/space forms prose uses.
+    # spelling a provider might echo back: the canonical name, the wire name
+    # it was sent under (`max_completion_tokens`, `stop_sequences`,
+    # `reasoning`, `thinking`), the wire duplicate (`repeat_penalty`), and the
+    # hyphen/space forms prose uses.
     detail = (exc.detail or "").lower()
-    spellings = {name: {name, name.replace("_", "-"), name.replace("_", " ")}
+    wires = llm_sampling.effective(conn)["controls"] if sent else {}
+    spellings = {name: {name, name.replace("_", "-"), name.replace("_", " "),
+                        wires[name]["wire"] or name}
                  for name in sent}
     spellings.get("repetition_penalty", set()).add("repeat_penalty")
     if not any(form in detail for forms in spellings.values() for form in forms):
@@ -879,25 +883,33 @@ class LLMClient:
 
     def _provider(self, messages: list[dict], conn: dict, usage: dict | None):
         kind = conn.get("kind", "openrouter")
-        # Split per ATTEMPT against that attempt's own connection, so a fallback
-        # of a different kind is held to what ITS backend takes. Passed only
-        # when there is something to send: a provider call with no preset is
-        # byte-for-byte the call it was before presets existed.
+        # Decided per ATTEMPT against that attempt's own connection, so a
+        # fallback of a different kind is held to what ITS backend takes
+        # (`llm_sampling.effective`, the one function that decides). Passed
+        # only when there is something to send: a provider call with no preset
+        # is byte-for-byte the call it was before presets existed.
+        controls = llm_sampling.effective(conn)
         applied, dropped = llm_sampling.split(conn)
+        reasoning = llm_sampling.reasoning_wire(controls)
         if dropped:
             log.debug("sampler preset on %r: not sent %s", _label(conn),
                       ", ".join(f"{d['param']} ({d['reason']})" for d in dropped))
-        extra = {"sampling": applied} if applied else {}
         if kind == "claude":
             return self._claude.stream(messages, effective_model(conn), usage=usage)
+        # Task 7 (the `anthropic` adapter) dispatches here, handing the adapter
+        # the whole body share: `effective=controls["effective"]`.
         if kind == "openai_compatible":
+            # Its reasoning travels as the adapter's own keyword, as the GLM
+            # setting always has (`llm_reasoning.glm_effort`, via `effective`).
+            effort = reasoning.get("reasoning_effort", "")
             return self._openai_compatible.stream(
                 messages, conn.get("model", ""), conn.get("api_key", ""),
                 conn.get("base_url", ""), strict=conn.get("post_process") == "strict",
-                usage=usage, **({"reasoning_effort": llm_reasoning.glm_effort(conn)}
-                                if llm_reasoning.glm_effort(conn) else {}), **extra)
+                usage=usage, **({"reasoning_effort": effort} if effort else {}),
+                **({"sampling": applied} if applied else {}))
+        sampling = {**applied, **reasoning}
         return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""),
-                                       usage=usage, **extra)
+                                       usage=usage, **({"sampling": sampling} if sampling else {}))
 
     def stream(self, messages: list[dict], conn: dict, usage: dict | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place

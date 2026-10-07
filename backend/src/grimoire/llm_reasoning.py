@@ -63,10 +63,19 @@ def from_chunk(obj, usage):
         feed(usage, text)
 
 
+#: The GLM models that take `reasoning_effort`, and the levels they take.
+GLM_MODELS = ("glm-5.3", "glm-5.3-flash")
+GLM_EFFORTS = ("low", "high", "max")
+
+
+def is_glm(conn):
+    """Whether `conn`'s model is one `glm_effort` speaks for."""
+    return str(conn.get("model", "")).lower().split("/")[-1] in GLM_MODELS
+
+
 def glm_effort(conn):
-    model = str(conn.get("model", "")).lower().split("/")[-1]
     effort = conn.get("reasoning_effort", "")
-    return effort if model in ("glm-5.3", "glm-5.3-flash") and effort in ("low", "high", "max") else ""
+    return effort if is_glm(conn) and effort in GLM_EFFORTS else ""
 
 
 async def stream(client, messages, conn, usage):

@@ -81,7 +81,7 @@ def read_preset(pid: str) -> dict | None:
     name = data.get("name")
     return {"id": pid,
             "name": name if isinstance(name, str) and name.strip() else pid,
-            "params": {k: v for k, v in params.items() if k in llm_sampling.NAMES}
+            "params": {k: v for k, v in params.items() if k in llm_sampling.CONTROLS}
             if isinstance(params, dict) else {},
             "notes": data.get("notes") if isinstance(data.get("notes"), str) else "",
             "source": data.get("source") if isinstance(data.get("source"), str) else ""}
@@ -329,6 +329,11 @@ def _map_one(name: str, key: str, value: object, include_max_tokens: bool,
 
 def from_sillytavern(data: object, include_max_tokens: bool = False) -> tuple[dict, dict]:
     """A SillyTavern preset as `(params, report)`.
+
+    Only the nine sampler parameters are mapped (`ST_KEYS`). A reasoning field
+    is not: SillyTavern's names a provider's own levels, not grimoire's
+    provider-neutral `reasoning_effort`, so it is listed as unmapped like any
+    other key this import does not carry.
 
     `report` has five lists -- `mapped`, `neutral`, `skipped`, `invalid`,
     `unmapped` -- plus `notes`. ValueError for anything that is not a JSON
