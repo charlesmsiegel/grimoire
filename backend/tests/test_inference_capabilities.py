@@ -349,7 +349,7 @@ def test_caps_for_never_raises(home):
 
 
 def test_caps_for_none_is_all_unknown():
-    got = capabilities.caps_for(None)  # type: ignore[arg-type]
+    got = capabilities.caps_for(None)
     assert all(c == Cap("unknown", "unknown") for c in got.values())
 
 
@@ -369,11 +369,17 @@ def test_openai_preset_without_catalog_vision_sends_no_images(home):
     config.write_config(send_images="on")
     conn = _conn(base_url="https://api.openai.com/v1", model="mara-7b")
     assert providers.infer(conn).id == "openai"
+    # The setting is on, so a zero below is the capability's answer, not the limit's.
+    assert post_images.limit() > 0
     assert post_images.capability(conn) == "unknown"
     assert post_images.images_for(conn) == 0
     llm_connections.set_cached_models(conn["id"], [{"id": "mara-7b", "outputs": ["text"]}],
                                       conn["rev"])
     assert post_images.capability(conn) == "unknown"
+    assert post_images.images_for(conn) == 0
+    llm_connections.set_cached_models(conn["id"], [{"id": "mara-7b", "vision": False}],
+                                      conn["rev"])
+    assert post_images.capability(conn) == "no"
     assert post_images.images_for(conn) == 0
 
 

@@ -176,7 +176,7 @@ def _facts(conn_id: str, model: str, rev: str) -> dict:
         return {}
 
 
-def caps_for(conn: dict, model: str | None = None) -> dict[str, Cap]:
+def caps_for(conn: dict | None, model: str | None = None) -> dict[str, Cap]:
     """`resolve_caps` for `conn`'s model (or `model`), reading its preset,
     cached catalog row and model facts. Never raises: a connection that is
     not one, or a source that cannot be read, contributes nothing."""
