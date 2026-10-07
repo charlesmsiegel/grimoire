@@ -14,7 +14,11 @@ no client change at all. `claude_agent` cannot: it joins ``m["content"]`` as a
 string to build its prompt, so a list would raise deep inside the SDK path and
 surface as a 500.
 
-Hence `SUPPORTED_KINDS`, checked in the route. Widening `claude_agent` to
+Hence the refusal. The route's own kind check is gone: the image route
+`requires` vision, the `claude` provider preset can `never` read images, and
+the inference seam (`routes.common.require_inference`) answers that with
+`UNSUPPORTED` before anything is sent. `SUPPORTED_KINDS` stays the list the
+facade and `post_images` read for the same fact. Widening `claude_agent` to
 multimodal is a real change with its own testing, and it is not this feature's
 to make in passing — a clear refusal is worth more than a crash, and worth much
 more than a silently-wrong prompt.
@@ -39,8 +43,8 @@ from .. import prompts
 SUPPORTED_KINDS: tuple[str, ...] = ("openrouter", "openai_compatible")
 
 #: Shown to the user when the active connection is the one that cannot.
-UNSUPPORTED = ("this connection cannot read images — switch to an OpenRouter "
-               "or OpenAI-compatible connection to draft a description")
+UNSUPPORTED = ("this connection cannot read images — switch to an OpenRouter, "
+               "OpenAI-compatible or Anthropic API connection to draft a description")
 
 #: The media types `assets` will store, by stored extension. Not
 #: `mimetypes.guess_type`: that reads the *name*, and the name here is a stem

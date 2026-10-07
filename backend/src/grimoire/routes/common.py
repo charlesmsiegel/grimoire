@@ -32,6 +32,7 @@ from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
 from ..store.inference import cascade as inference_cascade
+from ..store.inference import providers as inference_providers
 from ..store.inference import resolve as inference
 from ..store.inference.resolved import ResolvedInference
 
@@ -266,12 +267,13 @@ def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[di
     a world record, where the path's `cid` is a character id and naming a
     campaign would be a coincidence of spelling.
     """
+    # The image route `requires` vision, so the seam refuses a connection that
+    # cannot read pictures -- `claude_agent`, whose SDK path joins message
+    # content as a string and would raise deep inside it, answers with
+    # `image_drafts.UNSUPPORTED` exactly as this function's own kind check
+    # used to; a model its catalog or the user says is blind, as `incapable`.
+    # The one check, so no surface can drift from another.
     conn = require_inference("image-description", cid).conn
-    if conn.get("kind") not in store.image_drafts.SUPPORTED_KINDS:
-        # A refusal the user can act on, rather than a 500 out of the SDK path:
-        # `claude_agent` joins message content as a string, so a multimodal
-        # message raises deep inside it. See `store/image_drafts.py`.
-        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
     if path is None:
         raise HTTPException(status_code=404, detail="image not found")
     try:
@@ -1320,9 +1322,54 @@ def _narrowed(resolved: ResolvedInference) -> UsableInference:
 
 
 def _usable(resolved: ResolvedInference) -> UsableInference:
-    """`resolved`, refused with the seam's 409 if it cannot send."""
+    """`resolved`, refused with the seam's 409 if it cannot send, or cannot do
+    what its route needs."""
     _refuse_unusable(resolved)
+    _refuse_incapable(resolved)
     return _narrowed(resolved)
+
+
+#: What a missing capability stops a model doing, as the refusal names it.
+_CANNOT = {
+    "generate": "generate text",
+    "vision": "read images",
+    "embed": "make embeddings",
+    "structured_output": "return structured output",
+    "prefill": "continue a prefilled reply",
+    "decide_native": "make native decisions",
+    "stream": "stream",
+}
+
+
+def _refuse_incapable(resolved: ResolvedInference) -> None:
+    """The 409 for a primary that is KNOWN unable to do what its route needs.
+
+    Only a known `no` (`resolved.missing`); `unknown` is let through, and a
+    fallback's gaps are reported (`fallback_missing`) but never refused on --
+    the facade still sends that fallback until slice C. Checked after
+    `_refuse_unusable`, so a connection with no key says that first: it is
+    the fix the reader has to make before anything else matters.
+
+    A wire protocol that cannot carry an image (an `adapter` `no` on vision)
+    answers with the sentence `image_draft_prompt` always answered with, in
+    the same body, so nothing that reads it sees a change. Anything else is
+    `incapable`, naming the route, the model, the provider and the first
+    missing capability in `capabilities.NAMES` order.
+    """
+    if not resolved.missing:
+        return
+    primary = resolved.attempts[0]
+    vision = primary.capabilities.get("vision")
+    if "vision" in resolved.missing and vision is not None and vision.source == "adapter":
+        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
+    conn = primary.conn
+    preset = inference_providers.PRESETS.get(primary.provider_preset)
+    provider = conn.get("name") or (preset.label if preset is not None else conn.get("id", ""))
+    route = store.routing.label_for(resolved.route) if resolved.route else "This generation"
+    raise HTTPException(status_code=409, detail={
+        "detail": f"{route} runs on {effective_model(conn)} ({provider}), which cannot "
+                  f"{_CANNOT.get(resolved.missing[0], resolved.missing[0])}.",
+        "kind": "incapable"})
 
 
 def _refuse_unusable(resolved: ResolvedInference) -> None:
@@ -1367,7 +1414,9 @@ def require_inference(task: str = "", cid: str = "", *,
 
     The one seam every LLM call site in `routes/` resolves through: the
     resolver (`store.inference.resolve`) answers, and this refuses what cannot
-    send. `.conn` is the connection dict the facade reads.
+    send -- a missing key or connection first, then a primary known unable to
+    do what the route needs (`_refuse_incapable`). `.conn` is the connection
+    dict the facade reads.
 
     `task` is the same string the call site meters under (`store.usage.meter`),
     and `store/routing.py` maps it to a route; `cid` lets a campaign override
@@ -1416,7 +1465,7 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     that makes possible live on a connection), and a bare connection id cannot
     say "the same provider, its bigger model".
 
-    Four refusals, and which one fires matters to the caller:
+    Five refusals, and which one fires matters to the caller:
 
     - a model id longer than `alternates.MAX_MODEL_CHARS` is a **400**. Bounded
       where it arrives rather than at each place it is recorded: the same body
@@ -1435,6 +1484,10 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
       frontend already routes that kind to the Connections page. Checked
       through the shared `store.inference.resolve.problem`, so an override is
       held to exactly the standard the standing connection is.
+    - a model the override lands on that is KNOWN unable to do what the route
+      needs is the same **409** `require_inference` raises for it
+      (`_refuse_incapable`), checked after the key -- the override is held to
+      the standing route's terms here too.
     - an override is NOT rescued by falling back to the standing connection
       when it is unusable. Quietly serving "reroll this on the local endpoint"
       from OpenRouter is the failure mode the explicit 409 exists to prevent,
@@ -1499,6 +1552,9 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
             raise HTTPException(
                 status_code=409,
                 detail={"detail": f"{conn['name']}: {problem}", "kind": "missing_key"})
+    # Then what the call needs, on the attempt that would serve it: an override
+    # onto a model known unable to do the job is refused like the standing one.
+    _refuse_incapable(resolved)
     served = _narrowed(resolved)
     standing = resolved.standing
     # Same provider means the same connection dict, so the standing model's
