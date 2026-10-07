@@ -53,8 +53,8 @@ def _preset(
                   always, possible, never)
 
 
-_ZAI_POSSIBLE = frozenset({"structured_output", "prefill"})
-_ZAI_NEVER = frozenset({"vision", "embed", "decide_native"})
+_ZAI_POSSIBLE = frozenset({"vision", "structured_output", "prefill"})
+_ZAI_NEVER = frozenset({"embed", "decide_native"})
 
 PRESETS: dict[str, Preset] = {p.id: p for p in (
     _preset(
