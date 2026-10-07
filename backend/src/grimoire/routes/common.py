@@ -31,6 +31,7 @@ from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
+from ..store.inference import capabilities as inference_capabilities
 from ..store.inference import cascade as inference_cascade
 from ..store.inference import providers as inference_providers
 from ..store.inference import resolve as inference
@@ -1329,16 +1330,9 @@ def _usable(resolved: ResolvedInference) -> UsableInference:
     return _narrowed(resolved)
 
 
-#: What a missing capability stops a model doing, as the refusal names it.
-_CANNOT = {
-    "generate": "generate text",
-    "vision": "read images",
-    "embed": "make embeddings",
-    "structured_output": "return structured output",
-    "prefill": "continue a prefilled reply",
-    "decide_native": "make native decisions",
-    "stream": "stream",
-}
+#: The sources of a vision `no` a connection's legacy "Images: on" overrides
+#: (`_refuse_incapable`'s bridge until slice C).
+_IMAGES_ON_OUTRANKS = frozenset({"catalog", "name", "preset"})
 
 
 def _refuse_incapable(resolved: ResolvedInference) -> None:
@@ -1352,23 +1346,37 @@ def _refuse_incapable(resolved: ResolvedInference) -> None:
 
     A wire protocol that cannot carry an image (an `adapter` `no` on vision)
     answers with the sentence `image_draft_prompt` always answered with, in
-    the same body, so nothing that reads it sees a change. Anything else is
-    `incapable`, naming the route, the model, the provider and the first
+    the same body, so nothing that reads it sees a change. A connection set
+    to "Images: on" is not refused over a catalog's vision `no` (a bridge,
+    below). Anything else is `incapable`, naming the route, the model, the provider and the first
     missing capability in `capabilities.NAMES` order.
     """
     if not resolved.missing:
         return
     primary = resolved.attempts[0]
-    vision = primary.capabilities.get("vision")
-    if "vision" in resolved.missing and vision is not None and vision.source == "adapter":
-        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
     conn = primary.conn
+    missing = resolved.missing
+    vision = primary.capabilities.get("vision")
+    if "vision" in missing and vision is not None and vision.source == "adapter":
+        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
+    if ("vision" in missing and conn.get("vision") == "on"
+            and vision is not None and vision.source in _IMAGES_ON_OUTRANKS):
+        # BRIDGE until slice C moves the connection's "Images: on" setting into
+        # the model's facts (where it would be a `user` yes and outrank the
+        # catalog): today that setting sends image drafts whatever the catalog
+        # says, and nothing in the app could undo a refusal here. Only the
+        # sources it outranks once migrated are waived -- the wire protocol's
+        # `no` is refused above, and a probe's or the user's per-model word
+        # stands.
+        missing = tuple(cap for cap in missing if cap != "vision")
+        if not missing:
+            return
     preset = inference_providers.PRESETS.get(primary.provider_preset)
     provider = conn.get("name") or (preset.label if preset is not None else conn.get("id", ""))
     route = store.routing.label_for(resolved.route) if resolved.route else "This generation"
     raise HTTPException(status_code=409, detail={
         "detail": f"{route} runs on {effective_model(conn)} ({provider}), which cannot "
-                  f"{_CANNOT.get(resolved.missing[0], resolved.missing[0])}.",
+                  f"{inference_capabilities.CANNOT.get(missing[0], missing[0])}.",
         "kind": "incapable"})
 
 

@@ -212,6 +212,23 @@ def test_an_openrouter_model_the_catalog_says_is_blind_is_refused(client, art):
         "kind": "incapable"})
 
 
+def test_images_on_still_drafts_where_the_catalog_says_blind(client, art):
+    """The connection's "Images: on" sent drafts whatever the catalog said
+    before the seam checked capabilities, and still does (a bridge until
+    slice C moves the setting into the model's facts)."""
+    wid, cid, vid = art
+    client.put("/api/llm-connections/openrouter", json={"vision": "on"})
+    conn = store.llm_connections.read_connection_raw("openrouter")
+    assert conn["vision"] == "on"
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": conn["model"], "vision": False}], conn["rev"])
+    fake = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = drafts.post(client, _url(wid, cid, vid))
+    assert r.status_code == 200
+    assert fake.calls == 1
+
+
 def test_the_unsupported_text_names_every_kind_that_can_read_images():
     text = store.image_drafts.UNSUPPORTED
     for name in ("OpenRouter", "OpenAI-compatible", "Anthropic API"):
