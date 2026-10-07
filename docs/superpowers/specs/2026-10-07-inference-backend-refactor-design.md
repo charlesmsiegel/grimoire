@@ -824,7 +824,7 @@ parameters and describes them. For each control:
 | `anthropic` | `low`/`medium`/`high` → `thinking: {type: "adaptive"}` + `output_config: {effort: <same>}` where the catalog says adaptive thinking is supported (current models reject `budget_tokens`); where the catalog lists `enabled` thinking instead, `budget_tokens` 1024 / 4096 / 16000, each held to at most half the effective `max_tokens` and at least 1024 (thinking is `unsupported` when that leaves no room); when the catalog states neither, nothing is sent and the control is `unknown`; `off` sends nothing (the model's default — some current models cannot turn thinking off), reported `supported` where the catalog lists budgeted thinking or none at all and `unknown` otherwise. Sampling parameters are sent only when the catalog says the model takes `enabled` thinking and no thinking is being sent, and `top_p` is not sent beside `temperature`; otherwise they are `unsupported`; `max_tokens` defaults to 16000 capped at the catalog's limit; `stop` is `translated` → `stop_sequences` |
 | GLM on `openai_compatible` | today's `llm_reasoning.glm_effort` |
 | `claude` (Agent SDK) | unsupported |
-| other `openai_compatible` | unknown — sent only where `sampler_support` allows non-standard parameters, like the other extensions |
+| other `openai_compatible` | `unsupported` (not sent) on a strict endpoint, like the other extensions; `unknown` (sent) where `sampler_support` allows non-standard parameters |
 
 `max_tokens` is `translated` → `max_completion_tokens` on the OpenAI preset
 (and wherever else an endpoint requires it). This is a deliberate exception to
