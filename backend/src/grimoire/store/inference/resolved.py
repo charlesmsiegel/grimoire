@@ -2,8 +2,11 @@
 
 Built by `resolve.resolve` and nowhere else. Until the facade takes attempts
 directly (spec §13), each `Attempt` carries its lowered connection dict -- the
-shape `LLMClient` reads today -- so `conn` and `fallback` are what a call site
-hands the facade.
+shape `LLMClient` reads today -- so `conn` is what a call site hands the facade,
+and `fallback` is what the facade then sends when that primary fails: the same
+connection and sampling `LLMClient._routes` derives (spec §5.2, §5.4). The
+facade still resolves its own fallback in this slice; this one is the
+resolver's account of it, held equal to the facade's by the tests.
 """
 
 from __future__ import annotations
@@ -19,7 +22,8 @@ class Attempt:
 
     provider_id: str
     model: str
-    #: The sampler preset the attempt runs with ("" for provider defaults).
+    #: The sampler preset the attempt runs with ("" for provider defaults). On
+    #: a fallback, the primary's when the primary's came from a route scope.
     preset_id: str
     #: The attempt lowered to today's connection dict (`sampling` and, where
     #: the catalog says, `model_params` attached).
@@ -41,7 +45,10 @@ class ResolvedInference:
     via: str
     #: "campaign" | "global" | "none".
     scope: str
-    #: Primary first, then the fallback. Empty when nothing resolved.
+    #: Primary first, then the fallback as the facade sends it: none when it
+    #: cannot be read, cannot send, or is the primary's own connection; and
+    #: carrying the primary's sampling when that came from a route scope
+    #: (campaign or global). Empty when nothing resolved.
     attempts: tuple[Attempt, ...]
     #: The selection the cascade chose before any per-call override, from the
     #: same reads the attempts were built from (None when it chose nothing).
@@ -55,5 +62,7 @@ class ResolvedInference:
 
     @property
     def fallback(self) -> dict | None:
-        """The fallback attempt's connection dict, or None when there is none."""
+        """The fallback attempt's connection dict as the facade sends it
+        (`llm.fallback_sampling` applied, `llm._same_route` honoured), or None
+        when there is none."""
         return self.attempts[1].conn if len(self.attempts) > 1 else None

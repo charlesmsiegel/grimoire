@@ -60,7 +60,7 @@ def _send_images_reach() -> str:
     this is a hint beside a checkbox, not something worth a 500."""
     try:
         # routing-ok: a display hint about where chat would run; it must never refuse
-        return store.post_images.reach(inference.resolve("chat", campaign_meta={}).conn)
+        return store.post_images.reach(inference.resolve("chat").conn)
     except Exception:  # noqa: BLE001 - a display hint; see the docstring
         return "unknown"
 

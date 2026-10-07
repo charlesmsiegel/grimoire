@@ -1298,23 +1298,6 @@ def _sheet_failure_status(exc: Exception) -> int:
     return 409 if isinstance(exc, store.sheets.SheetConflict) else 400
 
 
-def _campaign_routing_meta(cid: str) -> dict:
-    """A campaign's frontmatter, for the routing walk -- {} for anything unreadable.
-
-    Never raises. A missing or damaged `campaign.md` is a 404 (or a 500) on the
-    routes that need the campaign itself, and every one of them has already said
-    so by the time a connection is resolved; re-deciding it here would let a
-    stale read turn "this campaign routes elsewhere" into a failed generation.
-    """
-    if not cid:
-        return {}
-    try:
-        return store.campaigns.read_campaign(cid)["meta"]
-    except (store.campaigns.CampaignNotFound, store.locks.StoreBusy,
-            OSError, UnicodeDecodeError):
-        return {}
-
-
 @dataclass(frozen=True)
 class UsableInference(ResolvedInference):
     """A resolution the seam has checked can send: its `conn` is never None.
@@ -1397,7 +1380,7 @@ def require_inference(task: str = "", cid: str = "", *,
     the guard cannot see).
     """
     return _usable(inference.resolve(  # routing-ok: this IS the seam the guard watches
-        task, campaign_meta=_campaign_routing_meta(cid), operation=operation))
+        task, cid, operation=operation))
 
 
 def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInference, bool]:
@@ -1487,7 +1470,7 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     # everything here is decided on the dict that is handed to the facade.
     override = inference_cascade.Selection(conn_id, model, "") if conn_id or model else None
     resolved = inference.resolve(  # routing-ok: this IS the seam, for a per-call override
-        task, campaign_meta=_campaign_routing_meta(cid), override=override)
+        task, cid, override=override)
     conn = resolved.conn
     if not conn_id:
         # The seam's refusals, on the copy that serves. A model alone drives

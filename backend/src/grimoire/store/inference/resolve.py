@@ -1,9 +1,9 @@
 """Resolve a task to the provider, model, preset and fallback it runs on.
 
-The impure half of `store/inference/`: this reads `config.md`, the connection
-files, the sampler presets and the model-catalog sidecars, and hands the pure
-pieces -- `translate` (the legacy layout read as the current one) and
-`cascade` (spec §5.1, §5.2, §5.5) -- dicts and predicates. What comes back is a
+The impure half of `store/inference/`: this reads `config.md`, the campaign's
+`campaign.md`, the connection files, the sampler presets and the model-catalog
+sidecars, and hands the pure pieces -- `translate` (the legacy layout read as
+the current one) and `cascade` (spec §5.1, §5.2, §5.5) -- dicts and predicates. What comes back is a
 `ResolvedInference`, whose attempts are lowered to the connection dict the
 facade reads today (`{**connection, "model", "sampling", "model_params"}`), so
 nothing downstream of a call site changes.
@@ -14,20 +14,28 @@ equivalence tests compare each answer with the route layer's own
 
 Never imports `llm`: the one thing borrowed from it, a connection's effective
 model, differs from the stored one only for `claude`, and `model_params`
-consults the catalog for OpenRouter alone.
+consults the catalog for OpenRouter alone. The two facade rules the fallback
+attempt mirrors (`llm.fallback_sampling`, `llm._same_route`) are restated here,
+with `ROUTE_SCOPES`, and the tests hold them to the facade's own answers.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
-from .. import config, llm_connections, locks, routing, sampler_presets
+from .. import campaigns, config, llm_connections, locks, routing, sampler_presets
 from . import cascade, translate
 from .cascade import Selection
 from .resolved import Attempt, ResolvedInference
 
 #: What a connection carries when no preset could be resolved for it at all.
 NO_SAMPLING = {"preset_id": "", "preset_name": "", "scope": "none", "params": {}}
+
+#: Where a sampler preset came from, for the scopes that are about the ROUTE
+#: rather than the connection: a preset from one of these follows the route onto
+#: the fallback. `llm.ROUTE_SCOPES`, restated because this module never imports
+#: `llm`; a test holds the two equal.
+ROUTE_SCOPES = frozenset({"campaign", "global"})
 
 #: The ways reading one connection can fail, every one of which reads as "no
 #: such connection" -- a dangling reference is walked past, never raised.
@@ -88,12 +96,30 @@ def model_params(conn: dict) -> list[str] | None:
     return None
 
 
+def campaign_meta(cid: str) -> dict:
+    """A campaign's frontmatter, for the routing walk -- {} for none, and for
+    anything unreadable.
+
+    Never raises. A missing or damaged `campaign.md` is a 404 (or a 500) on the
+    routes that need the campaign itself, and every one of them has already said
+    so by the time a connection is resolved; re-deciding it here would let a
+    stale read turn "this campaign routes elsewhere" into a failed generation.
+    """
+    if not cid:
+        return {}
+    try:
+        return campaigns.read_campaign(cid)["meta"]
+    except (campaigns.CampaignNotFound, locks.StoreBusy, OSError, UnicodeDecodeError):
+        return {}
+
+
 # ---- the per-call caches ----
 def _connection_lookup() -> translate.Lookup:
     """`read_connection_raw`, memoised for one resolution and never raising.
 
-    One resolution asks about the same few ids many times over (the legacy
-    translation looks up every route's pin, the cascade checks existence), so
+    One resolution asks about the same few ids several times over (the legacy
+    translation looks up the roles and the task's route pins, the cascade
+    checks existence), so
     each file is read at most once -- which also means every question in one
     resolution is answered from the same read."""
     seen: dict[str, dict | None] = {}
@@ -200,28 +226,44 @@ def _overridden(standing: Selection | None, override: Selection | None,
                      override.preset or base.preset)
 
 
-def resolve(task: str, *, campaign_meta: dict, operation: str = "generate",
+def resolve(task: str, cid: str = "", *, operation: str = "generate",
             override: Selection | None = None) -> ResolvedInference:
-    """Where `task` runs, for a campaign whose frontmatter is `campaign_meta`
-    (`{}` for none), and what it falls back to.
+    """Where `task` runs, for campaign `cid` ("" for none), and what it falls
+    back to.
 
     The connection files are migrated BEFORE `config.md` is read: a store from
     before named connections holds only a flat key and model, and migration is
-    what seeds the active connection those resolve to.
+    what seeds the active connection those resolve to. The campaign's
+    frontmatter is read here too (`campaign_meta`), never raising: one that
+    cannot be read has no routing opinion.
+
+    Only what the task can reach is looked up: the roles, the fallback, and the
+    pins of the task's own route (`translate`'s `only`). The layout is decided
+    once, from `config.md` (spec 11.1).
 
     Nothing here refuses. A primary that cannot send is still the primary --
     the seam reports it (`problem`) rather than walking past it; no selection
-    at all is an empty `attempts`. The fallback is dropped when it cannot be
-    read or cannot send, so a misconfigured fallback never replaces the
-    primary's real error.
+    at all is an empty `attempts`.
+
+    The fallback attempt is the one the facade sends (spec 5.2, 5.4, 5.5): it
+    is dropped when it cannot be read or cannot send (so a misconfigured
+    fallback never replaces the primary's real error) and when it names the
+    primary's own connection (`llm._same_route`: a second try on the connection
+    that just failed is not a fallback); and when the primary's preset came
+    from a ROUTE scope -- campaign or global, a `PRESET_CLEAR` included -- the
+    fallback carries that same sampling rather than its own preset
+    (`llm.fallback_sampling`). Its `model_params` stay its own model's.
     """
     llm_connections.ensure_migrated()
     cfg = config.read_config()
+    meta = campaign_meta(cid)
     lookup = _connection_lookup()
     presets = _preset_lookup()
     route = routing.route(task)
-    glob = translate.global_view(cfg, lookup)
-    campaign = translate.campaign_view(campaign_meta, lookup)
+    only = (route.key,) if route is not None else ()
+    glob = translate.global_view(cfg, lookup, only=only)
+    campaign = translate.campaign_view(meta, lookup, current=translate.is_current(cfg),
+                                       only=only)
     choice = cascade.choose(route, campaign=campaign, glob=glob,
                             exists=lambda conn_id: lookup(conn_id) is not None)
 
@@ -233,14 +275,16 @@ def resolve(task: str, *, campaign_meta: dict, operation: str = "generate",
         sampling = _sampling(
             lambda known: cascade.preset_for(route, primary, campaign=campaign,
                                              glob=glob, known=known), presets)
-        attempts.append(Attempt(primary.provider, primary.model, sampling["preset_id"],
-                                _lower(raw, sampling, primary.model)))
+        conn = _lower(raw, sampling, primary.model)
+        attempts.append(Attempt(primary.provider, primary.model, sampling["preset_id"], conn))
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
-        if fallback is not None and fb_raw is not None and problem(fb_raw) is None:
-            # The fallback brings its own preset (spec §5.2); a route's preset
-            # is carried onto it by the facade (`llm.fallback_sampling`).
-            fb_sampling = _sampling(_own_preset(fallback), presets)
+        if (fallback is not None and fb_raw is not None and problem(fb_raw) is None
+                and not _same_provider(conn, fb_raw)):
+            # A copy, so the two attempts never share a mutable block.
+            fb_sampling = ({**sampling, "params": dict(sampling["params"])}
+                           if sampling["scope"] in ROUTE_SCOPES
+                           else _sampling(_own_preset(fallback), presets))
             attempts.append(Attempt(fallback.provider, fallback.model,
                                     fb_sampling["preset_id"],
                                     _lower(fb_raw, fb_sampling, fallback.model)))
@@ -251,3 +295,11 @@ def resolve(task: str, *, campaign_meta: dict, operation: str = "generate",
         legacy_route=routing.legacy_key(route) if route is not None else "",
         role=choice.role, via=choice.via, scope=choice.scope,
         attempts=tuple(attempts), standing=choice.selection)
+
+
+def _same_provider(primary: dict, fallback: dict) -> bool:
+    """Whether the fallback is the primary's own connection, by store id --
+    `llm._same_route`'s rule (two dicts read from disk are never the same
+    object, so the id is what decides)."""
+    pid = primary.get("id", "")
+    return bool(pid) and pid == fallback.get("id", "")

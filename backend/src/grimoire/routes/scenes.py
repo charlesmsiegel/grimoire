@@ -36,7 +36,6 @@ from . import continuity as continuity_routes
 from . import tracker as tracker_routes
 from .common import (
     _campaign_root_or_404,
-    _campaign_routing_meta,
     _dump,
     _llm_http_error,
     _noting,
@@ -5130,7 +5129,7 @@ def get_scene_context(cid: str, sid: str):
     inspector marks the counts as estimates."""
     _require_scene(cid, sid)
     # routing-ok: the context view shows what chat WOULD run on; it must never refuse
-    conn = inference.resolve("chat", campaign_meta=_campaign_routing_meta(cid)).conn
+    conn = inference.resolve("chat", cid).conn
     model = effective_model(conn) if conn is not None else ""
     # What the next turn would send, pictures included (#377): the Images row is
     # present exactly when they would reach this scene's routed connection. And
@@ -5227,7 +5226,7 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # assemble/pack pass `GET .../context` does, so the side this diff calls
         # "live" is the one the Context panel is showing.
         # routing-ok: the live side of a prompt diff is a display; it must never refuse
-        conn = inference.resolve("chat", campaign_meta=_campaign_routing_meta(cid)).conn
+        conn = inference.resolve("chat", cid).conn
         model = effective_model(conn) if conn is not None else ""
         live = store.context.context_breakdown(cid, sid, model=model,
                                                images=store.post_images.images_for(conn))

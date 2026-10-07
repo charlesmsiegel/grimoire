@@ -14,12 +14,21 @@ existence check exactly as it always was). A route naming a connection that
 does not exist is still translated, to a pin on that id: walking past a
 dangling choice is the cascade's job, not this module's.
 
+The layout is decided once, globally (spec 11.1): `global_view` passes a
+current `config.md` through, and `campaign_view` passes a campaign through only
+when the caller says the GLOBAL layout is current (and the campaign is marked
+too). A campaign's own marker never switches it alone.
+
+Both views take `only`, the route keys to translate (None for every route), so
+a resolver answering one task looks up only that route's pins. Roles and the
+fallback are always translated: every task can reach them.
+
 Emitted key names come from `keys` only.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 
 from .. import routing
 from . import keys
@@ -43,10 +52,13 @@ def _selection(conn_id: str, conn: Lookup) -> dict[str, str]:
     }
 
 
-def _pins_and_presets(meta: dict, conn: Lookup, scoped_only: bool) -> dict:
+def _pins_and_presets(meta: dict, conn: Lookup, scoped_only: bool,
+                      only: Collection[str] | None) -> dict:
     out: dict = {}
     for route in routing.ROUTES:
         if scoped_only and not route.campaign_scoped:
+            continue
+        if only is not None and route.key not in only:
             continue
         legacy = routing.legacy_key(route)
         chosen = str(meta.get(routing.config_key(legacy), "") or "").strip()
@@ -73,8 +85,9 @@ def embedding_role(cfg: dict) -> tuple[str, str]:
     return str(provider or "").strip(), str(model or "").strip()
 
 
-def global_view(cfg: dict, conn: Lookup) -> dict:
-    """The global settings in the current layout."""
+def global_view(cfg: dict, conn: Lookup, *, only: Collection[str] | None = None) -> dict:
+    """The global settings in the current layout (`only`: the route keys whose
+    pins and presets to translate; None for all)."""
     if is_current(cfg):
         return cfg
     out: dict = {}
@@ -92,14 +105,20 @@ def global_view(cfg: dict, conn: Lookup) -> dict:
     if provider:
         out[keys.role_key("embedding", "provider")] = provider
         out[keys.role_key("embedding", "model")] = model
-    out.update(_pins_and_presets(cfg, conn, scoped_only=False))
+    out.update(_pins_and_presets(cfg, conn, scoped_only=False, only=only))
     return out
 
 
-def campaign_view(meta: dict, conn: Lookup) -> dict:
+def campaign_view(meta: dict, conn: Lookup, *, current: bool,
+                  only: Collection[str] | None = None) -> dict:
     """A campaign's overrides in the current layout. A campaign carried only
     route and preset choices, for the campaign-scoped routes, so that is all
-    there is to translate."""
-    if is_current(meta):
+    there is to translate.
+
+    `current` is the GLOBAL decision (`is_current(cfg)`): a campaign is read as
+    it stands only when `config.md` is current and the campaign is marked as
+    well. Its own marker alone is ignored, so a store a newer build migrated
+    and an older one reopened resolves every campaign from the legacy keys."""
+    if current and is_current(meta):
         return meta
-    return _pins_and_presets(meta, conn, scoped_only=True)
+    return _pins_and_presets(meta, conn, scoped_only=True, only=only)
