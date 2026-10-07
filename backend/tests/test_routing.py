@@ -22,7 +22,7 @@ def _resolve(task, *, campaign=None, cfg=None, known=("openrouter", "cheap", "bi
 # --- the registry itself ---
 
 def test_every_route_key_has_a_config_key_and_they_agree():
-    assert tuple(f"route_{r.key}" for r in routing.ROUTES) == routing.CONFIG_KEYS
+    assert tuple(f"route_{r.key}" for r in routing.LEGACY_ROUTES) == routing.CONFIG_KEYS
     assert routing.config_key("scene") == "route_scene"
 
 
@@ -38,7 +38,7 @@ def test_no_task_is_claimed_by_two_routes():
 def test_the_six_routes_the_issue_named_are_spelled_as_the_issue_spelled_them():
     # #142 listed scene / opener / absorb / dossier / suggestions / tagline, and
     # named the scene turn's retries and director turns as part of ONE task.
-    keys = {r.key for r in routing.ROUTES}
+    keys = {r.key for r in routing.LEGACY_ROUTES}
     assert {"scene", "opener", "absorb", "dossier", "suggestions", "tagline"} <= keys
     assert routing.TASK_ROUTE["retry"] == "scene"
     assert routing.TASK_ROUTE["director"] == "scene"
@@ -213,10 +213,10 @@ def test_the_campaign_bundle_omits_the_routes_a_campaign_cannot_override():
 
 def test_the_global_bundle_carries_every_route():
     bundle = routing.bundle(campaign_meta={}, cfg={}, exists=lambda cid: False, scope="global")
-    assert set(bundle["routes"]) == {r.key for r in routing.ROUTES}
+    assert set(bundle["routes"]) == {r.key for r in routing.LEGACY_ROUTES}
 
 
-@pytest.mark.parametrize("route", [r.key for r in routing.ROUTES])
+@pytest.mark.parametrize("route", [r.key for r in routing.LEGACY_ROUTES])
 def test_every_route_is_named_and_described_for_the_picker(route):
     got = routing.route_by_key(route)
     assert got.label and got.label[0].isupper()
@@ -233,8 +233,7 @@ def test_the_continuity_route_is_spelled_as_section_29_spells_it():
         "End Scene or a refresh.",
         ("continuity-identity", "continuity-reconcile"), True)
     got = routing.route_by_key("continuity")
-    for field in routing.Route._fields:
-        assert getattr(got, field) == getattr(want, field), field
+    assert got[:5] == want[:5]
     assert (routing.TASK_ROUTE["continuity-identity"]
             == routing.TASK_ROUTE["continuity-reconcile"] == "continuity")
     others = [t for t in routing.TASK_ROUTE
@@ -242,3 +241,69 @@ def test_the_continuity_route_is_spelled_as_section_29_spells_it():
     assert others == []
     # §29: the scene-suggestion task keeps its name.
     assert routing.TASK_ROUTE["suggestions"] == "suggestions"
+
+
+# --- the fifteen-route registry and the twelve-route legacy view ---
+
+_ORIGINAL_TASKS = {
+    "scene": ("chat", "retry", "regenerate", "extend", "director", "replay",
+              "continuation", "response-selector"),
+    "opener": ("opener",),
+    "absorb": ("absorb", "audit"),
+    "dossier": ("dossier",),
+    "continuity": ("continuity-identity", "continuity-reconcile"),
+    "summary": ("rolling-summary", "scene-break"),
+    "tracker": ("tracker-update",),
+    "suggestions": ("suggestions", "intent", "character-from-passage"),
+    "voice": ("voice-anchor", "voice-drift"),
+    "image": ("image-description",),
+    "tagline": ("tagline",),
+    "scenario": ("scenario",),
+}
+
+
+def test_three_routes_split_out_of_their_parents():
+    assert routing.route("response-selector").key == "speaker"
+    assert routing.route("scene-break").key == "scene_break"
+    assert routing.route("voice-drift").key == "voice_drift"
+    assert routing.route_by_key("speaker").legacy == "scene"
+    assert routing.route_by_key("scene_break").legacy == "summary"
+    assert routing.route_by_key("voice_drift").legacy == "voice"
+    assert "response-selector" not in routing.route_by_key("scene").tasks
+    assert routing.TASK_ROUTE["response-selector"] == "speaker"
+
+
+def test_legacy_routes_keep_their_original_task_lists():
+    assert {r.key: r.tasks for r in routing.LEGACY_ROUTES} == _ORIGINAL_TASKS
+    assert [r.key for r in routing.LEGACY_ROUTES] == list(_ORIGINAL_TASKS)
+
+
+def test_legacy_surfaces_still_see_twelve_routes():
+    assert len(routing.LEGACY_ROUTES) == 12
+    assert tuple(f"route_{r.key}" for r in routing.LEGACY_ROUTES) == routing.CONFIG_KEYS
+    assert tuple(
+        f"preset_{r.key}" for r in routing.LEGACY_ROUTES) == routing.PRESET_CONFIG_KEYS
+    for new in ("speaker", "scene_break", "voice_drift"):
+        assert f"route_{new}" not in routing.CONFIG_KEYS
+        assert f"preset_{new}" not in routing.PRESET_CONFIG_KEYS
+    assert routing.routes_for("global") == routing.LEGACY_ROUTES
+    assert all(r.legacy == "" for r in routing.LEGACY_ROUTES)
+
+
+def test_every_route_declares_operation_and_default_role():
+    for r in routing.ROUTES:
+        assert r.operation in routing.OPERATIONS
+        assert r.default_role in routing.DEFAULT_ROLES
+        assert r.operation == "generate"
+    primary = {"scene", "opener", "suggestions", "voice"}
+    for r in routing.ROUTES:
+        want = "primary" if r.key in primary else "fast"
+        assert r.default_role == want, r.key
+    assert routing.route_by_key("image").requires == ("vision",)
+    assert len(routing.ROUTES) == 15
+
+
+def test_a_split_route_resolves_through_its_parents_key():
+    got = routing.resolve("scene-break", campaign_meta={}, cfg={"route_summary": "x"},
+                          exists=lambda _: True)
+    assert got == {"route": "summary", "connection_id": "x", "scope": "global"}

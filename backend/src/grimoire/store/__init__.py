@@ -94,6 +94,7 @@ from . import (
     image_subjects,
     image_surfaces,
     image_usage,
+    inference,
     journal,
     length_drift,
     lengths,

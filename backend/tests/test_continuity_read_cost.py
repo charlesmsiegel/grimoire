@@ -340,7 +340,7 @@ def _armed(client, monkeypatch):
     """Every way a read could reach a model or an embedding, recorded.
 
     The connection is configured first: every model call in the app resolves
-    it (`_require_connection`) before it reaches the client, so without one a
+    it (`require_inference`) before it reaches the client, so without one a
     call on a tolerant path (`_soft`, `_attempt`, a section's `_tolerant`) is
     stopped by the 409 and swallowed before the fake can count it -- the
     raiser-inside-`_soft` trap one layer up."""
@@ -388,7 +388,7 @@ def test_the_no_model_recorders_fire_on_a_tolerant_path(client, monkeypatch):
     fake, fake_embeddings, _class_calls = _armed(client, monkeypatch)
 
     def model_call():
-        conn = common._require_connection("continuity_reconcile", cid)
+        conn = common.require_inference("continuity_reconcile", cid).conn
         asyncio.run(fake.complete([{"role": "system", "content": "control"}], conn))
 
     def embedding_call():

@@ -192,7 +192,7 @@ def resolve(task: str, *, campaign_meta: dict, cfg: dict, conn: dict | None,
     """
     got = routing.route(task)
     if got is not None:
-        key = routing.preset_key(got.key)
+        key = routing.preset_key(routing.legacy_key(got))
         scopes = ([("campaign", campaign_meta)] if got.campaign_scoped else []) \
             + [("global", cfg)]
         for scope, meta in scopes:

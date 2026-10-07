@@ -23,12 +23,12 @@ from . import tracker as tracker_routes
 from .common import (
     _dump,
     _fallback_connection,
-    _override_connection,
     _record_prompt,
-    _require_connection,
     _require_scene,
     _turn_override,
     get_llm,
+    override_inference,
+    require_inference,
 )
 from .models import GroupSettings, RegenerateBody
 
@@ -152,7 +152,7 @@ def start(
             planned = _plan(cid, sid, kind, trigger, actor_ref)
             if not conn and (planned["actor_ref"]
                              or not (automatic and planned["mode"] == "manual")):
-                conn = _require_connection("chat", cid)
+                conn = require_inference("chat", cid).conn
             chain = {}
             if kind == "post" and planned["mode"] != "manual":
                 # The rounds a player post may run on for (`_follow_on`);
@@ -651,7 +651,7 @@ async def _select(cid, sid, client, round_record):
     eligible = round_record["eligible"]
     if len(eligible) <= 1:
         return (eligible[0]["ref"] if eligible else "grimoire"), None
-    conn = await run_in_threadpool(_require_connection, "response-selector", cid)
+    conn = await run_in_threadpool(lambda: require_inference("response-selector", cid).conn)
     messages = await run_in_threadpool(_selector_messages, cid, sid, round_record)
     meter = store.usage.meter(
         "response-selector",
@@ -1429,7 +1429,8 @@ def regenerate_response(
         return replay
     _turn_override(body)
     _require_scene(cid, sid)
-    conn, _ = _override_connection(body, "regenerate", cid)
+    resolved, _ = override_inference(body, "regenerate", cid)
+    conn = resolved.conn
     run, fresh = runs.reserve_turn(request.app, cid, sid, "regenerate", x_grimoire_attempt)
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
@@ -1501,7 +1502,8 @@ def extend_response(
         return replay
     _turn_override(body)
     _require_scene(cid, sid)
-    conn, _ = _override_connection(body, "extend", cid)
+    resolved, _ = override_inference(body, "extend", cid)
+    conn = resolved.conn
     run, fresh = runs.reserve_turn(request.app, cid, sid, "extend", x_grimoire_attempt)
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))

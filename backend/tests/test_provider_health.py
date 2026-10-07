@@ -252,7 +252,7 @@ def test_check_reports_a_refused_key_without_failing_the_request(client):
 
 
 def test_check_short_circuits_a_connection_with_no_credential(client):
-    """`_require_connection` already refuses to generate on one of these
+    """`require_inference` already refuses to generate on one of these
     without a network call; a check that made the doomed request anyway would
     teach the reader nothing the missing key does not."""
     fake = FakeCatalog()

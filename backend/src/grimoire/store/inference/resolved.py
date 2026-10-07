@@ -1,0 +1,68 @@
+"""What a task resolved to: the attempts it runs, and how they were chosen.
+
+Built by `resolve.resolve` and nowhere else. Until the facade takes attempts
+directly (spec §13), each `Attempt` carries its lowered connection dict -- the
+shape `LLMClient` reads today -- so `conn` is what a call site hands the facade,
+and `fallback` is what the facade then sends when that primary fails: the same
+connection and sampling `LLMClient._routes` derives (spec §5.2, §5.4). The
+facade still resolves its own fallback in this slice; this one is the
+resolver's account of it, held equal to the facade's by the tests.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from .cascade import Selection
+
+
+@dataclass(frozen=True)
+class Attempt:
+    """One provider/model/preset the generation may run on."""
+
+    provider_id: str
+    model: str
+    #: The sampler preset the attempt runs with ("" for provider defaults). On
+    #: a fallback, the primary's when the primary's came from a route scope.
+    preset_id: str
+    #: The attempt lowered to today's connection dict (`sampling` and, where
+    #: the catalog says, `model_params` attached).
+    conn: dict
+
+
+@dataclass(frozen=True)
+class ResolvedInference:
+    task: str
+    operation: str
+    #: The route's key, or "" for a task no route claims.
+    route: str
+    #: The key the route's legacy settings live under (`routing.legacy_key`),
+    #: which is what a refusal names; "" for no route.
+    legacy_route: str
+    #: The role whose slot supplied the selection ("" for a pin, or nothing).
+    role: str
+    #: "route" (a pin), "role", or "" when nothing was selected.
+    via: str
+    #: "campaign" | "global" | "none".
+    scope: str
+    #: Primary first, then the fallback as the facade sends it: none when it
+    #: cannot be read, cannot send, or is the primary's own connection; and
+    #: carrying the primary's sampling when that came from a route scope
+    #: (campaign or global). Empty when nothing resolved.
+    attempts: tuple[Attempt, ...]
+    #: The selection the cascade chose before any per-call override, from the
+    #: same reads the attempts were built from (None when it chose nothing).
+    #: What an override is compared against to say whether it moved the call.
+    standing: Selection | None = None
+
+    @property
+    def conn(self) -> dict | None:
+        """The primary attempt's connection dict, or None when nothing resolved."""
+        return self.attempts[0].conn if self.attempts else None
+
+    @property
+    def fallback(self) -> dict | None:
+        """The fallback attempt's connection dict as the facade sends it
+        (`llm.fallback_sampling` applied, `llm._same_route` honoured), or None
+        when there is none."""
+        return self.attempts[1].conn if len(self.attempts) > 1 else None

@@ -12598,14 +12598,14 @@ def test_new_send_supersedes(client):
 
 # a send that dies on the missing-key guard must not have durably retired the
 # user's pending chip first — supersede only runs once the send is actually
-# going to happen (routes/scenes.py: after _require_scene *and* _require_connection).
+# going to happen (routes/scenes.py: after _require_scene *and* require_inference).
 def test_chat_missing_key_does_not_supersede_pending_proposal(client):
     cid, sid, _ = _mech_scene(client)
     rec = _pending(client, cid, sid)
     # update_connection's "type to replace" convention treats an empty api_key
     # as "keep the stored one" (never silently erases a working credential),
     # so clearing "openrouter"'s key isn't possible via PUT — instead, drop
-    # the active connection selection entirely, which _require_connection
+    # the active connection selection entirely, which require_inference
     # also reports as status 409 kind=missing_key.
     client.put("/api/config", json={"active_connection_id": ""})
     resp = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "never mind"})

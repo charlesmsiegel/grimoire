@@ -246,7 +246,7 @@ class RoutingUpdate(BaseModel):
     """Which connection each route runs on, at one scope (#142).
 
     A free-form `{route: connection_id}` map rather than ten declared fields:
-    the route list is `store.routing.ROUTES` and declaring it twice is how the
+    the route list is `store.routing.LEGACY_ROUTES` and declaring it twice is how the
     two drift. Unknown keys are refused by the handler, which is where the
     scope's own list of allowed routes lives -- a campaign may not set the
     world-scoped ones.

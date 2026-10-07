@@ -64,10 +64,10 @@ from .common import (
     _bounded_call,
     _llm_http_error,
     _noting,
-    _require_connection,
-    _soft_connection,
+    _soft_inference,
     computes_only,
     get_llm,
+    require_inference,
     run_error,
 )
 from .models import ContinuityAliasCreate, ContinuityDismiss, ContinuityLinkCreate
@@ -628,7 +628,7 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     nothing to ask is ``"skipped"``. A provider failure or an undecodable
     reply fails the run, and persist 1's findings stand (§26)."""
     conn, why = await run_in_threadpool(
-        _soft_connection, lambda: _require_connection("continuity-reconcile", cid))
+        _soft_inference, lambda: require_inference("continuity-reconcile", cid))
     selected = await run_in_threadpool(reconcile.select, cid, sweep)
     if conn is None:
         result.update(llm="off", reason=why)
