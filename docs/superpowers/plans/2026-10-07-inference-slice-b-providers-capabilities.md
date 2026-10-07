@@ -81,7 +81,7 @@
   - `anthropic`: always `{generate, stream}`; possible `{vision, structured_output}`; never `{embed, decide_native, prefill}`.
   - `claude`: always `{generate, stream}`; possible `{}`; never `{vision, embed, decide_native, structured_output, prefill}`.
   - `openai`: always `{generate, stream}`; possible `{vision, embed, decide_native, structured_output, prefill}`; never `{}`.
-  - `zai`, `zai_coding`: always `{generate, stream}`; possible `{structured_output, prefill}`; never `{vision, embed, decide_native}`.
+  - `zai`, `zai_coding`: always `{generate, stream}`; possible `{vision, structured_output, prefill}`; never `{embed, decide_native}` (vision moved to possible during execution: spec §6.1 never rules it out, and `never` changed `post_images.reach` for existing z.ai connections).
   - `ollama`, `lmstudio`, `custom`: always `{}`; possible everything except `decide_native`; never `{decide_native}`.
 - `infer(conn: dict) -> Preset` per spec §11.2 step 2 (explicit valid `conn["preset"]` wins; unknown host → `custom`). `billing(conn) -> str`.
 - [ ] **Step 1: Failing tests:** `infer` per preset (trailing slashes, ports, unknown host, explicit preset, bogus explicit preset); the exact sets above; every preset's `kind` is in `llm_connections.KINDS + ("anthropic",)` (Task 7 tightens it to `KINDS`).
