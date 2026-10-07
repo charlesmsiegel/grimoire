@@ -265,7 +265,7 @@ def test_group_hidden_by_the_adapter_names_the_preset():
 def test_group_hidden_by_another_source_names_that_source():
     row = {"id": "m", "outputs": ["text"]}
     assert capabilities.group_for(_resolve("custom", row=row), "embed", P["custom"]) == (
-        "hidden", "the catalog says this model does not produce embeddings")
+        "hidden", "the catalog says this model does not make embeddings")
     caps = _resolve("custom", verified={"embed": {"ok": False, "at": "x"}})
     assert capabilities.group_for(caps, "embed", P["custom"]) == (
         "hidden", "a test call found no embeddings")

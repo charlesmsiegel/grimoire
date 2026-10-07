@@ -143,13 +143,20 @@ def _by_url(url: object) -> str:
 def infer(conn: dict) -> Preset:
     """The preset a connection is on.
 
-    An explicit, valid `conn["preset"]` wins; anything else is inferred from
-    the adapter and, for `openai_compatible`, the base URL (spec 11.2 step 2).
+    An explicit, valid `conn["preset"]` wins -- but only when that preset is
+    on the connection's own adapter (a missing `kind` reads as `openrouter`,
+    as it does everywhere else). One on another adapter is a hand edit or a
+    sync gone wrong, and believing it would credit a connection with another
+    protocol's capabilities and billing, so it is ignored like a bogus one.
+    Anything else is inferred from the adapter and, for `openai_compatible`,
+    the base URL (spec 11.2 step 2).
     """
-    explicit = conn.get("preset")
-    if isinstance(explicit, str) and explicit in PRESETS:
-        return PRESETS[explicit]
     kind = conn.get("kind")
+    own_kind = kind if isinstance(kind, str) and kind else "openrouter"
+    explicit = conn.get("preset")
+    if (isinstance(explicit, str) and explicit in PRESETS
+            and PRESETS[explicit].kind == own_kind):
+        return PRESETS[explicit]
     if kind in ("openrouter", "claude", "anthropic"):
         return PRESETS[str(kind)]
     return PRESETS[_by_url(conn.get("base_url"))]

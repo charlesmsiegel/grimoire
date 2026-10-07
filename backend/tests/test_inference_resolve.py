@@ -852,16 +852,16 @@ NEWLY_REFUSED = {("claude_active", "image-description"),
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
 def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
-    """`require_inference` against the frozen baseline, refusal included: every
-    recorded answer stands except the intended new one, which answers exactly
-    as the image route always did."""
+    """`require_inference` against the frozen baseline, refusal and success
+    alike: every recorded answer stands except the intended new one, which
+    answers exactly as the image route always did."""
     ctx = at_state(state)
     for task in TASKS:
         for scope, scope_cid in (("global", ""), ("campaign", ctx["cid"])):
             where = (state, task, scope)
             recorded = BASELINE[state]["tasks"][task][scope]
             try:
-                routes.common.require_inference(task, scope_cid)
+                served = routes.common.require_inference(task, scope_cid)
             except HTTPException as exc:
                 failure = baseline._failure(exc)
                 if (state, task) in NEWLY_REFUSED:
@@ -872,3 +872,39 @@ def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
                     assert failure == recorded, where
                 continue
             assert "status" not in recorded and (state, task) not in NEWLY_REFUSED, where
+            # And what it served is what was recorded: the connection, model,
+            # sampling and catalog parameters, and the fallback the facade sends.
+            conn = served.conn
+            fallback = _facade_fallback(conn)
+            assert _normalised({
+                **baseline._resolved(conn),
+                "fallback": None if fallback is None
+                else {"id": fallback["id"], "sampling": fallback["sampling"]},
+            }) == recorded, where
+
+
+# ---- the "Images: on" bridge (until slice C moves it into model facts) ----
+def test_images_on_outranks_a_catalogs_vision_no_at_the_seam(at_state):
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", vision="on")
+    _catalog("openrouter", [{"id": "vendor/active", "vision": False}])
+    image = inf.resolve("image-description")
+    # Still reported: the bridge is the seam's, not the resolver's.
+    assert image.missing == ("vision",)
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+
+
+def test_images_on_does_not_outrank_the_adapter(at_state):
+    at_state("claude_active")
+    store.llm_connections.update_connection("claude", vision="on")
+    assert store.llm_connections.read_connection_raw("claude")["vision"] == "on"
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    assert exc.detail == store.image_drafts.UNSUPPORTED
+
+
+def test_images_on_does_not_outrank_the_models_own_facts(at_state):
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", vision="on")
+    inference_facts.set_overrides("openrouter", "vendor/active", {"vision": "no"})
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    assert exc.detail["kind"] == "incapable"

@@ -70,8 +70,18 @@ _ADAPTER_SAYS = {
     "embed": "serves no embeddings",
     "decide": "cannot decide",
 }
-_VERB = {"generate": "generate text", "vision": "read images",
-         "embed": "produce embeddings", "decide_native": "decide natively"}
+#: What a model lacking each capability cannot do: "... cannot <phrase>" and
+#: "... does not <phrase>". The one table; the seam's `incapable` refusal
+#: (`routes.common._refuse_incapable`) and `group_for`'s reasons both read it.
+CANNOT: dict[str, str] = {
+    "generate": "generate text",
+    "vision": "read images",
+    "embed": "make embeddings",
+    "structured_output": "return structured output",
+    "prefill": "continue a prefilled reply",
+    "decide_native": "make native decisions",
+    "stream": "stream",
+}
 _NOUN = {"generate": "text generation", "vision": "image reading",
          "embed": "embeddings", "decide_native": "native decisions"}
 _GERUND = {"generate": "generating text", "vision": "reading images",
@@ -220,14 +230,14 @@ def _why_not(caps: dict[str, Cap], need: str, preset: providers.Preset) -> str:
         if found.value != NO or found.source == "adapter":
             continue
         if found.source == "catalog":
-            return f"the catalog says this model does not {_VERB[cap]}"
+            return f"the catalog says this model does not {CANNOT[cap]}"
         if found.source == "test":
             return f"a test call found no {_NOUN[cap]}"
         if found.source == "user":
             return f"you marked this model as not {_GERUND[cap]}"
         if found.source == "name":
             return "its name marks it as an embedding model"
-        return f"this model does not {_VERB[cap]}"
+        return f"this model does not {CANNOT[cap]}"
     return f"{preset.label} {_ADAPTER_SAYS[need]}"
 
 

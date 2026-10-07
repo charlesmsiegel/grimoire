@@ -58,6 +58,26 @@ def test_bogus_explicit_preset_falls_back_to_inference(bogus):
     assert providers.infer(conn).id == "openai"
 
 
+@pytest.mark.parametrize(("conn", "want"), [
+    ({"kind": "openrouter", "preset": "claude"}, "openrouter"),
+    ({"kind": "claude", "preset": "openai"}, "claude"),
+    ({"kind": "openrouter", "preset": "anthropic"}, "openrouter"),
+    ({**_oc("https://api.openai.com/v1"), "preset": "openrouter"}, "openai"),
+    # No kind reads as openrouter: its own preset is believed, another is not.
+    ({"preset": "openrouter"}, "openrouter"),
+    ({"preset": "zai", "base_url": "https://api.openai.com/v1"}, "openai"),
+])
+def test_an_explicit_preset_on_another_adapter_is_ignored(conn, want):
+    assert providers.infer(conn).id == want
+
+
+def test_openai_compatible_presets_share_an_adapter():
+    """Any of them may be chosen explicitly over what the URL suggests."""
+    for preset in ("openai", "zai", "zai_coding", "ollama", "lmstudio", "custom"):
+        conn = {**_oc("http://localhost:1234/v1"), "preset": preset}
+        assert providers.infer(conn).id == preset
+
+
 def test_billing_inferred_and_explicit():
     assert providers.billing({"kind": "claude"}) == "subscription"
     assert providers.billing(_oc("https://api.z.ai/api/coding/paas/v4")) == "subscription"
