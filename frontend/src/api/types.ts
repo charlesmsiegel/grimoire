@@ -28,6 +28,18 @@ export type Model = {
   /** Whether the provider says this model reads images (#377); `null` when it
    *  did not say. Absent on a catalog cached before the field existed. */
   vision?: boolean | null;
+  /** What the model produces ("text", "embeddings", "image", ...), when the
+   *  provider says. Absent means it did not say, and reads as a text model. */
+  outputs?: string[];
+  /** Per-model capabilities a provider states (Anthropic's models API today);
+   *  only the keys the provider stated are present. */
+  features?: {
+    structured_output?: boolean;
+    adaptive_thinking?: boolean;
+    enabled_thinking?: boolean;
+    effort?: string[];
+    max_tokens?: number;
+  };
 };
 /** A connection's image override (#377): `""` follows the catalog. */
 export type VisionOverride = "" | "on" | "off";
