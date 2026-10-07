@@ -177,7 +177,7 @@ export type ControlsPreview = {
   effective: Record<string, unknown>;
   controls: Record<string, ControlPreview>;
 };
-export type ModelsRefreshResult ={ models: Model[]; fetched_at: string; rev: string };
+export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
 /** A connection described but not saved, for the sake of listing its models. */
 export type CatalogDraft = { kind: LLMConnectionKind; base_url?: string; api_key?: string };
 /** What a connection's provider last actually did (#146).
