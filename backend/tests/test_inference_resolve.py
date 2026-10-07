@@ -1,21 +1,24 @@
 """The resolver: a task (and a campaign's settings) in, the attempts it runs out.
 
 `store.inference.resolve` assembles the pure pieces (`translate`, `cascade`)
-around the store reads, and must answer exactly what the route layer answers
-today. Nothing calls it yet, so these tests hold it to today's functions in
-`routes.common` directly, over every store state the frozen baseline builds
-(`inference_baseline.STATES`), for every task, with and without the campaign.
+around the store reads, and must answer exactly what the route layer answered
+before the refactor. The functions it replaced are gone from `routes.common`
+now, so these tests hold the resolver itself -- not the seam built on it -- to
+the frozen baseline (`fixtures/inference_baseline.json`), over every store state
+that baseline builds (`inference_baseline.STATES`), for every task, with and
+without the campaign. `test_inference_equivalence.py` holds the seam to the same
+file.
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import json
 
 import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import routes
+from grimoire import llm_sampling, routes
 from grimoire.llm import effective_model
 from grimoire.store import routing
 from grimoire.store.inference import resolve as inf
@@ -25,6 +28,14 @@ from grimoire.store.inference.resolved import Attempt, ResolvedInference
 from . import inference_baseline as baseline
 
 TASKS = [*sorted(routing.TASK_ROUTE), ""]
+
+#: The frozen answers (never regenerated -- see `inference_baseline`).
+BASELINE = json.loads(baseline.FIXTURE.read_text(encoding="utf-8"))
+
+
+def _normalised(value):
+    """`value` as the baseline spells it: connection revs replaced."""
+    return baseline._normalise(value, baseline._revs())
 
 
 def _meta(cid: str) -> dict:
@@ -59,11 +70,12 @@ def at_state(tmp_path):
 
 
 def _refusal(resolved: ResolvedInference) -> dict | None:
-    """The 409 detail `_usable_or_409` would raise for this resolution, or None.
+    """The 409 detail `routes.common.require_inference` raises for this
+    resolution, or None.
 
-    Spelled out here as Task 6's seam will spell it, so the comparison below
+    Spelled out here rather than read off the seam, so the comparison below
     proves the resolver carries everything that refusal needs (`conn`, `via`,
-    `legacy_route`)."""
+    `legacy_route`) independently of the code that builds it."""
     conn = resolved.conn
     if conn is None:
         return {"detail": "No LLM connection selected", "kind": "missing_key"}
@@ -77,36 +89,37 @@ def _refusal(resolved: ResolvedInference) -> dict | None:
     return {"detail": problem, "kind": "missing_key"}
 
 
-# ---- the equivalence sweep: every state, task and scope against today ----
+# ---- the equivalence sweep: every state, task and scope against the baseline ----
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_every_task_resolves_as_the_route_layer_does_today(state, at_state):
+def test_every_task_resolves_as_the_baseline_recorded(state, at_state):
     ctx = at_state(state)
     cid = ctx["cid"]
     for task in TASKS:
-        for scope_cid in ("", cid):
-            where = (state, task, scope_cid)
+        for scope, scope_cid in (("global", ""), ("campaign", cid)):
+            where = (state, task, scope)
+            recorded = BASELINE[state]["tasks"][task][scope]
             resolved = inf.resolve(task, campaign_meta=_meta(scope_cid))
-            standing, resolution, routed = routes.common._standing_connection(task, scope_cid)
-
-            # The primary: the same dict today's seam hands the facade,
-            # `sampling` and `model_params` included.
-            assert resolved.conn == standing, where
-            # How it was decided: a pin is today's "routed", and the legacy
-            # route is what today's 409 names.
-            assert (resolved.via == "route") == routed, where
-            assert resolved.legacy_route == resolution["route"], where
             assert resolved.task == task and resolved.operation == "generate", where
 
-            # The refusal, where today refuses, and only there.
-            try:
-                routes.common._require_connection(task, scope_cid)
-            except HTTPException as exc:
-                assert exc.status_code == 409, where
-                assert _refusal(resolved) == exc.detail, where
+            # The refusal, where the baseline refused, and only there.
+            if "status" in recorded:
+                assert recorded["status"] == 409, where
+                assert _refusal(resolved) == recorded["detail"], where
             else:
                 assert _refusal(resolved) is None, where
-                # The fallback: today's standing policy, whole.
-                assert resolved.fallback == routes.common._fallback_connection(), where
+                # The primary: the same connection, model, sampling and
+                # catalog parameters the seam handed the facade.
+                got = _normalised(baseline._resolved(resolved.conn))
+                assert got == {k: v for k, v in recorded.items() if k != "fallback"}, where
+                # The fallback's identity, as the facade uses it: it drops a
+                # fallback naming the primary's own connection, and carries a
+                # route's preset onto the one it keeps -- so the sampling is
+                # held to `_fallback_connection` by the next test instead.
+                fallback = resolved.fallback
+                if fallback is not None and fallback["id"] == resolved.conn["id"]:
+                    fallback = None
+                assert (None if fallback is None else fallback["id"]) == (
+                    None if recorded["fallback"] is None else recorded["fallback"]["id"]), where
 
             if resolved.conn is None:
                 assert resolved.attempts == () and resolved.fallback is None, where
@@ -149,26 +162,24 @@ def _selection(body: dict) -> Selection:
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_every_override_resolves_as_today(state, at_state):
+def test_every_override_resolves_as_the_baseline_recorded(state, at_state):
+    """The resolver's half of an override, against what the seam answered
+    (recorded at the campaign scope). A 400 or a 409 is the seam's to raise;
+    the resolver's part is to have nothing, or something that cannot send."""
     ctx = at_state(state)
-    cid = ctx["cid"]
     for name, body in OVERRIDES.items():
-        for scope_cid in ("", cid):
-            where = (state, name, scope_cid)
-            resolved = inf.resolve("regenerate", campaign_meta=_meta(scope_cid),
-                                   override=_selection(body))
-            try:
-                conn, _routed = routes.common._override_connection(
-                    SimpleNamespace(**body), "regenerate", scope_cid)
-            except HTTPException as exc:
-                if exc.status_code == 400:
-                    # A named connection that does not exist.
-                    assert resolved.conn is None, where
-                else:
-                    assert exc.status_code == 409, where
-                    assert resolved.conn is None or inf.problem(resolved.conn), where
-                continue
-            assert resolved.conn == conn, where
+        where = (state, name)
+        recorded = BASELINE[state]["overrides"][name]
+        resolved = inf.resolve("regenerate", campaign_meta=_meta(ctx["cid"]),
+                               override=_selection(body))
+        if recorded.get("status") == 400:
+            # A named connection that does not exist.
+            assert resolved.conn is None, where
+        elif recorded.get("status") == 409:
+            assert resolved.conn is None or inf.problem(resolved.conn), where
+        else:
+            got = _normalised(baseline._resolved(resolved.conn))
+            assert got == {k: v for k, v in recorded.items() if k != "routed"}, where
             # An override picks the primary; the fallback stays standing policy.
             assert resolved.fallback == routes.common._fallback_connection(), where
 
@@ -338,15 +349,17 @@ def test_an_override_naming_no_connection_resolves_nothing(at_state):
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_own_sampling_matches_a_task_less_attach(state, at_state):
+def test_own_sampling_reports_what_the_baseline_recorded(state, at_state):
+    """A connection's own sampling, as the connection editor's sidebar reports
+    it, is what the baseline's `display.connection_sampling` recorded."""
     at_state(state)
+    recorded = BASELINE[state]["display"]["connection_sampling"]
     ids = {c["id"] for c in store.llm_connections.list_connections()}
     assert ids
     for conn_id in sorted(ids):
         raw = store.llm_connections.read_connection_raw(conn_id)
-        assert inf.own_sampling(raw) == routes.common._attach_sampling(raw, "", ""), conn_id
-        assert inf.model_params(raw) == routes.common._model_params(raw), conn_id
-        assert inf.problem(raw) == routes.common._connection_problem(raw), conn_id
+        got = _normalised(llm_sampling.report(inf.own_sampling(raw)))
+        assert got == recorded[conn_id], conn_id
 
 
 def test_own_sampling_drops_a_stale_model_params(at_state):
@@ -359,3 +372,24 @@ def test_own_sampling_drops_a_stale_model_params(at_state):
 def test_the_operation_is_carried(at_state):
     at_state("fresh")
     assert inf.resolve("chat", campaign_meta={}, operation="decide").operation == "decide"
+
+
+def test_an_unreadable_campaign_resolves_globally(at_state):
+    """A `campaign.md` that cannot be decoded has no routing opinion: the seam
+    answers what the global scope says, rather than failing the generation."""
+    ctx = at_state("routed")
+    cid = ctx["cid"]
+    path = store.campaigns.campaign_root(cid) / "campaign.md"
+    path.write_bytes(b"\xff\xfe\x00 not text")
+
+    def answer(task: str, scope_cid: str):
+        try:
+            return routes.common.require_inference(task, scope_cid)
+        except HTTPException as exc:
+            return exc.status_code, exc.detail
+
+    # The state is chosen so the question has teeth: this campaign routes
+    # `scene` elsewhere when its file can be read.
+    assert routes.common._campaign_routing_meta(cid) == {}
+    for task in TASKS:
+        assert answer(task, cid) == answer(task, ""), task

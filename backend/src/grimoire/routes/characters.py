@@ -28,7 +28,6 @@ from .common import (
     _campaign_root_or_404,
     _card_data,
     _display_name_or_400,
-    _require_connection,
     _serve_image,
     _upload_image_ext,
     _world_char_version_or_404,
@@ -37,6 +36,7 @@ from .common import (
     get_llm,
     image_draft_prompt,
     image_id_field,
+    require_inference,
     thumb_query,
 )
 from .models import (
@@ -304,7 +304,7 @@ def post_character_tagline_generate(
     nobody has agreed to yet.
     """
     root = _world_root_or_404(wid)
-    conn = _require_connection("tagline")
+    conn = require_inference("tagline").conn
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
@@ -449,7 +449,7 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
     new root, and deriving there fills them.
     """
     root = _world_root_or_404(wid)
-    conn = _require_connection("tagline")
+    conn = require_inference("tagline").conn
     # Off the event loop: `list_characters` stats every version and every image
     # of every character, which is ~200ms on a large world (see
     # `list_undescribed_images`). Eagerly, before the response is returned, so
@@ -557,7 +557,7 @@ def post_character_voice_anchor_generate(
     so an anchor is never written without review (#59).
     """
     root = _world_root_or_404(wid)
-    conn = _require_connection("voice-anchor")
+    conn = require_inference("voice-anchor").conn
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:

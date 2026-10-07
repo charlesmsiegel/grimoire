@@ -70,7 +70,7 @@ def legacy_key(route: Route) -> str:
 #: did not exist when it was filed.
 #:
 #: Adding a generation? Add its task here. `test_routing_guard.py` fails on a
-#: `_require_connection` call whose task no route claims, so the alternative to
+#: `require_inference` call whose task no route claims, so the alternative to
 #: this line is a red test, not a silently unroutable call.
 ROUTES: tuple[Route, ...] = (
     Route("scene", "Scene turns",

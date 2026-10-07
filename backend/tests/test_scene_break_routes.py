@@ -72,7 +72,7 @@ def _location(cid: str, name: str) -> str:
 
 
 def _key(client):
-    """A usable LLM connection, so `_require_connection` stops being the answer."""
+    """A usable LLM connection, so `require_inference` stops being the answer."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
 
 

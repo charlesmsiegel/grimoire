@@ -281,7 +281,7 @@ def live_server(monkeypatch, tmp_path):
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     a = store.scenes.create_scene(cid, "Mara")
     b = store.scenes.create_scene(cid, "Winifred")
-    # Without a key `_require_connection` answers 409 `missing_key` before any
+    # Without a key `require_inference` answers 409 `missing_key` before any
     # streaming happens -- which looks exactly like a detach test failing for
     # the reason it was written to catch.
     with TestClient(app) as boot:

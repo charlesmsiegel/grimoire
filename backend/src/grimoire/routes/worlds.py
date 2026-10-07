@@ -33,7 +33,6 @@ from .common import (
     PC_HISTORY_MISSES,
     _content_fields,
     _dump,
-    _require_connection,
     _serve_image,
     _sheet_failure_status,
     _spooled_upload,
@@ -44,6 +43,7 @@ from .common import (
     image_draft_prompt,
     image_id_field,
     pc_history_404,
+    require_inference,
 )
 from .models import (
     AvatarFocus,
@@ -835,7 +835,7 @@ async def post_scenario_parse(wid: str, request: Request,
     # after the user has fixed a card (or waited on a slow host) tells them the
     # wrong thing first. Before the RESERVATION too, so a keyless install does
     # not leave a failed run behind for every press.
-    conn = _require_connection("scenario")
+    conn = require_inference("scenario").conn
     run, fresh = await _reserve_scenario(request, wid, x_grimoire_attempt)
     if not fresh:
         return {"run": runs.run_payload(run)}
@@ -862,7 +862,7 @@ async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody, request: Requ
     fetches nothing is a 404 the reader retypes, and hiding it behind a run
     would make "not a valid URL" arrive as a failed generation."""
     root = _world_root_or_404(wid)
-    conn = _require_connection("scenario")
+    conn = require_inference("scenario").conn
     run, fresh = await _reserve_scenario(request, wid, x_grimoire_attempt)
     if not fresh:
         return {"run": runs.run_payload(run)}

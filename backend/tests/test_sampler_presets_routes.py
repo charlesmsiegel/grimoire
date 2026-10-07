@@ -228,7 +228,8 @@ def test_a_model_override_does_not_inherit_the_standing_models_param_list(client
         connection_id = None
         model = "other/model"
 
-    conn, routed = common._override_connection(Body(), "chat", cid)
+    resolved, routed = common.override_inference(Body(), "chat", cid)
+    conn = resolved.conn
     assert routed and "model_params" not in conn
     from grimoire import llm_sampling
     report = llm_sampling.report(conn)

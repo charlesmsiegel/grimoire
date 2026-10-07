@@ -29,9 +29,9 @@ from . import runs
 from .common import (
     _dump,
     _llm_http_error,
-    _require_connection,
     _require_scene,
     get_llm,
+    require_inference,
     run_error,
 )
 from .models import CampaignTracker, TrackerEdit, TrackerLayer
@@ -389,7 +389,7 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
         # a failed record saying why rather than an exception out of the run.
         # In a worker: resolving a connection reads the campaign and the
         # connection files, and this runs on the lifespan loop.
-        conn = await run_in_threadpool(_require_connection, "tracker-update", cid)
+        conn = await run_in_threadpool(lambda: require_inference("tracker-update", cid).conn)
     except HTTPException as exc:
         await run_in_threadpool(_fail, cid, identity, sid, key, _detail(exc), gen)
         return {"state": "failed", "error": run_error(exc)}

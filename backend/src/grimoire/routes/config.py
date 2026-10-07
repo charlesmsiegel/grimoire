@@ -13,17 +13,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from .. import health, llm, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store.inference import resolve as inference
 from . import runs
 from .common import (
     _bounded_call,
-    _connection_problem,
     _dump,
     _llm_http_error,
     _response_body,
     _routing_body,
     _routing_fields,
-    _standing_connection,
-    _with_sampling,
     _write_response,
     get_health,
     get_llm,
@@ -61,7 +59,7 @@ def _send_images_reach() -> str:
     of its own runs on. Answers "unknown" rather than failing the config read:
     this is a hint beside a checkbox, not something worth a 500."""
     try:
-        return store.post_images.reach(_standing_connection("chat", "")[0])
+        return store.post_images.reach(inference.resolve("chat", campaign_meta={}).conn)
     except Exception:  # noqa: BLE001 - a display hint; see the docstring
         return "unknown"
 
@@ -496,7 +494,7 @@ def _connection_sampling(conn_id: str) -> dict | None:
         conn = store.llm_connections.read_connection_raw(conn_id)
     except store.llm_connections.ConnectionNotFound:
         return None
-    return llm_sampling.report(_with_sampling(conn, "", ""))
+    return llm_sampling.report(inference.own_sampling(conn))
 
 
 @router.post("/llm-connections")
@@ -668,7 +666,7 @@ async def post_connection_health(
     answered at all.
 
     A connection with nothing to check with is answered without a network call,
-    from the same `_connection_problem` rule that turns a keyless connection
+    from the same `inference.problem` rule that turns a keyless connection
     into a 409 on the generation routes: a request that is going to be rejected
     for having no credential teaches the reader nothing that the missing
     credential does not.
@@ -680,7 +678,7 @@ async def post_connection_health(
         conn = store.llm_connections.read_connection_raw(cid)
     except store.llm_connections.ConnectionNotFound as exc:
         raise HTTPException(status_code=404, detail="connection not found") from exc
-    problem = _connection_problem(conn)
+    problem = inference.problem(conn)
     if problem is not None:
         return _health_body(registry.record(conn, LLMError("missing_key", problem)))
     try:

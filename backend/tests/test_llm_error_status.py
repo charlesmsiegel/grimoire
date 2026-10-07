@@ -210,7 +210,7 @@ def test_every_one_shot_generation_route_reports_the_kind_it_got(client, kind, s
 
 
 def test_a_provider_missing_key_matches_the_pre_flight_refusal(client):
-    """`_require_connection` refuses an unconfigured connection with a 409
+    """`require_inference` refuses an unconfigured connection with a 409
     before any call goes out. A key the *provider* then reports missing is the
     same condition found later, and answering it differently would make one
     setup mistake look like two problems."""

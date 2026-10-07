@@ -21,13 +21,13 @@ from .common import (
     _campaign_root_or_404,
     _fresh_or_409,
     _record_prompt,
-    _require_connection,
     _require_scene,
     _world_char_version_or_404,
     _world_root_or_404,
     computes_only,
     get_llm,
     image_id_field,
+    require_inference,
     thumb_query,
 )
 from .models import (
@@ -599,7 +599,7 @@ def post_opener(cid: str, sid: str, body: Opener, request: Request,
     if not body.adapt and not body.prompt.strip():
         raise HTTPException(status_code=422, detail="an opener needs a prompt")
     prompt = _greeting_to_adapt(cid, sid) if body.adapt else body.prompt
-    conn = _require_connection("opener", cid)
+    conn = require_inference("opener", cid).conn
     cast = _opener_cast(cid, sid)
     if body.snapshot and body.snapshot != cast:
         raise HTTPException(409, detail="opener cast changed")

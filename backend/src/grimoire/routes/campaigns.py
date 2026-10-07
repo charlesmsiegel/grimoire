@@ -39,7 +39,6 @@ from .common import (
     _dump,
     _page_of,
     _page_window,
-    _require_connection,
     _response_body,
     _routing_body,
     _routing_fields,
@@ -56,6 +55,7 @@ from .common import (
     image_id_field,
     leaves_campaign_unchanged,
     pc_history_404,
+    require_inference,
 )
 from .models import (
     AdvanceTime,
@@ -2202,7 +2202,7 @@ def post_campaign_voice_anchor_generate(
     overlay so a campaign-local character (which has no world copy) can use it
     too. Preview only — the caller persists with PUT."""
     _campaign_root_or_404(cid)
-    conn = _require_connection("voice-anchor", cid)
+    conn = require_inference("voice-anchor", cid).conn
     root = store.overlay.char_root(cid, char)
     try:
         ch = store.characters.read_character(root, char)

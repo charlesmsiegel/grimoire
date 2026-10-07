@@ -30,28 +30,29 @@ from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
 from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
+from ..store.inference import resolve as inference
 from . import character_turns, runs, streaming
 from . import continuity as continuity_routes
 from . import tracker as tracker_routes
 from .common import (
     _campaign_root_or_404,
+    _campaign_routing_meta,
     _dump,
     _llm_http_error,
     _noting,
-    _override_connection,
     _page_of,
     _page_window,
     _record_prompt,
-    _require_connection,
     _require_scene,
     _response_body,
-    _soft_connection,
-    _standing_connection,
+    _soft_inference,
     _turn_override,
     _write_response,
     computes_only,
     draft_completion,
     get_llm,
+    override_inference,
+    require_inference,
     run_error,
 )
 from .models import (
@@ -339,7 +340,7 @@ def post_scene_suggestions(cid: str, request: Request,
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
-    conn = _require_connection("suggestions", cid)
+    conn = require_inference("suggestions", cid).conn
     snapshot = store.suggest.build_snapshot(cid, offscreen=req.offscreen)
     controls = _controls_or_refuse(cid, snapshot, req)
     # A refresh passes rank=false: re-ranking would reshuffle the greeting cards
@@ -415,7 +416,7 @@ def post_scene_intent(cid: str, body: SceneIntent, request: Request,
         raise HTTPException(status_code=404, detail="campaign not found")
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty scene description")
-    conn = _require_connection("intent", cid)
+    conn = require_inference("intent", cid).conn
     messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
 
     async def work():
@@ -809,7 +810,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     # BEFORE the preflight checks, and that order is the whole point of an
     # attempt id. This is a REPLAY: the work already ran and its outcome is
     # buffered, so a client that lost the original response must get that
-    # outcome back. Behind `_require_connection` it would not -- a connection
+    # outcome back. Behind `require_inference` it would not -- a connection
     # removed or re-keyed in the meantime answers `missing_key`, telling the
     # player a turn that actually landed did not, which is the exact ambiguity
     # the attempt id exists to remove. No provider is needed to replay.
@@ -822,7 +823,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     if character_turns.enabled() or turn.speaker_ref:
         character_turns.validate_actor(cid, sid, turn.speaker_ref)
     try:
-        conn = _require_connection("chat", cid)
+        conn = require_inference("chat", cid).conn
     except HTTPException as exc:
         # A Manual-mode post naming no speaker generates nothing, so a missing
         # connection is no reason to refuse it. `{}` tells the engine none was
@@ -1115,7 +1116,7 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
         return replay
     _turn_override(body)
     scene = _require_scene(cid, sid)
-    conn = _require_connection("retry", cid)
+    conn = require_inference("retry", cid).conn
     # Ahead of the retirement, not behind it: a refusal must not cost a decision
     # for a request that then does nothing at all. Ahead of the RESERVATION too:
     # a run reserved for a request that was never going to do anything has to be
@@ -1243,7 +1244,8 @@ def post_regenerate(cid: str, sid: str, request: Request,
     # The task literal lives here, at the call site, because this is where a
     # generation knows what it is: a reroll of a scene reply routes exactly
     # where the reply it replaces would have (#142).
-    conn, routed = _override_connection(body, "regenerate", cid)
+    resolved, routed = override_inference(body, "regenerate", cid)
+    conn = resolved.conn
     # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
     # else: this route archives the outgoing reply and removes it from the
     # transcript before the replacement exists, so a 409 raised afterwards
@@ -1260,7 +1262,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
                     client: LLMClient, conn: dict, run, *, routed: bool):
     """The body of a reroll, once the scene is reserved -- see `_chat_run`."""
     guidance = (body.guidance or "").strip() if body else ""
-    # What this reroll will actually be sent to, after `_override_connection`
+    # What this reroll will actually be sent to, after `override_inference`
     # has folded in whatever the body asked for. Read off `conn` rather than off
     # the body, so it names the resolved route in every case -- an override
     # naming only a connection reports THAT connection's model, and a Claude
@@ -1272,7 +1274,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # the active connection at its own model is not an override, and review
     # caught the earlier reading of this flag turning such a request into one
     # that displaced the snapshot stamp below. Decided once, by
-    # `_override_connection`, which compares the resolved route against the
+    # `override_inference`, which compares the resolved route against the
     # standing one on the EFFECTIVE model; re-deriving it here off `body` would
     # be a second place for that rule to drift. The two stamps below answer to
     # it differently -- and deliberately, because they answer different
@@ -2907,7 +2909,7 @@ def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
     """
     _campaign_root_or_404(cid)
     _require_scene(cid, sid)
-    conn = _require_connection("absorb", cid)
+    conn = require_inference("absorb", cid).conn
     # Before the reservation and before a token of the budget: a scene whose id
     # predates the cap can be one the review sidecar's longer name will not fit
     # beside, and finding that out in `publish` costs the whole generation and
@@ -3021,14 +3023,14 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # pointing one of them at a keyless connection has to come back as that
         # phase's status rather than as a 409 that discards the extraction's
         # result too.
-        dossier_conn, dossier_why = _soft_connection(
-            lambda: _require_connection("dossier", cid))
-        voice_conn, voice_why = _soft_connection(
-            lambda: _require_connection("voice-drift", cid))
-        audit_conn, audit_why = _soft_connection(
-            lambda: _require_connection("audit", cid))
-        ident_conn, ident_why = _soft_connection(
-            lambda: _require_connection("continuity-identity", cid))
+        dossier_conn, dossier_why = _soft_inference(
+            lambda: require_inference("dossier", cid))
+        voice_conn, voice_why = _soft_inference(
+            lambda: require_inference("voice-drift", cid))
+        audit_conn, audit_why = _soft_inference(
+            lambda: require_inference("audit", cid))
+        ident_conn, ident_why = _soft_inference(
+            lambda: require_inference("continuity-identity", cid))
         with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
             # ONE race, around the whole fan-out, rather than a predicate
             # threaded into each phase. Two reasons, and the second is the one
@@ -3366,7 +3368,7 @@ def post_audit(cid: str, sid: str, request: Request,
     nothing else can reconstruct.
     """
     _require_scene(cid, sid)
-    conn = _require_connection("audit", cid)
+    conn = require_inference("audit", cid).conn
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
 
@@ -3786,7 +3788,7 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
         # digest, what gets folded, what `covered` records -- then works from the
         # same bounded transcript, rather than each having to remember the bound.
         scene = {**scene, "messages": scene["messages"][:upto]}
-    conn = _require_connection("rolling-summary", cid)
+    conn = require_inference("rolling-summary", cid).conn
     every = store.config.rolling_summary_every()
     facts = store.chronicle.scene_facts(cid, sid)
     view = _rolling_view(cid, sid, scene, facts)
@@ -4043,7 +4045,7 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
         if upto < 0:
             raise HTTPException(status_code=400, detail="upto must not be negative")
         scene = {**scene, "messages": scene["messages"][:upto]}
-    conn = _require_connection("scene-break", cid)
+    conn = require_inference("scene-break", cid).conn
     every = store.config.scene_break_every()
     provider = _break_provider(cid)
     view = _break_view(scene, every, provider,
@@ -4353,7 +4355,7 @@ def post_dossiers(cid: str, sid: str, request: Request,
     proposal from the first pass and put nothing in its place.
     """
     scene = _require_scene(cid, sid)
-    conn = _require_connection("dossier", cid)
+    conn = require_inference("dossier", cid).conn
     if not store.scenes.in_context(scene["messages"]):
         # A dossier is a paragraph the model rewrites FROM the transcript, so an
         # empty one can only produce invention. The audit needs no equivalent
@@ -5127,7 +5129,7 @@ def get_scene_context(cid: str, sid: str):
     this model's own (`tokens.counting`) -- for most backends it is not, and the
     inspector marks the counts as estimates."""
     _require_scene(cid, sid)
-    conn, _resolution, _routed = _standing_connection("chat", cid)
+    conn = inference.resolve("chat", campaign_meta=_campaign_routing_meta(cid)).conn
     model = effective_model(conn) if conn is not None else ""
     # What the next turn would send, pictures included (#377): the Images row is
     # present exactly when they would reach this scene's routed connection. And
@@ -5223,7 +5225,7 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # Composed here rather than read: `context_breakdown` runs the same
         # assemble/pack pass `GET .../context` does, so the side this diff calls
         # "live" is the one the Context panel is showing.
-        conn, _resolution, _routed = _standing_connection("chat", cid)
+        conn = inference.resolve("chat", campaign_meta=_campaign_routing_meta(cid)).conn
         model = effective_model(conn) if conn is not None else ""
         live = store.context.context_breakdown(cid, sid, model=model,
                                                images=store.post_images.images_for(conn))
@@ -5716,7 +5718,7 @@ def post_replay_turn(cid: str, sid: str, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = _require_connection("replay", cid)
+    conn = require_inference("replay", cid).conn
     _replay_session(cid, sid)
     run, fresh = runs.reserve_turn(request.app, cid, sid, "replay",
                                    x_grimoire_attempt)

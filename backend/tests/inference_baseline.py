@@ -261,7 +261,7 @@ def _resolved(conn: dict) -> dict:
 
 def _task(client: TestClient, task: str, cid: str) -> dict:
     try:
-        conn = routes.common._require_connection(task, cid)
+        conn = routes.common.require_inference(task, cid).conn
     except HTTPException as exc:
         return _failure(exc)
     attempts = client.app.state.llm._routes(conn)
@@ -291,10 +291,11 @@ OVERRIDE_BODIES: dict[str, dict] = {
 
 def _override(body: dict, cid: str) -> dict:
     try:
-        conn, routed = routes.common._override_connection(
+        resolved, routed = routes.common.override_inference(
             SimpleNamespace(**body), "regenerate", cid)
     except HTTPException as exc:
         return _failure(exc)
+    conn = resolved.conn
     return {**_resolved(conn), "routed": routed}
 
 

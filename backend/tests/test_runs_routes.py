@@ -387,7 +387,7 @@ def _chat(client, cid, sid, content="Mara steps onto the dock.", **kw):
 @pytest.fixture
 def sending_scene(client, campaign_scene):
     """`campaign_scene` plus the connection a send needs, so a refusal in these
-    tests is the one the test injected rather than `_require_connection`'s."""
+    tests is the one the test injected rather than `require_inference`'s."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     return campaign_scene
 
@@ -555,7 +555,7 @@ def test_a_completed_attempt_replays_after_the_connection_is_removed(client, sen
     """The attempt id exists to answer "did my turn land?" -- so a replay must
     not be subject to the checks a NEW turn needs.
 
-    Behind `_require_connection`, a client that lost the response and re-sent
+    Behind `require_inference`, a client that lost the response and re-sent
     the same id after the key was removed or re-keyed was told `missing_key`:
     the turn landed, and the one mechanism built to say so reported a failure.
     """
