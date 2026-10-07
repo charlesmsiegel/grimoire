@@ -53,6 +53,24 @@
       "model": "embed-small",
       "space": "local\u0000<rev:local>\u0000embed-small"
     },
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "local_padded": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "detail": "That connection no longer exists \u2014 pick another, or reroll on the campaign's.",
@@ -87,6 +105,30 @@
         "model": "opus",
         "model_params": null,
         "routed": false,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": null,
+        "routed": true,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_connection": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": null,
+        "routed": true,
         "sampling": {
           "params": {},
           "preset_id": "",
@@ -1640,6 +1682,24 @@
       "model": "embed-small",
       "space": "local\u0000<rev:local>\u0000embed-small"
     },
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "local_padded": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "detail": "That connection no longer exists \u2014 pick another, or reroll on the campaign's.",
@@ -1674,6 +1734,30 @@
         "model": "opus",
         "model_params": null,
         "routed": false,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": null,
+        "routed": true,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_connection": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": null,
+        "routed": true,
         "sampling": {
           "params": {},
           "preset_id": "",
@@ -3214,6 +3298,14 @@
       "send_images_reach": "off"
     },
     "embedding": null,
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": null,
+      "local_padded": null,
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "detail": "That connection no longer exists \u2014 pick another, or reroll on the campaign's.",
@@ -3244,6 +3336,30 @@
         }
       },
       "none": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": null,
+        "routed": false,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": null,
+        "routed": true,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_connection": {
         "conn": "openrouter",
         "model": "vendor/active",
         "model_params": null,
@@ -4782,6 +4898,14 @@
       "send_images_reach": "off"
     },
     "embedding": null,
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": null,
+      "local_padded": null,
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "detail": "That connection no longer exists \u2014 pick another, or reroll on the campaign's.",
@@ -4815,6 +4939,30 @@
         }
       },
       "none": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": null,
+        "routed": false,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": null,
+        "routed": true,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_connection": {
         "conn": "openrouter",
         "model": "vendor/active",
         "model_params": null,
@@ -6361,6 +6509,24 @@
       "send_images_reach": "none"
     },
     "embedding": null,
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "local_padded": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "conn": "spare",
@@ -6417,6 +6583,39 @@
         "model": "local-model",
         "model_params": null,
         "routed": false,
+        "sampling": {
+          "params": {
+            "temperature": 0.9
+          },
+          "preset_id": "warm",
+          "preset_name": "warm",
+          "scope": "campaign"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": [
+          "temperature"
+        ],
+        "routed": true,
+        "sampling": {
+          "params": {
+            "temperature": 0.9
+          },
+          "preset_id": "warm",
+          "preset_name": "warm",
+          "scope": "campaign"
+        }
+      },
+      "openrouter_connection": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": [
+          "temperature",
+          "top_p"
+        ],
+        "routed": true,
         "sampling": {
           "params": {
             "temperature": 0.9
@@ -7853,6 +8052,14 @@
       "send_images_reach": "off"
     },
     "embedding": null,
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": null,
+      "local_padded": null,
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "detail": "That connection no longer exists \u2014 pick another, or reroll on the campaign's.",
@@ -7883,6 +8090,30 @@
         }
       },
       "none": {
+        "conn": "openrouter",
+        "model": "vendor/legacy",
+        "model_params": null,
+        "routed": false,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": null,
+        "routed": true,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_connection": {
         "conn": "openrouter",
         "model": "vendor/legacy",
         "model_params": null,
@@ -9435,6 +9666,24 @@
       "send_images_reach": "unknown"
     },
     "embedding": null,
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "local_padded": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "conn": "spare",
@@ -9491,6 +9740,39 @@
         "model": "local-model",
         "model_params": null,
         "routed": false,
+        "sampling": {
+          "params": {
+            "temperature": 0.9
+          },
+          "preset_id": "warm",
+          "preset_name": "warm",
+          "scope": "campaign"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": [
+          "temperature"
+        ],
+        "routed": true,
+        "sampling": {
+          "params": {
+            "temperature": 0.9
+          },
+          "preset_id": "warm",
+          "preset_name": "warm",
+          "scope": "campaign"
+        }
+      },
+      "openrouter_connection": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": [
+          "temperature",
+          "top_p"
+        ],
+        "routed": true,
         "sampling": {
           "params": {
             "temperature": 0.9
@@ -11783,6 +12065,24 @@
       "model": "embed-small",
       "space": "local\u0000<rev:local>\u0000embed-small"
     },
+    "embedding_cfgs": {
+      "dangling": null,
+      "local": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "local_padded": {
+        "base_url": "http://localhost:1234/v1",
+        "key": "",
+        "model": "embed-small",
+        "space": "local\u0000<rev:local>\u0000embed-small"
+      },
+      "no_model": null,
+      "openrouter_kind": null,
+      "spare": null
+    },
     "overrides": {
       "both": {
         "conn": "spare",
@@ -11829,6 +12129,30 @@
         }
       },
       "none": {
+        "conn": "openrouter",
+        "model": "vendor/active",
+        "model_params": null,
+        "routed": false,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_bigger": {
+        "conn": "openrouter",
+        "model": "vendor/bigger",
+        "model_params": null,
+        "routed": true,
+        "sampling": {
+          "params": {},
+          "preset_id": "",
+          "preset_name": "",
+          "scope": "none"
+        }
+      },
+      "openrouter_connection": {
         "conn": "openrouter",
         "model": "vendor/active",
         "model_params": null,

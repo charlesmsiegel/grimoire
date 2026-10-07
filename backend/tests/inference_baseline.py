@@ -46,7 +46,7 @@ from grimoire import routes
 from grimoire.llm import effective_model
 from grimoire.main import create_app
 from grimoire.store import routing
-from grimoire.store.frontmatter import dump_frontmatter
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inference_baseline.json"
 
@@ -62,6 +62,7 @@ def client_at(home: Path) -> Iterator[TestClient]:
     Mirrors the `client` fixture of `test_routing_routes.py`, without
     `monkeypatch`, so `python -m tests.inference_baseline` can build the same
     stores the test does. The environment is put back afterwards."""
+    # os.environ directly, not monkeypatch: the `__main__` path has no pytest.
     before = os.environ.get("GRIMOIRE_HOME")
     os.environ["GRIMOIRE_HOME"] = str(home)
     try:
@@ -76,14 +77,41 @@ def client_at(home: Path) -> Iterator[TestClient]:
 
 
 # ---- building blocks: one small helper per ingredient ----
+def _ok(response):
+    """`response`, after asserting the write was accepted: a builder whose API
+    call silently failed would freeze a baseline of the wrong state."""
+    assert response.status_code == 200, (response.request.url, response.status_code,
+                                         response.text)
+    return response
+
+
+def _config(**fields) -> None:
+    """`store.write_config`, then check the raw file holds exactly these values
+    (a key the store narrows away, or a value it rewrote, would otherwise be
+    frozen into the baseline unnoticed)."""
+    store.write_config(**fields)
+    raw, _ = parse_frontmatter((store.home() / "config.md").read_text(encoding="utf-8"))
+    for key, value in fields.items():
+        assert raw.get(key) == value, (key, value, raw.get(key))
+
+
+def _campaign_routing(cid: str, fields: dict) -> None:
+    store.campaigns.set_campaign_routing(cid, fields)
+    meta = store.campaigns.read_campaign(cid)["meta"]
+    for key, value in fields.items():
+        assert meta.get(key) == value, (key, value, meta.get(key))
+
+
 def _world_and_campaign(client: TestClient) -> str:
     """World "Realm", character "Mara", campaign "Saltmarch Run" with one scene
     and a short transcript; returns the campaign id."""
-    wid = client.post("/api/worlds", json={"name": "Realm"}).json()["id"]
-    client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara", "version_name": "main"})
-    cid = client.post("/api/campaigns",
-                      json={"name": "Saltmarch Run", "world": wid}).json()["id"]
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "Saltmarch"}).json()["id"]
+    wid = _ok(client.post("/api/worlds", json={"name": "Realm"})).json()["id"]
+    _ok(client.post(f"/api/worlds/{wid}/characters",
+                    json={"name": "Mara", "version_name": "main"}))
+    cid = _ok(client.post("/api/campaigns",
+                          json={"name": "Saltmarch Run", "world": wid})).json()["id"]
+    sid = _ok(client.post(f"/api/campaigns/{cid}/scenes",
+                          json={"title": "Saltmarch"})).json()["id"]
     store.scenes.append_message(cid, sid, "user", "Something happened at the docks.")
     store.scenes.append_message(cid, sid, "assistant", "The keeper said nothing.")
     return cid
@@ -92,14 +120,14 @@ def _world_and_campaign(client: TestClient) -> str:
 def _fresh(client: TestClient) -> dict:
     """The seeded openrouter connection holds a key and a model; nothing else."""
     cid = _world_and_campaign(client)
-    client.put("/api/llm-connections/openrouter",
-               json={"api_key": "sk-test-active", "model": "vendor/active"})
+    _ok(client.put("/api/llm-connections/openrouter",
+                   json={"api_key": "sk-test-active", "model": "vendor/active"}))
     return {"cid": cid}
 
 
 def _connection(client: TestClient, name: str, **fields) -> str:
     body = {"kind": "openrouter", "name": name, **fields}
-    return client.post("/api/llm-connections", json=body).json()["id"]
+    return _ok(client.post("/api/llm-connections", json=body)).json()["id"]
 
 
 def _local(client: TestClient, preset: str = "") -> str:
@@ -133,11 +161,11 @@ def _routed(client: TestClient) -> dict:
     _presets()
     _local(client, preset="warm")
     _spare(client)
-    client.put("/api/llm-connections/openrouter", json={"sampler_preset": "warm"})
+    _ok(client.put("/api/llm-connections/openrouter", json={"sampler_preset": "warm"}))
     # Global scope. `voice` and `tracker`'s preset name things that do not exist
     # (a connection / a preset), which the PUT refuses, so these are written the
     # way a deletion upstream would have left them.
-    store.write_config(
+    _config(
         route_dossier="local", route_summary="claude", route_voice="gone",
         route_tracker="local", preset_scene="cold", preset_summary=PRESET_CLEAR,
         preset_tracker="nosuch", fallback_connection_id="spare",
@@ -148,10 +176,10 @@ def _routed(client: TestClient) -> dict:
     # a delete cannot reach into a campaign's frontmatter, so it is made that
     # way here rather than invented.
     gone = _connection(client, "deleted", api_key="sk-deleted")
-    store.campaigns.set_campaign_routing(cid, {
+    _campaign_routing(cid, {
         "route_scene": "local", "preset_scene": "warm", "route_tracker": "spare",
         "route_absorb": gone, "preset_dossier": PRESET_CLEAR})
-    client.delete(f"/api/llm-connections/{gone}")
+    _ok(client.delete(f"/api/llm-connections/{gone}"))
     _catalog_for_openrouter()
     return ctx
 
@@ -159,21 +187,22 @@ def _routed(client: TestClient) -> dict:
 def _keyless(client: TestClient) -> dict:
     ctx = _fresh(client)
     _connection(client, "nokey")
-    store.write_config(route_absorb="nokey", fallback_connection_id="nokey")
+    _config(route_absorb="nokey", fallback_connection_id="nokey")
     return ctx
 
 
 def _no_active(client: TestClient) -> dict:
     ctx = _routed(client)
-    store.write_config(active_connection_id="")
+    _config(active_connection_id="")
     return ctx
 
 
 def _claude_active(client: TestClient) -> dict:
     ctx = _fresh(client)
     store.llm_connections.update_connection("claude", model="")
+    assert store.llm_connections.read_connection_raw("claude")["model"] == ""
     _local(client)
-    store.write_config(active_connection_id="claude", embeddings_connection_id="local",
+    _config(active_connection_id="claude", embeddings_connection_id="local",
                        embeddings_model="embed-small", send_images="on")
     return ctx
 
@@ -181,9 +210,11 @@ def _claude_active(client: TestClient) -> dict:
 def _embed_with_dangling(client: TestClient) -> dict:
     ctx = _claude_active(client)
     _spare(client)
-    store.write_config(route_voice="gone", route_dossier="spare")
+    _config(route_voice="gone", route_dossier="spare")
     # Not valid UTF-8: the connection exists as a file and cannot be read.
     (store.home() / "llm_connections" / "spare.md").write_bytes(b"\xff\xfe\x00 not text")
+    assert store.embed_space.resolve({"embeddings_connection_id": "spare",
+                                      "embeddings_model": "m"}) is None
     return ctx
 
 
@@ -191,7 +222,7 @@ def _whitespace(client: TestClient) -> dict:
     ctx = _fresh(client)
     _local(client)
     _spare(client)
-    store.write_config(route_dossier="  local  ", fallback_connection_id="  spare  ",
+    _config(route_dossier="  local  ", fallback_connection_id="  spare  ",
                        embeddings_connection_id="  local  ", embeddings_model="embed-small")
     return ctx
 
@@ -250,6 +281,11 @@ OVERRIDE_BODIES: dict[str, dict] = {
     "unknown_connection": {"connection_id": "nope"},
     "long_model": {"model": "x" * 10_000},
     "keyless_connection": {"connection_id": "nokey"},
+    # Added after review: a named OpenRouter connection, so the catalog lookup
+    # for `model_params` runs under an override (in `routed`, `vendor/bigger`
+    # is in its sidecar and `model` alone never reaches it).
+    "openrouter_connection": {"connection_id": "openrouter"},
+    "openrouter_bigger": {"connection_id": "openrouter", "model": "vendor/bigger"},
 }
 
 
@@ -280,6 +316,21 @@ def _display(client: TestClient, cid: str) -> dict:
                              "sampling": context.json().get("sampling")
                              if context.status_code == 200 else None},
     }
+
+
+#: Explicit configs for `embed_space.resolve(cfg)`, asked in every state: the
+#: configured pair is covered by `embedding`; these are the other ways of not
+#: having one (an id naming nothing, an unreadable file where a state has one,
+#: a kind with no /embeddings route, no model, stray whitespace).
+EMBEDDING_CFGS: dict[str, dict] = {
+    "dangling": {"embeddings_connection_id": "gone", "embeddings_model": "embed-small"},
+    "spare": {"embeddings_connection_id": "spare", "embeddings_model": "embed-small"},
+    "local": {"embeddings_connection_id": "local", "embeddings_model": "embed-small"},
+    "local_padded": {"embeddings_connection_id": "  local  ", "embeddings_model": "embed-small"},
+    "openrouter_kind": {"embeddings_connection_id": "openrouter",
+                        "embeddings_model": "embed-small"},
+    "no_model": {"embeddings_connection_id": "local", "embeddings_model": ""},
+}
 
 
 def _revs() -> dict[str, str]:
@@ -314,6 +365,8 @@ def observe(client: TestClient, ctx: dict) -> dict:
         "overrides": {name: _override(body, cid) for name, body in OVERRIDE_BODIES.items()},
         "display": _display(client, cid),
         "embedding": store.embed_space.resolve(),
+        "embedding_cfgs": {name: store.embed_space.resolve(cfg)
+                           for name, cfg in EMBEDDING_CFGS.items()},
         "routing": {"global": client.get("/api/routing").json(),
                     "campaign": client.get(f"/api/campaigns/{cid}/routing").json()},
     }
