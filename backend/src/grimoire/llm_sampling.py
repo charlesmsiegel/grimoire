@@ -14,13 +14,20 @@ that show it (see the sampler-presets spec).
 
 A preset supplies exactly the parameters it sets. An absent parameter is the
 backend's own default, never a zero: defaulting it here would override a
-provider default nobody chose to change.
+provider default nobody chose to change. (The one exception is the Anthropic
+API's `max_tokens`, which that API requires on every request.)
+
+`effective` is the one function that decides, per control, what a connection is
+sent and why (spec 8); `split`, `sent_names` and `report` are views over it.
 """
 
 from __future__ import annotations
 
 import math
 from typing import NamedTuple
+from urllib.parse import urlsplit
+
+from . import llm_reasoning
 
 
 class Param(NamedTuple):
@@ -28,9 +35,10 @@ class Param(NamedTuple):
 
     name: str
     label: str
-    kind: str          # "float" | "int" | "stop"
+    kind: str          # "float" | "int" | "stop" | "choice"
     low: float
     high: float
+    choices: tuple[str, ...] = ()
 
 
 #: Every parameter a preset may set, in the order every surface lists them.
@@ -49,7 +57,40 @@ PARAMS: tuple[Param, ...] = (
     Param("stop", "Stop strings", "stop", 0, 0),
 )
 NAMES: tuple[str, ...] = tuple(p.name for p in PARAMS)
-_BY_NAME = {p.name: p for p in PARAMS}
+
+#: A preset's provider-neutral reasoning effort (spec 4.3). Not in `PARAMS`: the
+#: editor's table gains it in slice C, and `split` stays about samplers.
+REASONING: tuple[str, ...] = ("off", "low", "medium", "high")
+REASONING_PARAM = Param("reasoning_effort", "Reasoning effort", "choice", 0, 0, REASONING)
+
+#: Every control a preset may set, in the order every answer lists them.
+CONTROLS: tuple[str, ...] = (*NAMES, REASONING_PARAM.name)
+_BY_NAME = {p.name: p for p in (*PARAMS, REASONING_PARAM)}
+
+#: What `effective` says of each control (spec 8). `n/a` is for an operation
+#: that takes no sampling at all (an embedding, a native decision); nothing that
+#: generates text is ever `n/a`.
+SUPPORTED, TRANSLATED, UNSUPPORTED, UNKNOWN, NOT_APPLICABLE = (
+    "supported", "translated", "unsupported", "unknown", "n/a")
+STATES: tuple[str, ...] = (SUPPORTED, TRANSLATED, UNSUPPORTED, UNKNOWN, NOT_APPLICABLE)
+#: The states whose control goes on the wire when it has a wire name.
+_SENT = frozenset({SUPPORTED, TRANSLATED, UNKNOWN})
+
+#: The Anthropic API requires `max_tokens`; this is what it is sent when the
+#: preset sets none (spec 8), before the model's own limit caps it.
+ANTHROPIC_MAX_TOKENS = 16000
+#: Budgeted thinking (`thinking: {type: enabled}`), for the models that take
+#: it: the spec's fixed budgets, each then held to at most half of the
+#: effective `max_tokens` -- the budget counts against `max_tokens`, so a budget
+#: just under it would leave the reply nothing -- and never under the API's
+#: minimum. A request with no room for the minimum sends no thinking at all.
+THINKING_BUDGET: dict[str, int] = {"low": 1024, "medium": 4096, "high": 16000}
+THINKING_MIN = 1024
+
+#: Wire fields only the reasoning control writes. `split` is about samplers,
+#: so these never appear in it; the facade hands them over beside it.
+REASONING_WIRE: tuple[str, ...] = ("reasoning", "reasoning_effort", "thinking",
+                                   "output_config")
 
 #: Stop strings a preset may hold, and how long each may be.
 STOP_MAX = 16
@@ -73,6 +114,23 @@ WHY_STANDARD = ("not part of the OpenAI API — turn on extended samplers if thi
 WHY_STOP = f"the OpenAI API takes at most {OPENAI_STOP_MAX} stop strings"
 WHY_CLAUDE = "the Claude Agent SDK takes no sampling options"
 WHY_INVALID = "the stored value is not valid"
+WHY_UNVERIFIED = ("OpenRouter's catalog for this model is not cached, so whether it "
+                  "takes this is not known")
+WHY_COMPLETION_TOKENS = "the OpenAI API spells it max_completion_tokens"
+WHY_STOP_SEQUENCES = "the Anthropic API spells it stop_sequences"
+WHY_ANTHROPIC_NONE = "the Anthropic API has no such parameter"
+WHY_ANTHROPIC_SAMPLING = ("current Claude models refuse sampling parameters; only a "
+                          "model whose catalog lists budgeted thinking takes them")
+WHY_ANTHROPIC_THINKING = "the Anthropic API refuses sampling parameters while thinking is on"
+WHY_REASONING_OFF = ("off sends no reasoning setting, so the model's own default "
+                     "applies, and it may still reason")
+WHY_THINKING_OFF = ("off sends no thinking setting; some current Claude models think "
+                    "anyway and cannot turn it off")
+WHY_THINKING_UNKNOWN = ("the catalog does not say which thinking this model takes, so "
+                        "none is sent")
+WHY_THINKING_NONE = "the catalog says this model takes no thinking"
+WHY_REASONING_ENDPOINT = "whether this endpoint takes reasoning_effort is not known"
+WHY_GLM = "this GLM model takes low or high (or max, set on the connection)"
 
 
 def _check_stop(p: Param, value: object) -> list[str]:
@@ -90,6 +148,12 @@ def _check(p: Param, value: object) -> object:
     """`value` as `p` stores it, or ValueError naming `p`."""
     if p.kind == "stop":
         return _check_stop(p, value)
+    if p.kind == "choice":
+        # Exactly one of the listed strings: a level is not case-folded or
+        # guessed, any more than a temperature is clamped.
+        if not isinstance(value, str) or value not in p.choices:
+            raise ValueError(f"{p.name} must be one of {', '.join(p.choices)}")
+        return value
     # bool is an int to Python and a mistake to a reader: `true` is not a
     # temperature.
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -128,7 +192,7 @@ def validate(params: object) -> dict:
         if p is None:
             raise ValueError(f"unknown sampler parameter: {key!r}")
         out[key] = _check(p, value)
-    return {name: out[name] for name in NAMES if name in out}
+    return {name: out[name] for name in CONTROLS if name in out}
 
 
 def _stored(conn: dict) -> dict:
@@ -152,75 +216,332 @@ def _why_not(kind: str, extended: bool, listed: set | None, name: str, value: ob
     return WHY_CATALOG if listed is not None and name not in listed else ""
 
 
-def split(conn: dict) -> tuple[dict, list[dict]]:
-    """What this connection will be sent from its attached preset, and what not.
+def _openai_api(base_url: object) -> bool:
+    """Whether `base_url` is the OpenAI API itself: the host rule of
+    `store.inference.providers`' `openai` preset, restated because this module
+    never imports the store (#239). A test holds the two equal."""
+    if not isinstance(base_url, str) or not base_url.strip():
+        return False
+    try:
+        parts = urlsplit(base_url.strip())
+        parts.port  # noqa: B018 - a malformed port makes the URL unparsable, as there
+    except ValueError:
+        return False
+    return (parts.hostname or "").lower() == "api.openai.com"
 
-    `applied` is keyed by WIRE name, ready to merge into a request body -- which
-    for an extended endpoint means repetition penalty twice, once under each
-    spelling (below). `dropped` is `[{param, reason}]` in `PARAMS` order.
 
-    Never raises: this runs per attempt on the generation path, and a preset
-    file edited by hand into nonsense costs that one parameter, reported as
-    dropped, rather than the turn.
-    """
-    stored = _stored(conn)
-    kind = conn.get("kind", "openrouter") if isinstance(conn, dict) else "openrouter"
-    extended = conn.get("sampler_support") == "extended"
+class _Control(NamedTuple):
+    """One control's decision. `fields` is what it adds to the wire body --
+    filled only by the decisions whose wire body is not just `{wire: value}`."""
+
+    state: str
+    wire: str | None
+    why: str
+    #: What decided it, in `store.inference.capabilities.SOURCES`' words:
+    #: `adapter` (the wire protocol), `catalog` (the model's catalog row),
+    #: `preset` (the provider preset: the OpenAI API), `name` (the model id),
+    #: `user` (the user's own setting or stored value), `unknown`.
+    source: str
+    fields: dict | None = None
+
+
+class _Conn(NamedTuple):
+    """What `effective` reads of a connection, read defensively once."""
+
+    kind: object
+    extended: bool
+    #: The catalog's supported parameters (OpenRouter), or None: not known.
+    listed: set | None
+    #: The catalog's `features` (Anthropic), or {}.
+    features: dict
+    #: An `openai_compatible` connection at the OpenAI API itself.
+    openai: bool
+
+
+def _context(conn: dict) -> _Conn:
     listed = conn.get("model_params")
     # Strings only: a hand-edited or sync-mangled catalog with an object in the
     # list must cost that entry, not the turn (`set` of a dict raises).
     listed = {x for x in listed if isinstance(x, str)} if isinstance(listed, list) else None
-    applied: dict = {}
-    dropped: list[dict] = []
-    for p in PARAMS:
-        if p.name not in stored:
-            continue
-        try:
-            value = _check(p, stored[p.name])
-        except ValueError:
-            dropped.append({"param": p.name, "reason": WHY_INVALID})
-            continue
-        why = _why_not(kind, extended, listed, p.name, value)
+    features = conn.get("model_features")
+    kind = conn.get("kind", "openrouter")
+    return _Conn(kind, conn.get("sampler_support") == "extended", listed,
+                 features if isinstance(features, dict) else {},
+                 kind == "openai_compatible" and _openai_api(conn.get("base_url")))
+
+
+def _sampler(c: _Conn, name: str, value: object) -> _Control:
+    """A sampler parameter on `openrouter`, `openai_compatible` or `claude`:
+    today's `_why_not`, with the OpenAI API's one spelling of its own."""
+    why = _why_not(c.kind, c.extended, c.listed, name, value)  # type: ignore[arg-type]
+    if c.kind == "claude":
+        return _Control(UNSUPPORTED, None, why, "adapter")
+    if c.kind == "openai_compatible":
+        source = "user" if c.extended else "adapter"
         if why:
-            dropped.append({"param": p.name, "reason": why})
-            continue
-        applied[p.name] = value
-        if kind == "openai_compatible" and p.name == "repetition_penalty":
-            # llama.cpp and LM Studio read `repeat_penalty`; vLLM, TabbyAPI and
-            # koboldcpp read `repetition_penalty`. Extended mode is for lenient
-            # servers by definition (they ignore a field they do not know), so
-            # sending both is what makes the one setting reach all five.
-            applied["repeat_penalty"] = value
-    return applied, dropped
+            return _Control(UNSUPPORTED, None, why, source)
+        if name == "max_tokens" and c.openai:
+            return _Control(TRANSLATED, "max_completion_tokens", WHY_COMPLETION_TOKENS, "preset")
+        return _Control(SUPPORTED, name, "", source)
+    if c.listed is None:
+        return _Control(UNKNOWN, name, WHY_UNVERIFIED, "unknown")
+    if why:
+        return _Control(UNSUPPORTED, None, why, "catalog")
+    return _Control(SUPPORTED, name, "", "catalog")
+
+
+def _anthropic_sampler(c: _Conn, name: str, thinking: bool) -> _Control:
+    """A sampler parameter on the Anthropic Messages API (spec 8)."""
+    if name in ("temperature", "top_p", "top_k"):
+        enabled = c.features.get("enabled_thinking")
+        if enabled is not True:
+            return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_SAMPLING,
+                            "catalog" if isinstance(enabled, bool) else "adapter")
+        if thinking:
+            return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_THINKING, "adapter")
+        return _Control(SUPPORTED, name, "", "catalog")
+    if name == "stop":
+        return _Control(TRANSLATED, "stop_sequences", WHY_STOP_SEQUENCES, "adapter")
+    if name == "max_tokens":
+        return _Control(SUPPORTED, "max_tokens", "", "adapter")
+    return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_NONE, "adapter")
+
+
+def _anthropic_max_tokens(c: _Conn, value: object) -> tuple[int, str]:
+    """`(max_tokens, why)`: the preset's value or the default, capped at the
+    model's own limit when its catalog row names one (`why` says so)."""
+    want = value if isinstance(value, int) and not isinstance(value, bool) else ANTHROPIC_MAX_TOKENS
+    limit = c.features.get("max_tokens")
+    if isinstance(limit, int) and not isinstance(limit, bool) and 0 < limit < want:
+        return limit, f"capped at this model's limit of {limit} tokens"
+    return want, ""
+
+
+def _openrouter_reasoning(c: _Conn, value: str | None) -> _Control:
+    if c.listed is not None and "reasoning" not in c.listed:
+        return _Control(UNSUPPORTED, None, WHY_CATALOG, "catalog")
+    if value == "off":
+        return _Control(UNKNOWN, None, WHY_REASONING_OFF,
+                        "unknown" if c.listed is None else "catalog")
+    fields = {"reasoning": {"effort": value}} if value else {}
+    if c.listed is None:
+        return _Control(UNKNOWN, "reasoning", WHY_UNVERIFIED, "unknown", fields)
+    return _Control(TRANSLATED, "reasoning", "OpenRouter takes it as reasoning.effort",
+                    "catalog", fields)
+
+
+def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
+    """`openai_compatible`: GLM by `llm_reasoning`'s rule (the connection's legacy
+    setting when the preset sets none), the OpenAI API as written, any other
+    endpoint unverified."""
+    if llm_reasoning.is_glm(conn):
+        if value is None:
+            legacy = llm_reasoning.glm_effort(conn)
+            return _Control(SUPPORTED, "reasoning_effort", "", "name",
+                            {"reasoning_effort": legacy} if legacy else {})
+        if value == "off":
+            return _Control(UNKNOWN, None, WHY_REASONING_OFF, "name")
+        effort = llm_reasoning.glm_effort({**conn, "reasoning_effort": value})
+        if not effort:
+            return _Control(UNSUPPORTED, None, WHY_GLM, "name")
+        return _Control(SUPPORTED, "reasoning_effort", "", "name", {"reasoning_effort": effort})
+    if value == "off":
+        return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset" if c.openai else "unknown")
+    fields = {"reasoning_effort": value} if value else {}
+    if c.openai:
+        return _Control(SUPPORTED, "reasoning_effort", "", "preset", fields)
+    return _Control(UNKNOWN, "reasoning_effort", WHY_REASONING_ENDPOINT, "unknown", fields)
+
+
+def _thinking(c: _Conn, value: str | None, max_tokens: int) -> _Control:
+    """The Anthropic API's thinking for a preset effort (spec 8, as amended):
+    adaptive thinking at that effort where the catalog lists it (current models
+    refuse a budget), else a budget where it lists `enabled`, else nothing."""
+    adaptive_flag = c.features.get("adaptive_thinking")
+    enabled_flag = c.features.get("enabled_thinking")
+    adaptive, enabled = adaptive_flag is True, enabled_flag is True
+    thinks_not = adaptive_flag is False and enabled_flag is False
+    if value == "off":
+        # Omitting thinking is "off" on a model that takes budgeted thinking;
+        # on a current one it is the model's default, which may be to think.
+        if enabled or thinks_not:
+            return _Control(SUPPORTED, None, "", "catalog")
+        return _Control(UNKNOWN, None, WHY_THINKING_OFF, "catalog" if adaptive else "unknown")
+    if thinks_not:
+        return _Control(UNSUPPORTED, None, WHY_THINKING_NONE, "catalog")
+    if not (adaptive or enabled):
+        return _Control(UNKNOWN, None, WHY_THINKING_UNKNOWN, "unknown")
+    if adaptive:
+        levels = c.features.get("effort")
+        if value is not None and isinstance(levels, list) and value not in levels:
+            named = ", ".join(x for x in levels if isinstance(x, str)) or "none"
+            return _Control(UNSUPPORTED, None, f"this model takes effort {named}", "catalog")
+        return _Control(TRANSLATED, "thinking", "sent as adaptive thinking at this effort",
+                        "catalog", ({"thinking": {"type": "adaptive"},
+                                     "output_config": {"effort": value}} if value else {}))
+    if value is None:
+        return _Control(TRANSLATED, "thinking", "sent as a thinking budget", "catalog")
+    budget = max(THINKING_MIN, min(THINKING_BUDGET[value], max_tokens // 2))
+    if budget >= max_tokens:
+        return _Control(UNSUPPORTED, None,
+                        f"max_tokens of {max_tokens} leaves no room for the "
+                        f"{THINKING_MIN}-token minimum thinking budget", "adapter")
+    return _Control(TRANSLATED, "thinking", f"sent as a thinking budget of {budget} tokens",
+                    "catalog", {"thinking": {"type": "enabled", "budget_tokens": budget}})
+
+
+def _reasoning(c: _Conn, conn: dict, value: str | None, max_tokens: int) -> _Control:
+    """`reasoning_effort` per adapter (spec 8). `value` None: the preset sets
+    none, and the answer describes what setting one would do."""
+    if c.kind == "claude":
+        return _Control(UNSUPPORTED, None, WHY_CLAUDE, "adapter")
+    if c.kind == "anthropic":
+        return _thinking(c, value, max_tokens)
+    if c.kind == "openai_compatible":
+        return _openai_reasoning(c, conn, value)
+    return _openrouter_reasoning(c, value)
+
+
+def effective(conn: dict) -> dict:
+    """What `conn` is sent from its attached preset, control by control.
+
+    `{"requested": {name: stored value}, "effective": {wire name: value},
+    "controls": {name: {"state", "wire", "why", "source"}}}`, every control in
+    `CONTROLS` order whether the preset sets it or not -- an unset control says
+    what setting it would do. `effective` is the wire body's share, ready to
+    merge: the sampler parameters, `repeat_penalty` beside `repetition_penalty`
+    on an `openai_compatible` endpoint, the reasoning control's fields, and the
+    Anthropic API's `max_tokens`, which it is always sent. `why` is a sentence
+    for every state but `supported` (and on a `supported` value it changed).
+
+    Reads only the connection dict: `kind`, `model`, `base_url`,
+    `sampling.params`, `sampler_support`, `model_params`, `model_features` and
+    the legacy `reasoning_effort`. Never raises: this runs per attempt on the
+    generation path, and a preset file edited by hand into nonsense costs that
+    one control, reported as unsupported (`WHY_INVALID`), rather than the turn.
+    """
+    conn = conn if isinstance(conn, dict) else {}
+    stored = _stored(conn)
+    c = _context(conn)
+    requested = {name: stored[name] for name in CONTROLS if name in stored}
+    values: dict = {}
+    invalid: set[str] = set()
+    for name, value in requested.items():
+        try:
+            values[name] = _check(_BY_NAME[name], value)
+        except ValueError:
+            invalid.add(name)
+    max_tokens, capped = (_anthropic_max_tokens(c, values.get("max_tokens"))
+                          if c.kind == "anthropic" else (0, ""))
+    reasoning = (_Control(UNSUPPORTED, None, WHY_INVALID, "user")
+                 if "reasoning_effort" in invalid
+                 else _reasoning(c, conn, values.get("reasoning_effort"), max_tokens))
+    thinking = "thinking" in (reasoning.fields or {})
+    sent: dict = {}
+    controls: dict[str, dict] = {}
+    for name in CONTROLS:
+        if name == REASONING_PARAM.name:
+            decided = reasoning
+            sent.update(decided.fields or {})
+        elif name in invalid:
+            decided = _Control(UNSUPPORTED, None, WHY_INVALID, "user")
+        else:
+            decided = (_anthropic_sampler(c, name, thinking) if c.kind == "anthropic"
+                       else _sampler(c, name, values.get(name)))
+            if name in values and decided.state in _SENT and decided.wire:
+                sent[decided.wire] = values[name]
+                if c.kind == "openai_compatible" and name == "repetition_penalty":
+                    # llama.cpp and LM Studio read `repeat_penalty`; vLLM,
+                    # TabbyAPI and koboldcpp read `repetition_penalty`. Extended
+                    # mode is for lenient servers by definition (they ignore a
+                    # field they do not know), so sending both is what makes
+                    # the one setting reach all five.
+                    sent["repeat_penalty"] = values[name]
+            if name == "max_tokens" and capped:
+                decided = decided._replace(why=capped, source="catalog")
+        if name == "max_tokens" and c.kind == "anthropic":
+            # Required by that API: sent even when the preset's own is invalid.
+            sent["max_tokens"] = max_tokens
+        controls[name] = {"state": decided.state, "wire": decided.wire, "why": decided.why,
+                          "source": decided.source}
+    return {"requested": requested, "effective": sent, "controls": controls}
+
+
+def reasoning_wire(eff: dict) -> dict:
+    """The reasoning control's share of `effective(...)["effective"]` -- what
+    the facade hands an adapter beside the sampler parameters `split` sends."""
+    return {k: eff["effective"][k] for k in REASONING_WIRE if k in eff["effective"]}
+
+
+def _sent(eff: dict, name: str) -> bool:
+    """Whether the preset's `name` went on the wire."""
+    entry = eff["controls"][name]
+    return (name in eff["requested"] and entry["state"] in _SENT
+            and entry["wire"] is not None and entry["wire"] in eff["effective"])
+
+
+def _dropped(eff: dict, names: tuple[str, ...]) -> list[dict]:
+    return [{"param": name, "reason": eff["controls"][name]["why"]} for name in names
+            if name in eff["requested"] and eff["controls"][name]["state"] == UNSUPPORTED]
+
+
+def split(conn: dict) -> tuple[dict, list[dict]]:
+    """What this connection will be sent from its attached preset's SAMPLER
+    parameters, and what not -- a view over `effective`.
+
+    `applied` is keyed by WIRE name, ready to merge into a request body -- which
+    for an extended endpoint means repetition penalty twice, once under each
+    spelling, and at the OpenAI API `max_completion_tokens`. `dropped` is
+    `[{param, reason}]` in `PARAMS` order. The reasoning control is not here:
+    it is `reasoning_wire`'s. Never raises (see `effective`).
+    """
+    eff = effective(conn)
+    applied: dict = {}
+    for name in NAMES:
+        if _sent(eff, name):
+            wire = eff["controls"][name]["wire"]
+            applied[wire] = eff["effective"][wire]
+            if wire == "repetition_penalty" and "repeat_penalty" in eff["effective"]:
+                applied["repeat_penalty"] = eff["effective"]["repeat_penalty"]
+    return applied, _dropped(eff, NAMES)
 
 
 def sent_names(conn: dict) -> list[str]:
-    """The preset parameters this connection actually sends, canonical names."""
-    applied, _ = split(conn)
-    return [name for name in NAMES if name in applied]
+    """The preset controls this connection actually sends, canonical names."""
+    eff = effective(conn)
+    return [name for name in CONTROLS if _sent(eff, name)]
 
 
 def report(conn: dict | None) -> dict | None:
     """What a reader is shown about this connection's sampling, or None when
     nothing was resolved for it at all.
 
-    `verified` is False only where a drop could be happening that this side
-    cannot see: an OpenRouter connection with no cached catalog for its model,
-    which sends everything and cannot say whether the model takes it.
+    `applied` is every control the preset set that is honoured, under its
+    canonical name and with the value sent (a capped `max_tokens` capped; an
+    `off` that is honoured by sending nothing, as `off`). `verified` is False
+    only where a drop could be happening that this side cannot see: an applied
+    control whose state is `unknown` -- an OpenRouter connection with no cached
+    catalog for its model, which sends everything and cannot say whether the
+    model takes it.
     """
     if not isinstance(conn, dict) or not isinstance(conn.get("sampling"), dict):
         return None
     sampling = conn["sampling"]
-    kind = conn.get("kind", "openrouter")
-    applied, dropped = split(conn)
-    verified = not (kind not in ("claude", "openai_compatible")
-                    and not isinstance(conn.get("model_params"), list)
-                    and bool(applied))
+    eff = effective(conn)
+    applied: dict = {}
+    for name in CONTROLS:
+        entry = eff["controls"][name]
+        if name not in eff["requested"] or entry["state"] == UNSUPPORTED:
+            continue
+        if _sent(eff, name):
+            applied[name] = eff["effective"][entry["wire"]]
+        elif entry["wire"] is None:
+            applied[name] = eff["requested"][name]
+    verified = not any(eff["controls"][name]["state"] == UNKNOWN for name in applied)
     return {"preset_id": sampling.get("preset_id", ""),
             "preset_name": sampling.get("preset_name", ""),
-            "scope": sampling.get("scope", ""), "kind": kind,
-            "applied": {name: applied[name] for name in NAMES if name in applied},
-            "dropped": dropped, "verified": verified}
+            "scope": sampling.get("scope", ""), "kind": conn.get("kind", "openrouter"),
+            "applied": applied, "dropped": _dropped(eff, CONTROLS), "verified": verified}
 
 
 def table() -> list[dict]:

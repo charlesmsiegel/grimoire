@@ -19,10 +19,11 @@ attempt mirrors (`llm.fallback_sampling`, `llm._same_route`) are restated here,
 with `ROUTE_SCOPES`, and the tests hold them to the facade's own answers.
 
 Each attempt also carries what slice B knows of it -- its provider's kind, URL,
-rev, billing and preset, its model's facts, and every capability with its
-source (`capabilities.resolve_caps`, fed the catalog row the lowering already
-read, so a sidecar is read once per attempt) -- and the resolution says which
-of the route's needs the primary and the fallback are known not to meet
+rev, billing and preset, its model's facts, its effective controls
+(`llm_sampling.effective` over the lowered connection), and every capability
+with its source (`capabilities.resolve_caps`, fed the catalog row the lowering
+already read, so a sidecar is read once per attempt) -- and the resolution says
+which of the route's needs the primary and the fallback are known not to meet
 (`missing`, `fallback_missing`). Nothing here refuses on them: the seam does.
 """
 
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from ... import llm_sampling
 from .. import campaigns, config, llm_connections, locks, routing, sampler_presets
 from . import capabilities, cascade, facts, providers, translate
 from .cascade import Selection
@@ -210,9 +212,20 @@ def _lowered(raw: dict, sampling: dict,
     return out, row
 
 
-def _lower(raw: dict, sampling: dict, model: str | None = None) -> dict:
-    """`_lowered`'s connection dict alone."""
+def lower(raw: dict, sampling: dict, model: str | None = None) -> dict:
+    """`_lowered`'s connection dict alone: `raw` as the facade reads it, with
+    `sampling` attached and `model` (when given) and its catalog facts set.
+    Public for `controls.preview`, which lowers a preset the same way."""
     return _lowered(raw, sampling, model)[0]
+
+
+def preset_sampling(preset_id: str, scope: str = "connection") -> dict:
+    """The `sampling` block for the sampler preset `preset_id` at `scope` -- the
+    shape `_sampling` gives an attempt; no preset ("") is provider defaults.
+    Never raises: an unreadable preset is no preset."""
+    if not preset_id:
+        return dict(NO_SAMPLING)
+    return _sampling(lambda _known: (preset_id, scope), _preset_lookup())
 
 
 def _model_facts(provider_id: str, model: str, rev: str) -> dict:
@@ -243,7 +256,7 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict) -> Attempt
         facts=model_facts,
         capabilities=capabilities.resolve_caps(preset, model, catalog_row=row,
                                                facts=model_facts),
-        controls={})
+        controls=llm_sampling.effective(conn))
 
 
 #: The capability an operation needs of itself. `decide` is not an operation
@@ -278,7 +291,7 @@ def own_sampling(conn: dict) -> dict:
     route: the standing fallback, and the connection list's display."""
     own = Selection(str(conn.get("id", "") or ""), str(conn.get("model", "") or ""),
                     str(conn.get("sampler_preset", "") or ""))
-    return _lower(conn, _sampling(_own_preset(own), _preset_lookup()))
+    return lower(conn, _sampling(_own_preset(own), _preset_lookup()))
 
 
 # ---- the resolver ----
