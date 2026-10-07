@@ -691,15 +691,28 @@ would answer neither question.
   `campaign_lock` anyway.
   What the store promises is in `docs/store-guarantees.md`; the design is
   `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
-- **Adding an LLM call site?** Resolve its connection with
-  `_require_connection(<task>, cid)` and name the task the call meters under.
-  `store/routing.py` maps that task to a route the user can point at a
-  connection of its own (global, or per campaign in `campaign.md`);
+- **Adding an LLM call site?** Resolve it with
+  `require_inference(<task>, cid)` and name the task the call meters under;
+  what it returns carries the connection dict `LLMClient` takes as `.conn`
+  (read that, until the facade stops needing a connection at all).
+  `store/routing.py` maps the task to a route (each one declares its
+  `operation`, its `default_role` and what it `requires`), and
+  `store/inference/` resolves the route to a role (Primary, Fast, Decision,
+  Embedding) or a pinned model -- today's settings are read through a legacy
+  translation, so the surfaces that already exist still show their twelve
+  routes. A reroll's connection override goes through `override_inference`, and
+  absorb's secondary phases hand `_soft_inference` a thunk, so a phase that
+  cannot resolve reports itself failed with a reason instead of losing the
+  review.
   `test_routing_guard.py` fails a call that names no task, a task no route
-  claims, and a route whose tasks nothing uses. A route names a whole
-  connection rather than a model string, because since `llm_connections/` a
-  model name no longer says which provider serves it — the same call #144's
-  fallback made.
+  claims, an `operation=` that differs from its route's, a reference to
+  `require_inference` that is not a call (a task handed through
+  `run_in_threadpool` is a literal the guard cannot see), a direct
+  `inference.resolve` call in `routes/` without a `# routing-ok:` marker (the
+  markers are capped), and a route whose tasks nothing uses. A route names a
+  whole connection or model rather than a bare model string, because since
+  `llm_connections/` a model name no longer says which provider serves it --
+  the same call #144's fallback made.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators
