@@ -1,0 +1,140 @@
+"""The provider preset table: shipped facts, and inferring a preset from a connection."""
+
+from __future__ import annotations
+
+import pytest
+
+from grimoire.store import llm_connections
+from grimoire.store.inference import providers
+
+CAPS = {"generate", "stream", "vision", "embed", "decide_native", "structured_output", "prefill"}
+ALL_BUT_DECIDE = frozenset(CAPS - {"decide_native"})
+
+
+def _oc(url: str) -> dict:
+    return {"kind": "openai_compatible", "base_url": url}
+
+
+@pytest.mark.parametrize(
+    "conn, want",
+    [
+        ({"kind": "openrouter", "base_url": "https://openrouter.ai/api/v1"}, "openrouter"),
+        ({"kind": "openrouter"}, "openrouter"),
+        ({"kind": "claude"}, "claude"),
+        ({"kind": "anthropic", "base_url": "https://api.anthropic.com"}, "anthropic"),
+        (_oc("https://api.openai.com/v1"), "openai"),
+        (_oc("https://api.openai.com/v1/"), "openai"),
+        (_oc("https://api.z.ai/api/paas/v4"), "zai"),
+        (_oc("https://api.z.ai/api/paas/v4/"), "zai"),
+        (_oc("https://api.z.ai/api/coding/paas/v4"), "zai_coding"),
+        (_oc("https://api.z.ai/api/coding/paas/v4/"), "zai_coding"),
+        (_oc("http://localhost:11434/v1"), "ollama"),
+        (_oc("http://localhost:11434/v1/"), "ollama"),
+        (_oc("http://192.168.1.5:11434"), "ollama"),
+        (_oc("http://localhost:1234/v1"), "lmstudio"),
+        (_oc("http://127.0.0.1:1234/v1/"), "lmstudio"),
+        (_oc("https://example.test/v1"), "custom"),
+        (_oc("http://localhost:8080/v1"), "custom"),
+        (_oc(""), "custom"),
+        ({"kind": "openai_compatible"}, "custom"),
+        (_oc("not a url"), "custom"),
+        (_oc("http://localhost:notaport/v1"), "custom"),
+    ],
+)
+def test_infer(conn, want):
+    assert providers.infer(conn).id == want
+
+
+def test_explicit_preset_wins_over_the_url():
+    conn = {**_oc("https://example.test/v1"), "preset": "zai"}
+    assert providers.infer(conn).id == "zai"
+    conn = {**_oc("http://localhost:11434/v1"), "preset": "custom"}
+    assert providers.infer(conn).id == "custom"
+
+
+@pytest.mark.parametrize("bogus", ["nope", "", None, 3, ["zai"]])
+def test_bogus_explicit_preset_falls_back_to_inference(bogus):
+    conn = {**_oc("https://api.openai.com/v1"), "preset": bogus}
+    assert providers.infer(conn).id == "openai"
+
+
+def test_billing_inferred_and_explicit():
+    assert providers.billing({"kind": "claude"}) == "subscription"
+    assert providers.billing(_oc("https://api.z.ai/api/coding/paas/v4")) == "subscription"
+    assert providers.billing(_oc("https://api.z.ai/api/paas/v4")) == "metered"
+    assert providers.billing({"kind": "openrouter"}) == "metered"
+    # A custom endpoint's billing is the user's choice.
+    assert providers.billing({**_oc("https://example.test/v1"), "billing": "subscription"}) == "subscription"
+    assert providers.billing({**_oc("https://example.test/v1"), "billing": "bogus"}) == "metered"
+    assert providers.billing(_oc("https://example.test/v1")) == "metered"
+
+
+def test_labels_and_urls():
+    p = providers.PRESETS
+    assert {k: v.label for k, v in p.items()} == {
+        "openrouter": "OpenRouter",
+        "anthropic": "Anthropic API",
+        "claude": "Claude subscription",
+        "openai": "OpenAI",
+        "zai": "z.ai",
+        "zai_coding": "z.ai Coding Plan",
+        "ollama": "Ollama",
+        "lmstudio": "LM Studio",
+        "custom": "Custom (OpenAI-compatible)",
+    }
+    assert p["openrouter"].base_url == "https://openrouter.ai/api/v1"
+    assert p["anthropic"].base_url == "https://api.anthropic.com"
+    assert p["claude"].base_url == ""
+    assert p["openai"].base_url == "https://api.openai.com/v1"
+    assert p["zai"].base_url == "https://api.z.ai/api/paas/v4"
+    assert p["zai_coding"].base_url == "https://api.z.ai/api/coding/paas/v4"
+    assert p["ollama"].base_url == "http://localhost:11434/v1"
+    assert p["lmstudio"].base_url == "http://localhost:1234/v1"
+    assert p["custom"].base_url == ""
+
+
+def test_url_locked_billing_and_price_reporting():
+    p = providers.PRESETS
+    assert {k for k, v in p.items() if v.url_locked} == {
+        "openrouter", "anthropic", "openai", "zai", "zai_coding"}
+    assert {k for k, v in p.items() if v.billing == "subscription"} == {"claude", "zai_coding"}
+    assert {k for k, v in p.items() if v.billing == "metered"} == set(p) - {"claude", "zai_coding"}
+    assert {k for k, v in p.items() if v.reports_price} == {"openrouter", "claude"}
+
+
+def _sets(preset):
+    return preset.always, preset.possible, preset.never
+
+
+def test_capability_sets_are_exact():
+    fz = frozenset
+    gs = fz({"generate", "stream"})
+    p = providers.PRESETS
+    assert _sets(p["openrouter"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
+    assert _sets(p["anthropic"]) == (gs, fz({"vision", "structured_output"}), fz({"embed", "decide_native", "prefill"}))
+    assert _sets(p["claude"]) == (gs, fz(), fz({"vision", "embed", "decide_native", "structured_output", "prefill"}))
+    assert _sets(p["openai"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
+    for k in ("zai", "zai_coding"):
+        assert _sets(p[k]) == (gs, fz({"structured_output", "prefill"}), fz({"vision", "embed", "decide_native"}))
+    for k in ("ollama", "lmstudio", "custom"):
+        assert _sets(p[k]) == (fz(), ALL_BUT_DECIDE, fz({"decide_native"}))
+
+
+def test_capability_sets_partition_the_vocabulary():
+    for preset in providers.PRESETS.values():
+        assert preset.always | preset.possible | preset.never == CAPS
+        assert not preset.always & preset.possible
+        assert not preset.always & preset.never
+        assert not preset.possible & preset.never
+
+
+def test_every_kind_is_a_known_adapter():
+    for preset in providers.PRESETS.values():
+        assert preset.kind in (*llm_connections.KINDS, "anthropic")
+    assert providers.PRESETS["anthropic"].kind == "anthropic"
+    assert providers.PRESETS["claude"].kind == "claude"
+    assert providers.PRESETS["openrouter"].kind == "openrouter"
+
+
+def test_preset_ids_match_their_keys():
+    assert all(k == v.id for k, v in providers.PRESETS.items())
