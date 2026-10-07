@@ -141,7 +141,11 @@ export type CapabilityName =
 /** `adapter` outranks `test`, then `user`, then `catalog`, `preset`, `name`. */
 export type CapabilitySource =
   | "adapter" | "test" | "user" | "catalog" | "preset" | "name" | "unknown";
-export type CapabilityValue = { value: "yes" | "no" | "unknown"; source: CapabilitySource };
+/** A failed test call is `unknown` from source `test`, never `no`, and carries
+ *  the provider's `error`; no other answer has one. */
+export type CapabilityValue = {
+  value: "yes" | "no" | "unknown"; source: CapabilitySource; error?: string;
+};
 /** A catalog row in a capability group: the entry, what put it there
  *  (`reason`) and every capability with the source that said so. */
 export type CapabilityModel = Model & {
@@ -153,7 +157,8 @@ export type CapabilityModel = Model & {
  *  `groups` and `hidden` are empty and `reason` says why; otherwise `reason`
  *  is `null`. */
 export type ModelCapabilities = {
-  preset: {
+  /** The provider preset; the sampler preset is `preset_id` elsewhere. */
+  provider_preset: {
     id: string; label: string; kind: LLMConnectionKind; base_url: string;
     url_locked: boolean; billing: "metered" | "subscription"; reports_price: boolean;
     always: CapabilityName[]; possible: CapabilityName[]; never: CapabilityName[];

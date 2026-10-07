@@ -63,7 +63,29 @@ def test_verified_results_are_test():
     got = _resolve("custom", verified={"vision": {"ok": True, "at": "x"},
                                        "embed": {"ok": False, "at": "x", "error": "404"}})
     assert got["vision"] == Cap("yes", "test")
-    assert got["embed"] == Cap("no", "test")
+    # Spec 12: a failed test leaves the capability unverified, with the error.
+    assert got["embed"] == Cap("unknown", "test", "404")
+
+
+def test_a_failed_test_is_never_a_no():
+    got = _resolve("custom", verified={"generate": {"ok": False, "at": "x"}})
+    assert got["generate"] == Cap("unknown", "test", "")
+    assert all(c.value != "no" for k, c in got.items() if k != "decide_native")
+    # A non-string error is no error text.
+    got = _resolve("custom", verified={"vision": {"ok": False, "error": {"x": 1}}})
+    assert got["vision"] == Cap("unknown", "test", "")
+
+
+def test_the_users_word_beats_a_failed_test_but_not_a_passed_one():
+    failed = {"vision": {"ok": False, "at": "x", "error": "refused"}}
+    assert _resolve("custom", verified=failed,
+                    overrides={"vision": "yes"})["vision"] == Cap("yes", "user")
+    assert _resolve("custom", verified=failed,
+                    overrides={"vision": "no"})["vision"] == Cap("no", "user")
+    assert _resolve("custom", verified=failed, vision="on")["vision"] == Cap("yes", "user")
+    passed = {"vision": {"ok": True, "at": "x"}}
+    assert _resolve("custom", verified=passed,
+                    overrides={"vision": "no"})["vision"] == Cap("yes", "test")
 
 
 def test_overrides_are_user():
@@ -109,10 +131,10 @@ def test_catalog_decisions_are_decide_native():
     # The adapter's no still wins over the catalog's yes.
     assert _resolve("custom", row={"id": "m", "outputs": ["decisions"]})[
         "decide_native"] == Cap("no", "adapter")
-    # A test call beats the catalog.
+    # A test call beats the catalog -- a failed one as unverified, not a no.
     assert _resolve("openrouter", row={"id": "m", "outputs": ["decisions"]},
                     verified={"decide_native": {"ok": False}})[
-        "decide_native"] == Cap("no", "test")
+        "decide_native"] == Cap("unknown", "test")
 
 
 def test_a_row_without_outputs_says_nothing_about_generate_or_embed():
@@ -203,7 +225,8 @@ def test_test_beats_user_beats_catalog():
     assert _resolve("custom", row=row, vision="off",
                     verified={"vision": {"ok": True, "at": "x"}})["vision"] == Cap("yes", "test")
     assert _resolve("custom", row=row,
-                    verified={"generate": {"ok": False, "at": "x"}})["generate"] == Cap("no", "test")
+                    verified={"generate": {"ok": False, "at": "x"}})["generate"] == Cap(
+        "unknown", "test")
     assert _resolve("custom", row=row,
                     overrides={"vision": "no"})["vision"] == Cap("no", "user")
 
@@ -266,9 +289,14 @@ def test_group_hidden_by_another_source_names_that_source():
     row = {"id": "m", "outputs": ["text"]}
     assert capabilities.group_for(_resolve("custom", row=row), "embed", P["custom"]) == (
         "hidden", "the catalog says this model does not make embeddings")
-    caps = _resolve("custom", verified={"embed": {"ok": False, "at": "x"}})
+    # A failed test hides nothing: the row stays unverified, the error shown.
+    caps = _resolve("custom", verified={"embed": {"ok": False, "at": "x", "error": "404"}})
     assert capabilities.group_for(caps, "embed", P["custom"]) == (
-        "hidden", "a test call found no embeddings")
+        "unverified", "a test call failed: 404")
+    caps = _resolve("custom", row={"id": "m", "outputs": ["embeddings"]},
+                    verified={"embed": {"ok": False, "at": "x"}})
+    assert capabilities.group_for(caps, "embed", P["custom"]) == (
+        "unverified", "a test call failed")
     caps = _resolve("custom", vision="off")
     assert capabilities.group_for(caps, "vision", P["custom"]) == (
         "hidden", "you marked this model as not reading images")

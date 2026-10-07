@@ -282,6 +282,25 @@ def cached_models(id: str) -> dict:
             "fetched_by": sidecar.get("fetched_by", "")}
 
 
+def cached_row(conn_id: str, model: str) -> dict | None:
+    """`model`'s row in the connection's cached catalog, or None when there is
+    none -- the one lookup the resolver, the capability resolver and the test
+    call's price estimate all make.
+
+    Never raises. It runs on every resolution, and whatever slips past
+    `cached_models`' own shape check (an over-long id's stat, a row list a
+    sync mangled) costs the catalog, never the turn."""
+    if not conn_id or not isinstance(conn_id, str):
+        return None
+    try:
+        models = cached_models(conn_id)["models"]
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if not isinstance(models, list):
+        return None
+    return next((r for r in models if isinstance(r, dict) and r.get("id") == model), None)
+
+
 def set_cached_models(id: str, models: list[dict], rev: str,
                       attempt: str = "") -> None:
     """Writes unconditionally, tagged with the rev captured before the

@@ -207,9 +207,16 @@ def test_an_openrouter_model_the_catalog_says_is_blind_is_refused(client, art):
         "openrouter", [{"id": model, "vision": False}], rev)
     client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
     r = drafts.post(client, _url(wid, cid, vid))
-    assert (r.status_code, r.json()) == (409, {
-        "detail": f"Image descriptions runs on {model} (OpenRouter), which cannot read images.",
-        "kind": "incapable"})
+    assert r.status_code == 409
+    body = r.json()
+    assert body["kind"] == "incapable"
+    # Spec 5.3: the route, the role, the model on its provider, what is
+    # missing, and the remedy.
+    assert body["detail"] == (
+        f"The Image descriptions route runs on the Primary role ({model} on "
+        "OpenRouter), which cannot read images — choose another Primary model "
+        "or pin this route.")
+    assert "descriptions runs" not in body["detail"]
 
 
 def test_images_on_still_drafts_where_the_catalog_says_blind(client, art):

@@ -21,8 +21,10 @@ Every connection, key and model name below is invented.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
+import zlib
 
 import httpx
 import pytest
@@ -107,17 +109,24 @@ def test_the_probe_payloads_are_the_specified_ones():
     assert probes.messages("generate") == [
         {"role": "user", "content": "Reply with the single word: ok"}]
     vision = probes.messages("vision")[0]["content"]
-    assert vision[0] == {"type": "text", "text": "What colour is this pixel? One word."}
-    assert vision[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert vision[0] == {"type": "text", "text": "What colour is this image? One word."}
+    assert vision[1]["image_url"]["url"] == (
+        "data:image/png;base64," + base64.b64encode(probes.PROBE_PNG).decode("ascii"))
     assert probes.sampling()["params"] == {"max_tokens": 64}
 
 
-def test_the_vision_probe_is_a_real_one_pixel_png():
-    png = probes.PIXEL_PNG
+def test_the_vision_probe_is_a_real_small_solid_png():
+    png = probes.PROBE_PNG
     assert png.startswith(b"\x89PNG\r\n\x1a\n")
-    # IHDR is the first chunk: width and height, big-endian, both 1.
-    assert png[16:24] == (1).to_bytes(4, "big") + (1).to_bytes(4, "big")
+    # IHDR is the first chunk: width and height, big-endian, both 64 -- big
+    # enough not to be refused as too small, small enough to be one tile.
+    assert png[16:24] == (64).to_bytes(4, "big") + (64).to_bytes(4, "big")
     assert png.endswith(b"IEND\xaeB`\x82")
+    # One colour throughout: every row is filter 0 then the same red pixels.
+    idat_len = int.from_bytes(png[33:37], "big")
+    assert png[37:41] == b"IDAT"
+    pixels = zlib.decompress(png[41:41 + idat_len])
+    assert pixels == (b"\x00" + b"\xff\x00\x00" * 64) * 64
 
 
 def test_an_estimate_needs_every_price_it_uses():
@@ -440,8 +449,10 @@ def test_an_outage_or_empty_wallet_is_reported_and_not_recorded(client, status, 
     assert facts.of(conn, MODEL, _rev(conn))["verified"] == {}
 
 
-def test_a_400_refusing_the_image_is_recorded_as_a_no(client):
-    """The provider refused THIS request -- the model's own answer."""
+def test_a_400_refusing_the_image_is_recorded_and_shown_unverified(client):
+    """The provider refused THIS request -- the model's own answer, recorded
+    with its error. Spec 12: the row stays unverified with that error shown,
+    never a `no` the seam could refuse on."""
     def handler(request: httpx.Request) -> httpx.Response:
         if "image_url" in request.content.decode():
             return _refusing(400, "this model does not support image input")(request)
@@ -461,6 +472,37 @@ def test_a_400_refusing_the_image_is_recorded_as_a_no(client):
     assert verified["generate"]["ok"] is True
     assert verified["vision"]["ok"] is False
     assert "image input" in verified["vision"]["error"]
+    vision = client.get(f"/api/llm-connections/{conn}/capabilities",
+                        params={"need": "vision", "model": MODEL}).json()
+    assert vision["hidden"] == []
+    row = vision["groups"]["unverified"][0]
+    assert row["capabilities"]["vision"]["value"] == "unknown"
+    assert row["capabilities"]["vision"]["source"] == "test"
+    assert "image input" in row["capabilities"]["vision"]["error"]
+    assert row["reason"].startswith("a test call failed: ")
+
+
+def test_the_verdicts_are_filed_off_the_event_loop(client, monkeypatch):
+    """Filing reads the connection and writes the facts file: blocking work,
+    kept off the loop every other run streams through."""
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+    where: list[bool] = []
+    real = config_routes._record_verdicts
+
+    def record(*args):
+        try:
+            asyncio.get_running_loop()
+            where.append(True)
+        except RuntimeError:
+            where.append(False)
+        return real(*args)
+
+    monkeypatch.setattr(config_routes, "_record_verdicts", record)
+    run = _run(client, conn, ["generate"])
+    assert run["result"]["recorded"] is True
+    assert where == [False]
 
 
 def test_a_400_naming_the_probes_own_cap_is_not_recorded(client):

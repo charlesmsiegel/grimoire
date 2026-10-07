@@ -1348,8 +1348,10 @@ def _refuse_incapable(resolved: ResolvedInference) -> None:
     answers with the sentence `image_draft_prompt` always answered with, in
     the same body, so nothing that reads it sees a change. A connection set
     to "Images: on" is not refused over a catalog's vision `no` (a bridge,
-    below). Anything else is `incapable`, naming the route, the model, the provider and the first
-    missing capability in `capabilities.NAMES` order.
+    below). Anything else is `incapable` (`_incapable_text`), naming the first
+    missing capability in `capabilities.NAMES` order. A name-rule guess is
+    never missing (`resolve._GUESSES`), and a failed test call is `unknown`,
+    so neither can refuse here.
     """
     if not resolved.missing:
         return
@@ -1366,18 +1368,47 @@ def _refuse_incapable(resolved: ResolvedInference) -> None:
         # catalog): today that setting sends image drafts whatever the catalog
         # says, and nothing in the app could undo a refusal here. Only the
         # sources it outranks once migrated are waived -- the wire protocol's
-        # `no` is refused above, and a probe's or the user's per-model word
-        # stands.
+        # `no` is refused above, and the user's per-model word stands (a
+        # probe's failure is never a `no`).
         missing = tuple(cap for cap in missing if cap != "vision")
         if not missing:
             return
+    raise HTTPException(status_code=409, detail={
+        "detail": _incapable_text(resolved, missing[0]), "kind": "incapable"})
+
+
+def _incapable_text(resolved: ResolvedInference, cap: str) -> str:
+    """The `incapable` sentence (spec 5.3): the route, the role when one
+    supplied the model, the model on its provider, what it cannot do, and
+    what to do about it.
+
+    "The <label> route ..." rather than "<label> runs ...", because half the
+    route labels are plural ("Scene turns", "Image descriptions"). The role
+    is named only when the model IS the role's: a pin names none, and a
+    per-call override moved the call off whatever the role chose. The remedy
+    follows: another model for the role, or a pin, where there is a route to
+    pin; another model for the route where it is already pinned."""
+    primary = resolved.attempts[0]
+    conn = primary.conn
     preset = inference_providers.PRESETS.get(primary.provider_preset)
     provider = conn.get("name") or (preset.label if preset is not None else conn.get("id", ""))
-    route = store.routing.label_for(resolved.route) if resolved.route else "This generation"
-    raise HTTPException(status_code=409, detail={
-        "detail": f"{route} runs on {effective_model(conn)} ({provider}), which cannot "
-                  f"{inference_capabilities.CANNOT.get(missing[0], missing[0])}.",
-        "kind": "incapable"})
+    on = f"{effective_model(conn)} on {provider}"
+    standing = resolved.standing
+    chosen = standing is not None and (standing.provider, standing.model) == (
+        primary.provider_id, primary.model)
+    subject = (f"The {store.routing.label_for(resolved.route)} route" if resolved.route
+               else "This generation")
+    pin = " or pin this route" if resolved.route else ""
+    if chosen and resolved.role:
+        role = resolved.role.capitalize()
+        where = f"runs on the {role} role ({on})"
+        remedy = f"choose another {role} model{pin}"
+    elif chosen and resolved.via == "route":
+        where, remedy = f"is pinned to {on}", "choose another model for this route"
+    else:
+        where, remedy = f"runs on {on}", f"choose another model{pin}"
+    return (f"{subject} {where}, which cannot "
+            f"{inference_capabilities.CANNOT.get(cap, cap)} — {remedy}.")
 
 
 def _refuse_unusable(resolved: ResolvedInference) -> None:

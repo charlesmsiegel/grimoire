@@ -60,7 +60,7 @@ def test_openrouter_embed_lists_only_embedding_models_as_fitting(client):
     assert body["hidden"] == [{"id": "vendor/text-7b",
                                "reason": "the catalog says this model does not make embeddings"}]
     assert body["reason"] is None
-    assert body["preset"]["id"] == "openrouter"
+    assert body["provider_preset"]["id"] == "openrouter"
 
 
 def test_a_row_is_the_catalog_entry_plus_its_capabilities(client):
@@ -114,6 +114,24 @@ def test_the_users_word_moves_a_model_between_groups(client):
     assert row["reason"] == "user"
 
 
+def test_a_failed_test_is_unverified_with_its_error(client):
+    """Spec 12: a test call that fails leaves the row unverified, the error
+    shown -- even over a catalog that says yes -- and never hidden."""
+    cid = _connection(client, rows=[SEER])
+    rev = llm_connections.read_connection_raw(cid)["rev"]
+    facts.record_verified(cid, "vendor/seer-9b", rev, {
+        "vision": {"ok": False, "error": "image input is not supported"}})
+    body = _get(client, cid, "vision").json()
+    assert body["hidden"] == [] and body["groups"]["fits"] == []
+    row = body["groups"]["unverified"][0]
+    assert row["capabilities"]["vision"] == {
+        "value": "unknown", "source": "test", "error": "image input is not supported"}
+    assert row["reason"] == "a test call failed: image input is not supported"
+    # Every other capability carries no error key at all.
+    assert all(set(v) == {"value", "source"}
+               for k, v in row["capabilities"].items() if k != "vision")
+
+
 def test_every_group_is_sorted_by_id(client):
     cid = _connection(client, rows=[{"id": "vendor/zed"}, {"id": "vendor/amy"},
                                     {"id": "vendor/mara"}])
@@ -133,7 +151,7 @@ def test_zai_embed_is_ruled_out_for_the_provider_not_row_by_row(client):
     cid = _connection(client, "openai_compatible", base_url=ZAI,
                       rows=[{"id": "glm-test-1"}, {"id": "glm-embed-test"}])
     body = _get(client, cid, "embed").json()
-    assert body["preset"]["id"] == "zai"
+    assert body["provider_preset"]["id"] == "zai"
     assert body["groups"] == {"fits": [], "unverified": []}
     # Documented choice: the one provider-wide reason, and no per-row echo of it.
     assert body["hidden"] == []

@@ -777,18 +777,6 @@ def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dic
     return raw, model, caps
 
 
-def _catalog_row(conn_id: str, model: str) -> dict | None:
-    """`model`'s row in the connection's cached catalog, or None. Never raises:
-    a missing or mangled sidecar is "no price known", not a failed preview."""
-    try:
-        rows = store.llm_connections.cached_models(conn_id)["models"]
-    except (OSError, KeyError, TypeError, ValueError):
-        return None
-    if not isinstance(rows, list):
-        return None
-    return next((r for r in rows if isinstance(r, dict) and r.get("id") == model), None)
-
-
 def _embed_endpoint(raw: dict) -> str:
     """Where the `embed` probe goes: the endpoint the Embedding path resolves
     for this provider -- OpenRouter's fixed URL (its adapter ignores a stored
@@ -839,9 +827,9 @@ def _records(exc: LLMError) -> bool:
 
     Only a provider refusing THIS request (`llm.REJECTED_STATUSES`, the set
     `_resilient` already reads as "refused what it was sent") says that. A
-    `test` no outranks the catalog and can make the seam refuse a route with
-    409 `incapable`, so everything else is reported to whoever asked and never
-    filed: no status at all (a transport failure, a malformed stream), a 402,
+    filed failure is shown on the model's row as unverified with its error
+    (`capabilities._stated`), outranking the catalog, so everything else is
+    reported to whoever asked and never filed: no status at all (a transport failure, a malformed stream), a 402,
     a 408, a 429, a 5xx. The chat adapters map most of those to
     `bad_response`, so the kind cannot make this call.
 
@@ -950,7 +938,10 @@ def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
     return {"provider": raw.get("name") or conn_id, "provider_id": conn_id, "model": model,
             "sends": [{"capability": c, "description": probes.describe(c, capped)}
                       for c in caps],
-            "estimated_cost_usd": probes.estimate_usd(_catalog_row(conn_id, model), caps)}
+            # A missing or mangled sidecar is "no price known" (`cached_row`
+            # never raises), not a failed preview.
+            "estimated_cost_usd": probes.estimate_usd(
+                store.llm_connections.cached_row(conn_id, model), caps)}
 
 
 @router.post("/llm-connections/{conn_id}/test", status_code=202)
@@ -988,10 +979,13 @@ def post_connection_test(
 
     async def work():
         results, verdicts = await _probe_all(client, caps, raw, conn, model)
+        # Off the loop, as `_embed_probe` sends: filing reads the connection
+        # and writes the facts file under its lock, and the lifespan loop is
+        # the one every other run streams through.
+        recorded = await asyncio.to_thread(_record_verdicts, conn_id, model, rev, verdicts)
         return {"state": "landed",
                 "result": {"provider": conn_id, "model": model, "rev": rev,
-                           "results": results,
-                           "recorded": _record_verdicts(conn_id, model, rev, verdicts)}}
+                           "results": results, "recorded": recorded}}
 
     return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "model-test",
                           x_grimoire_attempt, work)
@@ -1165,16 +1159,19 @@ class InferenceControlsBody(BaseModel):
     model: str = ""
 
 
-@router.get("/llm-connections/{cid}/capabilities")
+@router.get("/llm-connections/{conn_id}/capabilities")
 def get_connection_capabilities(
-        cid: str, need: Literal["generate", "vision", "embed", "decide"] = "generate",
+        conn_id: str, need: Literal["generate", "vision", "embed", "decide"] = "generate",
         model: str = ""):
     """The connection's models grouped for a role that needs `need`
     (`capabilities.grouped`): every catalog row, embedding-only ones included
     (the Embedding picker lists those), so this is not narrowed by
-    `catalog.listable`. Calls no provider and reserves no run."""
+    `catalog.listable`. Calls no provider and reserves no run.
+
+    `conn_id`, never `cid`: `cid` is a campaign id in every other path, and
+    the activity middleware reads it as one."""
     try:
-        conn = store.llm_connections.read_connection_raw(cid)
+        conn = store.llm_connections.read_connection_raw(conn_id)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
     return capabilities.grouped(conn, need, model or None)

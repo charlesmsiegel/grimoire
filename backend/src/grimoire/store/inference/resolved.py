@@ -83,8 +83,8 @@ class ResolvedInference:
     standing: Selection | None = None
     #: The capabilities the route needs -- its operation's own and its
     #: `requires` -- that the PRIMARY attempt is known (`no`) not to have, in
-    #: `capabilities.NAMES` order. `unknown` is never missing. What the seam
-    #: refuses on.
+    #: `capabilities.NAMES` order. `unknown` is never missing, and nor is the
+    #: name rule's `no` (a guess, `resolve._GUESSES`). What the seam refuses on.
     missing: tuple[str, ...] = ()
     #: The same check on the fallback attempt. Reported only: the facade still
     #: sends that fallback until slice C drops it.

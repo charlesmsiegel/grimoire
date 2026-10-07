@@ -5,8 +5,11 @@ every probe is as small as a request can be and still answer its question:
 
 - `generate` -- one user message asking for one word, the reply capped at
   `MAX_TOKENS`.
-- `vision` -- the same cap, a 1x1 PNG built here (no file is read) and a
-  one-word question about it.
+- `vision` -- the same cap, a small solid-colour PNG built here (no file is
+  read) and a one-word question about it. `PROBE_EDGE` square rather than
+  1x1: a picture some provider may refuse as too small would be a refusal of
+  the probe, not an answer about the model, and this size is still one tile
+  in the common providers' per-image charging.
 - `embed` -- one short fixed string.
 
 A probe succeeds when the provider accepted the request and the response
@@ -39,24 +42,29 @@ from .capabilities import NAMES
 MAX_TOKENS = 64
 
 GENERATE_PROMPT = "Reply with the single word: ok"
-VISION_PROMPT = "What colour is this pixel? One word."
+VISION_PROMPT = "What colour is this image? One word."
 EMBED_TEXT = "A short sentence to embed."
+#: The vision probe's picture is this many pixels on a side.
+PROBE_EDGE = 64
+
 
 def _chunk(kind: bytes, data: bytes) -> bytes:
     return (struct.pack(">I", len(data)) + kind + data
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
 
 
-def _pixel_png(rgb: tuple[int, int, int] = (255, 0, 0)) -> bytes:
-    """A valid 1x1 8-bit RGB PNG of one colour: signature, IHDR, IDAT, IEND."""
-    header = struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
-    row = b"\x00" + bytes(rgb)   # filter type 0, then the one pixel
+def _solid_png(rgb: tuple[int, int, int] = (255, 0, 0), edge: int = PROBE_EDGE) -> bytes:
+    """A valid `edge` x `edge` 8-bit RGB PNG of one colour: signature, IHDR,
+    IDAT, IEND. Built here, so the probe reads no file and needs no imaging
+    library."""
+    header = struct.pack(">IIBBBBB", edge, edge, 8, 2, 0, 0, 0)
+    row = b"\x00" + bytes(rgb) * edge   # filter type 0, then the row's pixels
     return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", header)
-            + _chunk(b"IDAT", zlib.compress(row)) + _chunk(b"IEND", b""))
+            + _chunk(b"IDAT", zlib.compress(row * edge)) + _chunk(b"IEND", b""))
 
 
-PIXEL_PNG = _pixel_png()
-PIXEL_DATA_URI = "data:image/png;base64," + base64.b64encode(PIXEL_PNG).decode("ascii")
+PROBE_PNG = _solid_png()
+PROBE_DATA_URI = "data:image/png;base64," + base64.b64encode(PROBE_PNG).decode("ascii")
 
 
 class Probe(NamedTuple):
@@ -68,7 +76,7 @@ class Probe(NamedTuple):
     #: estimate -- not a measurement. The completion side is the cap, so it is
     #: an upper bound; the prompt side is the prompt plus a provider's framing,
     #: and for `vision` the largest per-image charge among the common
-    #: providers' published schemes, which bill even a 1x1 image as a tile.
+    #: providers' published schemes, which bill a small image as one tile.
     #: To be tuned against real ledger rows.
     prompt_tokens: int
     completion_tokens: int
@@ -96,7 +104,7 @@ def messages(cap: str) -> list[dict]:
     if cap == "vision":
         return [{"role": "user", "content": [
             {"type": "text", "text": VISION_PROMPT},
-            {"type": "image_url", "image_url": {"url": PIXEL_DATA_URI}},
+            {"type": "image_url", "image_url": {"url": PROBE_DATA_URI}},
         ]}]
     raise ValueError(f"{cap!r} is not a chat probe")
 
@@ -122,7 +130,8 @@ def describe(cap: str, capped: bool = True) -> str:
     if cap == "generate":
         return f"One chat message, “{GENERATE_PROMPT}”{cap_clause}."
     if cap == "vision":
-        return f"One chat message carrying a one-pixel (1x1) PNG and “{VISION_PROMPT}”{cap_clause}."
+        return (f"One chat message carrying a small solid-colour PNG "
+                f"({PROBE_EDGE}x{PROBE_EDGE}) and “{VISION_PROMPT}”{cap_clause}.")
     if cap == "embed":
         return f"One embeddings request for the text “{EMBED_TEXT}”."
     raise ValueError(f"no probe for {cap!r}")

@@ -769,9 +769,11 @@ def test_the_missing_key_refusal_comes_before_the_capability_one(at_state):
     store.llm_connections.update_connection(blind, api_key="sk-test-blind")
     _catalog(blind, [{"id": "vendor/blind", "vision": False}])
     exc = _refused(lambda: routes.common.require_inference("image-description"))
+    # A pin names no role, and its remedy is another model for the route.
     assert exc.detail == {
-        "detail": "Image descriptions runs on vendor/blind (Saltmarch Router), "
-                  "which cannot read images.",
+        "detail": "The Image descriptions route is pinned to vendor/blind on "
+                  "Saltmarch Router, which cannot read images — choose another "
+                  "model for this route.",
         "kind": "incapable"}
 
 
@@ -797,9 +799,11 @@ def test_an_unrouted_task_is_named_as_a_generation(at_state):
     store.llm_connections.update_connection("openrouter", model="vendor/embedder")
     _embedder_only()
     exc = _refused(lambda: routes.common.require_inference(""))
+    # No route, so nothing to pin: the remedy is the role's model alone.
     assert exc.detail == {
-        "detail": "This generation runs on vendor/embedder (OpenRouter), "
-                  "which cannot generate text.",
+        "detail": "This generation runs on the Primary role (vendor/embedder on "
+                  "OpenRouter), which cannot generate text — choose another "
+                  "Primary model.",
         "kind": "incapable"}
 
 
@@ -811,10 +815,12 @@ def test_an_override_onto_an_incapable_model_is_refused_the_same_way(at_state, b
     _embedder_only()
     exc = _refused(lambda: routes.common.override_inference(
         SimpleNamespace(**body), "regenerate", ctx["cid"]))
-    assert exc.detail == {
-        "detail": "Scene turns runs on vendor/embedder (OpenRouter), "
-                  "which cannot generate text.",
-        "kind": "incapable"}
+    # The override moved the call off the role's model, so no role is named.
+    assert exc.detail["kind"] == "incapable"
+    assert exc.detail["detail"].startswith(
+        "The Scene turns route runs on vendor/embedder on OpenRouter, "
+        "which cannot generate text — choose another model")
+    assert "role" not in exc.detail["detail"]
 
 
 def test_an_override_onto_a_keyless_connection_is_refused_for_the_key_first(at_state):
@@ -836,8 +842,9 @@ def test_a_soft_phase_reports_the_capability_refusal(at_state):
     conn, reason = routes.common._soft_inference(
         lambda: routes.common.require_inference("dossier", ctx["cid"]))
     assert conn is None
-    assert reason == ("Dossier refresh runs on vendor/embedder (OpenRouter), "
-                      "which cannot generate text.")
+    assert reason == ("The Dossier refresh route runs on the Primary role (vendor/embedder "
+                      "on OpenRouter), which cannot generate text — choose another "
+                      "Primary model or pin this route.")
 
 
 def test_an_attempt_built_from_slice_a_fields_defaults_the_rest():
@@ -911,6 +918,47 @@ def test_images_on_does_not_outrank_the_models_own_facts(at_state):
     inference_facts.set_overrides("openrouter", "vendor/active", {"vision": "no"})
     exc = _refused(lambda: routes.common.require_inference("image-description"))
     assert exc.detail["kind"] == "incapable"
+
+
+def test_a_failed_test_never_refuses_and_the_users_word_outranks_it(at_state):
+    """Spec 12: a failed test leaves the model unverified, so it cannot make
+    the seam refuse -- and the user's own override beats it."""
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", vision="on")
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    inference_facts.record_verified("openrouter", "vendor/active", rev, {
+        "vision": {"ok": False, "error": "image input is not supported"}})
+    # The failure alone: unverified, carrying the error, and not refused.
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap(
+        "unknown", "test", "image input is not supported")
+    assert image.missing == ()
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+    # The user's override outranks the failed test.
+    inference_facts.set_overrides("openrouter", "vendor/active", {"vision": "yes"})
+    conn = store.llm_connections.read_connection_raw("openrouter")
+    assert capabilities.caps_for(conn)["vision"] == Cap("yes", "user")
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+    assert store.post_images.capability(conn) == "yes"
+
+
+def test_the_name_rule_hides_a_model_but_never_refuses_it(at_state):
+    """A chat model whose id says "embed" is a guess the name rule gets wrong:
+    the picker hides it, the seam lets it run."""
+    at_state("fresh")
+    chat = store.llm_connections.create_connection(
+        "openai_compatible", "Saltmarch Local", base_url="https://llm.saltmarch.test/v1",
+        model="mara-embedded-chat")
+    raw = store.llm_connections.read_connection_raw(chat)
+    assert store.inference.providers.infer(raw).id == "custom"
+    store.write_config(route_dossier=chat)
+    dossier = inf.resolve("dossier")
+    assert dossier.attempts[0].capabilities["generate"] == Cap("no", "name")
+    assert dossier.missing == ()
+    assert routes.common.require_inference("dossier").conn["id"] == chat
+    group, reason = capabilities.group_for(
+        dossier.attempts[0].capabilities, "generate", store.inference.providers.PRESETS["custom"])
+    assert group == "hidden" and "name" in reason
 
 
 def test_an_anthropic_connection_needs_a_key_to_send():

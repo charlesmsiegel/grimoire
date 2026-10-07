@@ -70,24 +70,9 @@ def problem(conn: dict) -> str | None:
 
 
 def _catalog_row(conn: dict, model: str) -> dict | None:
-    """`model`'s row in `conn`'s cached catalog, or None when there is none.
-
-    Never raises. The sidecar is a file a sync or a hand can mangle, and this
-    runs on every resolution, so whatever slips past `cached_models`' own shape
-    check costs the catalog, never the turn."""
-    conn_id = conn.get("id")
-    if not conn_id or not isinstance(conn_id, str):
-        return None
-    try:
-        models = llm_connections.cached_models(conn_id)["models"]
-    except (OSError, KeyError, TypeError, ValueError, AttributeError):
-        return None
-    if not isinstance(models, list):
-        return None
-    for entry in models:
-        if isinstance(entry, dict) and entry.get("id") == model:
-            return entry
-    return None
+    """`model`'s row in `conn`'s cached catalog, or None when there is none
+    (`llm_connections.cached_row`, which never raises)."""
+    return llm_connections.cached_row(conn.get("id", ""), model)
 
 
 def _params_of(conn: dict, row: dict | None) -> list[str] | None:
@@ -273,11 +258,18 @@ def _needs(route: routing.Route | None, operation: str) -> frozenset[str]:
     return frozenset({own, *(route.requires if route is not None else ())})
 
 
+#: The sources whose `no` is a guess rather than knowledge: the name rule
+#: reads "embed" in an id, and a chat model can carry that word. Such a `no`
+#: hides a model in a picker (`capabilities.group_for`) but is never missing,
+#: so the seam never refuses on it.
+_GUESSES = frozenset({"name"})
+
+
 def _missing(attempt: Attempt, needs: frozenset[str]) -> tuple[str, ...]:
     """The needs `attempt` is known (`no`) not to meet, in `capabilities.NAMES`
-    order. `unknown` is never missing."""
+    order. `unknown` is never missing, and neither is a guess (`_GUESSES`)."""
     known_no = {cap for cap, found in attempt.capabilities.items()
-                if found.value == capabilities.NO}
+                if found.value == capabilities.NO and found.source not in _GUESSES}
     return tuple(cap for cap in capabilities.NAMES if cap in needs and cap in known_no)
 
 

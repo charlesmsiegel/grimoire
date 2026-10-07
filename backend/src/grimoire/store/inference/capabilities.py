@@ -6,10 +6,15 @@ authority first -- the first one that says anything is the answer:
 
 1. `adapter` -- the preset's `never`: the wire protocol cannot. A hard `no`
    that nothing below may claim past, however sure it is.
-2. `test`, then `user` -- the model's facts (`facts.of`): a probe's verdict
-   for the connection's current `rev`, then the user's `overrides`, then the
-   user's own `vision` / `prefill` statements. The legacy connection `vision`
-   field is NOT one of them: it is the post-image *setting*
+2. `test`, then `user` -- the model's facts (`facts.of`): a probe that
+   PASSED for the connection's current `rev` (`yes`), then the user's
+   `overrides`, then the user's own `vision` / `prefill` statements, then a
+   probe that FAILED (`unknown`, source `test`, carrying the provider's
+   `error`). A failed test is never a `no` (spec 12: the row stays unverified
+   with the error shown), so a test can never make the seam refuse; it still
+   outranks the steps below, so a catalog's `yes` does not hide what the test
+   found, but never the user's own word. The legacy connection `vision` field
+   is NOT one of these: it is the post-image *setting*
    (`post_images.capability`), not a statement about the model.
 3. `catalog` -- what the provider publishes for the model: `outputs`
    (`text` -> generate, `embeddings` -> embed; a stated list without one of
@@ -47,6 +52,9 @@ NAMES: tuple[str, ...] = ("generate", "stream", "vision", "embed", "decide_nativ
 class Cap(NamedTuple):
     value: str
     source: str
+    #: What a failed test call reported (source `test`, value `unknown`);
+    #: empty for every other answer.
+    error: str = ""
 
 
 _UNKNOWN = Cap(UNKNOWN, "unknown")
@@ -62,6 +70,8 @@ NEEDS: dict[str, tuple[str, ...]] = {
 }
 
 UNVERIFIED_REASON = "not known yet — a test call can check"
+#: A row whose test call failed; the provider's error follows when it gave one.
+FAILED_REASON = "a test call failed"
 
 #: "<preset label> ..." when the preset rules the need out.
 _ADAPTER_SAYS = {
@@ -82,8 +92,6 @@ CANNOT: dict[str, str] = {
     "decide_native": "make native decisions",
     "stream": "stream",
 }
-_NOUN = {"generate": "text generation", "vision": "image reading",
-         "embed": "embeddings", "decide_native": "native decisions"}
 _GERUND = {"generate": "generating text", "vision": "reading images",
            "embed": "producing embeddings", "decide_native": "deciding natively"}
 
@@ -92,9 +100,30 @@ def _yes_no(flag: bool) -> str:
     return YES if flag else NO
 
 
+def _tested(verified: object) -> tuple[dict[str, Cap], dict[str, Cap]]:
+    """`(passed, failed)`: the probes' verdicts. A pass is a `yes`; a failure
+    is unverified, carrying the provider's error text (spec 12)."""
+    passed: dict[str, Cap] = {}
+    failed: dict[str, Cap] = {}
+    if not isinstance(verified, dict):
+        return passed, failed
+    for cap, result in verified.items():
+        ok = result.get("ok") if isinstance(result, dict) else None
+        if cap not in NAMES or not isinstance(ok, bool):
+            continue
+        if ok:
+            passed[cap] = Cap(YES, "test")
+        else:
+            error = result.get("error")
+            failed[cap] = Cap(UNKNOWN, "test", error if isinstance(error, str) else "")
+    return passed, failed
+
+
 def _stated(model_facts: dict) -> dict[str, Cap]:
-    """Step 2: a probe's verdict wins over the user's word for the same cap."""
-    out: dict[str, Cap] = {}
+    """Step 2: a passed probe wins over the user's word for the same cap, and
+    the user's word wins over a failed one."""
+    passed, failed = _tested(model_facts.get("verified"))
+    out: dict[str, Cap] = dict(failed)
     vision = model_facts.get("vision")
     if vision in ("on", "off"):
         out["vision"] = Cap(_yes_no(vision == "on"), "user")
@@ -106,12 +135,7 @@ def _stated(model_facts: dict) -> dict[str, Cap]:
         for cap, value in overrides.items():
             if cap in NAMES and value in (YES, NO):
                 out[cap] = Cap(value, "user")
-    verified = model_facts.get("verified")
-    if isinstance(verified, dict):
-        for cap, result in verified.items():
-            ok = result.get("ok") if isinstance(result, dict) else None
-            if cap in NAMES and isinstance(ok, bool):
-                out[cap] = Cap(_yes_no(ok), "test")
+    out.update(passed)
     return out
 
 
@@ -171,14 +195,6 @@ def resolve_caps(preset: providers.Preset, model: str, *, catalog_row: dict | No
     return out
 
 
-def _row(conn_id: str, model: str) -> dict | None:
-    try:
-        rows = llm_connections.cached_models(conn_id)["models"]
-        return next((r for r in rows if isinstance(r, dict) and r.get("id") == model), None)
-    except Exception:  # noqa: BLE001 - an unreadable catalog says nothing
-        return None
-
-
 def _facts(conn_id: str, model: str, rev: str) -> dict:
     try:
         return facts.of(conn_id, model, rev)
@@ -203,7 +219,8 @@ def caps_for(conn: dict | None, model: str | None = None) -> dict[str, Cap]:
     conn_id = conn_id if isinstance(conn_id, str) else ""
     rev = conn.get("rev", "")
     rev = rev if isinstance(rev, str) else ""
-    return resolve_caps(preset, model, catalog_row=_row(conn_id, model),
+    return resolve_caps(preset, model,
+                        catalog_row=llm_connections.cached_row(conn_id, model),
                         facts=_facts(conn_id, model, rev))
 
 
@@ -231,8 +248,6 @@ def _why_not(caps: dict[str, Cap], need: str, preset: providers.Preset) -> str:
             continue
         if found.source == "catalog":
             return f"the catalog says this model does not {CANNOT[cap]}"
-        if found.source == "test":
-            return f"a test call found no {_NOUN[cap]}"
         if found.source == "user":
             return f"you marked this model as not {_GERUND[cap]}"
         if found.source == "name":
@@ -245,15 +260,27 @@ def group_for(caps: dict[str, Cap], need: str,
               preset: providers.Preset) -> tuple[str, str]:
     """`(group, reason)` for a role picker (spec 6.3): `fits` (reason: the
     source that said yes), `unverified` (unknown, and the preset does not rule
-    the need out) or `hidden` (reason: what rules it out)."""
+    the need out; reason: a failed test's error, or that nothing has said)
+    or `hidden` (reason: what rules it out)."""
     verdict = fits(caps, need)
     needed = _needed(need)
     if verdict == YES:
         source = next(caps[c].source for c in needed if caps.get(c, _UNKNOWN).value == YES)
         return "fits", source
     if verdict == UNKNOWN and not all(c in preset.never for c in needed):
-        return "unverified", UNVERIFIED_REASON
+        return "unverified", _unverified_reason(caps, needed)
     return "hidden", _why_not(caps, need, preset)
+
+
+def _unverified_reason(caps: dict[str, Cap], needed: tuple[str, ...]) -> str:
+    """Why a row is only unverified: a failed test call, with what the
+    provider said, when one is on record for a capability the need rests on;
+    otherwise that nothing has said yet."""
+    for cap in needed:
+        found = caps.get(cap, _UNKNOWN)
+        if found.value == UNKNOWN and found.source == "test":
+            return f"{FAILED_REASON}: {found.error}" if found.error else FAILED_REASON
+    return UNVERIFIED_REASON
 
 
 # ---- the model list a role picker reads ----
@@ -265,6 +292,15 @@ def preset_body(preset: providers.Preset) -> dict:
             "billing": preset.billing, "reports_price": preset.reports_price,
             "always": sorted(preset.always), "possible": sorted(preset.possible),
             "never": sorted(preset.never)}
+
+
+def cap_body(cap: Cap) -> dict:
+    """One capability as the wire carries it: `{value, source}`, plus `error`
+    when a failed test call left one."""
+    body = {"value": cap.value, "source": cap.source}
+    if cap.error:
+        body["error"] = cap.error
+    return body
 
 
 def _catalog_rows(conn_id: str) -> list[dict]:
@@ -286,15 +322,16 @@ def _facts_file(conn_id: str) -> dict:
 def grouped(conn: dict, need: str, model: str | None = None) -> dict:
     """`conn`'s cached catalog grouped for a role that needs `need` (spec 6.3):
 
-        {"preset": {...}, "need": str,
+        {"provider_preset": {...}, "need": str,
          "groups": {"fits": [row], "unverified": [row]},
          "hidden": [{"id", "reason"}], "reason": str | None}
 
     A row is the catalog entry (every row, embedding-only ones included: the
     Embedding picker lists those) plus `capabilities` (`{name: {value,
-    source}}`) and `reason` (what put it in its group: the source that said
-    yes, or why it is only unverified). Each list is sorted by id, as the
-    catalog is.
+    source, error?}}`, `error` only after a failed test) and `reason` (what
+    put it in its group: the source that said yes, or why it is only
+    unverified -- a failed test's error among them). Each list is sorted by
+    id, as the catalog is.
 
     When the preset rules the need out for EVERY model (z.ai for `embed`),
     both groups and `hidden` are empty and `reason` alone says why -- one
@@ -307,7 +344,7 @@ def grouped(conn: dict, need: str, model: str | None = None) -> dict:
     """
     needed = _needed(need)
     preset = providers.infer(conn)
-    out: dict = {"preset": preset_body(preset), "need": need,
+    out: dict = {"provider_preset": preset_body(preset), "need": need,
                  "groups": {"fits": [], "unverified": []}, "hidden": [], "reason": None}
     if all(c in preset.never for c in needed):
         out["reason"] = group_for(resolve_caps(preset, "", catalog_row=None, facts={}),
@@ -330,6 +367,5 @@ def grouped(conn: dict, need: str, model: str | None = None) -> dict:
             continue
         out["groups"][group].append({
             **row, "reason": reason,
-            "capabilities": {n: {"value": c.value, "source": c.source}
-                             for n, c in caps.items()}})
+            "capabilities": {n: cap_body(c) for n, c in caps.items()}})
     return out

@@ -720,7 +720,9 @@ would answer neither question.
   the same call #144's fallback made. A route that needs a capability declares
   it in `requires`, and the seam refuses a primary that is *known* not to have
   it (a `no`, never an `unknown`) with 409 `incapable`; an image route whose
-  adapter says `no` keeps the old `UNSUPPORTED` body instead.
+  adapter says `no` keeps the old `UNSUPPORTED` body instead. A failed test
+  call is `unknown` with its error, never `no`, and the name rule's `no` is a
+  guess that hides a model in a picker but never refuses one.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators

@@ -297,8 +297,10 @@ def _anthropic_sampler(c: _Conn, name: str, thinking: bool, temperature: bool) -
     if name in ("temperature", "top_p", "top_k"):
         enabled = c.features.get("enabled_thinking")
         if enabled is not True:
+            # The catalog's False is its word; a row that says nothing is
+            # nobody's, and not the adapter's either.
             return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_SAMPLING,
-                            "catalog" if isinstance(enabled, bool) else "adapter")
+                            "catalog" if isinstance(enabled, bool) else "unknown")
         if thinking:
             return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_THINKING, "adapter")
         if name == "top_p" and temperature:
@@ -337,8 +339,10 @@ def _openrouter_reasoning(c: _Conn, value: str | None) -> _Control:
 
 def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
     """`openai_compatible`: GLM by `llm_reasoning`'s rule (the connection's legacy
-    setting when the preset sets none), the OpenAI API as written, any other
-    endpoint unverified."""
+    setting when the preset sets none), the OpenAI API as written, and any other
+    endpoint by the strict-endpoint rule the samplers follow (spec 8): it is not
+    an OpenAI chat parameter, so it is held back unless extended samplers are
+    on, and then sent unverified."""
     if llm_reasoning.is_glm(conn):
         if value is None:
             legacy = llm_reasoning.glm_effort(conn)
@@ -355,6 +359,8 @@ def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
     fields = {"reasoning_effort": value} if value else {}
     if c.openai:
         return _Control(SUPPORTED, "reasoning_effort", "", "preset", fields)
+    if not c.extended:
+        return _Control(UNSUPPORTED, None, WHY_STANDARD, "adapter")
     return _Control(UNKNOWN, "reasoning_effort", WHY_REASONING_ENDPOINT, "unknown", fields)
 
 
@@ -540,7 +546,9 @@ def report(conn: dict | None) -> dict | None:
             continue
         if _sent(eff, name):
             applied[name] = eff["effective"][entry["wire"]]
-        elif entry["wire"] is None:
+        elif entry["wire"] is None and entry["state"] == SUPPORTED:
+            # Honoured by sending nothing (an `off` the model takes as off).
+            # An `unknown` that sends nothing has applied nothing anyone knows.
             applied[name] = eff["requested"][name]
     verified = not any(eff["controls"][name]["state"] == UNKNOWN for name in applied)
     return {"preset_id": sampling.get("preset_id", ""),

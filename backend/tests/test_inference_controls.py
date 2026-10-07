@@ -261,6 +261,17 @@ def test_sampling_is_unsupported_unless_the_catalog_says_enabled_thinking(featur
         assert name not in eff["effective"]
 
 
+@pytest.mark.parametrize(("features", "source"), [
+    (None, "unknown"), ({}, "unknown"), ({"adaptive_thinking": True}, "unknown"),
+    ({"enabled_thinking": False}, "catalog"), (CURRENT, "catalog")])
+def test_refused_sampling_names_who_said_so(features, source):
+    """The catalog's False is the catalog's answer; a row that says nothing
+    about budgeted thinking is nobody's, not the adapter's."""
+    eff = ls.effective(_claude_api({"temperature": 0.7}, features))
+    assert eff["controls"]["temperature"]["state"] == "unsupported"
+    assert eff["controls"]["temperature"]["source"] == source
+
+
 def test_an_older_claude_model_takes_sampling_parameters():
     eff = ls.effective(_claude_api({"temperature": 0.7, "top_k": 5}, OLDER))
     assert eff["effective"] == {"temperature": 0.7, "top_k": 5, "max_tokens": 16000}
@@ -387,6 +398,21 @@ def test_a_model_the_catalog_says_cannot_think_is_unsupported():
     assert "thinking" not in eff["effective"]
 
 
+def test_report_counts_a_sent_nothing_as_applied_only_when_it_is_supported():
+    """An `off` honoured by sending nothing is applied; one whose effect is
+    not known (the model's default may still reason) applied nothing anyone
+    can vouch for, and is not listed."""
+    older = _claude_api({"reasoning_effort": "off"}, OLDER)
+    assert ls.report(older)["applied"] == {"reasoning_effort": "off"}
+    for conn in (_claude_api({"reasoning_effort": "off"}, CURRENT),
+                 _conn("openrouter", {"reasoning_effort": "off"},
+                       model_params=["reasoning"]),
+                 _conn("openai_compatible", {"reasoning_effort": "off"},
+                       base_url="https://api.openai.com/v1")):
+        assert ls.effective(conn)["controls"]["reasoning_effort"]["state"] == "unknown"
+        assert "reasoning_effort" not in ls.report(conn)["applied"]
+
+
 def test_off_omits_thinking():
     older = ls.effective(_claude_api({"reasoning_effort": "off"}, OLDER))
     assert "thinking" not in older["effective"]
@@ -431,9 +457,25 @@ def test_the_openai_api_takes_reasoning_effort():
     assert ls.sent_names(conn) == ["reasoning_effort"]
 
 
-def test_another_openai_compatible_endpoint_is_unknown():
+def test_a_strict_endpoint_is_not_sent_reasoning_effort():
+    """Spec 8's strict-endpoint rule: `reasoning_effort` is not an OpenAI chat
+    parameter, so a standard endpoint is not sent it -- the same gate as the
+    three sampler extensions, and the same sentence."""
+    conn = _conn("openai_compatible", {"reasoning_effort": "high"},
+                 base_url="http://localhost:1234/v1")
+    eff = ls.effective(conn)
+    assert eff["controls"]["reasoning_effort"] == {
+        "state": "unsupported", "wire": None, "why": ls.WHY_STANDARD, "source": "adapter"}
+    assert eff["effective"] == {}
+    assert ls.sent_names(conn) == []
+    assert ls.report(conn)["dropped"] == [{"param": "reasoning_effort",
+                                          "reason": ls.WHY_STANDARD}]
+
+
+def test_an_extended_endpoint_is_sent_reasoning_effort_unverified():
     eff = ls.effective(_conn("openai_compatible", {"reasoning_effort": "high"},
-                             base_url="http://localhost:1234/v1"))
+                             base_url="http://localhost:1234/v1",
+                             sampler_support="extended"))
     assert eff["controls"]["reasoning_effort"]["state"] == "unknown"
     assert eff["effective"] == {"reasoning_effort": "high"}
 
