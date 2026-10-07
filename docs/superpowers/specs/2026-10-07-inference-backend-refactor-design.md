@@ -250,9 +250,12 @@ that provider:
     "post_process": "none",
     "rates": {"prompt_usd_per_1k": 0.0006, "completion_usd_per_1k": 0.0022},
     "verified": {
-      "generate": {"ok": true, "rev": "a1b2c3d4e5f60718", "at": "2026-10-07T12:00:00Z"},
-      "embed":    {"ok": false, "rev": "a1b2c3d4e5f60718", "at": "2026-10-07T12:00:00Z",
-                   "error": "404 model does not support embeddings"}
+      "rev": "a1b2c3d4e5f60718",
+      "caps": {
+        "generate": {"ok": true, "at": "2026-10-07T12:00:00Z"},
+        "embed":    {"ok": false, "at": "2026-10-07T12:00:00Z",
+                     "error": "404 model does not support embeddings"}
+      }
     },
     "overrides": {"generate": "", "embed": "", "decide_native": "", "structured_output": ""}
   }
@@ -264,9 +267,10 @@ that provider:
 - `prefill`, `post_process`: as today, per model.
 - `rates`: per-token rates, same field names and units as `pricing.json`
   (§9).
-- `verified`: test-call results (§6.4). Each is stamped with the provider `rev`
-  it was made under; a result whose `rev` differs from the provider's current
-  one reads as absent ("unverified").
+- `verified`: test-call results (§6.4). The results carry one stamp, the
+  provider `rev` they were made under; results whose `rev` differs from the
+  provider's current one read as absent ("unverified"). A test made under a
+  new `rev` replaces the old results rather than merging with them.
 - `overrides`: an explicit user assertion per capability (`""` / `yes` /
   `no`), for endpoints whose discovery says nothing and where the user does
   not want to spend on a test call. Bounded by adapter facts (§6.2).
@@ -423,12 +427,19 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
 
 - **known incompatible** on the primary attempt → 409 `incapable`, naming the
   route, the role (if any), the provider and the model, and what is missing.
+  Only a `no` from the adapter, a user assertion or the catalog refuses: the
+  name rule (§6.2 source 5) sorts pickers but never refuses a call, and a
+  failed test call is `unknown`, not `no` (§6.4). Until slice C migrates it
+  into model facts, a connection whose legacy `vision` is `on` is not refused
+  for a vision `no` from the catalog or the preset; an adapter `no` or the
+  model's own facts still refuse.
   Example: "Scene-break runs on the Decision role (Jev 1.13 on OpenRouter),
   which cannot answer decide() for this question type — choose another
   Decision model or pin this route."
 - **known incompatible** on a fallback attempt → that attempt is dropped from
   the chain (generalising today's "text-only fallback is dropped for
-  image-bearing messages").
+  image-bearing messages"). From slice C; slice B reports it in
+  `fallback_missing` and the facade still sends it.
 - **unknown** → allowed; surfaces show "unverified".
 
 ### 5.4 `ResolvedInference`
@@ -526,14 +537,14 @@ pre-fills the URL and billing, and contributes capability facts.
 | Preset | Adapter (`kind`) | Base URL | Billing | Reports price | Can do at all |
 |---|---|---|---|---|---|
 | OpenRouter | `openrouter` | fixed | metered | yes | generate, vision, embed, decide_native, structured_output — per catalog |
-| Anthropic API (new) | `anthropic` | fixed `https://api.anthropic.com` | metered | no | generate; vision and structured_output (`output_config.format`) per the model's catalog entry; no embed, no decide_native; sampling parameters and prefill per model (current models reject both) |
+| Anthropic API (new) | `anthropic` | fixed `https://api.anthropic.com` | metered | no | generate; vision and structured_output (`output_config.format`) per the model's catalog entry; no embed, no decide_native; prefill never (current models reject it); sampling parameters per model (current models reject them) |
 | Claude subscription | `claude` | — (Agent SDK) | subscription | equivalent | generate only |
 | OpenAI | `openai_compatible` | fixed `https://api.openai.com/v1` | metered | no | generate, vision, embed, structured_output, decide_native (`/v1/decisions`) |
-| z.ai | `openai_compatible` | fixed `https://api.z.ai/api/paas/v4` | metered | no | generate, structured_output (unverified); no embed |
+| z.ai | `openai_compatible` | fixed `https://api.z.ai/api/paas/v4` | metered | no | generate; vision, structured_output and prefill per model (unverified); no embed, no decide_native |
 | z.ai Coding Plan | `openai_compatible` | fixed `https://api.z.ai/api/coding/paas/v4` | subscription | no | as z.ai |
-| Ollama | `openai_compatible` | editable, default `http://localhost:11434/v1` | metered | no | everything unknown |
-| LM Studio | `openai_compatible` | editable, default `http://localhost:1234/v1` | metered | no | everything unknown |
-| Custom | `openai_compatible` | editable | user's choice | no | everything unknown |
+| Ollama | `openai_compatible` | editable, default `http://localhost:11434/v1` | metered | no | everything unknown except `decide_native` (no) |
+| LM Studio | `openai_compatible` | editable, default `http://localhost:1234/v1` | metered | no | everything unknown except `decide_native` (no) |
+| Custom | `openai_compatible` | editable | user's choice | no | everything unknown except `decide_native` (no) |
 
 A local endpoint costs nothing only once the user enters zero rates for it;
 Grimoire never assumes a price (rule 5), so until then its models count toward
@@ -542,8 +553,12 @@ the Housekeeping chore (§9.2) like any other unpriced model.
 The last column means **not ruled out**: it only decides whether a model
 whose catalog says nothing lands in §6.3's Unverified group. A preset asserts
 `yes` only for what is true of every model behind it (`generate` and
-`stream` on the generative presets) — never for a per-model capability such
-as vision or embeddings.
+`stream` on the hosted presets; the local and custom presets assert nothing,
+since an embedding-only server sits behind them as easily as a chat one) —
+never for a per-model capability such as vision or embeddings. A known gap:
+because the preset outranks the name rule, an embedding id whose catalog row
+states no `outputs` reads `generate: yes` on a hosted preset; slice C's
+Embedding picker must not rely on that row's generate answer.
 
 The preset table is shipped code, deliberately small, and is where the
 "quirks" the planning draft mentioned live. It is not a model database.
@@ -573,23 +588,25 @@ Sources, highest authority first:
    physically do (e.g. `claude` and `anthropic` cannot `embed`; only
    `openrouter` and the OpenAI preset have a native decision endpoint). Nothing
    below may claim past a hard `no` here.
-2. **User assertions** (`source: test` or `source: user`) — `verified` results
-   for the current `rev`, then `overrides`.
+2. **User assertions** (`source: test` or `source: user`) — a passed test for
+   the current `rev`, then `overrides` (and the per-model `vision`/`prefill`
+   facts), then a failed test. A failed test is `unknown` carrying its error,
+   never `no`: it marks the row unverified without hiding it, and the user's
+   own override can still answer it.
 3. **Provider catalog** (`source: catalog`) — OpenRouter is fetched with
    `output_modalities=all` (its default is text-only, which is why no embedding
    or decision model reaches the catalog today): `text` → generate,
    `embeddings` → embed, `decisions` → decide_native; `input_modalities`
    containing `image` → vision; `supported_parameters` containing
    `structured_outputs` or `response_format` → structured_output, and the param
-   list feeds §8 as today. Anthropic's catalog lists ids; their capabilities
-   come from adapter facts.
+   list feeds §8 as today. Anthropic's `/v1/models` is a catalog too: it
+   publishes a capability tree (`image_input`, `structured_outputs`,
+   `thinking.types`, `effort`, `max_tokens`).
 4. **Preset table** (`source: preset`) — only its always-true facts
    (`generate`, `stream`); its hard `no`s (e.g. z.ai: embed) are source 1.
-   Anthropic's `/v1/models` is a catalog (source 3): it publishes a capability
-   tree (`image_input`, `structured_outputs`, `thinking.types`, `effort`,
-   `max_tokens`). The legacy connection `vision` field is a **post-image**
-   setting and is not read as a vision assertion; §4.2's `vision` in model
-   facts is the new-layout assertion.
+   The legacy connection `vision` field is a **post-image** setting and is not
+   read as a vision assertion (the seam honours it as a bridge, §5.3); §4.2's
+   `vision` in model facts is the new-layout assertion.
 5. **Name rule** (`source: name`) — an id containing `embed` → embed `yes`,
    generate `no`.
 6. Otherwise `unknown`.
@@ -611,35 +628,48 @@ ways for the role's operation:
 
 What a role needs: Primary and Fast — `generate`; Decision — `decide_native`
 **or** `generate` (structured generation can answer any decision; §7.4);
-Embedding — `embed`. A typed model id is always accepted and lands as
-unverified. A provider whose preset rules an operation out shows an empty list
+Embedding — `embed`. A typed model id is always accepted; one the catalog
+does not list is judged on its name, the preset and its facts alone, so it can
+land in any group. A provider whose preset rules an operation out shows an empty list
 with the reason ("z.ai serves no embeddings").
 
 Fallback pickers use the same filtering. The route pin picker uses the route's
-operation and `requires`.
+operation and `requires`; the capabilities API takes one need per call, so a
+route needing two (the image route: generate and vision) combines two calls.
+Hidden rows are returned with their reasons for the screens that explain them.
 
 ### 6.4 The test call
 
 Optional; offered on unverified rows and on the model-facts panel.
 
 1. The user clicks **Test…**. A confirmation states the provider, model, what
-   will be sent, and the estimated cost when rates are known (otherwise "cost
-   unknown — one tiny request").
+   will be sent, and the estimated cost when the catalog states a price
+   (otherwise "cost unknown — one tiny request"; the user's rates and
+   `pricing.json` join the estimate with slice E).
 2. On confirm, one probe per capability asked about:
-   - generate: a fixed instruction, `max_tokens` 5
+   - generate: a fixed instruction, the reply capped at 64 tokens (the vision
+     probe takes the same cap)
    - embed: one fixed short string; records the dimension
-   - vision: a 1×1 PNG and a one-word question
+   - vision: a small solid-colour PNG (64×64, one tile; some vision stacks
+     refuse a 1×1 image for reasons that have nothing to do with vision) and a
+     one-word question
    - decide_native: one predicate (lands with the native adapters, slice H)
 3. Results go to `facts.json[model].verified`, stamped with the provider's
-   current `rev`. A failure records the error text the provider gave (no
-   credentials).
+   `rev` when the test started (nothing is recorded if it moved meanwhile). A
+   failure is recorded only when the provider refused the probe itself
+   (400/404/413/415/422, and not a refusal of the probe's own reply cap), with
+   the error text it gave and no credentials; it resolves as `unknown` with
+   that error (§6.2). Rate limits, outages, 402/408, auth and transport
+   failures are reported to the caller and not recorded, and a failure that
+   answers for every probe stops the probes after it (reported "not sent").
    Each probe runs **once — no retries and no fallback** — and succeeds when
    the request is accepted and the response completes (text is not required:
    a thinking model may spend a small cap thinking).
 4. The call is metered under task `model-test` with no campaign (an `embed`
    probe's row carries no token counts until slice D meters embeddings). `model-test`
-   is registered as a non-route task (like the catalog refresh and health
-   probe) so the routing guard knows it.
+   is registered as a non-route task so the routing guard knows it (the
+   catalog refresh and the health probe meter nothing, so they need no
+   registration).
 
 The probe runs as a `draft` run (`runs.run_draft`) so a dropped connection does
 not lose the result; it writes its facts in the run's terminal step.
@@ -771,7 +801,8 @@ today's parse on them, offline. Native backends are measured with
 
 ## 8. Presets and effective controls
 
-`inference.controls.effective(preset, attempt)` is the generalisation of
+`llm_sampling.effective(conn)` (wrapped for the screens by
+`store/inference/controls.preview`) is the generalisation of
 `llm_sampling.split`, and it is the only thing that both builds the wire
 parameters and describes them. For each control:
 
@@ -781,21 +812,24 @@ parameters and describes them. For each control:
 | `translated` | sent under the provider's spelling | sent | editable, shows the mapping |
 | `unsupported` | known not to work | not sent | greyed out; stored value kept |
 | `unknown` | cannot be proven | sent, per today's rule (marked unverified; standard-only on strict endpoints unless `sampler_support` is on) | distinguishable from unsupported |
-| `n/a` | the operation takes no sampling (embed, native decide) | not sent | the panel says so |
+| `n/a` | the operation takes no sampling (embed, native decide) — produced from slices D/H, when operations reach the controls API | not sent | the panel says so |
 
 `reasoning_effort` translations:
 
 | Adapter | Wire |
 |---|---|
-| `openrouter` | `reasoning: {effort}` when the catalog lists `reasoning`; else unsupported |
+| `openrouter` | `reasoning: {effort}`: `translated` when the cached catalog lists `reasoning`, `unsupported` when a cached catalog omits it, `unknown` (sent) when no catalog is cached |
 | OpenAI preset | `reasoning_effort` |
-| `anthropic` | `low`/`medium`/`high` → `thinking: {type: "adaptive"}` + `output_config: {effort: <same>}` where the catalog says adaptive thinking is supported (current models reject `budget_tokens`); otherwise fixed `budget_tokens` 1024 / 4096 / 16000, each ≥ 1024 and below the effective `max_tokens`; `off` sends nothing (the model's default — some current models cannot turn thinking off). Sampling parameters are `unsupported` when the catalog says `enabled` thinking is unsupported, or whenever thinking is sent; `max_tokens` defaults to 16000 capped at the catalog's limit; `stop` is `translated` → `stop_sequences` |
+| `anthropic` | `low`/`medium`/`high` → `thinking: {type: "adaptive"}` + `output_config: {effort: <same>}` where the catalog says adaptive thinking is supported (current models reject `budget_tokens`); where the catalog lists `enabled` thinking instead, `budget_tokens` 1024 / 4096 / 16000, each held to at most half the effective `max_tokens` and at least 1024 (thinking is `unsupported` when that leaves no room); when the catalog states neither, nothing is sent and the control is `unknown`; `off` sends nothing (the model's default — some current models cannot turn thinking off), reported `supported` where the catalog lists budgeted thinking or none at all and `unknown` otherwise. Sampling parameters are sent only when the catalog says the model takes `enabled` thinking and no thinking is being sent, and `top_p` is not sent beside `temperature`; otherwise they are `unsupported`; `max_tokens` defaults to 16000 capped at the catalog's limit; `stop` is `translated` → `stop_sequences` |
 | GLM on `openai_compatible` | today's `llm_reasoning.glm_effort` |
 | `claude` (Agent SDK) | unsupported |
-| other `openai_compatible` | unknown |
+| other `openai_compatible` | unknown — sent only where `sampler_support` allows non-standard parameters, like the other extensions |
 
 `max_tokens` is `translated` → `max_completion_tokens` on the OpenAI preset
-(and wherever else an endpoint requires it). The per-kind decisions live in
+(and wherever else an endpoint requires it). This is a deliberate exception to
+rule 3: an existing connection at `api.openai.com` with a `max_tokens` preset
+sends the new spelling from slice B, because the endpoint refuses the old one
+on current models. The per-kind decisions live in
 one gateway function (`llm_sampling.effective`, which the facade calls per
 attempt from the connection dict, so the fallback is covered too); the store
 wraps it to add each control's capability `source` for the screens. The API returns `{requested, effective, controls: {name: {state,
@@ -1018,7 +1052,7 @@ never migrated in place; tests migrate a copy.
 | Migration backup failed | no write; Settings banner; translation serves |
 | Decide question unanswerable | `answer: None` + `reason`; never a guessed default |
 | Embedding provider fails | caller degrades as today; no fallback |
-| Test call fails | recorded in `verified` with the provider's error text; the row stays "unverified" with that error shown |
+| Test call fails | a refusal of the probe itself is recorded in `verified` with the provider's error text and resolves as `unknown`, so the row stays "unverified" with that error shown and the call is never refused for it; transient failures (rate limit, outage, credits, auth, transport) are reported and not recorded |
 
 Reads fail soft (a mangled `facts.json`, catalog or preset reads as empty);
 writes fail visibly.
@@ -1050,7 +1084,7 @@ against this spec) and lands green under `make check`. Order is chosen so that
 |---|---|---|
 | **A — Resolver substrate** | `store/inference/` (keys, cascade, translation, resolver), the 15-route registry with `operation`/`default_role`/`requires` (legacy surfaces keep the original 12), `ResolvedInference` + lowering, `require_inference`, per-role fallback chain, `embed_space` resolved through the Embedding role, guard updates. Reads legacy state through the translation; writes nothing new | No. A behaviour-equivalence test pins every task's resolved provider, model, preset and fallback against the baseline resolver |
 | **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources) and the §5.3 capability check, OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
-| **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI; legacy settings UI removed | **Yes** |
+| **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI, dropping an incapable fallback attempt (§5.3; B reports it); legacy settings UI removed | **Yes** |
 | **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering, the confirm on Embedding-role change, and one reader of the Embedding role (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag, the Housekeeping chore | Yes |
 | **F — `decide()`** | The contract, `generate(schema=)`, the structured backend, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
@@ -1066,7 +1100,7 @@ model during C–E therefore cannot break any task; nothing uses that role yet.
 
 - `test_routing_guard.py`: follows `require_inference`; fails an operation
   mismatch between call site and route; knows the registered non-route tasks
-  (`model-test`, catalog refresh, health probe) and embed tasks.
+  (`model-test`) and embed tasks.
 - New guard: every `inference.embed`/`embed_sync` names a registered embed
   task; every `inference.decide` names a task on a `decide` route.
 - `test_usage_guard.py`: decide and embed are metered.
