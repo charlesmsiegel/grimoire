@@ -23,6 +23,7 @@ from __future__ import annotations
 import zlib
 
 from . import config, llm_connections
+from .inference import translate
 
 
 def resolve(cfg: dict | None = None) -> dict | None:
@@ -42,8 +43,7 @@ def resolve(cfg: dict | None = None) -> dict | None:
     """
     try:
         cfg = config.read_config() if cfg is None else cfg
-        model = str(cfg.get("embeddings_model") or "").strip()
-        conn_id = str(cfg.get("embeddings_connection_id") or "").strip()
+        conn_id, model = translate.embedding_role(cfg)
         if not model or not conn_id:
             return None
         conn = llm_connections.read_connection_raw(conn_id)
