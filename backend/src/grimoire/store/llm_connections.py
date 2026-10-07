@@ -66,6 +66,14 @@ def regex_path(conn_id: str) -> Path:
     return _dir() / f"{conn_id}.regex.json"
 
 
+def facts_path(conn_id: str) -> Path:
+    """The connection's per-model facts (`store/inference/facts.py`): what was
+    verified of each model, and what the user said about it. Its own file for
+    the same reason as the sidecar -- one JSON document per provider, not a
+    flat string in the record's frontmatter."""
+    return _dir() / f"{conn_id}.facts.json"
+
+
 def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     """Unconditional write: stamps a fresh rev and clears any sidecar for
     this id, on every call (create AND update) — simpler than conditioning
@@ -234,6 +242,7 @@ def delete_connection(id: str) -> None:
     p.unlink()
     _sidecar_path(id).unlink(missing_ok=True)
     regex_path(id).unlink(missing_ok=True)
+    facts_path(id).unlink(missing_ok=True)
 
 
 def get_active() -> dict | None:
