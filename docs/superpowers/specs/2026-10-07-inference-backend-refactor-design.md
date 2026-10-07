@@ -433,9 +433,10 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
   into model facts, a connection whose legacy `vision` is `on` is not refused
   for a vision `no` from the catalog or the preset; an adapter `no` or the
   model's own facts still refuse.
-  Example: "Scene-break runs on the Decision role (Jev 1.13 on OpenRouter),
-  which cannot answer decide() for this question type — choose another
-  Decision model or pin this route."
+  Example: "The Scene-break route runs on the Decision role (Jev 1.13 on
+  OpenRouter), which cannot answer decide() for this question type — choose
+  another Decision model or pin this route." A pinned route says "is pinned
+  to <model> on <provider>" and suggests another model for the route.
 - **known incompatible** on a fallback attempt → that attempt is dropped from
   the chain (generalising today's "text-only fallback is dropped for
   image-bearing messages"). From slice C; slice B reports it in
