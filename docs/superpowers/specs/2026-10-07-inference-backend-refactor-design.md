@@ -474,8 +474,10 @@ fallback at all when it would be the primary's own provider.
 - Fallback comes from the role the route resolves through; a route pinned to an
   explicit selection uses the fallback of the role named by its
   `default_role`.
-- One attempt, as today, dropped when it resolves to the same provider and
-  model as the primary or when it is known incapable (§5.3).
+- One attempt, as today, dropped when it resolves to the same **provider** as
+  the primary (the facade's rule since #144: a second attempt on the same
+  provider is a retry, which the retry budget already covers) or when it is
+  known incapable (§5.3).
 - `decide` chain: native (if the selection is `decide_native`) → structured
   generation on the same selection (if it can `generate`) → the role fallback
   (native or structured, by its own capabilities).

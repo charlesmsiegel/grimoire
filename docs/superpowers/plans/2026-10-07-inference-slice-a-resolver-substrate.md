@@ -12,6 +12,8 @@
 
 **Gate record:** the plan → implementation Codex review could not run (no Codex CLI or credentials in the container); by the user's choice a Claude adversarial review stood in. Its seven findings are folded into this revision.
 
+> **Superseded after execution (final-review fix wave, commits a730422 / 0cb3855):** the resolver's signature is `resolve(task, cid="", *, operation="generate", override=None)` and reads the campaign itself (`resolve.campaign_meta(cid)`); `routes/common._campaign_routing_meta` is gone. The fallback attempt now carries what the facade sends (route-scoped presets follow onto it; a same-provider fallback is dropped), and its test compares against the frozen JSON rather than `_fallback_connection()`. Campaign layout markers are honoured only when the global layout is current. Where the tasks below say otherwise, the code and the spec win.
+
 ## Global Constraints
 
 - **Behaviour-neutral (spec rule 3).** For every task, with and without a campaign, the resolved connection id, model, sampling `{preset_id, preset_name, scope, params}`, `model_params`, fallback connection and its sampling, every 409/400 status and `detail` string, and the routing API bodies are identical to the baseline. Task 1's snapshot is the arbiter and is **never regenerated** after Task 1.
