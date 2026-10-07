@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
-from . import cascade, facts, keys, providers, resolve, resolved, translate
+from . import capabilities, cascade, facts, keys, providers, resolve, resolved, translate
 
-__all__ = ["cascade", "facts", "keys", "providers", "resolve", "resolved", "translate"]
+__all__ = ["capabilities", "cascade", "facts", "keys", "providers", "resolve", "resolved",
+           "translate"]
