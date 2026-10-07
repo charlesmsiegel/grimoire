@@ -30,6 +30,7 @@ import pytest
 from grimoire import llm, llm_errors, routes
 from grimoire.llm_errors import KINDS, LLMError
 from grimoire.routes import common
+from grimoire.store import llm_connections
 from tests import draft_runs as drafts
 from tests.llm_fakes import FailingOpenRouter, FakeCatalog
 
@@ -351,3 +352,13 @@ def test_the_browser_and_the_backend_agree_on_which_kinds_have_a_catalog():
     block = re.search(r"LISTABLE: LLMConnectionKind\[\] = \[(.*?)\]", source, re.DOTALL)
     assert block, "LISTABLE is no longer an array literal — this guard reads it as text"
     assert set(re.findall(r'"([a-z_]+)"', block.group(1))) == set(llm.LISTABLE_KINDS)
+
+
+def test_the_browser_and_the_backend_agree_on_which_connection_kinds_exist():
+    """`LLMConnectionKind` is the frontend's copy of `llm_connections.KINDS`. A
+    kind the store reads and the type does not name is a connection the
+    editor's kind checks silently treat as none of the known ones."""
+    source = (FRONTEND / "api" / "types.ts").read_text(encoding="utf-8")
+    block = re.search(r"export type LLMConnectionKind = (.*?);", source, re.DOTALL)
+    assert block, "LLMConnectionKind is no longer a union of literals — this guard reads it as text"
+    assert set(re.findall(r'"([a-z_]+)"', block.group(1))) == set(llm_connections.KINDS)

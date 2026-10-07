@@ -911,3 +911,12 @@ def test_images_on_does_not_outrank_the_models_own_facts(at_state):
     inference_facts.set_overrides("openrouter", "vendor/active", {"vision": "no"})
     exc = _refused(lambda: routes.common.require_inference("image-description"))
     assert exc.detail["kind"] == "incapable"
+
+
+def test_an_anthropic_connection_needs_a_key_to_send():
+    """The same credential rule as OpenRouter's: the Anthropic API answers a
+    keyless request with a 401, so the seam refuses it first with a 409."""
+    conn = {"id": "a", "kind": "anthropic", "name": "Anthropic API",
+            "base_url": "", "api_key": "", "model": "claude-test-1"}
+    assert inf.problem(conn) == "Anthropic API key not set"
+    assert inf.problem({**conn, "api_key": "test-key-anthropic"}) is None

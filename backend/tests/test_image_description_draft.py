@@ -247,6 +247,12 @@ def test_every_connection_kind_is_classified_as_image_capable_or_not():
     assert supported | text_only == set(store.llm_connections.KINDS)
 
 
+def test_the_anthropic_api_can_carry_an_image():
+    """Its adapter turns an `image_url` data URI into the API's own base64
+    image block, so it is classified with the kinds that pass parts on."""
+    assert "anthropic" in store.image_drafts.SUPPORTED_KINDS
+
+
 def test_an_oversized_image_is_refused_before_its_bytes_are_read(tmp_path, monkeypatch):
     """One draft holds the file three times over -- the bytes, their base64
     buffer, and the ~4/3-sized string that sits in the request. Only the

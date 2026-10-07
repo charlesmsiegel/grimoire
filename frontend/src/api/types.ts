@@ -44,7 +44,7 @@ export type Model = {
 /** A connection's image override (#377): `""` follows the catalog. */
 export type VisionOverride = "" | "on" | "off";
 
-export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
+export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible" | "anthropic";
 // `model` is what is STORED (what the connection editor edits); `effective_model`
 // is what a generation on it will actually run — they differ for `claude`
 // alone, which substitutes a default for an unset model. Any surface naming

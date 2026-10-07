@@ -15,7 +15,7 @@ import { RegexRulesEditor } from "./RegexRulesEditor";
  *  route checks it there: `claude`'s models are SDK aliases with no endpoint to
  *  enumerate, so the form offers that kind a fixed list and this must not offer
  *  it a Fetch button that can only ever 400. */
-const LISTABLE: LLMConnectionKind[] = ["openrouter", "openai_compatible"];
+const LISTABLE: LLMConnectionKind[] = ["openrouter", "openai_compatible", "anthropic"];
 
 /** What the last thing this connection's provider did says, in words.
  *

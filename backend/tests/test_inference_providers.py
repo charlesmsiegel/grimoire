@@ -150,7 +150,7 @@ def test_capability_sets_partition_the_vocabulary():
 
 def test_every_kind_is_a_known_adapter():
     for preset in providers.PRESETS.values():
-        assert preset.kind in (*llm_connections.KINDS, "anthropic")
+        assert preset.kind in llm_connections.KINDS
     assert providers.PRESETS["anthropic"].kind == "anthropic"
     assert providers.PRESETS["claude"].kind == "claude"
     assert providers.PRESETS["openrouter"].kind == "openrouter"

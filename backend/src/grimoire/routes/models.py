@@ -81,7 +81,7 @@ class PromptLayoutUpdate(BaseModel):
 
 
 class ConnectionCreate(BaseModel):
-    kind: Literal["openrouter", "claude", "openai_compatible"]
+    kind: Literal["openrouter", "claude", "openai_compatible", "anthropic"]
     name: str
     base_url: str = ""
     api_key: str = ""
@@ -128,7 +128,7 @@ class CatalogProbe(BaseModel):
     only the catalogs that need no auth.
     """
 
-    kind: Literal["openrouter", "claude", "openai_compatible"]
+    kind: Literal["openrouter", "claude", "openai_compatible", "anthropic"]
     base_url: str = ""
     api_key: str = ""
 

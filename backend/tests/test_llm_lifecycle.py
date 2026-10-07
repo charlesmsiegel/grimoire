@@ -95,7 +95,8 @@ def test_shutdown_closes_the_underlying_connection_pools(app):
         # Both pools are lazy -- force them into existence so there is
         # something for shutdown to close.
         pools = [app.state.llm._openrouter._client(),
-                 app.state.llm._openai_compatible._client()]
+                 app.state.llm._openai_compatible._client(),
+                 app.state.llm._anthropic._client()]
         assert not any(pool.is_closed for pool in pools)
 
     assert all(pool.is_closed for pool in pools)
