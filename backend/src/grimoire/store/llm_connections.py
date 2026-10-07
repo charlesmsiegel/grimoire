@@ -1,4 +1,4 @@
-"""Named LLM connections: openrouter / claude / openai_compatible profiles,
+"""Named LLM connections: openrouter / claude / openai_compatible / anthropic profiles,
 each remembering its own key+model so switching the active one never loses
 credentials. Migrates the pre-connections flat config fields once. See
 docs/superpowers/specs/2026-07-18-llm-connections-design.md for the full
@@ -20,7 +20,7 @@ from .paths import home, now_iso, safe_id, slugify, uniquify
 #: .TEXT_ONLY_KINDS` for the fallback route and `store.image_drafts
 #: .SUPPORTED_KINDS` for the primary -- and a test partitions THIS roster
 #: between them, so a new kind cannot be added without classifying it.
-KINDS = ("openrouter", "claude", "openai_compatible")
+KINDS = ("openrouter", "claude", "openai_compatible", "anthropic")
 #: `vision` is "" (auto: the cached catalog decides), "on" or "off" -- whether
 #: this connection's model may be sent post images (#377, `store.post_images`).
 #: `prefill` is "true" or "" on disk and a bool once read -- whether a reply cut

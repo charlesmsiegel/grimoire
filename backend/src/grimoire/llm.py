@@ -13,6 +13,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 from . import content_parts, llm_capture, llm_reasoning, llm_sampling, model_guidance
+from .anthropic import AnthropicClient
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -147,7 +148,7 @@ TEXT_ONLY_KINDS = frozenset({"claude"})
 #: route reads this to refuse a catalog request the provider cannot serve
 #: *before* making one, so the reader gets "this kind has no catalog" instead
 #: of a transport error from a URL that was never going to exist.
-LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible"})
+LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible", "anthropic"})
 
 #: Key under which `_stamp` records the connection the *current* attempt is
 #: running on, in the usage holder the caller already threads down.
@@ -706,11 +707,13 @@ class LLMClient:
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
                  retries=None, fallback=None, observer=None, capture=None,
-                 images=None, load_image=None):
+                 images=None, load_image=None, anthropic=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
                                     else OpenAICompatibleClient())
+        # Last in the signature so no positional caller shifts.
+        self._anthropic = anthropic if anthropic is not None else AnthropicClient()
         # A number, or a callable returning one. Callable is how routes hands
         # over the config.md setting without this module importing the store —
         # the gateway's imports are kept acyclic and store-free on purpose
@@ -896,8 +899,13 @@ class LLMClient:
                       ", ".join(f"{d['param']} ({d['reason']})" for d in dropped))
         if kind == "claude":
             return self._claude.stream(messages, effective_model(conn), usage=usage)
-        # Task 7 (the `anthropic` adapter) dispatches here, handing the adapter
-        # the whole body share: `effective=controls["effective"]`.
+        if kind == "anthropic":
+            # The whole body share, not `split`'s sampler half: `max_tokens` is
+            # always in it (the API requires one), and `thinking` /
+            # `output_config` are the reasoning control's.
+            return self._anthropic.stream(
+                messages, conn.get("model", ""), conn.get("api_key", ""), usage=usage,
+                base_url=conn.get("base_url", ""), effective=controls["effective"])
         if kind == "openai_compatible":
             # Its reasoning travels as the adapter's own keyword, as the GLM
             # setting always has (`llm_reasoning.glm_effort`, via `effective`).
@@ -987,6 +995,9 @@ class LLMClient:
         if kind == "openai_compatible":
             return await self._openai_compatible.list_models(
                 conn.get("base_url", ""), conn.get("api_key", ""))
+        if kind == "anthropic":
+            return await self._anthropic.list_models(conn.get("api_key", ""),
+                                                     conn.get("base_url", ""))
         return await self._openrouter.list_models(conn.get("api_key", ""))
 
     async def check(self, conn: dict) -> None:
@@ -1010,9 +1021,12 @@ class LLMClient:
         elif kind == "openai_compatible":
             await self._openai_compatible.probe(conn.get("base_url", ""),
                                                 conn.get("api_key", ""))
+        elif kind == "anthropic":
+            await self._anthropic.probe(conn.get("api_key", ""), conn.get("base_url", ""))
         else:
             await self._openrouter.probe(conn.get("api_key", ""))
 
     async def aclose(self) -> None:
         await self._openrouter.aclose()
         await self._openai_compatible.aclose()
+        await self._anthropic.aclose()

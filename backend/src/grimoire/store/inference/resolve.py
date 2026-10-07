@@ -62,6 +62,8 @@ def problem(conn: dict) -> str | None:
     """
     if conn["kind"] == "openrouter" and not conn.get("api_key"):
         return "OpenRouter key not set"
+    if conn["kind"] == "anthropic" and not conn.get("api_key"):
+        return "Anthropic API key not set"
     if conn["kind"] == "openai_compatible" and not conn.get("base_url"):
         return "Endpoint base URL not set"
     return None

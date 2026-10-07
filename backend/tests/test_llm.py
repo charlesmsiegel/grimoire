@@ -14,6 +14,7 @@ def test_llm_error_detail_defaults_to_kind():
 
 
 from grimoire import llm  # noqa: E402 - deliberate late import; see the lines above
+from grimoire.anthropic import AnthropicClient  # noqa: E402 - deliberate late import
 from grimoire.llm import LLMClient  # noqa: E402 - deliberate late import; see the lines above
 
 
@@ -85,6 +86,62 @@ async def test_missing_kind_defaults_to_openrouter():
     assert [c async for c in client.stream([], conn)] == ["or"]
 
 
+async def test_dispatches_to_anthropic_with_the_effective_body_share():
+    op, cl, oc, an = (FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc"),
+                      FakeProvider("an"))
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc, anthropic=an)
+    conn = _conn("anthropic", model="claude-test-1", api_key="test-key",
+                 base_url="https://proxy.example.com")
+    chunks = [c async for c in client.stream([], conn)]
+    assert chunks == ["an"]
+    assert an.calls == [(("claude-test-1", "test-key"),
+                         {"usage": None, "base_url": "https://proxy.example.com",
+                          "effective": {"max_tokens": 16000}})]
+    assert op.calls == [] and cl.calls == [] and oc.calls == []
+
+
+async def test_anthropic_gets_the_controls_effective_decides_capped_by_the_catalog():
+    an = FakeProvider("an")
+    client = LLMClient(openrouter=FakeProvider("or"), claude=FakeProvider("cl"),
+                       openai_compatible=FakeProvider("oc"), anthropic=an)
+    conn = _conn("anthropic", model="claude-test-1",
+                 model_features={"max_tokens": 8192, "adaptive_thinking": True,
+                                 "enabled_thinking": False, "effort": ["low", "medium", "high"]},
+                 sampling={"preset_id": "p", "preset_name": "Terse", "scope": "connection",
+                           "params": {"temperature": 0.7, "stop": ["END"],
+                                      "reasoning_effort": "low"}})
+    [c async for c in client.stream([], conn)]
+    effective = an.calls[0][1]["effective"]
+    assert effective == {"max_tokens": 8192, "stop_sequences": ["END"],
+                         "thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}
+    assert effective == llm.llm_sampling.effective(conn)["effective"]
+
+
+def test_anthropic_is_a_listable_kind_that_carries_images():
+    assert "anthropic" in llm.LISTABLE_KINDS
+    assert "anthropic" not in llm.TEXT_ONLY_KINDS
+
+
+async def test_aclose_closes_the_anthropic_client_too():
+    closed = []
+
+    class Closable:
+        def __init__(self, tag):
+            self.tag = tag
+
+        async def aclose(self):
+            closed.append(self.tag)
+
+    client = LLMClient(openrouter=Closable("or"), claude=Closable("cl"),
+                       openai_compatible=Closable("oc"), anthropic=Closable("an"))
+    await client.aclose()
+    assert "an" in closed and "or" in closed and "oc" in closed
+
+
+def test_a_default_client_builds_the_real_anthropic_adapter():
+    assert isinstance(LLMClient()._anthropic, AnthropicClient)
+
+
 # ---- the catalog and the probe are dispatched by kind too (#146, #149) ----
 from tests.llm_fakes import (  # noqa: E402 - see the late imports above
     RecordingProvider,
@@ -95,7 +152,8 @@ from tests.llm_fakes import (  # noqa: E402 - see the late imports above
 def _asking_client(**kinds):
     return LLMClient(openrouter=kinds.get("openrouter", RecordingProvider()),
                      claude=kinds.get("claude", RecordingProvider()),
-                     openai_compatible=kinds.get("openai_compatible", RecordingProvider()))
+                     openai_compatible=kinds.get("openai_compatible", RecordingProvider()),
+                     anthropic=kinds.get("anthropic", RecordingProvider()))
 
 
 async def test_list_models_asks_openrouter_for_an_openrouter_connection():
@@ -117,6 +175,16 @@ async def test_list_models_asks_the_endpoint_for_a_custom_connection():
     assert oc.listed == [("https://x/v1", "k")]
 
 
+async def test_list_models_asks_the_anthropic_api_for_an_anthropic_connection():
+    an = RecordingProvider(models=[{"id": "claude-test-1"}])
+    client = _asking_client(anthropic=an)
+
+    got = await client.list_models(_conn("anthropic", api_key="test-key", base_url=""))
+
+    assert got == [{"id": "claude-test-1"}]
+    assert an.listed == [("test-key", "")]
+
+
 async def test_list_models_refuses_the_kind_with_no_catalog():
     """A backstop: the route already refuses this, and what it must not do is
     reach a provider with no `list_models` and raise an AttributeError."""
@@ -127,16 +195,20 @@ async def test_list_models_refuses_the_kind_with_no_catalog():
 
 
 async def test_check_probes_the_connections_own_provider():
-    op, cl, oc = RecordingProvider(), RecordingProvider(), RecordingProvider()
-    client = _asking_client(openrouter=op, claude=cl, openai_compatible=oc)
+    op, cl, oc, an = (RecordingProvider(), RecordingProvider(), RecordingProvider(),
+                      RecordingProvider())
+    client = _asking_client(openrouter=op, claude=cl, openai_compatible=oc, anthropic=an)
 
     await client.check(_conn("openrouter", api_key="sk-or-x"))
     await client.check(_conn("claude", model=""))
     await client.check(_conn("openai_compatible", base_url="https://x/v1", api_key="k"))
+    await client.check(_conn("anthropic", api_key="test-key",
+                             base_url="https://proxy.example.com"))
 
     assert op.probed == [("sk-or-x",)]
     assert cl.probed == [("opus",)]        # the effective model, as a turn would run
     assert oc.probed == [("https://x/v1", "k")]
+    assert an.probed == [("test-key", "https://proxy.example.com")]
 
 
 async def test_a_failing_check_is_not_retried_or_fallen_back_to_another_provider():

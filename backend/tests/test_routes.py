@@ -15808,9 +15808,8 @@ def test_listing_and_detail_carry_image_id(client):
 
 
 def test_an_anthropic_connection_needs_a_key_to_be_ready():
-    """Shaped like one: the kind is not registered with `llm_connections` yet,
-    so this is the dict a read will hand `_connection_ready` once it is."""
+    """The dict a read hands `_connection_ready` for an `anthropic` connection."""
     conn = {"id": "anthropic", "kind": "anthropic", "name": "Anthropic API",
             "base_url": "", "api_key": "", "model": "claude-test"}
     assert routes.config._connection_ready(conn) is False
-    assert routes.config._connection_ready({**conn, "api_key": "sk-ant-test"}) is True
+    assert routes.config._connection_ready({**conn, "api_key": "test-key-anthropic"}) is True
