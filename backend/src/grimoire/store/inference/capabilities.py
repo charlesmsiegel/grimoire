@@ -254,3 +254,82 @@ def group_for(caps: dict[str, Cap], need: str,
     if verdict == UNKNOWN and not all(c in preset.never for c in needed):
         return "unverified", UNVERIFIED_REASON
     return "hidden", _why_not(caps, need, preset)
+
+
+# ---- the model list a role picker reads ----
+def preset_body(preset: providers.Preset) -> dict:
+    """A provider preset as the wire carries it: the namedtuple, with each
+    capability set as a sorted list."""
+    return {"id": preset.id, "label": preset.label, "kind": preset.kind,
+            "base_url": preset.base_url, "url_locked": preset.url_locked,
+            "billing": preset.billing, "reports_price": preset.reports_price,
+            "always": sorted(preset.always), "possible": sorted(preset.possible),
+            "never": sorted(preset.never)}
+
+
+def _catalog_rows(conn_id: str) -> list[dict]:
+    try:
+        rows = llm_connections.cached_models(conn_id)["models"]
+    except Exception:  # noqa: BLE001 - an unreadable catalog lists nothing
+        return []
+    return sorted((r for r in rows if isinstance(r, dict) and isinstance(r.get("id"), str)),
+                  key=lambda r: r["id"])
+
+
+def _facts_file(conn_id: str) -> dict:
+    try:
+        return facts.read(conn_id)
+    except Exception:  # noqa: BLE001 - unreadable facts say nothing
+        return {}
+
+
+def grouped(conn: dict, need: str, model: str | None = None) -> dict:
+    """`conn`'s cached catalog grouped for a role that needs `need` (spec 6.3):
+
+        {"preset": {...}, "need": str,
+         "groups": {"fits": [row], "unverified": [row]},
+         "hidden": [{"id", "reason"}], "reason": str | None}
+
+    A row is the catalog entry (every row, embedding-only ones included: the
+    Embedding picker lists those) plus `capabilities` (`{name: {value,
+    source}}`) and `reason` (what put it in its group: the source that said
+    yes, or why it is only unverified). Each list is sorted by id, as the
+    catalog is.
+
+    When the preset rules the need out for EVERY model (z.ai for `embed`),
+    both groups and `hidden` are empty and `reason` alone says why -- one
+    sentence rather than the same one echoed per row. Otherwise `reason` is None.
+
+    `model` narrows the answer to that one id, in whichever group it lands in;
+    an id the catalog does not list is judged on what is known without a row
+    (its name, the preset, the user's facts). Raises ValueError for an unknown
+    `need`; reads only the store, never the network.
+    """
+    needed = _needed(need)
+    preset = providers.infer(conn)
+    out: dict = {"preset": preset_body(preset), "need": need,
+                 "groups": {"fits": [], "unverified": []}, "hidden": [], "reason": None}
+    if all(c in preset.never for c in needed):
+        out["reason"] = group_for(resolve_caps(preset, "", catalog_row=None, facts={}),
+                                  need, preset)[1]
+        return out
+    conn_id = conn.get("id", "")
+    conn_id = conn_id if isinstance(conn_id, str) else ""
+    rev = conn.get("rev", "")
+    rev = rev if isinstance(rev, str) else ""
+    rows = _catalog_rows(conn_id)
+    if model:
+        rows = [next((r for r in rows if r["id"] == model), {"id": model})]
+    stated = _facts_file(conn_id) if rows else {}
+    for row in rows:
+        known = _facts(conn_id, row["id"], rev) if row["id"] in stated else {}
+        caps = resolve_caps(preset, row["id"], catalog_row=row, facts=known)
+        group, reason = group_for(caps, need, preset)
+        if group == "hidden":
+            out["hidden"].append({"id": row["id"], "reason": reason})
+            continue
+        out["groups"][group].append({
+            **row, "reason": reason,
+            "capabilities": {n: {"value": c.value, "source": c.source}
+                             for n, c in caps.items()}})
+    return out

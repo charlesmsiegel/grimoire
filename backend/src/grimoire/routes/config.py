@@ -7,12 +7,15 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel
 
 from .. import catalog, health, llm, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store.inference import capabilities, controls
 from ..store.inference import resolve as inference
 from . import runs
 from .common import (
@@ -873,6 +876,46 @@ def delete_sampler_preset(pid: str):
     except store.sampler_presets.PresetNotFoundError:
         raise HTTPException(status_code=404, detail="sampler preset not found") from None
     return {"ok": True}
+
+
+# ---- inference read APIs: what a model can do, and what a preset sends ----
+class InferenceControlsBody(BaseModel):
+    """A sampler preset previewed on a provider's model. Defined beside its one
+    route, not in `models.py`, so this block stays in one place. `preset_id` ""
+    is no preset (provider defaults); `model` "" is the provider's own."""
+
+    preset_id: str = ""
+    provider: str
+    model: str = ""
+
+
+@router.get("/llm-connections/{cid}/capabilities")
+def get_connection_capabilities(
+        cid: str, need: Literal["generate", "vision", "embed", "decide"] = "generate",
+        model: str = ""):
+    """The connection's models grouped for a role that needs `need`
+    (`capabilities.grouped`): every catalog row, embedding-only ones included
+    (the Embedding picker lists those), so this is not narrowed by
+    `catalog.listable`. Calls no provider and reserves no run."""
+    try:
+        conn = store.llm_connections.read_connection_raw(cid)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+    return capabilities.grouped(conn, need, model or None)
+
+
+@router.post("/inference/controls")
+def post_inference_controls(body: InferenceControlsBody):
+    """What sampler preset `preset_id` sends on `provider` serving `model`:
+    `{requested, effective, controls}` (`controls.preview`), the same answer an
+    attempt resolved for that provider, model and preset carries."""
+    try:
+        conn = store.llm_connections.read_connection_raw(body.provider)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+    if body.preset_id and store.sampler_presets.read_preset(body.preset_id) is None:
+        raise HTTPException(status_code=404, detail="sampler preset not found")
+    return controls.preview(body.preset_id, conn, body.model)
 
 
 # ---- the entity kinds an import may route a row to (#138) ----

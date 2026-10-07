@@ -712,7 +712,10 @@ would answer neither question.
   markers are capped), and a route whose tasks nothing uses. A route names a
   whole connection or model rather than a bare model string, because since
   `llm_connections/` a model name no longer says which provider serves it --
-  the same call #144's fallback made.
+  the same call #144's fallback made. A route that needs a capability declares
+  it in `requires`, and the seam refuses a primary that is *known* not to have
+  it (a `no`, never an `unknown`) with 409 `incapable`; an image route whose
+  adapter says `no` keeps the old `UNSUPPORTED` body instead.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators

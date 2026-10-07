@@ -133,7 +133,51 @@ export type SamplingReport = {
    *  everything and cannot say whether the model takes it. */
   verified: boolean;
 };
-export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
+/** What a role needs of a model (`capabilities.NEEDS`). */
+export type CapabilityNeed = "generate" | "vision" | "embed" | "decide";
+export type CapabilityName =
+  | "generate" | "stream" | "vision" | "embed" | "decide_native"
+  | "structured_output" | "prefill";
+/** `adapter` outranks `test`, then `user`, then `catalog`, `preset`, `name`. */
+export type CapabilitySource =
+  | "adapter" | "test" | "user" | "catalog" | "preset" | "name" | "unknown";
+export type CapabilityValue = { value: "yes" | "no" | "unknown"; source: CapabilitySource };
+/** A catalog row in a capability group: the entry, what put it there
+ *  (`reason`) and every capability with the source that said so. */
+export type CapabilityModel = Model & {
+  reason: string;
+  capabilities: Record<CapabilityName, CapabilityValue>;
+};
+/** `GET /api/llm-connections/{id}/capabilities`. Every catalog row, embedding
+ *  models included. When the provider rules the need out for every model,
+ *  `groups` and `hidden` are empty and `reason` says why; otherwise `reason`
+ *  is `null`. */
+export type ModelCapabilities = {
+  preset: {
+    id: string; label: string; kind: LLMConnectionKind; base_url: string;
+    url_locked: boolean; billing: "metered" | "subscription"; reports_price: boolean;
+    always: CapabilityName[]; possible: CapabilityName[]; never: CapabilityName[];
+  };
+  need: CapabilityNeed;
+  groups: { fits: CapabilityModel[]; unverified: CapabilityModel[] };
+  hidden: { id: string; reason: string }[];
+  reason: string | null;
+};
+/** One control of a sampler preset on a model, and why it is what it is. */
+export type ControlPreview = {
+  state: "supported" | "translated" | "unsupported" | "unknown" | "n/a";
+  /** The wire field it is sent as; `null` when it is not sent. */
+  wire: string | null;
+  why: string; source: CapabilitySource;
+};
+/** `POST /api/inference/controls`: what a sampler preset sends on a provider's
+ *  model — `llm_sampling.effective`. */
+export type ControlsPreview = {
+  requested: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  controls: Record<string, ControlPreview>;
+};
+export type ModelsRefreshResult ={ models: Model[]; fetched_at: string; rev: string };
 /** A connection described but not saved, for the sake of listing its models. */
 export type CatalogDraft = { kind: LLMConnectionKind; base_url?: string; api_key?: string };
 /** What a connection's provider last actually did (#146).
