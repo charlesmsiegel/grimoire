@@ -39,6 +39,26 @@ class Route(NamedTuple):
     #: written there anyway (by hand; the PUT refuses it) is ignored, rather
     #: than being a setting that silently never fires.
     campaign_scoped: bool
+    #: What kind of call this is. Both are `generate` in this slice; `decide`
+    #: is reserved for routes that answer a yes/no or a pick.
+    operation: str = "generate"
+    #: Which connection role serves this route when nothing overrides it.
+    default_role: str = "primary"
+    #: Capabilities the serving connection must have (e.g. `vision`).
+    requires: tuple[str, ...] = ()
+    #: For a route split out of a legacy one, the legacy route's key: stored
+    #: settings (connection and preset keys) are still read from it. "" means
+    #: this route IS a legacy route.
+    legacy: str = ""
+
+
+OPERATIONS: tuple[str, ...] = ("generate", "decide")
+DEFAULT_ROLES: tuple[str, ...] = ("primary", "fast", "decision")
+
+
+def legacy_key(route: Route) -> str:
+    """The key this route's stored settings live under."""
+    return route.legacy or route.key
 
 
 #: Every route, in the order the pickers render them: the prose ones first,
@@ -56,27 +76,33 @@ ROUTES: tuple[Route, ...] = (
     Route("scene", "Scene turns",
           "Every streamed turn in play: sends, retries, regenerations, kept-writing "
           "replies, director turns, replayed turns and mechanics continuations.",
-          ("chat", "retry", "regenerate", "extend", "director", "replay", "continuation",
-           "response-selector"), True),
+          ("chat", "retry", "regenerate", "extend", "director", "replay", "continuation"),
+          True),
+    Route("speaker", "Next speaker",
+          "Which character speaks next in group play.",
+          ("response-selector",), True, default_role="fast", legacy="scene"),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",
           "End-of-scene extraction, and the mechanics audit that runs beside it.",
-          ("absorb", "audit"), True),
+          ("absorb", "audit"), True, default_role="fast"),
     Route("dossier", "Dossier refresh",
           "One call per present character at absorb -- the loop where a cheaper "
           "model saves the most.",
-          ("dossier",), True),
+          ("dossier",), True, default_role="fast"),
     Route("continuity", "Continuity checks",
           "The duplicate check beside absorb and the reconciliation sweep after "
           "End Scene or a refresh.",
-          ("continuity-identity", "continuity-reconcile"), True),
+          ("continuity-identity", "continuity-reconcile"), True, default_role="fast"),
     Route("summary", "Summaries & scene-break checks",
           "The live rolling summary and the is-this-scene-over question.",
-          ("rolling-summary", "scene-break"), True),
+          ("rolling-summary",), True, default_role="fast"),
+    Route("scene_break", "Scene-break checks",
+          "Whether the scene has reached a natural break.",
+          ("scene-break",), True, default_role="fast", legacy="summary"),
     Route("tracker", "Scene state tracker",
           "One small call after every post to keep each character's tracked state current.",
-          ("tracker-update",), True),
+          ("tracker-update",), True, default_role="fast"),
     Route("suggestions", "Scene suggestions",
           "Suggested next scenes, and the metadata read out of a scene description.",
           ("suggestions", "intent", "character-from-passage"), True),
@@ -84,25 +110,49 @@ ROUTES: tuple[Route, ...] = (
           "Drafted voice anchors, and the drift check against them. A campaign "
           "override reaches its own cast; a world character's anchor is drafted "
           "outside any campaign and follows the global route.",
-          ("voice-anchor", "voice-drift"), True),
+          ("voice-anchor",), True),
+    Route("voice_drift", "Voice drift checks",
+          "Whether a played scene drifted from a character's voice anchor.",
+          ("voice-drift",), True, default_role="fast", legacy="voice"),
     Route("image", "Image descriptions",
           "What a picture shows, drafted for the alt text and the art catalog. A "
           "campaign override reaches its own image library; a world record's "
           "picture follows the global route.",
-          ("image-description",), True),
+          ("image-description",), True, default_role="fast", requires=("vision",)),
     Route("tagline", "Character taglines",
-          "The one-line tagline drafted for a character version.", ("tagline",), False),
+          "The one-line tagline drafted for a character version.", ("tagline",), False,
+          default_role="fast"),
     Route("scenario", "Scenario drafts",
-          "The scene roster read out of an imported character card.", ("scenario",), False),
+          "The scene roster read out of an imported character card.", ("scenario",), False,
+          default_role="fast"),
 )
+
+
+def _legacy_routes() -> tuple[Route, ...]:
+    """The routes as they were before three were split out: each legacy route
+    with its own tasks followed by its split children's, in registry order.
+    Every pre-registry surface (config keys, pickers, the routing bundle, the
+    campaign allow-list) reads this view and so sees exactly what it always
+    saw."""
+    out: list[Route] = []
+    for r in ROUTES:
+        if r.legacy:
+            continue
+        kids = tuple(t for c in ROUTES if c.legacy == r.key for t in c.tasks)
+        out.append(r._replace(tasks=r.tasks + kids) if kids else r)
+    return tuple(out)
+
+
+#: The twelve routes `ROUTES` held before the split.
+LEGACY_ROUTES: tuple[Route, ...] = _legacy_routes()
 
 #: task -> route key. Built here rather than written out, so the two cannot drift.
 TASK_ROUTE: dict[str, str] = {task: r.key for r in ROUTES for task in r.tasks}
 
-#: Frontmatter keys, in `ROUTES` order. `config.py` narrows `read_config()` to
+#: Frontmatter keys, in `LEGACY_ROUTES` order. `config.py` narrows `read_config()` to
 #: `_CONFIG_KEYS`, so a key missing from there is silently dropped on read AND
 #: on write -- which is why this is one tuple both files share.
-CONFIG_KEYS: tuple[str, ...] = tuple(f"route_{r.key}" for r in ROUTES)
+CONFIG_KEYS: tuple[str, ...] = tuple(f"route_{r.key}" for r in LEGACY_ROUTES)
 
 #: The sampler-preset choice per route, stored beside the connection choice at
 #: both scopes (`store/sampler_presets.py` resolves it). A separate tuple rather
@@ -110,7 +160,7 @@ CONFIG_KEYS: tuple[str, ...] = tuple(f"route_{r.key}" for r in ROUTES)
 #: naming a CONNECTION -- `llm_connections.delete_connection` clears every key
 #: in it that names the deleted id, and a preset that happened to share a
 #: connection's slug would be cleared by the wrong delete.
-PRESET_CONFIG_KEYS: tuple[str, ...] = tuple(f"preset_{r.key}" for r in ROUTES)
+PRESET_CONFIG_KEYS: tuple[str, ...] = tuple(f"preset_{r.key}" for r in LEGACY_ROUTES)
 
 _BY_KEY: dict[str, Route] = {r.key: r for r in ROUTES}
 
@@ -152,8 +202,8 @@ def routes_for(scope: str) -> tuple[Route, ...]:
     """The routes a scope may set: all of them globally, the campaign-scoped
     ones for a campaign."""
     if scope == "campaign":
-        return tuple(r for r in ROUTES if r.campaign_scoped)
-    return ROUTES
+        return tuple(r for r in LEGACY_ROUTES if r.campaign_scoped)
+    return LEGACY_ROUTES
 
 
 def _opinion(meta: dict, key: str, exists: Callable[[str], bool]) -> str:
@@ -187,15 +237,16 @@ def resolve(task: str, *, campaign_meta: dict, cfg: dict,
     got = route(task)
     if got is None:
         return {"route": "", "connection_id": "", "scope": "active"}
-    key = config_key(got.key)
+    lkey = legacy_key(got)
+    key = config_key(lkey)
     if got.campaign_scoped:
         chosen = _opinion(campaign_meta, key, exists)
         if chosen:
-            return {"route": got.key, "connection_id": chosen, "scope": "campaign"}
+            return {"route": lkey, "connection_id": chosen, "scope": "campaign"}
     chosen = _opinion(cfg, key, exists)
     if chosen:
-        return {"route": got.key, "connection_id": chosen, "scope": "global"}
-    return {"route": got.key, "connection_id": "", "scope": "active"}
+        return {"route": lkey, "connection_id": chosen, "scope": "global"}
+    return {"route": lkey, "connection_id": "", "scope": "active"}
 
 
 def bundle(*, campaign_meta: dict, cfg: dict, exists: Callable[[str], bool],

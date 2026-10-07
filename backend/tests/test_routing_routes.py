@@ -210,12 +210,12 @@ DRIVERS = {
 }
 
 #: The routes a campaign may override, which is the registry's own answer.
-CAMPAIGN_ROUTES = [r.key for r in store.routing.ROUTES if r.campaign_scoped]
-GLOBAL_ONLY = [r.key for r in store.routing.ROUTES if not r.campaign_scoped]
+CAMPAIGN_ROUTES = [r.key for r in store.routing.LEGACY_ROUTES if r.campaign_scoped]
+GLOBAL_ONLY = [r.key for r in store.routing.LEGACY_ROUTES if not r.campaign_scoped]
 
 
 def test_every_route_has_a_driver():
-    assert set(DRIVERS) == {r.key for r in store.routing.ROUTES}
+    assert set(DRIVERS) == {r.key for r in store.routing.LEGACY_ROUTES}
 
 
 @pytest.mark.parametrize("route", sorted(DRIVERS))
