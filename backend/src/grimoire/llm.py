@@ -469,7 +469,18 @@ def fallback_sampling(primary: dict, fallback: dict) -> dict:
     return fallback
 
 
-def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
+class PresetRefusalError(LLMError):
+    """An `LLMError` that is a sampler parameter THIS request sent being
+    refused, rather than the request itself (`_preset_refusal`).
+
+    A subclass rather than a reworded detail alone, so a reader that has to
+    tell the two apart asks the type instead of matching prose: the model test
+    call (`routes.config`) sends its own reply cap, and a provider refusing
+    that cap has said nothing about whether the model can do what was asked.
+    Every `except LLMError` still catches it, with the same kind and status."""
+
+
+def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     """The error to raise in place of `exc` when it is a preset being refused.
 
     None when it is not: `exc` carries no refusal status, or this attempt sent
@@ -503,7 +514,7 @@ def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
         return None
     sampling = conn.get("sampling") or {}
     name = sampling.get("preset_name") or sampling.get("preset_id") or "?"
-    return LLMError(
+    return PresetRefusalError(
         exc.kind,
         f"{exc.detail} — this request carried sampler preset “{name}” "
         f"({', '.join(sent)}) and the provider's refusal names one of them, so "

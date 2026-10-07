@@ -291,7 +291,8 @@ subscriber. **Thirty-two handlers** start detached runs, in five classes:
   `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call
   (the catalog refresh and the model test excepted, which list or probe rather
   than complete, and are the two whose run writes beside the connection), and
-  `api.draftRun` in the client. `post_opener` is the exception on the
+  `api.draftRun` in the client (the model test has no client caller until
+  slice C). `post_opener` is the exception on the
   client side only, where `api.streamDraft` re-attaches by attempt id instead
   of polling.
 

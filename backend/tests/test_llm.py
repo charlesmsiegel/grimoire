@@ -1367,6 +1367,9 @@ async def test_a_refused_preset_is_not_handed_to_the_fallback(status):
     assert "Warm" in exc.value.detail and "temperature" in exc.value.detail
     assert "fallback connection was not tried" in exc.value.detail
     assert exc.value.kind == "bad_response" and exc.value.status == status
+    # Typed, so a reader that must tell a refused setting from a refused
+    # request (the model test call) asks the type rather than the prose.
+    assert isinstance(exc.value, llm.PresetRefusalError)
     assert seen == []  # a refused setting is not a failing connection
 
 
@@ -1444,6 +1447,12 @@ async def test_single_does_not_retry_a_rate_limit():
         await client.single([], _conn("openrouter"))
     assert exc.value.kind == "rate_limit"
     assert provider.attempts == 1
+    # The control: the same provider and client through `stream` DO retry, so
+    # the one attempt above is `single`'s doing, not this setup's.
+    provider = FlakyProvider(failures=1, kind="rate_limit")
+    client = _retry_client(provider, retries=3)
+    assert await client.complete([], _conn("openrouter")) == "ok"
+    assert provider.attempts == 2
 
 
 async def test_single_never_calls_a_configured_fallback():

@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
@@ -793,7 +793,11 @@ def _embed_endpoint(raw: dict) -> str:
     """Where the `embed` probe goes: the endpoint the Embedding path resolves
     for this provider -- OpenRouter's fixed URL (its adapter ignores a stored
     one), else the connection's own base URL. The kinds with no embeddings
-    route never get here: their preset's `never` refused the test."""
+    route never get here: their preset's `never` refused the test. On a
+    legacy-format store this can record `embed: yes` for an OpenRouter model
+    that the Embedding role will still not use (OpenRouter embeddings are
+    new-layout only); the explicit, confirmed test call is allowed to probe it
+    anyway."""
     if raw.get("kind", "openrouter") == "openrouter":
         return store.inference.providers.PRESETS["openrouter"].base_url
     return str(raw.get("base_url") or "")
@@ -818,34 +822,107 @@ async def _embed_probe(raw: dict, model: str) -> dict:
     return {"ok": True, "dims": len(vectors[0])}
 
 
-async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str) -> dict:
-    """One probe's outcome: `{"ok": True}` (plus `dims` for embed), or
-    `{"ok": False, "kind", "error"}` with the error scrubbed of any picture and
-    of the connection's key. One attempt, never retried, never fallen back."""
+#: The failure kinds that answer for every probe still to be sent: the
+#: credential was refused or is missing, the SDK is not installed, or the
+#: provider could not be reached in time. Whatever was asked next would fail
+#: the same way and say no more, so the rest are not sent (`_halts`).
+_HALTING_KINDS = frozenset({"auth", "missing_key", "missing_dependency", "network", "timeout"})
+
+#: The HTTP statuses that do the same: out of credits (402) and a request the
+#: server timed out (408). Every 5xx joins them in `_halts` -- the provider
+#: failing, which no other probe sent to it would get past.
+_HALTING_STATUSES = frozenset({402, 408})
+
+
+def _records(exc: LLMError) -> bool:
+    """Whether a probe's failure is a verdict on the MODEL, and may be filed.
+
+    Only a provider refusing THIS request (`llm.REJECTED_STATUSES`, the set
+    `_resilient` already reads as "refused what it was sent") says that. A
+    `test` no outranks the catalog and can make the seam refuse a route with
+    409 `incapable`, so everything else is reported to whoever asked and never
+    filed: no status at all (a transport failure, a malformed stream), a 402,
+    a 408, a 429, a 5xx. The chat adapters map most of those to
+    `bad_response`, so the kind cannot make this call.
+
+    Nor is a refusal of the probe's OWN setting. `llm._preset_refusal` reads a
+    400 naming a parameter the request sent -- here the reply cap, the only
+    one a probe sends -- as that parameter refused, and raises it as
+    `llm.PresetRefusalError`; a provider that refused the cap has said nothing
+    about whether the model can do what was asked."""
+    return exc.status in llm.REJECTED_STATUSES and not isinstance(exc, llm.PresetRefusalError)
+
+
+def _halts(exc: LLMError) -> bool:
+    """Whether a failure answers for every probe after it, so none is sent
+    (`_HALTING_KINDS`, `_HALTING_STATUSES`, any 5xx). A refusal, a refused
+    cap, a rate limit or an unexplained bad response is this probe's own
+    answer, and the next probe asks a different question."""
+    return (exc.kind in _HALTING_KINDS or exc.status in _HALTING_STATUSES
+            or (exc.status or 0) >= 500)
+
+
+class _Outcome(NamedTuple):
+    #: What the run reports for the probe.
+    result: dict
+    #: Whether `result` is a verdict to file (`_records`).
+    records: bool
+    #: Whether no further probe is sent (`_halts`).
+    halts: bool
+
+
+async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str) -> _Outcome:
+    """One probe's outcome. Its result is `{"ok": True}` (plus `dims` for
+    embed), or `{"ok": False, "kind", "error"}` with the error scrubbed of any
+    picture and of the connection's key. One attempt, never retried, never
+    fallen back. A success is always a verdict; a failure only when `_records`
+    says so."""
     probes = store.inference.probes
     try:
         if probes.PROBES[cap].operation == "embed":
-            return await _embed_probe(raw, model)
+            return _Outcome(await _embed_probe(raw, model), True, False)
         with store.usage.meter("model-test") as m:
             # Completed is accepted; the text is not read.
             await _bounded_call(client.single(probes.messages(cap), conn, m.usage))
     except LLMError as exc:
-        return {"ok": False, "kind": exc.kind,
-                "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])}
-    return {"ok": True}
+        return _Outcome({"ok": False, "kind": exc.kind,
+                         "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},
+                        _records(exc), _halts(exc))
+    return _Outcome({"ok": True}, True, False)
 
 
-def _record_verdicts(conn_id: str, model: str, rev: str, results: dict[str, dict]) -> bool:
-    """File the verdicts under the `rev` the test STARTED on, unless that rev
+async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict, conn: dict,
+                     model: str) -> tuple[dict[str, dict], dict[str, dict]]:
+    """`(results, verdicts)` for `caps`, probed in order.
+
+    After a failure that answers for every probe (`_halts`) the rest are NOT
+    sent -- each would be a request, and maybe money, spent learning what the
+    first already said. They are reported as `not_sent`, naming that failure,
+    and nothing is filed for them."""
+    results: dict[str, dict] = {}
+    verdicts: dict[str, dict] = {}
+    stopped: str | None = None
+    for cap in caps:
+        if stopped is not None:
+            results[cap] = {"ok": False, "kind": "not_sent", "error": f"not sent: {stopped}"}
+            continue
+        outcome = await _probe(client, cap, raw, conn, model)
+        results[cap] = outcome.result
+        if outcome.records:
+            verdicts[cap] = {k: outcome.result[k] for k in ("ok", "error", "dims")
+                             if k in outcome.result}
+        if outcome.halts:
+            stopped = f"the {cap} probe failed first ({outcome.result['error']})"
+    return results, verdicts
+
+
+def _record_verdicts(conn_id: str, model: str, rev: str, verdicts: dict[str, dict]) -> bool:
+    """File `verdicts` under the `rev` the test STARTED on, unless that rev
     has moved: an edit that landed while the probes were out describes a
     different endpoint, and `facts.record_verified` replaces another rev's
     results outright -- so the stale verdict would overwrite whatever the new
-    rev already holds. A failure that says nothing about the model
-    (`probes.SAYS_NOTHING`) is reported but never recorded. Whether anything
-    was filed is the answer."""
-    verdicts = {cap: {k: r[k] for k in ("ok", "error", "dims") if k in r}
-                for cap, r in results.items()
-                if r.get("kind") not in store.inference.probes.SAYS_NOTHING}
+    rev already holds. `verdicts` holds only what `_records` let through.
+    Whether anything was filed is the answer."""
     if not verdicts:
         return False
     try:
@@ -896,8 +973,12 @@ def post_connection_test(
     through the connection as the resolver lowers it, carrying the probe's
     reply cap and no preset of the connection's own.
 
-    The verdicts are filed in the run's terminal step under the `rev` captured
-    here, unless it moved meanwhile (`_record_verdicts`).
+    Only what the model answered is a verdict: a success, or the provider
+    refusing the probe itself (`_records`); an outage, a rate limit or a
+    refused key is reported and not filed, and stops the probes after it when
+    it answers for them too (`_halts`). The verdicts are filed in the run's
+    terminal step under the `rev` captured here, unless it moved meanwhile
+    (`_record_verdicts`).
     """
     raw, model, caps = _test_plan(conn_id, body)
     if body.confirm is not True:
@@ -906,11 +987,11 @@ def post_connection_test(
     conn = inference.lower(raw, store.inference.probes.sampling(), model)
 
     async def work():
-        results = {cap: await _probe(client, cap, raw, conn, model) for cap in caps}
+        results, verdicts = await _probe_all(client, caps, raw, conn, model)
         return {"state": "landed",
                 "result": {"provider": conn_id, "model": model, "rev": rev,
                            "results": results,
-                           "recorded": _record_verdicts(conn_id, model, rev, results)}}
+                           "recorded": _record_verdicts(conn_id, model, rev, verdicts)}}
 
     return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "model-test",
                           x_grimoire_attempt, work)

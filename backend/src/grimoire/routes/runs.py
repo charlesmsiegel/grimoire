@@ -2160,11 +2160,12 @@ def run_draft(app, subject: Subject, kind: str, attempt_id: str | None,
               work) -> dict:
     """Reserve a computing `draft`, hand `work` to the runner, answer the 202.
 
-    THE route-side half of the shared contract, so that the twelve call sites
+    THE route-side half of the shared contract, so that the thirteen call sites
     are the three lines that differ between them -- what to generate and how to
     read it back -- and none of the five that do not: reserve, adopt a
     duplicate, guarantee the reservation reaches a terminal state, detach,
-    shape the body. Written out per route, that is twelve chances to forget
+    shape the body. (The two scenario parses reserve through `reserve_draft`
+    instead.) Written out per route, that is thirteen chances to forget
     `reservation` and leave a run `running` for the life of the process.
 
     `work` is `start_computing`'s: a zero-arg callable returning a coroutine

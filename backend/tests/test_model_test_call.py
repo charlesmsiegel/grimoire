@@ -9,6 +9,10 @@ suite holds are about what is NOT sent as much as what is:
 * a confirmed test sends each probe ONCE -- no retry, no fallback (Review
   Focus 3), proven on the wire with a real `LLMClient` over `MockTransport`;
 * a probe that completes without text still counts as accepted;
+* only the provider refusing the probe itself is recorded as a `no` -- not an
+  outage, an empty wallet, a rate limit, or a refusal of the probe's own cap;
+* a failure that answers for every probe (a refused key, an outage, an
+  unreachable host) stops the rest from being sent;
 * the verdicts are recorded for the connection's `rev`, so an edit hides them.
 
 Every connection, key and model name below is invented.
@@ -16,6 +20,7 @@ Every connection, key and model name below is invented.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 
@@ -29,6 +34,7 @@ from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
 from grimoire.store.inference import facts, probes
+from grimoire.store.inference import resolve as inference
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter
 
 REFUSAL = ("This test sends a request to the provider and may cost money — "
@@ -295,7 +301,7 @@ def test_an_empty_completion_still_counts_as_accepted(client):
 def test_a_provider_refusal_is_recorded_with_its_message_scrubbed(client):
     message = ("image refused: data:image/png;base64,iVBORw0KGgoAAAA "
                "(key sk-or-fake-0001)")
-    _use(client, FailingOpenRouter(kind="bad_response", message=message))
+    _use(client, FakeLLM([[]], error=LLMError("bad_response", message, status=400)))
     conn = _connection(client)
 
     run = _run(client, conn, ["vision"])
@@ -387,6 +393,127 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     assert rows[0]["task"] == "model-test"
     assert rows[0].get("attempts", 1) == 1   # the ledger omits the default
 
+    # The control: the same facade, sent the same probe through `stream`,
+    # DOES retry and fall back -- so the one request above is the test call's
+    # doing, not this setup's.
+    seen.clear()
+    facade = client.app.dependency_overrides[routes.get_llm]()
+    probe_conn = inference.lower(store.llm_connections.read_connection_raw(conn),
+                                 probes.sampling(), MODEL)
+    with pytest.raises(LLMError):
+        asyncio.run(facade.complete(probes.messages("generate"), probe_conn))
+    assert [r.url.host for r in seen] == ["primary.example"] * 4 + ["backup.example"]
+
+
+# ---- only what the MODEL answered is recorded --------------------------------
+
+def _refusing(status: int, message: str):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"error": {"message": message}})
+    return handler
+
+
+def _answer(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, text=_sse({"choices": [{"delta": {"content": "ok"}}]}),
+                          headers={"content-type": "text/event-stream"})
+
+
+@pytest.mark.parametrize("status,message", [
+    (503, "upstream unavailable"),
+    (402, "insufficient credits"),
+])
+def test_an_outage_or_empty_wallet_is_reported_and_not_recorded(client, status, message):
+    """The adapters map both to `bad_response`, which is also what a refusal
+    is -- so the kind alone would have filed a `test` no that outranks the
+    catalog for a model nobody actually asked."""
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    seen = _wire_client(client, _refusing(status, message))
+
+    run = _run(client, conn, ["generate"])
+
+    assert len(seen) == 1
+    got = run["result"]["results"]["generate"]
+    assert got["ok"] is False
+    assert got["kind"] == "bad_response"
+    assert message in got["error"]
+    assert run["result"]["recorded"] is False
+    assert facts.of(conn, MODEL, _rev(conn))["verified"] == {}
+
+
+def test_a_400_refusing_the_image_is_recorded_as_a_no(client):
+    """The provider refused THIS request -- the model's own answer."""
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "image_url" in request.content.decode():
+            return _refusing(400, "this model does not support image input")(request)
+        return _answer(request)
+
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    seen = _wire_client(client, handler, retries=3)
+
+    run = _run(client, conn, ["generate", "vision"])
+
+    assert len(seen) == 2   # no retry, and no text-only re-send of the picture
+    results = run["result"]["results"]
+    assert results["generate"] == {"ok": True}
+    assert results["vision"]["ok"] is False
+    assert run["result"]["recorded"] is True
+    verified = facts.of(conn, MODEL, _rev(conn))["verified"]
+    assert verified["generate"]["ok"] is True
+    assert verified["vision"]["ok"] is False
+    assert "image input" in verified["vision"]["error"]
+
+
+def test_a_400_naming_the_probes_own_cap_is_not_recorded(client):
+    """A refusal of `max_tokens` is a refusal of the setting the PROBE sent,
+    not of the capability; it is reported as the test's setting refused."""
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    seen = _wire_client(client, _refusing(400, "Unsupported parameter: 'max_tokens'"))
+
+    run = _run(client, conn, ["generate", "vision"])
+
+    # Not a failure that answers for the next probe: both were sent.
+    assert len(seen) == 2
+    for cap in ("generate", "vision"):
+        got = run["result"]["results"][cap]
+        assert got["ok"] is False
+        assert "max_tokens" in got["error"] and "model test" in got["error"]
+    assert run["result"]["recorded"] is False
+    assert facts.of(conn, MODEL, _rev(conn))["verified"] == {}
+
+
+def _unreachable(_request: httpx.Request) -> httpx.Response:
+    raise httpx.ConnectError("connection refused")
+
+
+@pytest.mark.parametrize("handler,kind", [
+    (_refusing(401, "invalid key"), "auth"),
+    (_refusing(402, "insufficient credits"), "bad_response"),
+    (_refusing(502, "bad gateway"), "bad_response"),
+    (_unreachable, "network"),
+])
+def test_a_failure_that_answers_for_every_probe_stops_the_rest(
+        client, monkeypatch, handler, kind):
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    seen = _wire_client(client, handler)
+    embedded = _embedder(monkeypatch, _vector)
+
+    run = _run(client, conn, ["generate", "vision", "embed"])
+
+    assert len(seen) == 1
+    assert embedded == []
+    results = run["result"]["results"]
+    first = results["generate"]
+    assert (first["ok"], first["kind"]) == (False, kind)
+    for cap in ("vision", "embed"):
+        assert results[cap]["ok"] is False
+        assert results[cap]["kind"] == "not_sent"
+        assert results[cap]["error"].startswith("not sent: ")
+        assert first["error"] in results[cap]["error"]
+    assert run["result"]["recorded"] is False
+    assert facts.of(conn, MODEL, _rev(conn))["verified"] == {}
+    # Only the probe that went out was metered.
+    assert len(_rows()) == 1
+
 
 def test_an_empty_stream_on_the_wire_counts_as_accepted(client):
     conn = _endpoint(client, "Mara Endpoint", "primary.example")
@@ -446,6 +573,8 @@ def test_an_embed_failure_is_one_metered_row_with_no_token_counts(client, monkey
     assert rows[0]["task"] == "model-test"
     assert rows[0]["status"] == "error"
     assert rows[0].get("prompt_tokens") is None
+    # A 400 is the endpoint refusing this request: a verdict, recorded.
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["embed"]["ok"] is False
 
 
 def test_the_gateway_fake_answers_single_like_complete():

@@ -42,16 +42,6 @@ GENERATE_PROMPT = "Reply with the single word: ok"
 VISION_PROMPT = "What colour is this pixel? One word."
 EMBED_TEXT = "A short sentence to embed."
 
-#: The kinds of failure that say nothing about the MODEL: the provider was
-#: busy, unreachable or slow, or the credential was refused. A probe that
-#: fails this way is reported to whoever asked but never recorded as a
-#: verdict -- a `test` no is the strongest `no` there is short of the wire
-#: protocol, and a rate limit stored as one would hide a model that works from
-#: every picker until the connection is next edited.
-SAYS_NOTHING: frozenset[str] = frozenset({
-    "rate_limit", "network", "timeout", "auth", "missing_key", "missing_dependency"})
-
-
 def _chunk(kind: bytes, data: bytes) -> bytes:
     return (struct.pack(">I", len(data)) + kind + data
             + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF))
@@ -115,7 +105,8 @@ def sampling() -> dict:
     """The `sampling` block a chat probe's connection is lowered with: the cap
     and nothing else, so no preset of the connection's own reaches a test. Named
     so a provider refusing the cap is reported as refusing a setting of the
-    test's (`llm._preset_refusal`), not of a preset the user chose."""
+    test's (`llm._preset_refusal`), not of a preset the user chose -- and,
+    raised as `llm.PresetRefusalError`, is never filed as a verdict on the model."""
     return {"preset_id": "", "preset_name": "model test", "scope": "none",
             "params": {"max_tokens": MAX_TOKENS}}
 
