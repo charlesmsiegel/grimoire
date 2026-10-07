@@ -458,6 +458,11 @@ Until slice I, each `Attempt` is lowered to today's connection-dict shape so
 `LLMClient` runs unchanged (approach 1, §13). The lowering is a single
 function with its own tests; nothing else builds a connection dict.
 
+Slice B adds `provider_kind`, `base_url`, `rev`, `billing`, `provider_preset`
+(the §6.1 preset id — named apart from the sampler `preset_id`), `facts`,
+`capabilities` and `controls`, and reports a known-incapable fallback in
+`ResolvedInference.fallback_missing`; the facade starts dropping it in slice C.
+
 **Slice A ships a reduced form** of these two types: `Attempt` carries the
 provider id, model, preset id and the lowered connection dict, and
 `ResolvedInference` carries task, operation, route (and its legacy key), the
@@ -521,7 +526,7 @@ pre-fills the URL and billing, and contributes capability facts.
 | Preset | Adapter (`kind`) | Base URL | Billing | Reports price | Can do at all |
 |---|---|---|---|---|---|
 | OpenRouter | `openrouter` | fixed | metered | yes | generate, vision, embed, decide_native, structured_output — per catalog |
-| Anthropic API (new) | `anthropic` | fixed `https://api.anthropic.com` | metered | no | generate, vision, structured_output (the API's JSON-schema output where offered, else a forced tool schema); no embed, no decide_native |
+| Anthropic API (new) | `anthropic` | fixed `https://api.anthropic.com` | metered | no | generate; vision and structured_output (`output_config.format`) per the model's catalog entry; no embed, no decide_native; sampling parameters and prefill per model (current models reject both) |
 | Claude subscription | `claude` | — (Agent SDK) | subscription | equivalent | generate only |
 | OpenAI | `openai_compatible` | fixed `https://api.openai.com/v1` | metered | no | generate, vision, embed, structured_output, decide_native (`/v1/decisions`) |
 | z.ai | `openai_compatible` | fixed `https://api.z.ai/api/paas/v4` | metered | no | generate, structured_output (unverified); no embed |
@@ -534,6 +539,12 @@ A local endpoint costs nothing only once the user enters zero rates for it;
 Grimoire never assumes a price (rule 5), so until then its models count toward
 the Housekeeping chore (§9.2) like any other unpriced model.
 
+The last column means **not ruled out**: it only decides whether a model
+whose catalog says nothing lands in §6.3's Unverified group. A preset asserts
+`yes` only for what is true of every model behind it (`generate` and
+`stream` on the generative presets) — never for a per-model capability such
+as vision or embeddings.
+
 The preset table is shipped code, deliberately small, and is where the
 "quirks" the planning draft mentioned live. It is not a model database.
 
@@ -544,7 +555,9 @@ or `pricing.json` price it), the retry/error taxonomy of the other adapters,
 and `/v1/models` for the catalog. It joins `catalog.py`'s normalisation and
 the `TEXT_ONLY_KINDS` / `SUPPORTED_KINDS` partition test.
 
-OpenRouter gains embeddings (`POST /api/v1/embeddings`) through the same
+OpenRouter gains embeddings for the new-layout Embedding role (slice C makes
+it selectable; a legacy `embeddings_connection_id` stays
+`openai_compatible`-only, so no existing store starts embedding) — `POST /api/v1/embeddings`, through the same
 response validation `embeddings.py` applies today (order, dimension, size
 bounds).
 
@@ -570,7 +583,13 @@ Sources, highest authority first:
    `structured_outputs` or `response_format` → structured_output, and the param
    list feeds §8 as today. Anthropic's catalog lists ids; their capabilities
    come from adapter facts.
-4. **Preset table** (`source: preset`) — e.g. z.ai: embed `no`.
+4. **Preset table** (`source: preset`) — only its always-true facts
+   (`generate`, `stream`); its hard `no`s (e.g. z.ai: embed) are source 1.
+   Anthropic's `/v1/models` is a catalog (source 3): it publishes a capability
+   tree (`image_input`, `structured_outputs`, `thinking.types`, `effort`,
+   `max_tokens`). The legacy connection `vision` field is a **post-image**
+   setting and is not read as a vision assertion; §4.2's `vision` in model
+   facts is the new-layout assertion.
 5. **Name rule** (`source: name`) — an id containing `embed` → embed `yes`,
    generate `no`.
 6. Otherwise `unknown`.
@@ -610,11 +629,15 @@ Optional; offered on unverified rows and on the model-facts panel.
    - generate: a fixed instruction, `max_tokens` 5
    - embed: one fixed short string; records the dimension
    - vision: a 1×1 PNG and a one-word question
-   - decide_native: one predicate
+   - decide_native: one predicate (lands with the native adapters, slice H)
 3. Results go to `facts.json[model].verified`, stamped with the provider's
    current `rev`. A failure records the error text the provider gave (no
    credentials).
-4. The call is metered under task `model-test` with no campaign. `model-test`
+   Each probe runs **once — no retries and no fallback** — and succeeds when
+   the request is accepted and the response completes (text is not required:
+   a thinking model may spend a small cap thinking).
+4. The call is metered under task `model-test` with no campaign (an `embed`
+   probe's row carries no token counts until slice D meters embeddings). `model-test`
    is registered as a non-route task (like the catalog refresh and health
    probe) so the routing guard knows it.
 
@@ -766,13 +789,16 @@ parameters and describes them. For each control:
 |---|---|
 | `openrouter` | `reasoning: {effort}` when the catalog lists `reasoning`; else unsupported |
 | OpenAI preset | `reasoning_effort` |
-| `anthropic` | `thinking: {type: "enabled", budget_tokens}` — low/medium/high map to fixed budgets, each capped below the effective `max_tokens`; `off` sends nothing |
+| `anthropic` | `low`/`medium`/`high` → `thinking: {type: "adaptive"}` + `output_config: {effort: <same>}` where the catalog says adaptive thinking is supported (current models reject `budget_tokens`); otherwise fixed `budget_tokens` 1024 / 4096 / 16000, each ≥ 1024 and below the effective `max_tokens`; `off` sends nothing (the model's default — some current models cannot turn thinking off). Sampling parameters are `unsupported` when the catalog says `enabled` thinking is unsupported, or whenever thinking is sent; `max_tokens` defaults to 16000 capped at the catalog's limit; `stop` is `translated` → `stop_sequences` |
 | GLM on `openai_compatible` | today's `llm_reasoning.glm_effort` |
 | `claude` (Agent SDK) | unsupported |
 | other `openai_compatible` | unknown |
 
-`max_tokens` may be `translated` → `max_completion_tokens` where an endpoint
-requires it. The API returns `{requested, effective, controls: {name: {state,
+`max_tokens` is `translated` → `max_completion_tokens` on the OpenAI preset
+(and wherever else an endpoint requires it). The per-kind decisions live in
+one gateway function (`llm_sampling.effective`, which the facade calls per
+attempt from the connection dict, so the fallback is covered too); the store
+wraps it to add each control's capability `source` for the screens. The API returns `{requested, effective, controls: {name: {state,
 source, wire}}}` for any (preset, selection) pair; the Presets editor's
 "Preview on…" and every role card render it. The frontend keeps no capability
 table of its own.
