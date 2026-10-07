@@ -23,7 +23,24 @@ from __future__ import annotations
 import zlib
 
 from . import config, llm_connections
-from .inference import translate
+from .inference import providers, translate
+
+
+def _endpoint(cfg: dict, conn: dict) -> str:
+    """The base URL `conn` serves embeddings from, or "" when it serves none.
+
+    An ``openai_compatible`` connection brings its own URL. OpenRouter serves
+    ``/embeddings`` too, but only for a config already in the current layout: a
+    legacy config naming an OpenRouter connection for embeddings has always
+    meant "off", and turning it on would start sending text to a provider
+    nobody chose it for. The URL is the preset's (an OpenRouter connection's
+    own is locked), and one with no key is not set up.
+    """
+    if conn["kind"] == "openai_compatible":
+        return conn["base_url"] or ""
+    if conn["kind"] == "openrouter" and translate.is_current(cfg) and conn["api_key"]:
+        return providers.PRESETS["openrouter"].base_url
+    return ""
 
 
 def resolve(cfg: dict | None = None) -> dict | None:
@@ -47,9 +64,10 @@ def resolve(cfg: dict | None = None) -> dict | None:
         if not model or not conn_id:
             return None
         conn = llm_connections.read_connection_raw(conn_id)
-        if conn["kind"] != "openai_compatible" or not conn["base_url"]:
+        base_url = _endpoint(cfg, conn)
+        if not base_url:
             return None
-        return {"model": model, "base_url": conn["base_url"], "key": conn["api_key"],
+        return {"model": model, "base_url": base_url, "key": conn["api_key"],
                 # The cache namespace. Two endpoints can both serve a model
                 # called "embedding" and mean different weights, and vectors
                 # from different spaces are incomparable even at matching
