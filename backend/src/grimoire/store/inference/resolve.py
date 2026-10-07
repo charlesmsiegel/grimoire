@@ -250,4 +250,4 @@ def resolve(task: str, *, campaign_meta: dict, operation: str = "generate",
         route=route.key if route is not None else "",
         legacy_route=routing.legacy_key(route) if route is not None else "",
         role=choice.role, via=choice.via, scope=choice.scope,
-        attempts=tuple(attempts))
+        attempts=tuple(attempts), standing=choice.selection)

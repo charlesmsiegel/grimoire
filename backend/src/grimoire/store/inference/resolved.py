@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .cascade import Selection
+
 
 @dataclass(frozen=True)
 class Attempt:
@@ -41,6 +43,10 @@ class ResolvedInference:
     scope: str
     #: Primary first, then the fallback. Empty when nothing resolved.
     attempts: tuple[Attempt, ...]
+    #: The selection the cascade chose before any per-call override, from the
+    #: same reads the attempts were built from (None when it chose nothing).
+    #: What an override is compared against to say whether it moved the call.
+    standing: Selection | None = None
 
     @property
     def conn(self) -> dict | None:

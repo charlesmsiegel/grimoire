@@ -13,6 +13,7 @@ file.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -380,7 +381,6 @@ def test_an_unreadable_campaign_resolves_globally(at_state):
     ctx = at_state("routed")
     cid = ctx["cid"]
     path = store.campaigns.campaign_root(cid) / "campaign.md"
-    path.write_bytes(b"\xff\xfe\x00 not text")
 
     def answer(task: str, scope_cid: str):
         try:
@@ -389,7 +389,60 @@ def test_an_unreadable_campaign_resolves_globally(at_state):
             return exc.status_code, exc.detail
 
     # The state is chosen so the question has teeth: this campaign routes
-    # `scene` elsewhere when its file can be read.
+    # `scene` elsewhere while its file can be read.
+    assert answer("chat", cid) != answer("chat", "")
+    path.write_bytes(b"\xff\xfe\x00 not text")
     assert routes.common._campaign_routing_meta(cid) == {}
     for task in TASKS:
         assert answer(task, cid) == answer(task, ""), task
+
+
+def _key_cleared_after_first_read(monkeypatch, conn_id: str) -> list[str]:
+    """Patch the connection reader so `conn_id` loses its key on every read
+    after the first -- a key cleared in another tab mid-request. Returns the
+    log of ids read."""
+    real = store.llm_connections.read_connection_raw
+    reads: list[str] = []
+
+    def reader(cid: str):
+        reads.append(cid)
+        got = real(cid)
+        if cid == conn_id and reads.count(cid) > 1:
+            return {**got, "api_key": ""}
+        return got
+
+    monkeypatch.setattr(store.llm_connections, "read_connection_raw", reader)
+    return reads
+
+
+@pytest.mark.parametrize("body", [{"model": "vendor/bigger"},
+                                  {"connection_id": "openrouter", "model": "vendor/bigger"}])
+def test_an_override_is_refused_on_the_copy_that_serves(at_state, monkeypatch, body):
+    """Review probe: an override that read the standing connection twice
+    checked one copy and served the other, so a key cleared between the two
+    reads went out keyless with no 409. One read per call, and what serves is
+    what was checked."""
+    ctx = at_state("fresh")
+    for scope_cid in ("", ctx["cid"]):
+        reads = _key_cleared_after_first_read(monkeypatch, "openrouter")
+        resolved, routed = routes.common.override_inference(
+            SimpleNamespace(**body), "regenerate", scope_cid)
+        assert reads.count("openrouter") == 1, (scope_cid, reads)
+        assert resolved.conn["api_key"] == "sk-test-active"
+        assert resolved.conn["model"] == "vendor/bigger" and routed
+        monkeypatch.undo()
+
+
+@pytest.mark.parametrize("body", [{"model": "vendor/bigger"}, {}])
+def test_a_model_only_override_on_a_keyless_standing_route_is_a_409(at_state, monkeypatch,
+                                                                    body):
+    """The other half of the probe: when the one read IS keyless, the reroll
+    is refused with the seam's own wording -- never served."""
+    at_state("fresh")
+    real = store.llm_connections.read_connection_raw
+    monkeypatch.setattr(store.llm_connections, "read_connection_raw",
+                        lambda cid: {**real(cid), "api_key": ""})
+    with pytest.raises(HTTPException) as exc:
+        routes.common.override_inference(SimpleNamespace(**body), "regenerate", "")
+    assert exc.value.status_code == 409
+    assert exc.value.detail == {"detail": "OpenRouter key not set", "kind": "missing_key"}

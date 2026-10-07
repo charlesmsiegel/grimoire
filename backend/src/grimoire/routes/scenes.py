@@ -5129,6 +5129,7 @@ def get_scene_context(cid: str, sid: str):
     this model's own (`tokens.counting`) -- for most backends it is not, and the
     inspector marks the counts as estimates."""
     _require_scene(cid, sid)
+    # routing-ok: the context view shows what chat WOULD run on; it must never refuse
     conn = inference.resolve("chat", campaign_meta=_campaign_routing_meta(cid)).conn
     model = effective_model(conn) if conn is not None else ""
     # What the next turn would send, pictures included (#377): the Images row is
@@ -5225,6 +5226,7 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # Composed here rather than read: `context_breakdown` runs the same
         # assemble/pack pass `GET .../context` does, so the side this diff calls
         # "live" is the one the Context panel is showing.
+        # routing-ok: the live side of a prompt diff is a display; it must never refuse
         conn = inference.resolve("chat", campaign_meta=_campaign_routing_meta(cid)).conn
         model = effective_model(conn) if conn is not None else ""
         live = store.context.context_breakdown(cid, sid, model=model,

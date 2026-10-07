@@ -1332,6 +1332,7 @@ class UsableInference(ResolvedInference):
 
 def _narrowed(resolved: ResolvedInference) -> UsableInference:
     """`resolved` as a `UsableInference`; the caller has refused a None `conn`."""
+    assert resolved.attempts, "narrowed a resolution that resolved nothing"
     return UsableInference(**{f.name: getattr(resolved, f.name) for f in fields(resolved)})
 
 
@@ -1344,10 +1345,10 @@ def _usable(resolved: ResolvedInference) -> UsableInference:
 def _refuse_unusable(resolved: ResolvedInference) -> None:
     """The 409 that says why this resolution cannot send, if it cannot.
 
-    Shared by the seam and by `override_inference`, which resolves the standing
-    route itself to answer a second question and must refuse it on exactly the
-    same terms -- including the routed-connection wording below, which its own
-    inline copy of these checks used to lose.
+    Shared by the seam and by `override_inference`, whose `model`-only reroll
+    drives the standing route and must be refused on exactly the same terms --
+    including the routed-connection wording below, which its own inline copy
+    of these checks used to lose.
     """
     conn = resolved.conn
     if conn is None:
@@ -1395,8 +1396,8 @@ def require_inference(task: str = "", cid: str = "", *,
     not a call (a task handed to it through `run_in_threadpool` is a literal
     the guard cannot see).
     """
-    return _usable(inference.resolve(task, campaign_meta=_campaign_routing_meta(cid),
-                                     operation=operation))
+    return _usable(inference.resolve(  # routing-ok: this IS the seam the guard watches
+        task, campaign_meta=_campaign_routing_meta(cid), operation=operation))
 
 
 def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInference, bool]:
@@ -1475,32 +1476,27 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
         raise HTTPException(
             status_code=400,
             detail="That is too long to be a model id — check it and try again.")
-    meta = _campaign_routing_meta(cid)
-    # The STANDING ROUTE for this task (#142), which is the active connection
-    # only when nothing routes it elsewhere. Read ONCE and used for both roles
-    # below: resolving a `model`-only override, and deciding whether the result
-    # differs from where this turn would have gone. A `model`-only override
-    # names the standing PROVIDER from this read rather than asking the
-    # resolver to re-derive it, so a repoint landing between the two reads
-    # cannot send "the same provider, its bigger model" to a different
-    # provider entirely, nor compute `routed` against a connection that never
-    # served the turn.
-    standing = inference.resolve(task, campaign_meta=meta)
-    active = standing.conn
-    if not conn_id:
-        # The seam's refusals, raised against the resolution already in hand
-        # rather than by resolving a second time -- and through the seam's own
-        # helper, so a routed connection that cannot send says so here too.
-        usable = _usable(standing)
-        resolved: ResolvedInference = usable if not model else inference.resolve(
-            task, campaign_meta=meta,
-            override=inference_cascade.Selection(usable.attempts[0].provider_id, model, ""))
-    else:
-        resolved = inference.resolve(
-            task, campaign_meta=meta,
-            override=inference_cascade.Selection(conn_id, model, ""))
+    # ONE resolution answers every question below: what serves, what it is
+    # refused on, and where the call would have gone without the override
+    # (`standing`). A second read -- the standing route first, then the
+    # override resolved again -- opens a window in which the copy refused and
+    # the copy served are different reads: a key cleared between them served a
+    # keyless connection with no 409, and a repoint sent "the same provider,
+    # its bigger model" to another provider entirely. The resolver reads each
+    # connection once per resolution (`resolve._connection_lookup`), so
+    # everything here is decided on the dict that is handed to the facade.
+    override = inference_cascade.Selection(conn_id, model, "") if conn_id or model else None
+    resolved = inference.resolve(  # routing-ok: this IS the seam, for a per-call override
+        task, campaign_meta=_campaign_routing_meta(cid), override=override)
     conn = resolved.conn
-    if conn is None:
+    if not conn_id:
+        # The seam's refusals, on the copy that serves. A model alone drives
+        # the STANDING provider, so this is the standing route's own refusal:
+        # `problem` does not depend on the model, and `via`/`legacy_route`
+        # describe the standing choice -- a routed connection that cannot
+        # send says so here too.
+        _refuse_unusable(resolved)
+    elif conn is None:
         # Written for the banner it lands in, not for a log. `errorText`
         # renders `detail` verbatim, and the reader's next move is the one
         # worth naming: the connection they picked is gone (deleted in
@@ -1509,7 +1505,7 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
-    if conn_id:
+    else:
         problem = inference.problem(conn)
         if problem is not None:
             # NAMED, unlike `require_inference`'s copy of this. There the
@@ -1520,9 +1516,14 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
             raise HTTPException(
                 status_code=409,
                 detail={"detail": f"{conn['name']}: {problem}", "kind": "missing_key"})
-    same = (active is not None and conn["id"] == active["id"]
-            and effective_model(conn) == effective_model(active))
-    return _narrowed(resolved), not same
+    served = _narrowed(resolved)
+    standing = resolved.standing
+    # Same provider means the same connection dict, so the standing model's
+    # effective value is read off it with only the model swapped back.
+    same = (standing is not None and served.conn["id"] == standing.provider
+            and effective_model(served.conn)
+            == effective_model({**served.conn, "model": standing.model}))
+    return served, not same
 
 
 def _require_scene(cid: str, sid: str) -> dict:

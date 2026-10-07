@@ -21,10 +21,10 @@ Honest about its reach, in the house style:
 
 - **It sees `require_inference`, not "a call to a provider".** A route that
   reached for `llm_connections.get_active()` itself, or hand-built a connection
-  dict, would route nothing and this would not notice. Nor does it see a direct
-  `store.inference.resolve.resolve(...)`: the display-only reads that ask "what
-  would chat run on" (`config._send_images_reach`, the scene context view) go
-  that way on purpose, because they must never refuse. That seam is the one
+  dict, would route nothing and this would not notice. A direct
+  `store.inference.resolve.resolve(...)` is pinned the same way: the seam's own
+  calls and the display-only reads that ask "what would chat run on" (which
+  must never refuse) are marked and capped, and anything else fails. That seam is the one
   every existing call site uses, and `test_the_only_way_into_a_provider_is_the_
   seam` below pins it so a second seam has to be declared rather than
   discovered.
@@ -204,6 +204,88 @@ def test_the_only_way_into_a_provider_is_the_seam_this_guard_watches():
     assert not offenders, (
         "these routes reach for the active connection directly instead of "
         f"require_inference, so no route setting applies to them: {offenders}")
+
+
+#: What a direct call to the resolver is called through: `inference.resolve(`
+#: (the module bound as `inference`), `resolve.resolve(`, and
+#: `store.inference.resolve.resolve(`.
+_RESOLVER_OWNERS = frozenset({"inference", "resolve"})
+
+
+def _resolver_calls(tree: ast.AST) -> list[ast.Call]:
+    """Calls straight to `store.inference.resolve.resolve`, bypassing the seam.
+
+    Matched on the receiver's name, not on `resolve` alone: `routes/` calls a
+    dozen other `resolve`s (`store.routing.resolve`, `sampler_presets.resolve`,
+    `embed_space.resolve`, `Path.resolve`), none of them a connection."""
+    out = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "resolve"):
+            continue
+        owner = node.func.value
+        name = (owner.id if isinstance(owner, ast.Name)
+                else owner.attr if isinstance(owner, ast.Attribute) else "")
+        if name in _RESOLVER_OWNERS:
+            out.append(node)
+    return out
+
+
+def _unmarked_resolver_calls(text: str, where: str) -> tuple[list[str], list[tuple[str, str]]]:
+    """(unmarked call sites, [(site, reason)] for the marked ones)."""
+    calls = _resolver_calls(ast.parse(text))
+    unmarked, marked = [], []
+    for call in calls:
+        reason = _reason(text, call, [c for c in calls if c is not call])
+        if reason is None:
+            unmarked.append(f"{where}:{call.lineno}")
+        else:
+            marked.append((f"{where}:{call.lineno}", reason))
+    return unmarked, marked
+
+
+#: The seam's own two calls (`require_inference`, `override_inference`) and the
+#: three display-only reads of where chat would run (`config._send_images_reach`,
+#: the scene context breakdown and the live side of a prompt diff). Raising it
+#: is a review question, not a fix.
+RESOLVER_CALL_CAP = 5
+
+
+def test_the_resolver_is_reached_only_through_the_seam_or_a_marked_display():
+    """A direct `inference.resolve(...)` is a resolution nothing refuses.
+
+    That is right for a display ("what WOULD chat run on") and wrong for a
+    generation, which would then run on a keyless connection or none at all
+    -- and its task would be invisible to every check above. So each one says
+    why, like `get_active`, and they stay few."""
+    unmarked, marked = [], []
+    for path, text in _sources():
+        got_unmarked, got_marked = _unmarked_resolver_calls(text, path.name)
+        unmarked.extend(got_unmarked)
+        marked.extend(got_marked)
+    assert not unmarked, (
+        "these routes call the resolver directly instead of require_inference, so "
+        f"nothing refuses what they resolve: {unmarked}")
+    unexplained = [loc for loc, reason in marked if len(reason) < 15]
+    assert not unexplained, f"`routing-ok` with no real reason: {unexplained}"
+    assert len(marked) <= RESOLVER_CALL_CAP, (
+        f"{len(marked)} direct resolver calls; each bypasses the seam's refusals, "
+        f"so they need review rather than a raised limit: {marked}")
+    assert marked, "found no resolver call at all; the walk is not finding them"
+
+
+def test_the_resolver_check_flags_a_planted_call():
+    for planted in ('conn = inference.resolve("chat", campaign_meta={}).conn\n',
+                    'conn = resolve.resolve("chat", campaign_meta={}).conn\n',
+                    'conn = store.inference.resolve.resolve("chat", campaign_meta={}).conn\n'):
+        assert _unmarked_resolver_calls(planted, "planted.py")[0] == ["planted.py:1"], planted
+    others = ('a = store.routing.resolve("chat", campaign_meta={}, cfg={}, exists=f)\n'
+              'b = path.resolve()\n'
+              'c = embed_space.resolve()\n')
+    assert _unmarked_resolver_calls(others, "planted.py") == ([], [])
+    marked = ("# routing-ok: a planted display read, argued here\n"
+              'conn = inference.resolve("chat", campaign_meta={}).conn\n')
+    assert _unmarked_resolver_calls(marked, "planted.py")[0] == []
 
 
 def test_the_marker_is_not_a_rubber_stamp():
