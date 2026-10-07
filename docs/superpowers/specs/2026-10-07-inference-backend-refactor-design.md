@@ -329,18 +329,21 @@ every route has exactly one operation:
 | `dossier` | dossier | generate | fast |
 | `continuity` | continuity-identity, continuity-reconcile | decide | decision |
 | `summary` | rolling-summary, scene-break-title | generate | fast |
-| `scene-break` (new) | scene-break | decide | decision |
+| `scene_break` (new) | scene-break | decide | decision |
 | `tracker` | tracker-update | generate | fast |
 | `suggestions` | suggestions, intent, character-from-passage | generate | primary |
 | `voice` | voice-anchor | generate | primary |
-| `voice-drift` (new) | voice-drift | decide | decision |
+| `voice_drift` (new) | voice-drift | decide | decision |
 | `image` | image-description | generate (requires vision) | fast |
 | `tagline` | tagline | generate | fast |
 | `scenario` | scenario | generate | fast |
 
-`tagline` and `scenario` stay `campaign_scoped = False`. A route's
-`default_role` is **`fast` until its tasks are actually converted to
-`decide()`** (slices F and G flip it); see §14's safety rule.
+`tagline` and `scenario` stay `campaign_scoped = False`. Route keys are
+spelled with underscores (`speaker`, `scene_break`, `voice_drift`) because
+they become frontmatter keys; task names keep their hyphens. The table shows
+each route's **final** values: until its tasks are actually converted to
+`decide()`, a decide route carries `operation = generate` and `default_role =
+fast`, and slices F and G flip both together (§14's safety rule).
 
 `scene-break-title` is the prose half split out of today's scene-break call
 (§7.4) and is registered in slice F, when that split happens. The new decide
@@ -905,7 +908,7 @@ Migration persists that same translation.
    `use_<k>_{provider,model,preset}` from that connection. `preset_<k>`
    untouched. Unset routes stay unset; they resolve through their default role
    to Primary, which is the old active connection — today's behaviour.
-7. **Split routes** — `speaker`, `scene-break`, `voice-drift` copy the
+7. **Split routes** — `speaker`, `scene_break`, `voice_drift` copy the
    `use_*` and `preset_*` of `scene`, `summary`, `voice` respectively.
 8. **Campaigns** — steps 6–7 inside each `campaign.md`, under that campaign's
    own `campaign_lock` (one at a time — never two held; `test_lock_order_guard`
@@ -988,8 +991,8 @@ against this spec) and lands green under `make check`. Order is chosen so that
 
 | Slice | Lands | User-visible |
 |---|---|---|
-| **A — Resolver substrate** | `store/inference/` (keys, cascade, capabilities skeleton, translation), the 15-route registry with `operation`/`default_role`/`requires`, `ResolvedInference` + lowering, `require_inference`, per-role fallback chain, `embed_space` resolved through the Embedding role, guard updates. Reads legacy state through the translation; writes nothing new | No. A behaviour-equivalence test pins every task's resolved provider, model, preset and fallback against the baseline resolver |
-| **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources), OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
+| **A — Resolver substrate** | `store/inference/` (keys, cascade, translation, resolver), the 15-route registry with `operation`/`default_role`/`requires` (legacy surfaces keep the original 12), `ResolvedInference` + lowering, `require_inference`, per-role fallback chain, `embed_space` resolved through the Embedding role, guard updates. Reads legacy state through the translation; writes nothing new | No. A behaviour-equivalence test pins every task's resolved provider, model, preset and fallback against the baseline resolver |
+| **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources) and the §5.3 capability check, OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
 | **C — The switch** | New storage writes, migration (§11), the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI; legacy settings UI removed | **Yes** |
 | **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering, the confirm on Embedding-role change | Small |
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag, the Housekeeping chore | Yes |
