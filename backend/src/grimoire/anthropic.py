@@ -126,15 +126,29 @@ def _root(base_url: str) -> str:
 
 
 # ---- the request ----
+#: The user turn put ahead of a conversation that would otherwise open on the
+#: assistant (a scene started from a greeting): the API refuses that with a
+#: 400. The same text `openai_compatible._strict_messages` inserts for the same
+#: reason -- spelled again because the two adapters share no code.
+OPENING_TURN = "(continue)"
+
+
 def _image(part: dict) -> dict:
-    """An OpenAI-style `image_url` part as the API's own image block."""
+    """An OpenAI-style `image_url` part as the API's own image block.
+
+    A `data:` URI must be base64 -- the only form this API takes inline -- and
+    keeps only its media type (`data:image/png;charset=x;base64,...` is
+    `image/png`). One that is not base64 is refused rather than sent on as a
+    URL the API would try, and fail, to fetch. Any other URL is a URL source."""
     ref = part.get("image_url")
     url = ref.get("url", "") if isinstance(ref, dict) else str(ref or "")
+    if not url.startswith("data:"):
+        return {"type": "image", "source": {"type": "url", "url": url}}
     head, sep, data = url.partition(";base64,")
-    if sep and head.startswith("data:"):
-        return {"type": "image",
-                "source": {"type": "base64", "media_type": head[len("data:"):], "data": data}}
-    return {"type": "image", "source": {"type": "url", "url": url}}
+    if not sep:
+        raise AnthropicError("bad_response", "an image data URI that is not base64 cannot be sent")
+    media = head[len("data:"):].split(";", 1)[0]
+    return {"type": "image", "source": {"type": "base64", "media_type": media, "data": data}}
 
 
 def _blocks(content: object) -> list[dict]:
@@ -205,11 +219,20 @@ def _messages(messages: list[dict]) -> tuple[str, list[dict]]:
             append("assistant", _blocks(content))
         pending = []
     append("user", pending)
-    joined = "\n\n".join(system)
-    if not turns and joined:
+    return _opened("\n\n".join(system), turns)
+
+
+def _opened(joined: str, turns: list[dict]) -> tuple[str, list[dict]]:
+    """`(system, turns)` made sendable: the API needs at least one message,
+    and refuses a first one from the assistant. The last turn is left alone."""
+    if not turns:
+        if not joined:
+            raise AnthropicError("bad_response", "nothing to send: the prompt is empty")
         # Nothing but a system prompt: the API needs at least one message, and
         # every other adapter sends this text as the prompt it is.
         return "", [{"role": "user", "content": [{"type": "text", "text": joined}]}]
+    if turns[0]["role"] == "assistant":
+        turns.insert(0, {"role": "user", "content": [{"type": "text", "text": OPENING_TURN}]})
     return joined, turns
 
 
@@ -372,7 +395,6 @@ class _Reader:
         #: them and newer API versions repeat them, cumulatively, on
         #: `message_delta`, so the sum is recomputed from what is known.
         self.counts: dict[str, int] = {}
-        self.wrote = False
         self.stopped = False
         self.stop_reason: str | None = None
         self.category: str | None = None
@@ -402,9 +424,11 @@ class _Reader:
         return ""
 
     def check_refusal(self) -> None:
-        """A refusal that wrote nothing is a failure the reader is told about:
-        "the model wrote nothing" would hide that it chose not to."""
-        if self.stop_reason == "refusal" and not self.wrote:
+        """A refusal is a failure, however much text arrived before it: a
+        refused reply is not a complete one, and "the model wrote nothing"
+        would hide that it chose not to. Once text has reached the caller the
+        facade re-raises rather than retrying (`llm._resilient`)."""
+        if self.stop_reason == "refusal":
             said = (f"the model declined ({self.category})" if self.category
                     else "the model declined")
             raise AnthropicError("bad_response", content_parts.scrub(said))
@@ -427,10 +451,7 @@ class _Reader:
             llm_reasoning.feed(self.usage, block.get("thinking"))
             return ""
         text = block.get("text") if kind in ("text", "text_delta") else None
-        if not isinstance(text, str) or not text:
-            return ""
-        self.wrote = True
-        return text
+        return text if isinstance(text, str) else ""
 
     def _delta(self, frame: dict) -> None:
         delta = frame.get("delta")

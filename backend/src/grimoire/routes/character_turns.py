@@ -18,6 +18,7 @@ from .. import content_parts, llm_reasoning, prompts, store
 from ..llm import ATTEMPTED, LLMClient, effective_model, fallback_sampling, prefill_capable
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
+from ..store.inference import providers as inference_providers
 from . import runs, streaming
 from . import tracker as tracker_routes
 from .common import (
@@ -1538,7 +1539,7 @@ async def _reroll_frames(app, cid, sid, rid, client, conn, run, token, record, m
     and how the result lands (`_accept_extend` joins it onto the reply)."""
     perception = record["actor_ref"] != "grimoire"
     if extend is not None:
-        perception = perception and not prefill_capable(conn)
+        perception = perception and not _prefills(conn)
     watcher = store.response_protocol.ResponseWatcher(perception=perception)
     meter = store.usage.meter(
         task,
@@ -1880,9 +1881,25 @@ def _extends_record(message: dict, first: dict, records: dict[str, dict],
 _EXTEND_CLOSERS = frozenset(".,;:!?)]\u201d\u2019'*\u2026\u2014")
 
 
+def _prefills(conn: dict) -> bool:
+    """Whether a "Keep writing" attempt on `conn` is sent as a prefill.
+
+    The connection's own opt-in (`llm.prefill_capable`, a gateway rule that
+    cannot read the store), unless its provider preset rules prefill out: the
+    Anthropic API's current models answer a trailing assistant turn with a 400,
+    so an opt-in there would fail every Keep writing. `claude` lists prefill
+    under `never` too, and is exempt: its SDK path has sent an opted-in
+    connection the prefill tail since play controls IV, and slice B changes
+    nothing an existing store does."""
+    if not prefill_capable(conn):
+        return False
+    preset = inference_providers.infer(conn)
+    return preset.kind == "claude" or "prefill" not in preset.never
+
+
 def _extend_mode(conn: dict) -> str:
     """The tail a "Keep writing" attempt on `conn` is sent."""
-    return "prefill" if prefill_capable(conn) else "instruction"
+    return "prefill" if _prefills(conn) else "instruction"
 
 
 def _extend_messages(snapshot: dict, conn: dict, partial: str, guidance: str,

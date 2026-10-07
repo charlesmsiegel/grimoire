@@ -218,6 +218,54 @@ async def test_a_trailing_assistant_turn_is_sent_as_given():
                                     "content": [{"type": "text", "text": "Once upon"}]}
 
 
+async def test_an_assistant_first_conversation_opens_on_a_user_turn():
+    """A scene started from a greeting: the API refuses a first assistant turn,
+    so a placeholder user turn opens it (`openai_compatible`'s strict text)."""
+    body = await _body_for([{"role": "system", "content": "S"},
+                            {"role": "assistant", "content": "Welcome, traveller."},
+                            {"role": "user", "content": "hello"}])
+    assert body["system"] == "S"
+    assert body["messages"] == [
+        {"role": "user", "content": [{"type": "text", "text": "(continue)"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Welcome, traveller."}]},
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]}]
+
+
+async def test_a_prompt_with_nothing_in_it_is_refused_before_sending():
+    seen: list = []
+    with pytest.raises(AnthropicError) as err:
+        await _drain(_client(_ok(), seen).stream(
+            [{"role": "system", "content": " "}, {"role": "user", "content": ""}], "m", KEY))
+    assert err.value.kind == "bad_response" and "nothing to send" in err.value.detail
+    assert seen == []
+
+
+async def test_a_data_uri_with_parameters_keeps_only_its_media_type():
+    body = await _body_for([{"role": "user", "content": [
+        {"type": "image_url",
+         "image_url": {"url": "data:image/png;charset=binary;base64,QUJD"}}]}])
+    assert body["messages"][0]["content"] == [
+        {"type": "image", "source": {"type": "base64", "media_type": "image/png",
+                                     "data": "QUJD"}}]
+
+
+async def test_a_data_uri_that_is_not_base64_is_refused_not_sent_as_a_url():
+    seen: list = []
+    with pytest.raises(AnthropicError) as err:
+        await _drain(_client(_ok(), seen).stream([{"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": "data:image/svg+xml,%3Csvg%3E"}}]}],
+            "m", KEY))
+    assert err.value.kind == "bad_response"
+    assert seen == []
+
+
+async def test_an_http_image_url_is_sent_as_a_url_source():
+    body = await _body_for([{"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": "https://img.example.com/a.png"}}]}])
+    assert body["messages"][0]["content"] == [
+        {"type": "image", "source": {"type": "url", "url": "https://img.example.com/a.png"}}]
+
+
 async def test_a_system_only_prompt_is_sent_as_the_user_turn():
     body = await _body_for([{"role": "system", "content": "Describe a harbour."}])
     assert "system" not in body
@@ -333,10 +381,18 @@ async def test_a_refusal_with_no_category_still_says_it_declined():
     assert err.value.detail == "the model declined"
 
 
-async def test_a_refusal_after_text_keeps_the_text():
-    body = _sse(START, _text("Partial"), _done("refusal"), STOP)
-    chunks = await _drain(_client(_ok(body)).stream(MSG, "m", KEY))
-    assert "".join(chunks) == "Partial"
+async def test_a_refusal_after_partial_text_still_raises():
+    """A refused reply is not a complete one, however much of it arrived."""
+    body = _sse(START, _text("Partial"), _done("refusal", stop_details={"category": "cyber"}),
+                STOP)
+    agen = _client(_ok(body)).stream(MSG, "m", KEY)
+    chunks: list = []
+    with pytest.raises(AnthropicError) as err:
+        while True:
+            chunks.append(await anext(agen))
+    assert "Partial" in chunks
+    assert err.value.kind == "bad_response"
+    assert err.value.detail == "the model declined (cyber)"
 
 
 async def test_complete_joins_the_stream():

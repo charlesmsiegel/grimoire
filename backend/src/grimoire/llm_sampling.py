@@ -122,6 +122,7 @@ WHY_ANTHROPIC_NONE = "the Anthropic API has no such parameter"
 WHY_ANTHROPIC_SAMPLING = ("current Claude models refuse sampling parameters; only a "
                           "model whose catalog lists budgeted thinking takes them")
 WHY_ANTHROPIC_THINKING = "the Anthropic API refuses sampling parameters while thinking is on"
+WHY_ANTHROPIC_TOP_P = "Claude takes temperature or top_p, not both; temperature was sent"
 WHY_REASONING_OFF = ("off sends no reasoning setting, so the model's own default "
                      "applies, and it may still reason")
 WHY_THINKING_OFF = ("off sends no thinking setting; some current Claude models think "
@@ -290,8 +291,9 @@ def _sampler(c: _Conn, name: str, value: object) -> _Control:
     return _Control(SUPPORTED, name, "", "catalog")
 
 
-def _anthropic_sampler(c: _Conn, name: str, thinking: bool) -> _Control:
-    """A sampler parameter on the Anthropic Messages API (spec 8)."""
+def _anthropic_sampler(c: _Conn, name: str, thinking: bool, temperature: bool) -> _Control:
+    """A sampler parameter on the Anthropic Messages API (spec 8). `temperature`:
+    whether a temperature is being sent -- `CONTROLS` decides it before `top_p`."""
     if name in ("temperature", "top_p", "top_k"):
         enabled = c.features.get("enabled_thinking")
         if enabled is not True:
@@ -299,6 +301,9 @@ def _anthropic_sampler(c: _Conn, name: str, thinking: bool) -> _Control:
                             "catalog" if isinstance(enabled, bool) else "adapter")
         if thinking:
             return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_THINKING, "adapter")
+        if name == "top_p" and temperature:
+            # The models that take sampling at all refuse the pair with a 400.
+            return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_TOP_P, "adapter")
         return _Control(SUPPORTED, name, "", "catalog")
     if name == "stop":
         return _Control(TRANSLATED, "stop_sequences", WHY_STOP_SEQUENCES, "adapter")
@@ -446,8 +451,8 @@ def effective(conn: dict) -> dict:
         elif name in invalid:
             decided = _Control(UNSUPPORTED, None, WHY_INVALID, "user")
         else:
-            decided = (_anthropic_sampler(c, name, thinking) if c.kind == "anthropic"
-                       else _sampler(c, name, values.get(name)))
+            decided = (_anthropic_sampler(c, name, thinking, "temperature" in sent)
+                       if c.kind == "anthropic" else _sampler(c, name, values.get(name)))
             if name in values and decided.state in _SENT and decided.wire:
                 sent[decided.wire] = values[name]
                 if c.kind == "openai_compatible" and name == "repetition_penalty":

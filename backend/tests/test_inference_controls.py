@@ -262,11 +262,15 @@ def test_sampling_is_unsupported_unless_the_catalog_says_enabled_thinking(featur
 
 
 def test_an_older_claude_model_takes_sampling_parameters():
-    eff = ls.effective(_claude_api({"temperature": 0.7, "top_p": 0.9, "top_k": 5}, OLDER))
-    assert eff["effective"] == {"temperature": 0.7, "top_p": 0.9, "top_k": 5,
-                                "max_tokens": 16000}
-    assert {eff["controls"][n]["state"] for n in ("temperature", "top_p", "top_k")} == {
-        "supported"}
+    eff = ls.effective(_claude_api({"temperature": 0.7, "top_k": 5}, OLDER))
+    assert eff["effective"] == {"temperature": 0.7, "top_k": 5, "max_tokens": 16000}
+    assert {eff["controls"][n]["state"] for n in ("temperature", "top_k")} == {"supported"}
+    alone = ls.effective(_claude_api({"top_p": 0.9}, OLDER))
+    assert alone["effective"] == {"top_p": 0.9, "max_tokens": 16000}
+    # The pair is refused by the models that take sampling at all: temperature wins.
+    both = ls.effective(_claude_api({"temperature": 0.7, "top_p": 0.9}, OLDER))
+    assert both["effective"] == {"temperature": 0.7, "max_tokens": 16000}
+    assert both["controls"]["top_p"]["state"] == "unsupported"
 
 
 def test_sampling_is_unsupported_whenever_thinking_is_sent():
