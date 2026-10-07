@@ -61,8 +61,9 @@ def legacy_key(route: Route) -> str:
     return route.legacy or route.key
 
 
-#: Every route, in the order the pickers render them: the prose ones first,
-#: then the per-turn upkeep, then the one-shot utilities.
+#: Every route, in registry order: the prose ones first, then the per-turn
+#: upkeep, then the one-shot utilities. The pickers render `LEGACY_ROUTES`
+#: (below), which is this order with the split routes folded into their parents.
 #:
 #: The six routes #142 named are spelled as it spelled them, INCLUDING its
 #: granularity: it listed the scene turn's retries, regenerations and director

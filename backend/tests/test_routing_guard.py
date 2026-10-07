@@ -7,15 +7,25 @@ shipped, nothing fails, and one more generation quietly ignores the routing page
 while appearing to obey it. The same failure `store/locks.py`'s prose domain list
 had, and this guard is `test_lock_domain_guard.py`'s shape applied to it.
 
-Four claims, held against the AST of `routes/`:
+The claims, each held against the AST of `routes/`:
 
-- every `require_inference(...)` call passes a **task literal**,
-- that literal is claimed by exactly one route in `routing.ROUTES`,
-- an `operation=` the call passes is a literal equal to that route's operation
-  (absent means `"generate"`, which must equal it too), and
+- every `require_inference(...)` call passes a **task literal**, and that
+  literal is claimed by a route in `routing.ROUTES` (a task maps to exactly
+  one route by construction: `routing.TASK_ROUTE`);
+- every `override_inference(body, task, cid)` call does the same with its
+  task -- a reroll resolves through the seam too, and an unrouted one would
+  ignore the routing page exactly as an unrouted `require_inference` would;
+- an `operation=` a `require_inference` call passes is a literal equal to that
+  route's operation (absent means `"generate"`, which must equal it too);
 - `require_inference` is only ever *called*: a reference handed around as a
   value (`run_in_threadpool(require_inference, ...)`) carries its task as an
-  argument nothing here reads.
+  argument nothing here reads;
+- a second argument handed to `require_inference` is `cid`, and a decorated
+  handler passing one is mounted under `/campaigns/{cid}`;
+- nothing in `routes/` reaches for `get_active()`, and a direct
+  `store.inference.resolve.resolve(...)` is marked and capped;
+- every task literal `routes/` names (resolved, overridden, metered or
+  streamed) is claimed by a route, and every claimed task is named somewhere.
 
 Honest about its reach, in the house style:
 
@@ -275,16 +285,16 @@ def test_the_resolver_is_reached_only_through_the_seam_or_a_marked_display():
 
 
 def test_the_resolver_check_flags_a_planted_call():
-    for planted in ('conn = inference.resolve("chat", campaign_meta={}).conn\n',
-                    'conn = resolve.resolve("chat", campaign_meta={}).conn\n',
-                    'conn = store.inference.resolve.resolve("chat", campaign_meta={}).conn\n'):
+    for planted in ('conn = inference.resolve("chat", cid).conn\n',
+                    'conn = resolve.resolve("chat", cid).conn\n',
+                    'conn = store.inference.resolve.resolve("chat", cid).conn\n'):
         assert _unmarked_resolver_calls(planted, "planted.py")[0] == ["planted.py:1"], planted
     others = ('a = store.routing.resolve("chat", campaign_meta={}, cfg={}, exists=f)\n'
               'b = path.resolve()\n'
               'c = embed_space.resolve()\n')
     assert _unmarked_resolver_calls(others, "planted.py") == ([], [])
     marked = ("# routing-ok: a planted display read, argued here\n"
-              'conn = inference.resolve("chat", campaign_meta={}).conn\n')
+              'conn = inference.resolve("chat", cid).conn\n')
     assert _unmarked_resolver_calls(marked, "planted.py")[0] == []
 
 
@@ -426,26 +436,97 @@ def test_the_reference_check_flags_a_planted_value():
     assert _bare_references(marked, "planted.py") == []
 
 
+def _override_task(call: ast.Call) -> ast.expr | None:
+    """The task an `override_inference(body, task, cid)` call passes, or None."""
+    if len(call.args) > 1:
+        return call.args[1]
+    return next((kw.value for kw in call.keywords if kw.arg == "task"), None)
+
+
+def _override_task_problems(text: str, where: str) -> list[str]:
+    """`override_inference` calls whose task is missing, not a literal, or
+    claimed by no route (a `# routing-ok:` marker exempts one, as above)."""
+    out = []
+    calls = list(_calls(ast.parse(text), "override_inference"))
+    for call in calls:
+        if _reason(text, call, [c for c in calls if c is not call]) is not None:
+            continue
+        task = _override_task(call)
+        site = f"{where}:{call.lineno}"
+        if task is None:
+            out.append(f"{site} (names no task)")
+        elif not (isinstance(task, ast.Constant) and isinstance(task.value, str)):
+            out.append(f"{site} (task is not a literal)")
+        elif task.value not in routing.TASK_ROUTE:
+            out.append(f"{site} passes {task.value!r}")
+    return out
+
+
+def test_every_override_names_a_routed_task():
+    """A reroll resolves through `override_inference`, whose task is its
+    SECOND argument -- a shape the `require_inference` walk above never reads."""
+    problems, seen = [], 0
+    for path, text in _sources():
+        problems.extend(_override_task_problems(text, path.name))
+        seen += sum(1 for _ in _calls(ast.parse(text), "override_inference"))
+    assert not problems, (
+        "these overrides resolve a connection without naming a task a route "
+        f"claims, so no routing setting can reach them: {problems}")
+    assert seen >= 3, f"only {seen} override call sites found; the walk is not finding them"
+
+
+def test_the_override_check_flags_a_planted_call():
+    for planted, why in (('r, _ = override_inference(body)\n', "(names no task)"),
+                         ('r, _ = override_inference(body, task, cid)\n',
+                          "(task is not a literal)"),
+                         ('r, _ = override_inference(body, task=t, cid=cid)\n',
+                          "(task is not a literal)"),
+                         ('r, _ = override_inference(body, "no-such-task", cid)\n',
+                          "passes 'no-such-task'")):
+        assert _override_task_problems(planted, "planted.py") == [f"planted.py:1 {why}"], planted
+    fine = ('r, _ = override_inference(body, "regenerate", cid)\n'
+            'r, _ = common.override_inference(body, task="extend", cid=cid)\n')
+    assert _override_task_problems(fine, "planted.py") == []
+    marked = ("# routing-ok: a planted override, argued here at length\n"
+              "r, _ = override_inference(body, task, cid)\n")
+    assert _override_task_problems(marked, "planted.py") == []
+    # The definition is not a call site.
+    assert _override_task_problems("def override_inference(body, task, cid):\n"
+                                   "    pass\n", "planted.py") == []
+
+
+def _str_literal(node: ast.AST | None) -> str | None:
+    return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+
+def _task_nodes(tree: ast.AST):
+    """`(task expression, call)` for every place a task is spelled in `tree`."""
+    for name in ("require_inference", "meter"):
+        for call in _calls(tree, name):
+            if call.args:
+                yield call.args[0], call
+    for call in _calls(tree, "override_inference"):
+        yield _override_task(call), call
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            for kw in node.keywords:
+                if kw.arg == "task":
+                    yield kw.value, node
+
+
 def _task_literals() -> dict[str, set[str]]:
     """Every task string `routes/` names, and where it was named.
 
-    Three shapes, because a task is spelled at three seams: resolving a
-    connection, metering the call, and telling a streamer what it is streaming.
+    Four shapes, because a task is spelled at four seams: resolving a
+    connection, overriding one for a reroll, metering the call, and telling a
+    streamer what it is streaming.
     """
     found: dict[str, set[str]] = {}
     for path, text in _sources():
-        tree = ast.parse(text)
-        for name in ("require_inference", "meter"):
-            for call in _calls(tree, name):
-                if call.args and isinstance(call.args[0], ast.Constant) \
-                        and isinstance(call.args[0].value, str):
-                    found.setdefault(call.args[0].value, set()).add(f"{path.name}:{call.lineno}")
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                for kw in node.keywords:
-                    if kw.arg == "task" and isinstance(kw.value, ast.Constant) \
-                            and isinstance(kw.value.value, str):
-                        found.setdefault(kw.value.value, set()).add(f"{path.name}:{node.lineno}")
+        for node, call in _task_nodes(ast.parse(text)):
+            task = _str_literal(node)
+            if task is not None:
+                found.setdefault(task, set()).add(f"{path.name}:{call.lineno}")
     return found
 
 
