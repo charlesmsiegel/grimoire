@@ -949,6 +949,39 @@ class LLMClient:
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, conn, usage)])
 
+    async def single(self, messages: list[dict], conn: dict,
+                     usage: dict | None = None) -> str:
+        """Exactly one attempt on `conn`, joined: the model test call's way in.
+
+        No retry, no fallback route and no degrade sibling -- the route list is
+        `conn` with zero retries and nothing else, so `_resilient` makes one
+        attempt and raises what it raised, exactly as `stream` would have from
+        that attempt. A test is a question about ONE model on ONE provider, and
+        each further attempt is money spent answering a different question:
+        a fallback's success would be recorded against a model that never
+        answered, a retry would pay twice for a 429, and a text-only re-send
+        would call a model that refused the picture one that read it.
+
+        Everything else is `stream`'s, through the same `_resilient` and
+        `_dispatch`: the idle bound, the per-attempt `usage` stamp a
+        `store.usage.Meter` files, the incoming-response capture, and
+        `_provider`'s `llm_sampling.effective` per adapter -- which is how the
+        probe's reply cap reaches the Anthropic API as its required
+        `max_tokens`.
+
+        Not reported to the health observer. A probe's refusal is about the
+        model (this one reads no images), not about whether the connection
+        serves, and a status dot turned red by a vision probe would send the
+        reader to fix a connection that works.
+        """
+        try:
+            sink = self._capture() if self._capture is not None else None
+        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
+            sink = None
+        agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
+                          [(conn, 0)], self._timeout_seconds(), usage=usage, capture=sink)
+        return "".join([chunk async for chunk in agen])
+
     def note_outcome(self, conn: dict, error: LLMError | None) -> None:
         """File an outcome this facade did not itself observe (#146).
 

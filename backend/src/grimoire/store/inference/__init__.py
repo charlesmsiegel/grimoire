@@ -8,11 +8,12 @@ from . import (
     controls,
     facts,
     keys,
+    probes,
     providers,
     resolve,
     resolved,
     translate,
 )
 
-__all__ = ["capabilities", "cascade", "controls", "facts", "keys", "providers", "resolve",
-           "resolved", "translate"]
+__all__ = ["capabilities", "cascade", "controls", "facts", "keys", "probes", "providers",
+           "resolve", "resolved", "translate"]

@@ -6,6 +6,7 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
     async def stream(messages, conn, usage=None) -> AsyncIterator[str]
     async def complete(messages, conn, usage=None) -> str
+    async def single(messages, conn, usage=None) -> str
     async def list_models(conn) -> list[dict]
     async def check(conn) -> None
 
@@ -245,6 +246,13 @@ class FakeLLM:
         # honoured would let a completing route (absorb, dossier, tagline,
         # suggestions) sail past the very condition the test set up. One call is
         # still recorded, because `stream` records exactly once.
+        return "".join([delta async for delta in self.stream(messages, conn, usage)])
+
+    async def single(self, messages, conn, usage=None) -> str:
+        """The model test call's one attempt. A fake has no retries or fallback
+        to skip, so this is `complete` -- consuming `stream` for the same reason
+        `complete` does. That `single` itself skips both is held by the facade's
+        own tests and the route's wire tests, not by this double."""
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
     async def list_models(self, conn) -> list[dict]:

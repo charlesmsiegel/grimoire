@@ -5,6 +5,7 @@ from."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime
 from typing import Literal
@@ -12,7 +13,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import catalog, health, llm, llm_sampling, store
+from .. import catalog, embeddings, health, llm, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference import capabilities, controls
@@ -36,6 +37,8 @@ from .models import (
     ConnectionCreate,
     ConnectionUpdate,
     DataDirUpdate,
+    ModelTestPreview,
+    ModelTestRun,
     PromptLayoutUpdate,
     ResponseSettings,
     RoutingUpdate,
@@ -719,6 +722,198 @@ def _health_body(status: dict) -> dict:
     """
     return {"ok": status["state"] == health.OK, "kind": status["kind"],
             "detail": status["detail"], "checked_at": status["at"]}
+
+
+# ---- the model test call (spec 6.4) ----
+#: The 400 a test without `confirm: true` gets, before anything is sent or
+#: metered. The standing rule is "always ask before spending money", and this
+#: is the one route whose whole purpose is to spend some.
+TEST_UNCONFIRMED = ("This test sends a request to the provider and may cost money — "
+                    "confirm to run it.")
+
+#: The client the `embed` probe goes through: its own instance, as each store
+#: module that embeds has one (`semantic._CLIENT`), so a test can put one over
+#: a `MockTransport` in its place.
+_EMBEDDINGS = embeddings.EmbeddingsClient()
+
+
+def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dict, str, tuple[str, ...]]:
+    """`(connection, model, capabilities)` for a test or its preview, or the
+    refusal that costs nothing to make -- each before any request is built.
+
+    Shared, so the preview can never show a confirmation for a test the run
+    would refuse: an unknown connection (404); no capabilities, or one with no
+    probe (400); one the provider's preset rules out (`never`, 400 -- the wire
+    protocol cannot, so a test would be money spent learning what is already
+    known); no model (400); and a connection that cannot send at all (the
+    seam's 409 `missing_key`)."""
+    try:
+        raw = store.llm_connections.read_connection_raw(conn_id)
+    except store.llm_connections.ConnectionNotFound as exc:
+        raise HTTPException(status_code=404, detail="connection not found") from exc
+    probes = store.inference.probes
+    if not body.capabilities:
+        raise HTTPException(status_code=400, detail="name at least one capability to test")
+    untestable = sorted({c for c in body.capabilities if c not in probes.PROBES})
+    if untestable:
+        raise HTTPException(status_code=400, detail=(
+            f"there is no test for {', '.join(untestable)}; testable: "
+            f"{', '.join(probes.ordered(probes.PROBES))}"))
+    caps = probes.ordered(body.capabilities)
+    preset = store.inference.providers.infer(raw)
+    ruled_out = [c for c in caps if c in preset.never]
+    if ruled_out:
+        raise HTTPException(status_code=400, detail=(
+            f"{preset.label} cannot do {', '.join(ruled_out)} on any model, so there "
+            "is nothing to test"))
+    model = body.model.strip() or llm.effective_model(raw)
+    if not model:
+        raise HTTPException(status_code=400, detail="name a model to test")
+    if len(model) > store.alternates.MAX_MODEL_CHARS:
+        raise HTTPException(status_code=400, detail="model id is too long")
+    problem = inference.problem(raw)
+    if problem is not None:
+        raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
+    return raw, model, caps
+
+
+def _catalog_row(conn_id: str, model: str) -> dict | None:
+    """`model`'s row in the connection's cached catalog, or None. Never raises:
+    a missing or mangled sidecar is "no price known", not a failed preview."""
+    try:
+        rows = store.llm_connections.cached_models(conn_id)["models"]
+    except (OSError, KeyError, TypeError, ValueError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    return next((r for r in rows if isinstance(r, dict) and r.get("id") == model), None)
+
+
+def _embed_endpoint(raw: dict) -> str:
+    """Where the `embed` probe goes: the endpoint the Embedding path resolves
+    for this provider -- OpenRouter's fixed URL (its adapter ignores a stored
+    one), else the connection's own base URL. The kinds with no embeddings
+    route never get here: their preset's `never` refused the test."""
+    if raw.get("kind", "openrouter") == "openrouter":
+        return store.inference.providers.PRESETS["openrouter"].base_url
+    return str(raw.get("base_url") or "")
+
+
+async def _embed_probe(raw: dict, model: str) -> dict:
+    """The `embed` probe: one fixed string, once, metered under `model-test`.
+
+    The holder is stamped as `llm._stamp` stamps a chat attempt, which is what
+    makes the meter file a row at all (an empty holder means "never sent") --
+    and it names no token counts: the embeddings client reports none, and the
+    ledger says so by leaving them absent until slice D meters embeddings
+    (ruling 14)."""
+    probes = store.inference.probes
+    with store.usage.meter("model-test") as m:
+        m.usage.update({"model": model, "connection": raw.get("name") or raw["id"],
+                        "provider": raw.get("kind", "openrouter"), "attempts": 1})
+        # Off the loop: the embeddings client is synchronous by design.
+        vectors = await asyncio.to_thread(
+            _EMBEDDINGS.embed, [probes.EMBED_TEXT], model, raw.get("api_key", ""),
+            _embed_endpoint(raw))
+    return {"ok": True, "dims": len(vectors[0])}
+
+
+async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str) -> dict:
+    """One probe's outcome: `{"ok": True}` (plus `dims` for embed), or
+    `{"ok": False, "kind", "error"}` with the error scrubbed of any picture and
+    of the connection's key. One attempt, never retried, never fallen back."""
+    probes = store.inference.probes
+    try:
+        if probes.PROBES[cap].operation == "embed":
+            return await _embed_probe(raw, model)
+        with store.usage.meter("model-test") as m:
+            # Completed is accepted; the text is not read.
+            await _bounded_call(client.single(probes.messages(cap), conn, m.usage))
+    except LLMError as exc:
+        return {"ok": False, "kind": exc.kind,
+                "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])}
+    return {"ok": True}
+
+
+def _record_verdicts(conn_id: str, model: str, rev: str, results: dict[str, dict]) -> bool:
+    """File the verdicts under the `rev` the test STARTED on, unless that rev
+    has moved: an edit that landed while the probes were out describes a
+    different endpoint, and `facts.record_verified` replaces another rev's
+    results outright -- so the stale verdict would overwrite whatever the new
+    rev already holds. A failure that says nothing about the model
+    (`probes.SAYS_NOTHING`) is reported but never recorded. Whether anything
+    was filed is the answer."""
+    verdicts = {cap: {k: r[k] for k in ("ok", "error", "dims") if k in r}
+                for cap, r in results.items()
+                if r.get("kind") not in store.inference.probes.SAYS_NOTHING}
+    if not verdicts:
+        return False
+    try:
+        if store.llm_connections.read_connection_raw(conn_id)["rev"] != rev:
+            return False
+        store.inference.facts.record_verified(conn_id, model, rev, verdicts)
+    except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy,
+            OSError, UnicodeDecodeError):
+        return False
+    return True
+
+
+@router.post("/llm-connections/{conn_id}/test/preview")
+def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
+    """What `POST .../test` would send, and roughly what it would cost. Sends
+    nothing, meters nothing, starts no run.
+
+    `estimated_cost_usd` is the probes' stated token guesses
+    (`probes.PROBES`) at the model's cached catalog prices, and null when the
+    catalog states no price -- "a price nobody reported is never rendered as
+    zero"; the confirmation then says the cost is unknown."""
+    raw, model, caps = _test_plan(conn_id, body)
+    probes = store.inference.probes
+    capped = "max_tokens" in llm_sampling.sent_names(inference.lower(raw, probes.sampling(), model))
+    return {"provider": raw.get("name") or conn_id, "provider_id": conn_id, "model": model,
+            "sends": [{"capability": c, "description": probes.describe(c, capped)}
+                      for c in caps],
+            "estimated_cost_usd": probes.estimate_usd(_catalog_row(conn_id, model), caps)}
+
+
+@router.post("/llm-connections/{conn_id}/test", status_code=202)
+def post_connection_test(
+    conn_id: str, body: ModelTestRun, request: Request, client: LLMClient = Depends(get_llm),
+    x_grimoire_attempt: str | None = Header(default=None),
+):
+    """Test what `model` can do on this connection: one probe per capability.
+
+    **Refused unless `confirm` is JSON `true`**, before anything is sent or
+    metered (`TEST_UNCONFIRMED`) -- the preview is how a client learns what it
+    is confirming. Every other refusal is `_test_plan`'s and comes first, so a
+    confirmed request for something untestable is still told why.
+
+    A `global` draft, the model-catalog refresh's twin: what it leaves behind
+    is stored beside the connection, which no world or campaign owns, and a
+    client that never comes back still gets it. Each probe is ONE attempt
+    (`LLMClient.single`): no retry, no fallback, no text-only re-send, each
+    metered under `model-test` with no campaign. The chat probes are sent
+    through the connection as the resolver lowers it, carrying the probe's
+    reply cap and no preset of the connection's own.
+
+    The verdicts are filed in the run's terminal step under the `rev` captured
+    here, unless it moved meanwhile (`_record_verdicts`).
+    """
+    raw, model, caps = _test_plan(conn_id, body)
+    if body.confirm is not True:
+        raise HTTPException(status_code=400, detail=TEST_UNCONFIRMED)
+    rev = raw["rev"]
+    conn = inference.lower(raw, store.inference.probes.sampling(), model)
+
+    async def work():
+        results = {cap: await _probe(client, cap, raw, conn, model) for cap in caps}
+        return {"state": "landed",
+                "result": {"provider": conn_id, "model": model, "rev": rev,
+                           "results": results,
+                           "recorded": _record_verdicts(conn_id, model, rev, results)}}
+
+    return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "model-test",
+                          x_grimoire_attempt, work)
 
 
 # ---- styles ----

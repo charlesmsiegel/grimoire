@@ -133,6 +133,24 @@ class CatalogProbe(BaseModel):
     api_key: str = ""
 
 
+class ModelTestPreview(BaseModel):
+    """What a model test would send, asked before anything is sent (spec 6.4).
+    `model` blank means the connection's own (effective) model."""
+
+    model: str = ""
+    capabilities: list[str] = []
+
+
+class ModelTestRun(BaseModel):
+    """A model test, to be run. `confirm` is `Any` rather than `bool` on
+    purpose: pydantic coerces `"true"`, `1` and `"yes"` to a bool, and the
+    only thing that may spend money here is a JSON `true` (`is True`)."""
+
+    model: str = ""
+    capabilities: list[str] = []
+    confirm: Any = None
+
+
 class DataDirUpdate(BaseModel):
     data_dir: str | None = None
 

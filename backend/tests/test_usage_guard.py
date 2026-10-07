@@ -42,8 +42,10 @@ from . import guard_markers
 
 ROUTES = pathlib.Path(routes_pkg.__file__).parent
 
-#: The two `LLMClient` methods that reach a provider. `aclose` does not.
-_GENERATORS = ("stream", "complete")
+#: The `LLMClient` methods that reach a provider. `aclose` does not. `single`
+#: is the model test call's one attempt (slice B Task 9): it spends money like
+#: the other two, so it is held to the same rule.
+_GENERATORS = ("stream", "complete", "single")
 #: How the injected client is spelled at every route (see the module docstring).
 _CLIENT = "client"
 #: The holder attribute a `store.usage.Meter` exposes.
@@ -127,8 +129,11 @@ def test_the_guard_actually_detects_an_unmetered_call():
 
     for src in ("client.complete(messages, conn, m.usage)",
                 "client.stream(messages, conn, usage=m.usage)",
-                "client.stream(messages, conn, meter.usage)"):
+                "client.stream(messages, conn, meter.usage)",
+                "client.single(messages, conn, m.usage)"):
         assert _is_metered(next(_generation_calls(ast.parse(src)))), src
+    unmetered = ast.parse("client.single(messages, conn)\n")
+    assert not _is_metered(next(_generation_calls(unmetered)))
 
 
 def test_the_guard_is_not_fooled_by_a_holder_that_files_nothing():

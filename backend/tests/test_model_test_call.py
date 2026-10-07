@@ -1,0 +1,460 @@
+"""The confirm-first model test call (spec 6.4, slice B Task 9).
+
+The standing rule is "always ask before spending money", so the claims this
+suite holds are about what is NOT sent as much as what is:
+
+* the preview sends nothing, meters nothing and starts no run;
+* the test refuses without `confirm: true`, before anything is sent or metered;
+* a capability the provider's preset rules out is refused before sending;
+* a confirmed test sends each probe ONCE -- no retry, no fallback (Review
+  Focus 3), proven on the wire with a real `LLMClient` over `MockTransport`;
+* a probe that completes without text still counts as accepted;
+* the verdicts are recorded for the connection's `rev`, so an edit hides them.
+
+Every connection, key and model name below is invented.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+
+import httpx
+import pytest
+
+import grimoire.store as store
+from grimoire import catalog, embeddings, routes
+from grimoire.llm import LLMClient
+from grimoire.llm_errors import LLMError
+from grimoire.openai_compatible import OpenAICompatibleClient
+from grimoire.routes import config as config_routes
+from grimoire.store.inference import facts, probes
+from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter
+
+REFUSAL = ("This test sends a request to the provider and may cost money — "
+           "confirm to run it.")
+MODEL = "vendor/model-a"
+
+
+def _connection(client, **fields) -> str:
+    body = {"kind": "openrouter", "name": "Realm Router", "api_key": "sk-or-fake-0001",
+            "model": MODEL, **fields}
+    r = client.post("/api/llm-connections", json=body)
+    assert r.status_code == 200, r.text
+    return r.json()["id"]
+
+
+def _rev(conn_id: str) -> str:
+    return store.llm_connections.read_connection_raw(conn_id)["rev"]
+
+
+def _rows() -> list[dict]:
+    return list(store.usage.calls(days=1))
+
+
+def _wait(client, run_id: str, state: str = "landed", timeout: float = 10.0) -> dict:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        run = client.get(f"/api/runs/{run_id}").json()["run"]
+        if run["state"] == state:
+            return run
+        if run["state"] not in ("running", "pending"):
+            raise AssertionError(f"run ended {run['state']}: {run}")
+        time.sleep(0.01)
+    raise AssertionError(f"run {run_id} never reached {state}")
+
+
+def _run(client, conn_id: str, caps, **extra) -> dict:
+    r = client.post(f"/api/llm-connections/{conn_id}/test",
+                    json={"model": MODEL, "capabilities": list(caps), "confirm": True, **extra})
+    assert r.status_code == 202, r.text
+    run = r.json()["run"]
+    assert (run["cls"], run["kind"]) == ("draft", "model-test")
+    return _wait(client, run["id"])
+
+
+def _use(client, fake) -> None:
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+
+
+def _embedder(monkeypatch, handler) -> list[httpx.Request]:
+    """The route's embeddings client, over a `MockTransport` that records."""
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    fake = embeddings.EmbeddingsClient(httpx.Client(transport=httpx.MockTransport(record)))
+    monkeypatch.setattr(config_routes, "_EMBEDDINGS", fake)
+    return seen
+
+
+def _vector(_request: httpx.Request) -> httpx.Response:
+    return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]})
+
+
+# ---- the probes themselves ---------------------------------------------------
+
+def test_the_probe_payloads_are_the_specified_ones():
+    assert probes.MAX_TOKENS == 64
+    assert probes.messages("generate") == [
+        {"role": "user", "content": "Reply with the single word: ok"}]
+    vision = probes.messages("vision")[0]["content"]
+    assert vision[0] == {"type": "text", "text": "What colour is this pixel? One word."}
+    assert vision[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert probes.sampling()["params"] == {"max_tokens": 64}
+
+
+def test_the_vision_probe_is_a_real_one_pixel_png():
+    png = probes.PIXEL_PNG
+    assert png.startswith(b"\x89PNG\r\n\x1a\n")
+    # IHDR is the first chunk: width and height, big-endian, both 1.
+    assert png[16:24] == (1).to_bytes(4, "big") + (1).to_bytes(4, "big")
+    assert png.endswith(b"IEND\xaeB`\x82")
+
+
+def test_an_estimate_needs_every_price_it_uses():
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000001", "completion": "0.000002"}})
+    expected = (probes.PROBES["generate"].prompt_tokens * 0.000001
+                + probes.PROBES["generate"].completion_tokens * 0.000002)
+    assert probes.estimate_usd(row, ["generate"]) == pytest.approx(expected)
+    # A price nobody reported is never rendered as zero.
+    assert probes.estimate_usd(catalog.entry({"id": MODEL}), ["generate"]) is None
+    assert probes.estimate_usd(None, ["generate"]) is None
+    assert probes.estimate_usd({"prompt": "-1", "completion": "0"}, ["generate"]) is None
+    # A model the provider says is free is a reported zero, not an unknown one.
+    assert probes.estimate_usd({"prompt": "0", "completion": "0"}, ["generate"]) == 0.0
+
+
+# ---- preview -----------------------------------------------------------------
+
+def test_the_preview_sends_nothing_meters_nothing_and_starts_no_run(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+
+    r = client.post(f"/api/llm-connections/{conn}/test/preview",
+                    json={"model": MODEL, "capabilities": ["vision", "generate"]})
+
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["provider"] == "Realm Router"
+    assert body["model"] == MODEL
+    assert [s["capability"] for s in body["sends"]] == ["generate", "vision"]
+    assert all(s["description"] for s in body["sends"])
+    assert "64" in body["sends"][0]["description"]
+    assert body["estimated_cost_usd"] is None   # no catalog: unknown, never 0
+    assert fake.calls == 0
+    assert _rows() == []
+    assert client.get("/api/runs").json()["runs"] == []
+
+
+def test_the_preview_prices_from_the_cached_catalog_row(client):
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003", "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+
+    body = client.post(f"/api/llm-connections/{conn}/test/preview",
+                       json={"model": MODEL, "capabilities": ["generate"]}).json()
+
+    assert body["estimated_cost_usd"] == pytest.approx(probes.estimate_usd(row, ["generate"]))
+    assert body["estimated_cost_usd"] > 0
+
+
+# ---- refusals: nothing sent, nothing metered ---------------------------------
+
+@pytest.mark.parametrize("confirm", [None, False, "true", 1])
+def test_without_confirm_the_test_is_refused_and_nothing_is_sent(client, confirm):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+    body = {"model": MODEL, "capabilities": ["generate"]}
+    if confirm is not None:
+        body["confirm"] = confirm
+
+    r = client.post(f"/api/llm-connections/{conn}/test", json=body)
+
+    assert r.status_code == 400
+    assert r.json()["detail"] == REFUSAL
+    assert fake.calls == 0
+    assert _rows() == []
+    assert client.get("/api/runs").json()["runs"] == []
+
+
+@pytest.mark.parametrize("path", ["test", "test/preview"])
+def test_a_capability_the_preset_rules_out_is_refused_before_sending(client, path):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
+                       api_key="sk-ant-fake-0001", model="claude-model-x")
+
+    r = client.post(f"/api/llm-connections/{conn}/{path}",
+                    json={"model": "claude-model-x", "capabilities": ["generate", "embed"],
+                          "confirm": True})
+
+    assert r.status_code == 400
+    assert "embed" in r.json()["detail"]
+    assert fake.calls == 0
+    assert _rows() == []
+
+
+@pytest.mark.parametrize("caps", [[], ["stream"], ["telepathy"]])
+def test_a_capability_with_no_probe_is_refused(client, caps):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": MODEL, "capabilities": caps, "confirm": True})
+
+    assert r.status_code == 400
+    assert fake.calls == 0
+
+
+def test_an_unknown_connection_is_a_404(client):
+    r = client.post("/api/llm-connections/nobody/test/preview",
+                    json={"model": MODEL, "capabilities": ["generate"]})
+    assert r.status_code == 404
+
+
+def test_a_connection_that_cannot_send_is_refused_before_sending(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client, api_key="")
+
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": MODEL, "capabilities": ["generate"], "confirm": True})
+
+    assert r.status_code == 409
+    assert r.json()["kind"] == "missing_key"
+    assert fake.calls == 0
+
+
+# ---- a confirmed test ----------------------------------------------------------
+
+def test_a_confirmed_test_meters_one_row_per_probe_and_records_the_verdicts(
+        client, monkeypatch):
+    fake = FakeOpenRouter(["ok"], usage={"prompt_tokens": 12, "completion_tokens": 1})
+    _use(client, fake)
+    conn = _connection(client)
+    seen = _embedder(monkeypatch, _vector)
+    rev = _rev(conn)
+
+    run = _run(client, conn, ["embed", "generate", "vision"])
+
+    result = run["result"]
+    assert result["model"] == MODEL
+    assert result["recorded"] is True
+    assert {c: r["ok"] for c, r in result["results"].items()} == {
+        "generate": True, "vision": True, "embed": True}
+    # Each chat probe was sent once, on the probe's own connection: the model
+    # under test and the 64-token cap, nothing else from a preset.
+    assert fake.calls == 2
+    for request in fake.requests:
+        assert request["conn"]["model"] == MODEL
+        assert request["conn"]["sampling"]["params"] == {"max_tokens": 64}
+    assert fake.requests[0]["messages"] == probes.messages("generate")
+    # The embed probe went to the endpoint the Embedding path resolves for an
+    # OpenRouter provider, with the model under test and the provider's key.
+    assert len(seen) == 1
+    assert str(seen[0].url) == "https://openrouter.ai/api/v1/embeddings"
+    assert seen[0].headers["Authorization"] == "Bearer sk-or-fake-0001"
+    assert json.loads(seen[0].content)["model"] == MODEL
+
+    rows = _rows()
+    assert sorted(r["task"] for r in rows) == ["model-test"] * 3
+    assert all(not r.get("campaign") for r in rows)
+    # Ruling 14: the embed probe's row carries no token counts (slice D meters
+    # embeddings); the two chat probes' rows carry what the provider reported.
+    uncounted = [r for r in rows
+                 if r.get("prompt_tokens") is None and r.get("completion_tokens") is None]
+    assert len(uncounted) == 1
+    assert uncounted[0]["model"] == MODEL
+    assert uncounted[0]["provider"] == "openrouter"
+
+    verified = facts.of(conn, MODEL, rev)["verified"]
+    assert {c: r["ok"] for c, r in verified.items()} == {
+        "generate": True, "vision": True, "embed": True}
+    assert all(r.get("at") for r in verified.values())
+    assert verified["embed"]["dims"] == 3
+
+
+def test_an_empty_completion_still_counts_as_accepted(client):
+    """A thinking model can spend a 64-token cap thinking and say nothing."""
+    _use(client, FakeLLM([[]]))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["generate"])
+
+    assert run["result"]["results"]["generate"] == {"ok": True}
+    assert facts.of(conn, MODEL, _rev(conn))["verified"]["generate"]["ok"] is True
+
+
+def test_a_provider_refusal_is_recorded_with_its_message_scrubbed(client):
+    message = ("image refused: data:image/png;base64,iVBORw0KGgoAAAA "
+               "(key sk-or-fake-0001)")
+    _use(client, FailingOpenRouter(kind="bad_response", message=message))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["vision"])
+
+    got = run["result"]["results"]["vision"]
+    assert got["ok"] is False
+    assert "[elided]" in got["error"]
+    assert "iVBORw0KGgo" not in got["error"]
+    assert "sk-or-fake-0001" not in got["error"]
+    stored = facts.of(conn, MODEL, _rev(conn))["verified"]["vision"]
+    assert stored["ok"] is False
+    assert stored["error"] == got["error"]
+
+
+def test_a_failure_that_says_nothing_about_the_model_is_reported_not_recorded(client):
+    """A rate limit is the provider's state, not the model's ability: storing
+    it as a `test` no would hide a working model from every picker."""
+    _use(client, FailingOpenRouter(kind="rate_limit", message="slow down"))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["generate"])
+
+    assert run["result"]["results"]["generate"]["ok"] is False
+    assert run["result"]["results"]["generate"]["kind"] == "rate_limit"
+    assert run["result"]["recorded"] is False
+    assert facts.of(conn, MODEL, _rev(conn))["verified"] == {}
+
+
+def test_a_key_edit_hides_the_results(client):
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    before = _rev(conn)
+    _run(client, conn, ["generate"])
+    assert facts.of(conn, MODEL, before)["verified"]["generate"]["ok"] is True
+
+    r = client.put(f"/api/llm-connections/{conn}", json={"api_key": "sk-or-fake-0002"})
+    assert r.status_code == 200
+
+    after = _rev(conn)
+    assert after != before
+    assert facts.of(conn, MODEL, after)["verified"] == {}
+
+
+# ---- on the wire: one attempt, no fallback (Review Focus 3) -------------------
+
+def _sse(*chunks: dict) -> str:
+    return "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
+
+
+def _wire_client(client, handler, **llm) -> list[httpx.Request]:
+    """A REAL facade, with retries and a fallback configured, whose
+    OpenAI-compatible adapter talks to a `MockTransport`."""
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    adapter = OpenAICompatibleClient(http=httpx.AsyncClient(transport=httpx.MockTransport(record)))
+    facade = LLMClient(openai_compatible=adapter, **llm)
+    client.app.dependency_overrides[routes.get_llm] = lambda: facade
+    return seen
+
+
+def _endpoint(client, name: str, host: str) -> str:
+    return _connection(client, kind="openai_compatible", name=name,
+                       base_url=f"https://{host}/v1", api_key="sk-fake-endpoint",
+                       model=MODEL)
+
+
+def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, monkeypatch):
+    from grimoire import llm as llm_mod
+    monkeypatch.setattr(llm_mod, "RETRY_BASE", 0.0)
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    backup = store.llm_connections.read_connection_raw(
+        _endpoint(client, "Winifred Endpoint", "backup.example"))
+    seen = _wire_client(
+        client, lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
+        retries=3, fallback=lambda: backup)
+
+    run = _run(client, conn, ["generate"])
+
+    assert [r.url.host for r in seen] == ["primary.example"]
+    got = run["result"]["results"]["generate"]
+    assert got["ok"] is False
+    assert got["kind"] == "rate_limit"
+    rows = _rows()
+    assert len(rows) == 1
+    assert rows[0]["task"] == "model-test"
+    assert rows[0].get("attempts", 1) == 1   # the ledger omits the default
+
+
+def test_an_empty_stream_on_the_wire_counts_as_accepted(client):
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    seen = _wire_client(
+        client,
+        lambda _r: httpx.Response(200, text=_sse({"choices": [{"delta": {},
+                                                                "finish_reason": "length"}]}),
+                                  headers={"content-type": "text/event-stream"}),
+        retries=3)
+
+    run = _run(client, conn, ["generate"])
+
+    assert len(seen) == 1
+    sent = json.loads(seen[0].content)
+    assert sent["max_tokens"] == 64
+    assert sent["model"] == MODEL
+    assert sent["messages"] == probes.messages("generate")
+    assert run["result"]["results"]["generate"] == {"ok": True}
+
+
+def test_the_rev_moving_during_the_run_records_nothing(client):
+    """An edit that lands while the probe is out describes a different
+    endpoint; writing the old rev's verdict would replace whatever the new
+    rev already holds."""
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    before = _rev(conn)
+
+    def edit_then_answer(_request: httpx.Request) -> httpx.Response:
+        store.llm_connections.update_connection(conn, api_key="sk-fake-rotated")
+        return httpx.Response(200, text=_sse({"choices": [{"delta": {"content": "ok"}}]}),
+                              headers={"content-type": "text/event-stream"})
+
+    _wire_client(client, edit_then_answer)
+
+    run = _run(client, conn, ["generate"])
+
+    assert run["result"]["results"]["generate"] == {"ok": True}
+    assert run["result"]["recorded"] is False
+    assert _rev(conn) != before
+    assert facts.read(conn) == {}
+
+
+def test_an_embed_failure_is_one_metered_row_with_no_token_counts(client, monkeypatch):
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    seen = _embedder(monkeypatch, lambda _r: httpx.Response(
+        400, json={"error": {"message": "this model makes no embeddings"}}))
+
+    run = _run(client, conn, ["embed"])
+
+    assert len(seen) == 1
+    got = run["result"]["results"]["embed"]
+    assert got["ok"] is False
+    assert "no embeddings" in got["error"]
+    rows = _rows()
+    assert len(rows) == 1
+    assert rows[0]["task"] == "model-test"
+    assert rows[0]["status"] == "error"
+    assert rows[0].get("prompt_tokens") is None
+
+
+def test_the_gateway_fake_answers_single_like_complete():
+    """`llm_fakes` stands in for the whole facade surface routes use."""
+    import asyncio
+    fake = FakeLLM([["o", "k"]], error=None)
+    usage: dict = {}
+    assert asyncio.run(fake.single([], {"kind": "openrouter", "model": "m"}, usage)) == "ok"
+    assert usage["attempts"] == 1
+    failing = FakeLLM([["x"]], error=LLMError("auth", "no"))
+    with pytest.raises(LLMError):
+        asyncio.run(failing.single([], {"kind": "openrouter", "model": "m"}))

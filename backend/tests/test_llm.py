@@ -146,6 +146,7 @@ def test_a_default_client_builds_the_real_anthropic_adapter():
 from tests.llm_fakes import (  # noqa: E402 - see the late imports above
     RecordingProvider,
     RefusingProvider,
+    SequencedProvider,
 )
 
 
@@ -1431,3 +1432,93 @@ async def test_a_fallback_that_refuses_the_preset_reports_both_failures():
     ({"kind": "claude", "prefill": True}, True), ({"kind": "openrouter", "prefill": "true"}, False)])
 def test_prefill_capable_reads_only_the_flag(conn, expected):
     assert llm.prefill_capable(conn) is expected
+
+
+# ---- `single`: exactly one attempt, for the model test call (Task 9) ----
+
+
+async def test_single_does_not_retry_a_rate_limit():
+    provider = FlakyProvider(failures=1, kind="rate_limit")
+    client = _retry_client(provider, retries=3)
+    with pytest.raises(LLMError) as exc:
+        await client.single([], _conn("openrouter"))
+    assert exc.value.kind == "rate_limit"
+    assert provider.attempts == 1
+
+
+async def test_single_never_calls_a_configured_fallback():
+    provider = RouteRecorder(failing={"primary"}, kind="auth")
+    asked = []
+
+    def fallback():
+        asked.append(True)
+        return _route("b", "backup")
+
+    client = _retry_client(provider, retries=2, fallback=fallback)
+    with pytest.raises(LLMError) as exc:
+        await client.single([], _route("a", "primary"))
+    assert provider.models == ["primary"]
+    assert asked == []   # not even resolved
+    assert "fallback" not in exc.value.detail
+
+
+async def test_single_sends_no_degrade_sibling():
+    """A request whose image the provider refused is not re-sent as text: the
+    test is asking whether the model takes the image."""
+    from grimoire import content_parts
+    provider = SequencedProvider([LLMError("bad_response", "no images", status=400), ["ok"]])
+    client = LLMClient(openrouter=provider, timeout=0, retries=2,
+                       images=lambda _conn: 4,
+                       load_image=lambda _c, _p: "data:image/png;base64,AA")
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": "look"}, content_parts.ref("/img/a.png", "a", False)]}]
+    with pytest.raises(LLMError):
+        await client.single(messages, _route("a", "primary"))
+    assert len(provider.requests) == 1
+    # The control: the same refusal through `stream` IS re-sent as text.
+    provider = SequencedProvider([LLMError("bad_response", "no images", status=400), ["ok"]])
+    client = LLMClient(openrouter=provider, timeout=0, retries=0,
+                       images=lambda _conn: 4,
+                       load_image=lambda _c, _p: "data:image/png;base64,AA")
+    assert await client.complete(messages, _route("a", "primary")) == "ok"
+    assert len(provider.requests) == 2
+
+
+async def test_single_counts_an_empty_completion_as_completed():
+    provider = FlakyProvider(failures=0, reply=())
+    client = _retry_client(provider, retries=2)
+    assert await client.single([], _conn("openrouter")) == ""
+    assert provider.attempts == 1
+
+
+async def test_single_stamps_usage_as_stream_does():
+    provider = FlakyProvider(failures=0)
+    client = _retry_client(provider, retries=2)
+    conn = _route("a", "primary")
+    usage: dict = {}
+    assert await client.single([], conn, usage) == "ok"
+    assert {k: usage[k] for k in ("model", "connection", "provider", "attempts")} == {
+        "model": "primary", "connection": "conn-a", "provider": "openrouter", "attempts": 1}
+    assert usage[llm.ATTEMPTED] is conn
+
+
+async def test_single_hands_anthropic_its_effective_body():
+    """The 64-token cap travels in the connection's sampling, and `single`
+    still runs it through `llm_sampling.effective` for the adapter."""
+    an = FakeProvider("an")
+    client = LLMClient(openrouter=FakeProvider("or"), claude=FakeProvider("cl"),
+                       openai_compatible=FakeProvider("oc"), anthropic=an,
+                       retries=3, fallback=lambda: _route("b", "backup"))
+    conn = _conn("anthropic", model="claude-test-1",
+                 sampling={"preset_id": "", "preset_name": "", "scope": "none",
+                           "params": {"max_tokens": 64}})
+    assert await client.single([], conn) == "an"
+    assert an.calls[0][1]["effective"] == {"max_tokens": 64}
+
+
+async def test_single_raises_a_provider_error_as_stream_does():
+    provider = FlakyProvider(failures=1, kind="bad_response")
+    client = _retry_client(provider, retries=0)
+    with pytest.raises(LLMError) as exc:
+        await client.single([], _conn("openrouter"))
+    assert (exc.value.kind, exc.value.detail) == ("bad_response", "attempt 1")
