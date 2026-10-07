@@ -43,7 +43,6 @@ def test_nothing_known_is_unknown():
 # ---- each source ----
 def test_adapter_never_is_no():
     got = _resolve("zai")
-    assert got["vision"] == Cap("no", "adapter")
     assert got["embed"] == Cap("no", "adapter")
     assert got["decide_native"] == Cap("no", "adapter")
 
@@ -81,6 +80,12 @@ def test_facts_vision_and_prefill_are_user():
     assert _resolve("custom", prefill=False)["prefill"] == Cap("no", "user")
 
 
+def test_zai_may_read_images():
+    # Spec 6.1 rules out embeddings on z.ai, never vision: the catalog decides.
+    assert _resolve("zai")["vision"] == Cap("unknown", "unknown")
+    assert _resolve("zai", row={"id": "m", "vision": True})["vision"] == Cap("yes", "catalog")
+
+
 def test_catalog_outputs():
     text = _resolve("custom", row={"id": "mara-7b", "outputs": ["text"]})
     assert text["generate"] == Cap("yes", "catalog")
@@ -92,6 +97,22 @@ def test_catalog_outputs():
     assert dec["generate"] == Cap("no", "catalog")
     both = _resolve("custom", row={"id": "mara-7b", "outputs": ["decisions", "text"]})
     assert both["generate"] == Cap("yes", "catalog")
+
+
+def test_catalog_decisions_are_decide_native():
+    dec = _resolve("openrouter", row={"id": "m", "outputs": ["decisions"]})
+    assert dec["decide_native"] == Cap("yes", "catalog")
+    assert dec["generate"] == Cap("no", "catalog")
+    # A stated list without "decisions" says nothing about it -- never `no`.
+    text = _resolve("openrouter", row={"id": "m", "outputs": ["text"]})
+    assert text["decide_native"] == Cap("unknown", "unknown")
+    # The adapter's no still wins over the catalog's yes.
+    assert _resolve("custom", row={"id": "m", "outputs": ["decisions"]})[
+        "decide_native"] == Cap("no", "adapter")
+    # A test call beats the catalog.
+    assert _resolve("openrouter", row={"id": "m", "outputs": ["decisions"]},
+                    verified={"decide_native": {"ok": False}})[
+        "decide_native"] == Cap("no", "test")
 
 
 def test_a_row_without_outputs_says_nothing_about_generate_or_embed():
@@ -123,8 +144,8 @@ def test_anthropic_features_structured_output():
     assert no["structured_output"] == Cap("no", "catalog")
 
 
-def test_the_catalog_says_nothing_about_stream_decide_or_prefill():
-    row = {"id": "m", "outputs": ["text", "decisions"],
+def test_the_catalog_says_nothing_about_stream_or_prefill():
+    row = {"id": "m", "outputs": ["text", "embeddings"],
            "params": ["structured_outputs"], "vision": True}
     for preset, cap in (("ollama", "stream"), ("ollama", "prefill"),
                         ("openrouter", "decide_native"), ("openrouter", "prefill")):
@@ -166,12 +187,14 @@ def test_name_rule_does_not_beat_adapter_no():
 # ---- precedence ----
 def test_adapter_no_beats_every_yes():
     got = _resolve("zai", model="test-embed-1",
-                   row={"id": "test-embed-1", "outputs": ["embeddings"], "vision": True},
-                   verified={"embed": {"ok": True, "at": "x"}, "vision": {"ok": True, "at": "x"}},
-                   overrides={"embed": "yes", "decide_native": "yes"}, vision="on")
+                   row={"id": "test-embed-1", "outputs": ["embeddings", "decisions"]},
+                   verified={"embed": {"ok": True, "at": "x"}},
+                   overrides={"embed": "yes", "decide_native": "yes"})
     assert got["embed"] == Cap("no", "adapter")
-    assert got["vision"] == Cap("no", "adapter")
     assert got["decide_native"] == Cap("no", "adapter")
+    got = _resolve("claude", row={"id": "m", "vision": True},
+                   verified={"vision": {"ok": True, "at": "x"}}, vision="on")
+    assert got["vision"] == Cap("no", "adapter")
 
 
 def test_test_beats_user_beats_catalog():
@@ -232,8 +255,9 @@ def test_group_unverified():
 def test_group_hidden_by_the_adapter_names_the_preset():
     assert capabilities.group_for(_resolve("zai"), "embed", P["zai"]) == (
         "hidden", "z.ai serves no embeddings")
-    assert capabilities.group_for(_resolve("zai"), "vision", P["zai"]) == (
-        "hidden", "z.ai reads no images")
+    assert capabilities.group_for(_resolve("claude"), "vision", P["claude"]) == (
+        "hidden", "Claude subscription reads no images")
+    assert capabilities.group_for(_resolve("zai"), "vision", P["zai"])[0] == "unverified"
     assert capabilities.group_for(_resolve("anthropic"), "embed", P["anthropic"]) == (
         "hidden", "Anthropic API serves no embeddings")
 
@@ -362,8 +386,18 @@ def test_post_images_reads_model_facts_after_the_legacy_setting(home):
     assert post_images.capability(off) == "no"
 
 
-def test_post_images_on_a_preset_that_reads_no_images(home):
-    # z.ai's wire protocol takes no image part (the preset table's `never`).
+def test_post_images_on_zai_answers_as_it_did(home):
+    # Nothing rules vision out on z.ai: auto is the catalog's answer, as before.
+    config.write_config(send_images="on")
     conn = _conn(base_url="https://api.z.ai/api/paas/v4", model="mara-7b")
-    assert post_images.capability(conn) == "no"
+    assert providers.infer(conn).id == "zai"
+    assert post_images.capability(conn) == "unknown"
+    assert post_images.reach(conn) == "unknown"
+    assert post_images.images_for(conn) == 0
+    for vision, want in ((True, "yes"), (False, "no"), (None, "unknown")):
+        llm_connections.set_cached_models(conn["id"], [{"id": "mara-7b", "vision": vision}],
+                                          conn["rev"])
+        assert post_images.capability(conn) == want
+        assert post_images.reach(conn) == want
     assert post_images.capability({**conn, "vision": "on"}) == "yes"
+    assert post_images.capability({**conn, "vision": "off"}) == "no"

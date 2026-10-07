@@ -13,7 +13,8 @@ authority first -- the first one that says anything is the answer:
    (`post_images.capability`), not a statement about the model.
 3. `catalog` -- what the provider publishes for the model: `outputs`
    (`text` -> generate, `embeddings` -> embed; a stated list without one of
-   them is a `no`), `vision`, `params` naming `structured_outputs` or
+   them is a `no`; `decisions` -> decide_native, whose absence says nothing),
+   `vision`, `params` naming `structured_outputs` or
    `response_format` (their absence says nothing), and Anthropic's
    `features.structured_output`. A key the row does not state contributes
    nothing, so a row without `outputs` leaves the name rule room to apply.
@@ -113,6 +114,11 @@ def _listed(row: dict | None) -> dict[str, Cap]:
     if isinstance(outputs, list):
         out["generate"] = Cap(_yes_no("text" in outputs), "catalog")
         out["embed"] = Cap(_yes_no("embeddings" in outputs), "catalog")
+        # Only a yes: a list without "decisions" leaves the native endpoint
+        # to the steps below (most text models have none, but a list of
+        # outputs does not say so).
+        if "decisions" in outputs:
+            out["decide_native"] = Cap(YES, "catalog")
     vision = row.get("vision")
     if isinstance(vision, bool):
         out["vision"] = Cap(_yes_no(vision), "catalog")

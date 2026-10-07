@@ -18,9 +18,10 @@ design, and `grimoire.content_parts` for the message shape.
   is the post-image *setting*, not a statement about the model, which is why
   the capability resolver does not read it;
 - "auto" asks the capability resolver (`inference.capabilities.caps_for`):
-  a preset whose wire protocol takes no image part (z.ai) is "no", then what
-  a test call or the user recorded in the model's facts, then the cached
-  model catalog (`catalog.entry`'s `vision`). No facts, no catalog, no
+  a preset whose wire protocol takes no image part is "no" (none of the
+  image-capable kinds' presets rules it out today), then what a test call or
+  the user recorded in the model's facts, then the cached model catalog
+  (`catalog.entry`'s `vision`). No facts, no catalog, no
   matching row, or a provider that did not say: "unknown".
 
 "unknown" sends nothing. An image part sent to a text-only endpoint is a 400,

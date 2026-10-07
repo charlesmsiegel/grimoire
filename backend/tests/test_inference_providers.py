@@ -115,7 +115,7 @@ def test_capability_sets_are_exact():
     assert _sets(p["claude"]) == (gs, fz(), fz({"vision", "embed", "decide_native", "structured_output", "prefill"}))
     assert _sets(p["openai"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
     for k in ("zai", "zai_coding"):
-        assert _sets(p[k]) == (gs, fz({"structured_output", "prefill"}), fz({"vision", "embed", "decide_native"}))
+        assert _sets(p[k]) == (gs, fz({"vision", "structured_output", "prefill"}), fz({"embed", "decide_native"}))
     for k in ("ollama", "lmstudio", "custom"):
         assert _sets(p[k]) == (fz(), ALL_BUT_DECIDE, fz({"decide_native"}))
 
