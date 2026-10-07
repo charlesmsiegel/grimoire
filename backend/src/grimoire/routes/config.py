@@ -225,7 +225,7 @@ def _setup_state(cfg: dict[str, str]) -> tuple[str, bool]:
 def _connection_ready(conn: dict | None) -> bool:
     if conn is None:
         return False
-    if conn["kind"] == "openrouter":
+    if conn["kind"] in ("openrouter", "anthropic"):
         return bool(conn["api_key"])
     if conn["kind"] == "openai_compatible":
         return bool(conn["base_url"])

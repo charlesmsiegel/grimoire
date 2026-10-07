@@ -530,6 +530,25 @@ def _task_literals() -> dict[str, set[str]]:
     return found
 
 
+def _unclassified(found: dict[str, set[str]]) -> dict[str, list[str]]:
+    """The named tasks neither a route claims nor `routing.NON_ROUTE_TASKS`
+    declares: a task that is metered on purpose outside every route (the
+    connection test call, which runs on the connection it is testing) is
+    named-but-not-routed, not unclassified."""
+    return {task: sorted(where) for task, where in found.items()
+            if task not in routing.TASK_ROUTE and task not in routing.NON_ROUTE_TASKS}
+
+
+def test_a_named_but_not_routed_task_is_classified():
+    assert routing.NON_ROUTE_TASKS == ("model-test",)
+    # Declared apart from every route: a task cannot be both.
+    assert not set(routing.NON_ROUTE_TASKS) & set(routing.TASK_ROUTE)
+    assert routing.route("model-test") is None
+    assert _unclassified({"model-test": {"planted.py:1"}}) == {}
+    assert _unclassified({"no-such-task": {"planted.py:1"}}) == {
+        "no-such-task": ["planted.py:1"]}
+
+
 def test_every_task_the_routes_name_is_classified():
     """A metered generation no route claims is one the routing page cannot reach.
 
@@ -538,8 +557,7 @@ def test_every_task_the_routes_name_is_classified():
     connection through an existing one (a phase of absorb, a director turn) but
     meters under a task of its own.
     """
-    unclassified = {task: sorted(where) for task, where in _task_literals().items()
-                    if task not in routing.TASK_ROUTE}
+    unclassified = _unclassified(_task_literals())
     assert not unclassified, (
         "these task strings are metered or streamed but belong to no route in "
         f"store/routing.py: {unclassified}")

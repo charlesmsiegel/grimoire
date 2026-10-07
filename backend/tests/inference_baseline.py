@@ -47,6 +47,7 @@ from grimoire.llm import effective_model
 from grimoire.main import create_app
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.inference import resolve as inference
 
 FIXTURE = Path(__file__).parent / "fixtures" / "inference_baseline.json"
 
@@ -260,8 +261,24 @@ def _resolved(conn: dict) -> dict:
 
 
 def _task(client: TestClient, task: str, cid: str) -> dict:
+    """What the seam answered for `task` when this baseline was recorded: the
+    resolution, refused only on the terms it refused on then (a missing
+    connection or credential, `_refuse_unusable`).
+
+    Not `require_inference` itself any more. Slice B gave the seam one new,
+    intended refusal -- a primary KNOWN unable to do what its route needs
+    (`_refuse_incapable`) -- and its one change to a recorded state is the
+    `image-description` task on a `claude` connection, which no user could
+    ever reach as recorded: the only route naming that task
+    (`image_draft_prompt`) refused that connection itself before the seam
+    took the check over. That refusal is pinned in `test_inference_resolve.py`
+    and `test_image_description_draft.py`; this keeps reading the slice-A
+    answer so the frozen fixture stays what it was.
+    """
     try:
-        conn = routes.common.require_inference(task, cid).conn
+        resolved = inference.resolve(task, cid)
+        routes.common._refuse_unusable(resolved)
+        conn = routes.common._narrowed(resolved).conn
     except HTTPException as exc:
         return _failure(exc)
     attempts = client.app.state.llm._routes(conn)

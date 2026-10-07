@@ -133,8 +133,9 @@ def _label(conn: dict) -> str:
 #: Connection kinds whose client cannot carry OpenAI-style content PARTS: the
 #: Claude SDK path joins a message's content into one string, so a multimodal
 #: message raises deep inside it. `store.image_drafts.SUPPORTED_KINDS` states
-#: the same rule positively for the ROUTE layer, which refuses such a
-#: connection as the PRIMARY with a message the user can act on;
+#: the same rule positively; the ROUTE layer refuses such a connection as the
+#: PRIMARY with a message the user can act on, through the `claude` provider
+#: preset's `never` (`store.inference.providers`) at the inference seam;
 #: `test_image_description_draft.py` pins the two halves to agree.
 TEXT_ONLY_KINDS = frozenset({"claude"})
 
