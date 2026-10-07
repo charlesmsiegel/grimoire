@@ -138,7 +138,7 @@ export type CapabilityNeed = "generate" | "vision" | "embed" | "decide";
 export type CapabilityName =
   | "generate" | "stream" | "vision" | "embed" | "decide_native"
   | "structured_output" | "prefill";
-/** `adapter` outranks `test`, then `user`, then `catalog`, `preset`, `name`. */
+/** `adapter` outranks a passed `test`, then `user`, then a failed `test` (`unknown`, with its `error`), then `catalog`, `preset`, `name`. */
 export type CapabilitySource =
   | "adapter" | "test" | "user" | "catalog" | "preset" | "name" | "unknown";
 /** A failed test call is `unknown` from source `test`, never `no`, and carries

@@ -49,7 +49,8 @@ class Attempt:
     provider_preset: str = ""
     #: What is known of this model on this provider (`facts.of`).
     facts: dict = field(default_factory=dict)
-    #: Every capability name -> `Cap(value, source)` (`capabilities.resolve_caps`).
+    #: Every capability name -> `Cap(value, source, error)` (`capabilities.resolve_caps`;
+    #: `error` is set only on a failed test, which reads `unknown`).
     capabilities: dict[str, Cap] = field(default_factory=dict)
     #: Effective controls (spec 8): `llm_sampling.effective(conn)` -- what each
     #: preset control sends on this attempt and why. Empty only on an attempt
