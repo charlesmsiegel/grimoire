@@ -15,8 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import NamedTuple
 
-from .. import routing
-from ..sampler_presets import PRESET_CLEAR
+from .. import routing, sampler_presets
 from . import keys
 
 
@@ -32,7 +31,9 @@ class Choice(NamedTuple):
     role: str
     #: "route" (a pin) or "role"; "" when nothing was selected.
     via: str
-    #: Whose setting decided it: "campaign" | "global" | "none".
+    #: "campaign" | "global": the scope whose key held the winning slot (for
+    #: a campaign route that names a role, where that role's slot was found);
+    #: "none" when nothing was selected.
     scope: str
     fallback: Selection | None
 
@@ -103,8 +104,12 @@ def choose(route: routing.Route | None, *, campaign: dict, glob: dict,
            exists: Callable[[str], bool]) -> Choice:
     """Spec 5.1: campaign route, campaign role, global route, global role."""
 
+    # A global-only route has no campaign: nothing of it is read, fallbacks
+    # included.
+    scoped = campaign if route is not None and route.campaign_scoped else {}
+
     def fallback_of(role: str) -> Selection | None:
-        return role_fallback(role, campaign=campaign, glob=glob, exists=exists)
+        return role_fallback(role, campaign=scoped, glob=glob, exists=exists)
 
     if route is None:
         # An unknown task resolves as it always has: the Primary role.
@@ -114,19 +119,18 @@ def choose(route: routing.Route | None, *, campaign: dict, glob: dict,
             return Choice(None, "", "", "none", fallback_of("primary"))
         return Choice(got, supplier, "role", scope, fallback_of("primary"))
 
-    scoped = campaign if route.campaign_scoped else {}
-
-    # 2. Campaign route.
+    # 2. Campaign route. A role it names that resolves to nothing is the
+    # answer too (no selection): the campaign chose, and the choice is empty.
     named = _named_role(scoped, route.key)
     if named:
         got, supplier, scope = role_selection(named, campaign=scoped, glob=glob,
                                               exists=exists)
-        if got is not None:
-            return Choice(got, supplier, "role", scope, fallback_of(named))
-    else:
-        pinned = _pin_slot(scoped, route.key, exists)
-        if pinned is not None:
-            return Choice(pinned, "", "route", "campaign", fallback_of(route.default_role))
+        if got is None:
+            return Choice(None, "", "", "none", fallback_of(named))
+        return Choice(got, supplier, "role", scope, fallback_of(named))
+    pinned = _pin_slot(scoped, route.key, exists)
+    if pinned is not None:
+        return Choice(pinned, "", "route", "campaign", fallback_of(route.default_role))
 
     # 3. Campaign role: the role the route uses at global scope.
     used = _named_role(glob, route.key) or route.default_role
@@ -139,19 +143,21 @@ def choose(route: routing.Route | None, *, campaign: dict, glob: dict,
     if pinned is not None:
         return Choice(pinned, "", "route", "global", fallback_of(route.default_role))
 
-    # 5. Global role.
-    got, supplier, scope = role_selection(used, campaign={}, glob=glob, exists=exists)
+    # 5. Role R by the full walk: campaign R, global R, then what R inherits
+    # (campaign, then global). A campaign that sets only Primary reaches its
+    # Fast-default routes through it.
+    got, supplier, scope = role_selection(used, campaign=scoped, glob=glob, exists=exists)
     if got is None:
         return Choice(None, "", "", "none", fallback_of(used))
     return Choice(got, supplier, "role", scope, fallback_of(used))
 
 
 def _preset_opinion(view: dict, key: str, known: Callable[[str], bool]) -> str:
-    """A preset id, `PRESET_CLEAR`, or "" for no opinion (absent, blank or
+    """A preset id, `sampler_presets.PRESET_CLEAR`, or "" for no opinion (absent, blank or
     dangling)."""
     value = str(view.get(key, "") or "").strip()
-    if value == PRESET_CLEAR:
-        return PRESET_CLEAR
+    if value == sampler_presets.PRESET_CLEAR:
+        return sampler_presets.PRESET_CLEAR
     return value if value and known(value) else ""
 
 
@@ -161,14 +167,14 @@ def preset_for(route: routing.Route | None, selection: Selection | None, *,
     """Spec 5.2: `(preset_id, scope)`. campaign `preset_<route>` -> global ->
     the selection's own preset -> none. `scope` is one of
     `sampler_presets.SCOPES`; "connection" means the selection's own preset.
-    `PRESET_CLEAR` at a scope stops the walk with an empty id."""
+    `sampler_presets.PRESET_CLEAR` at a scope stops the walk with an empty id."""
     if route is not None:
         key = keys.preset_key(route.key)
         scopes = ([("campaign", campaign)] if route.campaign_scoped else []) \
             + [("global", glob)]
         for scope, view in scopes:
             chosen = _preset_opinion(view, key, known)
-            if chosen == PRESET_CLEAR:
+            if chosen == sampler_presets.PRESET_CLEAR:
                 return "", scope
             if chosen:
                 return chosen, scope

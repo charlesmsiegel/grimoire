@@ -95,6 +95,31 @@ def test_the_campaign_role_considered_is_the_one_the_global_route_names():
     assert (got.via, got.role, got.scope) == ("role", "primary", "global")
 
 
+def test_a_campaign_primary_reaches_a_fast_default_route():
+    campaign = {**role("primary", "A"), **fb("primary", "B")}
+    glob = {**role("primary", "D"), **fb("primary", "F")}
+    got = go(SUMMARY, campaign, glob)
+    assert got.selection == sel("A")
+    assert (got.via, got.role, got.scope) == ("role", "primary", "campaign")
+    assert got.fallback == sel("B")
+    # spelling the same choice out changes nothing
+    assert go(SUMMARY, {**campaign, **use("summary", "fast")}, glob) == got
+
+
+def test_a_global_pin_beats_a_campaign_role_reached_only_by_inheritance():
+    got = go(SUMMARY, role("primary", "A"), {**pin("summary", "C"), **role("primary", "D")})
+    assert got.selection == sel("C")
+    assert (got.via, got.scope) == ("route", "global")
+
+
+def test_a_campaign_route_naming_an_empty_role_is_no_selection():
+    glob = {**pin("summary", "C"), **fb("fast", "G")}
+    got = go(SUMMARY, use("summary", "fast"), glob)
+    assert got.selection is None
+    assert (got.via, got.scope) == ("", "none")
+    assert got.fallback == sel("G")
+
+
 # ---- inheritance ----
 
 def test_decision_inherits_fast_then_primary():
@@ -104,7 +129,7 @@ def test_decision_inherits_fast_then_primary():
     r, supplier, scope = cascade.role_selection(
         "decision", campaign={}, glob=role("primary", "D"), exists=ALL)
     assert (r, supplier, scope) == (sel("D"), "primary", "global")
-    # a campaign's own fast beats the global decision it never set
+    # the global decision is reached before the campaign's fast is inherited
     r, supplier, scope = cascade.role_selection(
         "decision", campaign=role("fast", "B"), glob=role("decision", "D"), exists=ALL)
     assert (r, supplier, scope) == (sel("D"), "decision", "global")
@@ -157,9 +182,12 @@ def test_no_primary_anywhere_is_no_selection():
 
 def test_a_global_only_route_ignores_the_campaign():
     campaign = {**pin("tagline", "A"), **role("fast", "B")}
-    got = go(TAGLINE, campaign, role("fast", "D"))
-    assert got.selection == sel("D")
-    assert got.scope == "global"
+    campaign.update(fb("fast", "B"))
+    got = go(TAGLINE, campaign, {**role("primary", "D"), **role("fast", "E")})
+    assert got.selection == sel("E")
+    assert (got.scope, got.fallback) == ("global", None)
+    got = go(TAGLINE, campaign, {**role("fast", "D"), **fb("fast", "G")})
+    assert (got.selection, got.fallback) == (sel("D"), sel("G"))
 
 
 # ---- fallback ----
