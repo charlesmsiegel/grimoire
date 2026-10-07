@@ -458,6 +458,17 @@ Until slice I, each `Attempt` is lowered to today's connection-dict shape so
 `LLMClient` runs unchanged (approach 1, §13). The lowering is a single
 function with its own tests; nothing else builds a connection dict.
 
+**Slice A ships a reduced form** of these two types: `Attempt` carries the
+provider id, model, preset id and the lowered connection dict, and
+`ResolvedInference` carries task, operation, route (and its legacy key), the
+role/via/scope provenance, the standing selection and the attempts. Each
+later slice adds the fields it introduces — B: `provider_kind`, `base_url`,
+`rev`, `billing`, `facts`, `capabilities`, `controls`; C: `retries` and the
+facade consuming the attempts; D: `space_id`; F/H: `decision_mode`. The
+fallback attempt already carries what the facade sends: the primary's
+route-scoped preset when the primary's came from a route (§5.2), and no
+fallback at all when it would be the primary's own provider.
+
 ### 5.5 Fallback
 
 - Fallback comes from the role the route resolves through; a route pinned to an
@@ -480,6 +491,14 @@ provider is 400 (not 404 — scene routes reserve 404 for "scene gone"); a
 provider that cannot send is the same 409. `routed` (whether the override
 differs from the standing route) compares the effective provider + model +
 preset.
+
+Two details are settled in slice C, when the override UI is built, and not
+before: an override's **preset** replaces the route-level preset too (it is
+the most specific choice there is, so it ranks above `preset_<route>`), and a
+**provider-only** override keeps the standing model on the new provider —
+the legacy meaning ("that connection's own model") ends with the legacy
+connection model field. Slice A keeps the legacy meaning and accepts no
+preset field from a request.
 
 ### 5.7 The seam
 
@@ -879,7 +898,17 @@ Embedding optional with one line on what it enables) → Look → World.
 `store/inference/translate.py` is a pure function from the legacy layout to
 the new one. While `inference_format` is absent, the resolver reads the store
 **through it**, so the app is correct before, during and without migration.
-Migration persists that same translation.
+Migration persists that same translation **plus the enrichments in §11.2**
+that a read-time translation deliberately does not make (an unset Claude model
+written as `opus`, derived reasoning presets): those change what a later edit
+starts from, not what resolves today, so the translation keeps the stored
+values verbatim.
+
+**The layout is decided once, globally.** A campaign's own `inference_format`
+is honoured only when `config.md`'s is current; a campaign marker alone never
+switches that campaign to the new keys, so a store migrated by a newer build
+and opened by an older one resolves every campaign from the same frozen
+legacy state.
 
 ### 11.2 Steps (global; once; idempotent; resumable)
 
@@ -993,8 +1022,8 @@ against this spec) and lands green under `make check`. Order is chosen so that
 |---|---|---|
 | **A — Resolver substrate** | `store/inference/` (keys, cascade, translation, resolver), the 15-route registry with `operation`/`default_role`/`requires` (legacy surfaces keep the original 12), `ResolvedInference` + lowering, `require_inference`, per-role fallback chain, `embed_space` resolved through the Embedding role, guard updates. Reads legacy state through the translation; writes nothing new | No. A behaviour-equivalence test pins every task's resolved provider, model, preset and fallback against the baseline resolver |
 | **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources) and the §5.3 capability check, OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
-| **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI; legacy settings UI removed | **Yes** |
-| **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering, the confirm on Embedding-role change | Small |
+| **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI; legacy settings UI removed | **Yes** |
+| **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering, the confirm on Embedding-role change, and one reader of the Embedding role (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag, the Housekeeping chore | Yes |
 | **F — `decide()`** | The contract, `generate(schema=)`, the structured backend, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
 | **G — Continuity decisions** | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision` | — |
