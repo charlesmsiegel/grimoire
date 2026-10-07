@@ -10,7 +10,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from .. import health, llm, llm_sampling, store
+from .. import catalog, health, llm, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference import resolve as inference
@@ -436,6 +436,13 @@ def get_store_conflicts():
 
 
 # ---- llm connections ----
+def _picker_models(conn: dict) -> dict:
+    """A connection detail as a picker reads it: only the models a chat picker
+    may offer. The sidecar keeps every row (embedding-only ones included) for
+    the readers that want them; this is the one place the detail is narrowed."""
+    return {**conn, "models": catalog.listable(conn["models"])}
+
+
 def _with_effective(conn: dict) -> dict:
     """One connection as the client needs it: plus the model it will actually
     run on.
@@ -510,7 +517,7 @@ def post_connection(body: ConnectionCreate):
 @router.get("/llm-connections/{id}")
 def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health)):
     try:
-        conn = _with_effective(store.llm_connections.read_connection(id))
+        conn = _with_effective(_picker_models(store.llm_connections.read_connection(id)))
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
     # The editor shows this beside the key it is about, which is the one place
@@ -554,7 +561,7 @@ def put_connection(id: str, body: ConnectionUpdate,
         # Inside the `try`, where it has always been: a connection deleted
         # between the write and this read is a 404, not a 500.
         fresh = store.llm_connections.read_connection(id)
-        return {**_with_effective(fresh), "health": registry.status(id, fresh["rev"]),
+        return {**_with_effective(_picker_models(fresh)), "health": registry.status(id, fresh["rev"]),
                 "sampling": _connection_sampling(id)}
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
@@ -621,7 +628,7 @@ def post_connection_models_refresh(
         # refreshing the same connection moves the timestamp too.
         store.llm_connections.set_cached_models(id, models, rev, attempt=attempt)
         return {"state": "landed",
-                "result": {"models": models, "fetched_at": fetched_at, "rev": rev}}
+                "result": {"models": catalog.listable(models), "fetched_at": fetched_at, "rev": rev}}
 
     return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "models-refresh",
                           attempt, work)
@@ -646,7 +653,7 @@ async def post_model_catalog(body: CatalogProbe, client: LLMClient = Depends(get
     if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     try:
-        return {"models": await client.list_models(conn)}
+        return {"models": catalog.listable(await client.list_models(conn))}
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
 

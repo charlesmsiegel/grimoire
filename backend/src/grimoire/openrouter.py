@@ -181,7 +181,8 @@ class OpenRouterClient:
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, model, key, usage)])
 
-    async def _get(self, url: str, key: str) -> httpx.Response:
+    async def _get(self, url: str, key: str,
+                   params: dict[str, str] | None = None) -> httpx.Response:
         """One bounded GET against this provider, with its errors normalized.
 
         The catalog and the probe are the same request twice over — a GET, a
@@ -189,10 +190,12 @@ class OpenRouterClient:
         they share it rather than each spelling the funnel out. The status
         mapping is `_status_kind`'s, which is what makes a rejected key read as
         `auth` here exactly as it does mid-generation.
+
+        `params` is the query string, built by httpx rather than by hand.
         """
         try:
             resp = await self._client().get(url, headers=self._headers(key),
-                                            timeout=PROBE_TIMEOUT)
+                                            params=params, timeout=PROBE_TIMEOUT)
         except httpx.HTTPError as exc:
             raise OpenRouterError("network", str(exc)) from exc
         except Exception as exc:  # client/TLS setup and other unexpected failures
@@ -212,7 +215,11 @@ class OpenRouterClient:
         and because a 401 here is a cheaper way to learn a key is wrong than
         the first turn of a scene.
         """
-        resp = await self._get(MODELS_URL, key)
+        # `all`, because the default listing is text-output models only and the
+        # catalog now records what each model outputs: embedding-only and
+        # rerank-only models are there for the Embedding role to find. Pickers
+        # of chat models filter them back out (`catalog.listable`).
+        resp = await self._get(MODELS_URL, key, params={"output_modalities": "all"})
         try:
             body = resp.json()
         except ValueError as exc:

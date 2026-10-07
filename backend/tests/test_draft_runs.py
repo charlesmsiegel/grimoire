@@ -483,6 +483,22 @@ def test_the_model_refresh_is_a_global_run(client):
     assert [r["kind"] for r in client.get("/api/runs").json()["runs"]] == ["models-refresh"]
 
 
+def test_the_refresh_run_result_lists_text_models_while_the_sidecar_keeps_every_row(client):
+    conn = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Endpoint",
+        "base_url": "https://x", "api_key": "sk-x"}).json()["id"]
+    rows = [{"id": "m-chat", "outputs": ["text"]}, {"id": "m-embed", "outputs": ["embeddings"]},
+            {"id": "m-rerank", "outputs": ["rerank"]}, {"id": "m-plain"}]
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeCatalog(models=rows)
+
+    started = client.post(f"/api/llm-connections/{conn}/models/refresh")
+    landed = _wait_state(client, "/api/runs", started.json()["run"]["id"])
+
+    assert [m["id"] for m in landed["result"]["models"]] == ["m-chat", "m-plain"]
+    assert [m["id"] for m in store.llm_connections.cached_models(conn)["models"]] == [
+        "m-chat", "m-embed", "m-rerank", "m-plain"]
+
+
 def test_the_refresh_caches_its_catalog_even_if_nobody_is_listening(client):
     """The point of the refresh is the sidecar it leaves behind, so the write
     happens in the RUN. A client that never comes back still gets it."""

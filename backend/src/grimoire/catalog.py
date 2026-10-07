@@ -39,7 +39,80 @@ def entry(raw: dict) -> dict:
     params = raw.get("supported_parameters")
     if isinstance(params, list):
         out["params"] = [p for p in params if isinstance(p, str)]
+    # What the model PRODUCES, when the provider says (OpenRouter's
+    # `architecture.output_modalities`): "text", "embeddings", "image", ...
+    # Absent means "did not say", which `listable` treats as a text model --
+    # the only kind a provider listed before outputs were recorded.
+    arch = raw.get("architecture")
+    outputs = arch.get("output_modalities") if isinstance(arch, dict) else None
+    if isinstance(outputs, list):
+        out["outputs"] = [o for o in outputs if isinstance(o, str)]
+    if _is_anthropic(raw):
+        _anthropic(raw, out)
     return out
+
+
+def listable(entries: list[dict]) -> list[dict]:
+    """The rows a chat-model picker may offer: those that output text, and
+    those that state no outputs at all.
+
+    The sidecar keeps every row (an Embedding role lists the embedding ones),
+    so this is applied where a picker's list is built, never where the catalog
+    is stored. A row whose `outputs` is not a list is one that states nothing.
+    """
+    return [m for m in entries
+            if not isinstance(m.get("outputs"), list) or "text" in m["outputs"]]
+
+
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _is_anthropic(raw: dict) -> bool:
+    return isinstance(raw.get("capabilities"), dict) and bool(raw.get("display_name"))
+
+
+def _supported(node: object) -> bool | None:
+    """`{"supported": bool}` -> the bool; anything else says nothing (None)."""
+    flag = node.get("supported") if isinstance(node, dict) else None
+    return flag if isinstance(flag, bool) else None
+
+
+def _positive_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _anthropic(raw: dict, out: dict) -> None:
+    """Fold an Anthropic models-API row into `out`, saying only what it states.
+
+    That API names the model (`display_name`), its window (`max_input_tokens`)
+    and a `capabilities` tree; every branch is read defensively because catalog
+    rows are provider data, and a branch that is missing or the wrong shape
+    leaves its key absent rather than guessed. The models it lists produce text.
+    """
+    caps = raw["capabilities"]
+    out["name"] = str(raw["display_name"])
+    out["context"] = _positive_int(raw.get("max_input_tokens"))
+    out["vision"] = _supported(caps.get("image_input"))
+    out["outputs"] = ["text"]
+    features: dict = {}
+    structured = _supported(caps.get("structured_outputs"))
+    if structured is not None:
+        features["structured_output"] = structured
+    thinking = caps.get("thinking")
+    types = thinking.get("types") if isinstance(thinking, dict) else None
+    if isinstance(types, dict):
+        for key, name in (("adaptive", "adaptive_thinking"), ("enabled", "enabled_thinking")):
+            flag = _supported(types.get(key))
+            if flag is not None:
+                features[name] = flag
+    effort = caps.get("effort")
+    if isinstance(effort, dict):
+        features["effort"] = [lvl for lvl in _EFFORT_LEVELS if _supported(effort.get(lvl)) is True]
+    max_tokens = _positive_int(raw.get("max_tokens"))
+    if max_tokens is not None:
+        features["max_tokens"] = max_tokens
+    if features:
+        out["features"] = features
 
 
 def _vision(raw: dict) -> bool | None:

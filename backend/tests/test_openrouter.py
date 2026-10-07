@@ -312,6 +312,32 @@ async def test_list_models_normalizes_and_sorts_by_id():
     ]
 
 
+async def test_list_models_asks_for_every_output_modality():
+    """The default listing is text-output models only; the catalog now records
+    what each model outputs, so it has to see the embedding-only rows too."""
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"data": [
+            {"id": "b/embed", "architecture": {"output_modalities": ["embeddings"]}}]})
+
+    models = await make_client(handler).list_models("")
+    assert seen["params"] == {"output_modalities": "all"}
+    assert models[0]["outputs"] == ["embeddings"]
+
+
+async def test_the_key_probe_sends_no_query():
+    seen = {}
+
+    def handler(request):
+        seen["query"] = request.url.query
+        return httpx.Response(200, json={"data": {}})
+
+    await make_client(handler).probe("sk-or-x")
+    assert seen["query"] == b""
+
+
 async def test_list_models_without_a_key_sends_no_authorization_header():
     """The wizard lists the catalog before a key has been typed (#149), and
     `Bearer ` with nothing after it is a malformed credential rather than an

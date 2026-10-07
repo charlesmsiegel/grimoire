@@ -181,3 +181,94 @@ def test_an_entry_keeps_the_parameters_a_model_takes():
 def test_an_entry_without_a_parameter_list_has_no_params_key():
     """Unknown is not "takes none": the sampler split reads the absence."""
     assert "params" not in catalog.entry({"id": "m", "supported_parameters": None})
+
+
+# ---- output modalities and per-model features (slice B) ----
+TEXT_ROW = {"id": "a/chat", "architecture": {"output_modalities": ["text"]}}
+EMBED_ROW = {"id": "b/embed", "architecture": {"output_modalities": ["embeddings"]}}
+RERANK_ROW = {"id": "c/rerank", "architecture": {"output_modalities": ["rerank"]}}
+
+
+def test_an_openrouter_entry_carries_the_outputs_the_row_states():
+    assert catalog.entry(TEXT_ROW)["outputs"] == ["text"]
+    assert catalog.entry({"id": "m", "architecture": {
+        "output_modalities": ["image", "text"]}})["outputs"] == ["image", "text"]
+
+
+def test_an_entry_whose_row_states_no_outputs_has_none():
+    """Absent stays absent: "the provider did not say" is not "outputs nothing"."""
+    assert "outputs" not in catalog.entry({"id": "m"})
+    assert "outputs" not in catalog.entry({"id": "m", "architecture": {}})
+    assert "outputs" not in catalog.entry({"id": "m", "architecture": {"output_modalities": "text"}})
+    assert "outputs" not in catalog.entry({"id": "m", "architecture": "text"})
+    assert "features" not in catalog.entry(TEXT_ROW)
+
+
+def _anthropic_row(**over):
+    row = {"id": "claude-test-1", "display_name": "Claude Test One",
+           "max_input_tokens": 200000, "max_tokens": 64000,
+           "capabilities": {
+               "image_input": {"supported": True},
+               "structured_outputs": {"supported": True},
+               "thinking": {"types": {"adaptive": {"supported": True},
+                                      "enabled": {"supported": False}}},
+               "effort": {"low": {"supported": True}, "medium": {"supported": True},
+                          "high": {"supported": True}, "xhigh": {"supported": False},
+                          "max": {"supported": True}}}}
+    row.update(over)
+    return row
+
+
+def test_an_anthropic_row_is_read_for_what_it_states():
+    got = catalog.entry(_anthropic_row())
+    assert got["id"] == "claude-test-1"
+    assert got["name"] == "Claude Test One"
+    assert got["context"] == 200000
+    assert got["vision"] is True
+    assert got["outputs"] == ["text"]
+    assert got["features"] == {
+        "structured_output": True, "adaptive_thinking": True, "enabled_thinking": False,
+        "effort": ["low", "medium", "high", "max"], "max_tokens": 64000}
+
+
+def test_an_anthropic_row_maps_only_the_keys_it_states():
+    row = _anthropic_row()
+    row["capabilities"] = {"structured_outputs": {"supported": False},
+                           "thinking": "nope", "effort": None}
+    del row["max_tokens"]
+    got = catalog.entry(row)
+    assert got["features"] == {"structured_output": False}
+    assert got["vision"] is None
+
+
+@pytest.mark.parametrize("caps", [
+    {"image_input": None, "structured_outputs": "x", "thinking": {"types": []},
+     "effort": {"low": 1, "high": {"supported": "yes"}}},
+    {"thinking": {"types": {"adaptive": None, "enabled": {}}}},
+    {},
+])
+def test_a_mangled_anthropic_row_never_raises(caps):
+    got = catalog.entry(_anthropic_row(capabilities=caps, max_tokens="big", max_input_tokens=None))
+    assert got["id"] == "claude-test-1" and got["outputs"] == ["text"]
+    assert got["context"] is None
+    assert got.get("features", {}).get("effort", []) == []
+
+
+def test_listable_keeps_text_and_unstated_rows_only():
+    rows = [catalog.entry(r) for r in (TEXT_ROW, EMBED_ROW, RERANK_ROW, {"id": "d/plain"},
+                                       {"id": "e/img", "architecture": {
+                                           "output_modalities": ["image", "text"]}})]
+    assert [m["id"] for m in catalog.listable(rows)] == ["a/chat", "d/plain", "e/img"]
+
+
+def test_listable_tolerates_a_mangled_outputs_value():
+    assert [m["id"] for m in catalog.listable([{"id": "x", "outputs": "text"}])] == ["x"]
+
+
+MIXED = [catalog.entry(r) for r in (TEXT_ROW, EMBED_ROW, RERANK_ROW)]
+
+
+def test_preview_lists_text_models_only(client):
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeCatalog(models=MIXED)
+    r = client.post("/api/model-catalog", json={"kind": "openrouter"})
+    assert [m["id"] for m in r.json()["models"]] == ["a/chat"]
