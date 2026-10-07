@@ -114,3 +114,42 @@ def test_a_format_two_store_passes_through():
     assert translate.campaign_view(cfg, lookup) is cfg
     assert not translate.is_current({"inference_format": "1"})
     assert not translate.is_current({})
+
+
+def test_a_connections_own_preset_is_stripped():
+    conns = {"p": {"model": "m", "sampler_preset": "  warm  "}}
+    cfg = {"active_connection_id": "p", "fallback_connection_id": "p",
+           "route_dossier": "p"}
+    view = translate.global_view(cfg, conns.get)
+    assert view[keys.role_key("primary", "preset")] == "warm"
+    assert view[keys.fallback_key("fast", "preset")] == "warm"
+    assert view[keys.pin_key("dossier", "preset")] == "warm"
+
+
+def test_a_padded_preset_value_is_stripped_at_both_scopes():
+    g = translate.global_view({"preset_scene": "  warm "}, lookup)
+    assert g[keys.preset_key("scene")] == "warm"
+    assert g[keys.preset_key("speaker")] == "warm"
+    c = translate.campaign_view({"preset_scene": "  warm "}, lookup)
+    assert c[keys.preset_key("scene")] == "warm"
+    assert c[keys.preset_key("speaker")] == "warm"
+
+
+def test_the_clear_sentinel_passes_through_a_campaign_view():
+    c = translate.campaign_view(
+        {"preset_summary": sampler_presets.PRESET_CLEAR}, lookup)
+    assert c[keys.preset_key("summary")] == sampler_presets.PRESET_CLEAR
+    assert c[keys.preset_key("scene_break")] == sampler_presets.PRESET_CLEAR
+
+
+def test_a_dangling_fallback_id_is_kept_raw():
+    view = translate.global_view({"fallback_connection_id": "gone"}, lambda cid: None)
+    for role in keys.GENERATIVE_ROLES:
+        assert view[keys.fallback_key(role, "provider")] == "gone"
+        assert view[keys.fallback_key(role, "model")] == ""
+
+
+def test_a_whitespace_only_fallback_id_is_kept_raw():
+    view = translate.global_view({"fallback_connection_id": "  "}, lookup)
+    for role in keys.GENERATIVE_ROLES:
+        assert view[keys.fallback_key(role, "provider")] == "  "

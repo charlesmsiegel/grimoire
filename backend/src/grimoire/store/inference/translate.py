@@ -39,7 +39,7 @@ def _selection(conn_id: str, conn: Lookup) -> dict[str, str]:
     return {
         "provider": conn_id,
         "model": str(raw.get("model") or ""),
-        "preset": str(raw.get("sampler_preset") or ""),
+        "preset": str(raw.get("sampler_preset") or "").strip(),
     }
 
 
