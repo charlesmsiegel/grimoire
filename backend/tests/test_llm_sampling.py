@@ -170,3 +170,22 @@ def test_a_malformed_catalog_list_costs_its_entries_not_the_split():
                  model_params=["temperature", {"bad": 1}, 3])
     applied, dropped = ls.split(conn)
     assert applied == {"temperature": 0.5} and dropped[0]["param"] == "top_k"
+
+
+def test_anthropic_takes_temperature_or_top_p_not_both():
+    """Models that take sampling at all (Claude before 4.7) refuse the pair
+    with a 400; temperature wins, and top_p says why it was not sent."""
+    conn = {"kind": "anthropic", "model": "claude-sonnet-4-5",
+            "model_features": {"enabled_thinking": True, "adaptive_thinking": False},
+            "sampling": {"preset_id": "p", "preset_name": "Warm", "scope": "connection",
+                         "params": {"temperature": 0.8, "top_p": 0.9, "top_k": 40}}}
+    eff = ls.effective(conn)
+    assert eff["effective"] == {"temperature": 0.8, "top_k": 40, "max_tokens": 16000}
+    assert eff["controls"]["top_p"]["state"] == ls.UNSUPPORTED
+    assert eff["controls"]["top_p"]["why"] == ls.WHY_ANTHROPIC_TOP_P
+    applied, dropped = ls.split(conn)
+    assert "top_p" not in applied
+    assert {"param": "top_p", "reason": ls.WHY_ANTHROPIC_TOP_P} in dropped
+    # top_p alone is still sent.
+    alone = {**conn, "sampling": {**conn["sampling"], "params": {"top_p": 0.9}}}
+    assert ls.effective(alone)["effective"]["top_p"] == 0.9

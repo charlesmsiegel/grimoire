@@ -6,15 +6,20 @@ hands `parse_output` back to the browser as a *preview* — the same shape
 `taglines` and `voice_anchors` already use, and for the same reason: a draft
 nobody has read must never become stored content (#59).
 
-## Only two of the three connection kinds can carry an image
+## Every connection kind but `claude` can carry an image
 
 `llm.LLMClient` passes `messages` straight into the provider payload for
 `openrouter` and `openai_compatible`, so OpenAI-style content parts work with
-no client change at all. `claude_agent` cannot: it joins ``m["content"]`` as a
-string to build its prompt, so a list would raise deep inside the SDK path and
-surface as a 500.
+no client change at all, and the `anthropic` adapter turns each `image_url`
+data URI into the Messages API's own base64 image block. `claude_agent`
+cannot: it joins ``m["content"]`` as a string to build its prompt, so a list
+would raise deep inside the SDK path and surface as a 500.
 
-Hence `SUPPORTED_KINDS`, checked in the route. Widening `claude_agent` to
+Hence the refusal. The route's own kind check is gone: the image route
+`requires` vision, the `claude` provider preset can `never` read images, and
+the inference seam (`routes.common.require_inference`) answers that with
+`UNSUPPORTED` before anything is sent. `SUPPORTED_KINDS` stays the list the
+facade and `post_images` read for the same fact. Widening `claude_agent` to
 multimodal is a real change with its own testing, and it is not this feature's
 to make in passing — a clear refusal is worth more than a crash, and worth much
 more than a silently-wrong prompt.
@@ -36,11 +41,11 @@ from pathlib import Path
 from .. import prompts
 
 #: Connection kinds whose client passes content parts through untouched.
-SUPPORTED_KINDS: tuple[str, ...] = ("openrouter", "openai_compatible")
+SUPPORTED_KINDS: tuple[str, ...] = ("openrouter", "openai_compatible", "anthropic")
 
 #: Shown to the user when the active connection is the one that cannot.
-UNSUPPORTED = ("this connection cannot read images — switch to an OpenRouter "
-               "or OpenAI-compatible connection to draft a description")
+UNSUPPORTED = ("this connection cannot read images — switch to an OpenRouter, "
+               "OpenAI-compatible or Anthropic API connection to draft a description")
 
 #: The media types `assets` will store, by stored extension. Not
 #: `mimetypes.guess_type`: that reads the *name*, and the name here is a stem

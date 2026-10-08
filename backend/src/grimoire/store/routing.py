@@ -147,6 +147,13 @@ def _legacy_routes() -> tuple[Route, ...]:
 #: The twelve routes `ROUTES` held before the split.
 LEGACY_ROUTES: tuple[Route, ...] = _legacy_routes()
 
+#: Tasks a call meters under that NO route claims, on purpose: the connection
+#: test call runs on the connection it is testing, so no routing setting may
+#: move it. `test_routing_guard.py` accepts these as named-but-not-routed; one
+#: may never appear in a route's `tasks` (nor be resolved through the seam,
+#: which would send it to the active connection).
+NON_ROUTE_TASKS: tuple[str, ...] = ("model-test",)
+
 #: task -> route key. Built here rather than written out, so the two cannot drift.
 TASK_ROUTE: dict[str, str] = {task: r.key for r in ROUTES for task in r.tasks}
 

@@ -37,6 +37,7 @@ import {
   type CommitmentSave, type CompositionRow,
   type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
   type ContinuityApplied, type ReconcileResult,
+  type CapabilityNeed, type ControlsPreview, type ModelCapabilities,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
@@ -2746,6 +2747,19 @@ export const api = {
     request<SamplerPreset>("PUT", `/api/sampler-presets/${encodeURIComponent(pid)}`, draft),
   deleteSamplerPreset: (pid: string) =>
     request<{ ok: boolean }>("DELETE", `/api/sampler-presets/${encodeURIComponent(pid)}`),
+  /** A connection's catalog grouped by what a role needs of a model (fits,
+   *  unverified, hidden), embedding models included. `model` narrows it to one
+   *  id. `fresh`: a test call or an override just moved a model between groups. */
+  readConnectionCapabilities: (id: string, need: CapabilityNeed, model?: string) =>
+    request<ModelCapabilities>(
+      "GET",
+      `/api/llm-connections/${encodeSegment(id)}/capabilities?need=${need}` +
+        (model ? `&model=${encodeURIComponent(model)}` : ""),
+      undefined, { fresh: true }),
+  /** What a sampler preset ("" for none) sends on a connection's model ("" for
+   *  its own), control by control. */
+  previewControls: (body: { preset_id: string; provider: string; model: string }) =>
+    request<ControlsPreview>("POST", "/api/inference/controls", body),
   /** A SillyTavern preset file, already parsed by the browser. */
   importSamplerPreset: (body: { name: string; data: unknown; include_max_tokens: boolean }) =>
     request<{ preset: SamplerPreset; report: SamplerImportReport }>(

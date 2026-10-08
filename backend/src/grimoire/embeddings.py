@@ -378,7 +378,8 @@ class EmbeddingsClient:
                     f"point the connection's base URL there")
             if resp.status_code >= 400:
                 raise EmbeddingsError(_status_kind(resp.status_code),
-                                      _extract_error(bytes(raw).decode("utf-8", "replace")))
+                                      _extract_error(bytes(raw).decode("utf-8", "replace")),
+                                      status=resp.status_code)
             try:
                 return json.loads(bytes(raw))
             except (json.JSONDecodeError, UnicodeDecodeError) as exc:

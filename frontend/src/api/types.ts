@@ -28,11 +28,25 @@ export type Model = {
   /** Whether the provider says this model reads images (#377); `null` when it
    *  did not say. Absent on a catalog cached before the field existed. */
   vision?: boolean | null;
+  /** What the model produces ("text", "embeddings", "image", ...), when the
+   *  provider says. Absent means it did not say, and reads as a text model. */
+  outputs?: string[];
+  /** Per-model capabilities a provider states (Anthropic's models API today);
+   *  only the keys the provider stated are present. */
+  features?: {
+    structured_output?: boolean;
+    adaptive_thinking?: boolean;
+    enabled_thinking?: boolean;
+    /** False exactly when this model's thinking cannot be turned off. */
+    disabled_thinking?: boolean;
+    effort?: string[];
+    max_tokens?: number;
+  };
 };
 /** A connection's image override (#377): `""` follows the catalog. */
 export type VisionOverride = "" | "on" | "off";
 
-export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible";
+export type LLMConnectionKind = "openrouter" | "claude" | "openai_compatible" | "anthropic";
 // `model` is what is STORED (what the connection editor edits); `effective_model`
 // is what a generation on it will actually run — they differ for `claude`
 // alone, which substitutes a default for an unset model. Any surface naming
@@ -120,6 +134,55 @@ export type SamplingReport = {
   /** False only for an OpenRouter connection with no cached catalog: it sends
    *  everything and cannot say whether the model takes it. */
   verified: boolean;
+};
+/** What a role needs of a model (`capabilities.NEEDS`). */
+export type CapabilityNeed = "generate" | "vision" | "embed" | "decide";
+export type CapabilityName =
+  | "generate" | "stream" | "vision" | "embed" | "decide_native"
+  | "structured_output" | "prefill";
+/** `adapter` outranks a passed `test`, then `user`, then a failed `test` (`unknown`, with its `error`), then `catalog`, `preset`, `name`. */
+export type CapabilitySource =
+  | "adapter" | "test" | "user" | "catalog" | "preset" | "name" | "unknown";
+/** A failed test call is `unknown` from source `test`, never `no`, and carries
+ *  the provider's `error`; no other answer has one. */
+export type CapabilityValue = {
+  value: "yes" | "no" | "unknown"; source: CapabilitySource; error?: string;
+};
+/** A catalog row in a capability group: the entry, what put it there
+ *  (`reason`) and every capability with the source that said so. */
+export type CapabilityModel = Model & {
+  reason: string;
+  capabilities: Record<CapabilityName, CapabilityValue>;
+};
+/** `GET /api/llm-connections/{id}/capabilities`. Every catalog row, embedding
+ *  models included. When the provider rules the need out for every model,
+ *  `groups` and `hidden` are empty and `reason` says why; otherwise `reason`
+ *  is `null`. */
+export type ModelCapabilities = {
+  /** The provider preset; the sampler preset is `preset_id` elsewhere. */
+  provider_preset: {
+    id: string; label: string; kind: LLMConnectionKind; base_url: string;
+    url_locked: boolean; billing: "metered" | "subscription"; reports_price: boolean;
+    always: CapabilityName[]; possible: CapabilityName[]; never: CapabilityName[];
+  };
+  need: CapabilityNeed;
+  groups: { fits: CapabilityModel[]; unverified: CapabilityModel[] };
+  hidden: { id: string; reason: string }[];
+  reason: string | null;
+};
+/** One control of a sampler preset on a model, and why it is what it is. */
+export type ControlPreview = {
+  state: "supported" | "translated" | "unsupported" | "unknown" | "n/a";
+  /** The wire field it is sent as; `null` when it is not sent. */
+  wire: string | null;
+  why: string; source: CapabilitySource;
+};
+/** `POST /api/inference/controls`: what a sampler preset sends on a provider's
+ *  model — `llm_sampling.effective`. */
+export type ControlsPreview = {
+  requested: Record<string, unknown>;
+  effective: Record<string, unknown>;
+  controls: Record<string, ControlPreview>;
 };
 export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
 /** A connection described but not saved, for the sake of listing its models. */

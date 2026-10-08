@@ -167,6 +167,81 @@ def test_every_surface_refuses_a_claude_connection_the_same_way(client, art):
         assert (r.status_code, "cannot read images" in str(r.json()["detail"])) == (409, True), url
 
 
+def test_all_five_surfaces_refuse_a_claude_connection_with_todays_body(client, art):
+    """The seam's capability check is the only one now (`image_draft_prompt`
+    no longer checks the kind itself), so every surface that drafts through it
+    is held to the exact body it answered before: `{"detail": UNSUPPORTED}`."""
+    wid, cid, vid = art
+    client.put("/api/config", json={"active_connection_id": "claude"})
+    fake = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    made = client.post(f"/api/worlds/{wid}/pcs", json={"name": "Mara"}).json()
+    pid, pvid = made["pc"], made["version"]
+    client.put(f"/api/worlds/{wid}/pcs/{pid}/versions/{pvid}/images/avatar",
+               files={"file": ("a.png", PNG, "image/png")})
+    eid = client.post(f"/api/worlds/{wid}/locations", json={"name": "Harbour"}).json()["id"]
+    client.put(f"/api/worlds/{wid}/locations/{eid}/images/gallery_1",
+               files={"file": ("a.png", PNG, "image/png")})
+    client.put(f"/api/worlds/{wid}/images/coastline",
+               files={"file": ("a.png", PNG, "image/png")})
+    camp = client.post("/api/campaigns", json={"name": "Saltmarch", "world": wid}).json()["id"]
+    client.put(f"/api/campaigns/{camp}/images/coastline",
+               files={"file": ("a.png", PNG, "image/png")})
+    for url in (_url(wid, cid, vid),
+                f"/api/worlds/{wid}/pcs/{pid}/versions/{pvid}/images/avatar/description/draft",
+                f"/api/worlds/{wid}/locations/{eid}/images/gallery_1/description/draft",
+                f"/api/worlds/{wid}/images/coastline/description/draft",
+                f"/api/campaigns/{camp}/images/coastline/description/draft"):
+        r = drafts.post(client, url)
+        assert (r.status_code, r.json()) == (
+            409, {"detail": store.image_drafts.UNSUPPORTED}), url
+    assert fake.calls == 0, "nothing reached the provider"
+
+
+def test_an_openrouter_model_the_catalog_says_is_blind_is_refused(client, art):
+    """The new refusal: a known `no` from the catalog, named for the reader."""
+    wid, cid, vid = art
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    model = store.llm_connections.read_connection_raw("openrouter")["model"]
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": model, "vision": False}], rev)
+    client.app.dependency_overrides[routes.get_llm] = CapturingOpenRouter
+    r = drafts.post(client, _url(wid, cid, vid))
+    assert r.status_code == 409
+    body = r.json()
+    assert body["kind"] == "incapable"
+    # Spec 5.3: the route, the role, the model on its provider, what is
+    # missing, and the remedy.
+    assert body["detail"] == (
+        f"The Image descriptions route runs on the Primary role ({model} on "
+        "OpenRouter), which cannot read images — choose another Primary model "
+        "or pin this route.")
+    assert "descriptions runs" not in body["detail"]
+
+
+def test_images_on_still_drafts_where_the_catalog_says_blind(client, art):
+    """The connection's "Images: on" sent drafts whatever the catalog said
+    before the seam checked capabilities, and still does (a bridge until
+    slice C moves the setting into the model's facts)."""
+    wid, cid, vid = art
+    client.put("/api/llm-connections/openrouter", json={"vision": "on"})
+    conn = store.llm_connections.read_connection_raw("openrouter")
+    assert conn["vision"] == "on"
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": conn["model"], "vision": False}], conn["rev"])
+    fake = CapturingOpenRouter()
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = drafts.post(client, _url(wid, cid, vid))
+    assert r.status_code == 200
+    assert fake.calls == 1
+
+
+def test_the_unsupported_text_names_every_kind_that_can_read_images():
+    text = store.image_drafts.UNSUPPORTED
+    for name in ("OpenRouter", "OpenAI-compatible", "Anthropic API"):
+        assert name in text, name
+
+
 def test_every_connection_kind_is_classified_as_image_capable_or_not():
     """The rule lives in two places for two different callers -- the route
     refuses an unsupported PRIMARY with a message the reader can act on, and
@@ -177,6 +252,12 @@ def test_every_connection_kind_is_classified_as_image_capable_or_not():
     text_only = set(llm.TEXT_ONLY_KINDS)
     assert not supported & text_only
     assert supported | text_only == set(store.llm_connections.KINDS)
+
+
+def test_the_anthropic_api_can_carry_an_image():
+    """Its adapter turns an `image_url` data URI into the API's own base64
+    image block, so it is classified with the kinds that pass parts on."""
+    assert "anthropic" in store.image_drafts.SUPPORTED_KINDS
 
 
 def test_an_oversized_image_is_refused_before_its_bytes_are_read(tmp_path, monkeypatch):

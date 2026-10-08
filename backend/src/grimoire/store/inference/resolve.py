@@ -17,14 +17,23 @@ model, differs from the stored one only for `claude`, and `model_params`
 consults the catalog for OpenRouter alone. The two facade rules the fallback
 attempt mirrors (`llm.fallback_sampling`, `llm._same_route`) are restated here,
 with `ROUTE_SCOPES`, and the tests hold them to the facade's own answers.
+
+Each attempt also carries what slice B knows of it -- its provider's kind, URL,
+rev, billing and preset, its model's facts, its effective controls
+(`llm_sampling.effective` over the lowered connection), and every capability
+with its source (`capabilities.resolve_caps`, fed the catalog row the lowering
+already read, so a sidecar is read once per attempt) -- and the resolution says
+which of the route's needs the primary and the fallback are known not to meet
+(`missing`, `fallback_missing`). Nothing here refuses on them: the seam does.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
 
+from ... import llm_sampling
 from .. import campaigns, config, llm_connections, locks, routing, sampler_presets
-from . import cascade, translate
+from . import capabilities, cascade, facts, providers, translate
 from .cascade import Selection
 from .resolved import Attempt, ResolvedInference
 
@@ -53,9 +62,27 @@ def problem(conn: dict) -> str | None:
     """
     if conn["kind"] == "openrouter" and not conn.get("api_key"):
         return "OpenRouter key not set"
+    if conn["kind"] == "anthropic" and not conn.get("api_key"):
+        return "Anthropic API key not set"
     if conn["kind"] == "openai_compatible" and not conn.get("base_url"):
         return "Endpoint base URL not set"
     return None
+
+
+def _catalog_row(conn: dict, model: str) -> dict | None:
+    """`model`'s row in `conn`'s cached catalog, or None when there is none
+    (`llm_connections.cached_row`, which never raises)."""
+    return llm_connections.cached_row(conn.get("id", ""), model)
+
+
+def _params_of(conn: dict, row: dict | None) -> list[str] | None:
+    """`model_params` from an already-read catalog row (see `model_params`)."""
+    if conn.get("kind", "openrouter") != "openrouter" or row is None:
+        return None
+    params = row.get("params")
+    if not isinstance(params, list):
+        return None
+    return [x for x in params if isinstance(x, str)]
 
 
 def model_params(conn: dict) -> list[str] | None:
@@ -67,33 +94,15 @@ def model_params(conn: dict) -> list[str] | None:
     that forwards a parameter a model does not take for the model to ignore,
     which is the silent drop sampler presets exist to report. Read from the
     sidecar the model picker already fills, so this costs one small file and
-    never a request; no cached catalog means `llm_sampling` says "unverified"
-    rather than guessing.
+    never a request; no cached catalog (or a malformed one) means
+    `llm_sampling` says "unverified" rather than guessing.
 
     The model looked up is the stored one: OpenRouter's effective model IS its
     stored model (`llm.effective_model` substitutes only for `claude`).
     """
     if conn.get("kind", "openrouter") != "openrouter" or not conn.get("id"):
         return None
-    try:
-        models = llm_connections.cached_models(conn["id"])["models"]
-    except (OSError, KeyError, TypeError, ValueError, AttributeError):
-        # Belt and braces: `cached_models` validates the sidecar's shape, and
-        # this runs on every OpenRouter turn, so whatever slips past that costs
-        # the catalog, never the turn.
-        return None
-    # The sidecar is a file a sync or a hand can mangle: a malformed one reads
-    # as "no catalog" (unverified), never as an exception that fails the turn.
-    if not isinstance(models, list):
-        return None
-    model = conn.get("model", "")
-    for entry in models:
-        if isinstance(entry, dict) and entry.get("id") == model:
-            params = entry.get("params")
-            if not isinstance(params, list):
-                return None
-            return [x for x in params if isinstance(x, str)]
-    return None
+    return _params_of(conn, _catalog_row(conn, conn.get("model", "")))
 
 
 def campaign_meta(cid: str) -> dict:
@@ -166,22 +175,102 @@ def _sampling(choose: Callable[[Callable[[str], bool]], tuple[str, str]],
             "params": dict(preset["params"]) if preset else {}}
 
 
-def _lower(raw: dict, sampling: dict, model: str | None = None) -> dict:
-    """`raw` as the facade reads it: `sampling` attached, `model` set (when
-    given), and `model_params` recomputed for that model.
+def _lowered(raw: dict, sampling: dict,
+             model: str | None = None) -> tuple[dict, dict | None]:
+    """`raw` as the facade reads it, and the catalog row that was read for it:
+    `sampling` attached, `model` set (when given), and `model_params` and
+    `model_features` recomputed for that model.
 
     A copy, never a mutation: `raw` can be the dict the store handed back. Any
-    `model_params` already on it is dropped first -- it may belong to another
-    model, and inheriting it would report a parameter the new model was never
-    checked for as verified, in either direction."""
-    out = {k: v for k, v in raw.items() if k != "model_params"}
+    `model_params` / `model_features` already on it is dropped first -- it may
+    belong to another model, and inheriting it would report a parameter the
+    new model was never checked for as verified, in either direction."""
+    out = {k: v for k, v in raw.items() if k not in ("model_params", "model_features")}
     if model is not None:
         out["model"] = model
     out["sampling"] = sampling
-    params = model_params(out)
+    row = _catalog_row(out, str(out.get("model", "") or ""))
+    params = _params_of(out, row)
     if params is not None:
         out["model_params"] = params
-    return out
+    features = row.get("features") if row is not None else None
+    if isinstance(features, dict):
+        out["model_features"] = dict(features)
+    return out, row
+
+
+def lower(raw: dict, sampling: dict, model: str | None = None) -> dict:
+    """`_lowered`'s connection dict alone: `raw` as the facade reads it, with
+    `sampling` attached and `model` (when given) and its catalog facts set.
+    Public for `controls.preview`, which lowers a preset the same way."""
+    return _lowered(raw, sampling, model)[0]
+
+
+def preset_sampling(preset_id: str, scope: str = "connection") -> dict:
+    """The `sampling` block for the sampler preset `preset_id` at `scope` -- the
+    shape `_sampling` gives an attempt; no preset ("") is provider defaults.
+    Never raises: an unreadable preset is no preset."""
+    if not preset_id:
+        return dict(NO_SAMPLING)
+    return _sampling(lambda _known: (preset_id, scope), _preset_lookup())
+
+
+def _model_facts(provider_id: str, model: str, rev: str) -> dict:
+    """`facts.of`, never raising: unreadable facts say nothing."""
+    try:
+        return facts.of(provider_id, model, rev)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+
+
+def _attempt(provider_id: str, model: str, sampling: dict, raw: dict) -> Attempt:
+    """One attempt: the lowered connection, and what is known of it.
+
+    Capabilities are resolved from the catalog row the lowering read and the
+    model's facts, once -- never by `capabilities.caps_for`, which would read
+    the same sidecar again."""
+    conn, row = _lowered(raw, sampling, model)
+    preset = providers.infer(conn)
+    rev = conn.get("rev", "")
+    rev = rev if isinstance(rev, str) else ""
+    model_facts = _model_facts(provider_id, model, rev)
+    base_url = conn.get("base_url", "")
+    return Attempt(
+        provider_id, model, sampling["preset_id"], conn,
+        provider_kind=str(conn.get("kind", "") or ""),
+        base_url=(base_url if isinstance(base_url, str) and base_url else preset.base_url),
+        rev=rev, billing=providers.billing(conn), provider_preset=preset.id,
+        facts=model_facts,
+        capabilities=capabilities.resolve_caps(preset, model, catalog_row=row,
+                                               facts=model_facts),
+        controls=llm_sampling.effective(conn))
+
+
+#: The capability an operation needs of itself. `decide` is not an operation
+#: the facade runs yet: a decide route still generates.
+OPERATION_CAPABILITY: dict[str, str] = {"generate": "generate", "embed": "embed",
+                                        "decide": "generate"}
+
+
+def _needs(route: routing.Route | None, operation: str) -> frozenset[str]:
+    """What an attempt must be able to do for this route and operation."""
+    own = OPERATION_CAPABILITY.get(operation, "generate")
+    return frozenset({own, *(route.requires if route is not None else ())})
+
+
+#: The sources whose `no` is a guess rather than knowledge: the name rule
+#: reads "embed" in an id, and a chat model can carry that word. Such a `no`
+#: hides a model in a picker (`capabilities.group_for`) but is never missing,
+#: so the seam never refuses on it.
+_GUESSES = frozenset({"name"})
+
+
+def _missing(attempt: Attempt, needs: frozenset[str]) -> tuple[str, ...]:
+    """The needs `attempt` is known (`no`) not to meet, in `capabilities.NAMES`
+    order. `unknown` is never missing, and neither is a guess (`_GUESSES`)."""
+    known_no = {cap for cap, found in attempt.capabilities.items()
+                if found.value == capabilities.NO and found.source not in _GUESSES}
+    return tuple(cap for cap in capabilities.NAMES if cap in needs and cap in known_no)
 
 
 def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple[str, str]]:
@@ -196,7 +285,7 @@ def own_sampling(conn: dict) -> dict:
     route: the standing fallback, and the connection list's display."""
     own = Selection(str(conn.get("id", "") or ""), str(conn.get("model", "") or ""),
                     str(conn.get("sampler_preset", "") or ""))
-    return _lower(conn, _sampling(_own_preset(own), _preset_lookup()))
+    return lower(conn, _sampling(_own_preset(own), _preset_lookup()))
 
 
 # ---- the resolver ----
@@ -275,8 +364,9 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         sampling = _sampling(
             lambda known: cascade.preset_for(route, primary, campaign=campaign,
                                              glob=glob, known=known), presets)
-        conn = _lower(raw, sampling, primary.model)
-        attempts.append(Attempt(primary.provider, primary.model, sampling["preset_id"], conn))
+        first = _attempt(primary.provider, primary.model, sampling, raw)
+        conn = first.conn
+        attempts.append(first)
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
         if (fallback is not None and fb_raw is not None and problem(fb_raw) is None
@@ -285,16 +375,18 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
             fb_sampling = ({**sampling, "params": dict(sampling["params"])}
                            if sampling["scope"] in ROUTE_SCOPES
                            else _sampling(_own_preset(fallback), presets))
-            attempts.append(Attempt(fallback.provider, fallback.model,
-                                    fb_sampling["preset_id"],
-                                    _lower(fb_raw, fb_sampling, fallback.model)))
+            attempts.append(_attempt(fallback.provider, fallback.model, fb_sampling,
+                                     fb_raw))
 
+    needs = _needs(route, operation)
     return ResolvedInference(
         task=task, operation=operation,
         route=route.key if route is not None else "",
         legacy_route=routing.legacy_key(route) if route is not None else "",
         role=choice.role, via=choice.via, scope=choice.scope,
-        attempts=tuple(attempts), standing=choice.selection)
+        attempts=tuple(attempts), standing=choice.selection,
+        missing=_missing(attempts[0], needs) if attempts else (),
+        fallback_missing=_missing(attempts[1], needs) if len(attempts) > 1 else ())
 
 
 def _same_provider(primary: dict, fallback: dict) -> bool:

@@ -5,14 +5,18 @@ from."""
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import datetime
+from typing import Literal, NamedTuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel
 
-from .. import health, llm, llm_sampling, store
+from .. import catalog, embeddings, health, llm, llm_errors, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
+from ..store.inference import capabilities, controls
 from ..store.inference import resolve as inference
 from . import runs
 from .common import (
@@ -33,6 +37,8 @@ from .models import (
     ConnectionCreate,
     ConnectionUpdate,
     DataDirUpdate,
+    ModelTestPreview,
+    ModelTestRun,
     PromptLayoutUpdate,
     ResponseSettings,
     RoutingUpdate,
@@ -225,7 +231,7 @@ def _setup_state(cfg: dict[str, str]) -> tuple[str, bool]:
 def _connection_ready(conn: dict | None) -> bool:
     if conn is None:
         return False
-    if conn["kind"] == "openrouter":
+    if conn["kind"] in ("openrouter", "anthropic"):
         return bool(conn["api_key"])
     if conn["kind"] == "openai_compatible":
         return bool(conn["base_url"])
@@ -436,6 +442,13 @@ def get_store_conflicts():
 
 
 # ---- llm connections ----
+def _picker_models(conn: dict) -> dict:
+    """A connection detail as a picker reads it: only the models a chat picker
+    may offer. The sidecar keeps every row (embedding-only ones included) for
+    the readers that want them; this is the one place the detail is narrowed."""
+    return {**conn, "models": catalog.listable(conn["models"])}
+
+
 def _with_effective(conn: dict) -> dict:
     """One connection as the client needs it: plus the model it will actually
     run on.
@@ -510,7 +523,7 @@ def post_connection(body: ConnectionCreate):
 @router.get("/llm-connections/{id}")
 def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health)):
     try:
-        conn = _with_effective(store.llm_connections.read_connection(id))
+        conn = _with_effective(_picker_models(store.llm_connections.read_connection(id)))
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
     # The editor shows this beside the key it is about, which is the one place
@@ -554,7 +567,7 @@ def put_connection(id: str, body: ConnectionUpdate,
         # Inside the `try`, where it has always been: a connection deleted
         # between the write and this read is a 404, not a 500.
         fresh = store.llm_connections.read_connection(id)
-        return {**_with_effective(fresh), "health": registry.status(id, fresh["rev"]),
+        return {**_with_effective(_picker_models(fresh)), "health": registry.status(id, fresh["rev"]),
                 "sampling": _connection_sampling(id)}
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
@@ -621,7 +634,7 @@ def post_connection_models_refresh(
         # refreshing the same connection moves the timestamp too.
         store.llm_connections.set_cached_models(id, models, rev, attempt=attempt)
         return {"state": "landed",
-                "result": {"models": models, "fetched_at": fetched_at, "rev": rev}}
+                "result": {"models": catalog.listable(models), "fetched_at": fetched_at, "rev": rev}}
 
     return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "models-refresh",
                           attempt, work)
@@ -646,7 +659,7 @@ async def post_model_catalog(body: CatalogProbe, client: LLMClient = Depends(get
     if conn["kind"] not in llm.LISTABLE_KINDS:
         raise HTTPException(status_code=400, detail="model listing not supported for this connection kind")
     try:
-        return {"models": await client.list_models(conn)}
+        return {"models": catalog.listable(await client.list_models(conn))}
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
 
@@ -709,6 +722,277 @@ def _health_body(status: dict) -> dict:
     """
     return {"ok": status["state"] == health.OK, "kind": status["kind"],
             "detail": status["detail"], "checked_at": status["at"]}
+
+
+# ---- the model test call (spec 6.4) ----
+#: The 400 a test without `confirm: true` gets, before anything is sent or
+#: metered. The standing rule is "always ask before spending money", and this
+#: is the one route whose whole purpose is to spend some.
+TEST_UNCONFIRMED = ("This test sends a request to the provider and may cost money — "
+                    "confirm to run it.")
+
+#: The client the `embed` probe goes through: its own instance, as each store
+#: module that embeds has one (`semantic._CLIENT`), so a test can put one over
+#: a `MockTransport` in its place.
+_EMBEDDINGS = embeddings.EmbeddingsClient()
+
+
+def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dict, str, tuple[str, ...]]:
+    """`(connection, model, capabilities)` for a test or its preview, or the
+    refusal that costs nothing to make -- each before any request is built.
+
+    Shared, so the preview can never show a confirmation for a test the run
+    would refuse: an unknown connection (404); no capabilities, or one with no
+    probe (400); one the provider's preset rules out (`never`, 400 -- the wire
+    protocol cannot, so a test would be money spent learning what is already
+    known); no model (400); and a connection that cannot send at all (the
+    seam's 409 `missing_key`)."""
+    try:
+        raw = store.llm_connections.read_connection_raw(conn_id)
+    except store.llm_connections.ConnectionNotFound as exc:
+        raise HTTPException(status_code=404, detail="connection not found") from exc
+    probes = store.inference.probes
+    if not body.capabilities:
+        raise HTTPException(status_code=400, detail="name at least one capability to test")
+    untestable = sorted({c for c in body.capabilities if c not in probes.PROBES})
+    if untestable:
+        raise HTTPException(status_code=400, detail=(
+            f"there is no test for {', '.join(untestable)}; testable: "
+            f"{', '.join(probes.ordered(probes.PROBES))}"))
+    caps = probes.ordered(body.capabilities)
+    preset = store.inference.providers.infer(raw)
+    ruled_out = [c for c in caps if c in preset.never]
+    if ruled_out:
+        raise HTTPException(status_code=400, detail=(
+            f"{preset.label} cannot do {', '.join(ruled_out)} on any model, so there "
+            "is nothing to test"))
+    model = body.model.strip() or llm.effective_model(raw)
+    if not model:
+        raise HTTPException(status_code=400, detail="name a model to test")
+    if len(model) > store.alternates.MAX_MODEL_CHARS:
+        raise HTTPException(status_code=400, detail="model id is too long")
+    problem = inference.problem(raw)
+    if problem is not None:
+        raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
+    return raw, model, caps
+
+
+def _embed_endpoint(raw: dict) -> str:
+    """Where the `embed` probe goes: the endpoint the Embedding path resolves
+    for this provider -- OpenRouter's fixed URL (its adapter ignores a stored
+    one), else the connection's own base URL. The kinds with no embeddings
+    route never get here: their preset's `never` refused the test. On a
+    legacy-format store this can record `embed: yes` for an OpenRouter model
+    that the Embedding role will still not use (OpenRouter embeddings are
+    new-layout only); the explicit, confirmed test call is allowed to probe it
+    anyway."""
+    if raw.get("kind", "openrouter") == "openrouter":
+        return store.inference.providers.PRESETS["openrouter"].base_url
+    return str(raw.get("base_url") or "")
+
+
+async def _embed_probe(raw: dict, model: str) -> dict:
+    """The `embed` probe: one fixed string, once, metered under `model-test`.
+
+    The holder is stamped as `llm._stamp` stamps a chat attempt, which is what
+    makes the meter file a row at all (an empty holder means "never sent") --
+    and it names no token counts: the embeddings client reports none, and the
+    ledger says so by leaving them absent until slice D meters embeddings
+    (ruling 14)."""
+    probes = store.inference.probes
+    with store.usage.meter("model-test") as m:
+        m.usage.update({"model": model, "connection": raw.get("name") or raw["id"],
+                        "provider": raw.get("kind", "openrouter"), "attempts": 1})
+        # Off the loop: the embeddings client is synchronous by design.
+        vectors = await asyncio.to_thread(
+            _EMBEDDINGS.embed, [probes.EMBED_TEXT], model, raw.get("api_key", ""),
+            _embed_endpoint(raw))
+    return {"ok": True, "dims": len(vectors[0])}
+
+
+#: The failure kinds that answer for every probe still to be sent: the
+#: credential was refused or is missing, the SDK is not installed, or the
+#: provider could not be reached in time. Whatever was asked next would fail
+#: the same way and say no more, so the rest are not sent (`_halts`).
+_HALTING_KINDS = frozenset({"auth", "missing_key", "missing_dependency", "network", "timeout"})
+
+#: The HTTP statuses that do the same: out of credits (402) and a request the
+#: server timed out (408). Every 5xx joins them in `_halts` -- the provider
+#: failing, which no other probe sent to it would get past.
+_HALTING_STATUSES = frozenset({402, 408})
+
+
+def _records(exc: LLMError) -> bool:
+    """Whether a probe's failure is a verdict on the MODEL, and may be filed.
+
+    Only a provider refusing THIS request (`llm.REJECTED_STATUSES`, the set
+    `_resilient` already reads as "refused what it was sent") says that. A
+    filed failure is shown on the model's row as unverified with its error
+    (`capabilities._stated`), outranking the catalog, so everything else is
+    reported to whoever asked and never filed: no status at all (a transport failure, a malformed stream), a 402,
+    a 408, a 429, a 5xx. The chat adapters map most of those to
+    `bad_response`, so the kind cannot make this call. Nor is an account
+    limit (`llm_errors.account_limit`): a spend limit the user set answers a
+    400, which is otherwise exactly the status a refusal has.
+
+    Nor is a refusal of the probe's OWN setting. `llm._preset_refusal` reads a
+    400 naming a parameter the request sent -- here the reply cap, the only
+    one a probe sends -- as that parameter refused, and raises it as
+    `llm.PresetRefusalError`; a provider that refused the cap has said nothing
+    about whether the model can do what was asked."""
+    return (exc.status in llm.REJECTED_STATUSES and not isinstance(exc, llm.PresetRefusalError)
+            and not llm_errors.account_limit(exc))
+
+
+def _halts(exc: LLMError) -> bool:
+    """Whether a failure answers for every probe after it, so none is sent
+    (`_HALTING_KINDS`, `_HALTING_STATUSES`, any 5xx, and an account limit --
+    `llm_errors.account_limit`, the same test `_records` reads: a spend limit
+    every further probe would hit and pay nothing to learn). A refusal, a
+    refused cap, a rate limit or an unexplained bad response is this probe's
+    own answer, and the next probe asks a different question."""
+    return (exc.kind in _HALTING_KINDS or exc.status in _HALTING_STATUSES
+            or (exc.status or 0) >= 500 or llm_errors.account_limit(exc))
+
+
+class _Outcome(NamedTuple):
+    #: What the run reports for the probe.
+    result: dict
+    #: Whether `result` is a verdict to file (`_records`).
+    records: bool
+    #: Whether no further probe is sent (`_halts`).
+    halts: bool
+
+
+async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str) -> _Outcome:
+    """One probe's outcome. Its result is `{"ok": True}` (plus `dims` for
+    embed), or `{"ok": False, "kind", "error"}` with the error scrubbed of any
+    picture and of the connection's key. One attempt, never retried, never
+    fallen back. A success is always a verdict; a failure only when `_records`
+    says so."""
+    probes = store.inference.probes
+    try:
+        if probes.PROBES[cap].operation == "embed":
+            return _Outcome(await _embed_probe(raw, model), True, False)
+        with store.usage.meter("model-test") as m:
+            # Completed is accepted; the text is not read.
+            await _bounded_call(client.single(probes.messages(cap), conn, m.usage))
+    except LLMError as exc:
+        return _Outcome({"ok": False, "kind": exc.kind,
+                         "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},
+                        _records(exc), _halts(exc))
+    return _Outcome({"ok": True}, True, False)
+
+
+async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict, conn: dict,
+                     model: str) -> tuple[dict[str, dict], dict[str, dict]]:
+    """`(results, verdicts)` for `caps`, probed in order.
+
+    After a failure that answers for every probe (`_halts`) the rest are NOT
+    sent -- each would be a request, and maybe money, spent learning what the
+    first already said. They are reported as `not_sent`, naming that failure,
+    and nothing is filed for them."""
+    results: dict[str, dict] = {}
+    verdicts: dict[str, dict] = {}
+    stopped: str | None = None
+    for cap in caps:
+        if stopped is not None:
+            results[cap] = {"ok": False, "kind": "not_sent", "error": f"not sent: {stopped}"}
+            continue
+        outcome = await _probe(client, cap, raw, conn, model)
+        results[cap] = outcome.result
+        if outcome.records:
+            verdicts[cap] = {k: outcome.result[k] for k in ("ok", "error", "dims")
+                             if k in outcome.result}
+        if outcome.halts:
+            stopped = f"the {cap} probe failed first ({outcome.result['error']})"
+    return results, verdicts
+
+
+def _record_verdicts(conn_id: str, model: str, rev: str, verdicts: dict[str, dict]) -> bool:
+    """File `verdicts` under the `rev` the test STARTED on, unless that rev
+    has moved or the connection is gone: an edit that landed while the probes
+    were out describes a different endpoint, and its verdict would replace
+    whatever the new rev already holds. That compare-and-write is
+    `facts.record_verified`'s, under the lock every connection write holds --
+    a rev read here, before it, would leave an edit room to land between.
+    `verdicts` holds only what `_records` let through. Whether anything was
+    filed is the answer."""
+    if not verdicts:
+        return False
+    try:
+        return store.inference.facts.record_verified(conn_id, model, rev, verdicts)
+    except (store.locks.StoreBusy, OSError, UnicodeDecodeError):
+        return False
+
+
+@router.post("/llm-connections/{conn_id}/test/preview")
+def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
+    """What `POST .../test` would send, and roughly what it would cost. Sends
+    nothing, meters nothing, starts no run.
+
+    `estimated_cost_usd` is the probes' stated token guesses
+    (`probes.PROBES`) at the model's cached catalog prices, plus the vision
+    probe's one image at the row's per-image price, and null when the catalog
+    states no price the estimate needs -- "a price nobody reported is never
+    rendered as zero"; the confirmation then says the cost is unknown."""
+    raw, model, caps = _test_plan(conn_id, body)
+    probes = store.inference.probes
+    capped = "max_tokens" in llm_sampling.sent_names(inference.lower(raw, probes.sampling(), model))
+    return {"provider": raw.get("name") or conn_id, "provider_id": conn_id, "model": model,
+            "sends": [{"capability": c, "description": probes.describe(c, capped)}
+                      for c in caps],
+            # A missing or mangled sidecar is "no price known" (`cached_row`
+            # never raises), not a failed preview.
+            "estimated_cost_usd": probes.estimate_usd(
+                store.llm_connections.cached_row(conn_id, model), caps)}
+
+
+@router.post("/llm-connections/{conn_id}/test", status_code=202)
+def post_connection_test(
+    conn_id: str, body: ModelTestRun, request: Request, client: LLMClient = Depends(get_llm),
+    x_grimoire_attempt: str | None = Header(default=None),
+):
+    """Test what `model` can do on this connection: one probe per capability.
+
+    **Refused unless `confirm` is JSON `true`**, before anything is sent or
+    metered (`TEST_UNCONFIRMED`) -- the preview is how a client learns what it
+    is confirming. Every other refusal is `_test_plan`'s and comes first, so a
+    confirmed request for something untestable is still told why.
+
+    A `global` draft, the model-catalog refresh's twin: what it leaves behind
+    is stored beside the connection, which no world or campaign owns, and a
+    client that never comes back still gets it. Each probe is ONE attempt
+    (`LLMClient.single`): no retry, no fallback, no text-only re-send, each
+    metered under `model-test` with no campaign. The chat probes are sent
+    through the connection as the resolver lowers it, carrying the probe's
+    reply cap and no preset of the connection's own.
+
+    Only what the model answered is a verdict: a success, or the provider
+    refusing the probe itself (`_records`); an outage, a rate limit or a
+    refused key is reported and not filed, and stops the probes after it when
+    it answers for them too (`_halts`). The verdicts are filed in the run's
+    terminal step under the `rev` captured here, unless it moved meanwhile
+    (`_record_verdicts`).
+    """
+    raw, model, caps = _test_plan(conn_id, body)
+    if body.confirm is not True:
+        raise HTTPException(status_code=400, detail=TEST_UNCONFIRMED)
+    rev = raw["rev"]
+    conn = inference.lower(raw, store.inference.probes.sampling(), model)
+
+    async def work():
+        results, verdicts = await _probe_all(client, caps, raw, conn, model)
+        # Off the loop, as `_embed_probe` sends: filing reads the connection
+        # and writes the facts file under its lock, and the lifespan loop is
+        # the one every other run streams through.
+        recorded = await asyncio.to_thread(_record_verdicts, conn_id, model, rev, verdicts)
+        return {"state": "landed",
+                "result": {"provider": conn_id, "model": model, "rev": rev,
+                           "results": results, "recorded": recorded}}
+
+    return runs.run_draft(request.app, runs.GLOBAL_SUBJECT, "model-test",
+                          x_grimoire_attempt, work)
 
 
 # ---- styles ----
@@ -866,6 +1150,49 @@ def delete_sampler_preset(pid: str):
     except store.sampler_presets.PresetNotFoundError:
         raise HTTPException(status_code=404, detail="sampler preset not found") from None
     return {"ok": True}
+
+
+# ---- inference read APIs: what a model can do, and what a preset sends ----
+class InferenceControlsBody(BaseModel):
+    """A sampler preset previewed on a provider's model. Defined beside its one
+    route, not in `models.py`, so this block stays in one place. `preset_id` ""
+    is no preset (provider defaults); `model` "" is the provider's own."""
+
+    preset_id: str = ""
+    provider: str
+    model: str = ""
+
+
+@router.get("/llm-connections/{conn_id}/capabilities")
+def get_connection_capabilities(
+        conn_id: str, need: Literal["generate", "vision", "embed", "decide"] = "generate",
+        model: str = ""):
+    """The connection's models grouped for a role that needs `need`
+    (`capabilities.grouped`): every catalog row, embedding-only ones included
+    (the Embedding picker lists those), so this is not narrowed by
+    `catalog.listable`. Calls no provider and reserves no run.
+
+    `conn_id`, never `cid`: `cid` is a campaign id in every other path, and
+    the activity middleware reads it as one."""
+    try:
+        conn = store.llm_connections.read_connection_raw(conn_id)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+    return capabilities.grouped(conn, need, model or None)
+
+
+@router.post("/inference/controls")
+def post_inference_controls(body: InferenceControlsBody):
+    """What sampler preset `preset_id` sends on `provider` serving `model`:
+    `{requested, effective, controls}` (`controls.preview`), the same answer an
+    attempt resolved for that provider, model and preset carries."""
+    try:
+        conn = store.llm_connections.read_connection_raw(body.provider)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+    if body.preset_id and store.sampler_presets.read_preset(body.preset_id) is None:
+        raise HTTPException(status_code=404, detail="sampler preset not found")
+    return controls.preview(body.preset_id, conn, body.model)
 
 
 # ---- the entity kinds an import may route a row to (#138) ----

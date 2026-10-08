@@ -8,10 +8,12 @@ the embedding provider's connection is read.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
+from grimoire.embeddings import EmbeddingsClient
 from grimoire.store import config, embed_space, llm_connections
-from grimoire.store.inference import translate
+from grimoire.store.inference import providers, translate
 
 
 @pytest.fixture(autouse=True)
@@ -61,3 +63,51 @@ def test_other_connections_are_never_read(monkeypatch):
     embed_space.resolve({"inference_format": "2", "role_embedding_provider": conn,
                          "role_embedding_model": "m", "role_primary_provider": "spare"})
     assert seen == [conn]
+
+
+# --- OpenRouter serves the Embedding role, in the current layout only --------
+
+def _router(key: str = "sk-or-fake") -> str:
+    return llm_connections.create_connection(
+        "openrouter", "Router", api_key=key, model="", post_process="none")
+
+
+def _current(conn: str) -> dict:
+    return {"inference_format": "2", "role_embedding_provider": conn,
+            "role_embedding_model": "vec-small"}
+
+
+def test_openrouter_embeds_in_a_current_config():
+    conn = _router()
+    out = embed_space.resolve(_current(conn))
+    rev = llm_connections.read_connection_raw(conn)["rev"]
+    assert out == {"model": "vec-small", "base_url": providers.PRESETS["openrouter"].base_url,
+                   "key": "sk-or-fake", "space": f"{conn}\0{rev}\0vec-small"}
+
+
+def test_a_keyless_openrouter_connection_does_not_embed():
+    conn = _router(key="")
+    assert embed_space.resolve(_current(conn)) is None
+
+
+def test_a_legacy_config_naming_openrouter_still_resolves_to_none():
+    conn = _router()
+    assert embed_space.resolve({"embeddings_connection_id": conn,
+                                "embeddings_model": "vec-small"}) is None
+
+
+def test_the_request_goes_to_the_openrouter_embeddings_route():
+    conn = _router()
+    got = embed_space.resolve(_current(conn))
+    assert got is not None
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.5, 0.25]}]})
+
+    client = EmbeddingsClient(http=httpx.Client(transport=httpx.MockTransport(handler)))
+    vectors = client.embed(["a line"], got["model"], got["key"], got["base_url"])
+    assert vectors == [[0.5, 0.25]]
+    assert str(seen[0].url) == "https://openrouter.ai/api/v1/embeddings"
+    assert seen[0].headers["Authorization"] == "Bearer sk-or-fake"

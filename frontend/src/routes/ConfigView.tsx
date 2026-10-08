@@ -234,7 +234,9 @@ function connectionCaption(conn: LLMConnection | undefined): string {
   if (conn.health.state === "error") {
     return `last attempt failed — ${conn.health.detail || conn.health.kind}`;
   }
-  if (conn.kind === "openrouter" && !conn.key_set) return "no key set — scenes will not send";
+  if ((conn.kind === "openrouter" || conn.kind === "anthropic") && !conn.key_set) {
+    return "no key set — scenes will not send";
+  }
   if (conn.kind === "openai_compatible" && !conn.base_url) {
     return "no base URL set — scenes will not send";
   }

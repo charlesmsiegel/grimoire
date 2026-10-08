@@ -336,6 +336,18 @@ test("a missing credential still outranks an unobserved connection", async () =>
   expect(screen.getByText(/no key set — scenes will not send/)).toBeInTheDocument();
 });
 
+test("an Anthropic API connection with no key says so too", async () => {
+  // The backend's `_connection_ready` asks the same of both keyed kinds.
+  (api.getConfig as any).mockResolvedValue({ ...cfg, active_connection_id: "openrouter" });
+  (api.listConnections as any).mockResolvedValue([
+    { ...connections[0], kind: "anthropic", key_set: false }, ...connections.slice(1),
+  ]);
+  renderView();
+  await open(/^Connection/);
+
+  expect(screen.getByText(/no key set — scenes will not send/)).toBeInTheDocument();
+});
+
 test("picks a fallback connection, excluding the active one", async () => {
   renderView();
   await open(/^Connection/);

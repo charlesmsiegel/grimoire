@@ -23,8 +23,10 @@ from grimoire import llm, llm_sampling, routes
 from grimoire.llm import effective_model
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import keys, translate
+from grimoire.store.inference import capabilities, keys, translate
+from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
+from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.cascade import Selection
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
@@ -273,7 +275,9 @@ def test_a_route_pin_lowers_to_that_connections_dict(at_state):
     assert "model_params" not in conn          # not an OpenRouter connection
     assert (resolved.route, resolved.legacy_route) == ("dossier", "dossier")
     assert (resolved.via, resolved.scope, resolved.role) == ("route", "global", "")
-    assert resolved.attempts[0] == Attempt("local", "local-model", "warm", conn)
+    first = resolved.attempts[0]
+    assert (first.provider_id, first.model, first.preset_id, first.conn) == (
+        "local", "local-model", "warm", conn)
 
 
 def test_a_split_route_reports_its_legacy_route(at_state):
@@ -626,3 +630,341 @@ def test_the_routing_bundle_reports_what_the_resolver_serves(state, tmp_path):
                     assert (resolved.conn or {}).get("id", "") \
                         == body["active_connection_id"], where
                 assert body["sampling"][r.key] == llm_sampling.report(resolved.conn), where
+
+
+# ---- slice B: what each attempt carries, and what it cannot do ----
+def _catalog(conn_id: str, rows: list[dict]) -> None:
+    """A catalog sidecar for `conn_id`, tagged with its CURRENT rev."""
+    rev = store.llm_connections.read_connection_raw(conn_id)["rev"]
+    store.llm_connections.set_cached_models(conn_id, rows, rev)
+
+
+def test_each_attempt_carries_its_provider_facts_and_capabilities(at_state):
+    ctx = at_state("routed")
+    chat = inf.resolve("chat", ctx["cid"])     # campaign pin to `local`, fallback `spare`
+    local, spare = chat.attempts
+    raw = store.llm_connections.read_connection_raw("local")
+    assert (local.provider_kind, local.base_url, local.rev) == (
+        "openai_compatible", "http://localhost:1234/v1", raw["rev"])
+    assert (local.billing, local.provider_preset) == ("metered", "lmstudio")
+    assert local.facts == inference_facts.of("local", "local-model", raw["rev"])
+    # The same answer the standalone resolver gives, read once per attempt.
+    assert local.capabilities == capabilities.caps_for(raw)
+    assert tuple(local.capabilities) == capabilities.NAMES
+    # Its controls are the gateway's decision for the lowered connection.
+    assert local.controls == llm_sampling.effective(local.conn)
+    assert list(local.controls["controls"]) == list(llm_sampling.CONTROLS)
+    spare_raw = store.llm_connections.read_connection_raw("spare")
+    # OpenRouter's URL is its preset's: the connection carries none of its own.
+    assert (spare.provider_kind, spare.base_url, spare.rev, spare.billing,
+            spare.provider_preset) == ("openrouter", "https://openrouter.ai/api/v1",
+                                       spare_raw["rev"], "metered", "openrouter")
+    assert spare.capabilities == capabilities.caps_for(spare_raw, "vendor/spare")
+    assert spare.controls == llm_sampling.effective(spare.conn)
+
+
+def test_a_subscription_connection_reports_its_billing(at_state):
+    at_state("claude_active")
+    first = inf.resolve("chat").attempts[0]
+    assert (first.provider_kind, first.provider_preset, first.billing) == (
+        "claude", "claude", "subscription")
+
+
+def test_the_lowering_attaches_the_catalog_rows_features(at_state):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "params": ["temperature"],
+                             "features": {"structured_output": True}}])
+    resolved = inf.resolve("chat")
+    assert resolved.conn["model_features"] == {"structured_output": True}
+    assert resolved.conn["model_params"] == ["temperature"]
+    assert resolved.attempts[0].capabilities["structured_output"] == Cap("yes", "catalog")
+
+
+def test_a_row_without_features_attaches_none(at_state):
+    at_state("routed")
+    resolved = inf.resolve("chat")
+    assert resolved.conn["id"] == "openrouter" and "model_params" in resolved.conn
+    assert "model_features" not in resolved.conn
+
+
+def test_the_catalog_is_read_once_per_attempt(at_state, monkeypatch):
+    ctx = at_state("routed")
+    calls: list[str] = []
+    real = store.llm_connections.cached_models
+
+    def counting(conn_id):
+        calls.append(conn_id)
+        return real(conn_id)
+
+    monkeypatch.setattr(store.llm_connections, "cached_models", counting)
+    resolved = inf.resolve("chat", ctx["cid"])
+    assert sorted(calls) == sorted(a.provider_id for a in resolved.attempts)
+
+
+def test_a_known_no_on_a_required_capability_is_missing(at_state):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "vision": False}])
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap("no", "catalog")
+    assert image.missing == ("vision",)
+    # A route that requires nothing is not held to it.
+    assert inf.resolve("chat").missing == ()
+
+
+def test_unknown_is_never_missing(at_state):
+    at_state("fresh")
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap("unknown", "unknown")
+    assert image.missing == () and image.fallback_missing == ()
+
+
+def test_the_operations_own_capability_is_checked_in_capability_order(at_state):
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "outputs": ["embeddings"],
+                             "vision": False}])
+    assert inf.resolve("chat").missing == ("generate",)
+    assert inf.resolve("image-description").missing == ("generate", "vision")
+
+
+def test_nothing_resolved_is_missing_nothing(at_state):
+    at_state("no_active")
+    resolved = inf.resolve("chat")
+    assert resolved.attempts == ()
+    assert resolved.missing == () and resolved.fallback_missing == ()
+
+
+def test_an_incapable_fallback_is_reported_and_the_facade_still_sends_it(at_state):
+    """Slice B reports; the facade starts dropping it only in slice C."""
+    at_state("routed")
+    _catalog("openrouter", [{"id": "vendor/active", "vision": True}])
+    _catalog("spare", [{"id": "vendor/spare", "vision": False}])
+    image = inf.resolve("image-description")
+    assert image.conn["id"] == "openrouter" and image.fallback["id"] == "spare"
+    assert image.missing == () and image.fallback_missing == ("vision",)
+    sent = routes.common.build_llm()._routes(image.conn)
+    assert [conn["id"] for conn, _ in sent] == ["openrouter", "spare"]
+    # And the seam does not refuse over a fallback.
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+
+
+# ---- the seam's capability refusal ----
+def _refused(call) -> HTTPException:
+    with pytest.raises(HTTPException) as exc:
+        call()
+    assert exc.value.status_code == 409
+    return exc.value
+
+
+def test_the_missing_key_refusal_comes_before_the_capability_one(at_state):
+    at_state("fresh")
+    blind = store.llm_connections.create_connection("openrouter", "Saltmarch Router",
+                                                    model="vendor/blind")
+    store.write_config(route_image=blind)
+    _catalog(blind, [{"id": "vendor/blind", "vision": False}])
+    assert inf.resolve("image-description").missing == ("vision",)
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    assert exc.detail == {
+        "detail": "OpenRouter key not set (Saltmarch Router, routed for image descriptions)",
+        "kind": "missing_key"}
+    store.llm_connections.update_connection(blind, api_key="sk-test-blind")
+    _catalog(blind, [{"id": "vendor/blind", "vision": False}])
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    # A pin names no role, and its remedy is another model for the route.
+    assert exc.detail == {
+        "detail": "The Image descriptions route is pinned to vendor/blind on "
+                  "Saltmarch Router, which cannot read images — choose another "
+                  "model for this route.",
+        "kind": "incapable"}
+
+
+def test_an_adapter_that_cannot_read_images_keeps_todays_refusal(at_state):
+    at_state("claude_active")
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap("no", "adapter")
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    assert exc.detail == store.image_drafts.UNSUPPORTED
+    # Everything else on the same connection still runs.
+    assert routes.common.require_inference("chat").conn["id"] == "claude"
+
+
+def _embedder_only(model: str = "vendor/embedder") -> None:
+    """Put `model` in the seeded OpenRouter catalog as a model that serves
+    embeddings and no text (`outputs`; the name rule would lose to the
+    preset's `always` generate)."""
+    _catalog("openrouter", [{"id": model, "outputs": ["embeddings"]}])
+
+
+def test_an_unrouted_task_is_named_as_a_generation(at_state):
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", model="vendor/embedder")
+    _embedder_only()
+    exc = _refused(lambda: routes.common.require_inference(""))
+    # No route, so nothing to pin: the remedy is the role's model alone.
+    assert exc.detail == {
+        "detail": "This generation runs on the Primary role (vendor/embedder on "
+                  "OpenRouter), which cannot generate text — choose another "
+                  "Primary model.",
+        "kind": "incapable"}
+
+
+@pytest.mark.parametrize("body", [{"model": "vendor/embedder"},
+                                  {"connection_id": "openrouter",
+                                   "model": "vendor/embedder"}])
+def test_an_override_onto_an_incapable_model_is_refused_the_same_way(at_state, body):
+    ctx = at_state("fresh")
+    _embedder_only()
+    exc = _refused(lambda: routes.common.override_inference(
+        SimpleNamespace(**body), "regenerate", ctx["cid"]))
+    # The override moved the call off the role's model, so no role is named.
+    assert exc.detail["kind"] == "incapable"
+    assert exc.detail["detail"].startswith(
+        "The Scene turns route runs on vendor/embedder on OpenRouter, "
+        "which cannot generate text — choose another model")
+    assert "role" not in exc.detail["detail"]
+
+
+def test_an_override_onto_a_keyless_connection_is_refused_for_the_key_first(at_state):
+    ctx = at_state("fresh")
+    keyless = store.llm_connections.create_connection(
+        "openrouter", "Mara", model="vendor/embedder")
+    _catalog(keyless, [{"id": "vendor/embedder", "outputs": ["embeddings"]}])
+    assert inf.resolve("regenerate", ctx["cid"],
+                       override=Selection(keyless, "", "")).missing == ("generate",)
+    exc = _refused(lambda: routes.common.override_inference(
+        SimpleNamespace(connection_id=keyless), "regenerate", ctx["cid"]))
+    assert exc.detail == {"detail": "Mara: OpenRouter key not set", "kind": "missing_key"}
+
+
+def test_a_soft_phase_reports_the_capability_refusal(at_state):
+    ctx = at_state("fresh")
+    store.llm_connections.update_connection("openrouter", model="vendor/embedder")
+    _embedder_only()
+    conn, reason = routes.common._soft_inference(
+        lambda: routes.common.require_inference("dossier", ctx["cid"]))
+    assert conn is None
+    assert reason == ("The Dossier refresh route runs on the Primary role (vendor/embedder "
+                      "on OpenRouter), which cannot generate text — choose another "
+                      "Primary model or pin this route.")
+
+
+def test_an_attempt_built_from_slice_a_fields_defaults_the_rest():
+    a = Attempt("p", "m", "", {})
+    assert (a.provider_kind, a.base_url, a.rev, a.billing, a.provider_preset) == ("",) * 5
+    assert (a.facts, a.capabilities, a.controls) == ({}, {}, {})
+
+
+#: The recorded states where the seam's capability check is meant to refuse:
+#: a `claude` primary on the image route, which only `image_draft_prompt`
+#: reaches and which it refused itself before the seam took the check over.
+NEWLY_REFUSED = {("claude_active", "image-description"),
+                 ("embed_with_dangling", "image-description")}
+
+
+@pytest.mark.parametrize("state", sorted(baseline.STATES))
+def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
+    """`require_inference` against the frozen baseline, refusal and success
+    alike: every recorded answer stands except the intended new one, which
+    answers exactly as the image route always did."""
+    ctx = at_state(state)
+    for task in TASKS:
+        for scope, scope_cid in (("global", ""), ("campaign", ctx["cid"])):
+            where = (state, task, scope)
+            recorded = BASELINE[state]["tasks"][task][scope]
+            try:
+                served = routes.common.require_inference(task, scope_cid)
+            except HTTPException as exc:
+                failure = baseline._failure(exc)
+                if (state, task) in NEWLY_REFUSED:
+                    assert "status" not in recorded, where
+                    assert failure == {"status": 409,
+                                       "detail": store.image_drafts.UNSUPPORTED}, where
+                else:
+                    assert failure == recorded, where
+                continue
+            assert "status" not in recorded and (state, task) not in NEWLY_REFUSED, where
+            # And what it served is what was recorded: the connection, model,
+            # sampling and catalog parameters, and the fallback the facade sends.
+            conn = served.conn
+            fallback = _facade_fallback(conn)
+            assert _normalised({
+                **baseline._resolved(conn),
+                "fallback": None if fallback is None
+                else {"id": fallback["id"], "sampling": fallback["sampling"]},
+            }) == recorded, where
+
+
+# ---- the "Images: on" bridge (until slice C moves it into model facts) ----
+def test_images_on_outranks_a_catalogs_vision_no_at_the_seam(at_state):
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", vision="on")
+    _catalog("openrouter", [{"id": "vendor/active", "vision": False}])
+    image = inf.resolve("image-description")
+    # Still reported: the bridge is the seam's, not the resolver's.
+    assert image.missing == ("vision",)
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+
+
+def test_images_on_does_not_outrank_the_adapter(at_state):
+    at_state("claude_active")
+    store.llm_connections.update_connection("claude", vision="on")
+    assert store.llm_connections.read_connection_raw("claude")["vision"] == "on"
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    assert exc.detail == store.image_drafts.UNSUPPORTED
+
+
+def test_images_on_does_not_outrank_the_models_own_facts(at_state):
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", vision="on")
+    inference_facts.set_overrides("openrouter", "vendor/active", {"vision": "no"})
+    exc = _refused(lambda: routes.common.require_inference("image-description"))
+    assert exc.detail["kind"] == "incapable"
+
+
+def test_a_failed_test_never_refuses_and_the_users_word_outranks_it(at_state):
+    """Spec 12: a failed test leaves the model unverified, so it cannot make
+    the seam refuse -- and the user's own override beats it."""
+    at_state("fresh")
+    store.llm_connections.update_connection("openrouter", vision="on")
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    inference_facts.record_verified("openrouter", "vendor/active", rev, {
+        "vision": {"ok": False, "error": "image input is not supported"}})
+    # The failure alone: unverified, carrying the error, and not refused.
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap(
+        "unknown", "test", "image input is not supported")
+    assert image.missing == ()
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+    # The user's override outranks the failed test.
+    inference_facts.set_overrides("openrouter", "vendor/active", {"vision": "yes"})
+    conn = store.llm_connections.read_connection_raw("openrouter")
+    assert capabilities.caps_for(conn)["vision"] == Cap("yes", "user")
+    assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+    assert store.post_images.capability(conn) == "yes"
+
+
+def test_the_name_rule_hides_a_model_but_never_refuses_it(at_state):
+    """A chat model whose id says "embed" is a guess the name rule gets wrong:
+    the picker hides it, the seam lets it run."""
+    at_state("fresh")
+    chat = store.llm_connections.create_connection(
+        "openai_compatible", "Saltmarch Local", base_url="https://llm.saltmarch.test/v1",
+        model="mara-embedded-chat")
+    raw = store.llm_connections.read_connection_raw(chat)
+    assert store.inference.providers.infer(raw).id == "custom"
+    store.write_config(route_dossier=chat)
+    dossier = inf.resolve("dossier")
+    assert dossier.attempts[0].capabilities["generate"] == Cap("no", "name")
+    assert dossier.missing == ()
+    assert routes.common.require_inference("dossier").conn["id"] == chat
+    group, reason = capabilities.group_for(
+        dossier.attempts[0].capabilities, "generate", store.inference.providers.PRESETS["custom"])
+    assert group == "hidden" and "name" in reason
+
+
+def test_an_anthropic_connection_needs_a_key_to_send():
+    """The same credential rule as OpenRouter's: the Anthropic API answers a
+    keyless request with a 401, so the seam refuses it first with a 409."""
+    conn = {"id": "a", "kind": "anthropic", "name": "Anthropic API",
+            "base_url": "", "api_key": "", "model": "claude-test-1"}
+    assert inf.problem(conn) == "Anthropic API key not set"
+    assert inf.problem({**conn, "api_key": "test-key-anthropic"}) is None

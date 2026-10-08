@@ -14,10 +14,15 @@ design, and `grimoire.content_parts` for the message shape.
 
 - a kind whose client cannot carry a content part (`claude`, which flattens
   every message into one string) is "no", whatever its override says;
-- the connection's own `vision` override ("on" / "off") wins otherwise;
-- "auto" asks the cached model catalog, which records what the provider
-  publishes (`catalog.entry`'s `vision`). No catalog, no matching row, or a
-  provider that did not say: "unknown".
+- the connection's own `vision` override ("on" / "off") wins otherwise -- it
+  is the post-image *setting*, not a statement about the model, which is why
+  the capability resolver does not read it;
+- "auto" asks the capability resolver (`inference.capabilities.caps_for`):
+  a preset whose wire protocol takes no image part is "no" (none of the
+  image-capable kinds' presets rules it out today), then what a test call or
+  the user recorded in the model's facts, then the cached model catalog
+  (`catalog.entry`'s `vision`). No facts, no catalog, no
+  matching row, or a provider that did not say: "unknown".
 
 "unknown" sends nothing. An image part sent to a text-only endpoint is a 400,
 not a graceful degradation, so the cost of guessing wrong runs the other way.
@@ -56,7 +61,8 @@ from pathlib import Path
 
 from PIL import Image, ImageOps, features
 
-from . import config, export, image_drafts, llm_connections, statcache
+from . import config, export, image_drafts, statcache
+from .inference import capabilities
 
 log = logging.getLogger(__name__)
 
@@ -73,7 +79,7 @@ MAX_LIMIT = 20
 
 def capability(conn: dict | None) -> str:
     """"yes", "no" or "unknown" -- whether `conn`'s model reads images. Never
-    raises: a catalog that cannot be read is "unknown"."""
+    raises: a catalog or facts file that cannot be read says nothing."""
     if conn is None or conn.get("kind", "openrouter") not in image_drafts.SUPPORTED_KINDS:
         return NO
     override = conn.get("vision", "")
@@ -81,20 +87,7 @@ def capability(conn: dict | None) -> str:
         return YES
     if override == "off":
         return NO
-    return _catalog_says(conn)
-
-
-def _catalog_says(conn: dict) -> str:
-    try:
-        rows = llm_connections.cached_models(conn.get("id", ""))["models"]
-    except Exception:  # noqa: BLE001 - see `capability`: unreadable is unknown
-        return UNKNOWN
-    model = conn.get("model", "")
-    row = next((r for r in rows if isinstance(r, dict) and r.get("id") == model), None)
-    vision = row.get("vision") if row is not None else None
-    if vision is True:
-        return YES
-    return NO if vision is False else UNKNOWN
+    return capabilities.caps_for(conn)["vision"].value
 
 
 def limit() -> int:

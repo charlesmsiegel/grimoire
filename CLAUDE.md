@@ -260,7 +260,7 @@ post the player can see.
 ## Detached runs: a turn outlives the request that asked for it
 
 A dropped connection used to cancel generation. It no longer does — it drops a
-subscriber. **Thirty-one handlers** start detached runs, in five classes:
+subscriber. **Thirty-two handlers** start detached runs, in five classes:
 
 - `turn` — `post_chat`, `post_retry`, `post_regenerate`, `post_replay_turn`,
   `post_roll_proposal`, and the per-response pair in `character_turns.py`,
@@ -272,22 +272,27 @@ subscriber. **Thirty-one handlers** start detached runs, in five classes:
   streams: each answers **202** with a run to poll and persists its result to
   `store/pending_reviews.py`, because a review's value is a payload nobody has
   written down and losing it costs the longest generation in the app.
-- `draft` — `post_opener`, plus the fourteen computing previews: scene
+- `draft` — `post_opener`, plus the fifteen computing previews: scene
   suggestions and intent, the five image-description drafts (a campaign
   library, a world library, a character version, an entity and a PC), both voice
-  anchors, taglines, both scenario parses, character-from-passage, and the
-  model-catalog refresh. The
-  fourteen answer **202** and hand back a result held on the run and reaped;
+  anchors, taglines, both scenario parses, character-from-passage, the
+  model-catalog refresh, and the model test (`post_connection_test`, which
+  refuses without `confirm: true` before anything is sent, and sends each probe
+  once through `LLMClient.single`). The
+  fifteen answer **202** and hand back a result held on the run and reaped;
   `post_opener` streams and buffers its frames like a turn. **A draft declares
   no exclusion key** — it neither holds a scene nor is refused by one, which is
   what stops a tagline preview from being able to refuse a chat, and its result
   is deliberately *not* durable: a sentence nobody has agreed to yet is
   regenerable, and storing it would be a second store to keep consistent.
 
-  All fourteen go through **one contract** rather than fourteen variants —
+  All fifteen go through **one contract** rather than fifteen variants —
   `runs.run_draft` on the route side (the two scenario parses reserve through
-  `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call,
-  and `api.draftRun` in the client. `post_opener` is the exception on the
+  `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call
+  (the catalog refresh and the model test excepted, which list or probe rather
+  than complete, and are the two whose run writes beside the connection), and
+  `api.draftRun` in the client (the model test has no client caller until
+  slice C). `post_opener` is the exception on the
   client side only, where `api.streamDraft` re-attaches by attempt id instead
   of polling.
 
@@ -712,7 +717,12 @@ would answer neither question.
   markers are capped), and a route whose tasks nothing uses. A route names a
   whole connection or model rather than a bare model string, because since
   `llm_connections/` a model name no longer says which provider serves it --
-  the same call #144's fallback made.
+  the same call #144's fallback made. A route that needs a capability declares
+  it in `requires`, and the seam refuses a primary that is *known* not to have
+  it (a `no`, never an `unknown`) with 409 `incapable`; an image route whose
+  adapter says `no` keeps the old `UNSUPPORTED` body instead. A failed test
+  call is `unknown` with its error, never `no`, and the name rule's `no` is a
+  guess that hides a model in a picker but never refuses one.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators

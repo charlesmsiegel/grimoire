@@ -1,4 +1,4 @@
-"""Named LLM connections: openrouter / claude / openai_compatible profiles,
+"""Named LLM connections: openrouter / claude / openai_compatible / anthropic profiles,
 each remembering its own key+model so switching the active one never loses
 credentials. Migrates the pre-connections flat config fields once. See
 docs/superpowers/specs/2026-07-18-llm-connections-design.md for the full
@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import secrets
+import threading
 from pathlib import Path
 
 from . import atomic, config, routing
@@ -20,7 +21,7 @@ from .paths import home, now_iso, safe_id, slugify, uniquify
 #: .TEXT_ONLY_KINDS` for the fallback route and `store.image_drafts
 #: .SUPPORTED_KINDS` for the primary -- and a test partitions THIS roster
 #: between them, so a new kind cannot be added without classifying it.
-KINDS = ("openrouter", "claude", "openai_compatible")
+KINDS = ("openrouter", "claude", "openai_compatible", "anthropic")
 #: `vision` is "" (auto: the cached catalog decides), "on" or "off" -- whether
 #: this connection's model may be sent post images (#377, `store.post_images`).
 #: `prefill` is "true" or "" on disk and a bool once read -- whether a reply cut
@@ -41,6 +42,21 @@ SAMPLER_FIELDS = frozenset({"sampler_preset", "sampler_support"})
 #: `prefill` joins them for the same reason: it shapes one kind of prompt and
 #: describes neither the catalog nor the provider's health.
 REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision", "prefill"}
+
+
+#: The one serialization boundary over a connection's record and the files
+#: beside it. Every write that stamps a rev (`_write_raw`: create, update,
+#: migration) or unlinks the record or a sidecar (delete) holds it, and so
+#: does `inference.facts.record_verified`'s compare-and-write -- which is what
+#: keeps a probe run that started on an old rev from filing its verdicts after
+#: an edit moved the rev (replacing the new rev's), or after a delete
+#: (recreating an orphan facts file). Reentrant: `ensure_migrated` writes and
+#: is called from inside the other writers.
+#:
+#: Lock order: this lock, THEN `inference.facts`' own `_lock` -- never the
+#: reverse. Nothing under the facts lock takes this one. In-process only, like
+#: the facts lock: two servers on one store are not serialized by it.
+LOCK = threading.RLock()
 
 
 class ConnectionNotFound(Exception):
@@ -66,21 +82,31 @@ def regex_path(conn_id: str) -> Path:
     return _dir() / f"{conn_id}.regex.json"
 
 
+def facts_path(conn_id: str) -> Path:
+    """The connection's per-model facts (`store/inference/facts.py`): what was
+    verified of each model, and what the user said about it. Its own file for
+    the same reason as the sidecar -- one JSON document per provider, not a
+    flat string in the record's frontmatter."""
+    return _dir() / f"{conn_id}.facts.json"
+
+
 def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     """Unconditional write: stamps a fresh rev and clears any sidecar for
     this id, on every call (create AND update) — simpler than conditioning
     the sidecar clear on which field changed, and no less correct: the rev
     bump alone already makes any stale sidecar invisible on read (see
-    cached_models below), so clearing it here is pure hygiene either way."""
+    cached_models below), so clearing it here is pure hygiene either way.
+    Under `LOCK`, whoever called it."""
     meta = {k: str(fields.get(k, "")) for k in _FIELDS}
     meta["prefill"] = "true" if fields.get("prefill") in (True, "true") else ""
     # `keep_rev` is the one exception, for an edit nothing the rev guards has
     # seen: the sidecar and the rev both survive it (see `REV_NEUTRAL_FIELDS`).
     meta["rev"] = keep_rev or secrets.token_hex(8)
-    _dir().mkdir(parents=True, exist_ok=True)
-    if not keep_rev:
-        _sidecar_path(id).unlink(missing_ok=True)
-    atomic.write_text(_path(id), dump_frontmatter(meta, ""))
+    with LOCK:
+        _dir().mkdir(parents=True, exist_ok=True)
+        if not keep_rev:
+            _sidecar_path(id).unlink(missing_ok=True)
+        atomic.write_text(_path(id), dump_frontmatter(meta, ""))
 
 
 def _read(id: str) -> dict | None:
@@ -159,16 +185,25 @@ def create_connection(kind: str, name: str, **fields) -> str:
     def exists(c: str) -> bool:
         return _path(c).exists()
 
-    id = uniquify(slugify(name), exists)
-    _write_raw(id, kind=kind, name=name, **fields)
+    # The slug is chosen and claimed in one hold: two creates of one name
+    # would otherwise both find it free and the second overwrite the first.
+    with LOCK:
+        id = uniquify(slugify(name), exists)
+        _write_raw(id, kind=kind, name=name, **fields)
     return id
 
 
 def update_connection(id: str, **fields) -> None:
     ensure_migrated()
-    conn = _read(id)
+    # The read is the merge's base, so it sits in the hold with the write.
+    with LOCK:
+        _update(id, fields)
+
+
+def _update(conn_id: str, fields: dict) -> None:
+    conn = _read(conn_id)
     if conn is None:
-        raise ConnectionNotFound(id)
+        raise ConnectionNotFound(conn_id)
     fields = {k: v for k, v in fields.items() if v is not None}
     base_url_changed = "base_url" in fields and fields["base_url"] != conn["base_url"]
     if base_url_changed:
@@ -188,7 +223,7 @@ def update_connection(id: str, **fields) -> None:
     merged = {**conn, **fields}
     changed = {k for k in _FIELDS if merged[k] != conn[k]}
     keep = conn["rev"] if changed and changed <= REV_NEUTRAL_FIELDS and conn["rev"] else ""
-    _write_raw(id, keep_rev=keep, **{k: merged[k] for k in _FIELDS})
+    _write_raw(conn_id, keep_rev=keep, **{k: merged[k] for k in _FIELDS})
 
 
 def delete_connection(id: str) -> None:
@@ -198,9 +233,17 @@ def delete_connection(id: str) -> None:
     # the one that unlinks.
     if not safe_id(id):
         raise ConnectionNotFound(id)
-    p = _path(id)
+    # The whole delete is one hold, sidecars included: a verdict filed between
+    # the record's unlink and the facts file's would recreate the file for a
+    # connection that no longer exists (`inference.facts.record_verified`).
+    with LOCK:
+        _delete(id)
+
+
+def _delete(conn_id: str) -> None:
+    p = _path(conn_id)
     if not p.exists():
-        raise ConnectionNotFound(id)
+        raise ConnectionNotFound(conn_id)
     # Every config key that names a connection, not just the active one:
     # `embeddings_connection_id` (semantic recall) points here too, as does
     # `fallback_connection_id` (#144), and a dangling one leaves the layer
@@ -218,7 +261,7 @@ def delete_connection(id: str) -> None:
     # connection that no longer exists for exactly this reason.
     named = ("active_connection_id", "embeddings_connection_id",
              "fallback_connection_id", *routing.CONFIG_KEYS)
-    dangling = {key: "" for key in named if cfg.get(key) == id}
+    dangling = {key: "" for key in named if cfg.get(key) == conn_id}
     if dangling:
         # Clear these BEFORE unlinking the file, not after — otherwise a
         # failure between the two steps (disk error, process death) leaves
@@ -232,8 +275,9 @@ def delete_connection(id: str) -> None:
         # retriable "delete didn't finish" state, not a dangling reference).
         config.write_config(**dangling)
     p.unlink()
-    _sidecar_path(id).unlink(missing_ok=True)
-    regex_path(id).unlink(missing_ok=True)
+    _sidecar_path(conn_id).unlink(missing_ok=True)
+    regex_path(conn_id).unlink(missing_ok=True)
+    facts_path(conn_id).unlink(missing_ok=True)
 
 
 def get_active() -> dict | None:
@@ -273,6 +317,25 @@ def cached_models(id: str) -> dict:
             "fetched_by": sidecar.get("fetched_by", "")}
 
 
+def cached_row(conn_id: str, model: str) -> dict | None:
+    """`model`'s row in the connection's cached catalog, or None when there is
+    none -- the one lookup the resolver, the capability resolver and the test
+    call's price estimate all make.
+
+    Never raises. It runs on every resolution, and whatever slips past
+    `cached_models`' own shape check (an over-long id's stat, a row list a
+    sync mangled) costs the catalog, never the turn."""
+    if not conn_id or not isinstance(conn_id, str):
+        return None
+    try:
+        models = cached_models(conn_id)["models"]
+    except (OSError, KeyError, TypeError, ValueError, AttributeError):
+        return None
+    if not isinstance(models, list):
+        return None
+    return next((r for r in models if isinstance(r, dict) and r.get("id") == model), None)
+
+
 def set_cached_models(id: str, models: list[dict], rev: str,
                       attempt: str = "") -> None:
     """Writes unconditionally, tagged with the rev captured before the
@@ -294,6 +357,14 @@ def set_cached_models(id: str, models: list[dict], rev: str,
 
 def ensure_migrated() -> None:
     _dir().mkdir(parents=True, exist_ok=True)
+    if (_dir() / ".migrated").exists():
+        return
+    # Checked again in the hold: two first reads would otherwise both seed.
+    with LOCK:
+        _migrate()
+
+
+def _migrate() -> None:
     marker = _dir() / ".migrated"
     if marker.exists():
         return

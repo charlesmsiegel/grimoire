@@ -12,7 +12,8 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from . import content_parts, llm_capture, llm_reasoning, llm_sampling, model_guidance
+from . import content_parts, llm_capture, llm_errors, llm_reasoning, llm_sampling, model_guidance
+from .anthropic import AnthropicClient
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
 from .openai_compatible import OpenAICompatibleClient
@@ -133,8 +134,9 @@ def _label(conn: dict) -> str:
 #: Connection kinds whose client cannot carry OpenAI-style content PARTS: the
 #: Claude SDK path joins a message's content into one string, so a multimodal
 #: message raises deep inside it. `store.image_drafts.SUPPORTED_KINDS` states
-#: the same rule positively for the ROUTE layer, which refuses such a
-#: connection as the PRIMARY with a message the user can act on;
+#: the same rule positively; the ROUTE layer refuses such a connection as the
+#: PRIMARY with a message the user can act on, through the `claude` provider
+#: preset's `never` (`store.inference.providers`) at the inference seam;
 #: `test_image_description_draft.py` pins the two halves to agree.
 TEXT_ONLY_KINDS = frozenset({"claude"})
 
@@ -146,7 +148,7 @@ TEXT_ONLY_KINDS = frozenset({"claude"})
 #: route reads this to refuse a catalog request the provider cannot serve
 #: *before* making one, so the reader gets "this kind has no catalog" instead
 #: of a transport error from a URL that was never going to exist.
-LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible"})
+LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible", "anthropic"})
 
 #: Key under which `_stamp` records the connection the *current* attempt is
 #: running on, in the usage holder the caller already threads down.
@@ -467,7 +469,41 @@ def fallback_sampling(primary: dict, fallback: dict) -> dict:
     return fallback
 
 
-def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
+class PresetRefusalError(LLMError):
+    """An `LLMError` that is a sampler parameter THIS request sent being
+    refused, rather than the request itself (`_preset_refusal`).
+
+    A subclass rather than a reworded detail alone, so a reader that has to
+    tell the two apart asks the type instead of matching prose: the model test
+    call (`routes.config`) sends its own reply cap, and a provider refusing
+    that cap has said nothing about whether the model can do what was asked.
+    Every `except LLMError` still catches it, with the same kind and status."""
+
+
+#: Keys that select a variant rather than carry a setting: a refusal naming one
+#: alone (a content block's `type`) is not about the control that sent it, and
+#: one that IS names its parent (`thinking.type`, `thinking`) anyway.
+_DISCRIMINATORS = frozenset({"type"})
+
+
+def _wire_spellings(share: dict, prefix: str = "") -> set[str]:
+    """Every name a provider could echo for the fields in `share`: each key, the
+    dotted path of each nested key (`output_config.effort`) and the nested key
+    itself (`effort`), lowercased -- a discriminator only as part of a path."""
+    names: set[str] = set()
+    for key, value in share.items():
+        if not isinstance(key, str):
+            continue
+        path = f"{prefix}{key}".lower()
+        names.add(path)
+        if prefix and key not in _DISCRIMINATORS:
+            names.add(key.lower())
+        if isinstance(value, dict):
+            names |= _wire_spellings(value, f"{path}.")
+    return names
+
+
+def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     """The error to raise in place of `exc` when it is a preset being refused.
 
     None when it is not: `exc` carries no refusal status, or this attempt sent
@@ -480,29 +516,38 @@ def _preset_refusal(exc: LLMError, conn: dict) -> LLMError | None:
     primary's health dot would go red over a temperature, and nothing would
     ever say the preset was the problem.
     """
-    if exc.status not in PRESET_REFUSAL_STATUSES:
+    if exc.status not in PRESET_REFUSAL_STATUSES or llm_errors.account_limit(exc):
+        # A spend limit's 400 is the account refused, whatever its prose says.
         return None
-    sent = llm_sampling.sent_names(conn)
+    shares = llm_sampling.sent_fields(conn)
+    sent = list(shares)
     # Only when the provider's message NAMES something that was sent. A 400 is
     # also what a context-length overflow or an unknown model id gets, and with
     # a preset attached those must still reach the fallback and the health
     # verdict exactly as they did before presets existed. Matched on every
-    # spelling a provider might echo back: the canonical name, the wire
-    # duplicate (`repeat_penalty`), and the hyphen/space forms prose uses.
+    # spelling a provider might echo back: the canonical name and its
+    # hyphen/space forms prose uses, and every field the control actually put
+    # on the wire (`_wire_spellings`) -- `max_completion_tokens`,
+    # `stop_sequences`, `repeat_penalty` beside `repetition_penalty`, and the
+    # reasoning control's whole share: adaptive thinking is sent as `thinking`
+    # AND `output_config.effort`, and the Anthropic API's refusal of the effort
+    # names only the second.
     detail = (exc.detail or "").lower()
-    spellings = {name: {name, name.replace("_", "-"), name.replace("_", " ")}
+    spellings = {name: {name, name.replace("_", "-"), name.replace("_", " "),
+                        *_wire_spellings(shares[name])}
                  for name in sent}
+    # llama.cpp's spelling, whichever one this endpoint was sent.
     spellings.get("repetition_penalty", set()).add("repeat_penalty")
     if not any(form in detail for forms in spellings.values() for form in forms):
         return None
     sampling = conn.get("sampling") or {}
     name = sampling.get("preset_name") or sampling.get("preset_id") or "?"
-    return LLMError(
+    return PresetRefusalError(
         exc.kind,
         f"{exc.detail} — this request carried sampler preset “{name}” "
         f"({', '.join(sent)}) and the provider's refusal names one of them, so "
         "the fallback connection was not tried",
-        exc.retry_after, status=exc.status)
+        exc.retry_after, status=exc.status, code=exc.code)
 
 
 async def _resilient(open_stream, routes, timeout: float,
@@ -701,11 +746,13 @@ class LLMClient:
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
                  retries=None, fallback=None, observer=None, capture=None,
-                 images=None, load_image=None):
+                 images=None, load_image=None, anthropic=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
                                     else OpenAICompatibleClient())
+        # Last in the signature so no positional caller shifts.
+        self._anthropic = anthropic if anthropic is not None else AnthropicClient()
         # A number, or a callable returning one. Callable is how routes hands
         # over the config.md setting without this module importing the store —
         # the gateway's imports are kept acyclic and store-free on purpose
@@ -878,25 +925,38 @@ class LLMClient:
 
     def _provider(self, messages: list[dict], conn: dict, usage: dict | None):
         kind = conn.get("kind", "openrouter")
-        # Split per ATTEMPT against that attempt's own connection, so a fallback
-        # of a different kind is held to what ITS backend takes. Passed only
-        # when there is something to send: a provider call with no preset is
-        # byte-for-byte the call it was before presets existed.
+        # Decided per ATTEMPT against that attempt's own connection, so a
+        # fallback of a different kind is held to what ITS backend takes
+        # (`llm_sampling.effective`, the one function that decides). Passed
+        # only when there is something to send: a provider call with no preset
+        # is byte-for-byte the call it was before presets existed.
+        controls = llm_sampling.effective(conn)
         applied, dropped = llm_sampling.split(conn)
+        reasoning = llm_sampling.reasoning_wire(controls)
         if dropped:
             log.debug("sampler preset on %r: not sent %s", _label(conn),
                       ", ".join(f"{d['param']} ({d['reason']})" for d in dropped))
-        extra = {"sampling": applied} if applied else {}
         if kind == "claude":
             return self._claude.stream(messages, effective_model(conn), usage=usage)
+        if kind == "anthropic":
+            # The whole body share, not `split`'s sampler half: `max_tokens` is
+            # always in it (the API requires one), and `thinking` /
+            # `output_config` are the reasoning control's.
+            return self._anthropic.stream(
+                messages, conn.get("model", ""), conn.get("api_key", ""), usage=usage,
+                base_url=conn.get("base_url", ""), effective=controls["effective"])
         if kind == "openai_compatible":
+            # Its reasoning travels as the adapter's own keyword, as the GLM
+            # setting always has (`llm_reasoning.glm_effort`, via `effective`).
+            effort = reasoning.get("reasoning_effort", "")
             return self._openai_compatible.stream(
                 messages, conn.get("model", ""), conn.get("api_key", ""),
                 conn.get("base_url", ""), strict=conn.get("post_process") == "strict",
-                usage=usage, **({"reasoning_effort": llm_reasoning.glm_effort(conn)}
-                                if llm_reasoning.glm_effort(conn) else {}), **extra)
+                usage=usage, **({"reasoning_effort": effort} if effort else {}),
+                **({"sampling": applied} if applied else {}))
+        sampling = {**applied, **reasoning}
         return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""),
-                                       usage=usage, **extra)
+                                       usage=usage, **({"sampling": sampling} if sampling else {}))
 
     def stream(self, messages: list[dict], conn: dict, usage: dict | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place
@@ -927,6 +987,39 @@ class LLMClient:
     async def complete(self, messages: list[dict], conn: dict,
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, conn, usage)])
+
+    async def single(self, messages: list[dict], conn: dict,
+                     usage: dict | None = None) -> str:
+        """Exactly one attempt on `conn`, joined: the model test call's way in.
+
+        No retry, no fallback route and no degrade sibling -- the route list is
+        `conn` with zero retries and nothing else, so `_resilient` makes one
+        attempt and raises what it raised, exactly as `stream` would have from
+        that attempt. A test is a question about ONE model on ONE provider, and
+        each further attempt is money spent answering a different question:
+        a fallback's success would be recorded against a model that never
+        answered, a retry would pay twice for a 429, and a text-only re-send
+        would call a model that refused the picture one that read it.
+
+        Everything else is `stream`'s, through the same `_resilient` and
+        `_dispatch`: the idle bound, the per-attempt `usage` stamp a
+        `store.usage.Meter` files, the incoming-response capture, and
+        `_provider`'s `llm_sampling.effective` per adapter -- which is how the
+        probe's reply cap reaches the Anthropic API as its required
+        `max_tokens`.
+
+        Not reported to the health observer. A probe's refusal is about the
+        model (this one reads no images), not about whether the connection
+        serves, and a status dot turned red by a vision probe would send the
+        reader to fix a connection that works.
+        """
+        try:
+            sink = self._capture() if self._capture is not None else None
+        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
+            sink = None
+        agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
+                          [(conn, 0)], self._timeout_seconds(), usage=usage, capture=sink)
+        return "".join([chunk async for chunk in agen])
 
     def note_outcome(self, conn: dict, error: LLMError | None) -> None:
         """File an outcome this facade did not itself observe (#146).
@@ -974,6 +1067,9 @@ class LLMClient:
         if kind == "openai_compatible":
             return await self._openai_compatible.list_models(
                 conn.get("base_url", ""), conn.get("api_key", ""))
+        if kind == "anthropic":
+            return await self._anthropic.list_models(conn.get("api_key", ""),
+                                                     conn.get("base_url", ""))
         return await self._openrouter.list_models(conn.get("api_key", ""))
 
     async def check(self, conn: dict) -> None:
@@ -997,9 +1093,12 @@ class LLMClient:
         elif kind == "openai_compatible":
             await self._openai_compatible.probe(conn.get("base_url", ""),
                                                 conn.get("api_key", ""))
+        elif kind == "anthropic":
+            await self._anthropic.probe(conn.get("api_key", ""), conn.get("base_url", ""))
         else:
             await self._openrouter.probe(conn.get("api_key", ""))
 
     async def aclose(self) -> None:
         await self._openrouter.aclose()
         await self._openai_compatible.aclose()
+        await self._anthropic.aclose()

@@ -222,6 +222,34 @@ def test_models_refresh_400_only_for_the_kind_with_no_catalog(client):
     assert drafts.post(client, "/api/llm-connections/claude/models/refresh").status_code == 400
 
 
+def _mixed_catalog():
+    from grimoire import catalog
+    return [catalog.entry(r) for r in (
+        {"id": "a/chat", "architecture": {"output_modalities": ["text"]}},
+        {"id": "b/embed", "architecture": {"output_modalities": ["embeddings"]}},
+        {"id": "c/rerank", "architecture": {"output_modalities": ["rerank"]}})]
+
+
+def test_refresh_result_and_detail_list_text_models_but_the_sidecar_keeps_every_row(client):
+    """Pickers read the refresh result and the connection detail; neither may
+    offer an embeddings-only or rerank-only model as a chat model. The sidecar
+    keeps every row for the Embedding role and the per-model fact readers."""
+    mixed = _mixed_catalog()
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeCatalog(models=mixed)
+
+    r = drafts.post(client, "/api/llm-connections/openrouter/models/refresh")
+    assert [m["id"] for m in r.json()["models"]] == ["a/chat"]
+
+    detail = client.get("/api/llm-connections/openrouter").json()
+    assert [m["id"] for m in detail["models"]] == ["a/chat"]
+    saved = client.put("/api/llm-connections/openrouter", json={"prefill": True}).json()
+    assert [m["id"] for m in saved["models"]] == ["a/chat"]
+
+    assert [m["id"] for m in
+            store.llm_connections.cached_models("openrouter")["models"]] == [
+        "a/chat", "b/embed", "c/rerank"]
+
+
 def test_models_refresh_404_for_missing_connection(client):
     assert drafts.post(client, "/api/llm-connections/nope/models/refresh").status_code == 404
 
@@ -15777,3 +15805,11 @@ def test_listing_and_detail_carry_image_id(client):
     row = next(i for i in client.get(f"{base}/versions/default/images").json()
                if i["name"] == "gallery_9")
     assert "image_id" not in row
+
+
+def test_an_anthropic_connection_needs_a_key_to_be_ready():
+    """The dict a read hands `_connection_ready` for an `anthropic` connection."""
+    conn = {"id": "anthropic", "kind": "anthropic", "name": "Anthropic API",
+            "base_url": "", "api_key": "", "model": "claude-test"}
+    assert routes.config._connection_ready(conn) is False
+    assert routes.config._connection_ready({**conn, "api_key": "test-key-anthropic"}) is True

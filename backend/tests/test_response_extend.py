@@ -34,6 +34,28 @@ _SNAP = {"version": 1, "primary_model": "m",
          "unprofiled": [[{"role": "user", "content": "Go."}], None], "profiles": {}}
 
 
+@pytest.mark.parametrize("conn, mode", [
+    ({"kind": "anthropic", "model": "m", "prefill": True}, "instruction"),
+    ({"kind": "anthropic", "model": "claude-opus-4-6", "prefill": True}, "instruction"),
+    # Claude 4.5 and earlier take a prefill; 4.6 and later refuse one.
+    ({"kind": "anthropic", "model": "claude-haiku-4-5-20251001", "prefill": True}, "prefill"),
+    ({"kind": "openrouter", "model": "m", "prefill": True}, "prefill"),
+    ({"kind": "openai_compatible", "model": "m", "base_url": "http://localhost:11434/v1",
+      "prefill": True}, "prefill"),
+    # `claude`'s preset lists prefill under `never` too, but an existing store's
+    # opt-in keeps today's answer (slice B changes no existing store).
+    ({"kind": "claude", "model": "", "prefill": True}, "prefill"),
+    ({"kind": "openrouter", "model": "m"}, "instruction"),
+])
+def test_keep_writing_prefills_only_where_the_provider_does_not_rule_it_out(conn, mode):
+    """The user's opt-in is not enough on the Anthropic API, whose models from
+    Claude 4.6 on refuse a trailing assistant turn: prefill is ruled out per
+    model there, and allowed on the older ones that take it."""
+    assert character_turns._extend_mode(conn) == mode
+    tailed = character_turns._extend_messages(_SNAP, conn, "Mara waits", "", None)
+    assert tailed.mode_for(conn) == mode
+
+
 def test_extend_tails_carry_the_partial_reply_and_the_steer():
     m = character_turns._extend_messages(_SNAP, {"model": "m", "prefill": True},
                                          "Mara ![a lamp](/api/x.png) waits", "colder", 150)

@@ -31,6 +31,14 @@ def entry(raw: dict) -> dict:
            "context": _context(raw),
            "prompt": pricing.get("prompt"), "completion": pricing.get("completion"),
            "vision": _vision(raw)}
+    # The price of one input image (OpenRouter's `pricing.image`, USD per
+    # image), stored as the provider wrote it, like the per-token prices. Kept
+    # only when stated, so the rows of every provider that names none keep
+    # their shape; an absent key is "not reported", which the test call's
+    # estimate reads as unknown rather than free.
+    image = pricing.get("image")
+    if image is not None:
+        out["image"] = image
     # Which request parameters the model takes, when the provider says
     # (OpenRouter's `supported_parameters`). Kept only as a list of strings and
     # only when present: an absent list means "unknown", which the sampler split
@@ -39,7 +47,91 @@ def entry(raw: dict) -> dict:
     params = raw.get("supported_parameters")
     if isinstance(params, list):
         out["params"] = [p for p in params if isinstance(p, str)]
+    # What the model PRODUCES, when the provider says (OpenRouter's
+    # `architecture.output_modalities`): "text", "embeddings", "image", ...
+    # Absent means "did not say", which `listable` treats as a text model --
+    # the only kind a provider listed before outputs were recorded.
+    arch = raw.get("architecture")
+    outputs = arch.get("output_modalities") if isinstance(arch, dict) else None
+    if isinstance(outputs, list):
+        out["outputs"] = [o for o in outputs if isinstance(o, str)]
+    if _is_anthropic(raw):
+        _anthropic(raw, out)
     return out
+
+
+def listable(entries: list[dict]) -> list[dict]:
+    """The rows a chat-model picker may offer: those that output text, and
+    those that state no outputs at all.
+
+    The sidecar keeps every row (an Embedding role lists the embedding ones),
+    so this is applied where a picker's list is built, never where the catalog
+    is stored. A row whose `outputs` is not a list is one that states nothing.
+    """
+    return [m for m in entries
+            if not isinstance(m.get("outputs"), list) or "text" in m["outputs"]]
+
+
+_EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
+
+
+def _is_anthropic(raw: dict) -> bool:
+    """An Anthropic Models API row, by the shape every one of them has: `type:
+    "model"` beside a `display_name`. Not by its `capabilities` tree, which that
+    API may send as null -- such a row still names its model, window and reply
+    cap. OpenRouter's rows carry neither key, and an OpenAI-style list says
+    `object: "model"`, not `type`."""
+    return raw.get("type") == "model" and bool(raw.get("display_name"))
+
+
+def _supported(node: object) -> bool | None:
+    """`{"supported": bool}` -> the bool; anything else says nothing (None)."""
+    flag = node.get("supported") if isinstance(node, dict) else None
+    return flag if isinstance(flag, bool) else None
+
+
+def _positive_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def _anthropic(raw: dict, out: dict) -> None:
+    """Fold an Anthropic models-API row into `out`, saying only what it states.
+
+    That API names the model (`display_name`), its window (`max_input_tokens`)
+    and a `capabilities` tree; every branch is read defensively because catalog
+    rows are provider data, and a branch that is missing or the wrong shape
+    leaves its key absent rather than guessed -- a null tree included, which
+    states no capability at all. The models it lists produce text.
+    """
+    caps = raw.get("capabilities")
+    if not isinstance(caps, dict):
+        caps = {}
+    out["name"] = str(raw["display_name"])
+    out["context"] = _positive_int(raw.get("max_input_tokens"))
+    out["vision"] = _supported(caps.get("image_input"))
+    out["outputs"] = ["text"]
+    features: dict = {}
+    structured = _supported(caps.get("structured_outputs"))
+    if structured is not None:
+        features["structured_output"] = structured
+    thinking = caps.get("thinking")
+    types = thinking.get("types") if isinstance(thinking, dict) else None
+    if isinstance(types, dict):
+        # `disabled.supported` is False exactly when sending `thinking:
+        # {type: disabled}` is a 400 -- a model whose thinking cannot be off.
+        for key, name in (("adaptive", "adaptive_thinking"), ("enabled", "enabled_thinking"),
+                          ("disabled", "disabled_thinking")):
+            flag = _supported(types.get(key))
+            if flag is not None:
+                features[name] = flag
+    effort = caps.get("effort")
+    if isinstance(effort, dict):
+        features["effort"] = [lvl for lvl in _EFFORT_LEVELS if _supported(effort.get(lvl)) is True]
+    max_tokens = _positive_int(raw.get("max_tokens"))
+    if max_tokens is not None:
+        features["max_tokens"] = max_tokens
+    if features:
+        out["features"] = features
 
 
 def _vision(raw: dict) -> bool | None:

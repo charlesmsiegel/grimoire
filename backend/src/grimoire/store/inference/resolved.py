@@ -7,12 +7,20 @@ and `fallback` is what the facade then sends when that primary fails: the same
 connection and sampling `LLMClient._routes` derives (spec §5.2, §5.4). The
 facade still resolves its own fallback in this slice; this one is the
 resolver's account of it, held equal to the facade's by the tests.
+
+Slice B adds what each attempt IS (its provider's kind, URL, rev, billing and
+preset), what is known of its model (`facts`), and what it can do
+(`capabilities`, each a `capabilities.Cap` with its source) -- and, from those,
+`missing` / `fallback_missing`: what the route needs that an attempt is known
+not to have. The seam refuses on `missing`; `fallback_missing` is reported only,
+because the facade still sends the fallback it resolves itself until slice C.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
+from .capabilities import Cap
 from .cascade import Selection
 
 
@@ -26,8 +34,28 @@ class Attempt:
     #: a fallback, the primary's when the primary's came from a route scope.
     preset_id: str
     #: The attempt lowered to today's connection dict (`sampling` and, where
-    #: the catalog says, `model_params` attached).
+    #: the catalog says, `model_params` and `model_features` attached).
     conn: dict
+    #: The connection's adapter (`kind`).
+    provider_kind: str = ""
+    #: Where requests go: the connection's own URL, else its preset's.
+    base_url: str = ""
+    #: The connection's revision -- what gates its catalog and verified facts.
+    rev: str = ""
+    #: "metered" | "subscription" (`providers.billing`).
+    billing: str = ""
+    #: The provider preset (`providers.PRESETS` id) -- named apart from the
+    #: sampler `preset_id` above.
+    provider_preset: str = ""
+    #: What is known of this model on this provider (`facts.of`).
+    facts: dict = field(default_factory=dict)
+    #: Every capability name -> `Cap(value, source, error)` (`capabilities.resolve_caps`;
+    #: `error` is set only on a failed test, which reads `unknown`).
+    capabilities: dict[str, Cap] = field(default_factory=dict)
+    #: Effective controls (spec 8): `llm_sampling.effective(conn)` -- what each
+    #: preset control sends on this attempt and why. Empty only on an attempt
+    #: built by hand.
+    controls: dict = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -54,6 +82,14 @@ class ResolvedInference:
     #: same reads the attempts were built from (None when it chose nothing).
     #: What an override is compared against to say whether it moved the call.
     standing: Selection | None = None
+    #: The capabilities the route needs -- its operation's own and its
+    #: `requires` -- that the PRIMARY attempt is known (`no`) not to have, in
+    #: `capabilities.NAMES` order. `unknown` is never missing, and nor is the
+    #: name rule's `no` (a guess, `resolve._GUESSES`). What the seam refuses on.
+    missing: tuple[str, ...] = ()
+    #: The same check on the fallback attempt. Reported only: the facade still
+    #: sends that fallback until slice C drops it.
+    fallback_missing: tuple[str, ...] = ()
 
     @property
     def conn(self) -> dict | None:

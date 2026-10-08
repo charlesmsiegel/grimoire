@@ -36,6 +36,18 @@ def test_an_entry_keeps_missing_metadata_missing():
         "prompt": None, "completion": None, "vision": None}
 
 
+def test_an_entry_keeps_the_per_image_price_as_reported():
+    """OpenRouter's `pricing.image` (USD per image) sits beside the per-token
+    prices, stored as the provider wrote it; a row that states none has no
+    `image` key at all, which reads as "not reported", never as free."""
+    row = catalog.entry({"id": "m", "pricing": {"prompt": "0.000001", "completion": "0.000002",
+                                                "image": "0.0025"}})
+    assert (row["prompt"], row["completion"], row["image"]) == ("0.000001", "0.000002",
+                                                                "0.0025")
+    assert "image" not in catalog.entry({"id": "m", "pricing": {"prompt": "0"}})
+    assert "image" not in catalog.entry({"id": "m", "pricing": {"image": None}})
+
+
 def test_the_context_window_is_read_from_vllms_field_too():
     """vLLM names the window it serves as `max_model_len`; without reading it a
     local model's context bar has nothing to be a fraction of."""
@@ -181,3 +193,122 @@ def test_an_entry_keeps_the_parameters_a_model_takes():
 def test_an_entry_without_a_parameter_list_has_no_params_key():
     """Unknown is not "takes none": the sampler split reads the absence."""
     assert "params" not in catalog.entry({"id": "m", "supported_parameters": None})
+
+
+# ---- output modalities and per-model features (slice B) ----
+TEXT_ROW = {"id": "a/chat", "architecture": {"output_modalities": ["text"]}}
+EMBED_ROW = {"id": "b/embed", "architecture": {"output_modalities": ["embeddings"]}}
+RERANK_ROW = {"id": "c/rerank", "architecture": {"output_modalities": ["rerank"]}}
+
+
+def test_an_openrouter_entry_carries_the_outputs_the_row_states():
+    assert catalog.entry(TEXT_ROW)["outputs"] == ["text"]
+    assert catalog.entry({"id": "m", "architecture": {
+        "output_modalities": ["image", "text"]}})["outputs"] == ["image", "text"]
+
+
+def test_an_entry_whose_row_states_no_outputs_has_none():
+    """Absent stays absent: "the provider did not say" is not "outputs nothing"."""
+    assert "outputs" not in catalog.entry({"id": "m"})
+    assert "outputs" not in catalog.entry({"id": "m", "architecture": {}})
+    assert "outputs" not in catalog.entry({"id": "m", "architecture": {"output_modalities": "text"}})
+    assert "outputs" not in catalog.entry({"id": "m", "architecture": "text"})
+    assert "features" not in catalog.entry(TEXT_ROW)
+
+
+def _anthropic_row(**over):
+    row = {"id": "claude-test-1", "type": "model", "display_name": "Claude Test One",
+           "max_input_tokens": 200000, "max_tokens": 64000,
+           "capabilities": {
+               "image_input": {"supported": True},
+               "structured_outputs": {"supported": True},
+               "thinking": {"types": {"adaptive": {"supported": True},
+                                      "enabled": {"supported": False},
+                                      "disabled": {"supported": True}}},
+               "effort": {"low": {"supported": True}, "medium": {"supported": True},
+                          "high": {"supported": True}, "xhigh": {"supported": False},
+                          "max": {"supported": True}}}}
+    row.update(over)
+    return row
+
+
+def test_an_anthropic_row_is_read_for_what_it_states():
+    got = catalog.entry(_anthropic_row())
+    assert got["id"] == "claude-test-1"
+    assert got["name"] == "Claude Test One"
+    assert got["context"] == 200000
+    assert got["vision"] is True
+    assert got["outputs"] == ["text"]
+    assert got["features"] == {
+        "structured_output": True, "adaptive_thinking": True, "enabled_thinking": False,
+        "disabled_thinking": True, "effort": ["low", "medium", "high", "max"], "max_tokens": 64000}
+
+
+def test_an_anthropic_row_maps_only_the_keys_it_states():
+    row = _anthropic_row()
+    row["capabilities"] = {"structured_outputs": {"supported": False},
+                           "thinking": "nope", "effort": None}
+    del row["max_tokens"]
+    got = catalog.entry(row)
+    assert got["features"] == {"structured_output": False}
+    assert got["vision"] is None
+
+
+@pytest.mark.parametrize("caps", [
+    {"image_input": None, "structured_outputs": "x", "thinking": {"types": []},
+     "effort": {"low": 1, "high": {"supported": "yes"}}},
+    {"thinking": {"types": {"adaptive": None, "enabled": {}}}},
+    {},
+])
+def test_a_mangled_anthropic_row_never_raises(caps):
+    got = catalog.entry(_anthropic_row(capabilities=caps, max_tokens="big", max_input_tokens=None))
+    assert got["id"] == "claude-test-1" and got["outputs"] == ["text"]
+    assert got["context"] is None
+    assert got.get("features", {}).get("effort", []) == []
+
+
+def test_an_anthropic_row_with_no_capability_tree_keeps_what_else_it_states():
+    """`capabilities` is nullable in the Models API: a null tree says nothing
+    about capabilities, but the row is still Anthropic's -- its name, window
+    and reply cap are read, and the cap reaches the request's `max_tokens`."""
+    from grimoire import llm_sampling as ls
+    got = catalog.entry(_anthropic_row(capabilities=None))
+    assert got["name"] == "Claude Test One"
+    assert got["context"] == 200000
+    assert got["outputs"] == ["text"]
+    assert got["vision"] is None
+    assert got["features"] == {"max_tokens": 64000}
+    conn = {"kind": "anthropic", "model": "claude-test-1", "model_features": got["features"],
+            "sampling": {"params": {"max_tokens": 100000}}}
+    assert ls.effective(conn)["effective"]["max_tokens"] == 64000
+
+
+@pytest.mark.parametrize("row", [
+    {"id": "a/chat", "name": "Chat", "context_length": 8000, "architecture": {},
+     "pricing": {"prompt": "0.1"}, "supported_parameters": ["temperature"]},
+    {"id": "gpt-x", "object": "model", "created": 1, "owned_by": "someone"},
+    {"id": "m", "display_name": "No type field", "capabilities": None},
+])
+def test_rows_from_other_catalogs_are_not_read_as_anthropic(row):
+    got = catalog.entry(row)
+    assert "features" not in got and "outputs" not in got
+
+
+def test_listable_keeps_text_and_unstated_rows_only():
+    rows = [catalog.entry(r) for r in (TEXT_ROW, EMBED_ROW, RERANK_ROW, {"id": "d/plain"},
+                                       {"id": "e/img", "architecture": {
+                                           "output_modalities": ["image", "text"]}})]
+    assert [m["id"] for m in catalog.listable(rows)] == ["a/chat", "d/plain", "e/img"]
+
+
+def test_listable_tolerates_a_mangled_outputs_value():
+    assert [m["id"] for m in catalog.listable([{"id": "x", "outputs": "text"}])] == ["x"]
+
+
+MIXED = [catalog.entry(r) for r in (TEXT_ROW, EMBED_ROW, RERANK_ROW)]
+
+
+def test_preview_lists_text_models_only(client):
+    client.app.dependency_overrides[routes.get_llm] = lambda: FakeCatalog(models=MIXED)
+    r = client.post("/api/model-catalog", json={"kind": "openrouter"})
+    assert [m["id"] for m in r.json()["models"]] == ["a/chat"]
