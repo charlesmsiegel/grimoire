@@ -336,6 +336,26 @@ test("a library still upgrading shows Finishing the upgrade, and writes nothing 
   });
 });
 
+test("an upgrade that never finishes stops promising, and is asked about less often", async () => {
+  // `pending` forever is a real state (the switch turned off, a run elsewhere
+  // that died): the step must not go on saying it opens "as soon as that is
+  // done", nor ask every second for as long as the tab stays open.
+  await withFakeTimers(async () => {
+    const reads = scriptReads(() => Promise.resolve(UPGRADING()));
+    await goToStep(2);
+    expect(await screen.findByText(/finishing the upgrade/i)).toBeInTheDocument();
+    for (let i = 0; i < 40; i += 1) await advance(1000);
+    expect(await screen.findByText(/not finishing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/finishing the upgrade/i)).not.toBeInTheDocument();
+
+    // Ten seconds asks twice at the slow cadence, not ten times.
+    const before = reads.count;
+    for (let i = 0; i < 10; i += 1) await advance(1000);
+    expect(reads.count - before).toBeGreaterThanOrEqual(1);
+    expect(reads.count - before).toBeLessThanOrEqual(2);
+  });
+});
+
 test("a read that fails while upgrading does not stop the asking", async () => {
   // Keyed on the answer alone, the poll re-armed only when the answer moved:
   // a rejected read leaves it where it was, and the step said "opens as soon

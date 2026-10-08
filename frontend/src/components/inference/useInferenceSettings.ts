@@ -5,6 +5,26 @@ import { onConfigChanged } from "../../appEvents";
 /** How often a library that is still moving to the new model-settings layout
  *  is asked again whether it has finished (spec 11.2). */
 export const UPGRADE_POLL_MS = 1000;
+/** How many reads are asked at `UPGRADE_POLL_MS` before the asking slows to
+ *  `UPGRADE_POLL_SLOW_MS`. An upgrade that says `pending` or `running` and never
+ *  finishes is a real state -- the automatic switch turned off, or another
+ *  process's run that died and left its note -- and a tab left open on it
+ *  would otherwise ask every second for as long as it stays open. Past this
+ *  many, a surface may also say the upgrade is not moving (`upgradeStalled`). */
+export const UPGRADE_POLL_QUICK = 30;
+/** The slower cadence past that: the run poll's own (`RUN_POLL_SLOW_MS`). */
+export const UPGRADE_POLL_SLOW_MS = 5000;
+
+/** The wait before the next upgrade read, after `reads` reads have settled. */
+export function upgradePollDelay(reads: number): number {
+  return reads < UPGRADE_POLL_QUICK ? UPGRADE_POLL_MS : UPGRADE_POLL_SLOW_MS;
+}
+
+/** Whether an upgrade still on its way after `reads` reads has stopped
+ *  looking like one that will finish while this page is open. */
+export function upgradeStalled(reads: number): boolean {
+  return reads >= UPGRADE_POLL_QUICK;
+}
 
 /** Whether `s` is a library whose global switch has not landed yet but is on
  *  its way: pending or running, at the old layout, and not a newer build's.
@@ -20,7 +40,8 @@ export function upgrading(s: InferenceSettings | null | undefined): boolean {
  *  A page reads the view once and gates its writes on the layout; nothing
  *  tells it when a background migration finishes, so a page opened while it
  *  ran stayed locked until it was left. This reads again:
- *  - every `UPGRADE_POLL_MS` while the view says the upgrade is `upgrading`,
+ *  - every `UPGRADE_POLL_MS` while the view says the upgrade is `upgrading`
+ *    (slowing to `UPGRADE_POLL_SLOW_MS` after `UPGRADE_POLL_QUICK` reads),
  *    re-armed whenever a read settles, answered or not -- keyed on the answer
  *    alone, one failed read changed nothing and the asking stopped;
  *  - on any model-settings change made anywhere (`configChanged`).
@@ -74,7 +95,7 @@ export function useInferenceSettings(enabled = true): {
   const polling = upgrading(settings);
   useEffect(() => {
     if (!polling) return;
-    const timer = setTimeout(read, UPGRADE_POLL_MS);
+    const timer = setTimeout(read, upgradePollDelay(reads));
     return () => clearTimeout(timer);
   }, [polling, reads, read]);
 

@@ -221,6 +221,11 @@ export function TestCallDialog({ provider, model, capabilities, tests, onClose }
 
   function run() {
     if (!preview) return;
+    // Run test is disabled while the test runs, and focus left on it would
+    // drop to the body -- out of the dialog, and nowhere a screen reader is
+    // told anything. The dialog itself holds it meanwhile; the outcome is
+    // announced from the live region below.
+    self.current?.focus();
     setFailed(null);
     setResult(null);
     setWatching(tests.start(provider, model, listed(caps)));
@@ -255,6 +260,8 @@ export function TestCallDialog({ provider, model, capabilities, tests, onClose }
             </p>
           </>
         )}
+        {/* Always in the page, so what lands in it is announced. */}
+        <div role="status" aria-live="polite">
         {result && (
           <ul className="test-call-results" aria-label="Results">
             {Object.entries(result.results).map(([cap, r]) => (
@@ -269,6 +276,7 @@ export function TestCallDialog({ provider, model, capabilities, tests, onClose }
           </ul>
         )}
         {failed !== null && <p className="field-hint">The test could not run: {errorText(failed)}</p>}
+        </div>
         <div className="form-actions">
           <button className="primary" type="button" onClick={run}
                   disabled={running || !preview}>

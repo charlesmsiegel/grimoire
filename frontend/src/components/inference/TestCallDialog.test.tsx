@@ -288,3 +288,27 @@ test("a run forgotten while in flight never answers for the next one", async () 
   expect(heard).toHaveBeenCalledWith(expect.objectContaining({ rev: "r2" }));
   expect(held().live("saltmarch", "vendor/m")).toBeUndefined();
 });
+
+test("Run test hands focus to the dialog, and the outcome is announced", async () => {
+  // Run test disables under the reader while the test runs: focus left on it
+  // dropped to the body, and the outcome arrived with nothing to say so.
+  let land: (r: ModelTestResult) => void = () => {};
+  (api.runModelTest as any).mockReturnValue(new Promise((r) => { land = r; }));
+  open();
+  const dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  const run = within(dialog).getByRole("button", { name: "Run test" });
+  run.focus();
+  fireEvent.click(run);
+
+  expect(await within(dialog).findByRole("button", { name: /testing/i })).toBeDisabled();
+  expect(document.activeElement).toBe(dialog);
+
+  const status = within(dialog).getByRole("status");
+  expect(status).toHaveAttribute("aria-live", "polite");
+  await act(async () => {
+    land({ provider: "saltmarch", model: "vendor/m", rev: "r1",
+           results: { generate: { ok: false, kind: "provider", error: "402 spend limit" } },
+           recorded: false });
+  });
+  expect(await within(status).findByText(/generate/i)).toBeInTheDocument();
+});

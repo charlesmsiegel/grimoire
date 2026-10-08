@@ -908,6 +908,26 @@ describe("the Models section", () => {
     expect(api.putCampaignInference).not.toHaveBeenCalled();
   });
 
+  test("a fallback preset left without a provider says it is not used", async () => {
+    // Saved, such a fallback is sent empty; the form must not go on showing
+    // the preset as though it were kept (/models says the same of its draft).
+    const section = await openModels();
+    fireEvent.click(await section.findByRole("button", { name: /^Fast/ }));
+    fireEvent.click(await section.findByRole("button", { name: "Edit" }));
+    fireEvent.click(section.getByRole("button", { name: "Fallback" }));
+    const fallback = within(await section.findByRole("group", { name: "Fast fallback" }));
+    fireEvent.change(fallback.getByRole("combobox", { name: "Provider" }),
+                     { target: { value: "realm" } });
+    fireEvent.click(await fallback.findByRole("radio", { name: "realm/small" }));
+    fireEvent.change(fallback.getByRole("combobox", { name: "Fallback preset" }),
+                     { target: { value: "terse" } });
+    expect(fallback.queryByText(/preset with no provider is not used/)).not.toBeInTheDocument();
+
+    fireEvent.change(fallback.getByRole("combobox", { name: "Provider" }),
+                     { target: { value: "" } });
+    expect(fallback.getByText(/preset with no provider is not used/)).toBeInTheDocument();
+  });
+
   test("an arrow on a model radio is the radio's, never the scene's variant swipe", async () => {
     // The play view binds bare ← and → to the last reply's variant swipe, and
     // the Inspector is a panel beside it, not an overlay: nothing holds those

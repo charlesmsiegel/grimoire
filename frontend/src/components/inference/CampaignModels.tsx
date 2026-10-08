@@ -12,7 +12,7 @@ import { InferenceBanner } from "./InferenceBanner";
 import { migrationBanner, migrationLine, migrationUnfinished } from "./migration";
 import { PresetSelect } from "./PresetSelect";
 import { ProviderModelPicker } from "./ProviderModelPicker";
-import { UPGRADE_POLL_MS, upgrading } from "./useInferenceSettings";
+import { upgradePollDelay, upgrading } from "./useInferenceSettings";
 import {
   CHOOSE_A_MODEL, describe, droppedFallbackWords, inheritedPreset, inheritWords, ROLE_LABEL,
   ROLE_NEEDS, routePinNeeds, routePresetWords, wantsModel,
@@ -138,7 +138,7 @@ export function CampaignModels({ cid }: { cid: string }) {
   const polling = upgrading(settings);
   useEffect(() => {
     if (!polling) return;
-    const timer = setTimeout(() => setRev((n) => n + 1), UPGRADE_POLL_MS);
+    const timer = setTimeout(() => setRev((n) => n + 1), upgradePollDelay(reads));
     return () => clearTimeout(timer);
   }, [polling, reads]);
 
@@ -322,6 +322,14 @@ function SelectionFields({ label, needs, sel, onChange, settings, blocked, prese
                       emptyLabel="Provider defaults" disabled={blocked || presetHeld}
                       onChange={(preset) => onChange({ ...sel, preset })} />
       </label>
+      {/* What /models says of the same draft: nothing reads a preset whose
+          selection names no provider, and a fallback saved that way is
+          saved empty -- so the form says so rather than showing one. */}
+      {!sel.provider && !!sel.preset && (
+        <p className="field-hint">
+          A preset with no provider is not used. Choose a provider, or clear it.
+        </p>
+      )}
       <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />
     </fieldset>
   );

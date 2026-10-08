@@ -8,7 +8,7 @@ import { errorText } from "../api/errors";
 import { Field } from "../components/Field";
 import { migrationLine, migrationUnfinished } from "../components/inference/migration";
 import { ProviderModelPicker } from "../components/inference/ProviderModelPicker";
-import { UPGRADE_POLL_MS } from "../components/inference/useInferenceSettings";
+import { upgradePollDelay, upgradeStalled } from "../components/inference/useInferenceSettings";
 import { StorageLocation } from "../components/StorageLocation";
 import { ThemePicker } from "../components/ThemePicker";
 import { PlainShell } from "../components/PageShell";
@@ -292,7 +292,7 @@ export default function SetupWizard(
     && (inference.migration.state === "pending" || inference.migration.state === "running");
   useEffect(() => {
     if (!upgrading || (step !== 2 && step !== 3)) return;
-    const timer = setTimeout(() => { void loadInference(); }, UPGRADE_POLL_MS);
+    const timer = setTimeout(() => { void loadInference(); }, upgradePollDelay(inferenceReads));
     return () => clearTimeout(timer);
   }, [upgrading, step, inferenceReads, loadInference]);
 
@@ -529,6 +529,18 @@ export default function SetupWizard(
           The upgrade to the new model settings stopped
           {inference.migration.reason ? `: ${inference.migration.reason}` : "."} Skip this step
           for now — Settings shows how the upgrade stands.
+        </p>
+      );
+    }
+    if (upgrading && upgradeStalled(inferenceReads)) {
+      // Still `pending` or `running` after a long while: the switch may be
+      // turned off, or a run elsewhere died and left its note. Nothing here
+      // can finish it, so the step stops promising that it will open.
+      return (
+        <p className="field-hint" role="status">
+          The upgrade to the new model settings is not finishing — it may not be running, and
+          it resumes the next time Grimoire starts. Skip this step for now — Settings shows how
+          the upgrade stands.
         </p>
       );
     }
