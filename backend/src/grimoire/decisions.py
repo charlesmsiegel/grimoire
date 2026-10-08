@@ -415,7 +415,31 @@ def _foreign_index(obj: dict[str, Any], count: int) -> bool:
 
     Such a reply was not keyed by our indices -- numbered from 1, most likely
     -- and its `"1"` may well be the model's answer to item 0. Renumbering it is
-    a guess, so none of its keys is read as ours."""
+    a guess, so none of its keys is read as ours.
+
+    THE LIMIT. A reply numbered from 1 that answered every item carries `"n"`,
+    one past the batch, and is caught; one that skipped an item may not be.
+    `{"1": ..., "2": ...}` beside three items is in range, so it is read as
+    items 1 and 2 -- and if the model meant items 0 and 1, a pair verdict
+    (`duplicate` A->B, `related`) lands on the wrong candidate. Strict
+    structured mode cannot send that shape (the schema requires `"0"` to
+    `"n-1"`); a prompt-only re-send, a fallback without the mode, or a server
+    that ignores `response_format` can. Identity is safe from it (each row's
+    `id` choice offers only that row's candidates, so a shifted one reads
+    `NOT_AN_OPTION`), and so are most of reconcile's status words (their
+    evidence scene must be one of the item's own); the pair words are not.
+
+    It is left unguarded because no test on the keys alone tells the two
+    apart. The obvious one -- index keys with no `"0"` -- also refuses a
+    reply keyed from 0 that answered every item but item 0, which reads
+    exactly as a reply keyed from 1 that skipped the last one. That is how a
+    reply answers only the items it has something to say about, and the
+    continuity gate's replies take it often (tried, the rule turned most of
+    the reconcile gate's decide reads into regressions), so refusing it would
+    leave answers unread that nothing suggests were misnumbered.
+    Telling them apart needs evidence the keys do not carry; a proposal
+    stands behind review either way, so a misattributed one is a wrong
+    suggestion the reviewer still has to accept, never a silent write."""
     return any(key.isdigit() and not (key == str(int(key)) and int(key) < count)
                for key in obj)
 

@@ -346,7 +346,10 @@ def test_a_reply_numbered_from_one_answers_no_item():
 
 def test_a_reply_whose_keys_are_all_in_range_is_read_as_before():
     """Every index key one we sent: read as today, an item left out included
-    (it is `NO_ITEM`; the other is answered)."""
+    (it is `NO_ITEM`; the other is answered). The second reply is also the
+    shape `_foreign_index`'s documented limit cannot tell from a reply keyed
+    from 1 that skipped the last item -- pinned so that refusing it is a
+    decision someone makes, not a side effect."""
     items = [Item("a", (Predicate("over", "i"),)), Item("b", (Predicate("over", "i"),))]
     first, second = decisions.parse(
         '{"0": {"answers": {"over": true}}, "1": {"answers": {"over": false}}}', items,
