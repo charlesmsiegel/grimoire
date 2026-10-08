@@ -27,15 +27,37 @@ per-token rates the user maintains, `<home>/pricing.json`::
 A sibling file rather than a `config.md` key, for the reason #158 gives: config
 frontmatter is flat string-scalar, and a per-model map is not.
 
+**That table is the second of two rate layers.** The first is a model's own
+rates, stated on its provider's page and kept in that provider's model facts
+(`store.inference.facts`, a `rates` entry per model, read by `provider_rates`).
+`rate_for_call` is the one place precedence is decided: a price the provider
+reported was never handed to this module at all, so it comes first by
+construction; then the model's own rates (under the model asked for, then the
+one that answered); then this table (each tier under the model that answered,
+then the one asked for). The facts are read straight from their
+JSON here rather than through `store.inference.facts`, because `store.usage`
+imports this module and `store.inference` reaches `store.usage` again through
+`campaigns` -- a runtime cycle the static import guard cannot see.
+
+**Every rollup prices history at current rates.** Editing a rate re-prices
+every row it covers, and so does deleting a provider: its facts file goes with
+it, so the rows it served price from this table or read unpriced. A provider id
+is its name's slug, so one created later under the same name prices those rows
+at its own rates. Only `modelled_usd` moves in any of these -- no rate ever
+touches a row a provider priced, so spend does not.
+
 **Both base rates are required.** An entry carrying only one is dropped, not
 half-applied: pricing a call's prompt at a rate and its completion at nothing
 produces a figure that is confidently wrong, and on a call that generated
 nothing it produces `$0.00` — the one thing this whole feature exists not to
 say. The cache pair stays optional for the opposite reason: those tokens have
-a rate either way (see below).
+a rate either way (see below). **A zero rate is a rate**: both base rates at
+zero say the model is free (a local endpoint), and its calls model to `$0`
+rather than reading unpriced -- only a rate nobody stated is "unknown".
 
 **What comes out of here is never spend.** An estimate is arithmetic over rates
-somebody typed, against token counts a provider reported; it belongs in its own
+somebody typed, against token counts a provider reported or this side counted
+(`tokens_estimated`, see `store.usage`); it belongs in its own
 column (`modelled_usd`) beside `cost_usd`, never summed into it, and never
 counted against a budget. The whole reason `store.usage` writes an *absent*
 price rather than a zero one is so this pass can tell "free" from "unknown" —
@@ -56,9 +78,10 @@ subtotal and onto their own; see `estimate`.
 from __future__ import annotations
 
 import json
+from functools import partial
 from pathlib import Path
 
-from . import atomic, paths
+from . import atomic, llm_connections, paths, statcache
 
 #: The key an entry uses to mean "every model with no entry of its own".
 DEFAULT_KEY = ""
@@ -123,8 +146,10 @@ def _rate(value: object) -> float | None:
     return value
 
 
-def _entry(value: object) -> dict | None:
-    """One table entry, keeping only the fields that are usable rates.
+def entry(value: object) -> dict | None:
+    """One table entry, keeping only the fields that are usable rates. Public
+    because a model's own rates (`store.inference.facts`) are read by the same
+    rule as a table row.
 
     An entry without BOTH base rates is dropped rather than kept partial: the
     pair is what makes an entry able to price a call, and a surviving one would
@@ -147,6 +172,33 @@ def _entry(value: object) -> dict | None:
     # The cache pair stays optional: those tokens have a rate either way, the
     # prompt rate, which is what a table naming no cache rate is saying.
     return kept if PROMPT in kept and COMPLETION in kept else None
+
+
+def check_entry(value: object) -> dict:
+    """The editor's strict form of `entry`: the usable entry, or `ValueError`.
+
+    `entry` drops what it cannot use, which is right for a reader and wrong for
+    a writer -- a rate somebody typed that vanishes on the way in is a rate they
+    never see again. Three refusals, checked in this order:
+
+    1. not an object, or a key outside `FIELDS` (a misspelt `..._1K` would
+       otherwise be dropped, leaving a half entry that is then refused as
+       "needs both" with no hint of why);
+    2. a present field that is not a non-negative finite number;
+    3. both base rates are not there.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("rates must be an object of rate fields")
+    unknown = sorted(str(k) for k in value if k not in FIELDS)
+    if unknown:
+        raise ValueError(f"unknown rate field(s): {', '.join(unknown)}")
+    for field in FIELDS:
+        if field in value and _rate(value[field]) is None:
+            raise ValueError(f"{field} must be a non-negative number")
+    kept = entry(value)
+    if kept is None:
+        raise ValueError("rates need both an input and an output rate")
+    return kept
 
 
 def read_pricing(strict: bool = False) -> dict[str, dict]:
@@ -183,9 +235,9 @@ def read_pricing(strict: bool = False) -> dict[str, dict]:
         if not isinstance(key, str) or len(table) >= MAX_ENTRIES:
             lost += 1
             continue
-        entry = _entry(value)
-        if entry is not None:
-            table[key] = entry
+        usable = entry(value)
+        if usable is not None:
+            table[key] = usable
         else:
             lost += 1
     # Dropping an entry is fine for a rollup -- that model reads "unpriced"
@@ -219,9 +271,9 @@ def write_pricing(table: object) -> dict[str, dict]:
     for key, value in table.items():
         if not isinstance(key, str):
             raise ValueError("every pricing key must be a model id")
-        entry = _entry(value)
-        if entry is not None:
-            kept[key] = entry
+        usable = entry(value)
+        if usable is not None:
+            kept[key] = usable
     # `ensure_home`, like every other first-write path (`config.write_config`,
     # `fork`): `atomic.write_text` creates its temp file BESIDE the target, so a
     # store root that does not exist yet is a `FileNotFoundError` rather than a
@@ -252,16 +304,33 @@ def rate_for(table: dict[str, dict], model: object) -> dict | None:
     default, which is correct: nobody knows what answered, so only a rate that
     claims to cover everything can price it.
     """
-    if not isinstance(model, str) or not model:
-        return table.get(DEFAULT_KEY)
-    exact = table.get(model)
-    if exact is not None:
-        return exact
+    return _table_rate(table, (model,))
+
+
+def _prefixed(table: dict[str, dict], model: str) -> dict | None:
+    """The longest ``prefix*`` entry `model` matches, or None."""
     best, best_len = None, -1
     for key, entry in table.items():
         if key.endswith("*") and model.startswith(key[:-1]) and len(key) > best_len:
             best, best_len = entry, len(key)
-    return best if best is not None else table.get(DEFAULT_KEY)
+    return best
+
+
+def _table_rate(table: dict[str, dict], names: tuple[object, ...]) -> dict | None:
+    """`rate_for`'s three tiers over several names: every name's exact entry,
+    then every name's longest ``prefix*``, then ``""`` -- so a narrower tier
+    under a later name beats a wider one under an earlier name, and names
+    within a tier are tried in the order given."""
+    usable = [n for n in names if isinstance(n, str) and n]
+    for name in usable:
+        exact = table.get(name)
+        if exact is not None:
+            return exact
+    for name in usable:
+        best = _prefixed(table, name)
+        if best is not None:
+            return best
+    return table.get(DEFAULT_KEY)
 
 
 def estimate(entry: dict | None, *, prompt_tokens: int | None,
@@ -330,3 +399,121 @@ def estimate(entry: dict | None, *, prompt_tokens: int | None,
     # hand. An estimate that overflowed is not an estimate: None, like every
     # other answer this function cannot compute.
     return total if total == total and total != float("inf") else None
+
+
+#: `provider_rates`' memo, one entry per facts file signature. A pool of its own
+#: like `usage._UNPRICED_POOL`: the shared `statcache` FIFO is the one the sync
+#: sweeps fill with every entity and card hash. The rail reads this on every
+#: navigation, so a stable file must cost a stat and not a parse. Each value is
+#: a handful of model names; the stale signatures an edit leaves behind cost
+#: nothing worth evicting early.
+_PROVIDER_POOL: dict = {}
+_PROVIDER_ENTRIES = 256
+
+
+def _read_provider_file(path: Path) -> dict[str, dict]:
+    """One facts file's usable rates as `{model: entry}`; `{}` for content that
+    is not a usable facts document (bad JSON, bytes that are not UTF-8, a
+    non-object), which the memo may remember because the stat signature keys
+    the content.
+
+    Raises OSError rather than answering empty, as `usage._month_unpriced`
+    does: a file a sync client or antivirus held for one read is not a file
+    with no rates in it, and the memo would otherwise keep that empty answer
+    under the signature of a file that never changed. `provider_rates` skips
+    the file for this read and caches nothing."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError:      # UnicodeDecodeError included: content, not access
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    rates: dict[str, dict] = {}
+    for model, facts in raw.items():
+        if not isinstance(model, str) or not isinstance(facts, dict):
+            continue
+        usable = entry(facts.get("rates"))
+        if usable is not None:
+            rates[model] = usable
+    return rates
+
+
+def provider_rates() -> dict[str, dict[str, dict]]:
+    """Every provider's stated model rates, as `{provider_id: {model: entry}}`.
+
+    Only usable entries (`entry`) appear, and a provider with none is omitted.
+    **Never raises**: a facts file a sync or a hand mangled into anything
+    contributes nothing, so its models read unpriced and fall back to the
+    `pricing.json` table -- never `$0`, and never a failed rollup.
+
+    Each file is remembered on its stat signature (`statcache`, in a pool of
+    its own), so this is cheap on a path that runs every navigation. The answer
+    is a fresh copy: a caller that edits it cannot edit the memo.
+
+    **Deleting a provider re-prices its history.** Its facts file goes with it
+    (`llm_connections.delete_connection`), so its rates leave this answer and
+    every row it served prices from the table, or reads unpriced, on the next
+    rollup (`usage.Rates`; the rail's aggregate re-prices on its fingerprint).
+    A provider id is its name's slug, and a slug is reusable: a provider
+    created later under the deleted one's name gets the same id, and its rates
+    then price the old provider's rows. The ledger has nothing else to tell the
+    two apart. Only `modelled_usd` is affected -- spend never moves, because no
+    rate touches a row its provider priced.
+
+    This reads the facts file's JSON shape itself (`{model: {"rates": ...}}`)
+    rather than importing `store.inference.facts`, which writes it: `usage`
+    imports this module, and `inference` reaches `usage` again through
+    `campaigns`, so that import would be a runtime cycle the static guard
+    cannot see. `tests/test_model_rates.py` writes through `facts.state` and
+    reads back through here, which holds the two to one schema.
+    """
+    out: dict[str, dict[str, dict]] = {}
+    try:
+        files = llm_connections.facts_files()
+    except Exception:   # noqa: BLE001 -- bookkeeping never fails a call
+        return out
+    for provider_id, path in files.items():
+        try:
+            sig = statcache.signature(path)
+            rates = statcache.memo("pricing:provider", sig, partial(_read_provider_file, path),
+                                   pool=_PROVIDER_POOL, max_entries=_PROVIDER_ENTRIES)
+        except Exception:   # noqa: BLE001 -- one file never costs the rest; an
+            continue        # OSError reaches here uncached, so the next read retries
+        if rates:
+            out[provider_id] = {m: dict(e) for m, e in rates.items()}
+    return out
+
+
+def rate_for_call(table: dict[str, dict], providers: dict[str, dict[str, dict]], *,
+                  provider_id: str = "", model: str = "",
+                  requested_model: str = "") -> dict | None:
+    """The entry that prices one call -- the one place precedence is decided.
+
+    In order:
+
+    1. the provider's rates for the model that was **asked for**
+       (`providers[provider_id][requested_model]`), when both are set -- a
+       provider may answer under a dated snapshot of what was requested, and
+       the rates were stated under the request;
+    2. the provider's rates for the model that **answered**;
+    3. the table, by `rate_for`'s tiers -- an exact entry, then the longest
+       `prefix*`, then `""` -- each tier tried under the model that
+       **answered** and then the model **asked for**.
+
+    A model's own rates are exact and take no wildcards. The table matches the
+    *recorded* model first, so every existing table prices exactly what it
+    priced before (no row filed before `requested_model` carries one). It also
+    matches the name asked for, because that is the only name configuration
+    knows: the Housekeeping chore (`inference.in_use.unpriced`) judges a
+    configured model through this same function, so an entry under the name
+    the user configured clears that chore AND prices the calls that answered
+    as a dated snapshot of it -- the two chores cannot disagree about a model.
+    A row that names no provider (every row filed before providers were
+    recorded) has only the table.
+    """
+    mine = providers.get(provider_id) if provider_id else None
+    if mine:
+        for name in (requested_model, model):
+            if name and name in mine:
+                return mine[name]
+    return _table_rate(table, (model, requested_model))

@@ -10,7 +10,11 @@ What this suite holds:
 * a failure is recorded at `Meter.done` with its kind and HTTP status only --
   never a provider's body or a redirect's `Location` (I1);
 * the space is the caller's: the role is never re-resolved (Review Focus 4);
-* one Debug-level capture line, which never carries the text.
+* one Debug-level capture line, which never carries the text;
+* what served the call (slice E): `provider_id`, `role`, `billing`, and the
+  `requested_model` when the endpoint answered under another name; a prompt
+  count the endpoint did not report is estimated locally, never by loading an
+  encoder, and flagged `tokens_estimated` -- never a completion count.
 
 Every provider, name and key below is invented.
 """
@@ -18,6 +22,7 @@ Every provider, name and key below is invented.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 import types
@@ -26,7 +31,16 @@ import httpx
 import pytest
 
 from grimoire import embeddings
-from grimoire.store import config, embed_space, errors, llm_connections, logs, usage
+from grimoire.store import (
+    config,
+    embed_space,
+    errors,
+    llm_connections,
+    logs,
+    pricing,
+    tokens,
+    usage,
+)
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import embed
 from grimoire.store.inference import resolve as inference_resolve
@@ -123,6 +137,130 @@ def test_an_embed_files_one_row(space):
     assert "completion_tokens" not in row
     assert "campaign" not in row
     assert row["status"] == "ok"
+
+
+def test_a_row_names_what_served_it(space):
+    """Slice E on D's door: the row carries the provider's id, the Embedding
+    role whose slot supplied the selection, and -- when the endpoint answered
+    under another name -- the model that was asked for (spec 9.3)."""
+    def renamed(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"model": "embed-1-2026",
+                                         "data": [{"index": 0, "embedding": [0.5, 0.25]}],
+                                         "usage": {"prompt_tokens": 3}})
+    client, _ = _client(renamed)
+
+    embed.embed_sync("semantic-recall", ["x"], space=space, client=client)
+
+    row = _rows()[0]
+    assert row["provider_id"] == space["provider"]
+    assert row["role"] == "embedding"
+    assert row["operation"] == "embed"
+    assert row["billing"] == "metered"
+    assert row["model"] == "embed-1-2026"
+    assert row["requested_model"] == "embed-1"
+
+
+def test_the_asked_model_is_not_restated_when_it_answered(space):
+    client, _ = _client(_answer({"prompt_tokens": 3}))
+
+    embed.embed_sync("semantic-recall", ["x"], space=space, client=client)
+
+    row = _rows()[0]
+    assert row["model"] == "embed-1"
+    assert "requested_model" not in row
+    assert row["provider_id"] == space["provider"]
+    assert row["role"] == "embedding"
+
+
+def test_the_resolution_never_writes_the_stored_record():
+    """The account block is the lowered copy's: resolving the role stamps
+    nothing onto the record the lookup handed it. Held on the lookup's own
+    dict, not the disk -- the resolution never writes a connection file, so a
+    re-read would pass whatever it did to the dict in memory."""
+    conn = _provider()
+    _role(conn)
+    lookup = inference_resolve.connection_lookup()
+    raw = lookup(conn)
+    assert raw is not None
+    before = copy.deepcopy(raw)
+    got = inference_resolve.embedding(lookup=lookup)
+    assert got.attempts[0].conn[inference_resolve.ACCOUNT_KEY] == {
+        "billing": "metered", "operation": "embed", "role": "embedding"}
+    assert got.attempts[0].conn is not raw
+    assert lookup(conn) is raw
+    assert raw == before
+    assert inference_resolve.ACCOUNT_KEY not in raw
+    assert inference_resolve.ACCOUNT_KEY not in llm_connections.read_connection_raw(conn)
+
+
+# ---- a prompt count nobody reported (slice E, ruling I1) ----------------------
+
+def test_an_unreported_prompt_is_counted_locally_and_says_so(space, monkeypatch):
+    # No encoder loaded: the characters/4 heuristic, rounded up per text.
+    monkeypatch.setattr(tokens, "_loaded", lambda: None)
+    client, _ = _client(_answer())
+
+    embed.embed_sync("semantic-recall", [TEXT, "abc"], space=space, client=client)
+
+    row = _rows()[0]
+    assert row["prompt_tokens"] == -(-len(TEXT) // 4) + 1
+    assert row["tokens_estimated"] is True
+    # An embedding generates nothing: never a completion count, estimated or not.
+    assert "completion_tokens" not in row
+
+
+def test_the_estimate_never_loads_an_encoder(space, monkeypatch):
+    """Only an encoder that has already loaded counts on the request path: a
+    load can be a download."""
+    def load():
+        raise AssertionError("the estimate started an encoder load")
+    monkeypatch.setattr(tokens, "_encoder", load)
+    monkeypatch.setattr(tokens, "_loaded", lambda: types.SimpleNamespace(
+        encode=lambda text: text.split()))
+    client, _ = _client(_answer())
+
+    embed.embed_sync("semantic-recall", [TEXT], space=space, client=client)
+
+    assert _rows()[0]["prompt_tokens"] == len(TEXT.split())
+
+
+def test_a_reported_prompt_is_never_estimated(space):
+    client, _ = _client(_answer({"prompt_tokens": 7}))
+
+    embed.embed_sync("semantic-recall", [TEXT], space=space, client=client)
+
+    row = _rows()[0]
+    assert row["prompt_tokens"] == 7
+    assert "tokens_estimated" not in row
+
+
+def test_a_failed_embed_is_never_estimated(space):
+    client, _ = _client(lambda _r: httpx.Response(500, json={"error": "down"}))
+
+    with pytest.raises(embeddings.EmbeddingsError):
+        embed.embed_sync("semantic-recall", [TEXT], space=space, client=client)
+
+    row = _rows()[0]
+    assert row["status"] == "error"
+    assert "prompt_tokens" not in row
+    assert "tokens_estimated" not in row
+
+
+def test_an_estimated_embed_row_is_modelled_at_a_prompt_rate(space, monkeypatch):
+    """The estimate makes the row priceable: its completion is the structural
+    zero `usage._completion_count` reads, so a rate prices the whole call into
+    `modelled_usd` -- never spend."""
+    monkeypatch.setattr(tokens, "_loaded", lambda: None)
+    pricing.write_pricing({"embed-1": {"prompt_usd_per_1k": 1.0,
+                                       "completion_usd_per_1k": 2.0}})
+    client, _ = _client(_answer())
+
+    embed.embed_sync("semantic-recall", ["x" * 4000], space=space, client=client)
+
+    out = usage.summary(days=1)["totals"]
+    assert out["modelled_usd"] == pytest.approx(1.0)
+    assert out["cost_usd"] == 0.0
+    assert out["estimated_token_calls"] == 1
 
 
 def test_a_row_carries_the_campaign_and_scene_it_is_given(space):

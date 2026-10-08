@@ -27,7 +27,7 @@ from grimoire import routes
 from grimoire.store import config, llm_connections, locks, proclock, sampler_presets
 from grimoire.store import inference_keys as keys
 from grimoire.store.campaigns import lifecycle as campaign_lifecycle
-from grimoire.store.inference import facts, migrate, settings
+from grimoire.store.inference import facts, in_use, migrate, settings
 from tests.llm_fakes import FakeCatalog
 
 from . import inference_baseline as base
@@ -287,7 +287,7 @@ def test_each_model_settings_read_is_inside_the_cross_process_hold(client, monke
         _spy(monkeypatch, sampler_presets, "read_preset", seen)
         sampler_presets.update_preset("warm", "warm", {"temperature": 0.5})
     else:
-        _spy(monkeypatch, settings, "_campaign_meta", seen)
+        _spy(monkeypatch, in_use, "campaign_meta", seen)
         settings.write("campaign", cid, SEL)
     assert seen and all(seen), seen
 

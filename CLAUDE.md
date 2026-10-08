@@ -79,16 +79,19 @@ from `GET /api/shell` in one read; a count nobody can answer cheaply is `null`
 and draws no tail, which is the cost rule ("a price nobody reported is never
 rendered as zero") one domain over.
 
-The Costs row carries **spend only**, and it is the ledger's all-time figure
-rather than a bounded window wearing its name. `store/usage.py`'s
-`lifetime_since` reserves the all-history scan for the all-time view and not
-the play path, so the rail was given a maintained aggregate instead —
-`store/usage_rollup.py`, a byte bookmark into each month file, so the read
-costs what has been played since the last navigation rather than the library's
-age. One tail cannot carry three columns that may never be added, so estimated
-and modelled stay on the hub's card where they can be labelled — and a campaign
-whose calls were all subscription-billed or all unpriced draws no tail rather
-than `$0.00`.
+**Neither Costs row draws a tail.** The app tier's goes to a global monthly
+report, which one campaign's figure would mislabel, and a tail on the campaign
+tier's would have to pick one of three columns that may never be added. The
+campaign's money still rides the shell read: `GET /api/shell` answers
+`campaign.money`, the ledger's all-time figure rather than a bounded window
+wearing its name, and the campaign hub's card draws it as three labelled
+columns (`MoneyColumns`). `store/usage.py`'s `lifetime_since` reserves the
+all-history scan for the all-time view and not the play path, so the shell
+reads a maintained aggregate instead — `store/usage_rollup.py`, a byte
+bookmark into each month file, so the read costs what has been played since the
+last navigation rather than the library's age — and an aggregate it could not
+bring up to date is `partial`, which the card says could not be totalled
+rather than drawing `$0.00`.
 
 **Where a record rail goes depends on whether the page owns the screen.** An
 editor that sits *inside* another page — a library section, a world tab, a
@@ -220,12 +223,15 @@ recover, so the split is the design rather than an artefact of it:
 
 - `cost_usd` — what a provider said it charged. The only figure that is spend,
   and the only one a campaign budget is measured against.
-- `estimated_usd` — a call that billed against a subscription instead of per
-  token (the `claude_agent` path), priced by the provider at what it *would*
-  have cost. Real usage; not money anybody paid.
+- `estimated_usd` — a price the provider reported as a subscription equivalent
+  (`cost_basis: equivalent`, the `claude_agent` path): what the call *would*
+  have cost per token. Real usage; not money anybody paid. A billed price on a
+  subscription-tagged provider stays `cost_usd`, since the tag is a label and
+  `cost_basis` alone decides the column.
 - `modelled_usd` — a call whose provider named no price at all, costed against
-  the per-token table the user maintains in `store/pricing.py`. Arithmetic this
-  side did, and the weakest of the three.
+  the user's rates: the model's own (in its provider's model facts), then the
+  per-token table in `pricing.json` (`store/pricing.py`). Arithmetic this side
+  did, and the weakest of the three.
 
 `unpriced_calls` counts what none of them covers, which is what makes an
 incomplete total say so. The rule that follows from all of it, and the one the
@@ -233,6 +239,36 @@ UI exists to keep: **a price nobody reported is never rendered as zero.** Both
 the ledger (an absent field, never a `0`) and the three cost surfaces
 (`components/cost.tsx`, which every one of them formats through) are built
 around that single sentence.
+
+**A row says what served it, and which numbers this side supplied.** Each
+row carries `provider_id` (the provider's store id; `provider` stays the
+adapter kind), `requested_model` (only when the answer named a dated snapshot),
+`operation`, `role`, `preset` and `billing`. Nobody passes them at a call site:
+`llm._stamp` copies them off the resolved conn of the attempt that served, a
+fallback included, and `usage.Meter.done` files what the holder carries.
+`billing` (`metered` or `subscription`) is a label, and only `cost_basis` moves
+a figure between columns — **a billed price beats the subscription tag**, stays
+`cost_usd` and counts against a budget. A row with no reported price is priced
+by `pricing.rate_for_call`, the one precedence function: the model's own rates
+(stated on its provider's page and kept in that provider's model facts), then
+`pricing.json`. That covers a subscription row with no price too, so it lands
+in `modelled_usd`, counted again in `modelled_subscription_calls` rather than
+in a fourth figure. A zero rate is a real `$0`, so a model stated free models
+to `≈ $0.00` rather than reading unpriced — but a bucket whose only estimate is
+that zero, beside calls nobody priced, still headlines "not reported", since a
+zero there would pass for a complete total. Rollups price the whole history at
+current rates: deleting a provider deletes its facts, so its rows fall back to
+the table or read unpriced, and a provider later created under the same slug
+prices them at its own rates. Only `modelled_usd` ever moves; no rate touches a
+row a provider priced. A true `tokens_estimated` marks counts this side made:
+the facade (`llm._resilient`) counts on a worker thread, never the event loop,
+only for an attempt whose stream ended on its own, and only the half the
+provider left out. An embed call that returned without a prompt count is the
+other counter: `inference.embed.estimate_prompt` (`tokens.count_if_loaded`,
+which never starts an encoder load) counts it on the caller's thread, which is
+a threadpool worker for every caller today -- the model test's probe hands it
+to one. `Meter.done` never counts, and a bucket says how many of its
+calls rest on such counts in `estimated_token_calls`.
 
 Attribution is per *player post*: a turn's ledger row carries the transcript
 index it was answering, so a post and every reroll of it bucket together and

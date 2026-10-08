@@ -896,7 +896,10 @@ def test_a_recall_files_one_semantic_recall_row(store, provider):
     semantic.recall([entry("Miss")], "scene text")
     [row] = _rows()
     assert (row["task"], row["operation"]) == ("semantic-recall", "embed")
-    assert "prompt_tokens" not in row and "completion_tokens" not in row
+    # The fake reports no counts, so the prompt is counted locally and says
+    # so (slice E); an embedding never gets a completion count.
+    assert row["prompt_tokens"] > 0 and row["tokens_estimated"] is True
+    assert "completion_tokens" not in row
     assert "campaign" not in row
 
 

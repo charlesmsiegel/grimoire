@@ -4,6 +4,7 @@ import { api, type CampaignSceneCosts, type SceneCostRow } from "../api/client";
 import type { MonthlyCosts } from "../api/types";
 import {
   Footnotes, MoneyColumns, UNPRICED, about, bound, bucketPrice, headlineIsEstimate, money,
+  tokenTotal,
 } from "../components/cost";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { usePaletteSource, type PaletteItem } from "../components/palette";
@@ -11,6 +12,7 @@ import { usePublishShellContext } from "../components/ShellStatus";
 import ReportScopeSelector from "../components/ReportScopeSelector";
 import ReportMonth, { useReportMonth } from "../components/ReportMonth";
 import CostTrend from "../components/CostTrend";
+import { modelRatesPath } from "../providerPaths";
 
 /** What a campaign has cost, scene by scene, in a selected UTC month (#153).
  *
@@ -116,6 +118,23 @@ export function CostsView() {
   const report = loaded && loaded.cid === cid && loaded.month === month ? loaded.data : null;
   const rows = report?.scenes ?? [];
 
+  /** The providers that exist now, id → name, or null until read. Only asked
+   *  for when an unpriced model names one: a line whose provider is gone (a
+   *  delete re-prices its history, so exactly those rows land here) has no
+   *  rates page to open, and points at the pricing table instead, the way
+   *  Housekeeping's item does (`routes/todo.py`). A failed read is read as
+   *  none, which costs the link and never sends anyone to a dead page. */
+  const [providers, setProviders] = useState<Map<string, string> | null>(null);
+  const namesProvider = !!report?.unpriced_models?.some((m) => m.provider_id);
+  useEffect(() => {
+    if (!namesProvider) return;
+    let live = true;
+    api.listConnections()
+      .then((list) => { if (live) setProviders(new Map(list.map((p) => [p.id, p.name]))); })
+      .catch(() => { if (live) setProviders(new Map()); });
+    return () => { live = false; };
+  }, [namesProvider]);
+
   const paletteSource = useCallback((): PaletteItem[] =>
     SORTS.map((s) => ({
       id: `costs:${s.key}`, group: "IN THIS CAMPAIGN", label: `Costs · ${s.label}`,
@@ -146,7 +165,7 @@ export function CostsView() {
           <div className="ctx-tokens">
             {totals.calls.toLocaleString()}{" "}
             {totals.calls === 1 ? "generation" : "generations"}
-            {" · "}{totals.total_tokens.toLocaleString()} tok
+            {" · "}{tokenTotal(totals)}
           </div>
         )}
       </ColumnSection>
@@ -210,19 +229,51 @@ export function CostsView() {
               <div className="unpriced-models">
                 <div className="money-label">No rate matches these</div>
                 <ul>
-                  {report.unpriced_models.map((m) => (
-                    <li key={m.model}>
-                      <code>{m.model}</code>
-                      <span className="field-hint">
-                        {" "}— {m.calls} call{m.calls === 1 ? "" : "s"} that could be priced
-                      </span>
-                    </li>
-                  ))}
+                  {/* One entry per call shape -- provider, the model asked
+                      for, the model that answered -- so a model two providers
+                      serve, or one snapshot asked for under two names, is two
+                      lines, keyed and labelled by all three. */}
+                  {report.unpriced_models.map((m) => {
+                    const asked = m.facts_model || m.model;
+                    const name = m.provider_id ? providers?.get(m.provider_id) : undefined;
+                    return (
+                      <li key={`${m.provider_id}:${m.model}:${asked}`}>
+                        <code>{m.model}</code>
+                        {asked !== m.model && <> asked for as <code>{asked}</code></>}
+                        <span className="field-hint">
+                          {" "}on {name ?? (m.provider_id
+                            ? <code>{m.provider_id}</code>
+                            : "no recorded provider")}
+                          {" "}— {m.calls} call{m.calls === 1 ? "" : "s"} that could be priced
+                        </span>
+                        {/* The model's own rates are stated under the model
+                            that was asked for, on a provider that still
+                            exists. A deleted provider, or a row filed before
+                            providers were named, has only the table -- and so
+                            does every line while those rates cannot be
+                            written (`rates_editable`: the store is not yet at
+                            the current model-settings format). */}
+                        {" "}
+                        {name !== undefined && report.rates_editable === true
+                          ? <Link to={modelRatesPath(m.provider_id, asked)}>Set its rates</Link>
+                          : (providers !== null || !m.provider_id
+                             || report.rates_editable !== true)
+                            && <Link to="/config?section=pricing">Add a pricing entry</Link>}
+                      </li>
+                    );
+                  })}
                 </ul>
                 <p className="field-hint">
-                  A pricing entry is matched on the model string exactly. Add one
-                  under <Link to="/config">Settings → Pricing</Link>, or a
-                  wildcard like <code>vendor/*</code>.
+                  A model's own rates on its provider page price it on that
+                  provider{report.rates_editable === true ? ""
+                    : report.rates_newer === true
+                      ? ", but a newer version of grimoire wrote this library's model"
+                        + " settings, so this version cannot set them"
+                      : ", and can be set after the upgrade to the new model settings"}.
+                  {" "}Otherwise a pricing entry is matched on the model
+                  string exactly: add one under{" "}
+                  <Link to="/config">Settings → Pricing</Link>, or a wildcard
+                  like <code>vendor/*</code>.
                 </p>
               </div>
             )}
@@ -307,7 +358,7 @@ export function CostsView() {
                       )}
                     </td>
                     <td className="cost-cell">{row.calls.toLocaleString()}</td>
-                    <td className="cost-cell">{row.total_tokens.toLocaleString()}</td>
+                    <td className="cost-cell">{tokenTotal(row)}</td>
                     <td className="ledger-asof">{day(row.last_ts)}</td>
                   </tr>
                 ))}

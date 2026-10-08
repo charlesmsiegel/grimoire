@@ -166,7 +166,7 @@ export const APP_ROWS: RailRow[] = [
     id: "costs", label: "Costs", icon: "$",
     to: () => "/costs",
     match: (p) => isUnder(p, "/costs"),
-    // The old campaign spend tail would mislabel this global monthly report.
+    // No tail: one campaign's spend would mislabel this global monthly report.
   },
   {
     id: "stats", label: "Stats", icon: "▦",
@@ -188,6 +188,9 @@ export const CAMPAIGN_ROWS: RailRow[] = [
     icon: report === "todo" ? "✓" : report === "costs" ? "$" : "▫",
     to: (ctx) => ctx.cid ? reportHref(report, ctx.cid) : null,
     match: (p, ctx) => !!ctx.cid && isUnder(p, reportHref(report, ctx.cid)),
+    // No tail on Costs either: one tail would have to pick one of three money
+    // columns that may never be added. The campaign hub's card draws all three
+    // from the shell payload's `campaign.money`, each under its own label.
   })),
   {
     // The campaign's front door. Exact, because every other campaign row lives
@@ -312,19 +315,6 @@ function num(v: number | null | undefined): string | undefined {
 function lbl(v: number | null | undefined, noun: string): string | undefined {
   return v === null || v === undefined ? undefined : `${v} ${noun}`;
 }
-
-/** The Costs tail and what a screen reader hears for it, or `undefined`.
- *
- *  Four ways to have nothing to say, and each is the cost rule rather than a
- *  missing case: no campaign open, an aggregate that could not be brought up
- *  to date (`partial`), a campaign that has run no calls at all, and — the one
- *  worth reading twice — a campaign whose calls were real but whose spend
- *  column is zero because every one of them billed to a subscription or came
- *  back with no price. Rendering `$0.00` there would be the app asserting that
- *  a played campaign was free.
- *
- *  Returned as a pair rather than computed twice, so the tail and its label
- *  cannot disagree about whether there is one. */
 
 /** What the ⌘K pill calls the screen you are on.
  *

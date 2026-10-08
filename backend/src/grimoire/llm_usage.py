@@ -167,3 +167,176 @@ def from_openai_chunk(obj: object, usage: dict | None) -> None:
     if cost is not None:
         usage["cost_usd"] = cost
         usage["cost_basis"] = BILLED
+
+
+# ---- what served a call (slice E; spec 9.1-9.3) ----
+#: Where a connection dict carries its ACCOUNT block: what the resolver knows
+#: of the attempt that the wire does not say -- the `operation` it runs, the
+#: `role` whose slot supplied it, the provider's `billing`, and (slice F) the
+#: `decision_mode` one call used. `store.inference.resolve.ACCOUNT_KEY`,
+#: restated because the gateway imports no store (#239); a test holds the two
+#: spellings equal. Private-looking for the reason `llm.FALLBACK_KEY` is: no
+#: adapter reads it, and nothing here sends it.
+ACCOUNT_KEY = "_account"
+
+#: The account block's keys that `account` files, each as its own ledger field.
+ACCOUNT_FIELDS = ("operation", "role", "billing", "decision_mode")
+
+
+def _text(value: object) -> str:
+    return value if isinstance(value, str) and value else ""
+
+
+def account(usage: dict | None, conn: dict) -> None:
+    """File what served this attempt into the holder: the provider's id
+    (`provider_id`, from `conn["id"]`), the sampler preset actually sent
+    (`preset`, `conn["sampling"]["preset_id"]` -- never the provider preset),
+    and each `ACCOUNT_FIELDS` key of the account block.
+
+    Only a non-empty `str` is copied, so a hand-built conn with a stray value
+    costs the field and never the row. Reads `conn`, never writes it, and never
+    raises: this is bookkeeping beside a call that has already been made."""
+    if usage is None:
+        return
+    try:
+        filed: dict[str, str] = {}
+        provider_id = _text(conn.get("id"))
+        if provider_id:
+            filed["provider_id"] = provider_id
+        sampling = conn.get("sampling")
+        preset = _text(sampling.get("preset_id")) if isinstance(sampling, dict) else ""
+        if preset:
+            filed["preset"] = preset
+        block = conn.get(ACCOUNT_KEY)
+        if isinstance(block, dict):
+            for key in ACCOUNT_FIELDS:
+                value = _text(block.get(key))
+                if value:
+                    filed[key] = value
+        usage.update(filed)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return
+
+
+def with_account(conn: dict, **fields: str) -> dict:
+    """`conn` with `fields` laid over its account block: a NEW conn and a NEW
+    block, and the one way to change an account block.
+
+    Never in place, because the block is shared: every `{**conn}` copy --
+    `llm.fallback_sampling`'s, `resolve.with_facts`'s -- carries the same dict,
+    so a write to it would rewrite the primary's and the fallback's at once.
+    Slice F stamps `decision_mode` per call through this; the model test call
+    stamps its probe's `operation`."""
+    block = conn.get(ACCOUNT_KEY)
+    return {**conn, ACCOUNT_KEY: {**(block if isinstance(block, dict) else {}), **fields}}
+
+
+# ---- a count the provider did not report (slice E, Task 3; spec 9.1) ----
+#: Where the holder carries the attempt's `Estimate`: the prompt it was sent
+#: and the reply text it produced, for the facade to count if the provider
+#: reports no count. Private-looking, and popped by the attempt's `finally` and
+#: again by `store.usage.Meter.done`, so a prompt reference never outlives the
+#: call. Restated in `store.usage`; a test holds the spellings equal.
+ESTIMATE_KEY = "_estimate"
+
+#: `True` in the holder when the attempt's stream ended on its own. Only such
+#: an attempt is estimated: an early break, a close or a failure leaves a call
+#: nobody knows the bill for, and an estimate would invent one.
+ENDED_KEY = "_ended"
+
+#: The holder key that says a count was estimated, spelled as the ledger field.
+ESTIMATED = "tokens_estimated"
+
+
+class Estimate:
+    """One attempt's text, gathered as it went, for a count nobody reported.
+
+    Holds a REFERENCE to the prompt rather than a copy: copying a long prompt
+    per attempt to count it maybe once would cost every call for the sake of a
+    few. Everything here is bookkeeping, so nothing raises on a shape it does
+    not expect -- it skips it."""
+
+    def __init__(self, messages: list):
+        self._messages = messages
+        self._reply: list[str] = []
+
+    def add(self, text: str) -> None:
+        if isinstance(text, str) and text:
+            self._reply.append(text)
+
+    def prompt_text(self) -> str:
+        """Every `str` content and every `{"type": "text"}` part's `str` text,
+        one message per line. An image part is not text, and there is no
+        portable per-image count, so it is skipped (spec 9.1); so is any shape
+        this does not recognize."""
+        out: list[str] = []
+        for message in self._messages if isinstance(self._messages, list) else ():
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                out.append(content)
+            elif isinstance(content, list):
+                parts = [p.get("text") for p in content
+                         if isinstance(p, dict) and p.get("type") == "text"]
+                out.extend(t for t in parts if isinstance(t, str))
+        return "\n".join(out)
+
+    def completion_text(self) -> str:
+        """The reply as it reached the caller, and the reasoning beside it:
+        reasoning is billed as completion."""
+        return "".join(self._reply)
+
+    def count(self, counter, *, prompt: bool = True,
+              completion: bool) -> tuple[int | None, int | None]:
+        """`(prompt, completion)` counted by `counter` (`str -> int`), each
+        only when asked for (None otherwise): a half the provider reported is
+        not counted again. Pure, and run on the facade's counting thread: a
+        counter can start an encoder download. It may raise; the facade
+        guards it."""
+        return (counter(self.prompt_text()) if prompt else None,
+                counter(self.completion_text()) if completion else None)
+
+
+def note_prompt(usage: dict | None, messages: list) -> None:
+    """Install a fresh `Estimate` for `messages`, replacing any. Called per
+    attempt, after its prompt is chosen and again after it is lowered, so the
+    count is of what this attempt sent."""
+    if usage is None:
+        return
+    try:
+        usage[ESTIMATE_KEY] = Estimate(messages)
+    except Exception:  # noqa: BLE001 - bookkeeping never fails a call
+        return
+
+
+def note_reply(usage: dict | None, text: str) -> None:
+    """Add `text` to the installed `Estimate`. A missing holder or estimate,
+    or a text that is not a non-empty `str`, is a no-op."""
+    if usage is None or not isinstance(text, str) or not text:
+        return
+    try:
+        estimate = usage.get(ESTIMATE_KEY)
+        if isinstance(estimate, Estimate):
+            estimate.add(text)
+    except Exception:  # noqa: BLE001 - bookkeeping never fails a call
+        return
+
+
+def fill(usage: dict, prompt: int | None, completion: int | None) -> None:
+    """Write the counts the provider did not report, and say they were
+    estimated. Runs on the loop, after the worker thread counted.
+
+    A reported count is never replaced. An `embed` row never gets a completion
+    count: an embedding generates nothing, so its completion is a structural
+    zero rather than something to estimate (ruling 8). The flag is set only
+    when a count was written."""
+    wrote = False
+    for key, count in (("prompt_tokens", prompt), ("completion_tokens", completion)):
+        if key == "completion_tokens" and usage.get("operation") == "embed":
+            continue
+        if tokens(count) is not None and tokens(usage.get(key)) is None:
+            usage[key] = count
+            wrote = True
+    if wrote:
+        usage[ESTIMATED] = True

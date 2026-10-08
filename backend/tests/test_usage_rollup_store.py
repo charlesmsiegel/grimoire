@@ -6,7 +6,8 @@ import json
 
 import pytest
 
-from grimoire.store import pricing, usage, usage_rollup
+from grimoire.store import llm_connections, pricing, usage, usage_rollup
+from grimoire.store.inference import facts
 
 
 @pytest.fixture
@@ -153,7 +154,7 @@ def test_rollup_json_is_not_mistaken_for_a_ledger_month(home):
     _call(cost_usd=1.0, ts="2026-08-01T00:00:00Z")
     usage_rollup.campaign_totals("saltmarch")
 
-    assert usage_rollup.rollup_path().name == "rollup.json"
+    assert usage_rollup.rollup_path().name == "rollup-v4.json"
     stored = json.loads(usage_rollup.rollup_path().read_text(encoding="utf-8"))
     assert list(stored["months"]) == ["2026-08"]
 
@@ -190,6 +191,114 @@ def test_an_unpriced_embed_row_is_modelled_by_the_aggregate(home):
     assert out["modelled_calls"] == 1
     assert out["unpriced_calls"] == 0
     assert out["unmetered_calls"] == 0
+
+
+def test_editing_model_rates_reprices_the_aggregate(home):
+    """A model's own rates are part of the fingerprint, like the table: a
+    stored `modelled_usd` is only true of the rates it was computed under."""
+    pid = llm_connections.create_connection("openai_compatible", "Saltmarch",
+                                            base_url="http://localhost:1/v1")
+    _call(provider_id=pid, ts="2026-08-01T00:00:00Z")
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["unpriced_calls"] == 1
+
+    facts.state(pid, "realm/opus", rates={"prompt_usd_per_1k": 1.0,
+                                          "completion_usd_per_1k": 2.0})
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["modelled_usd"] == pytest.approx(1.4)
+    assert out["unpriced_calls"] == 0
+
+    facts.state(pid, "realm/opus", rates={})
+    assert usage_rollup.campaign_totals("saltmarch")["unpriced_calls"] == 1
+
+
+def test_deleting_a_provider_reprices_its_history(home):
+    """Its facts file goes with it, so its rows fall back to the table -- here
+    empty, so unpriced. Spend never moves."""
+    pid = llm_connections.create_connection("openai_compatible", "Saltmarch",
+                                            base_url="http://localhost:1/v1")
+    facts.state(pid, "realm/opus", rates={"prompt_usd_per_1k": 1.0,
+                                          "completion_usd_per_1k": 2.0})
+    _call(provider_id=pid, ts="2026-08-01T00:00:00Z")
+    _call(provider_id=pid, cost_usd=0.5, ts="2026-08-02T00:00:00Z")
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["modelled_usd"] == pytest.approx(1.4)
+    assert out["unpriced_calls"] == 0
+
+    llm_connections.delete_connection(pid)
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["modelled_usd"] == 0.0
+    assert out["modelled_calls"] == 0
+    assert out["unpriced_calls"] == 1
+    assert out["cost_usd"] == 0.5
+
+
+def test_a_provider_reusing_a_deleted_id_reprices_with_its_own_rates(home):
+    """A provider id is a reusable slug: one created later under the deleted
+    one's name gets the same id, and its rates price the old rows. Only
+    `modelled_usd` moves."""
+    pid = llm_connections.create_connection("openai_compatible", "Saltmarch",
+                                            base_url="http://localhost:1/v1")
+    facts.state(pid, "realm/opus", rates={"prompt_usd_per_1k": 1.0,
+                                          "completion_usd_per_1k": 2.0})
+    _call(provider_id=pid, ts="2026-08-01T00:00:00Z")
+    _call(provider_id=pid, cost_usd=0.5, ts="2026-08-02T00:00:00Z")
+    assert usage_rollup.campaign_totals("saltmarch")["modelled_usd"] == pytest.approx(1.4)
+
+    llm_connections.delete_connection(pid)
+    again = llm_connections.create_connection("openai_compatible", "Saltmarch",
+                                              base_url="http://localhost:2/v1")
+    assert again == pid
+    facts.state(again, "realm/opus", rates={"prompt_usd_per_1k": 0.1,
+                                            "completion_usd_per_1k": 0.2})
+
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["modelled_usd"] == pytest.approx(0.14)
+    assert out["modelled_calls"] == 1
+    assert out["unpriced_calls"] == 0
+    assert out["cost_usd"] == 0.5
+
+
+def test_the_breakdown_counts_reach_campaign_totals(home):
+    pid = llm_connections.create_connection("openai_compatible", "Saltmarch",
+                                            base_url="http://localhost:1/v1")
+    facts.state(pid, "realm/opus", rates={"prompt_usd_per_1k": 1.0,
+                                          "completion_usd_per_1k": 2.0})
+    _call(provider_id=pid, billing="subscription", tokens_estimated=True,
+          ts="2026-08-01T00:00:00Z")
+    _call(provider_id=pid, model="realm/unpriced", billing="subscription",
+          ts="2026-08-02T00:00:00Z")
+
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["estimated_token_calls"] == 1
+    assert out["modelled_subscription_calls"] == 1
+    assert out["unpriced_subscription_calls"] == 1
+    # Spend only on the rail: a modelled figure is never spend.
+    assert out["cost_usd"] == 0.0
+    # And a campaign with none of them reads zero for each, not a missing key.
+    _call(campaign="elsewhere", cost_usd=1.0, ts="2026-08-03T00:00:00Z")
+    other = usage_rollup.campaign_totals("elsewhere")
+    assert other["estimated_token_calls"] == 0
+    assert other["modelled_subscription_calls"] == 0
+    assert other["unpriced_subscription_calls"] == 0
+
+
+def test_an_older_builds_rollup_is_left_alone(home):
+    """M8: two builds sharing a synced library each keep their own aggregate.
+    This build never reads, writes or deletes the older name."""
+    _call(cost_usd=1.0, ts="2026-08-01T00:00:00Z")
+    older = usage.ledger_dir() / "rollup.json"
+    older.write_text(json.dumps({"version": 2, "rates": "x", "months": {},
+                                 "all": {}, "campaigns": {}}) + "\n",
+                     encoding="utf-8")
+    before = older.read_bytes()
+
+    assert usage_rollup.campaign_totals("saltmarch")["cost_usd"] == 1.0
+    usage_rollup.rollup_path().unlink()                 # force a rebuild
+    assert usage_rollup.campaign_totals("saltmarch")["cost_usd"] == 1.0
+    assert usage_rollup.rollup_path().exists()
+
+    assert older.read_bytes() == before
 
 
 def test_an_unreadable_rate_table_does_not_break_the_aggregate(home):

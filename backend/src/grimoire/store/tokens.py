@@ -151,6 +151,26 @@ def count_tokens(text: str) -> int:
         return -(-len(text) // 4)
 
 
+def count_if_loaded(text: str) -> int:
+    """`count_tokens`, never starting a load: the encoder if it has already
+    loaded (`_loaded`), else the characters/4 heuristic, rounded up as
+    `count_tokens` rounds it.
+
+    For an estimate made on a request path that must not wait on an encoder
+    download -- an embed call whose provider reported no prompt count
+    (`inference.embed.estimate_prompt`). Does not touch `last_counter`, which
+    describes a compose's counts, not this. Never raises."""
+    if not text:
+        return 0
+    encoder = _loaded()
+    if encoder is not None:
+        try:
+            return len(encoder.encode(text))
+        except Exception:  # noqa: BLE001 - a count never fails a call; heuristic instead
+            pass
+    return -(-len(text) // 4)
+
+
 def _native_encoding(model: str) -> str:
     """The encoding tiktoken says `model` itself uses, or "" when that cannot
     be known -- which is every model not named as OpenAI's.

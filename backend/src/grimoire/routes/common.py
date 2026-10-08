@@ -305,6 +305,10 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     each call's resolved connection carries its own (`llm.FALLBACK_KEY`, set by
     `store.inference.resolve`), so the client holds none.
 
+    The token counter rides the seam too (`_count_tokens`): the facade counts
+    what a provider did not report, on a worker thread, and the gateway may not
+    import `store.tokens` to do it (spec 9.1).
+
     `health` is that app's registry (#146), passed as the observer every attempt
     reports its outcome to. Optional so a caller that only wants to generate —
     tests, mostly — need not build one; the facade treats a missing observer as
@@ -315,7 +319,8 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
                      observer=health.record if health is not None else None,
                      capture=store.logs.incoming_capture,
                      images=_post_images_for,
-                     load_image=_load_post_image)
+                     load_image=_load_post_image,
+                     count_tokens=_count_tokens)
 
 
 # Late-bound through the module attribute, so a test patching
@@ -326,6 +331,13 @@ def _post_images_for(conn: dict) -> int:
 
 def _load_post_image(cid: str, part: dict) -> str | None:
     return store.post_images.load(cid, part)
+
+
+# Late-bound for the same reason: a test patching `store.tokens` intercepts the
+# counter the facade runs, on a worker thread, for a provider that reported no
+# counts (spec 9.1).
+def _count_tokens(text: str) -> int:
+    return store.tokens.count_tokens(text)
 
 
 def build_openai_compatible_client() -> OpenAICompatibleClient:
@@ -1198,6 +1210,45 @@ def refuse_unmigrated() -> None:
     if inference_translate.is_current(store.read_config()):
         return
     raise _not_migrated()
+
+
+#: What a pricing link says while a model's own rates cannot be written: the
+#: pricing table prices any model meanwhile. One sentence per reason, because
+#: a store a newer build wrote is already past the upgrade and this version
+#: will never write its rates -- "after the upgrade" would be untrue there.
+RATES_AFTER_UPGRADE = ("A model's own rates can be set after the upgrade to the new model "
+                       "settings; until then your pricing table can price it.")
+RATES_NEWER_FORMAT = ("A newer version of grimoire wrote this library's model settings, so "
+                      "this version cannot set a model's own rates; your pricing table can "
+                      "still price it.")
+RATES_UNREADABLE = ("A model's own rates cannot be set while the settings cannot be read; "
+                    "your pricing table can price it.")
+
+#: What stops `config.md` from being read for `rates_block`.
+_CONFIG_UNREADABLE = (OSError, UnicodeDecodeError, ValueError, store.locks.StoreBusy)
+
+
+def rates_block() -> str | None:
+    """Why a model's own rates cannot be written now, as the sentence a pricing
+    link carries, or None when they can -- the test `refuse_unmigrated` makes
+    for `PUT .../facts`, so a "Set rates" link never opens an editor that
+    cannot save. A store a newer build wrote (`RATES_NEWER_FORMAT`) and one the
+    migration has not reached (`RATES_AFTER_UPGRADE`) are not current, and a
+    link to the pricing table works on either. A `config.md` that cannot be
+    read is blocked too (`RATES_UNREADABLE`), which costs the rates link and
+    never sends anyone to a dead form."""
+    try:
+        meta = store.read_config()
+    except _CONFIG_UNREADABLE:
+        return RATES_UNREADABLE
+    if store.inference_keys.is_newer(meta):
+        return RATES_NEWER_FORMAT
+    return None if inference_translate.is_current(meta) else RATES_AFTER_UPGRADE
+
+
+def rates_editable() -> bool:
+    """Whether a model's own rates can be written now (`rates_block`)."""
+    return rates_block() is None
 
 
 def _refuse_incapable(resolved: ResolvedInference) -> None:

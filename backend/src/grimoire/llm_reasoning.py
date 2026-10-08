@@ -4,8 +4,15 @@ Only a display consumer installs a Buffer in the existing usage holder.
 Adapters enqueue reasoning there; the gateway wakes that consumer even when
 the provider has no visible text. Ordinary stream/complete callers still see
 only prose. Retrying clears the old attempt's reasoning before new text lands.
+
+Reasoning is also billed as completion, so every reasoning text is noted for
+the facade's local estimate (`llm_usage.note_reply`) whether or not a display
+consumer installed a Buffer: `from_chunk` extracts it either way, and `feed`
+notes it once before it decides whether there is a Buffer to append to.
 """
 from __future__ import annotations
+
+from . import llm_usage
 
 KEY = "_reasoning_display"
 
@@ -36,14 +43,18 @@ def pending(usage):
 
 
 def feed(usage, text):
+    """Note `text` for the estimate (once), then show it if anyone is
+    watching. The direct callers (`anthropic`, `claude_agent`) and
+    `from_chunk` all come through here, so nothing notes reasoning twice."""
+    llm_usage.note_reply(usage, text)
     buffer = usage.get(KEY) if usage is not None else None
     if isinstance(buffer, Buffer) and isinstance(text, str) and text:
         buffer.chunks.append(text)
 
 
 def from_chunk(obj, usage):
-    buffer = usage.get(KEY) if usage is not None else None
-    if not isinstance(buffer, Buffer) or not isinstance(obj, dict):
+    # No Buffer is no reason to stop: the text is still noted for the estimate.
+    if usage is None or not isinstance(obj, dict):
         return
     choices = obj.get("choices")
     if not isinstance(choices, list):

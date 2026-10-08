@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
-import { Footnotes, PostCost, about, bound, bucketPrice, money, turnPrice, MoneyColumns } from "./cost";
+import { EQUIVALENT, Footnotes, PostCost, SUBSCRIPTION_NOT_BILLED, TOKENS_ESTIMATED, UNPRICED,
+         about, bound, bucketPrice, headlineIsEstimate, money, perMillionRate, perThousand,
+         estimatedTokensTitle, tokenTotal, turnPrice, turnTags, MoneyColumns } from "./cost";
 
 /** The rule these three surfaces share: a price nobody reported is never
  *  rendered as zero, and a figure grimoire computed is never rendered as one it
@@ -231,4 +233,176 @@ test("a post that sent none does not mention images", () => {
                              priced_calls: 1, cost_usd: 0.02 }} />);
   expect(screen.getByText("$0.02").closest(".post-cost")?.getAttribute("title"))
     .not.toContain("image");
+});
+
+test("a per-token rate reads as stated, and a zero rate is a price", () => {
+  // A rate is not a bill: `money`'s four places would round $0.00015 / 1K
+  // away, and a typed 0.001 must read back as 0.001.
+  expect(perThousand(0.001)).toBe("$0.001 / 1K");
+  expect(perThousand(0.00015)).toBe("$0.00015 / 1K");
+  expect(perThousand(0)).toBe("$0 / 1K");
+  expect(perMillionRate(1.5)).toBe("$1,500/M");
+  expect(perMillionRate(0)).toBe("$0/M");
+  expect(perThousand(1234.5)).toBe("$1,234.5 / 1K");
+});
+
+test("a tiny stated rate never reads as $0", () => {
+  // Fraction digits would round these to zero, which is a claim nobody made.
+  expect(perMillionRate(0.000001)).toBe("$0.001/M");
+  expect(perMillionRate(0.0000012345)).toBe("$0.0012/M");
+  expect(perMillionRate(0.00015)).toBe("$0.15/M");
+  expect(perThousand(1e-12)).toBe("$0.000000000001 / 1K");
+  expect(perThousand(0.15000000000000002)).toBe("$0.15 / 1K");
+});
+
+// ---- slice E: subscription calls, estimated tokens, and zero rates (I4) ----
+
+test("a stated zero rate reads as an estimate of zero, never a bare $0.00", () => {
+  // A local model the user rated at zero. `$0.00` alone reads as spend, and
+  // "not reported" denies a price somebody did state.
+  const bucket = { ...ZERO, calls: 2, modelled_calls: 2, modelled_usd: 0 };
+  expect(bucketPrice(bucket)).toBe("≈ $0.00");
+  expect(headlineIsEstimate(bucket)).toBe(true);
+});
+
+test("a zero-rated kind beside a subscription estimate headlines the estimate", () => {
+  // A zero-rated local Fast next to a subscription Primary. Adding $0 to the
+  // subscription figure reconciles to both columns, so there is no conflict.
+  const bucket = { ...ZERO, calls: 5, priced_calls: 3, subscription_calls: 3,
+                   estimated_usd: 0.4, modelled_calls: 2, modelled_usd: 0 };
+  expect(bucketPrice(bucket)).toBe("≈ $0.40");
+  expect(headlineIsEstimate(bucket)).toBe(true);
+});
+
+test("a zero estimate beside unpriced calls reads not reported, never ≈ $0.00", () => {
+  // An unpriced call makes the total incomplete, and a zero beside it would
+  // read as a complete one: ten calls nobody priced headlining as free.
+  const modelled = { ...ZERO, calls: 11, modelled_calls: 1, modelled_usd: 0,
+                     unpriced_calls: 10 };
+  expect(bucketPrice(modelled)).toBe(UNPRICED);
+  expect(headlineIsEstimate(modelled)).toBe(false);
+  const subscription = { ...ZERO, calls: 3, priced_calls: 1, subscription_calls: 1,
+                         estimated_usd: 0, unpriced_calls: 2 };
+  expect(bucketPrice(subscription)).toBe(UNPRICED);
+  // A non-zero estimate beside unpriced calls keeps its figure, as before;
+  // `Footnotes` says it is a floor.
+  expect(bucketPrice({ ...modelled, modelled_usd: 0.2 })).toBe("≈ $0.20");
+});
+
+test("two non-zero estimate kinds still read not reported", () => {
+  const bucket = { ...ZERO, calls: 5, priced_calls: 3, subscription_calls: 3,
+                   estimated_usd: 0.4, modelled_calls: 2, modelled_usd: 0.1 };
+  expect(bucketPrice(bucket)).toBe(UNPRICED);
+  expect(headlineIsEstimate(bucket)).toBe(false);
+});
+
+test("a zero-rated post beside a subscription one gets the subscription figure", () => {
+  render(<PostCost bucket={{ ...ZERO, post: 0, rerolls: 1, calls: 2,
+                             priced_calls: 1, subscription_calls: 1,
+                             estimated_usd: 0.5, modelled_calls: 1,
+                             modelled_usd: 0 }} />);
+  expect(screen.getByText(/≈ \$0\.50/).textContent).not.toMatch(/\+/);
+});
+
+test("Footnotes names subscription calls in the modelled figure", () => {
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 3, modelled_calls: 3, modelled_usd: 0.3,
+                         modelled_subscription_calls: 2 }} />);
+  expect(container.textContent)
+    .toMatch(/Of these, 2 calls ran on a subscription — not billed\./);
+});
+
+test("Footnotes names subscription calls among the unpriced", () => {
+  // M13: a subscription call nothing could price is still not a bill.
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 2, unpriced_calls: 2,
+                         unpriced_subscription_calls: 1 }} />);
+  expect(container.textContent)
+    .toMatch(/Of these, 1 call ran on a subscription — not billed\./);
+});
+
+test("Footnotes says when token counts were estimated", () => {
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 2, modelled_calls: 2, modelled_usd: 0.1,
+                         estimated_token_calls: 2 }} />);
+  expect(container.textContent)
+    .toMatch(/2 calls had token counts estimated here — the provider reported none\./);
+});
+
+test("Footnotes reads a bucket without the new counts as none of them", () => {
+  // `/usage` omits a count that is zero; absent is 0, never NaN.
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 2, modelled_calls: 2, modelled_usd: 0.1,
+                         unpriced_calls: 0 }} />);
+  expect(container.textContent).not.toMatch(/subscription|estimated here|NaN/);
+});
+
+test("a subscription turn is tagged subscription — not billed", () => {
+  const turn = { billing: "subscription", tokens_estimated: false,
+                 cost_usd: null, cost_basis: "", modelled_usd: 0.01 };
+  expect(turnTags(turn)).toEqual([SUBSCRIPTION_NOT_BILLED]);
+  expect(turnTags({ ...turn, cost_usd: 0.5, cost_basis: EQUIVALENT }))
+    .toEqual([SUBSCRIPTION_NOT_BILLED]);
+  expect(SUBSCRIPTION_NOT_BILLED).toBe("subscription — not billed");
+});
+
+test("a billed turn on a subscription provider is not tagged", () => {
+  // Ruling 4: a provider that reported a BILLED price said it charged.
+  expect(turnTags({ billing: "subscription", cost_usd: 0.02, cost_basis: "billed" }))
+    .toEqual([]);
+  expect(turnTags({ cost_usd: null, cost_basis: "" })).toEqual([]);
+});
+
+test("a turn whose counts were estimated here says so", () => {
+  expect(turnTags({ cost_usd: null, cost_basis: "", tokens_estimated: true }))
+    .toEqual([TOKENS_ESTIMATED]);
+  expect(TOKENS_ESTIMATED).toBe("tokens estimated");
+});
+
+test("a token total is marked when any of its counts were estimated", () => {
+  expect(tokenTotal({ total_tokens: 1234, estimated_token_calls: 1 })).toBe("≈ 1,234 tok");
+  expect(tokenTotal({ total_tokens: 1234, estimated_token_calls: 0 })).toBe("1,234 tok");
+  expect(tokenTotal({ total_tokens: 1234 })).toBe("1,234 tok");
+});
+
+test("a post's title says how many calls ran on a subscription and were estimated", () => {
+  render(<PostCost bucket={{ ...ZERO, post: 0, rerolls: 0, calls: 3,
+                             modelled_calls: 2, modelled_usd: 0.2,
+                             modelled_subscription_calls: 1, unpriced_calls: 1,
+                             unpriced_subscription_calls: 1,
+                             estimated_token_calls: 2 }} />);
+  const title = screen.getByText(/≈ \$0\.20/).closest(".post-cost")?.getAttribute("title");
+  expect(title).toContain("2 on a subscription — not billed");
+  expect(title).toContain("2 with tokens estimated");
+});
+
+test("MoneyColumns says how much of the modelled column ran on a subscription, and when tokens were estimated", () => {
+  const { container } = render(
+    <MoneyColumns bucket={{
+      priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
+      cost_usd: 0, estimated_usd: 0, modelled_usd: 0.3, modelled_calls: 3,
+      modelled_subscription_calls: 2, estimated_token_calls: 1,
+    }} />);
+  expect(container.textContent).toMatch(/Priced against your rates\. Arithmetic, not a receipt\./);
+  expect(container.textContent).toMatch(/2 on a subscription — not billed\./);
+  expect(container.textContent).toMatch(/Some token counts were estimated here\./);
+});
+
+test("MoneyColumns shows a zero-rated modelled column as an estimate of zero", () => {
+  const { container } = render(
+    <MoneyColumns bucket={{
+      priced_calls: 0, subscription_calls: 0, unpriced_calls: 0,
+      cost_usd: 0, estimated_usd: 0, modelled_usd: 0, modelled_calls: 2,
+    }} />);
+  const figures = [...container.querySelectorAll(".money-figure")].map((x) => x.textContent);
+  expect(figures).toEqual(["not reported", "—", "≈ $0.00"]);
+  expect(container.textContent).not.toMatch(/subscription — not billed|estimated here/);
+});
+
+test("a figure resting on locally counted tokens carries a note that says so", () => {
+  // Every surface without `Footnotes` beside its figure spreads this onto it.
+  expect(estimatedTokensTitle({ estimated_token_calls: 2 })).toMatch(/^2 calls with tokens estimated/);
+  expect(estimatedTokensTitle({ estimated_token_calls: 1 })).toMatch(/^1 call with tokens estimated/);
+  expect(estimatedTokensTitle({ estimated_token_calls: 0 })).toBeUndefined();
+  expect(estimatedTokensTitle({})).toBeUndefined();
 });

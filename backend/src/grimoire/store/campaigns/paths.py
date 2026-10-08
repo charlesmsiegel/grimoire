@@ -38,6 +38,19 @@ def campaign_root(cid: str) -> Path:
     return _campaigns_dir() / cid
 
 
+def campaign_ids() -> list[str]:
+    """Every campaign directory that holds a `campaign.md`, by id, sorted --
+    the set `read.world_refs` walks, less the ids `campaign_root` refuses,
+    and without reading a file. For a caller that reads each campaign through
+    a memo of its own (`inference.in_use`): enumerating through `world_refs`
+    would parse every `campaign.md` on every call for the listing alone."""
+    base = _campaigns_dir()
+    if not base.exists():
+        return []
+    return sorted(d.name for d in base.iterdir()
+                  if safe_id(d.name) and d.is_dir() and (d / "campaign.md").exists())
+
+
 def campaign_meta_path(cid: str) -> Path:
     return campaign_root(cid) / "campaign.md"
 

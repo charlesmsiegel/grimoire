@@ -23,13 +23,17 @@ Two kinds of fact, and they age differently:
   are the user's own word about the model and survive a rev change.
 
 Reads never raise: the file is one a sync or a hand can mangle into any JSON,
-and it is read on the path of a turn. A write the user asked for replaces a
-mangled file; no write replaces one it could not READ (a sharing violation, a
-file a sync client holds) -- that raises `FactsUnreadableError` instead, since
-what it would write is the one entry it was changing and every other model's
-verdicts and overrides would be gone. The migration's copy
-(`adopt_legacy`) is stricter still: unattended, it refuses a mangled, empty or
-truncated file too, and the run that asked retries on the next start. Writes
+and it is read on the path of a turn. No write replaces a file it could not
+read: one it could not open (a sharing violation, a file a sync client holds)
+raises `FactsUnreadableError`, and one it opened and could not parse (empty,
+truncated, hand-mangled, not an object of models) raises its subclass
+`FactsMangledError`. Either way nothing is written, since what a write would
+store is the one entry it was changing, and every other model's rates,
+verdicts and overrides -- which one fixed comma would have recovered -- would
+be gone. The first clears on its own; the second needs a person, so the facts
+route answers them differently (503 against 409 `facts_unreadable`). The
+migration's copy (`adopt_legacy`) holds the same rule, and the run that asked
+retries on the next start. Writes
 are read-merge-write under one module lock, because two probes of different
 models on one provider would otherwise each rewrite the file from a copy that
 lacks the other's result. Global to the provider, so it takes no campaign lock.
@@ -44,7 +48,7 @@ import json
 import threading
 from collections.abc import Callable
 
-from .. import atomic, config, llm_connections
+from .. import atomic, config, llm_connections, pricing
 from ..paths import now_iso, safe_id
 from .providers import CAPABILITIES
 
@@ -72,16 +76,23 @@ def _load(provider_id: str) -> dict[str, dict]:
 
 class FactsUnreadableError(OSError):
     """A provider's facts file that a WRITE could not read: there, but held by
-    another program or (for the migration's strict read) empty, truncated or
-    not a JSON object. Nothing is written; rewriting it from an empty read
-    would drop every other model's verified results and overrides."""
+    another program, or not text. Nothing is written; rewriting it from an
+    empty read would drop every other model's rates, verified results and
+    overrides. Usually clears on its own (a sync client lets go)."""
 
 
-def _load_for_write(provider_id: str, *, strict: bool = False) -> dict[str, dict]:
-    """The file as a writer merges onto it. Absent is empty. A read that fails
-    raises `FactsUnreadableError`; so, when `strict`, does a file that is not
-    a JSON object of objects (empty, truncated, hand-mangled). Not `strict`, a
-    mangled file is replaced, as `_load` reads it -- the user's own edit."""
+class FactsMangledError(FactsUnreadableError):
+    """A facts file that was read and does not parse as a JSON object of
+    objects: empty, truncated, or hand-mangled. Refused like its parent, but
+    it will not clear on its own -- a person has to fix or remove the file --
+    so a caller that answers a person says so (409 `facts_unreadable`)."""
+
+
+def _load_for_write(provider_id: str) -> dict[str, dict]:
+    """The file as a writer merges onto it, or a refusal: absent is empty, a
+    read that fails raises `FactsUnreadableError`, and a file that is not a
+    JSON object of objects raises `FactsMangledError`. Never `_load`'s
+    fail-soft `{}` -- a write merged onto that replaces the file."""
     path = llm_connections.facts_path(provider_id)
     try:
         text = path.read_text(encoding="utf-8")
@@ -93,17 +104,12 @@ def _load_for_write(provider_id: str, *, strict: bool = False) -> dict[str, dict
     try:
         raw = json.loads(text)
     except ValueError as exc:
-        if strict:
-            raise FactsUnreadableError(
-                f"the model facts of {provider_id} are not readable JSON: {exc}") from exc
-        return {}
-    if not isinstance(raw, dict) or (strict and not all(isinstance(e, dict)
-                                                        for e in raw.values())):
-        if strict:
-            raise FactsUnreadableError(
-                f"the model facts of {provider_id} are not an object of models")
-        return {}
-    return {m: e for m, e in raw.items() if isinstance(e, dict)}
+        raise FactsMangledError(
+            f"the model facts of {provider_id} are not readable JSON: {exc}") from exc
+    if not isinstance(raw, dict) or not all(isinstance(e, dict) for e in raw.values()):
+        raise FactsMangledError(
+            f"the model facts of {provider_id} are not an object of models")
+    return raw
 
 
 def _store(provider_id: str, doc: dict[str, dict]) -> None:
@@ -142,13 +148,14 @@ def of(provider_id: str, model: str, rev: str, *, strict: bool = False) -> dict:
     """What is known of `model`, in the one shape callers read.
 
     Verified results recorded under another `rev` are dropped; everything the
-    user stated is kept. `strict` reads as a writer does (`_load_for_write`,
-    not strict): a file that exists and cannot be READ -- held by a sync
-    client, half-synced -- raises `FactsUnreadableError` instead of reading
-    as a model nothing was said of; an absent or mangled file still reads as
-    empty. The facts panel's GET flags that (`unreadable`), and the
-    migration's Embedding check (`migrate._embeds`) fails the run on it
-    rather than deciding anything for good from a file it could not read.
+    user stated is kept. `strict` reads as a writer does (`_load_for_write`):
+    a file that exists and cannot be read -- held by a sync client
+    (`FactsUnreadableError`), or not an object of models (`FactsMangledError`)
+    -- raises instead of reading as a model nothing was said of; an absent
+    file still reads as empty. The facts panel's GET flags either
+    (`unreadable`), since a save would be refused, and the migration's
+    Embedding check (`migrate._embeds`) fails the run on it rather than
+    deciding anything for good from a file it could not read.
     """
     if strict and safe_id(provider_id):
         return _view(_load_for_write(provider_id).get(model, {}), rev)
@@ -161,14 +168,14 @@ def _view(entry: dict, rev: str) -> dict:
     vision = entry.get("vision")
     prefill = entry.get("prefill")
     post_process = entry.get("post_process")
-    rates = entry.get("rates")
+    rates = entry.get("rates")      # usable or None: `pricing.entry`, the reader's rule
     verified = entry.get("verified")
     overrides = entry.get("overrides")
     return {
         "vision": vision if vision in _VISION else "",
         "prefill": prefill if isinstance(prefill, bool) else None,
         "post_process": post_process if isinstance(post_process, str) else "",
-        "rates": rates if isinstance(rates, dict) else None,
+        "rates": pricing.entry(rates),
         "verified": (_clean_results(verified.get("caps"))
                      if isinstance(verified, dict) and verified.get("rev") == rev
                      else {}),
@@ -339,21 +346,35 @@ def set_stated(provider_id: str, model: str, *, vision: str | None = None,
 
 def state(provider_id: str, model: str, *, vision: object = None, prefill: object = None,
           post_process: object = None, overrides: object = None,
-          guard: Guard | None = None) -> None:
+          rates: object = None, guard: Guard | None = None) -> None:
     """The facts panel's write: `set_stated`'s fields, and `overrides` MERGED
     per capability -- `{cap: "yes"|"no"}` sets one, `{cap: ""}` removes it,
     and a capability the dict does not name is left as it is. Everything is
     checked (`ValueError`) before the file is touched, and lands as one write.
     `ConnectionNotFound` when the provider is gone (`_write_existing`);
-    `guard` is checked in the hold that writes (see there)."""
+    `guard` is checked in the hold that writes (see there).
+
+    `rates` is the model's own per-token price: `None` leaves it as it is, `{}`
+    removes it, and anything else replaces it after `pricing.check_entry` --
+    both base rates, no unknown field -- so a partial entry is refused rather
+    than half-stored. A stated fact like the rest: it survives a `rev` change.
+    """
     _require_safe(provider_id)
     stated = _check_stated(vision, prefill, post_process)
     changed = {} if overrides is None else _check_overrides(overrides, blank=True)
-    if not stated and not changed:
+    priced = (None if rates is None
+              else {} if isinstance(rates, dict) and not rates
+              else pricing.check_entry(rates))
+    if not stated and not changed and priced is None:
         return
 
     def change(entry: dict) -> None:
         entry.update(stated)
+        if priced is not None:
+            if priced:
+                entry["rates"] = priced
+            else:
+                entry.pop("rates", None)
         if not changed:
             return
         old = entry.get("overrides")
@@ -430,10 +451,10 @@ def adopt_legacy(provider_id: str, model: str, stated: dict[str, object]) -> dic
     afresh. So the facts end up saying what the record says now, and nothing
     the migration did not write is touched.
 
-    Strict, unlike the user's writes: a file it cannot read, or one that is
-    empty, truncated or mangled, raises `FactsUnreadableError` and nothing is
-    written -- an unattended rewrite from an empty read would drop every other
-    model's verified results and overrides. `ConnectionNotFound` when the
+    A file it cannot read, or one that is empty, truncated or mangled, raises
+    `FactsUnreadableError` (`FactsMangledError` for the latter) and nothing
+    is written, as for every write -- an unattended rewrite from an empty read
+    would drop every other model's verified results and overrides. `ConnectionNotFound` when the
     provider is gone, `config.NewerFormatError` on a store a newer build
     switched; both in `_write_existing`'s hold and lock order."""
     _require_safe(provider_id)
@@ -441,7 +462,7 @@ def adopt_legacy(provider_id: str, model: str, stated: dict[str, object]) -> dic
     with llm_connections.LOCK, config.format_hold():
         llm_connections.read_connection_raw(provider_id)
         with _lock:
-            doc = _load_for_write(provider_id, strict=True)
+            doc = _load_for_write(provider_id)
             before = json.dumps(doc, sort_keys=True)
             _take_back_copies(doc)
             if valid:

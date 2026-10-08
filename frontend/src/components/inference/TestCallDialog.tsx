@@ -9,8 +9,9 @@ import { isTopModal } from "../../shortcuts/registry";
 import { useHotkeys } from "../../shortcuts/useHotkeys";
 import { about } from "../cost";
 
-/** What the estimate reads when the catalog states no price. A price nobody
- *  reported is never rendered as zero (CLAUDE.md, Costs). */
+/** What the estimate reads when no source prices the test (the catalog, the
+ *  model's rates, `pricing.json`). A price nobody reported is never rendered
+ *  as zero (CLAUDE.md, Costs). */
 export const COST_UNKNOWN = "cost unknown — one tiny request";
 
 /** The capabilities back out of the key they are held as. */
@@ -257,6 +258,8 @@ export function TestCallDialog({ provider, model, capabilities, tests, onClose }
             <p className="field-hint">
               Estimated cost: {preview.estimated_cost_usd === null
                 ? COST_UNKNOWN : about(preview.estimated_cost_usd)}
+              {preview.estimated_cost_usd !== null && preview.estimate_basis === "rates"
+                ? " at your rates" : ""}
             </p>
           </>
         )}

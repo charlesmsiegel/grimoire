@@ -386,15 +386,19 @@ export type ModelFacts = {
   vision: VisionOverride;
   prefill: boolean | null;
   post_process: "" | "none" | "strict";
-  /** The user's own rates (slice E); `null` when none are stated. */
-  rates: Record<string, unknown> | null;
+  /** The model's own per-token rates on this provider (slice E), used before
+   *  the pricing table; `null` when none are stated. A stated `0` is a price. */
+  rates: PricingEntry | null;
   verified: Partial<Record<CapabilityName, VerifiedResult>>;
   overrides: Partial<Record<CapabilityName, "yes" | "no">>;
   capabilities: Record<CapabilityName, CapabilityValue>;
-  /** The facts file exists and could not be read (a sync client holding it):
-   *  nothing above is what the user said, and a save is refused (503, try
-   *  again), so none is offered. */
+  /** The facts file exists and could not be read: nothing above is what the
+   *  user said, and a save is refused, so none is offered. */
   unreadable?: boolean;
+  /** Why, when `unreadable`: `held` -- another program has the file (a save
+   *  answers 503, try again) -- or `mangled` -- it does not parse, which a
+   *  person has to fix (a save answers 409 `facts_unreadable`). */
+  unreadable_reason?: "held" | "mangled";
 };
 /** `PUT /api/llm-connections/{id}/facts`. A field left out is left as it is;
  *  an override of `""` removes that override. */
@@ -407,16 +411,22 @@ export type ModelFactsUpdate = {
   /** A save that turns the Embedding role on (it embeds the library) is
    *  refused with 400 `confirm_embedding` without this. */
   confirm_embedding?: boolean;
+  /** The model's own rates: both base rates, no unknown field, and an unset
+   *  rate LEFT OUT (a present `null` is refused); `{}` clears them. */
+  rates?: PricingEntry | Record<string, never>;
 };
 /** The capabilities a test call has a probe for (`probes.PROBES`). */
 export type TestableCapability = "generate" | "vision" | "embed";
 /** `POST /api/llm-connections/{id}/test/preview`: what a test would send.
- *  `estimated_cost_usd` is `null` when the catalog states no price; 0 is only
+ *  `estimated_cost_usd` is `null` when no source (catalog, rates) states a price; 0 is only
  *  ever a stated free model. */
 export type ModelTestPreview = {
   provider: string; provider_id: string; model: string;
   sends: { capability: TestableCapability; description: string }[];
   estimated_cost_usd: number | null;
+  /** Which source priced it: the provider's `catalog`, or the user's `rates`
+   *  (the model's own, else `pricing.json`). `null` with a null estimate. */
+  estimate_basis: "catalog" | "rates" | null;
 };
 /** One probe's outcome. `kind` is `not_sent` for a probe skipped after an
  *  earlier failure that answered for it too. */
@@ -1717,6 +1727,16 @@ export type UsageBucket = {
    *  tell a reader whether typing a rate would help — for these it would not,
    *  and saying so anyway sends them to an action that cannot succeed. */
   unmetered_calls: number;
+  /** Breakdown counts, each a slice of a count above and never money (spec
+   *  9.1): `modelled_subscription_calls` sits inside `modelled_calls`,
+   *  `unpriced_subscription_calls` inside `unpriced_calls` -- calls a
+   *  subscription served that no provider billed -- and `estimated_token_calls`
+   *  inside `calls`, the ones whose token counts were counted here because the
+   *  provider reported none. `/usage` omits each while it is zero, so a reader
+   *  takes absent as 0. */
+  modelled_subscription_calls?: number;
+  unpriced_subscription_calls?: number;
+  estimated_token_calls?: number;
   duration_ms: number;
 };
 /** A bucket with the thing it buckets — a task name, a model, a day. */
@@ -1738,6 +1758,13 @@ export type UsageTurn = {
    *  when it answered none (an absorb, a summary, an opener). */
   post: number | null;
   duration_ms: number;
+  /** What the provider bills by (`"subscription"`, `"metered"`): a label,
+   *  never a figure -- `cost_basis` alone moves money between columns. Absent
+   *  from an older build. */
+  billing?: string;
+  /** The token counts (and so any modelled figure) rest on a local count,
+   *  because the provider reported none. */
+  tokens_estimated?: boolean;
 };
 /** One player post's spend: every call made answering it, the first reply and
  *  each reroll of it. Keyed by transcript index.
@@ -1761,10 +1788,23 @@ export type SceneCostRow = UsageBucket & {
  *  whose oldest month file was deleted by hand cannot reach past what is left. */
 export type CampaignSceneCosts = {
   available_months?: string[];
-  /** Model strings the ledger holds that no pricing entry matches, and whose
-   *  calls DO carry token counts — so a rate would price them. Names the
-   *  reason behind `unpriced_calls`, which is otherwise just a number. */
-  unpriced_models?: { model: string; calls: number }[];
+  /** Model strings the ledger holds that no rate prices, and whose calls DO
+   *  carry token counts — so a rate would price them. Names the reason behind
+   *  `unpriced_calls`, which is otherwise just a number. One entry per call
+   *  shape, so a model served by two providers is two entries: `facts_model`
+   *  is the key the model's own rates are stated under on `provider_id` (the
+   *  model that was asked for, when the answer named a dated snapshot), and a
+   *  row filed before providers were named has `provider_id` "" and only the
+   *  pricing table can price it. */
+  unpriced_models?: { model: string; facts_model: string; provider_id: string;
+                      calls: number }[];
+  /** Whether a model's own rates can be written now: only on a store at the
+   *  current model-settings format, so a line never opens an editor that
+   *  cannot save. Before it, the pricing table is the only rate on offer. */
+  rates_editable?: boolean;
+  /** The store's model settings were written by a newer version, which is
+   *  why `rates_editable` is false: past the upgrade, never waiting for it. */
+  rates_newer?: boolean;
   campaign: string; since: string; until: string; generated_at: string;
   /** The order the server applied before capping the list — echoed back, so a
    *  view can tell an answer to the sort it asked for from a stale one. */
@@ -3120,11 +3160,13 @@ export type LogLevelInfo = { level: LogLevel; levels: LogLevel[] };
  *  versus a tail reading 0. It is the cost rule ("a price nobody reported is
  *  never rendered as zero") one domain over.
  *
- *  `campaign.money` is the all-time rollup the Costs row wanted from the start.
- *  It waited for `store.usage_rollup` rather than for a cheaper substitute: a
- *  bounded 30-day window would have put the same unlabelled figure on screen
- *  meaning something else. Three columns, never summed, and a `partial` flag —
- *  because a badge that cannot be computed must draw nothing rather than $0.00.
+ *  `campaign.money` is the all-time rollup, drawn by the campaign hub's money
+ *  card (the rail's Costs rows carry no tail: one tail cannot hold three
+ *  columns). It waited for `store.usage_rollup` rather than for a cheaper
+ *  substitute: a bounded 30-day window would have put the same unlabelled
+ *  figure on screen meaning something else. Three columns, never summed, and
+ *  a `partial` flag — because a figure that cannot be computed must draw
+ *  nothing rather than $0.00.
  *
  *  There is no `library` field either: the number of library sections lives in
  *  `librarySections.ts`, and answering it from Python as well would be one
@@ -3189,6 +3231,11 @@ export type ShellMoney = {
   modelled_calls: number;
   priced_calls: number;
   total_tokens: number;
+  /** The breakdown counts `UsageBucket` names. The aggregate always carries
+   *  them; optional because a response from an older build does not. */
+  modelled_subscription_calls?: number;
+  unpriced_subscription_calls?: number;
+  estimated_token_calls?: number;
   partial: boolean;
 };
 

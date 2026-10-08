@@ -8432,6 +8432,39 @@ test("a scene whose calls nobody priced says so rather than $0.00", async () => 
   expect(await screen.findByText(/not reported/)).toBeInTheDocument();
 });
 
+test("a zero estimate beside calls nobody priced says not reported in the scene head", async () => {
+  (api.getSceneUsage as any).mockResolvedValue(
+    sceneUsage({ calls: 11, cost_usd: 0, priced_calls: 0, modelled_calls: 1,
+                 modelled_usd: 0, unpriced_calls: 10 }));
+  renderCampaign();
+
+  expect(await screen.findByText(/not reported/)).toBeInTheDocument();
+  expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+});
+
+test("an estimate in the scene head is not labelled spend", async () => {
+  // A subscription's per-token equivalent is real usage, not money anybody
+  // paid -- `≈ $0.40 SPEND` would call it a bill.
+  (api.getSceneUsage as any).mockResolvedValue(
+    sceneUsage({ cost_usd: 0, priced_calls: 4, subscription_calls: 4,
+                 estimated_usd: 0.4 }));
+  renderCampaign();
+
+  expect(await screen.findByText(/≈ \$0\.40/)).toBeInTheDocument();
+  expect(screen.queryByText(/SPEND/)).not.toBeInTheDocument();
+});
+
+test("the scene head says when the scene's token counts were estimated here", async () => {
+  (api.getSceneUsage as any).mockResolvedValue(
+    sceneUsage({ cost_usd: 0, priced_calls: 0, modelled_calls: 4, modelled_usd: 0.37,
+                 estimated_token_calls: 4 }));
+  renderCampaign();
+
+  const figure = await screen.findByText(/≈ \$0\.37/);
+  expect(figure.closest("span")).toHaveAttribute(
+    "title", expect.stringMatching(/4 calls with tokens estimated/));
+});
+
 test("a ledger read that failed costs the figure and nothing else", async () => {
   (api.getSceneUsage as any).mockRejectedValue(new Error("busy"));
   renderCampaign();

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError, api, type CapabilityName, type CapabilityValue, type HealthCheckResult,
   type InferenceSettings, type LLMConnection, type LLMConnectionDetail,
@@ -15,8 +15,12 @@ import { migrationBanner, migrationLine } from "../components/inference/migratio
 import { TestCallDialog, useModelTests } from "../components/inference/TestCallDialog";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { perThousand } from "../components/cost";
+import { RATE_FIELDS, RateFields, entryOf, filled, formOf, hasBase,
+         type RateForm } from "../components/RateFields";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { errorText } from "../api/errors";
+import { EDIT_RATES, modelPath, providerPath } from "../providerPaths";
 
 /** Adapters whose provider can be asked for a catalog. Mirrors
  *  `llm.LISTABLE_KINDS`: the Claude subscription's models are SDK aliases with
@@ -39,12 +43,6 @@ const OVERRIDABLE: { name: CapabilityName; label: string }[] = [
 const ROLE_LABEL: Record<string, string> = {
   primary: "Primary", fast: "Fast", decision: "Decision", embedding: "Embedding",
 };
-
-const providerPath = (id: string) => `/providers/${encodeURIComponent(id)}`;
-/** Segment by segment, because a model id's own `/` is part of the path the
- *  `models/*` splat reads back. */
-const modelPath = (id: string, model: string) =>
-  `${providerPath(id)}/models/${model.split("/").map(encodeURIComponent).join("/")}`;
 
 /** What the provider last did, in words (#146). */
 function healthLabel(health: ProviderHealth): string {
@@ -158,7 +156,7 @@ export default function ProvidersView() {
   // upgrade is on its way, so the page unlocks when it lands. A failed read
   // leaves it null, which blocks nothing: the server refuses what it must on
   // its own.
-  const { settings } = useInferenceSettings();
+  const { settings, settled } = useInferenceSettings();
   // Each loaded record is held WITH the provider it describes: this component
   // stays mounted across `:id` changes, and a slow read must not paint one
   // provider's detail under another's name.
@@ -202,15 +200,18 @@ export default function ProvidersView() {
   // and the test call -- is refused only on a store a newer build switched:
   // at format 1 (an upgrade pending, or one that keeps failing) the server
   // takes these writes, and this is the one place a revoked key can be
-  // replaced. A model's FACTS are the new layout's own and wait on the store's
-  // FORMAT, not on the migration being done: the status stays pending after
-  // the global switch while any campaign is left unmarked (busy, synced from
-  // an older build, deferred by maintenance), and the server takes them once
-  // the format is "2". What is still left then is the quiet line,
-  // information rather than a lock -- worded as every other model-settings
-  // surface words it.
+  // replaced. A model's FACTS (its rates included) are the new layout's own
+  // and wait on the store's FORMAT, not on the migration being done: the
+  // status stays pending after the global switch while any campaign is left
+  // unmarked (busy, synced from an older build, deferred by maintenance), and
+  // the server takes them once the format is "2". What is still left then is
+  // the quiet line, information rather than a lock -- worded as every other
+  // model-settings surface words it. Until the first read has settled the
+  // format is not known, and not known is held like locked for the facts: a
+  // form opened by a link (`?edit=rates`) must not offer a live Save first.
+  // A read that FAILED leaves it to the server, as it always has.
   const blocked = !!settings && settings.newer;
-  const factsBlocked = !!settings && (settings.newer || settings.format !== "2");
+  const factsBlocked = settings ? settings.newer || settings.format !== "2" : !settled;
   const banner = migrationBanner(settings);
   const upgradeNote = migrationLine(settings);
 
@@ -847,12 +848,14 @@ const VISION_WORDS: Record<VisionOverride, string> = {
 type FactsForm = {
   vision: VisionOverride; prefill: boolean; post_process: "none" | "strict";
   overrides: Partial<Record<CapabilityName, "" | "yes" | "no">>;
+  rates: RateForm;
 };
 
 function factsForm(f: ModelFacts): FactsForm {
   return {
     vision: f.vision, prefill: !!f.prefill, post_process: f.post_process || "none",
     overrides: Object.fromEntries(OVERRIDABLE.map(({ name }) => [name, f.overrides[name] ?? ""])),
+    rates: formOf(f.rates),
   };
 }
 
@@ -876,9 +879,34 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
   const [testing, setTesting] = useState(false);
   // The embedding question, in the server's words; null when not asking.
   const [asking, setAsking] = useState<string | null>(null);
+  const [params, setParams] = useSearchParams();
+  const ratesId = useId();
+  /** `?edit=rates` opens the form once the facts are read and the store is
+   *  known to take writes, and puts the caret in the Input box. A store that
+   *  is locked (or not yet known) keeps the view, as its disabled Edit does.
+   *  Once per arrival: a later reload (a landed test) must not throw a reader
+   *  back into a form, and leaving the form clears the param, which re-arms
+   *  it for the next link that carries one. */
+  const askedRates = params.get("edit") === EDIT_RATES;
+  const openedFromUrl = useRef(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [focusRates, setFocusRates] = useState(false);
 
   const load = useCallback(() => api.readModelFacts(provider.id, model).then(setFacts), [provider.id, model]);
   useEffect(() => { load().catch(setError); }, [load]);
+  useEffect(() => {
+    if (!askedRates) { openedFromUrl.current = false; return; }
+    if (!facts || factsBlocked || openedFromUrl.current) return;
+    openedFromUrl.current = true;
+    setForm(factsForm(facts));
+    setMode("edit");
+    setFocusRates(true);
+  }, [facts, askedRates, factsBlocked]);
+  useEffect(() => {
+    if (mode !== "edit" || !focusRates) return;
+    inputRef.current?.focus();
+    setFocusRates(false);
+  }, [mode, focusRates]);
   // A landed test moves this model's facts and its badges -- whichever page
   // started it (the runs are shared, so a test begun from the /models picker
   // is the one Test… rejoins here).
@@ -906,11 +934,34 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
   const unreadable = facts.unreadable === true;
   const unreadableNote = unreadable && (
     <div className="banner" role="status">
-      This model&apos;s facts file could not be read, so it cannot be edited until it has
-      synced.
+      {facts.unreadable_reason === "mangled"
+        ? "This provider's model facts file is not valid JSON (it may have been edited by "
+          + "hand), so nothing here can be edited until the file is fixed or removed. "
+          + "Saving now would replace every model's facts in it."
+        : "This model's facts file could not be read, so it cannot be edited until it "
+          + "has synced."}
     </div>
   );
   const stated = OVERRIDABLE.filter(({ name }) => facts.overrides[name]);
+  // A rate the entry carries, zero included: a stated $0 is a price.
+  const statedRates = RATE_FIELDS.flatMap(({ key, label }) => {
+    const value = facts.rates?.[key];
+    return typeof value === "number" ? [{ key, label, value }] : [];
+  });
+
+  /** Back to the view, and `?edit` out of the URL with it (replacing the entry,
+   *  not pushing one): left in, a refresh would open the form again over a
+   *  save that already landed or an edit the reader abandoned. */
+  function leave() {
+    setMode("view");
+    if (params.has("edit")) {
+      setParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("edit");
+        return next;
+      }, { replace: true });
+    }
+  }
 
   async function save(confirm = false) {
     if (!facts || !form) return;
@@ -923,12 +974,18 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
       .filter((name) => (form.overrides[name] ?? "") !== (was.overrides[name] ?? ""))
       .map((name) => [name, form.overrides[name] ?? ""]));
     if (Object.keys(overrides).length) body.overrides = overrides;
+    // Rates only when a box changed, like every other field. Every box empty
+    // clears them (`{}`); otherwise the filled boxes, an empty one LEFT OUT —
+    // the store refuses a present null — and a zero kept, being a price.
+    if (RATE_FIELDS.some(({ key }) => form.rates[key].trim() !== was.rates[key].trim())) {
+      body.rates = filled(form.rates) ? entryOf(form.rates) : {};
+    }
     if (confirm) body.confirm_embedding = true;
     setSaving(true);
     setError(null);
     try {
       setFacts(await api.putModelFacts(provider.id, body));
-      setMode("view");
+      leave();
       onChanged();
     } catch (err: unknown) {
       if (!confirm && err instanceof ApiError && err.kind === "confirm_embedding") {
@@ -945,6 +1002,11 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
 
   if (mode === "edit" && form) {
     const set = (patch: Partial<FactsForm>) => setForm({ ...form, ...patch });
+    // A rate typed with no pair to price against: one base rate alone, or a
+    // cache rate alone -- a base box left EMPTY, which only the form can say.
+    // A filled box whose value the store refuses (a negative) is not this: it
+    // is sent, and the store's own reason is shown.
+    const halfRated = filled(form.rates) && !hasBase(form.rates);
     return (
       <div className="form">
         {back}
@@ -993,6 +1055,15 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
             </select>
           </Field>
         ))}
+        <h4>Rates</h4>
+        <div className="field-hint">
+          This model&apos;s price on this provider, in dollars per 1,000 tokens. Used before your
+          pricing table, for calls whose provider reports no price. Empty every box to state none.
+        </div>
+        <RateFields value={form.rates} onChange={(rates) => set({ rates })}
+                    idPrefix={ratesId} subject={model} disabled={saving}
+                    inputRef={inputRef} />
+        {halfRated && <div className="field-hint error">Input and output are both needed.</div>}
         {asking !== null && (
           <div className="banner" role="group" aria-label="Confirm the embedding">
             {asking}{" "}
@@ -1004,11 +1075,11 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
           </div>
         )}
         <div className="form-actions">
-          <button className="subtle" onClick={() => { setAsking(null); setMode("view"); }}>
+          <button className="subtle" onClick={() => { setAsking(null); setError(null); leave(); }}>
             Cancel
           </button>
           <button className="primary" onClick={() => { void save(); }}
-                  disabled={factsBlocked || saving || unreadable || asking !== null}>
+                  disabled={factsBlocked || saving || unreadable || halfRated || asking !== null}>
             Save facts
           </button>
         </div>
@@ -1063,6 +1134,20 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
         <div className="side-section">
           <h4>Prompt post-processing</h4>
           <span className="chip on">{facts.post_process || "none"}</span>
+        </div>
+        <div className="side-section">
+          <h4>Rates</h4>
+          {statedRates.length === 0 ? (
+            <span className="field-hint">
+              None stated — your pricing table is used if it covers this model.
+            </span>
+          ) : (
+            <div className="chips">
+              {statedRates.map(({ key, label, value }) => (
+                <span key={key} className="chip on">{`${label} ${perThousand(value)}`}</span>
+              ))}
+            </div>
+          )}
         </div>
         <div className="side-section">
           <h4>Capability overrides</h4>

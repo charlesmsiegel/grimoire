@@ -337,6 +337,17 @@ marker it publishes share one hold of it, so another process's provider edit
 cannot land between them either. `test_format_hold.py` enumerates the writers
 and checks that each one's read is inside the hold.
 
+A model-facts write is a merge onto the provider's whole facts file, so it
+never replaces a file it could not read. One another program holds is refused
+(`facts.FactsUnreadableError`, 503 from the facts route: try again), and so is
+one that was read and does not parse as an object of models — empty,
+truncated or hand-mangled (`facts.FactsMangledError`, 409 `facts_unreadable`:
+a person fixes or removes it). Writing over either would keep only the entry
+being changed and drop every other model's rates, verdicts and overrides. The
+facts GET flags both as `unreadable`, so the panel never offers that save;
+reads elsewhere stay fail-soft, so a mangled file prices nothing and refuses
+no turn.
+
 ### Reads notice external writes
 
 Every request re-reads from `paths.home()`, and `store/statcache.py` keys its

@@ -228,6 +228,37 @@ test("never shows a zero cost for an unknown price", async () => {
   expect(dialog).not.toHaveTextContent("$0");
 });
 
+test("TestCallDialog says when the estimate comes from your rates", async () => {
+  (api.previewModelTest as any).mockResolvedValue(
+    preview({ estimated_cost_usd: 0.0042, estimate_basis: "rates" }));
+  open();
+
+  const dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  expect(await within(dialog).findByText(/Estimated cost: ≈ \$0\.0042 at your rates/))
+    .toBeInTheDocument();
+});
+
+test("a catalog estimate does not claim to be from your rates", async () => {
+  (api.previewModelTest as any).mockResolvedValue(
+    preview({ estimated_cost_usd: 0.0042, estimate_basis: "catalog" }));
+  open();
+
+  const dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  expect(await within(dialog).findByText(/Estimated cost: ≈ \$0\.0042/)).toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("at your rates");
+});
+
+test("an unpriced estimate says cost unknown whatever basis it carries", async () => {
+  (api.previewModelTest as any).mockResolvedValue(
+    preview({ estimated_cost_usd: null, estimate_basis: "rates" }));
+  open();
+
+  const dialog = await screen.findByRole("dialog", { name: "Test a model" });
+  expect(await within(dialog).findByText(/cost unknown — one tiny request/)).toBeInTheDocument();
+  expect(dialog).not.toHaveTextContent("at your rates");
+  expect(dialog).not.toHaveTextContent("$0");
+});
+
 test("a preview the server refuses says why and offers no Run", async () => {
   (api.previewModelTest as any).mockRejectedValue(
     new ApiError(409, "This connection has no API key.", "missing_key"));

@@ -680,6 +680,24 @@ def test_a_campaign_that_has_generated_nothing_reports_zero_rather_than_404(clie
     assert body["totals"]["cost_usd"] == 0.0
 
 
+def test_the_scene_list_says_whether_a_models_own_rates_can_be_written(client):
+    """The Costs page's "Set its rates" opens an editor that saves only on a
+    store at the current model-settings format (`PUT .../facts` answers 409
+    `not_migrated` before it, `newer_format` after), so the page is told."""
+    from grimoire.store import inference_keys
+    _, cid = _campaign(client)
+
+    def flags() -> tuple:
+        body = client.get(f"/api/campaigns/{cid}/usage/scenes").json()
+        return body["rates_editable"], body["rates_newer"]
+    assert flags() == (False, False)
+    store.write_config(**{inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT})
+    assert flags() == (True, False)
+    # A newer build's store is not waiting for an upgrade: the page says so.
+    store.write_config(**{inference_keys.FORMAT_KEY: str(int(inference_keys.CURRENT_FORMAT) + 1)})
+    assert flags() == (False, True)
+
+
 # ---- the rate table (#158) ----
 def test_the_rate_table_starts_empty(client):
     body = client.get("/api/pricing").json()

@@ -36,6 +36,7 @@ from collections.abc import Iterable
 from typing import NamedTuple
 
 from ... import content_parts
+from .. import pricing
 from .capabilities import NAMES
 
 #: The reply cap on every chat probe.
@@ -184,6 +185,26 @@ def estimate_usd(row: dict | None, caps: Iterable[str]) -> float | None:
             if image is None:
                 return None
             total += probe.images * image
+    return total
+
+
+def estimate_from_rates(entry: dict | None, caps: Iterable[str]) -> float | None:
+    """What probing `caps` should cost at the user's rates -- a model's own or
+    a `pricing.json` entry (`pricing.rate_for_call`).
+
+    The sum over the probes of `pricing.estimate` on each probe's token guess,
+    and None when any one of them is None: no entry, or an entry that cannot
+    price both halves of a call. The vision probe is priced from its token
+    guess alone, because user rates price an image as prompt tokens, as the
+    ledger does; the per-image price is a catalog row's (`estimate_usd`)."""
+    total = 0.0
+    for cap in caps:
+        probe = PROBES[cap]
+        cost = pricing.estimate(entry, prompt_tokens=probe.prompt_tokens,
+                                completion_tokens=probe.completion_tokens)
+        if cost is None:
+            return None
+        total += cost
     return total
 
 

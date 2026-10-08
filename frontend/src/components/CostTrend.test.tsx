@@ -7,7 +7,9 @@ test("the projected series is present for a modelled-only month and marks gaps",
     priced_calls: 0, subscription_calls: 0, modelled_calls: 1 } as never]} />);
   expect(screen.getByText("Estimated total")).toBeInTheDocument();
   expect(screen.getByText("Modelled")).toBeInTheDocument();
-  expect(within(screen.getByRole("list")).getAllByText("$1.25")).toHaveLength(2);
+  // Both are estimates, never spend: marked as such.
+  expect(within(screen.getByRole("list")).getAllByText("≈ $1.25")).toHaveLength(2);
+  expect(within(screen.getByRole("list")).queryByText("$1.25")).toBeNull();
   expect(screen.getByText(/Incomplete: 1 unpriced call/)).toBeInTheDocument();
   const line = screen.getByRole("img", { name: /cost versus month/i });
   const bars = screen.getByRole("list");
@@ -44,4 +46,35 @@ test("the line chart starts at the first measured month and keeps later empty mo
   expect(screen.queryByText("2026-06")).not.toBeInTheDocument();
   expect(screen.getAllByTestId("cost-trend-month").map((node) => node.textContent))
     .toEqual(["2026-08", "2026-07"]);
+});
+
+test("a month played only on a zero-rated model reads ≈ $0.00, never a bare $0.00", () => {
+  render(<CostTrend rows={[{ month: "2026-09", calls: 2, cost_usd: 0, estimated_usd: 0,
+    modelled_usd: 0, estimated_total_usd: 0, unpriced_calls: 0,
+    priced_calls: 0, subscription_calls: 0, modelled_calls: 2 } as never]} />);
+  const list = within(screen.getByRole("list"));
+  expect(list.getAllByText("≈ $0.00")).toHaveLength(2);
+  expect(list.queryByText("$0.00")).toBeNull();
+});
+
+test("a month whose counts were estimated here says so on its estimates", () => {
+  render(<CostTrend rows={[{ month: "2026-09", calls: 2, cost_usd: 0.5, estimated_usd: 0,
+    modelled_usd: 0.25, estimated_total_usd: 0.75, unpriced_calls: 0,
+    priced_calls: 1, subscription_calls: 0, modelled_calls: 1,
+    estimated_token_calls: 1 } as never]} />);
+  const list = within(screen.getByRole("list"));
+  expect(list.getByText("≈ $0.25")).toHaveAttribute("title", expect.stringMatching(/tokens estimated/));
+  expect(list.getByText("≈ $0.75")).toHaveAttribute("title", expect.stringMatching(/tokens estimated/));
+  // A provider's charge rests on no count of ours.
+  expect(list.getByText("$0.50")).not.toHaveAttribute("title");
+  // A tooltip cannot be seen on a touch screen: the month says so in text too,
+  // the way it says "Incomplete".
+  expect(list.getByText("1 call with tokens estimated")).toBeInTheDocument();
+});
+
+test("a month with no estimated counts carries no such note", () => {
+  render(<CostTrend rows={[{ month: "2026-09", calls: 1, cost_usd: 0.5, estimated_usd: 0,
+    modelled_usd: 0, estimated_total_usd: 0.5, unpriced_calls: 0,
+    priced_calls: 1, subscription_calls: 0, modelled_calls: 0 } as never]} />);
+  expect(screen.queryByText(/tokens estimated/)).toBeNull();
 });

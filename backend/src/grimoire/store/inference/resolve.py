@@ -80,6 +80,15 @@ FALLBACK_KEY = "_fallback"
 #: it lifts the drop, and leave the credential ones (`problem`) alone.
 SAME_PROVIDER = "it is on the primary's own provider"
 
+#: Where a lowered connection dict carries its account block -- what the
+#: ledger files about an attempt that the wire does not say: its `billing`
+#: (stamped on every lowered dict), and, on a resolved attempt, the
+#: `operation` and the `role` whose slot supplied it (spec 9.3).
+#: `llm_usage.ACCOUNT_KEY`, restated for the same reason; a test holds them
+#: equal. A block is never written in place (`llm_usage.with_account`): every
+#: `{**conn}` copy shares it.
+ACCOUNT_KEY = "_account"
+
 #: The ways reading one connection can fail, every one of which reads as "no
 #: such connection" -- a dangling reference is walked past, never raised.
 _UNREADABLE = (llm_connections.ConnectionNotFound, locks.StoreBusy,
@@ -225,6 +234,10 @@ def _lowered(raw: dict, sampling: dict, model: str | None = None, *,
     if model is not None:
         out["model"] = model
     out["sampling"] = sampling
+    # A fresh block per lowering, never `raw`'s: `resolve` replaces it whole
+    # with what the resolution knows, and `lower`'s callers (the model test,
+    # `controls.preview`) carry the billing alone.
+    out[ACCOUNT_KEY] = {"billing": providers.billing(out)}
     row = _catalog_row(out, str(out.get("model", "") or "")) if catalog else None
     params = _params_of(out, row)
     if params is not None:
@@ -609,6 +622,9 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
             attempts.append(_attempt(fallback.provider, fallback.model, fb_sampling,
                                      fb_raw, current=current))
 
+    # Stamped BEFORE the fallback is attached, so the dict the facade sends
+    # is the stamped one.
+    _account(attempts, operation, choice, selection)
     needs = _needs(route, operation)
     # The "Images: on" bridge applies to a format-1 fallback as it does to the
     # primary (`_bridged`): what the legacy layout sent, it still sends.
@@ -778,10 +794,49 @@ def embedding(cfg: dict | None = None, *,
                                  role="", via="", scope="none", attempts=(),
                                  current=current)
     got = embed_attempt(selection.provider, selection.model, raw, current=current)
+    # The account block a chat resolution's attempts get from `_account`: the
+    # operation, and the role whose slot supplied the selection -- always the
+    # Embedding role's, since nothing overrides it per call (spec 9.3).
+    # Replaced, never updated in place: the block is shared by `{**conn}` copies.
+    conn = got.attempt.conn
+    conn[ACCOUNT_KEY] = {**conn.get(ACCOUNT_KEY, {}), "operation": "embed",
+                         "role": "embedding"}
     return ResolvedInference(
         task="", operation="embed", route="", legacy_route="",
         role="embedding", via="role", scope=scope, attempts=(got.attempt,),
         standing=selection, current=current, missing=got.missing, space_id=got.space_id)
+
+
+def _role_supplied(standing: Selection | None, selection: Selection | None,
+                   kind: str) -> bool:
+    """Whether the selection a call runs on is still the one the role's slot
+    supplied: the same provider, at the same EFFECTIVE model (`facts.model_of`,
+    on the provider's `kind`). A preset-only override keeps it.
+
+    Effective, as `routes.common.override_inference` compares: a Claude
+    selection with no model runs the default, so a reroll naming that default
+    has not left the role's selection and its row keeps the role."""
+    if standing is None or selection is None or standing.provider != selection.provider:
+        return False
+    return (facts.model_of({"kind": kind, "model": standing.model})
+            == facts.model_of({"kind": kind, "model": selection.model}))
+
+
+def _account(attempts: list[Attempt], operation: str, choice: cascade.Choice,
+             selection: Selection | None) -> None:
+    """Stamp each attempt's account block (spec 9.3): the `operation`, and the
+    `role` whose slot supplied the resolution, on both attempts (ruling 9).
+
+    No role for a pin (`choice.role` is empty), nor when a per-call override
+    chose the provider or the model -- the user supplied that selection, not a
+    role. The block is REPLACED, never `update()`d: `{**conn}` copies share it,
+    and an in-place write would reach every one of them."""
+    stamp = {"operation": operation}
+    kind = str(attempts[0].conn.get("kind", "") or "") if attempts else ""
+    if choice.role and _role_supplied(choice.selection, selection, kind):
+        stamp["role"] = choice.role
+    for attempt in attempts:
+        attempt.conn[ACCOUNT_KEY] = {**attempt.conn.get(ACCOUNT_KEY, {}), **stamp}
 
 
 def _same_provider(primary: dict, fallback: dict) -> bool:

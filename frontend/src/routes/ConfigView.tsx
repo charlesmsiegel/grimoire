@@ -899,7 +899,8 @@ export default function ConfigView() {
               says; an OpenAI-compatible endpoint you host yourself says nothing
               at all, and those calls read as <em>not reported</em> everywhere costs
               are shown — which is honest, and no use for answering what a
-              campaign has cost. Rates here fill that gap.
+              campaign has cost. Rates here fill that gap. A model's own
+              rates, set on its provider's page, are used before this table.
             </p>
             <p className="config-copy">
               What comes out of them is an <strong>estimate, and is labelled as

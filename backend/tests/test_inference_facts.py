@@ -103,12 +103,13 @@ def test_a_rev_change_does_not_hide_what_the_user_stated(conn):
     p = llm_connections.facts_path(cid)
     doc = json.loads(p.read_text(encoding="utf-8"))
     doc["m"].update({"vision": "on", "prefill": True, "post_process": "strict",
-                     "rates": {"input": 1.0, "output": 2.0}})
+                     "rates": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0}})
     p.write_text(json.dumps(doc), encoding="utf-8")
     got = facts.of(cid, "m", "a-different-rev")
     assert got["overrides"] == {"vision": "yes"}
     assert (got["vision"], got["prefill"], got["post_process"], got["rates"]) == (
-        "on", True, "strict", {"input": 1.0, "output": 2.0})
+        "on", True, "strict",
+        {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0})
 
 
 def test_set_overrides_replaces_and_empty_clears(conn):
@@ -176,21 +177,49 @@ def test_mangled_fields_inside_a_model_read_as_empty(conn):
                    "verified": {"embed": _ok()}, "overrides": {"embed": "no"}}
 
 
-def test_a_mangled_file_is_replaced_by_the_next_write(conn):
+@pytest.mark.parametrize("raw", [
+    "", "{not json", '{"other": {"rates": {"prompt_usd_per_1k": 1,}}}', "[]", "null",
+    '{"m": 3}',
+])
+@pytest.mark.parametrize("write", ["overrides", "state", "rates", "verified"])
+def test_no_write_replaces_a_file_it_could_not_parse(conn, raw, write):
+    """A hand-mangled file reads as nothing stated, but it still holds every
+    other model's word -- a trailing comma away from readable. A write merged
+    onto that empty read would keep only its own entry, so every write refuses
+    (`FactsMangledError`) and the bytes stay as they were."""
+    cid, rev = conn
+    p = llm_connections.facts_path(cid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(raw, encoding="utf-8")
+    with pytest.raises(facts.FactsMangledError):
+        if write == "overrides":
+            facts.set_overrides(cid, "m", {"vision": "yes"})
+        elif write == "state":
+            facts.state(cid, "m", vision="off")
+        elif write == "rates":
+            facts.state(cid, "m", rates={"prompt_usd_per_1k": 0.0,
+                                         "completion_usd_per_1k": 0.0})
+        else:
+            facts.record_verified(cid, "m", rev, {"vision": _ok()})
+    assert p.read_text(encoding="utf-8") == raw
+
+
+def test_a_mangled_file_is_refused_on_a_strict_read_and_fail_soft_otherwise(conn):
     cid, rev = conn
     p = llm_connections.facts_path(cid)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("{not json", encoding="utf-8")
-    facts.set_overrides(cid, "m", {"vision": "yes"})
-    assert facts.of(cid, "m", rev)["overrides"] == {"vision": "yes"}
+    assert facts.of(cid, "m", rev)["overrides"] == {}
+    with pytest.raises(facts.FactsMangledError):
+        facts.of(cid, "m", rev, strict=True)
 
 
 @pytest.mark.parametrize("write", ["state", "verified"])
 def test_no_write_replaces_a_file_it_could_not_read(conn, monkeypatch, write):
-    """A mangled file is the user's to replace; one that could not be READ (a
-    sharing violation, a sync client holding it) is not mangled -- rewritten
-    from an empty read, it would hold only this write, and every other model's
-    verified results and overrides would be gone."""
+    """One that could not be READ (a sharing violation, a sync client holding
+    it) is refused as well -- rewritten from an empty read, it would hold only
+    this write, and every other model's verified results and overrides would
+    be gone. It is the transient case, so it is not `FactsMangledError`."""
     from pathlib import Path
 
     cid, rev = conn
@@ -205,12 +234,13 @@ def test_no_write_replaces_a_file_it_could_not_read(conn, monkeypatch, write):
         return real(self, *a, **kw)
 
     monkeypatch.setattr(Path, "read_text", held)
-    with pytest.raises(facts.FactsUnreadableError):
+    with pytest.raises(facts.FactsUnreadableError) as got:
         if write == "state":
             facts.state(cid, "m", vision="off")
         else:
             facts.record_verified(cid, "m", rev, {"vision": _ok()})
     monkeypatch.setattr(Path, "read_text", real)
+    assert not isinstance(got.value, facts.FactsMangledError)
     assert p.read_bytes() == before
 
 

@@ -157,6 +157,24 @@ def facts_path(conn_id: str) -> Path:
     return _dir() / f"{conn_id}.facts.json"
 
 
+def facts_files() -> dict[str, Path]:
+    """Every provider's facts file, as `{connection id: path}`.
+
+    A glob of the connections directory: no connection record is read, so this
+    is cheap enough for the rate reader that sits on the shell's navigation
+    path (`pricing.provider_rates`). `delete_connection` unlinks a deleted
+    connection's facts file, so the ids here are live providers. A file whose
+    stem is not a safe id (a hand-dropped stray) is skipped.
+    """
+    suffix = ".facts.json"
+    try:
+        found = sorted(_dir().glob(f"*{suffix}"))
+    except OSError:
+        return {}
+    return {p.name[:-len(suffix)]: p for p in found
+            if p.is_file() and safe_id(p.name[:-len(suffix)])}
+
+
 def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     """Unconditional write: stamps a fresh rev and clears any sidecar for
     this id, on every call (create AND update) — simpler than conditioning

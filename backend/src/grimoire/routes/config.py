@@ -15,7 +15,7 @@ from typing import Literal, NamedTuple
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import catalog, embeddings, health, llm, llm_errors, llm_sampling, store
+from .. import catalog, embeddings, health, llm, llm_errors, llm_sampling, llm_usage, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference import capabilities, controls, facts, providers
@@ -1130,14 +1130,17 @@ def _embed_endpoint(raw: dict) -> str:
     return str(raw.get("base_url") or "")
 
 
-async def _embed_probe(raw: dict, model: str) -> dict:
+async def _embed_probe(raw: dict, conn: dict, model: str) -> dict:
     """The `embed` probe: one fixed string, once, metered under `model-test`
     with `operation: "embed"`, on the provider under test (ruling 8: it is not
     an embed task and resolves no role).
 
     The holder is stamped as `llm._stamp` stamps a chat attempt, which is what
     makes the meter file a row at all (an empty holder means "never sent"),
-    and the client folds into it whatever counts the endpoint reports. A
+    and the client folds into it whatever counts the endpoint reports (a
+    prompt count it did not report is estimated, `embed.estimate_prompt`).
+    What served it -- the provider id and the `embed` operation -- is filed
+    from the probe's lowered `conn` through `llm_usage.account` (slice E, M9). A
     failure is finished as the embed operation finishes one
     (`inference.embed.record_failure`): its recorded detail is the kind and HTTP status
     only, because a redirect's `Location` can carry a key. The verdict still
@@ -1146,12 +1149,10 @@ async def _embed_probe(raw: dict, model: str) -> dict:
     # `model=` because the client owns the holder's `model` key: it clears it
     # at entry and refills it only with what the endpoint named.
     with store.usage.meter("model-test", model=model) as m:
-        # Slice E meters this through `llm_usage.account(with_account(conn,
-        # operation="embed"))`; on merge E's account line is kept and this
-        # literal `operation` goes.
         m.usage.update({"model": model, "connection": raw.get("name") or raw["id"],
                         "provider": raw.get("kind", "openrouter"), "attempts": 1,
-                        "operation": "embed"})
+                        "requested_model": model})
+        llm_usage.account(m.usage, llm_usage.with_account(conn, operation="embed"))
         try:
             # Off the loop: the embeddings client is synchronous by design.
             vectors = await asyncio.to_thread(lambda: _EMBEDDINGS.embed(
@@ -1160,6 +1161,11 @@ async def _embed_probe(raw: dict, model: str) -> dict:
         except Exception as exc:
             store.inference.embed.record_failure(m, exc)
             raise
+        # A prompt count the endpoint did not report is estimated locally, as
+        # the embed operation estimates one (`embed.estimate_prompt`) -- in a
+        # worker too, since a loaded encoder counts synchronously.
+        await asyncio.to_thread(store.inference.embed.estimate_prompt,
+                                m.usage, [probes.EMBED_TEXT])
     return {"ok": True, "dims": len(vectors[0])}
 
 
@@ -1225,12 +1231,15 @@ async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str)
     says so."""
     probes = store.inference.probes
     try:
-        if probes.PROBES[cap].operation == "embed":
-            return _Outcome(await _embed_probe(raw, model), True, False)
+        probe = probes.PROBES[cap]
+        if probe.operation == "embed":
+            return _Outcome(await _embed_probe(raw, conn, model), True, False)
         with store.usage.meter("model-test") as m:
-            # Completed is accepted; the text is not read.
-            await _bounded_call(client.single(probes.messages(cap), conn, m.usage),
-                                ceiling=MODEL_TEST_CEILING)
+            # Completed is accepted; the text is not read. The row names the
+            # probe's operation (M9) on a copy: `conn` serves every probe.
+            await _bounded_call(client.single(
+                probes.messages(cap), llm_usage.with_account(conn, operation=probe.operation),
+                m.usage), ceiling=MODEL_TEST_CEILING)
     except LLMError as exc:
         return _Outcome({"ok": False, "kind": exc.kind,
                          "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},
@@ -1286,20 +1295,39 @@ def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
     nothing, meters nothing, starts no run.
 
     `estimated_cost_usd` is the probes' stated token guesses
-    (`probes.PROBES`) at the model's cached catalog prices, plus the vision
-    probe's one image at the row's per-image price, and null when the catalog
-    states no price the estimate needs -- "a price nobody reported is never
-    rendered as zero"; the confirmation then says the cost is unknown."""
+    (`probes.PROBES`) priced from the first of three sources that can price the
+    whole test, and `estimate_basis` names it: `catalog` (the model's cached
+    catalog prices, plus the vision probe's one image at the row's per-image
+    price), else `rates` (the user's -- the model's own, else `pricing.json`,
+    by `pricing.rate_for_call` -- with the vision probe priced from its token
+    guess, as the ledger prices images). A catalog row that states token prices
+    but no image price leaves only the catalog source unknown. Null with a null
+    basis when none of them prices it -- "a price nobody reported is never
+    rendered as zero"; the confirmation then says the cost is unknown.
+
+    The user's rates are tried only for a provider that does not report its
+    own price (`reports_price`): the ledger never prices such a provider's
+    calls from them, since what it reports always wins, so a zero default
+    meant for local models would otherwise read "≈ $0.00 at your rates" for a
+    call that will be billed. Without a catalog price, such a provider's
+    test is "cost unknown"."""
     raw, model, caps = _test_plan(conn_id, body)
     probes = store.inference.probes
     capped = "max_tokens" in llm_sampling.sent_names(inference.lower(raw, probes.sampling(), model))
+    # A missing or mangled sidecar is "no price known" (`cached_row` never
+    # raises), not a failed preview.
+    estimate = probes.estimate_usd(store.llm_connections.cached_row(conn_id, model), caps)
+    basis = "catalog" if estimate is not None else None
+    if estimate is None and not store.inference.providers.infer(raw).reports_price:
+        entry = store.pricing.rate_for_call(
+            store.pricing.read_pricing(), store.pricing.provider_rates(),
+            provider_id=conn_id, model=model)
+        estimate = probes.estimate_from_rates(entry, caps)
+        basis = "rates" if estimate is not None else None
     return {"provider": raw.get("name") or conn_id, "provider_id": conn_id, "model": model,
             "sends": [{"capability": c, "description": probes.describe(c, capped)}
                       for c in caps],
-            # A missing or mangled sidecar is "no price known" (`cached_row`
-            # never raises), not a failed preview.
-            "estimated_cost_usd": probes.estimate_usd(
-                store.llm_connections.cached_row(conn_id, model), caps)}
+            "estimated_cost_usd": estimate, "estimate_basis": basis}
 
 
 @router.post("/llm-connections/{conn_id}/test", status_code=202)
@@ -1535,18 +1563,24 @@ def _facts_body(conn: dict, model: str) -> dict:
     its current rev) and every capability as it resolves with them.
 
     Read strictly, as `GET /pricing` reads its table: a facts file that exists
-    and cannot be read answers `unreadable: true` with nothing stated, rather
-    than reading as a model nothing was said of -- the panel must not offer a
-    save over the user's word it could not read (the write would be refused
-    anyway, `put_connection_facts`)."""
+    and cannot be read -- held by another program, or not parseable --
+    answers `unreadable: true` with nothing stated, rather than reading as a
+    model nothing was said of -- the panel must not offer a save over the
+    user's word it could not read (the write would be refused anyway,
+    `put_connection_facts`). `unreadable_reason` says which: `held` clears on
+    its own, `mangled` needs the file fixed by hand."""
     caps = capabilities.caps_for(conn, model)
+    reason = ""
     try:
         known = facts.of(conn["id"], model, conn["rev"], strict=True)
-        unreadable = False
-    except facts.FactsUnreadableError:
-        known, unreadable = facts.of(conn["id"], model, conn["rev"]), True
-    return {"provider": conn["id"], "model": model, **known, "unreadable": unreadable,
+    except facts.FactsUnreadableError as exc:
+        known = facts.of(conn["id"], model, conn["rev"])
+        reason = "mangled" if isinstance(exc, facts.FactsMangledError) else "held"
+    body = {"provider": conn["id"], "model": model, **known, "unreadable": bool(reason),
             "capabilities": {n: capabilities.cap_body(c) for n, c in caps.items()}}
+    if reason:
+        body["unreadable_reason"] = reason
+    return body
 
 
 @router.get("/llm-connections/{conn_id}/facts")
@@ -1564,15 +1598,26 @@ def get_connection_facts(conn_id: str, model: str = ""):
 FACTS_UNREADABLE = ("This provider's model facts could not be read just now "
                     "(another program may hold the file); nothing was saved. Try again.")
 
+#: A facts write onto a file that was read and does not parse (`facts
+#: .FactsMangledError`): refused as 409 `facts_unreadable` rather than written
+#: over every other model's rates, verdicts and overrides. Unlike the 503 it
+#: will not clear on its own, so it says what a person has to do.
+FACTS_MANGLED = ("This provider's model facts file is not valid JSON (it may have been "
+                 "edited by hand); nothing was saved. Fix or remove the file, then try "
+                 "again.")
+
 
 @router.put("/llm-connections/{conn_id}/facts")
 def put_connection_facts(conn_id: str, body: FactsUpdate):
-    """State `vision`, `prefill`, `post_process` and capability `overrides`
-    (`{cap: "" | "yes" | "no"}`, "" removing one) for one model; a field left
-    out (or null) is left as it is. 400 for a value the store refuses, before
-    anything is written; 404 for a provider that does not exist -- or stopped
-    existing before the write, which `facts.state` checks under the connection
-    lock. Rates are slice E's.
+    """State `vision`, `prefill`, `post_process`, capability `overrides`
+    (`{cap: "" | "yes" | "no"}`, "" removing one) and `rates` (the model's own
+    per-token price; `{}` removing it) for one model; a field left out (or
+    null) is left as it is. 400 for a value the store refuses -- a partial or
+    unknown-field rate included -- before anything is written; 404 for a
+    provider that does not exist -- or stopped existing before the write, which
+    `facts.state` checks under the connection lock. The facts file it merges
+    onto is never replaced: 503 while another program holds it (try again),
+    409 `facts_unreadable` when it does not parse (a person fixes it).
 
     A model-settings write like any other (spec 11.2, 12): 409 `not_migrated`
     until the store is at format 2, where the lowering reads facts rather than
@@ -1597,12 +1642,18 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
     try:
         facts.state(conn_id, model, vision=fields.get("vision"),
                     prefill=fields.get("prefill"), post_process=fields.get("post_process"),
-                    overrides=fields.get("overrides"),
+                    overrides=fields.get("overrides"), rates=fields.get("rates"),
                     guard=None if confirmed else _refuse_unconfirmed_facts(conn, model))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
+    except facts.FactsMangledError:
+        # Read, and not a facts document: a write would replace every other
+        # model's word with this one entry. Nothing was written, and a retry
+        # will not help until a person fixes the file.
+        raise HTTPException(status_code=409, detail={
+            "kind": "facts_unreadable", "detail": FACTS_MANGLED}) from None
     except facts.FactsUnreadableError:
         # Held by another program: nothing was written, and a retry may land.
         raise HTTPException(status_code=503, detail=FACTS_UNREADABLE) from None

@@ -2703,14 +2703,12 @@ export const api = {
       "GET", `/api/llm-connections/${encodeSegment(id)}/facts?model=${encodeURIComponent(model)}`,
       undefined, { fresh: true }),
   /** State what the user knows of one model. A field left out is left alone.
-   *  Invalidates the cached config and announces: a capability override on
-   *  the model Primary resolves to can move `ready`, which the header reads. */
+   *  Announced (`announceModels`): a capability override on the model Primary
+   *  resolves to can move `ready`, which the header reads, and the model's
+   *  rates are among the facts a model view shows. */
   putModelFacts: (id: string, body: ModelFactsUpdate) =>
     request<ModelFacts>("PUT", `/api/llm-connections/${encodeSegment(id)}/facts`, body)
-      .then((r) => {
-        invalidateConfigCache();
-        return notifyConfig(r);
-      }),
+      .then(announceModels),
   /** What a test call would send and roughly cost. Sends nothing, meters
    *  nothing, starts no run -- it is what the confirmation shows. */
   previewModelTest: (id: string, body: { model: string; capabilities: TestableCapability[] }) =>

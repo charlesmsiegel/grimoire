@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { api, type CampaignBudget, type SceneUsage, type UsageTurn } from "../api/client";
-import { Footnotes, about, bound, bucketPrice, money, turnPrice } from "./cost";
+import {
+  Footnotes, about, bound, bucketPrice, estimatedTokensTitle, money, tokenTotal, turnPrice,
+  turnTags,
+} from "./cost";
 
 /** What this scene's turns cost, and where the campaign stands against its
  *  budget (#153).
@@ -123,7 +126,7 @@ export function CostPanel({ cid, sid, refreshKey, usage: usageProp, budget: budg
         <>
           <div className="ctx-tokens">
             {bucketPrice(totals)} · {totals.calls} {totals.calls === 1 ? "turn" : "turns"}
-            {" · "}{totals.total_tokens.toLocaleString()} tok
+            {" · "}{tokenTotal(totals)}
           </div>
           {/* Everything the figure above is not covering, one line per reason
               — see `cost.Footnotes` for why they are not collapsed into one. */}
@@ -145,7 +148,7 @@ export function CostPanel({ cid, sid, refreshKey, usage: usageProp, budget: budg
       {usage && usage.by_task.length > 0 && (
         <div className="cost-tasks">
           {usage.by_task.map((b) => (
-            <span className="chip on" key={b.key}>
+            <span className="chip on" key={b.key} title={estimatedTokensTitle(b)}>
               {b.key} {b.calls} · {bucketPrice(b)}
             </span>
           ))}
@@ -254,6 +257,9 @@ function TurnRow({ turn }: { turn: UsageTurn }) {
         {turn.status === "error" && <span className="ctx-drop">{turn.error || "failed"}</span>}
         <span className="ctx-meta">{clock(turn.ts)}</span>
         <span className="ctx-meta">{turnPrice(turn)}</span>
+        {/* Labels, never figures: what served the turn and whether its counts
+            were counted here. `cost.turnTags` decides which apply. */}
+        {turnTags(turn).map((tag) => <span className="chip" key={tag}>{tag}</span>)}
       </summary>
       <div className="cost-turn-body">
         <div className="field-hint">{turn.model}</div>

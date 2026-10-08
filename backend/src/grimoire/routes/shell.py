@@ -37,7 +37,10 @@ figure a different meaning, which is the drift the three-money-columns rule
 exists to prevent. So the Costs row waited for the maintained aggregate rather
 than for a cheaper lie, and ``store.usage_rollup`` is it: the same all-time
 figure, read through a byte bookmark into each month file so the cost is what
-has been played since the last navigation rather than the library's age.
+has been played since the last navigation rather than the library's age. The
+rail itself has since dropped the tail -- one tail cannot carry three columns
+that may never be added -- so the campaign hub's money card is what draws this
+figure, in three labelled columns.
 
 The three columns arrive apart and are never summed here or anywhere else, and
 ``partial`` says when the aggregate could not be brought up to date -- which is
