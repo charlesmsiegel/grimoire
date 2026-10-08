@@ -7,7 +7,7 @@ is the set of production lines and arcs (branch edges) the suite executed,
 compared as sets. That is what this writes and compares
 (`docs/superpowers/specs/2026-10-08-test-suite-acceleration-design.md` §4.4).
 
-    python scripts/coverage_arcs.py dump .coverage OUT.json [--src WORKTREE/backend/src]
+    python scripts/coverage_arcs.py dump .coverage OUT.json --profile PROFILE.json [--src WORKTREE/backend/src]
     python scripts/coverage_arcs.py stable OUT.json RUN1.json RUN2.json RUN3.json
     python scripts/coverage_arcs.py diff BEFORE.json AFTER.json
     python scripts/coverage_arcs.py contexts .coverage OUT.json --match tests/test_x.py::
@@ -23,11 +23,14 @@ its numbers say nothing about this one. `--src` names a different tree on
 purpose -- a worktree the run was made in -- and the same rule then holds
 against that tree.
 
-Each file's entry carries the SHA-256 of its source as the dump read it.
-Line and arc numbers mean something only against the text they were measured
-on, so **stable** and **diff** refuse two dumps whose shared files differ in
-content -- a rebase or a production edit between the runs -- rather than
-intersecting numbers that now point at different code.
+Each file's entry carries the SHA-256 of the source the *run* measured, which
+`dump` takes from the phase profile the same pytest invocation wrote
+(`--phase-profile`, which records it before any test runs) and checks the tree
+against: a coverage file kept across an edit or a rebase and dumped afterwards
+is refused rather than labelled with the new text's hash. Line and arc numbers
+mean something only against the text they were measured on, so **stable** and
+**diff** in turn refuse two dumps whose shared files differ in content, rather
+than intersecting numbers that point at different code.
 
 **stable** is the intersection of several dumps, plus the remainder that some
 runs executed and others did not. Some production branches here depend on
@@ -83,13 +86,22 @@ def _read_with_arcs(data_file: str | pathlib.Path) -> CoverageData:
     return data
 
 
-def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
+def dump(data_file: str | pathlib.Path, recorded: dict[str, str] | None,
+         src: pathlib.Path = SRC) -> dict:
     """Every package file's executed lines and arcs, keyed under `src`, each
-    with the hash of the source those numbers refer to."""
+    with the hash of the source the run measured (`recorded`, from its phase
+    profile) -- refused if `src` no longer holds exactly that source."""
     data = _read_with_arcs(data_file)
+    if not recorded:
+        raise SystemExit(f"{data_file}: no recorded sources -- dump needs the phase profile "
+                         "the same run wrote (--profile), to know what text it measured")
+    now = {_key(p, src): _source_hash(p) for p in sorted((src / "grimoire").rglob("*.py"))}
+    moved = sorted(k for k in set(now) | set(recorded) if now.get(k) != recorded.get(k))
+    if moved:
+        raise SystemExit(f"{data_file}: {len(moved)} source file(s) differ from what the run "
+                         f"measured, e.g. {moved[0]} -- the tree changed since the run")
     files: dict[str, dict] = {
-        _key(p, src): {"sha256": _source_hash(p), "lines": [], "arcs": []}
-        for p in sorted((src / "grimoire").rglob("*.py"))
+        key: {"sha256": digest, "lines": [], "arcs": []} for key, digest in sorted(now.items())
     }
     foreign = []
     for measured in sorted(data.measured_files()):
@@ -99,8 +111,11 @@ def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
         except ValueError:
             foreign.append(measured)
             continue
+        if key not in now:
+            foreign.append(measured)
+            continue
         files[key] = {
-            "sha256": _source_hash(path),
+            "sha256": now[key],
             "lines": sorted(data.lines(measured) or []),
             "arcs": sorted([a, b] for a, b in (data.arcs(measured) or [])),
         }
@@ -219,6 +234,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dump")
     p.add_argument("data_file")
     p.add_argument("out")
+    p.add_argument("--profile", required=True,
+                   help="the phase profile the same run wrote; its `sources` are what was measured")
     p.add_argument("--src", type=pathlib.Path, default=SRC,
                    help="the backend/src the run imported (default: this checkout's)")
     p = sub.add_parser("stable")
@@ -244,7 +261,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run(args: argparse.Namespace) -> int:
     if args.cmd == "dump":
-        doc = dump(args.data_file, src=args.src)
+        doc = dump(args.data_file, _load(args.profile).get("sources"), src=args.src)
         _write(args.out, doc)
         print(json.dumps(fingerprint(doc), sort_keys=True))
         return 0

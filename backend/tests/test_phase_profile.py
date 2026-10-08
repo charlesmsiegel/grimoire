@@ -17,9 +17,11 @@ so what passes here is what the gate runs.
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 import fastapi
@@ -186,6 +188,24 @@ def test_the_header_names_the_run(tmp_path):
     assert doc["machine"]["cpu_count"] >= 1
     assert doc["usage"]["cpu_user_s"] > 0
     assert doc["args"][-1].startswith("--phase-profile=")
+
+
+def test_the_sources_the_run_measured_are_recorded(tmp_path, monkeypatch):
+    """Every module file of the package, hashed before any test runs and keyed
+    the way `coverage_arcs.py dump` keys its files -- found, not imported."""
+    pkg = tmp_path / "lib" / "fakepkg"
+    (pkg / "sub").mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "sub" / "m.py").write_text("x = 1\n", encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path / "lib"))
+    got = phase_profile.source_hashes("fakepkg")
+    assert got == {"fakepkg/__init__.py": hashlib.sha256(b"").hexdigest(),
+                   "fakepkg/sub/m.py": hashlib.sha256(b"x = 1\n").hexdigest()}
+    assert "fakepkg" not in sys.modules
+    assert phase_profile.source_hashes("no_such_package_here") is None
+    # And the real run records grimoire's, the package the gate measures.
+    _, _, doc = _profiled(tmp_path / "run")
+    assert doc["sources"] and all(k.startswith("grimoire/") for k in doc["sources"])
 
 
 def test_the_collected_manifest_is_recorded_apart_from_the_reports(tmp_path):

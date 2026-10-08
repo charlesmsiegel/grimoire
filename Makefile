@@ -193,9 +193,13 @@ test-py-failed:
 # the summary is wanted, so make prints its "Error (ignored)" and summarises
 # anyway. The summary then exits with the status pytest recorded in the
 # profile, so the target still fails when a selected test did -- portably,
-# where carrying `$?` across a line would need one recipe per shell.
+# where carrying `$?` across a line would need one recipe per shell. The last
+# run's profile is deleted first: a pytest that stops before writing one (a
+# bad ARGS, a conftest that fails to import) must not be summarised -- and
+# pass -- on an earlier run's file.
 test-py-profile:
 	@echo NOT A GATE: a diagnostic profile, written to $(PROFILE).
+	"$(call fixpath,$(PY))" -c "import pathlib, sys; pathlib.Path(sys.argv[1]).unlink(missing_ok=True)" $(PROFILE)
 	-$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_MEASURE),) $(ARGS)
 	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE) --exit-with-run
 

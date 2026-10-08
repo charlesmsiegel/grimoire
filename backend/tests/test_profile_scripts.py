@@ -104,6 +104,15 @@ def test_summary_can_exit_with_the_profiled_runs_status(tmp_path, capsys, header
     assert profile_report.main(["summary", str(path)]) == 0
 
 
+def test_summary_fails_on_a_profile_that_was_never_written(tmp_path, capsys):
+    """`make test-py-profile` deletes the last profile before pytest runs, so a
+    pytest that stopped before writing one leaves nothing -- which fails,
+    rather than an earlier run's file being summarised as this one."""
+    missing = tmp_path / "p.json"
+    assert profile_report.main(["summary", str(missing), "--exit-with-run"]) == 1
+    assert "no profile" in capsys.readouterr().out
+
+
 def test_compare_fails_on_a_node_that_went_missing(tmp_path, capsys):
     before = _profile({"t.py::a": _node(), "t.py::b": _node()})
     after = _profile({"t.py::a": _node(), "t.py::d": _node()})
@@ -163,7 +172,8 @@ def _budgeted(wall=100.0, collected=("t.py::a", "t.py::b", "t.py::c"), skipped=1
         tests[nid] = _node(outcome="skipped")
     if slow:
         tests[collected[-1]] = _node(call=slow)
-    header = {"python": "3.11.16", "coverage": True, "exitstatus": 0, **header}
+    header = {"python": "3.11.16", "coverage": True, "exitstatus": 0,
+              "packages": {"pytest": "9.1.1", "fastapi": "0.142.4"}, **header}
     return _profile(tests, wall_s=wall, collected=list(collected), **header)
 
 
@@ -204,10 +214,12 @@ def test_one_slow_session_is_noise_and_five_are_a_regression():
 @pytest.mark.parametrize("other", [
     {"python": "3.14.6"}, {"workers": 2}, {"distribution": "worksteal"},
     {"coverage": False}, {"exitstatus": 2}, {"exitstatus": None},
+    {"packages": {"pytest": "9.1.1", "fastapi": "0.143.0"}},
 ])
 def test_only_comparable_complete_runs_join_the_window(other):
-    """A different interpreter, worker count, scheduler or coverage setting
-    times a different job, and an interrupted run timed less of the suite."""
+    """A different interpreter, worker count, scheduler, coverage setting or
+    dependency release times a different job, and an interrupted run timed
+    less of the suite."""
     window = profile_report.session_window(
         _budgeted(wall=500.0), _earlier(500, 500, 500, 500, **other))
     assert window == [500.0]
@@ -280,11 +292,18 @@ def _data_file(tmp_path: pathlib.Path, name: str, arcs: dict) -> pathlib.Path:
     return path
 
 
+def _recorded(src: pathlib.Path) -> dict[str, str]:
+    """What a phase profile records for `src`, as the run saw it."""
+    return {f"grimoire/{p.relative_to(src / 'grimoire').as_posix()}":
+            hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted((src / "grimoire").rglob("*.py"))}
+
+
 def test_dump_lists_every_package_file_including_ones_never_imported(tmp_path):
     src = _source_tree(tmp_path)
     a = src / "grimoire" / "a.py"
     doc = coverage_arcs.dump(_data_file(tmp_path, "cov", {a: [(-1, 1), (1, 2), (2, -1)]}),
-                             src=src)
+                             _recorded(src), src=src)
     assert set(doc["files"]) == {"grimoire/__init__.py", "grimoire/a.py",
                                  "grimoire/never_imported.py"}
     source = hashlib.sha256(b"x = 1\n").hexdigest()
@@ -302,7 +321,25 @@ def test_dump_refuses_a_file_from_another_checkout(tmp_path):
     src = _source_tree(tmp_path)
     elsewhere = tmp_path / "other-checkout" / "grimoire" / "a.py"
     with pytest.raises(SystemExit, match="another checkout"):
-        coverage_arcs.dump(_data_file(tmp_path, "cov", {elsewhere: [(1, 2)]}), src=src)
+        coverage_arcs.dump(_data_file(tmp_path, "cov", {elsewhere: [(1, 2)]}),
+                           _recorded(src), src=src)
+
+
+def test_dump_refuses_a_tree_that_changed_since_the_run(tmp_path):
+    """A coverage file kept across an edit, dumped afterwards: its numbers
+    describe the text the run measured, which the tree no longer holds -- and
+    a dump with no record of that text at all is refused too."""
+    src = _source_tree(tmp_path)
+    data = _data_file(tmp_path, "cov", {src / "grimoire" / "a.py": [(1, 2)]})
+    recorded = _recorded(src)
+    (src / "grimoire" / "a.py").write_text("x = 2\ny = 3\n", encoding="utf-8")
+    with pytest.raises(SystemExit, match="the tree changed since the run"):
+        coverage_arcs.dump(data, recorded, src=src)
+    (src / "grimoire" / "new.py").write_text("", encoding="utf-8")
+    with pytest.raises(SystemExit, match="changed since the run"):
+        coverage_arcs.dump(data, _recorded(src) | {"grimoire/new.py": "gone"}, src=src)
+    with pytest.raises(SystemExit, match="no recorded sources"):
+        coverage_arcs.dump(data, None, src=src)
 
 
 def test_dump_reads_a_run_made_in_another_tree_when_told_so(tmp_path):
@@ -311,7 +348,10 @@ def test_dump_reads_a_run_made_in_another_tree_when_told_so(tmp_path):
     src = _source_tree(tmp_path)
     data = _data_file(tmp_path, "cov", {src / "grimoire" / "a.py": [(1, 2)]})
     out = tmp_path / "dump.json"
-    assert coverage_arcs.main(["dump", str(data), str(out), "--src", str(src)]) == 0
+    profile = tmp_path / "profile.json"
+    profile.write_text(json.dumps({"sources": _recorded(src)}), encoding="utf-8")
+    assert coverage_arcs.main(["dump", str(data), str(out), "--src", str(src),
+                               "--profile", str(profile)]) == 0
     doc = json.loads(out.read_text(encoding="utf-8"))
     assert doc["files"]["grimoire/a.py"]["arcs"] == [[1, 2]]
 
