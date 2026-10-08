@@ -79,7 +79,8 @@ ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
 .PHONY: apk apk-release apk-install android-bootstrap android-clean \
         check check-py check-web check-lint check-mypy check-eslint \
         check-templates check-pydantic1 check-apk web-dist frontend-deps \
-        baseline sync-phone sync-phone-apply
+        baseline sync-phone sync-phone-apply \
+        test-py-fast test-py-failed test-py-profile
 
 apk:
 	$(GRADLEW) :app:assembleDebug $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
@@ -127,8 +128,45 @@ check: check-lint check-mypy check-templates check-eslint check-web check-py che
 # One line, no backslash continuation: on Windows the recipe shell is cmd.exe
 # (pinned above), which continues lines with `^` and would take a trailing `\`
 # as an argument.
+#
+# The coverage arguments live in one variable so that every target measuring
+# the backend -- this gate and `test-py-profile COV=1` below -- measures it
+# with byte-identical settings.
+COV_ARGS = --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:skip-covered --cov-report=xml:backend/coverage.xml --cov-fail-under=$(COV_FLOOR)
+
 check-py:
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:skip-covered --cov-report=xml:backend/coverage.xml --cov-fail-under=$(COV_FLOOR)
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(COV_ARGS)
+
+# ---- development commands. NOT gates: none is named check-*, none is in
+# `check:` above, and each says so before it runs, so a green one cannot be
+# mistaken for the suite passing. Each puts this checkout's backend/src first
+# on the path ($(WITH_SRC)), so in a worktree it tests the worktree.
+#
+#   make test-py-fast TESTS=backend/tests/test_scenes.py   (paths, node ids)
+#   make test-py-fast TESTS=backend ARGS="-k reroll"
+#   make test-py-failed                       what failed last time, only
+#   make test-py-profile [TESTS=...] [COV=1]  per-node phase profile + summary
+#
+# TESTS is relative to the repo root; ARGS goes to pytest as it is.
+TESTS ?= backend
+ARGS ?=
+PROFILE ?= build/perf/profile.json
+
+test-py-fast:
+	@echo NOT A GATE: no coverage, stops at the first failure. make check-py is the gate.
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q -x --tb=short $(ARGS)
+
+# --lfnf=none: with no failure on record, select nothing rather than quietly
+# run the whole suite. Not -q, so pytest's "run-last-failure:" line says which
+# happened; with nothing on record pytest exits 5 (no tests ran).
+test-py-failed:
+	@echo NOT A GATE: re-runs only what failed last time, without coverage. Exit 5 means nothing failed last time.
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend --lf --lfnf=none --tb=short $(ARGS)
+
+test-py-profile:
+	@echo NOT A GATE: a diagnostic profile, written to $(PROFILE).
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_ARGS),) $(ARGS)
+	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE)
 
 # `test:coverage`, not `test`: same suite, same pass/fail, plus it drops
 # frontend/coverage/lcov.info. Measuring in the gate rather than in a separate
