@@ -45,6 +45,28 @@ runs. With three app start-ups per run the old group gave that race three
 chances; the merged test gives it one. The test's own action never reaches
 those lines, and the suite's stable arc set (the report) keeps them.
 
+## The machine-generated inventory (spec §6, steps 1–3)
+
+Beyond the spec's own candidates, every test module was walked as an AST and
+its test functions grouped by (fixture parameters, the first four calls the test
+makes to the app, as method and path skeleton -- `PUT
+/api/campaigns/{}/scenes/{}/chronicle`); parametrized tests are already one
+function and were left out. Each group's members were joined to their seconds in
+a whole-suite phase profile (four workers, head `08fb85d`, route memo on), and
+ranked by the most a merge could save -- every execution but the slowest.
+
+225 groups of two or more tests share fixtures and leading calls. Across all of
+them that upper bound is **77 s of the profile's 1121 node-seconds** (about 7 %,
+or roughly 20 s of wall time across four workers), and it is an upper bound only:
+the top groups (27 group-play turns, 23 chronicle saves, 25 ledger reads) post the
+same route with different payloads, casts and stored state to test different
+outcomes -- spec class D, separate scenarios, not one action checked several
+ways. Measured against what phase F's route memo removed (the per-app route
+analysis that had been most of every route test), further consolidation buys
+little and costs the per-test diagnostics the spec's safeguards protect, so it
+stops here. The inventory script is a one-off and is not committed; its method
+is the paragraph above.
+
 ## Merged
 
 ### C1 — `test_continuity_reconcile_routes.py`, a failed model call

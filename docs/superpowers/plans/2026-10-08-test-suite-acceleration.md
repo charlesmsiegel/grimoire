@@ -144,6 +144,36 @@ Locally: `check-py`, `check-pydantic1` (it runs the new subprocess self-tests to
 
 ---
 
+## As built (supersedes the outlines below where they differ)
+
+The outlines that follow were written before the phases were built; the code
+and the commit messages are the record. Where they differ:
+
+- **B** shipped `test-py-fast`, `test-py-failed`, `test-py-profile`; `COV=1`
+  measures without the whole-suite floor (`COV_MEASURE`).
+- **C**'s opt-in `test-py-parallel` existed for C–F and was retired in G, when
+  `check-py` and `check-pydantic1` took `WORKERS` (default 4) and `DIST`
+  (default `load`) themselves; `WORKERS=0` is the serial rollback.
+- **D/E**: C1–C5 merged, C7 batched, C6/C8/C9 kept -- the ledger has each
+  reason; the §6 inventory is in the ledger.
+- **F**: the measured hotspot was not the spec's guess. `create_app()` costs
+  milliseconds; FastAPI's lazy per-app route analysis cost most of every route
+  test. `tests/route_memo.py` memoises it per process (test-only, opt-out,
+  equivalence- and isolation-tested); `guard_markers` caches its tokenizer.
+  Sleeps and polls were classified rather than changed (performance report).
+- **G**: also a non-failing performance budget in CI (`perf_budget.json`,
+  `profile_report.py budget`), `faulthandler_timeout`, and job timeouts.
+
+**Decision 1** (which interpreter measures coverage) was not put to the user:
+with the suite parallel, the 3.11 coverage job that motivated it fell from a
+58-minute median to about twelve minutes, so the exception it would need is no
+longer worth asking for. Coverage stays on 3.11, as before.
+
+**End gates.** The implementation → done review and the final
+spec-conformance review ran as Claude stand-ins over `a219190..908200e`.
+Neither found a blocking issue; their should-fix findings are addressed in
+`9f12de0` and in the performance report, which records each one.
+
 ## PR B — Fast developer commands (outline)
 
 **Category:** selection (local only) — never a gate.
