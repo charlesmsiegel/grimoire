@@ -246,9 +246,9 @@ def test_decide_speaker_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
 
 def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
     """The permanent duplicate-check decide case: its prompt is the structured
-    prompt the switch will send for `build_items`' items over what `examine`
-    finds, a live run sends that batch's schema, and each counterexample
-    carries today's recording's failure mode into the decide shape."""
+    prompt absorb sends for `build_items`' items over what `examine` finds, a
+    live run sends that batch's schema, and each counterexample carries a
+    failure mode of the duplicate check into the decide shape."""
     from grimoire import decisions, inference
     from grimoire.store.continuity import identity
 
@@ -268,15 +268,15 @@ def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch
     assert set(ctx["expected"]) == {"r1", "r2", "r3"}
     assert case.schema is not None
     assert case.schema(ctx) == decisions.schema(items, explain=True)
-    # Today's case still stands beside it until the switch retires it.
-    assert "continuity-identity" in case_mod.BY_ID
+    # The one-call case is retired: the decide case is the only one left.
+    assert "continuity-identity" not in case_mod.BY_ID
 
 
 def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
     """The permanent reconciliation decide case: its prompt is the structured
-    prompt the switch will send for `build_items`' items over the payload the
-    case builds, a live run sends that batch's schema, and each counterexample
-    carries today's recording's failure mode into the decide shape."""
+    prompt the sweep sends for `build_items`' items over the payload the case
+    builds, a live run sends that batch's schema, and each counterexample
+    carries a failure mode of the sweep into the decide shape."""
     from grimoire import decisions, inference
     from grimoire.store.continuity import reconcile
 
@@ -298,5 +298,5 @@ def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatc
     assert set(ctx["expected"]) == {f"c{n}" for n in range(1, 8)}
     assert case.schema is not None
     assert case.schema(ctx) == decisions.schema(items, explain=True)
-    # Today's case still stands beside it until the switch retires it.
-    assert "continuity-reconcile" in case_mod.BY_ID
+    # The one-call case is retired: the decide case is the only one left.
+    assert "continuity-reconcile" not in case_mod.BY_ID

@@ -1,14 +1,13 @@
 {#- One candidate as a `decide()` item's context (`reconcile.build_items`):
-    `user.j2`'s preamble limited to this item -- the campaign date and the
-    chronicle lines it shows -- then a heading naming what is asked, then the
-    candidate's record and signal block from `user.j2` byte for byte.
-    `user.j2` is the legacy one-call prompt's and stays until the switch
-    retires it. Vars: now (the campaign date, friendly form, or blank),
-    chronicle [{id, one_line}] (only the lines of the scenes this item shows,
-    `reconcile.item_scenes`: its own beat scenes and the recent window, a
-    scene whose id collides once normalised left out), c {label (what is
-    being asked, `reconcile.LABELS`), records (as `user.j2`'s), signal_text}.
-    Every key is always passed; a blank one renders nothing. -#}
+    a preamble limited to this item -- the campaign date and the chronicle
+    lines it shows -- then a heading naming what is asked, then the
+    candidate's record and signal block. Vars: now (the campaign date,
+    friendly form, or blank), chronicle [{id, one_line}] (only the lines of
+    the scenes this item shows, `reconcile.item_scenes`: its own beat scenes
+    and the recent window, a scene whose id collides once normalised left
+    out), c {label (what is being asked, `reconcile.LABELS`), records
+    (`reconcile.build_payload`'s), signal_text}. Every key is always passed; a
+    blank one renders nothing. -#}
 {% if now -%}
 Campaign date: {{ now }}
 {% endif -%}

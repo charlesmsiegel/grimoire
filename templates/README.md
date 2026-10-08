@@ -221,46 +221,33 @@ static line is marked `[static]`), `roll_lines` (`audit.roll_lines()` — the
 scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
 
 ### `continuity_identity/` — the duplicate check inside POST …/absorb
-Mirrors `store/continuity/identity.py:build_prompt`. Messages: system, user.
-`system.j2` is static. `user.j2` vars: `rows` (`identity.template_rows()` over
-`Examination.prompt_rows()`) — one per proposed-new plot thread or commitment
-that has a plausible same-type neighbour, each `{key, kind ("thread" |
-"commitment"), title, beat, status, commitment_kind, due, quote, speaker,
-certainty, why_new, distinguished_from, candidates}`; each candidate is
-`{id (bare canonical id), title, status, kind, due, latest_beat, earlier (up to
-two earlier beats, newest first), signals, line, signal_text}`, where `line` is
+Mirrors `store/continuity/identity.py:build_items`. One `decide()` item per
+`Examination.prompt_rows()` row, in order, with `decide/` rendering the prompt
+around them: one proposed-new plot thread or commitment that has a plausible
+same-type neighbour, each row `{key, kind ("thread" | "commitment"), title,
+beat, status, commitment_kind, due, quote, speaker, certainty, why_new,
+distinguished_from, candidates}`; each candidate is `{id (bare canonical id),
+title, status, kind, due, latest_beat, earlier (up to two earlier beats, newest
+first), signals, line, signal_text}`, where `line` is
 `snippets/plot_thread_line/absorb.j2` or `snippets/commitment_line/absorb.j2`
 (a blank commitment kind passed as `promise`) rendered by Python, and
-`signal_text` the similarity signals as fixed-order phrases. Every key is
-always passed; a blank optional one renders nothing.
-Reply shape: ONLY `{"decisions": [{"row": "<row key>", "decision": "existing" |
-"new" | "uncertain", "id": "<candidate id, for existing>", "reason": "<one
-short sentence>"}]}`, parsed by `identity.parse_output` through
-`absorb.extract_object`. An undecodable reply means the phase is `failed`
-(every examined row keeps its hints); a decodable one with nothing usable is
-no decisions. The resolver's replies, including each row's `reason`, are
-captured at Debug level like every other LLM response, under the existing
-Settings disclosure, while its info-level log row carries counts and modes
-only.
-
-**As decision items (slice G, prepared; the call site switches later).**
-`store/continuity/identity.py:build_items` makes one `decide()` item per
-`prompt_rows()` row, in order, and `decide/` renders the prompt around them;
-`system.j2` and `user.j2` above stay until the switch retires them.
+`signal_text` the similarity signals as fixed-order phrases
+(`identity.template_rows` adds the last two). Every key is always passed; a
+blank optional one renders nothing.
 - `item.j2` is the item's context. Var: `r`, one `identity.template_rows` row
   holding only the candidates the item offers. A heading (`Proposed plot
-  thread: <title>` or `Proposed commitment: <title>`), then `user.j2`'s row
-  block byte for byte, from `Beat:` to the candidates' signals.
+  thread: <title>` or `Proposed commitment: <title>`), then the row's block,
+  from `Beat:` to the candidates' signals.
 - `question.j2` is the first question's instructions (a choice under the id
-  `decision`, no null): the legacy prompt's criteria, two sentences reworded
-  for one row shown above. No vars.
+  `decision`, no null): the criteria of the retired one-call prompt, two
+  sentences reworded for one row shown above. No vars.
 - `option.j2` describes each of its three options. Var: `decision`
-  (`existing`, `new` or `uncertain`): each text is that decision's legacy
-  bullet, word for word after its quoted word.
+  (`existing`, `new` or `uncertain`): each text is that decision's bullet in
+  the retired prompt, word for word after its quoted word.
 - `record.j2` is the second question's instructions (a choice under the id
   `id`, null allowed) over the row's candidates by bare id, each described by
   its clipped title (or its id when the title is blank). No vars. An option's
-  aliases are the spellings today's acceptance guard canonicalises: the ref
+  aliases are the spellings the acceptance guard canonicalises: the ref
   form `<kind>:<id>`, and each live alias source of it with its bare id. A
   candidate whose id is not offerable or collides once normalised with a
   higher-ranked one is dropped from the options and the context, ids before
@@ -270,66 +257,49 @@ only.
 - `explain.j2` is the rationale instruction (`identity.explain`): the row's
   display-only reason. No vars.
 
-`identity.answers_of` maps the parsed batch back to the legacy decision dicts
-for the unchanged `Examination.decide`, leaving out an item the reply never
-reached (`decisions.was_read`), so its row stays `unchecked`; `identity.take`
-decides or, for no readable answer at all, makes every row a hint only.
-`scripts/verify_templates.py` holds each criterion of `system.j2` to a
-decide-era template (`IDENTITY_CARRIED`, `IDENTITY_OPTIONS` keyed by decision,
-`IDENTITY_REWORDED` with why), and every sentence of it to those or its reply
-format (`IDENTITY_FORMAT`), which `decide/system.j2` owns now.
+`identity.answers_of` maps the parsed batch to the decision dicts
+`Examination.decide` reads, leaving out an item the reply never reached
+(`decisions.was_read`), so its row stays `unchecked`; `identity.take` decides
+or, for no readable answer at all, makes every row a hint only. An undecodable
+reply means the phase is `failed` (every examined row keeps its hints); a
+decodable one with nothing usable is no decisions. The replies, including each
+row's reason, are captured at Debug level like every other LLM response, under
+the existing Settings disclosure, while the info-level log row carries counts
+and modes only. `scripts/verify_templates.py` holds each criterion of the
+retired prompt to a decide-era template (`IDENTITY_CARRIED`, `IDENTITY_OPTIONS`
+keyed by decision, `IDENTITY_REWORDED` with why); the reply format is
+`decide/system.j2`'s.
 
 ### `continuity_reconcile/` — the reconciliation sweep after End Scene or a refresh
-Mirrors `store/continuity/reconcile.py:build_prompt`. Messages: system, user.
-One call per sweep, over at most `RECONCILE_MAX_CANDIDATES` findings chosen by
-`reconcile.select`. `system.j2` is static: the vocabularies, the direction
-rules and the evidence floor. `user.j2` vars (`reconcile.template_vars()` over
-`reconcile.build_payload()`): `now` (the campaign date, or blank), `chronicle`
-(`[{id, one_line}]` — the chronicle lines of every beat scene shown and of the
-last `RECONCILE_RECENT_SCENES` scenes), and `candidates`, each `{key ("c1",
-…), label, words (the vocabulary its answer must come from), records,
-signal_text}`. Each record is `{letter ("A" | "B"), ref, type, line, beats
-([{scene, text}], its last `RECONCILE_BEATS`), pressure, links, actors}`;
-`type` (`plot thread` / `commitment`, blank for an event) is printed beside the
-letter, because a cross pair stores the commitment as A; `line` is
-`snippets/plot_thread_line/absorb.j2` or `snippets/commitment_line/absorb.j2`
-with no latest beat (the beats follow it), or `event: <name> (<date>)`,
-rendered by Python. Only scenes that exist are shown: a beat in a deleted
-scene loses its scene marker and a deleted scene's chronicle line is dropped,
-so the evidence the parser accepts is evidence the apply can check. No
-transcript is ever sent. Every key is always passed; a
-blank optional one renders nothing.
-Reply shape: ONLY `{"decisions": [{"candidate": "<key>", "decision":
-"<word>", "from": "A" | "B", "to": "A" | "B", "reason": "<one short
-sentence>", "evidence_scenes": ["<scene id>"]}]}`, parsed by
-`reconcile.parse_output` through `absorb.extract_object` into one cache
-proposal per known candidate. A word outside the candidate's vocabulary, a
-direction the link rules refuse, or a closure or resolution without a reason
-and an evidence scene the prompt showed is `uncertain`. An undecodable reply
-fails the run, and the deterministic findings already cached are kept; a
-decodable one with nothing usable proposes nothing. The sweep's replies,
-including each `reason`, are captured at Debug level like every other LLM
-response, under the existing Settings disclosure, while its info-level log row
-carries counts and modes only.
-
-**As decision items (slice G, prepared; the call site switches later).**
-`store/continuity/reconcile.py:build_items` makes one `decide()` item per
-payload candidate, in order, and `decide/` renders the prompt around them;
-`system.j2` and `user.j2` above stay until the switch retires them.
-`build_payload` also names the recent window itself (`recent`, in play order),
-which today's prompt does not read. `reconcile.item_scenes` is the scenes one
-item shows: its records' beat scenes and the chronicle lines of those and of
-the recent window, in `known_scenes` order, an id `decisions.offerable`
-refuses or one colliding once normalised with an earlier one dropped from the
-item's options and lines (over every candidate, the union is today's
-`known_scenes`).
+Mirrors `store/continuity/reconcile.py:build_items`. One call per sweep, over
+at most `RECONCILE_MAX_CANDIDATES` findings chosen by `reconcile.select`, as
+one `decide()` item per payload candidate, in order, with `decide/` rendering
+the prompt around them. `reconcile.build_payload()` supplies `now` (the
+campaign date, or blank), `chronicle` (`[{id, one_line}]` — the chronicle lines
+of every beat scene shown and of the last `RECONCILE_RECENT_SCENES` scenes),
+`recent` (that recent window itself, in play order) and `candidates`, each
+`{key ("c1", …), vocabulary, records, signal_text}`. Each record is `{letter
+("A" | "B"), ref, type, line, beats ([{scene, text}], its last
+`RECONCILE_BEATS`), pressure, links, actors}`; `type` (`plot thread` /
+`commitment`, blank for an event) is printed beside the letter, because a cross
+pair stores the commitment as A; `line` is `snippets/plot_thread_line/absorb.j2`
+or `snippets/commitment_line/absorb.j2` with no latest beat (the beats follow
+it), or `event: <name> (<date>)`, rendered by Python. Only scenes that exist
+are shown: a beat in a deleted scene loses its scene marker and a deleted
+scene's chronicle line is dropped, so the evidence the sweep accepts is
+evidence the apply can check. No transcript is ever sent. Every key is always
+passed; a blank optional one renders nothing.
+`reconcile.item_scenes` is the scenes one item shows: its records' beat scenes
+and the chronicle lines of those and of the recent window, in `known_scenes`
+order, an id `decisions.offerable` refuses or one colliding once normalised
+with an earlier one dropped from the item's options and lines.
 - `item.j2` is the item's context. Vars: `now`, `chronicle` (only the lines
   of the scenes the item shows) and `c` (`{label, records, signal_text}`):
-  `user.j2`'s preamble, a heading `Candidate — <label>`, then `user.j2`'s
-  record and signal block byte for byte.
+  the campaign date and those lines, a heading `Candidate — <label>`, then the
+  candidate's record and signal block.
 - `question.j2` is the first question's instructions (a choice under the id
   `decision`, no null, each option labelled by its own word with `_` as a
-  space). Var: `vocabulary`. The legacy prompt's criteria, one sentence
+  space). Var: `vocabulary`. The retired prompt's criteria, one sentence
   reworded for one candidate shown above, and the vocabulary's whole bullet
   (two commitments carry the plot threads' bullet too, which theirs calls
   "the same rules").
@@ -345,15 +315,21 @@ item's options and lines (over every candidate, the union is today's
 - `explain.j2` is the rationale instruction (`reconcile.explain`): the
   proposal's display-only reason. No vars.
 
-`reconcile.proposals_of` maps the parsed batch back to today's proposals
-through today's `_decide`, leaving out a candidate the reply never reached
-(`decisions.was_read`), so it gets no proposal and is asked again; a status
-word stands on a shown evidence scene without a rationale, its `reason` then
-`""`. `scripts/verify_templates.py` holds each criterion of `system.j2` to a
+`reconcile.proposals_of` maps the parsed batch to cache proposals through
+`_decide`, leaving out a candidate the reply never reached
+(`decisions.was_read`), so it gets no proposal and is asked again. A word
+outside the candidate's vocabulary, a direction the link rules refuse, or a
+closure or resolution without an evidence scene its item showed is
+`uncertain`; a status word stands on a shown scene without a rationale, its
+`reason` then `""`. An undecodable reply fails the run, and the deterministic
+findings already cached are kept; a decodable one with nothing usable proposes
+nothing. The sweep's replies, including each reason, are captured at Debug
+level like every other LLM response, under the existing Settings disclosure,
+while its info-level log row carries counts and modes only.
+`scripts/verify_templates.py` holds each criterion of the retired prompt to a
 decide-era template (`RECONCILE_CARRIED`, `RECONCILE_BULLETS` keyed by
-vocabulary, `RECONCILE_REWORDED` with why), prints the words it adds
-(`RECONCILE_ADDED`), and holds every sentence of `system.j2` to those or its
-reply format (`RECONCILE_FORMAT`), which `decide/system.j2` owns now.
+vocabulary, `RECONCILE_REWORDED` with why) and prints the words it adds
+(`RECONCILE_ADDED`); the reply format is `decide/system.j2`'s.
 
 ### `rolling_summary/` — POST /campaigns/{cid}/scenes/{sid}/rolling-summary
 The live running summary of a scene **still being played** (#85). Mirrors

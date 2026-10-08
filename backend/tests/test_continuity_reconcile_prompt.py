@@ -3,18 +3,16 @@
 `select` chooses what is asked -- capped, prioritized, and never a finding that
 already has a proposal or that the reader already answered. `build_payload`
 bounds what is sent: the records the chosen candidates name, their last beats
-and the scene lines around them, never a transcript. `parse_output` trusts
-nothing the reply says: an unknown key is dropped, a word outside the
-candidate's vocabulary or a direction §5.3 does not allow is ``uncertain``, and
-a closure without a known evidence scene and a reason is ``uncertain`` too.
+and the scene lines around them, never a transcript. `proposals_of` trusts
+nothing the reply says: a word outside the candidate's vocabulary or a
+direction §5.3 does not allow is ``uncertain``, and a closure without an
+evidence scene its item showed is ``uncertain`` too.
 
 Payloads are built through `select` / `build_payload` over a seeded campaign,
-so what is parsed is what the prompt actually showed.
+so what is read is what the items actually showed.
 """
 
 from __future__ import annotations
-
-import json
 
 import pytest
 
@@ -101,12 +99,18 @@ def _by_id(payload, candidate_id):
     return cand
 
 
-def _reply(*decisions):
-    return json.dumps({"decisions": list(decisions)})
-
-
 def _user(payload):
-    return reconcile.build_prompt(payload)[1]["content"]
+    """Every item's context, as the model is shown them."""
+    return "\n\n".join(item.context for item in reconcile.build_items(payload))
+
+
+def _decided(payload, key, **given):
+    """The proposal for candidate `key` when the reply answers only it (every
+    other candidate ``uncertain``)."""
+    order = [c["id"] for c in payload["candidates"]]
+    per_item = [{} for _ in order]
+    per_item[order.index(key)] = given
+    return _proposals(payload, *per_item)[key]
 
 
 def _closure(cid, s0):
@@ -117,22 +121,7 @@ def _closure(cid, s0):
     return key
 
 
-# ------------------------------------------------------------------ parsing
-
-
-def test_parse_undecodable_is_none(cid, s0):
-    payload = _payload(cid)
-    assert reconcile.parse_output("I think so.", payload) is None
-    assert reconcile.parse_output("", payload) is None
-
-
-def test_parse_decodable_empty_is_empty(cid, s0):
-    _closure(cid, s0)
-    payload = _payload(cid)
-    assert payload["candidates"]
-    assert reconcile.parse_output("{}", payload) == {}
-    assert reconcile.parse_output('{"decisions": 4}', payload) == {}
-    assert reconcile.parse_output('{"decisions": [3, "x", null]}', payload) == {}
+# ------------------------------------------------------------------ reading answers
 
 
 def test_cross_type_duplicate_is_uncertain(cid, s0):
@@ -143,11 +132,9 @@ def test_cross_type_duplicate_is_uncertain(cid, s0):
     payload = _payload(cid)
     assert _by_id(payload, key)["vocabulary"] == "cross"
 
-    got = reconcile.parse_output(_reply(
-        {"candidate": "c1", "decision": "duplicate", "from": "A", "to": "B",
-         "reason": "Same business."}), payload)
-    assert got[key]["decision"] == "uncertain"
-    assert (got[key]["relation"], got[key]["from"], got[key]["to"]) == ("", "", "")
+    got = _decided(payload, key, decision="duplicate", **{"from": "A", "to": "B"})
+    assert got["decision"] == "uncertain"
+    assert (got["relation"], got["from"], got["to"]) == ("", "", "")
 
 
 def test_disallowed_direction_is_uncertain(cid, s0):
@@ -160,7 +147,6 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     plot_key, plots = _record(cid, "possible_duplicate", [MAP, CHART], _pair_signals())
     _cache(cid, (cross_key, cross), (owed_key, owed), (plot_key, plots))
     payload = _payload(cid)
-    keys = {c["id"]: c["key"] for c in payload["candidates"]}
     cross_c = _by_id(payload, cross_key)
     assert [r["ref"] for r in cross_c["records"]] == [OATH, MAP]
     assert [r["letter"] for r in cross_c["records"]] == ["A", "B"]
@@ -168,9 +154,8 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     assert _by_id(payload, plot_key)["vocabulary"] == "same_thread"
 
     def decide(key, decision, frm, to):
-        reply = _reply({"candidate": keys[key], "decision": decision, "from": frm, "to": to,
-                        "reason": "Because."})
-        return reconcile.parse_output(reply, payload)[key]
+        return _decided(payload, key, decision=decision,
+                        **{"from": frm or None, "to": to or None})
 
     # pays_off runs from the thread to the commitment, never the other way
     assert decide(cross_key, "pays_off", "A", "B")["decision"] == "uncertain"
@@ -187,7 +172,7 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     dup = decide(plot_key, "duplicate", "B", "A")
     assert (dup["decision"], dup["relation"], dup["from"], dup["to"]) == (
         "duplicate", "", CHART, MAP)
-    sub = decide(plot_key, "subthread", "a", "b")
+    sub = decide(plot_key, "subthread", "A", "B")
     assert (sub["decision"], sub["relation"], sub["from"], sub["to"]) == (
         "subthread", "subthread_of", MAP, CHART)
     cont = decide(plot_key, "continuation", "B", "A")
@@ -210,13 +195,10 @@ def test_temporal_words_name_the_commitment_and_the_event(cid, s0):
     [_, ev] = cand["records"]
     assert ev["line"] == "event: The coronation (2026-05-13)"
 
-    got = reconcile.parse_output(_reply(
-        {"candidate": cand["key"], "decision": "before", "from": "B", "to": "A",
-         "reason": "The oath falls before the crowning."}), payload)[key]
+    got = _decided(payload, key, decision="before")
     assert (got["decision"], got["relation"], got["from"], got["to"]) == (
         "before", "before", OATH, event)
-    got = reconcile.parse_output(_reply(
-        {"candidate": cand["key"], "decision": "unrelated"}), payload)[key]
+    got = _decided(payload, key, decision="unrelated")
     assert (got["decision"], got["relation"], got["from"], got["to"]) == (
         "unrelated", "", "", "")
 
@@ -240,70 +222,6 @@ def test_actors_are_sent_per_record(cid, s0):
     user = _user(payload)
     assert "people: Mara" in user
     assert user.count("people:") == 1
-
-
-def test_closure_without_known_evidence_is_uncertain(cid, s0):
-    key = _closure(cid, s0)
-    payload = _payload(cid)
-    assert s0 in payload["known_scenes"]
-
-    def decide(**over):
-        item = {"candidate": "c1", "decision": "close", "reason": "The map was burned.",
-                "evidence_scenes": [s0], **over}
-        return reconcile.parse_output(_reply(item), payload)[key]
-
-    unknown = decide(evidence_scenes=["999--nowhere"])
-    assert unknown["decision"] == "uncertain"
-    assert unknown["status"] == "" and unknown["evidence_scenes"] == []
-    assert decide(reason="")["decision"] == "uncertain"
-    assert decide(reason="   ")["decision"] == "uncertain"
-    assert decide(evidence_scenes=s0)["decision"] == "uncertain"
-    closed = decide(evidence_scenes=["999--nowhere", s0, s0])
-    assert (closed["decision"], closed["status"], closed["evidence_scenes"]) == (
-        "close", "closed", [s0])
-    assert closed["reason"] == "The map was burned."
-    assert decide(decision="keep_open", reason="")["decision"] == "keep_open"
-
-
-def test_resolutions_need_evidence_too_and_carry_their_status(cid, s0):
-    _commitment(cid, OATH, "Mara's oath", "Mara swore it.", s0, due="2026-05-05")
-    key, rec = _record(cid, "possible_commitment_resolution", [OATH],
-                       {"reason": "overdue", "in_days": -5, "via": "deadline"})
-    _cache(cid, (key, rec))
-    payload = _payload(cid)
-    for word in ("fulfilled", "broken", "expired"):
-        got = reconcile.parse_output(_reply(
-            {"candidate": "c1", "decision": word, "reason": "So it went.",
-             "evidence_scenes": [s0]}), payload)[key]
-        assert (got["decision"], got["status"]) == (word, word)
-        bare = reconcile.parse_output(_reply(
-            {"candidate": "c1", "decision": word, "reason": "So it went."}), payload)[key]
-        assert bare["decision"] == "uncertain"
-    closed = reconcile.parse_output(_reply(
-        {"candidate": "c1", "decision": "close", "reason": "x", "evidence_scenes": [s0]}),
-        payload)[key]
-    assert closed["decision"] == "uncertain"
-
-
-def test_unknown_candidate_keys_and_enums_are_dropped_or_uncertain(cid, s0):
-    key = _closure(cid, s0)
-    payload = _payload(cid)
-    got = reconcile.parse_output(_reply(
-        {"candidate": "c9", "decision": "close", "reason": "x", "evidence_scenes": [s0]},
-        {"candidate": 1, "decision": "close"},
-        "not an object",
-        {"candidate": "  Candidate C1 ", "decision": "Merge it", "reason": "r" * 400},
-        {"candidate": "c1", "decision": "keep_open", "reason": "second answer"}), payload)
-    assert set(got) == {key}
-    first = got[key]
-    assert first["decision"] == "uncertain"
-    assert first["reason"] == "r" * reconcile.RECONCILE_REASON_CHARS
-    assert set(first) == {"decision", "from", "to", "relation", "status", "reason",
-                          "evidence_scenes"}
-    assert reconcile.parse_output(_reply({"candidate": "c1", "decision": 3}),
-                                  payload)[key]["decision"] == "uncertain"
-    assert reconcile.parse_output(_reply({"candidate": "candidate:c1", "decision": "KEEP_OPEN"}),
-                                  payload)[key]["decision"] == "keep_open"
 
 
 # ---------------------------------------------------------------- selection
@@ -384,7 +302,7 @@ def test_select_skips_suppressed_and_satisfied_model_only_nominations(cid, s0):
         assert not hidden & {s["id"] for s in selected}
         assert visible in {s["id"] for s in selected}
         payload = reconcile.build_payload(cid, selected)
-        text = "\n".join(m["content"] for m in reconcile.build_prompt(payload))
+        text = _user(payload)
         assert "The coronation" not in text
         assert "event: Saltmarch Eve (" not in text
         assert "event: Mara's audience (2026-05-17)" in text
@@ -420,10 +338,10 @@ def test_known_scenes_are_the_shown_beats_and_chronicle_lines(cid, monkeypatch):
     user = _user(payload)
     assert f"{s3} — Winifred opened the door." in user
     assert "The road was long." not in user
-    got = reconcile.parse_output(_reply(
-        {"candidate": "c1", "decision": "close", "reason": "Answered.",
-         "evidence_scenes": [s2]}), payload)
-    assert got[payload["candidates"][0]["id"]]["decision"] == "uncertain"
+    # A scene the item did not show is not an option, so it cannot be evidence.
+    got = _decided(payload, payload["candidates"][0]["id"], decision="close",
+                   evidence_scene=s2)
+    assert got["decision"] == "uncertain"
 
 
 def test_a_deleted_scene_is_not_known_evidence(cid, s0):
@@ -448,9 +366,7 @@ def test_a_deleted_scene_is_not_known_evidence(cid, s0):
     user = _user(payload)
     assert gone not in user
     assert "  The map was found on the road." in user
-    got = reconcile.parse_output(_reply(
-        {"candidate": "c1", "decision": "close", "reason": "The map was found.",
-         "evidence_scenes": [gone]}), payload)[key]
+    got = _decided(payload, key, decision="close", evidence_scene=gone)
     assert got["decision"] == "uncertain"
     assert got["evidence_scenes"] == []
     live = {s["id"] for s in scenes.list_scenes(cid)}
@@ -547,9 +463,7 @@ def test_a_pathologically_long_record_cannot_unbound_the_prompt(cid, s0):
     assert f"- {s0} — Mara came ashore. harbour" in user
     assert "\nB: event: The coronation harbour" in user
     assert " (2026-05-13)\nsignals:" in user
-    got = reconcile.parse_output(_reply(
-        {"candidate": "c1", "decision": "duplicate", "from": "A", "to": "B",
-         "reason": "Same ledger."}), payload)[pair_key]
+    got = _decided(payload, pair_key, decision="duplicate", **{"from": "A", "to": "B"})
     assert (got["decision"], got["from"], got["to"]) == ("duplicate", LEDGER, MAP)
 
 
@@ -558,29 +472,25 @@ def test_no_transcript_text_is_sent(cid, s0):
     scenes.append_message(cid, s0, "assistant", "Mara nodded and pocketed the brass key.")
     chronicle.absorb(cid, {"id": s0, "one_line": "Mara came ashore."})
     _closure(cid, s0)
-    text = "\n".join(m["content"] for m in reconcile.build_prompt(_payload(cid)))
+    text = _user(_payload(cid))
     assert "Mara came ashore." in text
     assert "lighthouse password" not in text
     assert "brass key" not in text
 
 
-def test_build_prompt_renders_with_no_optional_fields():
-    payload = {"now": "", "chronicle": [], "known_scenes": [], "candidates": [
+def test_build_items_render_with_no_optional_fields():
+    payload = {"now": "", "chronicle": [], "known_scenes": [], "recent": [], "candidates": [
         {"key": "c1", "id": "possible_thread_closure-0123456789abcdef",
          "vocabulary": "thread", "signal_text": "",
          "records": [{"letter": "A", "ref": MAP, "type": "plot thread",
                       "line": "mara-s-map: Mara's map (open)",
                       "beats": [], "pressure": "", "links": [], "actors": []}]}]}
-    system, user = reconcile.build_prompt(payload)
-    assert system == {"role": "system",
-                      "content": prompts.render("continuity_reconcile/system.j2")}
-    assert user["role"] == "user"
-    assert user["content"] == ('Candidate c1 — whether a plot thread is finished '
-                               '(answer with: "close", "keep_open", "uncertain")\n'
-                               "A (plot thread): mara-s-map: Mara's map (open)")
+    [item] = reconcile.build_items(payload)
+    assert item.context == ("Candidate — whether a plot thread is finished\n"
+                            "A (plot thread): mara-s-map: Mara's map (open)")
 
 
-def test_the_user_prompt_shows_every_part(cid, s0):
+def test_the_item_context_shows_every_part(cid, s0):
     clock.advance(cid, to="2026-05-10")
     chronicle.absorb(cid, {"id": s0, "one_line": "Mara came ashore.",
                            "cast": ["characters/mara"]})
@@ -598,9 +508,7 @@ def test_the_user_prompt_shows_every_part(cid, s0):
     assert payload["now"]
     user = _user(payload)
     assert user.startswith(f"Campaign date: {payload['now']}\nRecent scenes:\n"
-                           f"- {s0} — Mara came ashore.\n\nCandidate c1 — two plot threads "
-                           '(answer with: "duplicate", "continuation", "subthread", "related", '
-                           '"distinct", "uncertain")\n')
+                           f"- {s0} — Mara came ashore.\n\nCandidate — two plot threads\n")
     assert "A (plot thread): mara-s-map: Mara's map (open)\n" in user
     assert f"  [{s0}] The map turned up in Saltmarch.\n" in user
     assert "  links: Mara's map pays_off Mara's oath\n" in user
@@ -608,17 +516,20 @@ def test_the_user_prompt_shows_every_part(cid, s0):
                          "shared characters: Mara; shared scenes: 1")
 
 
-def test_the_system_prompt_is_static_and_names_every_word():
-    text = prompts.render("continuity_reconcile/system.j2")
+def test_the_questions_carry_the_criteria():
+    text = "\n".join([*(prompts.render("continuity_reconcile/question.j2", vocabulary=vocab)
+                       for vocab in reconcile.DECISIONS),
+                      prompts.render("continuity_reconcile/evidence.j2")])
     assert text.startswith(
         "You are reviewing a campaign's story ledger for records that may overlap or be finished")
     for opener in ("You are absorbing a completed role-play scene",
                    "You are auditing a completed role-play scene",
                    "You are checking whether newly proposed story records"):
         assert opener not in text
-    for words in reconcile.DECISIONS.values():
+    for vocab, words in reconcile.DECISIONS.items():
+        question = prompts.render("continuity_reconcile/question.j2", vocabulary=vocab)
         for word in words:
-            assert f'"{word}"' in text
+            assert f'"{word}"' in question, (vocab, word)
     for needle in ('"duplicate" only when both records are the same question or obligation',
                    ('a narrower or later question is "continuation" or "subthread", '
                     'not "duplicate"'),
@@ -655,9 +566,8 @@ def test_the_vocabulary_is_the_global_constraints_one():
 # ------------------------------------------------------ as decision items
 #
 # The sweep's adjudication as `decide()` items (spec §7.4): one per candidate,
-# its context self-contained, its scenes only the ones it shows. Nothing calls
-# these until the switch; `build_prompt` and `parse_output` above are still
-# what the sweep sends and reads.
+# its context self-contained, its scenes only the ones it shows. These are what
+# the sweep sends and reads.
 
 EVENT = "event:the-coronation"
 D1, D2, D3, D4 = ("0001--saltmarch-docks", "0002--realm-road", "0003--winifreds-house",
@@ -731,9 +641,6 @@ def test_build_payload_names_the_recent_window(cid, monkeypatch):
     assert payload["recent"] == [s2, s3]
     monkeypatch.setattr(reconcile, "RECONCILE_RECENT_SCENES", 0)
     assert _payload(cid)["recent"] == []
-    # Today's prompt does not read it.
-    assert _user(payload) == prompts.render("continuity_reconcile/user.j2",
-                                            **reconcile.template_vars(payload))
 
 
 def test_build_items_one_per_candidate_under_its_vocabulary():
@@ -956,11 +863,6 @@ def test_a_status_verdict_stands_without_a_rationale():
         bare = _proposals(payload, {}, {"decision": word})
         assert (bare[owed]["decision"], bare[owed]["status"]) == ("uncertain", "")
     assert _proposals(payload, {"decision": "close"})[closure]["decision"] == "uncertain"
-    # Today's parse keeps today's rule: no reason, no verdict.
-    today = reconcile.parse_output(_reply(
-        {"candidate": "c1", "decision": "close", "reason": "", "evidence_scenes": [D1]}),
-        payload)
-    assert today[closure]["decision"] == "uncertain"
 
 
 def _result(decision: decisions.Answer) -> decisions.ItemResult:

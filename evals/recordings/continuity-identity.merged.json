@@ -1,5 +1,0 @@
-{"decisions": [
-  {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "Recovering the harbour ledger is the same business as finding it."},
-  {"row": "r2", "decision": "existing", "id": "the-saltmarch-smuggling", "reason": "Both are about the Saltmarch smuggling."},
-  {"row": "r3", "decision": "existing", "id": "seraphines-debts", "reason": "Both are about Seraphine's debts."}
-]}

@@ -2945,10 +2945,10 @@ Each acceptance criterion (§32) and the stopping rule (§33), with the tests an
 
 | Criterion | Claim | Evidence |
 |---|---|---|
-| AC1 | A new thread or commitment is compared against plausible same-type records before it is treated as new | `test_absorb_identity.py::test_close_candidate_mapped_to_existing_rewrites_the_row`; `test_absorb_identity.py::test_a_new_record_with_no_close_neighbour_makes_no_identity_call`; `test_continuity_identity.py::test_reworded_duplicate_is_examined_with_the_record_as_candidate`; `test_continuity_identity.py::test_cross_type_never_a_candidate`; eval `continuity-identity` |
+| AC1 | A new thread or commitment is compared against plausible same-type records before it is treated as new | `test_absorb_identity.py::test_close_candidate_mapped_to_existing_rewrites_the_row`; `test_absorb_identity.py::test_a_new_record_with_no_close_neighbour_makes_no_identity_call`; `test_continuity_identity.py::test_reworded_duplicate_is_examined_with_the_record_as_candidate`; `test_continuity_identity.py::test_cross_type_never_a_candidate`; eval `decide-continuity-identity` |
 | AC2 | Matching works without embeddings and improves with them | `test_continuity_identity.py::test_wordless_paraphrase_is_not_a_candidate_without_embeddings`; `test_continuity_identity.py::test_semantic_matching_finds_a_wordless_paraphrase`; `test_continuity_reconcile.py::test_unconfigured_makes_no_embedding_call`; `test_continuity_reconcile_routes.py::test_refresh_works_with_no_connection` |
 | AC3 | Todo says when semantic matching is not configured, and that basic matching still works | `test_todo_route.py::test_missing_embeddings_shows_one_library_chore_on_the_global_page`; `test_todo_route.py::test_embeddings_with_recall_depth_zero_show_no_chore`; `test_todo_route.py::test_no_embeddings_still_shows_continuity_chores` |
-| AC4 | Reconciliation proposes duplicate, relation, closure and resolution findings without applying them | `test_continuity_reconcile_routes.py::test_a_duplicate_proposal_mutates_nothing_until_apply`; `test_continuity_reconcile.py::test_a_stale_thread_is_nominated_for_closure_not_closed`; `test_continuity_reconcile.py::test_a_passed_deadline_nominates_but_does_not_resolve`; `test_continuity_reconcile.py::test_thread_and_commitment_overlap_is_a_relation_never_a_duplicate`; `test_continuity_reconcile_prompt.py::test_resolutions_need_evidence_too_and_carry_their_status`; `test_continuity_writer_guard.py::test_discovery_modules_never_write_reviewed_state`; `test_continuity_writer_guard.py::test_the_scanned_modules_exist`; eval `continuity-reconcile` |
+| AC4 | Reconciliation proposes duplicate, relation, closure and resolution findings without applying them | `test_continuity_reconcile_routes.py::test_a_duplicate_proposal_mutates_nothing_until_apply`; `test_continuity_reconcile.py::test_a_stale_thread_is_nominated_for_closure_not_closed`; `test_continuity_reconcile.py::test_a_passed_deadline_nominates_but_does_not_resolve`; `test_continuity_reconcile.py::test_thread_and_commitment_overlap_is_a_relation_never_a_duplicate`; `test_continuity_reconcile_prompt.py::test_a_status_verdict_stands_without_a_rationale`; `test_continuity_writer_guard.py::test_discovery_modules_never_write_reviewed_state`; `test_continuity_writer_guard.py::test_the_scanned_modules_exist`; eval `decide-continuity-reconcile` |
 | AC5 | A reviewed duplicate is merged non-destructively and reversibly | `test_continuity_effective.py::test_removing_alias_restores_two_records`; `test_continuity_review.py::test_create_alias_journals_and_undo_removes`; `test_continuity_undo.py::test_undo_alias_create_and_redo`; `test_continuity_review_routes.py::test_applying_a_duplicate_writes_an_alias_only` |
 | AC6 | Prompts show a merged record once, under its canonical, and a campaign with no aliases sees byte-identical sections | `test_continuity_effective.py::test_identity_law_threads`; `test_continuity_effective.py::test_identity_law_commitments`; `test_continuity_effective.py::test_render_helpers_obey_identity_law`; `test_continuity_effective.py::test_render_helpers_show_canonical_ids_only`; `test_context.py::test_the_play_prompt_lists_a_merged_record_once_under_its_canonical`; `test_absorb_store.py::test_absorb_snapshots_show_canonical_ids_only`; `test_briefing_route.py::test_a_merged_thread_briefs_once_under_its_canonical`; `test_frozen_campaign.py::test_the_frozen_campaign_still_reads_the_way_it_was_recorded` |
 | AC7 | Commitments are first-class suggestion inputs | `test_suggest_store.py::test_snapshot_has_ids_commitments_timeline_and_index`; `test_suggest_store.py::test_prompt_renders_refs_commitments_timeline_and_index` |
@@ -2970,13 +2970,13 @@ Each of §28.10's ten cases, held to the grader check that scores it and the cou
 
 | §28.10 case | Eval case | Check | Tripped by |
 |---|---|---|---|
-| 1 | `continuity-identity` | `identity.same_obligation` | `unknown-id` |
-| 2 | `continuity-reconcile`; `continuity-identity` | `reconcile.distinct`; `identity.distinct` | `merged`; `merged` |
-| 3 | `continuity-reconcile`; `continuity-identity` | `reconcile.continuation`; `identity.continuation` | `merged`; `merged` |
-| 4 | `continuity-reconcile` | `reconcile.cross_type` | `timid` |
-| 5 | `continuity-reconcile` | `reconcile.close` | `timid` |
-| 6 | `continuity-reconcile` | `reconcile.keep_open` | `eager` |
-| 7 | `continuity-reconcile` | `reconcile.fulfilled` | `timid` |
-| 8 | `continuity-reconcile` | `reconcile.unproven` | `eager` |
+| 1 | `decide-continuity-identity` | `identity.same_obligation` | `unknown-id` |
+| 2 | `decide-continuity-reconcile`; `decide-continuity-identity` | `reconcile.distinct`; `identity.distinct` | `merged`; `merged` |
+| 3 | `decide-continuity-reconcile`; `decide-continuity-identity` | `reconcile.continuation`; `identity.continuation` | `merged`; `merged` |
+| 4 | `decide-continuity-reconcile` | `reconcile.cross_type` | `timid` |
+| 5 | `decide-continuity-reconcile` | `reconcile.close` | `timid` |
+| 6 | `decide-continuity-reconcile` | `reconcile.keep_open` | `eager` |
+| 7 | `decide-continuity-reconcile` | `reconcile.fulfilled` | `timid` |
+| 8 | `decide-continuity-reconcile` | `reconcile.unproven` | `eager` |
 | 9 | `scene-suggestions`; `scene-suggestions` | `suggest.focus_coverage`, `suggest.distinct`; `suggest.distinct`, `suggest.focus_spread` | `cloned`; `one-premise` |
 | 10 | `scene-suggestions`; `scene-suggestions-anchor-on` | `suggest.date_consistent`; `suggest.on_derived` | `bad-date`; `compliant` (an “on” batch's date is derived from its anchor, so no reply can get it wrong: the compliant recording, graded in a custom calendar, is the evidence) |

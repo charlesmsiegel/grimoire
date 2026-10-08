@@ -282,42 +282,6 @@ def _source(name: str) -> str:
     return " ".join(re.sub(r"\{#.*?#\}", " ", text, flags=re.DOTALL).split())
 
 
-# Coverage of a legacy one-call prompt while it exists (slice F's, shared since
-# slice G): every sentence of it is either inside one fragment, or is fragments
-# joined by glue -- delete each fragment it contains, then a JSON key
-# (`"verdict":`), and nothing but punctuation and a connective may be left.
-# Containing ONE fragment is not enough: a format fragment can sit beside a
-# criterion in one sentence, so a criterion missing from a table would hide
-# behind its neighbour. With this rule, a carried fragment deleted from the
-# table leaves its words behind and fails. A multi-sentence fragment covers
-# sentence by sentence.
-_GLUE_WORDS = frozenset({"and"})
-_SENTENCE = re.compile(r"(?<=[.?!])\s+")
-
-
-def _sentences(text: str) -> list[str]:
-    return [sentence for paragraph in re.split(r"\n\s*\n", text.strip())
-            for sentence in _SENTENCE.split(" ".join(paragraph.split()))]
-
-
-def _leftover(source: str, fragments: list[str]) -> list[tuple[str, list[str]]]:
-    """Each sentence of `source`, with the words it says beyond `fragments`
-    and glue (none when it is covered)."""
-    out = []
-    by_length = sorted(fragments, key=len, reverse=True)
-    for sentence in _sentences(source):
-        if any(sentence in f for f in fragments):
-            out.append((sentence, []))
-            continue
-        rest = sentence
-        for f in by_length:
-            rest = rest.replace(f, " ")
-        rest = re.sub(r'"\w+"\s*:', " ", rest)
-        out.append((sentence, [w for w in re.findall(r"[A-Za-z]+", rest)
-                               if w.lower() not in _GLUE_WORDS]))
-    return out
-
-
 #: Scene-break's criteria, carried out of the legacy one-call prompt (the
 #: `scene_break/system.j2` slice F deleted) into the decide-era templates word
 #: for word (I8): (fragment, the template it went to). Invent no criterion, and
@@ -757,10 +721,11 @@ assert 'prompts.render(\n        "scene/roll_result.j2"' in routes_src \
 assert 'prompts.render("scene/roll_declined.j2")' in routes_src, \
     "the routes package no longer renders the roll-declined continuation template (#162)"
 
-# The continuity identity resolver (capstone spec §10.2). Rows are
-# `Examination.prompt_rows()`-shaped; three inputs so every optional branch of
-# `user.j2` is taken both ways: every optional field, none, and a closed
-# neighbour carrying earlier beats and every signal.
+# The continuity identity check (capstone spec §10.2). Rows are
+# `Examination.prompt_rows()`-shaped; four inputs so every optional branch of
+# `item.j2` is taken both ways: every optional field, none, a closed neighbour
+# carrying earlier beats and every signal, and a row none of whose candidates
+# can be offered (which asks `decision` alone).
 from grimoire.store.continuity import identity  # noqa: E402
 
 
@@ -815,73 +780,59 @@ IDENTITY_INPUTS = {
                                     chars=0.7, cosine=0.9, actors=["characters:winifred"],
                                     scenes=["saltmarch-docks"], anchors=["event:e1"]))],
             status="open", certainty=0.5)],
+    # A hand-edited ledger's ``thread:`` key leaves an empty bare id, which the
+    # decision contract cannot offer: the row is asked about, with no record
+    # question to answer.
+    "no-offerable": [
+        _identity_row("r1", "thread", "Recover the harbour ledger", [
+            _identity_candidate("", "Find the ledger")])],
 }
-for label, rows in IDENTITY_INPUTS.items():
-    exp = identity.build_prompt(rows)
-    check(f"continuity identity system ({label})", exp[0]["content"],
-          render("continuity_identity/system.j2"))
-    shown = identity.template_rows(rows)
-    check(f"continuity identity user ({label})", exp[1]["content"],
-          render("continuity_identity/user.j2", rows=shown))
-    for row in shown:
-        for cand in row["candidates"]:
-            if row["kind"] == "thread":
-                want = render("snippets/plot_thread_line/absorb.j2",
-                              t={"id": cand["id"], "title": cand["title"],
-                                 "status": cand["status"], "latest_beat": cand["latest_beat"]})
-            else:
-                want = render("snippets/commitment_line/absorb.j2",
-                              c={"id": cand["id"], "title": cand["title"],
-                                 "kind": cand["kind"] or "promise", "status": cand["status"],
-                                 "due": cand["due"], "latest_beat": cand["latest_beat"]})
-            check(f"continuity identity line ({label}, {cand['id']})", want, cand["line"])
-            assert cand["line"] in exp[1]["content"], \
-                f"continuity identity user ({label}) does not show {cand['id']}'s line"
-
-# The continuity identity resolver as decision items (slice G, spec 7.4):
-# `identity.build_items` over the same row sets, against direct renders. Each
-# item's context is `item.j2` over its row; its `decision` choice is
-# `question.j2`'s with each option described by `option.j2`; its `id` choice is
-# `record.j2`'s over the row's candidates, each described by its title. While
-# the legacy `user.j2` exists, a context below its heading is that template's
-# row block byte for byte.
+# The continuity identity check as decision items (slice G, spec 7.4):
+# `identity.build_items` over the row sets, against direct renders. Each
+# item's context is `item.j2` over its row, holding only the candidates the
+# item offers (`identity._offered`); its `decision` choice is `question.j2`'s
+# with each option described by `option.j2`; its `id` choice, asked only when
+# the row offers a candidate, is `record.j2`'s over those candidates, each
+# described by its title.
 for label, rows in IDENTITY_INPUTS.items():
     items = identity.build_items(rows, {})
-    for item, shown in zip(items, identity.template_rows(rows), strict=True):
-        tag = f"{label}, {shown['key']}"
+    for item, row in zip(items, rows, strict=True):
+        tag = f"{label}, {row['key']}"
+        kept, _ = identity._offered(row, {})
+        [shown] = identity.template_rows([{**row, "candidates": kept}])
         check(f"continuity identity item context ({tag})", item.context,
               render("continuity_identity/item.j2", r=shown))
-        heading, _, body = item.context.partition("\n")
-        legacy_head, _, legacy_body = render("continuity_identity/user.j2",
-                                             rows=[shown]).partition("\n")
-        check(f"continuity identity item body is today's row ({tag})", body, legacy_body)
-        REPORT.require(f"continuity identity item heading ({tag})",
-                       heading == f"Proposed {legacy_head.partition(' — proposed ')[2]}",
-                       f"{heading!r} does not name what {legacy_head!r} does")
-        REPORT.require(f"continuity identity item questions ({tag})",
-                       [q.id for q in item.questions]
-                       == [identity.DECISION_ID, identity.RECORD_ID],
-                       f"asks {[q.id for q in item.questions]}")
-        decision, record = item.questions
+        asked = [q.id for q in item.questions]
+        wanted = [identity.DECISION_ID] + ([identity.RECORD_ID] if kept else [])
+        REPORT.require(f"continuity identity item questions ({tag})", asked == wanted,
+                       f"asks {asked}, wanted {wanted}")
+        if asked[:1] != [identity.DECISION_ID]:
+            continue
+        decision, *rest = item.questions
         check(f"continuity identity decision question ({tag})", decision.instructions,
               render("continuity_identity/question.j2"))
         for opt in decision.options:
             check(f"continuity identity option {opt.id} ({tag})", opt.description,
                   render("continuity_identity/option.j2", decision=opt.id))
-        check(f"continuity identity record question ({tag})", record.instructions,
-              render("continuity_identity/record.j2"))
-        REPORT.require(f"continuity identity record options ({tag})",
-                       [(o.id, o.description) for o in record.options]
-                       == [(c["id"], c["title"] or c["id"]) for c in shown["candidates"]]
-                       and record.allow_none and not decision.allow_none,
-                       f"offers {[(o.id, o.description) for o in record.options]}")
+        REPORT.require(f"continuity identity decision allows no null ({tag})",
+                       not decision.allow_none, "the decision question allows null")
+        for record in rest:
+            check(f"continuity identity record question ({tag})", record.instructions,
+                  render("continuity_identity/record.j2"))
+            REPORT.require(f"continuity identity record options ({tag})",
+                           [(o.id, o.description) for o in record.options]
+                           == [(c["id"], c["title"] or c["id"]) for c in shown["candidates"]]
+                           and record.allow_none,
+                           f"offers {[(o.id, o.description) for o in record.options]}")
 check("continuity identity explain", identity.explain(),
       render("continuity_identity/explain.j2"))
 
 #: The duplicate check's criteria, carried out of its legacy one-call prompt
-#: (`continuity_identity/system.j2`, until the switch retires it) into the
-#: decide-era templates word for word (I8): (fragment, the template it went
-#: to). Invent no criterion, and drop none.
+#: (the `continuity_identity/system.j2` slice G deleted) into the decide-era
+#: templates word for word (I8): (fragment, the template it went to). Invent no
+#: criterion, and drop none. While the legacy prompt existed, a coverage check
+#: held that every sentence of it was inside these tables or its reply format,
+#: which `decide/system.j2` owns now.
 IDENTITY_CARRIED = (
     ("You are checking whether newly proposed story records already exist.",
      "continuity_identity/question.j2"),
@@ -932,18 +883,6 @@ IDENTITY_REWORDED = (
      'Answer null for "id" unless the decision is "existing".',
      "continuity_identity/record.j2", "an empty string is not an option; null is"),
 )
-#: The legacy prompt's reply format, which `decide/system.j2` owns now: no
-#: criterion lives in these. The example is cut around its "reason"
-#: placeholder, which is the carried rationale instruction (`explain.j2`), so
-#: that fragment's coverage is its own rather than the example's.
-IDENTITY_FORMAT = (
-    "Give exactly one decision per row:",
-    "Reply with ONLY a JSON object, no prose around it:",
-    ('{"decisions": [{"row": "<row key>", "decision": "existing" | "new" | "uncertain", '
-     '"id": "<candidate id, for existing>", "reason": "<'),
-    '>"}]}',
-    '"row" is the key after "Row" (for "Row r1", write "r1").',
-)
 for fragment, target in IDENTITY_CARRIED:
     REPORT.require(f"continuity identity carried ({target}: {fragment[:40]}…)",
                    fragment in _source(target), f"not in {target}")
@@ -959,40 +898,11 @@ for _old, new, target, why in IDENTITY_REWORDED:
     REPORT.require(f"continuity identity reworded ({target}: {new[:40]}…)",
                    new in _source(target), f"not in {target} ({why})")
 
-#: Each decision's legacy bullet, quoted word and description together: while
-#: the legacy prompt exists, the pairing above must be its pairing.
-IDENTITY_BULLETS = [f'- "{word}" {text}' for word, text in IDENTITY_OPTIONS.items()]
-_LEGACY_IDENTITY = (REPO / "templates" / "continuity_identity" / "system.j2").read_text(
-    encoding="utf-8")
-_IDENTITY_BITES = ([f for f, _ in IDENTITY_CARRIED] + IDENTITY_BULLETS
-                   + [old for old, _, _, _ in IDENTITY_REWORDED])
-for fragment in _IDENTITY_BITES + list(IDENTITY_FORMAT):
-    REPORT.require(f"continuity identity fragment is the old prompt's ({fragment[:40]}…)",
-                   fragment in _source("continuity_identity/system.j2"),
-                   "not in continuity_identity/system.j2")
-
-
-def _identity_fragments(without: str = "") -> list[str]:
-    return [s for f in _IDENTITY_BITES if f != without
-            for s in _sentences(f)] + list(IDENTITY_FORMAT)
-
-
-for sentence, words in _leftover(_LEGACY_IDENTITY, _identity_fragments()):
-    REPORT.require(f"continuity identity coverage ({sentence[:40]}…)", not words,
-                   "continuity_identity/system.j2 says what no fragment carries: "
-                   f"{' '.join(words)!r}")
-# Coverage that bites: with any one carried, option or reworded fragment gone
-# from the tables, some sentence of the legacy prompt is left uncovered.
-for fragment in _IDENTITY_BITES:
-    REPORT.require(f"continuity identity coverage misses ({fragment[:40]}…)",
-                   any(words for _, words in _leftover(_LEGACY_IDENTITY,
-                                                       _identity_fragments(fragment))),
-                   "coverage passes without it, so the tables do not hold it")
-
 # The reconciliation sweep (capstone spec §11.2). Payloads are
-# `reconcile.build_payload`-shaped; three inputs so every optional branch of
-# `user.j2` is taken both ways: pairs and lifecycle findings with every optional
-# field, none, and a temporal pair whose second record is an event.
+# `reconcile.build_payload`-shaped; four inputs so every optional branch of
+# `item.j2` is taken both ways: pairs and lifecycle findings with every optional
+# field, none, a temporal pair whose second record is an event, and a closure
+# showing four scenes.
 from grimoire.store.continuity import reconcile  # noqa: E402
 
 
@@ -1066,31 +976,6 @@ RECONCILE_INPUTS = {
                                                  "003--winifreds-house")])],
             "no new beat in 75 days")]},
 }
-for label, payload in RECONCILE_INPUTS.items():
-    exp = reconcile.build_prompt(payload)
-    check(f"continuity reconcile system ({label})", exp[0]["content"],
-          render("continuity_reconcile/system.j2"))
-    check(f"continuity reconcile user ({label})", exp[1]["content"],
-          render("continuity_reconcile/user.j2", **reconcile.template_vars(payload)))
-    for cand in payload["candidates"]:
-        for rec in cand["records"]:
-            fields, (prefix, _, rid) = rec["_fields"], rec["ref"].partition(":")
-            if prefix == "thread":
-                want = render("snippets/plot_thread_line/absorb.j2",
-                              t={"id": rid, "title": fields["title"],
-                                 "status": fields["status"], "latest_beat": ""})
-            elif prefix == "commitment":
-                want = render("snippets/commitment_line/absorb.j2",
-                              c={"id": rid, "title": fields["title"],
-                                 "kind": fields["kind"] or "promise", "status": fields["status"],
-                                 "due": fields["due"], "latest_beat": ""})
-            else:
-                want = f"event: {fields['title']} ({fields['due']})"
-            check(f"continuity reconcile line ({label}, {rec['ref']})", want, rec["line"])
-            shown = f" ({rec['type']})" if rec["type"] else ""
-            assert f"{rec['letter']}{shown}: {rec['line']}" in exp[1]["content"], \
-                f"continuity reconcile user ({label}) does not show {rec['ref']}'s line"
-
 # The reconciliation sweep as decision items (slice G, spec 7.4):
 # `reconcile.build_items` over the same payloads, against direct renders. Each
 # item's context is `item.j2` over its candidate and the scene lines it shows;
@@ -1098,9 +983,7 @@ for label, payload in RECONCILE_INPUTS.items():
 # labelled by its own word; a pair's `from` and `to` are `direction.j2`'s and
 # `direction_to.j2`'s over `record_option.j2`; and one evidence choice per
 # shown scene, up to `EVIDENCE_SCENES`, is `evidence.j2`'s and then
-# `evidence_more.j2`'s over `scene_option.j2`. While the legacy `user.j2`
-# exists, a context's preamble is that template's over the item's lines, and
-# its body below the heading that template's candidate block byte for byte.
+# `evidence_more.j2`'s over `scene_option.j2`.
 for label, payload in RECONCILE_INPUTS.items():
     items = reconcile.build_items(payload)
     for item, cand in zip(items, payload["candidates"], strict=True):
@@ -1111,24 +994,6 @@ for label, payload in RECONCILE_INPUTS.items():
               render("continuity_reconcile/item.j2", now=payload["now"], chronicle=lines,
                      c={"label": reconcile.LABELS[vocab], "records": cand["records"],
                         "signal_text": cand["signal_text"]}))
-        heading = f"Candidate — {reconcile.LABELS[vocab]}"
-        preamble, _, body = item.context.partition(heading)
-        legacy_head, _, legacy_body = render(
-            "continuity_reconcile/user.j2", now="", chronicle=[],
-            candidates=reconcile.template_vars({**payload, "candidates": [cand]})["candidates"],
-        ).partition("\n")
-        check(f"continuity reconcile item body is today's candidate ({tag})", body,
-              "\n" + legacy_body if legacy_body else "")
-        REPORT.require(f"continuity reconcile item heading ({tag})",
-                       legacy_head.endswith(f" — {reconcile.LABELS[vocab]} (answer with: "
-                                            + ", ".join(f'"{w}"' for w in
-                                                        reconcile.DECISIONS[vocab]) + ")"),
-                       f"{heading!r} does not name what {legacy_head!r} does")
-        today = render("continuity_reconcile/user.j2", now=payload["now"], chronicle=lines,
-                       candidates=[])
-        REPORT.require(f"continuity reconcile item preamble is today's ({tag})",
-                       preamble == (today + "\n" if today else ""),
-                       f"{preamble!r} is not {today!r}")
         decision, *rest = item.questions
         check(f"continuity reconcile decision question ({tag})", decision.instructions,
               render("continuity_reconcile/question.j2", vocabulary=vocab))
@@ -1181,10 +1046,12 @@ REPORT.require("continuity reconcile fixtures ask every kind of question",
                "no fixture shows two scenes, or more than EVIDENCE_SCENES, or none asks "
                "a direction")
 
-#: The sweep's criteria, carried out of its legacy one-call prompt
-#: (`continuity_reconcile/system.j2`, until the switch retires it) into the
-#: decide-era templates word for word (I8): (fragment, the template it went
-#: to). Invent no criterion, and drop none.
+#: The sweep's criteria, carried out of its legacy one-call prompt (the
+#: `continuity_reconcile/system.j2` slice G deleted) into the decide-era
+#: templates word for word (I8): (fragment, the template it went to). Invent no
+#: criterion, and drop none. While the legacy prompt existed, a coverage check
+#: held that every sentence of it was inside these tables or its reply format,
+#: which `decide/system.j2` owns now.
 RECONCILE_CARRIED = (
     (("A plot thread is an open narrative question; a commitment is an obligation someone "
       "owes (a promise, a debt, a threat or a piece of foreshadowing); an event is a dated "
@@ -1275,21 +1142,6 @@ RECONCILE_ADDED = (
     ("record {{ letter }}", "continuity_reconcile/record_option.j2"),
     ("the scene listed above as {{ sid }}", "continuity_reconcile/scene_option.j2"),
 )
-#: The legacy prompt's reply format, which `decide/system.j2` owns now, and
-#: its two "leave it empty" rules, which the reworded direction and evidence
-#: sentences carry as null: no criterion lives in these. The example is cut
-#: around its "reason" placeholder, which is the carried rationale
-#: instruction (`explain.j2`), so that fragment's coverage is its own.
-RECONCILE_FORMAT = (
-    "Give exactly one decision per candidate, using only the words its line offers:",
-    "Reply with ONLY a JSON object, no prose around it:",
-    ('{"decisions": [{"candidate": "<key>", "decision": "<word>", "from": "A" | "B", '
-     '"to": "A" | "B", "reason": "<'),
-    '>", "evidence_scenes": ["<scene id>"]}]}',
-    '"candidate" is the key after "Candidate" (for "Candidate c1", write "c1").',
-    ('Leave "from" and "to" empty when the decision has no direction, and "evidence_scenes" '
-     "empty when no scene settles it."),
-)
 for fragment, target in RECONCILE_CARRIED:
     REPORT.require(f"continuity reconcile carried ({target}: {fragment[:40]}…)",
                    fragment in _source(target), f"not in {target}")
@@ -1318,33 +1170,6 @@ for text, target in RECONCILE_ADDED:
     REPORT.require(f"continuity reconcile added ({target})", text in _source(target),
                    f"not in {target}")
     print(f"continuity reconcile adds, in {target}: {text}")
-
-_LEGACY_RECONCILE = (REPO / "templates" / "continuity_reconcile" / "system.j2").read_text(
-    encoding="utf-8")
-_RECONCILE_BITES = ([f for f, _ in RECONCILE_CARRIED] + list(RECONCILE_BULLETS.values())
-                    + [old for old, _, _, _ in RECONCILE_REWORDED])
-for fragment in _RECONCILE_BITES + list(RECONCILE_FORMAT):
-    REPORT.require(f"continuity reconcile fragment is the old prompt's ({fragment[:40]}…)",
-                   fragment in _source("continuity_reconcile/system.j2"),
-                   "not in continuity_reconcile/system.j2")
-
-
-def _reconcile_fragments(without: str = "") -> list[str]:
-    return [s for f in _RECONCILE_BITES if f != without
-            for s in _sentences(f)] + list(RECONCILE_FORMAT)
-
-
-for sentence, words in _leftover(_LEGACY_RECONCILE, _reconcile_fragments()):
-    REPORT.require(f"continuity reconcile coverage ({sentence[:40]}…)", not words,
-                   "continuity_reconcile/system.j2 says what no fragment carries: "
-                   f"{' '.join(words)!r}")
-# Coverage that bites: with any one carried, bullet or reworded fragment gone
-# from the tables, some sentence of the legacy prompt is left uncovered.
-for fragment in _RECONCILE_BITES:
-    REPORT.require(f"continuity reconcile coverage misses ({fragment[:40]}…)",
-                   any(words for _, words in _leftover(_LEGACY_RECONCILE,
-                                                       _reconcile_fragments(fragment))),
-                   "coverage passes without it, so the tables do not hold it")
 
 # Structured decisions (slice F, spec 7.4): `inference.structured_messages`
 # against direct renders of `decide/`. Every branch the templates take: the

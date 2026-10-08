@@ -505,49 +505,22 @@ def test_proposed_subject_carries_the_scene_cast(cid, s0, sid):
     assert signals["via"] == "structural"
 
 
-# ------------------------------------------------------------ resolver parse
+# ------------------------------------------------------------ the vocabularies
 
 
-def test_parse_undecodable_is_none():
-    assert identity.parse_output("I think so.") is None
-
-
-def test_parse_decodable_empty_is_empty_list():
-    assert identity.parse_output("{}") == []
-    assert identity.parse_output('{"decisions": 3}') == []
-
-
-def test_parse_accepts_row_labels_as_printed():
-    for label in ("Row r1", " R1 ", "r1", "ROW R1"):
-        [decision] = identity.parse_output(json.dumps(
-            {"decisions": [{"row": label, "decision": "new"}]}))
-        assert decision["row"] == "r1", label
-
-
-def test_parse_normalizes_and_never_raises():
-    reply = "Here you go:\n```json\n" + json.dumps({"decisions": [
-        "not a row",
-        {"decision": "new", "id": "", "reason": "no row key"},
-        {"row": "   ", "decision": "new"},
-        {"row": 3, "decision": "new"},
-        {"row": "Row r1", "decision": "EXISTING", "id": " find-the-ledger ",
-         "reason": " Same ledger. "},
-        {"row": "r2", "decision": "maybe", "id": 7, "reason": "x" * 400},
-        {"row": "r1", "decision": "new", "id": "", "reason": "a second answer for r1"},
-        {"row": "r3", "decision": None, "reason": ["not", "text"]},
-    ]}) + "\n```"
-    assert identity.parse_output(reply) == [
-        {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "Same ledger."},
-        {"row": "r2", "decision": "uncertain", "id": "", "reason": "x" * identity.REASON_CHARS},
-        {"row": "r3", "decision": "uncertain", "id": "", "reason": ""},
-    ]
-    assert len(identity.parse_output(reply)[1]["reason"]) == identity.REASON_CHARS
+def test_the_decision_vocabularies():
     assert identity.DECISIONS == ("existing", "new", "uncertain")
     assert identity.CHECK_DECISIONS == ("existing", "new", "uncertain", "unchecked")
     assert identity.STATUSES == ("accepted", "downgraded", "hint_only")
 
 
-# ------------------------------------------------------------ resolver prompt
+# ------------------------------------------------------------ the item context
+
+
+def _context(row, live=None):
+    """The `decide()` item context `build_items` makes of one `prompt_rows()` row."""
+    [item] = identity.build_items([row], live or {})
+    return item.context
 
 #: A proposed thread re-opening `LEDGER_THREAD` under its exact title, after the
 #: stored one was closed -- so it is proposed, and titled the same.
@@ -604,17 +577,14 @@ def test_prompt_rows_carry_the_row_and_its_neighbours(cid, s0, sid):
         "the-midnight-deadline", "threat", "midnight", [])
 
 
-def test_build_prompt_shows_rows_candidates_and_signals(cid, s0, sid):
+def test_build_items_show_rows_candidates_and_signals(cid, s0, sid):
     _seed_prompt_fixture(cid, s0)
     exam = _examine(cid, sid, plot=[REOPENED_LEDGER], owed=[SERAPHINES_DEADLINE])
-    system, user = identity.build_prompt(exam.prompt_rows())
-    assert (system["role"], user["role"]) == ("system", "user")
-    assert system["content"].startswith("You are checking whether newly proposed story records")
-    for word in ('"existing"', '"new"', '"uncertain"'):
-        assert word in system["content"]
-    text = user["content"]
-    assert "Row r1 — proposed plot thread: Find the ledger" in text
-    assert "Row r2 — proposed commitment: Seraphine's midnight deadline" in text
+    items = identity.build_items(exam.prompt_rows(), exam.live)
+    assert len(items) == 2
+    text = "\n".join(item.context for item in items)
+    assert items[0].context.startswith("Proposed plot thread: Find the ledger\n")
+    assert items[1].context.startswith("Proposed commitment: Seraphine's midnight deadline\n")
     assert "find-the-ledger: Find the ledger (closed) — Winifred burned the ledger." in text
     assert ("the-midnight-deadline: The midnight deadline (threat, open), due midnight"
             " — Seraphine must pay by midnight.") in text
@@ -644,7 +614,7 @@ def test_template_rows_signal_text_order():
     assert "line" not in row["candidates"][0]   # the input is not mutated
 
 
-def test_build_prompt_with_no_optional_fields_renders():
+def test_build_items_with_no_optional_fields_render():
     signals = {"title_equal": False, "slug_equal": False, "tokens": 0.3, "chars": 0.0,
                "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical"}
     row = {"key": "r1", "kind": "commitment", "title": "The Saltmarch tithe",
@@ -654,9 +624,8 @@ def test_build_prompt_with_no_optional_fields_renders():
            "candidates": [{"id": "salt-owed", "title": "Salt owed", "status": "open",
                            "kind": "", "due": "", "latest_beat": "", "earlier": [],
                            "signals": signals}]}
-    _, user = identity.build_prompt([row])
-    text = user["content"]
-    assert "Row r1 — proposed commitment: The Saltmarch tithe" in text
+    text = _context(row)
+    assert text.startswith("Proposed commitment: The Saltmarch tithe\n")
     # A blank commitment kind is shown as the default it means.
     assert "salt-owed: Salt owed (promise, open)" in text
     assert "signals: word overlap 0.30" in text
@@ -672,10 +641,10 @@ def _candidate_text_bytes(cand):
     return sum(len(f.encode("utf-8")) for f in fields)
 
 
-def test_a_long_stored_beat_is_clipped_in_the_resolver_prompt(cid, s0, sid):
+def test_a_long_stored_beat_is_clipped_in_the_item_context(cid, s0, sid):
     # Ledger routes take a beat of any length, and a closed record is in the
     # pool though not in the extraction snapshot: its title can select it while
-    # its beats would blow the resolver's context. The candidate's stored text
+    # its beats would blow the item's context. The candidate's stored text
     # is shown within the identity-text bound, as its embedding input was.
     pid, title, _ = LEDGER_THREAD
     first = "Winifred found the first page. " + "ш" * 20000
@@ -690,18 +659,18 @@ def test_a_long_stored_beat_is_clipped_in_the_resolver_prompt(cid, s0, sid):
     assert cand["title"] == "Find the ledger"
     assert cand["latest_beat"].startswith("Winifred burned the ledger. 灰")
     assert latest.startswith(cand["latest_beat"])
-    _, user = identity.build_prompt([row])
-    # The same prompt with one-byte beats: the labels and separators, the fixed overhead.
-    _, short = identity.build_prompt([{**row, "candidates": [
-        {**cand, "latest_beat": "-", "earlier": ["-"] * len(cand["earlier"])}]}])
-    assert len(user["content"].encode("utf-8")) <= len(short["content"].encode("utf-8")) + bound
-    assert "Winifred burned the ledger. 灰灰灰" in user["content"]
+    context = _context(row, exam.live)
+    # The same context with one-byte beats: the labels and separators, the fixed overhead.
+    short = _context({**row, "candidates": [
+        {**cand, "latest_beat": "-", "earlier": ["-"] * len(cand["earlier"])}]}, exam.live)
+    assert len(context.encode("utf-8")) <= len(short.encode("utf-8")) + bound
+    assert "Winifred burned the ledger. 灰灰灰" in context
 
 
 def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, sid):
     bound = similarity.CONTINUITY_IDENTITY_BYTES
     # The kind is what a ledger route stores (one of `commitments.KINDS`); the
-    # id is the resolver's handle: both are shown whole, the rest shares what is left.
+    # id is the model's handle: both are shown whole, the rest shares what is left.
     record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "threat",
               "due": "midsummer " + "d" * bound, "status": "open",
               "beats": [{"text": "Mara swore it. " + "e" * bound, "scene": s0},
@@ -723,7 +692,7 @@ def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, si
 
 def test_a_record_whose_id_overruns_the_bound_is_never_a_candidate(cid, s0, sid):
     # A ledger route slugifies a title of any length into the record's id, and
-    # the resolver has to name a candidate back by that id, so it cannot be
+    # the model has to name a candidate back by that id, so it cannot be
     # clipped: a record whose id alone overruns the identity-text bound is not
     # offered, and the prompt does not grow with it.
     bound = similarity.CONTINUITY_IDENTITY_BYTES
@@ -735,8 +704,7 @@ def test_a_record_whose_id_overruns_the_bound_is_never_a_candidate(cid, s0, sid)
     [row] = exam.prompt_rows()
     assert [c["id"] for c in row["candidates"]] == ["find-the-ledger"]
     assert [s.ref for s, _ in exam.rows[0].candidates] == ["thread:find-the-ledger"]
-    _, user = identity.build_prompt([row])
-    assert len(user["content"].encode("utf-8")) <= 2 * bound
+    assert len(_context(row, exam.live).encode("utf-8")) <= 2 * bound
 
 
 def test_a_title_filling_the_bound_does_not_relabel_a_commitment_kind(s0):
@@ -752,9 +720,9 @@ def test_a_title_filling_the_bound_does_not_relabel_a_commitment_kind(s0):
     [cand] = row["candidates"]
     assert cand["kind"] == "threat"
     assert _candidate_text_bytes(cand) <= bound
-    _, user = identity.build_prompt([row])
-    assert "(threat, open)" in user["content"]
-    assert "promise" not in user["content"]
+    context = _context(row)
+    assert "(threat, open)" in context
+    assert "promise" not in context
 
 
 # ------------------------------------------------------------ deciding rows
@@ -769,7 +737,7 @@ SERAPHINES_THREAT = {"title": "Seraphine's midnight deadline",
                      "beat": "Seraphine must pay the midnight deadline.",
                      "kind": "threat", "status": "open"}
 
-#: A citation, as `parse_output` carries one.
+#: A citation, as the extraction carries one.
 CITED = {"quote": "I want that ledger back.", "speaker": "Winifred", "certainty": 0.8}
 
 
@@ -1180,8 +1148,7 @@ def test_a_hand_edited_long_status_shares_the_identity_text_bound(cid, s0, sid):
     [cand] = row["candidates"]
     assert _candidate_text_bytes(cand) <= bound
     assert cand["status"].startswith("closed")
-    _, user = identity.build_prompt([row])
-    assert len(user["content"].encode("utf-8")) <= 2 * bound
+    assert len(_context(row).encode("utf-8")) <= 2 * bound
 
 
 # ------------------------------------------------- the check as decision items

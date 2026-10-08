@@ -3,8 +3,8 @@
 Before absorb treats a plot thread or commitment as NEW, this module asks which
 of the extraction's rows would open a record, and which stored same-type
 records each of those is plausibly the same business as. It reads; it never
-writes, and it decides nothing on its own -- the resolver (and after it, the
-reviewer) does that, and `similarity` only chooses what they see.
+writes, and it decides nothing on its own -- the model's answers (and after
+them, the reviewer) do that, and `similarity` only chooses what they see.
 
 **Proposed-new is the materializer's answer, not a second opinion.** A row is
 proposed-new iff the id `absorb.materializer.assign_ids` gives it names no
@@ -15,17 +15,17 @@ reserved. A row the assignment drops (blank beat, no usable id or title, a
 second move of one record) is ignored. An id-less row whose slug collision the
 §10.5 predicate honours -- an open record with the same title -- is the model
 naming a record it was shown, and materialize stages it onto that record
-whatever a resolver would say; it is a target here, like an explicit id, and is
+whatever the model would say; it is a target here, like an explicit id, and is
 not asked about (deviation 2). A proposed row is matched under the title the
 new record would carry -- its title, or else its assigned id (§10.2) -- so an
 id-only row is not compared by a blank title line; §9.1's "no ids" rule is
 about stored records' ids, not this.
 
 **Neighbours** come from `similarity.pool`: effective records, closed and
-resolved included (a closed thread is shown so the resolver knows it was
+resolved included (a closed thread is shown so the model knows it was
 settled), keyed by canonical ref, so a merged-away alias source is never a
 candidate -- less any record whose id and kind alone overrun the identity-text
-bound (`_offerable`), which the resolver could not be shown. At most
+bound (`_offerable`), which the model could not be shown. At most
 `similarity.IDENTITY_TOP_K` per row, never padded.
 
 **Embeddings** are an enhancement. When a space is configured, each proposed
@@ -39,12 +39,14 @@ earlier absorb's warm, or by Slice D's reconcile sweep, which warms the whole
 ledger. An embedding failure is a mode, never an exception: the lexical
 and structural candidates still stand.
 
-**The resolver** is one batched call over every examined row (§10.2): its
-prompt (`build_prompt`, the `continuity_identity/` templates) shows each row,
-its citation and identity fields, and its candidates with their signals, and
-nothing else of the campaign. `parse_output` rebuilds the reply field by field;
-a reply with no decodable object is None -- a failed check -- never ``[]``,
-which is a decodable reply with nothing usable in it (§24).
+**The check is a set of `decide()` items** (spec §7.4): `build_items` makes one
+per examined row, showing the row, its citation and identity fields, and its
+candidates with their signals, and nothing else of the campaign. Each asks
+`decision` and then, when the row has a candidate it may offer, `id`.
+`answers_of` rebuilds the answers field by field into the dicts
+`Examination.decide` reads; a reply with no decodable object is None -- a
+failed check -- never ``[]``, which is a decodable reply with nothing usable in
+it (§24).
 
 **Deciding** (`Examination.decide`) is where the reply is not trusted: an
 ``existing`` is accepted only onto an offered, live candidate no other row in
@@ -57,7 +59,7 @@ examined row with its `identity_check`; materialize stages what it is given.
 again. A later row `assign_ids` dropped as a second move of that proposed
 record -- the same title again, or the id it was given spelled out -- was never
 examined, and on that second run it would be handed the freed id and open the
-very record the resolver said already exists, with no `identity_check` to say
+very record the model said already exists, with no `identity_check` to say
 so. `examine` remembers those siblings per proposal (the rows that stage once
 it stops holding its id), and `rewritten` retargets them onto the same record,
 where materialize drops them as a second move again: the drop they already had.
@@ -66,14 +68,12 @@ where materialize drops them as a second move again: the drop they already had.
 from __future__ import annotations
 
 import math
-import re
 from collections.abc import Mapping, Sequence
 from typing import Literal
 
 from ... import decisions, prompts
 from .. import commitments, fieldtext
 from ..absorb import materializer as absorb_materializer
-from ..absorb import parse as absorb_parse
 from . import canon, effective, involvement, similarity
 
 #: Parsed section -> the record kind its rows open.
@@ -225,13 +225,13 @@ class Examination:
         self.live = live         # the live_canon map examine loaded
 
     def prompt_rows(self) -> list[dict]:
-        """The examined rows as the resolver prompt reads them (`build_prompt`).
+        """The examined rows as the decision items read them (`build_items`).
         Within one row every candidate is the row's own type, so a bare id is
         unambiguous."""
         return [_prompt_row(e) for e in self.rows]
 
     def decide(self, decisions: list[dict]) -> None:
-        """Take the resolver's `parse_output` decisions (spec §10.2).
+        """Take the model's decisions (`answers_of`'s dicts, spec §10.2).
 
         Rows are visited in examination order. A row the reply never answered
         is `unchecked` / `hint_only`; ``new`` and ``uncertain`` stand as given;
@@ -349,7 +349,7 @@ def _onto_existing(kind: str, row: dict, rid: str) -> dict:
 
     The id becomes the canonical one and the title blank (keep stored). A plot
     status is the model's ``closed`` or ``advanced``, else ``advanced`` -- never
-    ``open``, which `parse_output` defaults to and which would regress an
+    ``open``, which the extraction's own default is and which would regress an
     advanced thread. A commitment keeps its stored kind and keeps a status only
     when it resolves the record. A stated ``due`` is kept and an absent one
     stays absent; a blank one is dropped, because ``""`` means "lift the
@@ -567,7 +567,7 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
                        targets, live)
 
 
-# ------------------------------------------------------------ resolver prompt
+# ------------------------------------------------------ the item context
 
 
 def _signal_text(signals: dict) -> str:
@@ -604,7 +604,7 @@ def _line(kind: str, c: dict) -> str:
 
 
 def template_rows(rows: list[dict]) -> list[dict]:
-    """`prompt_rows` output as `continuity_identity/user.j2` reads it: each
+    """`prompt_rows` output as `continuity_identity/item.j2` reads it: each
     candidate gains its snippet `line` and its `signal_text`. Snippets are
     rendered here, by Python, as every other prompt's are. The input is not
     mutated."""
@@ -614,40 +614,11 @@ def template_rows(rows: list[dict]) -> list[dict]:
             for row in rows]
 
 
-def build_prompt(rows: list[dict]) -> list[dict]:
-    """The resolver's messages for `prompt_rows` output: one batched call for
-    every examined row (spec §10.2), never one per row."""
-    return [{"role": "system", "content": prompts.render("continuity_identity/system.j2")},
-            {"role": "user", "content": prompts.render("continuity_identity/user.j2",
-                                                       rows=template_rows(rows))}]
-
-
-#: A leading ``row`` word, as the user prompt prints a key (``Row r1``).
-_ROW_WORD = re.compile(r"^row(?![a-z0-9])[\s:#.-]*")
-
-
-def _row_key(value) -> str:
-    if not isinstance(value, str):
-        return ""
-    return _ROW_WORD.sub("", value.strip().casefold()).strip()
-
-
-def _decision(item: dict) -> dict:
-    word = item.get("decision")
-    word = word.strip().lower() if isinstance(word, str) else ""
-    rid, reason = item.get("id"), item.get("reason")
-    return {"row": _row_key(item.get("row")),
-            "decision": word if word in DECISIONS else "uncertain",
-            "id": rid.strip() if isinstance(rid, str) else "",
-            "reason": reason.strip()[:REASON_CHARS] if isinstance(reason, str) else ""}
-
-
 # ------------------------------------------------------- as decision items
 #
 # The check as `decide()` items (spec §7.4): one per examined row, asking
 # `decision` and then `id`. These are what absorb sends and reads
-# (`routes.scenes._resolve_identity`); `build_prompt` and `parse_output` above
-# are the legacy one-call prompt's, which nothing sends any more.
+# (`routes.scenes._resolve_identity`).
 
 
 def _spelled(seen: set[str], spelling: str) -> bool:
@@ -674,7 +645,11 @@ def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decis
     that ref with its bare id (a source of another kind, which `_existing`
     would never reach, is not one). An alias that is not offerable, or
     collides with any kept id or an earlier alias, is dropped alone, so an
-    earlier candidate's alias source never shadows a later candidate's id."""
+    earlier candidate's alias source never shadows a later candidate's id *in
+    the options*: that holds up to the parse. `Examination.decide` maps the
+    answered id through the alias map again, so an answer naming a later
+    candidate whose id is also an earlier candidate's alias source lands the
+    row on the earlier candidate, as today's `_existing` does."""
     kind = row["kind"]
     seen: set[str] = set()
     kept = [c for c in row["candidates"] if _spelled(seen, c["id"])]
@@ -767,7 +742,7 @@ def _no_object(result: decisions.ItemResult) -> bool:
 
 
 def take(exam: Examination, answers: list[dict] | None) -> bool:
-    """Decide `exam` by `answers` (`parse_output` or `answers_of`), or, for
+    """Decide `exam` by `answers` (`answers_of`), or, for
     None -- no readable answer at all -- make every row a hint only with
     `UNREADABLE`. Whether it decided."""
     if answers is None:
@@ -775,29 +750,3 @@ def take(exam: Examination, answers: list[dict] | None) -> bool:
         return False
     exam.decide(answers)
     return True
-
-
-def parse_output(text: str) -> list[dict] | None:
-    """The resolver's decisions, rebuilt field by field, or None when the reply
-    holds no decodable object at all -- a failed check, which is not the same
-    as a decodable reply with nothing usable in it (``[]``, spec §24).
-
-    Each usable element becomes ``{row, decision, id, reason}``: the row key as
-    the prompt printed it, without its ``Row`` label; an unknown decision word
-    as ``uncertain``; a reason clipped to `REASON_CHARS`. A duplicate row key
-    keeps its first answer. Nothing here raises on bad JSON."""
-    obj = absorb_parse.extract_object(text)
-    if obj is None:
-        return None
-    items = obj.get("decisions")
-    out: list[dict] = []
-    seen: set[str] = set()
-    for item in items if isinstance(items, list) else ():
-        if not isinstance(item, dict):
-            continue
-        decision = _decision(item)
-        if not decision["row"] or decision["row"] in seen:
-            continue
-        seen.add(decision["row"])
-        out.append(decision)
-    return out

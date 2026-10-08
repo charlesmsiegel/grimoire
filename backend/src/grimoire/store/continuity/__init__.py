@@ -46,7 +46,7 @@ guard forbids. Importers name the submodule they want:
 - ``reconcile`` -- the reconciliation sweep: deterministic discovery of possible
   overlaps, closures and resolutions over the whole ledger, the one bounded
   model call that adjudicates them (``select``, ``build_payload``,
-  ``parse_output``), and the two persists (``persist_found``,
+  ``build_items``, ``proposals_of``), and the two persists (``persist_found``,
   ``persist_proposals``) that write `continuity_candidates.json` under the
   campaign lock and bump the campaign's revision. Scores rank and never write
   a ledger: a finding changes plot, commitments or continuity.json only through

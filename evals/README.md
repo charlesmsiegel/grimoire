@@ -20,14 +20,12 @@ stake in:
 | `owned-lore` | lore owned by an absent character stays out of both the prompt and the reply; lore `known_by` one actor reaches that actor's call and the narrator, not its owner's |
 | `turn-taking` | with four NPCs cast and `speaker_turn_taking` on, the reply is carried by the nominated speaker rather than by whoever has been monologuing |
 | `natural-prose` | a reply contains none of the stock names or literal banned phrases the selected Natural Prose (Legacy) guide lists, does not repeat a single beat word past the cap or use the enumerated not-X-but-Y forms, and does not flatten into uniform sentence and paragraph length |
-| `continuity-identity` | the identity resolver maps a reworded duplicate to the existing record and keeps a same-topic question and a concrete continuation new; a row is only ever offered records of its own type |
-| `continuity-reconcile` | the reconciliation sweep keeps a same-topic question apart (distinct or related), reads a concrete question as a continuation or subthread of the broad one, never merges a thread with a commitment, closes a thread or resolves a commitment only on a shown beat, and keeps an old or overdue record open when nothing shown settles it |
 | `scene-suggestions` | with two focused drivers and a batch anchor in a custom calendar, the suggestions spread focus coverage instead of cloning one premise, cite only known drivers, and carry dates the anchor rule accepts, written in the calendar's own notation |
 | `scene-suggestions-anchor-on` | with a batch anchor `on` an event in a custom calendar, every parsed date is the anchor's own date in the calendar's notation, whatever the model wrote |
 | `decide-scene-break` | asked through `decide()` whether a scene whose beat has resolved is over, the reply is the schema's object, answers yes, and says why; the prompt carries the question, the transcript, the schema and the rationale instruction |
 | `decide-voice-drift` | asked through `decide()` whether a character with a clipped, contraction-free anchor and a standing correction drifted when she chattered in contractions, the reply is the schema's object, answers `drift`, and gives a corrective no longer than `MAX_NOTE`; the prompt carries the question, every verdict with its description, the transcript and anchor, the correction and the schema |
-| `decide-continuity-identity` | asked through `decide()` about each row the duplicate check examines, the reply is the schema's object, maps a reworded duplicate to the existing record by an offered id, and keeps a same-topic question and a concrete continuation new; the prompt carries the question, every examined row's title, the rationale instruction and the schema (the call site switches later: until then `continuity-identity` is what absorb sends) |
-| `decide-continuity-reconcile` | asked through `decide()` about each candidate the reconciliation sweep sends, the reply is the schema's object, keeps a same-topic question distinct, reads a concrete question as a continuation, never merges a thread with a commitment, closes or resolves only on a scene its item shows, and keeps an old or overdue record open when nothing settles it; the prompt carries each vocabulary's question, the direction and evidence questions, every candidate's records, the rationale instruction and the schema (the call site switches later: until then `continuity-reconcile` is what the sweep sends) |
+| `decide-continuity-identity` | asked through `decide()` about each row the duplicate check examines, the reply is the schema's object, maps a reworded duplicate to the existing record by an offered id, and keeps a same-topic question and a concrete continuation new; the prompt carries the question, every examined row's title, the rationale instruction and the schema |
+| `decide-continuity-reconcile` | asked through `decide()` about each candidate the reconciliation sweep sends, the reply is the schema's object, keeps a same-topic question distinct, reads a concrete question as a continuation, never merges a thread with a commitment, closes or resolves only on a scene its item shows, and keeps an old or overdue record open when nothing settles it; the prompt carries each vocabulary's question, the direction and evidence questions, every candidate's records, the rationale instruction and the schema |
 | `decide-speaker` | asked through `decide()` who opens a round in which the player has just put a question to one of two NPCs by name, the reply is the schema's object and picks that NPC (no rationale is asked for); the prompt carries the question, every eligible ref with its name and `grimoire` with its description, null allowed, the observable transcript (gathered by the store helpers the route calls, so a director note in the scene never reaches it) and the schema |
 
 ## Running it
@@ -246,27 +244,25 @@ missing or wrong-typed section and turns a JSON `null` into the string
 yes regardless of what the model sent. The contract itself *is* derived from
 `parse_output` (its key set, with defaults telling text from list), so a
 section added to absorb is graded from the day it lands.
-`continuity-identity` scores the resolver's reply the same way: the identity
-parser reads an unknown decision word as `uncertain`, so only the raw object
-can fail `identity.enum`. Its row keys are the one thing read the app's way
-(a `Row r1` key is one the app accepts). Its `build` pins which records
-`identity.examine` offers each row, and through which clause, so a change to
-the similarity floors fails there rather than leaving the case asking about
-nothing.
-`continuity-reconcile` follows the same rule for the same reason:
-`reconcile.parse_output` reads a word outside a candidate's vocabulary, a
-direction the relation does not allow and a closure with no known evidence
-scene all as `uncertain`, so `reconcile.enum`, `reconcile.shape` and
-`reconcile.evidence` score the raw object, and only candidate keys are read the
-app's way (a `Candidate c1` key is one the app accepts). Its candidates are
-specified by hand, one per §28.10 case 2–8, and sent through the production
-`reconcile.build_payload` / `build_prompt`, which key them `c1`… in the order
-they are sent (so case 2 is `c1`). Its `prompt` asserts that each case is sent
-under the vocabulary it needs and that every scene is known evidence, so a
-change there fails at build rather than leaving a recording citing a scene the
-parser would refuse. A verdict check reads the decision word alone, and
-`reconcile.evidence` judges the citation, so "the wrong call" and "the right
-call, unfounded" stay separable.
+`decide-continuity-identity` scores the duplicate check's reply the same way:
+`identity.answers_of` turns a word outside the decisions into `uncertain`, so
+`identity.enum` is scored on the parsed answers' `NOT_AN_OPTION` detail rather
+than on the mapping. Its `build` pins which records `identity.examine` offers
+each row, and through which clause, so a change to the similarity floors fails
+there rather than leaving the case asking about nothing.
+`decide-continuity-reconcile` follows the same rule for the same reason:
+`reconcile.proposals_of` reads a word outside a candidate's vocabulary, a
+direction the relation does not allow and a closure with no shown evidence
+scene all as `uncertain`, so `reconcile.enum` and `reconcile.evidence` score
+the parsed answers. Its candidates are specified by hand, one per §28.10 case
+2–8, and sent through the production `reconcile.build_payload` /
+`build_items`, which key them `c1`… in the order they are sent (so case 2 is
+`c1`). Its `prompt` asserts that each case is sent under the vocabulary it
+needs and that every scene is known evidence, so a change there fails at build
+rather than leaving a recording citing a scene the item would not offer. A
+verdict check reads the decision word alone, and `reconcile.evidence` judges
+the citation, so "the wrong call" and "the right call, unfounded" stay
+separable.
 `scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`,
 keeps only the entries `suggest.is_card` keeps (a title and a premise, the
 cards the player is shown), and judges claims and dates with `suggest.claim`

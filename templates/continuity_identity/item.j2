@@ -1,8 +1,8 @@
 {#- One examined row as a `decide()` item's context (`identity.build_items`):
-    a heading naming what the row would open, then the row's block from
-    `user.j2` byte for byte (Beat through Candidates). `user.j2` is the
-    legacy one-call prompt's and stays until the switch retires it.
-    Vars: `r`, one `identity.template_rows` row (its keys are `user.j2`'s),
+    a heading naming what the row would open, then the row's block (Beat
+    through Candidates).
+    Vars: `r`, one `identity.template_rows` row (`Examination.prompt_rows`'s
+    keys, plus each candidate's `line` and `signal_text`),
     with the candidates the item offers and no others: a candidate whose id
     the builder drops (unofferable, or colliding once normalised) is shown
     nowhere. Every key is always passed; a blank one renders nothing. -#}

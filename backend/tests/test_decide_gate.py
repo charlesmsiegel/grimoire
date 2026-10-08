@@ -517,18 +517,6 @@ def _identity_gate() -> gate.Conversion:
     return next(c for c in gate.GATES if c.id == "continuity-identity")
 
 
-def test_the_identity_copy_answers_as_production_does():
-    """The frozen `identity_parse_output` reads every legacy case as today's
-    production parser does. Deleted with the production parser (Task 6)."""
-    from grimoire.store.continuity import identity
-
-    conv = _identity_gate()
-    for case in conv.legacy_cases:
-        assert legacy_mod.identity_parse_output(case) == identity.parse_output(case), case
-    assert legacy_mod.IDENTITY_DECISIONS == identity.DECISIONS
-    assert legacy_mod.IDENTITY_REASON_CHARS == identity.REASON_CHARS
-
-
 def test_continuity_identity_is_gated_on_what_the_call_site_stores():
     """The outcome is whether `take` decided, and each examined row's
     decision, status, reason and target once `Examination.decide` has run:
@@ -583,23 +571,6 @@ def test_continuity_identity_decide_reads_every_entry():
 
 def _reconcile_gate() -> gate.Conversion:
     return next(c for c in gate.GATES if c.id == "continuity-reconcile")
-
-
-def test_the_reconcile_copy_answers_as_production_does():
-    """The frozen `reconcile_parse_output` reads every legacy case as today's
-    production parser does, over the gate's fixture payload, and its frozen
-    domain tables are production's. Deleted with the production parser
-    (Task 6)."""
-    from grimoire.store.continuity import effective, pending, reconcile
-
-    conv = _reconcile_gate()
-    for case in conv.legacy_cases:
-        assert (legacy_mod.reconcile_parse_output(case, gate._RECONCILE_PAYLOAD)
-                == reconcile.parse_output(case, gate._RECONCILE_PAYLOAD)), case
-    assert legacy_mod.RECONCILE_DECISIONS == reconcile.DECISIONS
-    assert legacy_mod.RECONCILE_REASON_CHARS == reconcile.RECONCILE_REASON_CHARS
-    assert legacy_mod.RELATIONS == effective.RELATIONS
-    assert legacy_mod.TEMPORAL_RELATIONS == pending.TEMPORAL_RELATIONS
 
 
 def test_continuity_reconcile_is_gated_on_the_proposals_the_sweep_stores():

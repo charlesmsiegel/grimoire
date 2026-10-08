@@ -311,9 +311,10 @@ def grade_absorb(text: str) -> tuple[list[Check], dict]:
 
 # -------------------------------------------------------------------- identity
 
-#: What the identity resolver may answer for a row, borrowed rather than
+#: What the identity check may answer for a row, borrowed rather than
 #: restated, so a decision word added to the app is graded the day it lands.
 IDENTITY_DECISIONS = identity.DECISIONS
+
 
 def _identity_word(value) -> str | None:
     """A decision word as the app compares it (case and padding ignored), or
@@ -335,26 +336,6 @@ def _identity_id(item: dict, kind: str | None) -> str:
     return identity._bare(kind, item.get("id"))
 
 
-def _identity_rows(raw: dict) -> tuple[Check, dict[str, dict]]:
-    """The shape check, and the well-shaped decisions keyed by row as the app
-    keys them: through `identity._row_key` (a ``Row`` label stripped), the
-    first answer kept when a key repeats."""
-    items = raw.get("decisions")
-    if not isinstance(items, list):
-        return (Check("identity.shape", False,
-                      f"decisions was {type(items).__name__}, wanted a list"), {})
-    by_row: dict[str, dict] = {}
-    bad = 0
-    for item in items:
-        key = identity._row_key(item.get("row")) if isinstance(item, dict) else ""
-        if not key:
-            bad += 1
-            continue
-        by_row.setdefault(key, item)
-    return (Check("identity.shape", not bad,
-                  f"{bad} decision(s) were not an object with a string row"), by_row)
-
-
 def _identity_verdict(key: str, got: dict, want: dict, kind: str | None) -> Check:
     word = _identity_word(got.get("decision"))
     rid = _identity_id(got, kind)
@@ -362,49 +343,6 @@ def _identity_verdict(key: str, got: dict, want: dict, kind: str | None) -> Chec
     wanted = want["decision"] + (f" {want['id']}" if want["decision"] == "existing" else "")
     return Check(f"identity.{want['check']}", ok,
                  f"row {key} was {got.get('decision')!r} {rid!r}, wanted {wanted}")
-
-
-def grade_identity(text: str, expected: dict[str, dict],
-                   offered: dict[str, set[str]],
-                   kinds: dict[str, str]) -> list[Check]:
-    """Does the resolver answer every row, in the contract's words, naming only
-    ids it was offered -- and the right verdict on each scored row?
-
-    Scored on the RAW extracted object, as grade_absorb is and for its reason:
-    `identity.parse_output` rewrites an unknown decision word as ``uncertain``,
-    so an enum check over its output could never fail. Row keys are the one
-    thing read the app's way (`identity._row_key`), since a ``Row r1`` key is
-    one the app accepts.
-
-    `expected` maps a row key to ``{"decision", "id", "check"}``: the verdict
-    that row should get, and the name of the check that reports it. A row with
-    no decision at all is reported by ``identity.covers_rows`` alone -- its own
-    verdict check is left out rather than failed beside it, so "the row was
-    skipped" and "the row was misjudged" stay separable. `offered` maps a row
-    key to the candidate ids its prompt listed, and `kinds` maps it to the
-    record kind it was examined as -- the one prefix an answer's id may carry.
-    """
-    raw = absorb.extract_object(text)
-    if raw is None:
-        return [Check("identity.json", False, "no JSON object recoverable from the reply")]
-    shape, by_row = _identity_rows(raw)
-    unknown = sorted(str(d.get("decision")) for d in by_row.values()
-                     if _identity_word(d.get("decision")) not in IDENTITY_DECISIONS)
-    unoffered = sorted(f"{key}: {_identity_id(d, kinds.get(key))!r}"
-                       for key, d in by_row.items()
-                       if _identity_word(d.get("decision")) == "existing"
-                       and _identity_id(d, kinds.get(key)) not in offered.get(key, set()))
-    missing = [key for key in expected if key not in by_row]
-    return [
-        Check("identity.json", True),
-        shape,
-        Check("identity.enum", not unknown,
-              f"decisions outside {list(IDENTITY_DECISIONS)}: {unknown}"),
-        Check("identity.known_ids", not unoffered,
-              f"existing named an id that row was not offered: {unoffered}"),
-        Check("identity.covers_rows", not missing, f"no decision for {missing}"),
-    ] + [_identity_verdict(key, by_row[key], want, kinds.get(key))
-         for key, want in expected.items() if key in by_row]
 
 
 def grade_identity_decision(text: str, items: Sequence[decisions.Item],
@@ -423,10 +361,11 @@ def grade_identity_decision(text: str, items: Sequence[decisions.Item],
 
     An item the reply never reached (`NO_ITEM`) fails `identity.covers_rows`
     alone: its own verdict is left out rather than failed beside it, so "the
-    row was skipped" and "the row was misjudged" stay separable, as
-    `grade_identity` keeps them. `known_ids` fails an ``existing`` whose `id`
-    was not read (an id the row was not offered, or none). `expected` is
-    `grade_identity`'s, keyed by row key."""
+    row was skipped" and "the row was misjudged" stay separable. `known_ids`
+    fails an ``existing`` whose `id` was not read (an id the row was not
+    offered, or none). `expected` maps a row key to ``{"decision", "id",
+    "check"}``: the verdict that row should get, and the name of the check that
+    reports it."""
     if decisions.find_object(text) is None:
         return [Check("identity.json", False, "no JSON object recoverable from the reply")]
     results = decisions.parse(text, items, explain=True)
@@ -469,38 +408,6 @@ def _letter(value) -> str:
     return value.strip().upper() if isinstance(value, str) else ""
 
 
-def _reconcile_items(raw: dict) -> tuple[Check, dict[str, dict]]:
-    """The shape check, and the decisions keyed by candidate as the app keys
-    them: through `reconcile._candidate_key` (a ``Candidate`` label and case
-    removed), the first answer kept when a key repeats. A directed word needs
-    two different letters, A and B, or the app reads it as ``uncertain``."""
-    items = raw.get("decisions")
-    if not isinstance(items, list):
-        return (Check("reconcile.shape", False,
-                      f"decisions was {type(items).__name__}, wanted a list"), {})
-    by_key: dict[str, dict] = {}
-    bad: list[str] = []
-    for item in items:
-        key = reconcile._candidate_key(item.get("candidate")) if isinstance(item, dict) else ""
-        if not key:
-            bad.append("not an object with a string candidate")
-            continue
-        by_key.setdefault(key, item)
-    for key, item in by_key.items():
-        word = _identity_word(item.get("decision"))
-        if word in RECONCILE_DIRECTED:
-            frm, to = _letter(item.get("from")), _letter(item.get("to"))
-            if {frm, to} != {"A", "B"}:
-                bad.append(f"{key} {word!r} ran {frm or '-'} to {to or '-'}")
-    return Check("reconcile.shape", not bad, f"malformed decisions: {bad}"), by_key
-
-
-def _founded(item: dict, known: set[str]) -> bool:
-    reason, scenes_ = item.get("reason"), item.get("evidence_scenes")
-    return (isinstance(reason, str) and bool(reason.strip()) and isinstance(scenes_, list)
-            and any(isinstance(s, str) and s in known for s in scenes_))
-
-
 def _reconcile_verdict(key: str, got: dict, want: dict) -> Check:
     word = _identity_word(got.get("decision"))
     frm = _letter(got.get("from"))
@@ -513,47 +420,6 @@ def _reconcile_verdict(key: str, got: dict, want: dict) -> Check:
                  f"wanted {wanted}")
 
 
-def grade_reconcile(text: str, expected: dict[str, dict],
-                    vocab: dict[str, tuple[str, ...]], known: set[str]) -> list[Check]:
-    """Does the reconciliation reply answer every candidate in its own
-    vocabulary, found every status word on a scene the prompt showed, and give
-    the right verdict on each scored candidate?
-
-    Scored on the RAW extracted object, as grade_absorb is and for its reason:
-    `reconcile.parse_output` rewrites a word outside the candidate's
-    vocabulary, a disallowed direction and an unfounded closure all as
-    ``uncertain``, so an enum or evidence check over its output could never
-    fail. Candidate keys are the one thing read the app's way.
-
-    `expected` maps a candidate key to ``{"check", "decisions", "from"}``: the
-    words that candidate may be decided as, the check that reports it, and,
-    per directed word, the letter its ``from`` must name. A candidate with no
-    decision is reported by ``reconcile.covers`` alone. `vocab` maps every key
-    the prompt sent to its vocabulary, and `known` is the payload's known
-    scene set -- the only evidence the parser accepts.
-    """
-    raw = absorb.extract_object(text)
-    if raw is None:
-        return [Check("reconcile.json", False, "no JSON object recoverable from the reply")]
-    shape, by_key = _reconcile_items(raw)
-    outside = sorted(f"{key}: {d.get('decision')!r}" for key, d in by_key.items()
-                     if _identity_word(d.get("decision")) not in vocab.get(key, ()))
-    unfounded = sorted(key for key, d in by_key.items()
-                       if _identity_word(d.get("decision")) in RECONCILE_STATUS
-                       and not _founded(d, known))
-    missing = [key for key in vocab if key not in by_key]
-    return [
-        Check("reconcile.json", True),
-        shape,
-        Check("reconcile.enum", not outside,
-              f"decisions outside their candidate's vocabulary: {outside}"),
-        Check("reconcile.covers", not missing, f"no decision for {missing}"),
-        Check("reconcile.evidence", not unfounded,
-              f"status words without a reason and a known evidence scene: {unfounded}"),
-    ] + [_reconcile_verdict(key, by_key[key], want)
-         for key, want in expected.items() if key in by_key]
-
-
 def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload: dict,
                              expected: dict[str, dict]) -> list[Check]:
     """The reconciliation sweep through `decide()`: does the reply decode,
@@ -562,10 +428,10 @@ def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload
     candidate?
 
     Read through `decisions.parse`, and scored on the RAW parsed answers
-    rather than `reconcile.proposals_of`, as `grade_reconcile` is and for its
-    reason: the mapping rewrites a word outside the vocabulary, a refused
-    direction and an unfounded closure all as ``uncertain``, so an enum or
-    evidence check over its output could never fail. `reconcile.json` is the
+    rather than `reconcile.proposals_of`: the mapping rewrites a word outside
+    the vocabulary, a refused direction and an unfounded closure all as
+    ``uncertain``, so an enum or evidence check over its output could never
+    fail. `reconcile.json` is the
     one check on the raw reply (`decisions.find_object`), and with no object
     nothing else is reported.
 
@@ -576,7 +442,9 @@ def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload
     evidence scene read in any `reconcile.EVIDENCE_IDS` slot; a rationale is
     not required (I4), and an item's options are only the scenes it shows.
     Each verdict reads the decision answer and the `from` letter.
-    `expected` is `grade_reconcile`'s, keyed by candidate key."""
+    `expected` maps a candidate key to ``{"check", "decisions", "from"}``: the
+    words that candidate may be decided as, the check that reports it, and,
+    per directed word, the letter its ``from`` must name."""
     if decisions.find_object(text) is None:
         return [Check("reconcile.json", False, "no JSON object recoverable from the reply")]
     results = decisions.parse(text, items, explain=True)
