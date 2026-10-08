@@ -10,11 +10,15 @@ than being copied into each guard and drifting.
 from __future__ import annotations
 
 import ast
+import functools
 import io
 import tokenize
+import types
+from collections.abc import Mapping
 
 
-def _comments_by_line(src: str) -> dict[int, str]:
+@functools.lru_cache(maxsize=512)
+def _comments_by_line(src: str) -> Mapping[int, str]:
     """{lineno: comment text} for the whole source.
 
     Tokenized rather than split on "#", so a marker sitting inside a string
@@ -27,6 +31,14 @@ def _comments_by_line(src: str) -> dict[int, str]:
     alone, so a docstring could still hand out exemptions. Only the full-file
     pass knows it is inside a string. A file that will not tokenize yields no
     comments at all, which fails closed.
+
+    Cached on the source text, and handed out read-only. A guard asks this of
+    one file once per node it checks, and the lock-domain guard asks it of
+    every function in the package: re-tokenizing the whole file each time was
+    quadratic, and the single slowest test in the suite. The answer is a pure
+    function of `src` -- the key IS the content, so a changed file is a
+    different key, never a stale hit -- and a read-only mapping means no caller
+    can alter what the next one is given.
     """
     out: dict[int, str] = {}
     try:
@@ -34,8 +46,8 @@ def _comments_by_line(src: str) -> dict[int, str]:
             if tok.type == tokenize.COMMENT:
                 out[tok.start[0]] = tok.string
     except (tokenize.TokenError, IndentationError, SyntaxError):
-        return {}
-    return out
+        return types.MappingProxyType({})
+    return types.MappingProxyType(out)
 
 
 def _spans(node: ast.AST) -> tuple[int, int]:

@@ -174,7 +174,7 @@ test-py-failed:
 # The whole suite, with the gate's exact coverage arguments, across WORKERS
 # processes -- the opt-in parallel run measured against `check-py`'s serial one.
 test-py-parallel:
-	@echo NOT A GATE: the full suite across $(WORKERS) workers ($(DIST)). make check-py is the gate.
+	@echo NOT A GATE: the full suite across $(WORKERS) workers, scheduler $(DIST). make check-py is the gate.
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(XDIST) $(COV_ARGS) $(ARGS)
 
 test-py-profile:
