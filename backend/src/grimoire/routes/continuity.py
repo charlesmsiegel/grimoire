@@ -34,12 +34,15 @@ the routed resolution, the `decide` call and the run's work live here, because
 ledger (§11.5).
 
 **Wall time.** Each chunk runs under the full `llm_call_budget` ceiling, inside
-its own meter, and so does a schema-refusal retry of it. A sweep that selects
+its own meter, and so does each prompt-only re-send of it: `decide` re-sends
+every route that refused the structured field, so a chunk whose primary and
+fallback both refused is three calls. A sweep that selects
 `RECONCILE_MAX_CANDIDATES` findings is three chunks, so it can hold the
 campaign's one background run -- refusing `PUT /config/data-dir` while it
 lives, and making End Scene adopt the live run rather than start its own --
-for up to three times as long as the single call it replaced, and six times
-with every chunk retried. The ceiling bounds each call, not the sweep.
+for up to three times as long as the single call it replaced, and up to nine
+times with both routes of every chunk re-sent. The ceiling bounds each call,
+not the sweep.
 """
 
 from __future__ import annotations

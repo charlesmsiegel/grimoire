@@ -806,9 +806,10 @@ would answer neither question.
   nomination, which is not stored), while an item that was read and answered
   badly is `uncertain`. A status word stands on its known evidence scene
   alone; the rationale is display text and nothing stands on it. Each chunk
-  runs under the full `llm_call_budget` ceiling (a schema-refusal retry too),
-  so a full sweep can hold the campaign's background run for up to three times
-  (six with every chunk retried) as long as the one call it replaced.
+  runs under the full `llm_call_budget` ceiling (each prompt-only re-send of
+  a route that refused the schema too), so a full sweep can hold the
+  campaign's background run for up to three times as long as the one call it
+  replaced, and up to nine with both routes of every chunk re-sent.
   `test_operation_guard.py` finds the call by import binding (a continuity
   `Examination.decide` is not one), fails a task literal that is not on a
   decide route or a call with no `resolved=`, and holds the safety rule both

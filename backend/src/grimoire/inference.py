@@ -219,7 +219,11 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisio
 
 
 #: Every backend `decide` can dispatch to, by `ResolvedInference.decision_mode`.
-#: Slice H adds "native" (and spec 5.5's chain) here.
+#: Slice H adds "native" (and spec 5.5's chain) here. A backend fills
+#: `Decision.errors` with each failed chunk's final error, in chunk order, for
+#: every chunk whose items it marks `error`: `routes.common._decide_error`
+#: reports a batch's failure from the first, so an empty one would lose a rate
+#: limit's kind and window (spec 7.4, "Result").
 _BACKENDS: dict[str, Backend] = {"structured": _structured}
 
 
