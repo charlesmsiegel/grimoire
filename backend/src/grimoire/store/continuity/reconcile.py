@@ -91,14 +91,14 @@ proposals". A status word stands on its known evidence scene alone, with no
 rationale (I4): the rationale is display text, and nothing is invented in its
 place.
 
-**A partial sweep lands.** A candidate no chunk reached (a chunk that failed or
-was refused beside one that answered) gets no proposal, never ``uncertain``:
-the sweep counts it `unanswered`, its cached record keeps no proposal and the
-next sweep's `select` asks it again (I1). The exception is a model-only
-nomination, which is cached only with its proposal, so one the reply never
-reached is not stored at all and is nominated afresh next time (M7). A
-candidate the reply reached and answered badly was read, and is ``uncertain``
-(N8).
+**A partial sweep lands.** A candidate no chunk reached (a chunk that failed,
+was refused or came back with no object beside one that answered) gets no
+proposal, never ``uncertain``: the sweep counts it `unanswered`, its cached
+record keeps no proposal and the next sweep's `select` asks it again (I1). The
+exception is a model-only nomination, which is cached only with its proposal,
+so one the reply never reached is not stored at all and is nominated afresh
+next time (M7). A candidate the reply reached and answered badly was read, and
+is ``uncertain`` (N8).
 
 **Two persists** (§11.1 steps 2 and 4, Decisions 7 and 8) share one campaign
 lock hold. Persist 1 writes what the sweep found plus every cached record it

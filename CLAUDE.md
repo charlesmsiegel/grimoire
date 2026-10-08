@@ -808,7 +808,7 @@ would answer neither question.
   alone; the rationale is display text and nothing stands on it. Each chunk
   runs under the full `llm_call_budget` ceiling (a schema-refusal retry too),
   so a full sweep can hold the campaign's background run for up to three times
-  as long as the one call it replaced.
+  (six with every chunk retried) as long as the one call it replaced.
   `test_operation_guard.py` finds the call by import binding (a continuity
   `Examination.decide` is not one), fails a task literal that is not on a
   decide route or a call with no `resolved=`, and holds the safety rule both

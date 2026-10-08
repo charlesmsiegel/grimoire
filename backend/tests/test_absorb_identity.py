@@ -2,11 +2,12 @@
 
 Absorb chains one identity step onto its extraction: the proposed-new plot
 threads and commitments are examined against the stored same-type records, and
-when any of them has a plausible neighbour ONE batched resolver call decides
-which are the same business. These drive the real endpoint -- the fifth
-`phases` row, the `identity` block, what is staged and what a save writes --
-with `llm_fakes.from_entries` answering by which prompt is asking and
-`llm_fakes.FakeEmbeddings` standing in for the embeddings provider.
+when any of them has a plausible neighbour one `decide()` over the examined
+rows, chunked, decides which are the same business. These drive the real
+endpoint -- the fifth `phases` row, the `identity` block, what is staged and
+what a save writes -- with `llm_fakes.from_entries` answering by which prompt
+is asking and `llm_fakes.FakeEmbeddings` standing in for the embeddings
+provider.
 
 Stored records are seeded in a scene of their own (`s0`, created before the
 absorbed scene), never the one being absorbed.
