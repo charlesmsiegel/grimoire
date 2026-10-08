@@ -7479,6 +7479,36 @@ def test_voice_drift_runs_on_decide_and_meters_under_its_task(client):
     assert (row["operation"], row["decision_mode"]) == ("decide", "structured")
 
 
+def test_the_voice_item_renders_off_the_event_loop(client, monkeypatch):
+    """Brutal-1 nit, CODE-M1's rule for the voice check: the judge's item and
+    its rationale instruction render templates, and absorb runs on the
+    lifespan loop a detached turn shares -- so both are built in a worker
+    thread, where no event loop is running."""
+    import asyncio
+
+    on_loop: dict[str, bool] = {}
+
+    def spy(name, real):
+        def wrapper(*args, **kwargs):
+            try:
+                asyncio.get_running_loop()
+                on_loop[name] = True
+            except RuntimeError:
+                on_loop[name] = False
+            return real(*args, **kwargs)
+        return wrapper
+
+    for name in ("judge_item", "explain"):
+        monkeypatch.setattr(store.voice_drift, name,
+                            spy(name, getattr(store.voice_drift, name)))
+    cid, sid = _voice_scene(client)
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She hedged."))
+    body = review_runs.absorb(client, cid, sid).json()
+    assert body["voice"]["flagged"] == ["aese"]
+    assert on_loop == {"judge_item": False, "explain": False}
+
+
 def test_an_unreadable_decision_is_a_failed_check_not_a_clear(client):
     """An answer `decide()` cannot read -- off the vocabulary, null, or no JSON
     at all -- is `None`, which is the failed check, never `in_voice`: with a

@@ -24,8 +24,8 @@ from fastapi import (
 )
 from starlette.concurrency import run_in_threadpool
 
+from .. import decisions, llm_sampling, prompts, store
 from .. import inference as operations
-from .. import llm_sampling, prompts, store
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
@@ -2427,6 +2427,14 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     return edits, {**out, "status": "ok"}
 
 
+def _voice_item(name: str, record: dict, transcript: str,
+                flag: dict) -> tuple[decisions.Item, str]:
+    """The voice judge's `decide()` item and its rationale instruction: both
+    render templates, so `_stage_voice_drift` builds them in a worker thread."""
+    return (store.voice_drift.judge_item(name, record, transcript, flag),
+            store.voice_drift.explain())
+
+
 async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMClient,
                              resolved: UsableInference | None, budget: _Budget,
                              unroutable: str = "") -> tuple[list[dict], dict]:
@@ -2573,7 +2581,11 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # prompt. A note fingerprinted to a REPLACED anchor, handed to the
             # judge as current, would mint a fresh flag against the anchor that
             # replaced it (`voice_drift.judge_item`, `live_correction`).
-            item = store.voice_drift.judge_item(name, record, transcript, flag)
+            # Off the loop, as the scene-break check's item is (CODE-M1): the
+            # item and the rationale instruction render templates, and absorb
+            # runs on the lifespan loop a detached turn shares.
+            item, explain = await run_in_threadpool(_voice_item, name, record,
+                                                    transcript, flag)
             # The absorb budget runs INSIDE `decide()`'s meter (`around`), as
             # it ran inside this phase's own meter before: an overrun is that
             # meter's `error/timeout` row, and `_noting` reads the live holder,
@@ -2582,7 +2594,7 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # atomically with the deadline.
             decision = await operations.decide(
                 "voice-drift", [item], client=client, resolved=resolved,
-                explain=store.voice_drift.explain(), campaign=cid, scene=sid,
+                explain=explain, campaign=cid, scene=sid,
                 around=lambda call, holder: budget.run(
                     call, lambda: out.__setitem__("attempted", True),
                     on_timeout=_noting(client, resolved.conn, holder)))
