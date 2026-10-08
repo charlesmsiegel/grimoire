@@ -129,6 +129,12 @@ WHY_THINKING_OFF = ("off sends no thinking setting; some current Claude models t
                     "anyway and cannot turn it off")
 WHY_THINKING_DISABLED = "sent as thinking disabled: left unset, this model would think"
 WHY_THINKING_ALWAYS = "the catalog says this model's thinking cannot be turned off"
+WHY_THINKING_BETWEEN = ("sent as thinking between_tools: this model refuses disabled, and "
+                        "between_tools is its off -- no thinking before the reply")
+#: The model ids that take `thinking: {"type": "between_tools"}` -- Claude
+#: Sonnet 5.5, which refuses `disabled` and offers this as its off. The API
+#: answers it with a 400 on every other model, and no catalog field names it.
+_BETWEEN_TOOLS = re.compile(r"claude-sonnet-5-5(?:$|[^0-9])")
 WHY_THINKING_UNKNOWN = ("the catalog does not say which thinking this model takes, so "
                         "none is sent")
 WHY_THINKING_NONE = "the catalog says this model takes no thinking"
@@ -394,7 +400,8 @@ def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
             return _Control(SUPPORTED, "reasoning_effort", "", "name",
                             {"reasoning_effort": legacy} if legacy else {})
         if value == "off":
-            return _Control(UNKNOWN, None, WHY_REASONING_OFF, "name")
+            # GLM takes low, high or max; off is a level it has not got.
+            return _Control(UNSUPPORTED, None, WHY_GLM, "name")
         effort = llm_reasoning.glm_effort({**conn, "reasoning_effort": value})
         if not effort:
             return _Control(UNSUPPORTED, None, WHY_GLM, "name")
@@ -414,14 +421,18 @@ def _thinking_off(c: _Conn, adaptive: bool, omission_is_off: bool) -> _Control:
     thinking -- even one that also lists budgeted thinking, as Claude Opus 5
     does -- so off has to be SENT there, and only to a model whose catalog says
     it takes `disabled` (one that cannot turn thinking off answers it with a
-    400). On a budget-only model, or one that does not think at all
-    (`omission_is_off`), sending nothing is off."""
+    400) -- except Claude Sonnet 5.5, which refuses `disabled` and takes
+    `between_tools` as its off (`_BETWEEN_TOOLS`). On a budget-only model, or
+    one that does not think at all (`omission_is_off`), sending nothing is off."""
     if adaptive:
         disabled = c.features.get("disabled_thinking")
         if disabled is True:
             return _Control(TRANSLATED, "thinking", WHY_THINKING_DISABLED, "catalog",
                             {"thinking": {"type": "disabled"}})
         if disabled is False:
+            if _BETWEEN_TOOLS.search(c.model.lower()):
+                return _Control(TRANSLATED, "thinking", WHY_THINKING_BETWEEN, "adapter",
+                                {"thinking": {"type": "between_tools"}})
             return _Control(UNSUPPORTED, None, WHY_THINKING_ALWAYS, "catalog")
         return _Control(UNKNOWN, None, WHY_THINKING_OFF, "catalog")
     if omission_is_off:
@@ -511,7 +522,8 @@ def effective(conn: dict) -> dict:
     # Whether thinking is ON: `disabled` is the reasoning control's field too,
     # and a model that takes sampling takes it with thinking turned off.
     wired = (reasoning.fields or {}).get("thinking")
-    thinking = isinstance(wired, dict) and wired.get("type") != "disabled"
+    thinking = isinstance(wired, dict) and wired.get("type") not in ("disabled",
+                                                                      "between_tools")
     sent: dict = {}
     controls: dict[str, dict] = {}
     for name in CONTROLS:

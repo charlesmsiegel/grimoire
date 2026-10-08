@@ -500,6 +500,29 @@ def test_off_on_an_adaptive_model_that_cannot_turn_it_off_is_unsupported(enabled
     assert report["dropped"] == [{"param": "reasoning_effort", "reason": entry["why"]}]
 
 
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5-5-20260928"])
+def test_off_on_sonnet_5_5_is_sent_as_between_tools(model):
+    """Sonnet 5.5 refuses `disabled`; `between_tools` is its off -- no thinking
+    before the reply -- and the API takes it on that model alone."""
+    features = {**OPUS_5, "disabled_thinking": False}
+    conn = _claude_api({"reasoning_effort": "off"}, features, model=model)
+    eff = ls.effective(conn)
+    assert eff["effective"]["thinking"] == {"type": "between_tools"}
+    assert "output_config" not in eff["effective"]
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("translated", "thinking",
+                                                                 "adapter")
+    assert ls.report(conn)["applied"] == {"reasoning_effort": "off"}
+
+
+def test_between_tools_is_never_sent_to_another_model():
+    features = {**OPUS_5, "disabled_thinking": False}
+    for model in ("claude-opus-5-5", "claude-sonnet-5", "claude-haiku-5-5"):
+        eff = ls.effective(_claude_api({"reasoning_effort": "off"}, features, model=model))
+        assert "thinking" not in eff["effective"], model
+        assert eff["controls"]["reasoning_effort"]["state"] == "unsupported", model
+
+
 @pytest.mark.parametrize("disabled", [True, False, None])
 def test_off_on_a_budget_only_model_omits_thinking(disabled):
     features = {**OLDER, **({"disabled_thinking": disabled} if disabled is not None else {})}
@@ -643,6 +666,18 @@ def test_glm_takes_only_the_levels_it_knows():
     eff = ls.effective(_conn("openai_compatible", {"reasoning_effort": "medium"}, **GLM))
     assert eff["controls"]["reasoning_effort"]["state"] == "unsupported"
     assert eff["effective"] == {}
+
+
+def test_glm_off_is_reported_as_not_honoured():
+    """GLM takes low, high or max; off sends nothing and must say so rather
+    than vanish from both `applied` and `dropped`."""
+    conn = _conn("openai_compatible", {"reasoning_effort": "off"}, **GLM)
+    eff = ls.effective(conn)
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["why"]) == ("unsupported", ls.WHY_GLM)
+    assert eff["effective"] == {}
+    report = ls.report(conn)
+    assert report["dropped"] == [{"param": "reasoning_effort", "reason": ls.WHY_GLM}]
 
 
 def test_the_legacy_setting_is_ignored_on_other_kinds():
