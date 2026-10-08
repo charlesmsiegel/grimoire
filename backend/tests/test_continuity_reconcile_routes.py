@@ -1494,6 +1494,40 @@ def test_an_errored_chunk_beside_a_garbled_one_reports_the_error(client, monkeyp
     assert _records(cid)[PAIR]["proposal"] is None
 
 
+def test_a_follow_on_pass_keeps_what_the_first_pass_answered(client, monkeypatch):
+    """M4: the counts describe the whole run. The first pass answers one
+    finding and leaves one; the follow-on asks the one left (and what it
+    touched) and answers none of them. The run stored a suggestion, so it
+    must not land reading "nothing answered" (the review's NONE note): what
+    the first pass answered stays counted, and `unanswered` is what is still
+    unasked."""
+    cid, temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    fake = _install(client, from_entries([
+        {"when": {**WHEN, "user_contains": TEMPORAL_ITEM},
+         "reply": _reply({"decision": "before"})},
+        _entry("{}")]))
+    _follow_on_refresh(client, cid)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    result = run["result"]
+    assert result["follow_on"] is True
+    # The first pass asked both; the follow-on asked the pair again, and
+    # nothing it asked was answered (an object holding no item).
+    asked = [_user(r) for r in _reconcile_requests(fake)]
+    assert [TEMPORAL_ITEM in u for u in asked].count(True) == 1
+    assert [PAIR_ITEM in u for u in asked].count(True) == 2
+    # The first pass's answer stands; the pair and the other finding the
+    # follow-on asked are still unanswered.
+    assert (result["llm"], result["adjudicated"], result["unanswered"]) == ("ok", 1, 2)
+    records = _records(cid)
+    assert records[temporal]["proposal"]["decision"] == "before"
+    assert records[PAIR]["proposal"] is None
+
+
 @pytest.mark.parametrize(("kind", "status", "retry_after"), [
     ("rate_limit", 429, "13"), ("timeout", 504, None)])
 def test_a_chunk_error_keeps_the_status_a_whole_failure_has(

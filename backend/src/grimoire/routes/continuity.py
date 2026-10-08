@@ -639,7 +639,8 @@ def _stopped(persisted: dict, result: dict, malformed: str = _MALFORMED) -> dict
 
 
 async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
-                      result: dict, stillborn: Callable[[], bool]) -> tuple[dict, dict]:
+                      result: dict, stillborn: Callable[[], bool],
+                      tally: dict) -> tuple[dict, dict]:
     """Steps 4-6: `decide()` over `select`'s findings, one item per finding
     and one metered call per chunk of them, and persist 2.
     ``(outcome, proposals)``. No resolution is ``llm: "off"`` with the reason;
@@ -648,7 +649,9 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     fails the run, and persist 1's findings stand (§26). A finding the reply
     never reached (a failed or garbled chunk beside an answered one) is
     counted `unanswered`: it gets no proposal, never ``uncertain``, and the
-    next sweep asks it again (I1)."""
+    next sweep asks it again (I1). Once the reply is read, `tally` holds the
+    ids it ``asked`` and the ids it ``answered``, for `_passes` to count a run
+    of two passes by (M4)."""
     resolved, why, kind = await run_in_threadpool(
         _soft_resolved,
         lambda: require_inference("continuity-reconcile", cid, operation="decide"))
@@ -697,6 +700,7 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
                                 "status": 502}), {}
     result.update(llm="ok", adjudicated=len(proposals),
                   unanswered=len(selected) - len(proposals))
+    tally.update(asked={c["id"] for c in selected}, answered=set(proposals))
     second = await _persist(run, lambda: reconcile.persist_proposals(
         cid, sweep, proposals, stillborn=stillborn))
     return (_stopped(second, result, _MALFORMED_PROPOSALS)
@@ -724,13 +728,14 @@ def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -
 
 async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
                       touched: tuple[str, ...], progress: dict,
-                      budget: reconcile.EmbedBudget,
+                      budget: reconcile.EmbedBudget, tally: dict,
                       malformed: str = _MALFORMED) -> dict:
     """Steps 1-7 of one pass (§11.1), as the run's outcome. Sets
     ``progress["saved"]`` once persist 1 has landed: from then on the section
     lists what this sweep found, whatever the rest of the run does (§26).
     `malformed` is what a refusal before persist 1 says it lost. `budget` is
-    the run's embedding allowance, which every pass draws on (§9.4)."""
+    the run's embedding allowance, which every pass draws on (§9.4). `tally`
+    is `_adjudicate`'s."""
     sweep = await run_in_threadpool(reconcile.discover, cid,
                                     stamp=reconcile.generation(run.id),
                                     full=full, touched=touched, budget=budget)
@@ -748,7 +753,8 @@ async def _sweep_pass(run, cid: str, client: LLMClient, *, full: bool,
         outcome = _stopped(first, result, malformed)
     if outcome is None:
         progress["saved"] = True
-        outcome, proposals = await _adjudicate(run, cid, client, sweep, result, stillborn)
+        outcome, proposals = await _adjudicate(run, cid, client, sweep, result, stillborn,
+                                               tally)
     if outcome["state"] != "cancelled":
         _log_pass(cid, sweep, result, proposals)
     return outcome
@@ -769,15 +775,22 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     incremental pass inside this run, since a live run can neither adopt a
     successor nor be told it finished. Its result keeps the first pass's
     `sweep` (a Refresh that absorbed an End Scene still reads ``full``) with
-    `follow_on` and the last pass's counts. A failure from then on sets
+    `follow_on` and the last pass's counts -- but for `adjudicated`, which
+    counts the run (M4): what the first pass answered and the follow-on did
+    not ask again, plus what the follow-on answered. Read as the follow-on's
+    alone, a follow-on that answered nothing would have the review say the
+    model gave no suggestions to a run that stored some. `unanswered` stays
+    the follow-on's, since it asks again every finding still without a
+    proposal (`reconcile.select`). A failure from then on sets
     ``progress["follow_on"]``: the first pass's findings stand whatever it
     was, so the failure is the follow-on pass's alone. Both passes draw on one
     `reconcile.EmbedBudget`: `RECONCILE_WARM_LIMIT` and the embedding window
     are the run's (§9.4), so the follow-on embeds only what the first left."""
     refs = set(touched) if full else set(touched) | _take_touched(app, cid)
     budget = reconcile.EmbedBudget()
+    first_tally: dict = {}
     outcome = await _sweep_pass(run, cid, client, full=full, touched=tuple(sorted(refs)),
-                                progress=progress, budget=budget)
+                                progress=progress, budget=budget, tally=first_tally)
     if outcome["state"] != "landed" or run.cancel_requested or run.forgotten:
         return outcome
     more = _take_touched(app, cid)
@@ -785,11 +798,16 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
         return outcome
     first = outcome["result"]["sweep"]
     progress["follow_on"] = True
+    follow_tally: dict = {}
     follow = await _sweep_pass(run, cid, client, full=False, touched=tuple(sorted(more)),
-                               progress=progress, budget=budget,
+                               progress=progress, budget=budget, tally=follow_tally,
                                malformed=_MALFORMED_FOLLOW_ON)
     out = {**follow, "result": {**(follow.get("result") or {}), "sweep": first,
                                 "follow_on": True}}
+    if follow["state"] == "landed" and first_tally:
+        answered = ((first_tally["answered"] - follow_tally.get("asked", set()))
+                    | follow_tally.get("answered", set()))
+        out["result"]["adjudicated"] = len(answered)
     if follow.get("error"):
         out["error"] = {**follow["error"], "sweep": first}
     return out
