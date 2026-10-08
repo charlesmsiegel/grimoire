@@ -24,8 +24,9 @@ authority first -- the first one that says anything is the answer:
 3. `catalog` -- what the provider publishes for the model: `outputs`
    (`text` -> generate, `embeddings` -> embed; a stated list without one of
    them is a `no`; `decisions` -> decide_native, whose absence says nothing),
-   `vision`, `params` naming `structured_outputs` or
-   `response_format` (their absence says nothing), and Anthropic's
+   `vision`, `params` naming `structured_outputs` (its absence says
+   nothing; `response_format` alone also covers JSON mode, so says
+   nothing either), and Anthropic's
    `features.structured_output`. A key the row does not state contributes
    nothing, so a row without `outputs` leaves the name rule room to apply.
 4. `preset` -- the preset's `always` (`generate`, `stream` on the generative
@@ -63,7 +64,10 @@ class Cap(NamedTuple):
 
 
 _UNKNOWN = Cap(UNKNOWN, "unknown")
-_STRUCTURED_PARAMS = frozenset({"structured_outputs", "response_format"})
+#: The catalog parameters that say a model takes a JSON Schema. Not
+#: `response_format` alone: that also covers JSON mode (`json_object`), which
+#: answers with JSON but holds it to no schema (plan Minor 5).
+_STRUCTURED_PARAMS = frozenset({"structured_outputs"})
 
 #: What a role needs, and the capabilities that can answer it. `decide` is
 #: either: structured generation can answer any decision (spec 7.4).

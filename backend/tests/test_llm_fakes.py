@@ -15,14 +15,15 @@ import json
 
 import pytest
 
-from grimoire import prompts
+from grimoire import decisions, inference, prompts
 from grimoire.llm_errors import LLMError
-from grimoire.store import suggest
+from grimoire.store import routing, suggest, voice_drift
 from grimoire.store.continuity import identity, reconcile
 from tests import llm_fakes
 from tests.llm_fakes import (
     Cassette,
     CassetteMiss,
+    CassetteProvider,
     FakeLLM,
     FakeOpenRouter,
     FakeOpenRouterComplete,
@@ -214,21 +215,23 @@ async def test_from_entries_refuses_a_request_it_does_not_cover():
 
 
 # ---- the shipped cassette still matches the shipped prompts ----
-#: Every system prompt a cassette entry can be keyed on, rendered from the real
-#: template. `scene_suggestions/system.j2`, the reply-format section and
-#: `absorb/system.j2` (whose steering paragraph is conditional; True renders
-#: the superset) are the only ones needing vars, in the shape their builders pass.
+#: Every prompt a cassette entry can be keyed on, rendered from the real
+#: templates, as a `(system, user)` pair. A generate prompt is keyed on its
+#: system message alone, so its user half is "". `scene_suggestions/system.j2`,
+#: the reply-format section and `absorb/system.j2` (whose steering paragraph is
+#: conditional; True renders the superset) are the only ones needing vars, in
+#: the shape their builders pass.
 _THREAD_DRIVER = {"ref": "thread:the-debt", "kind": "thread", "label": "The debt",
                   "summary": "", "actors": [], "status": "open",
                   "pressure": {"state": "stale", "in_days": None, "friendly": ""},
                   "time_anchors": [], "links": [], "dormancy": 3}
 
 
-def _rendered_prompts() -> list[str]:
+def _generate_prompts() -> list[str]:
     return [prompts.render("absorb/system.j2", steering=True)] + \
            [prompts.render(t) for t in ("audit/system.j2",
                                         "dossier/system.j2", "voice_anchor/system.j2",
-                                        "voice_drift/system.j2", "tagline/system.j2")] + [
+                                        "tagline/system.j2")] + [
         # `drivers` with a one-row index, so the drivers addendum is rendered
         # (and covered) too.
         prompts.render("scene_suggestions/system.j2", offscreen=False, s={"now": ""},
@@ -243,28 +246,158 @@ def _rendered_prompts() -> list[str]:
     ]
 
 
+def _decide_prompts() -> dict[str, tuple[str, str]]:
+    """Each decide conversion `campaign_flow` drives, by task: the `(system,
+    user)` pair `inference.decide` sends for one item, built through
+    `inference.structured_messages` exactly as it builds it."""
+    item = voice_drift.build_item("Seraphine", "Clipped. Never uses contractions.",
+                                  "Seraphine: Salt first.")
+    system, user = inference.structured_messages([item], explain=voice_drift.explain())
+    return {"voice-drift": (system["content"], user["content"])}
+
+
+#: The decide conversions `campaign_flow` never drives, each with the reason.
+#: Their route tests script their own replies, so a cassette entry for them
+#: would be one nothing reads.
+NOT_IN_CASSETTE = {
+    "scene-break": ("the play loop's follow-up, which `test_scene_break_routes.py` and "
+                    "`test_turn_follow_ups.py` drive with scripted decide replies"),
+    "response-selector": ("the next-speaker pick in group play, which "
+                          "`test_character_turns.py` and `test_group_play_turns.py` "
+                          "drive with scripted decide replies"),
+}
+
+
+def _rendered_prompts() -> list[tuple[str, str]]:
+    return [(text, "") for text in _generate_prompts()] + list(_decide_prompts().values())
+
+
+def _as_messages(pair: tuple[str, str]) -> list[dict]:
+    system, user = pair
+    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _shipped() -> Cassette:
+    return Cassette.load("campaign_flow")
+
+
+def test_every_decide_task_is_rendered_or_named_as_not_driven():
+    """A decide route's task either has its pair rendered here (and so a
+    cassette entry the next test demands) or is named in `NOT_IN_CASSETTE`
+    with the reason -- never neither, never both."""
+    decide = {t for r in routing.ROUTES if r.operation == "decide" for t in r.tasks}
+    rendered = set(_decide_prompts())
+    assert decide <= rendered | set(NOT_IN_CASSETTE), decide - rendered - set(NOT_IN_CASSETTE)
+    assert not rendered & set(NOT_IN_CASSETTE)
+    # Only a decide task is ever excused: a generate task named here would be
+    # one whose prompt nothing renders and no cassette matcher is held to.
+    assert set(NOT_IN_CASSETTE) <= decide, set(NOT_IN_CASSETTE) - decide
+    assert set(NOT_IN_CASSETTE) <= set(routing.TASK_ROUTE)
+    assert all(reason.strip() for reason in NOT_IN_CASSETTE.values())
+
+
 def test_every_cassette_matcher_is_still_a_phrase_the_real_prompts_contain():
-    """The link that would otherwise rot. A reworded system prompt leaves the
-    matcher dead, the cassette answers nothing, and — without this test — the
-    only symptom is a `CassetteMiss` in whichever unrelated test happens to
-    drive that call next."""
+    """The link that would otherwise rot. A reworded prompt leaves the matcher
+    dead, the cassette answers nothing, and — without this test — the only
+    symptom is a `CassetteMiss` in whichever unrelated test happens to drive
+    that call next. Each needle is looked for in the rendered text of ITS role,
+    and one rendered prompt must satisfy all of an entry's needles at once."""
+    cassette = _shipped()
     rendered = _rendered_prompts()
-    cassette = json.loads((llm_fakes.FIXTURES / "campaign_flow.json").read_text(encoding="utf-8"))
-    for entry in cassette["entries"]:
-        needle = entry["when"]["system_contains"]
-        assert any(needle in text for text in rendered), \
-            f"no shipped prompt contains {needle!r} any more — the cassette entry is dead"
+    for entry in cassette.entries:
+        when = entry["when"]
+        assert set(when) <= {"system_contains", "user_contains"}, when
+        for key, needle in when.items():
+            role = 0 if key == "system_contains" else 1
+            assert any(needle in pair[role] for pair in rendered), \
+                f"no shipped prompt's {key[:-9]} contains {needle!r} any more — the entry is dead"
+        assert any(cassette._matches(when, _as_messages(pair)) for pair in rendered), \
+            f"no one shipped prompt matches every matcher of {when!r}"
 
 
 def test_the_cassette_covers_every_prompt_the_app_can_send():
     """The other direction: a new LLM call type with no cassette entry would
     only surface as a `CassetteMiss` the first time somebody wired the cassette
-    into a test that triggers it."""
-    cassette = json.loads((llm_fakes.FIXTURES / "campaign_flow.json").read_text(encoding="utf-8"))
-    needles = [e["when"]["system_contains"] for e in cassette["entries"]]
-    for text in _rendered_prompts():
-        assert any(n in text for n in needles), \
-            f"no cassette entry matches this prompt: {text[:120]!r}"
+    into a test that triggers it. Every matcher of the entry must match."""
+    cassette = _shipped()
+    for pair in _rendered_prompts():
+        assert any(cassette._matches(e["when"], _as_messages(pair)) for e in cassette.entries), \
+            f"no cassette entry matches this prompt: {pair[0][:120]!r} / {pair[1][:120]!r}"
+
+
+def test_the_voice_drift_body_is_a_decision_the_judge_reads():
+    """The judge's canned reply decodes, through `decide()`'s own parser, to a
+    usable `in_voice` -- the old body's `"consistent"` never parsed, so every
+    absorb that reached it saw a failed check."""
+    item = voice_drift.build_item("Seraphine", "Clipped.", "Seraphine: Salt first.")
+    reply = _shipped().reply(_as_messages(_decide_prompts()["voice-drift"]))
+    (result,) = decisions.parse("".join(reply), (item,), explain=True)
+    finding = voice_drift.finding_of(result)
+    assert finding == {"verdict": voice_drift.IN_VOICE, "note": ""}
+    assert voice_drift.check_failure(finding) is None
+
+
+def test_a_decide_entry_never_answers_another_decision():
+    """The decide system prompt is every decision's, so the voice entry also
+    keys on its own context: a decision without the anchor heading misses."""
+    system, _user = _decide_prompts()["voice-drift"]
+    with pytest.raises(CassetteMiss):
+        _shipped().reply([{"role": "system", "content": system},
+                           {"role": "user", "content": "Is this scene over?"}])
+
+
+# ---- an entry's `model` is honoured, never ignored ----
+_PRIMARY = {"kind": "openrouter", "model": "m/primary", "api_key": "k"}
+_FALLBACK = {"kind": "openrouter", "model": "m/fallback", "api_key": "k"}
+
+
+async def test_a_fake_honours_an_entrys_model():
+    """`FakeLLM` serves the attempt it was handed and no fallback, so an entry
+    naming a model answers only a request sent on that model: a primary-only
+    entry can never answer the fallback's request."""
+    fake = llm_fakes.from_entries([
+        {"when": {"contains": "judge"}, "model": "m/primary", "reply": "primary"},
+        {"when": {"contains": "judge"}, "reply": "anyone"}])
+    msgs = [{"role": "user", "content": "judge this"}]
+    assert await fake.complete(msgs, _PRIMARY) == "primary"
+    assert await fake.complete(msgs, _FALLBACK) == "anyone"
+    only = llm_fakes.from_entries([{"when": {"contains": "judge"}, "model": "m/primary",
+                                    "reply": "primary"}])
+    with pytest.raises(CassetteMiss):
+        await only.complete(msgs, _FALLBACK)
+
+
+def test_a_model_keyed_entry_refuses_a_request_that_names_no_model():
+    """Read without a model (`Cassette.reply` called directly), an entry that
+    names one is an error rather than a match: the key is honoured or it
+    fails, never silently ignored."""
+    cas = Cassette({"entries": [{"when": {}, "model": "m/primary", "reply": "x"}]})
+    with pytest.raises(ValueError, match="model"):
+        cas.reply([{"role": "user", "content": "hi"}])
+
+
+# ---- the provider double ----
+async def test_the_cassette_provider_answers_by_shape_and_model():
+    """`CassetteProvider` sits under a real facade: an entry may name the
+    model an attempt was sent, so a primary and its fallback answer apart."""
+    provider = CassetteProvider([
+        {"when": {"system_contains": "judge"}, "model": "m/primary",
+         "error": {"kind": "network", "message": "reset"}},
+        {"when": {"system_contains": "judge"}, "reply": ["ruled", " fine"]}])
+    msgs = [{"role": "system", "content": "You judge."}]
+    with pytest.raises(LLMError):
+        [d async for d in provider.stream(msgs, "m/primary")]
+    assert [d async for d in provider.stream(msgs, "m/fallback")] == ["ruled", " fine"]
+    assert [r["model"] for r in provider.requests] == ["m/primary", "m/fallback"]
+    with pytest.raises(CassetteMiss):
+        [d async for d in provider.stream([{"role": "system", "content": "other"}], "m")]
+
+
+async def test_the_cassette_provider_stalls_where_told():
+    provider = CassetteProvider([{"when": {"contains": "slow"}, "stall": 5, "reply": "late"}])
+    with pytest.raises(TimeoutError):
+        await asyncio.wait_for(
+            anext(aiter(provider.stream([{"role": "user", "content": "slow"}], "m"))), 0.05)
 
 
 def test_the_absorb_body_is_the_shape_the_parser_expects():

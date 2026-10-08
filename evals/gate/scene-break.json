@@ -1,0 +1,217 @@
+[
+  {
+    "shape": "clean-yes",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "The Long Walk Back"
+    }
+  },
+  {
+    "shape": "prose-and-fence",
+    "intended": [
+      false,
+      "They are mid-argument.",
+      ""
+    ],
+    "legacy": "Sure!\n```json\n{\"break\": false, \"reason\": \"They are mid-argument.\"}\n```",
+    "decide": "Sure!\n```json\n{\"0\": {\"answers\": {\"over\": false}, \"rationale\": \"They are mid-argument.\"}}\n```"
+  },
+  {
+    "shape": "empty",
+    "intended": [
+      false,
+      "",
+      ""
+    ],
+    "legacy": "",
+    "decide": ""
+  },
+  {
+    "shape": "prose-only",
+    "intended": [
+      false,
+      "",
+      ""
+    ],
+    "legacy": "no idea",
+    "decide": "no idea"
+  },
+  {
+    "shape": "bare-array",
+    "intended": [
+      false,
+      "",
+      ""
+    ],
+    "legacy": "[1, 2, 3]",
+    "decide": "[1, 2, 3]"
+  },
+  {
+    "shape": "json-null",
+    "intended": [
+      false,
+      "",
+      ""
+    ],
+    "legacy": "null",
+    "decide": "null"
+  },
+  {
+    "shape": "multi-line",
+    "intended": [
+      true,
+      "They parted. --- done: false",
+      "A"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"They parted.\\n---\\ndone: false\", \"title\": \"A\\nB\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"They parted.\\n---\\ndone: false\"}}",
+    "aux": {
+      "title": "A\nB"
+    },
+    "ruling": "The title is a free-text reply now, and its second line is not title (spec 7.4: the first non-empty line); today's JSON title field kept both lines as one."
+  },
+  {
+    "shape": "string-yes",
+    "intended": [
+      false,
+      "r",
+      ""
+    ],
+    "legacy": "{\"break\": \"yes\", \"reason\": \"r\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": \"yes\"}, \"rationale\": \"r\"}}"
+  },
+  {
+    "shape": "string-boolean",
+    "intended": [
+      false,
+      "The ledger changed hands.",
+      ""
+    ],
+    "legacy": "{\"break\": \"true\", \"reason\": \"The ledger changed hands.\", \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": \"true\"}, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "The Long Walk Back"
+    }
+  },
+  {
+    "shape": "truncated",
+    "intended": [
+      false,
+      "",
+      ""
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed ha",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed ha"
+  },
+  {
+    "shape": "unwrapped-item",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed hands.\"}",
+    "aux": {
+      "title": "The Long Walk Back"
+    }
+  },
+  {
+    "shape": "flattened",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"over\": true, \"rationale\": \"The ledger changed hands.\"}",
+    "aux": {
+      "title": "The Long Walk Back"
+    }
+  },
+  {
+    "shape": "no-reason-yes",
+    "intended": [
+      true,
+      "",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}}}",
+    "aux": {
+      "title": "The Long Walk Back"
+    }
+  },
+  {
+    "shape": "quoted-title",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"\\\"The Long Walk Back.\\\"\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "\"The Long Walk Back.\""
+    },
+    "ruling": "The title is cleaned now (spec 7.4): a matched quote pair and trailing punctuation are stripped, which today's title field kept."
+  },
+  {
+    "shape": "leading-apostrophe",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "'Tis the Season"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"'Tis the Season\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "'Tis the Season"
+    }
+  },
+  {
+    "shape": "trailing-possessive",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Sisters'"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"The Sisters'\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "The Sisters'"
+    }
+  },
+  {
+    "shape": "explained-title",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"0\": {\"answers\": {\"over\": true}, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "The Long Walk Back\n\nThis title reflects the debt being settled."
+    }
+  },
+  {
+    "shape": "keyed-flattened",
+    "intended": [
+      true,
+      "The ledger changed hands.",
+      "The Long Walk Back"
+    ],
+    "legacy": "{\"break\": true, \"reason\": \"The ledger changed hands.\", \"title\": \"The Long Walk Back\"}",
+    "decide": "{\"0\": {\"over\": true, \"rationale\": \"The ledger changed hands.\"}}",
+    "aux": {
+      "title": "The Long Walk Back"
+    }
+  }
+]

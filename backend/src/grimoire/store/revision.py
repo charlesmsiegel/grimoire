@@ -54,11 +54,12 @@ same one.
 Everything a DETACHED run writes bumps where it writes, because the run outlives
 the response: `routes.scenes._under_review_lock` for a review's terminal write
 (whose route answered 202 minutes earlier and correctly declares itself
-`@computes_only`), `routes.scenes._rolling_commit` and `_break_commit` for the
-follow-ups a landed turn schedules, and `routes.streaming._turn_settled` at each
-of a turn's terminal points. That last one is deliberately not "a post landed":
-a roll fence that closes with no narration writes a proposal record and nothing
-else, and a failed turn's rollback takes a post back OFF.
+`@computes_only`), `routes.scenes._rolling_commit`, `_break_commit` and
+`_break_title_commit` for the follow-ups a landed turn schedules, and
+`routes.streaming._turn_settled` at each of a turn's terminal points. That last
+one is deliberately not "a post landed": a roll fence that closes with no
+narration writes a proposal record and nothing else, and a failed turn's
+rollback takes a post back OFF.
 
 The continuity reconciliation sweep is detached in the same way, so its two
 persists, `store.continuity.reconcile.persist_found` and `persist_proposals`,

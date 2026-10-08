@@ -152,11 +152,13 @@ def test_catalog_vision():
 
 
 def test_catalog_params_say_structured_output_and_absence_says_nothing():
-    for param in ("structured_outputs", "response_format"):
-        got = _resolve("custom", row={"id": "m", "params": ["temperature", param]})
-        assert got["structured_output"] == Cap("yes", "catalog")
-    got = _resolve("custom", row={"id": "m", "params": ["temperature"]})
-    assert got["structured_output"] == Cap("unknown", "unknown")
+    got = _resolve("custom", row={"id": "m", "params": ["temperature", "structured_outputs"]})
+    assert got["structured_output"] == Cap("yes", "catalog")
+    # `response_format` alone also covers JSON mode, which holds the reply to
+    # no schema: it says nothing (plan Minor 5).
+    for params in (["temperature", "response_format"], ["temperature"]):
+        got = _resolve("custom", row={"id": "m", "params": params})
+        assert got["structured_output"] == Cap("unknown", "unknown")
 
 
 def test_anthropic_features_structured_output():

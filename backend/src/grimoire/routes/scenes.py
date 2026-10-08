@@ -24,7 +24,8 @@ from fastapi import (
 )
 from starlette.concurrency import run_in_threadpool
 
-from .. import llm_sampling, prompts, store
+from .. import decisions, llm_sampling, prompts, store
+from .. import inference as operations
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
@@ -35,6 +36,7 @@ from . import character_turns, runs, streaming
 from . import continuity as continuity_routes
 from . import tracker as tracker_routes
 from .common import (
+    UsableInference,
     _campaign_root_or_404,
     _dump,
     _llm_http_error,
@@ -45,6 +47,7 @@ from .common import (
     _require_scene,
     _response_body,
     _soft_inference,
+    _soft_resolved,
     _turn_override,
     _write_response,
     computes_only,
@@ -838,6 +841,16 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
                     speaker_ref=turn.speaker_ref)):
             raise
         conn = {}
+    if character_turns.enabled():
+        # The speaker pick's refusal, ahead of the reservation for the reason
+        # below. The kind is `_chat_run`'s: a post unless the send is
+        # ephemeral, then a note when one was typed, else a continue.
+        ephemeral = (turn.director or store.scenes.is_pcless(cid, sid)
+                     or not turn.content.strip())
+        character_turns.refuse_an_unanswerable_pick(
+            cid, sid, actor_ref=turn.speaker_ref,
+            kind=("post" if not ephemeral
+                  else "note" if turn.director and turn.content.strip() else "continue"))
     # RESERVED BEFORE THE FIRST MUTATOR. `heal` can append a line and the
     # sidecar block can retire a proposal, so a 409 raised after them would
     # tell the player nothing happened when something already had. The
@@ -1027,15 +1040,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         # (`tracker.after_take_back`), landed or not.
         tracker_routes.start(request.app, cid, sid, tracked, client, run.scene_identity)
     if character_turns.enabled() or turn.speaker_ref:
-        return character_turns.start(
-            cid,sid,request,client,conn,run,post=posted_at,
-            note=(content or prompts.render("scene/director_note.j2")) if ephemeral else "",
-            turn=_turn_override(turn),automatic=not ephemeral,
-            actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client),
-            kind="post" if not ephemeral else ("note" if content else "continue"),
-            trigger=content,
-            # The player's own words only: the template above is app wording.
-            typed_note=content if ephemeral else "")
+        return _start_round(cid, sid, turn, request, client, conn, run, ephemeral=ephemeral,
+                            posted_at=posted_at, content=content, post_id=post_id)
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default
@@ -1109,6 +1115,32 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
     return runs.tail_response(run, 0, lead=runs.lead_frame(run))
+
+
+def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
+                 client: LLMClient, conn: dict, run, *, ephemeral: bool, posted_at,
+                 content: str, post_id: str | None):
+    """`_chat_run`'s hand-off to the round engine (`character_turns.start`).
+
+    A refusal from `start` comes before any round opened (its defence
+    against a settings change since `refuse_an_unanswerable_pick`), and the
+    answer is then an error -- so the post this send wrote comes back off, as
+    a failed turn's does. A director note stays, for `note_text`'s reasons."""
+    try:
+        return character_turns.start(
+            cid,sid,request,client,conn,run,post=posted_at,
+            note=(content or prompts.render("scene/director_note.j2")) if ephemeral else "",
+            turn=_turn_override(turn),automatic=not ephemeral,
+            actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client),
+            kind="post" if not ephemeral else ("note" if content else "continue"),
+            trigger=content,
+            # The player's own words only: the template above is app wording.
+            typed_note=content if ephemeral else "")
+    except HTTPException:
+        if posted_at is not None:
+            with store.locks.campaign_lock(cid):
+                _take_the_post_back(cid, sid, posted_at, content, run, post_id)
+        raise
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/retry")
@@ -2395,8 +2427,16 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     return edits, {**out, "status": "ok"}
 
 
+def _voice_item(name: str, record: dict, transcript: str,
+                flag: dict) -> tuple[decisions.Item, str]:
+    """The voice judge's `decide()` item and its rationale instruction: both
+    render templates, so `_stage_voice_drift` builds them in a worker thread."""
+    return (store.voice_drift.judge_item(name, record, transcript, flag),
+            store.voice_drift.explain())
+
+
 async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMClient,
-                             conn: dict | None, budget: _Budget,
+                             resolved: UsableInference | None, budget: _Budget,
                              unroutable: str = "") -> tuple[list[dict], dict]:
     """Judge every present NPC's dialogue in this scene against their voice
     anchor, proposing a drift flag (or a clear) for each.
@@ -2404,6 +2444,13 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
     Runs ONLY for NPCs that actually have an anchor (#59). That is the cost
     control for the whole feature: a library with no anchors makes no extra LLM
     calls, and adding one is how a user opts a character in.
+
+    Each judgment is one `decide()` item (spec 7.4) on the `voice_drift` route,
+    which runs on the Decision role: a choice of verdict, with the corrective
+    as the item's rationale. `resolved` is the fan-out's soft resolution of
+    that route -- None, with `unroutable` saying why, when it could not
+    resolve -- so a route that cannot run fails this phase and never the
+    absorb.
 
     The LLM call happens here; the WRITE does not, for _stage_dossiers' reason
     (#235) -- a flag that landed before the reviewer saved would survive a
@@ -2417,7 +2464,7 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
     out: dict = {"status": "skipped", "reason": None, "checked": [], "flagged": [],
                  "unjudged": [], "failed": [], "skipped": [],
                  "attempted": False, "budget_exhausted": False}
-    if conn is None:
+    if resolved is None:
         return [], {**out, "status": "failed", "reason": unroutable or "no connection"}
     edits: list[dict] = []
     try:
@@ -2470,18 +2517,16 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # Checked HERE, inside the per-actor boundary: everything below
             # treats the name as text, and one bad card must cost that actor its
             # voice check rather than 500 the whole absorb.
-            # The RAW card name, not `a["name"]`: `_actor_name` substitutes the
-            # actor id for a card that carries no usable one, and that id is a
-            # display convenience, not something the transcript is known to
-            # label anyone with. Judging against it means judging against a
-            # name nobody agreed on.
+            # The RAW card name (`voice_drift.locked_name`), not `a["name"]`:
+            # `_actor_name` substitutes the actor id for a card that carries no
+            # usable one, and that id is a display convenience, not something
+            # the transcript is known to label anyone with. Judging against it
+            # means judging against a name nobody agreed on.
             try:
-                vid = store.appearances.locked_version(cid, "characters", a["id"])
-                data = store.characters.read_card(croot, a["id"], vid).get("data")
+                name = store.voice_drift.locked_name(cid, a["id"])
             except Exception as exc:  # noqa: BLE001 -- unreadable card: skip this actor
                 out["failed"].append({"id": a["id"], "reason": f"{type(exc).__name__}: {exc}"})
                 continue
-            name = data.get("name") if isinstance(data, dict) else None
             # `label_preserved`, not merely "is a nonblank string": the
             # serializer silently writes the generic role label instead of a
             # name it cannot form a marker from (one holding `*` or a newline,
@@ -2529,65 +2574,42 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             # One snapshot, so the note and the provenance staged as `before`
             # always describe the same committed flag (voice_drift.read_record).
             flag = store.voice_drift.read_record(croot, aid)
-            prior, prior_fp = flag["note"], flag["anchor"]
-            # Only a correction that is STILL IN FORCE may reach the judge.
-            # `context/cast.py` applies exactly this test before putting a note
-            # in the SCENE prompt; without it here, a note fingerprinted to a
-            # REPLACED anchor is suppressed for the writer and handed to the
-            # judge as current -- which mints a fresh flag against the anchor
-            # that replaced it. "" is a pre-nonce flag, which counts as valid
-            # for the reason `anchor_fingerprint` documents.
-            live = prior if (not prior_fp or store.voice_drift.fingerprint_matches(
-                prior_fp, record["text"], record["id"])) else ""
-            # The judge is sent the EFFECTIVE anchor, because that is all the
-            # generator ever saw: a rule past the cap is enforced against
-            # neither. The FINGERPRINT above still uses the raw stored text --
-            # capping it would retire every correction whose anchor is long.
-            msgs = store.voice_drift.build_prompt(
-                name, store.voice_anchors.effective(record["text"]), transcript,
-                correction=live)
-            # The loop's own check is stale by now, so the attempt is recorded
-            # by `run`, which alone can decide it atomically with the deadline.
-            with store.usage.meter("voice-drift", campaign=cid, scene=sid) as m:
-                text = await budget.run(client.complete(msgs, conn, m.usage),
-                                        lambda: out.__setitem__("attempted", True),
-                                        on_timeout=_noting(client, conn, m.usage))
-            finding = store.voice_drift.parse_output(text)
-            # An unreadable verdict is a FAILED call, not a quiet pass. Left
-            # conflated with "in voice" it would stage a default-approved clear
-            # of a standing flag on the strength of a garbled reply -- and a
-            # model that answers nonsense for every NPC would report `ok` while
-            # retiring the campaign's correctives one by one.
-            if finding["verdict"] == store.voice_drift.UNKNOWN:
-                out["failed"].append({"id": aid, "reason": "unreadable verdict from the voice judge"})
+            # The item is built over the EFFECTIVE anchor (all the generator
+            # ever saw: a rule past the cap is enforced against neither) and
+            # the stored correction only while it is STILL IN FORCE -- the test
+            # `context/cast.py` applies before putting a note in the scene
+            # prompt. A note fingerprinted to a REPLACED anchor, handed to the
+            # judge as current, would mint a fresh flag against the anchor that
+            # replaced it (`voice_drift.judge_item`, `live_correction`).
+            # Off the loop, as the scene-break check's item is (CODE-M1): the
+            # item and the rationale instruction render templates, and absorb
+            # runs on the lifespan loop a detached turn shares.
+            item, explain = await run_in_threadpool(_voice_item, name, record,
+                                                    transcript, flag)
+            # The absorb budget runs INSIDE `decide()`'s meter (`around`), as
+            # it ran inside this phase's own meter before: an overrun is that
+            # meter's `error/timeout` row, and `_noting` reads the live holder,
+            # so a fallback that had taken over is the connection told. The
+            # attempt is recorded by `run`, which alone can decide it
+            # atomically with the deadline.
+            decision = await operations.decide(
+                "voice-drift", [item], client=client, resolved=resolved,
+                explain=explain, campaign=cid, scene=sid,
+                around=lambda call, holder: budget.run(
+                    call, lambda: out.__setitem__("attempted", True),
+                    on_timeout=_noting(client, resolved.conn, holder)))
+            finding = store.voice_drift.finding_of(decision.items[0])
+            # An unreadable verdict is a FAILED call, not a quiet pass, and a
+            # drift is only usable with a corrective that fits in front of
+            # every later turn (`check_failure` has the three checks and their
+            # words).
+            reason = store.voice_drift.check_failure(finding)
+            if reason:
+                out["failed"].append({"id": aid, "reason": reason})
                 continue
-            # Both note checks are DRIFT-only, because only a drift verdict
-            # stores a note: `stage_edit` writes `after=""` for IN_VOICE and
-            # proposes nothing at all for NOT_ENOUGH, so their notes never reach
-            # a prompt. Failing the call on an oversized note there would punish
-            # a chatty explanation by leaving an obsolete corrective standing --
-            # the clear is the whole point of a clean verdict, and a note nobody
-            # stores cannot cost a single token.
-            if finding["verdict"] == store.voice_drift.DRIFT:
-                # No note is unusable: the note IS the corrective the next turn
-                # gets. Report it rather than staging a flag that would say
-                # nothing, or silently downgrading it to "fine".
-                if not finding["note"]:
-                    out["failed"].append({"id": aid, "reason": "drift reported with no corrective"})
-                    continue
-                # ...and the corrective is rendered into the post-history
-                # message, which the packer reserves and cannot trim, so an
-                # oversized one is charged against every later generation with
-                # nothing able to give way.
-                if len(finding["note"]) > store.voice_drift.MAX_NOTE:
-                    out["failed"].append({
-                        "id": aid,
-                        "reason": f"the voice judge returned a corrective over "
-                                  f"{store.voice_drift.MAX_NOTE} characters, too long to put "
-                                  f"in front of every following turn"})
-                    continue
-            edit = store.voice_drift.stage_edit(aid, name, prior, finding,
-                                                record["text"], record["id"], prior_fp)
+            # `before` is that snapshot, never a re-read (the rule above).
+            edit = store.voice_drift.stage_edit(aid, name, flag["note"], finding,
+                                                record["text"], record["id"], flag["anchor"])
         except BudgetRefused:
             # Refused, not failed: nothing was sent, so this NPC is one more the
             # clock never reached — and so is everyone after them.
@@ -3022,15 +3044,16 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # argument list instead, a failure from the third would leave the first
         # two coroutines created and never awaited.
         #
-        # And resolved through `_phase_connection`, which reports instead of
-        # raising: these four promise never to fail an absorb, so a route
-        # pointing one of them at a keyless connection has to come back as that
-        # phase's status rather than as a 409 that discards the extraction's
-        # result too.
+        # And resolved softly (`_soft_inference`, `_soft_resolved`), which
+        # report instead of raising: these four promise never to fail an
+        # absorb, so a route pointing one of them at a keyless connection has
+        # to come back as that phase's status rather than as a 409 that
+        # discards the extraction's result too. Voice drift keeps the whole
+        # resolution, since `decide()` takes one (spec 7.4).
         dossier_conn, dossier_why = _soft_inference(
             lambda: require_inference("dossier", cid))
-        voice_conn, voice_why = _soft_inference(
-            lambda: require_inference("voice-drift", cid))
+        voice_resolved, voice_why, _voice_kind = _soft_resolved(
+            lambda: require_inference("voice-drift", cid, operation="decide"))
         audit_conn, audit_why = _soft_inference(
             lambda: require_inference("audit", cid))
         ident_conn, ident_why = _soft_inference(
@@ -3058,7 +3081,7 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
                     cid, sid, client, prepared, budget, ident_conn, ident_why),
                 _stage_dossiers(cid, sid, prepared.transcript, client, dossier_conn,
                                 budget, unroutable=dossier_why),
-                _stage_voice_drift(cid, sid, prepared.transcript, client, voice_conn,
+                _stage_voice_drift(cid, sid, prepared.transcript, client, voice_resolved,
                                    budget, unroutable=voice_why),
                 _run_audit(cid, sid, client, audit_conn, budget, unroutable=audit_why),
                 limit=store.config.absorb_concurrency()), abandoned)
@@ -4049,7 +4072,7 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
         if upto < 0:
             raise HTTPException(status_code=400, detail="upto must not be negative")
         scene = {**scene, "messages": scene["messages"][:upto]}
-    conn = require_inference("scene-break", cid).conn
+    resolved = require_inference("scene-break", cid, operation="decide")
     every = store.config.scene_break_every()
     provider = _break_provider(cid)
     view = _break_view(scene, every, provider,
@@ -4062,13 +4085,23 @@ async def _break_once(cid: str, sid: str, force: bool, upto: int | None,
     # would be asked about nothing.
     if not (view["due"] or (force and view["posts"] > 0)):
         return {**_break_body(view, every), "asked": False}
-    return await _break_ask(cid, sid, scene, view, every, conn, client, provider)
+    return await _break_ask(cid, sid, scene, view, every, resolved, client, provider)
 
 
 async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
-                     conn: dict, client: LLMClient, provider) -> dict:
+                     resolved: UsableInference, client: LLMClient, provider) -> dict:
     """The paid half of `post_scene_break`, split out so the route above reads as
-    the decision it is."""
+    the decision it is.
+
+    Two calls at most, in this order, and the order is the design (spec 7.4).
+    The verdict is a closed question, asked through `decide()` and committed
+    first, exactly as the old one-call answer was. Only a YES that LANDED buys
+    the second call, the title -- prose, which a closed question cannot carry,
+    drafted on the `summary` route (`_break_title`) and written by a second
+    guarded write (`_break_title_commit`). A YES therefore costs two calls and
+    two copies of the transcript; a NO, or a verdict whose transcript moved
+    under it, costs one. A title that fails leaves the verdict standing with an
+    empty title: the proposal is the verdict, and the title only names it."""
     messages = scene["messages"]
     # Zero when the watermark was VOIDED, not the stale count it still holds.
     # Review caught the pair coming apart: a rewound scene scores from zero and
@@ -4076,19 +4109,28 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     # count would show the model the last ten posts while the answer went on
     # file as an answer about all fifty.
     base = min(view["stored"]["at"], len(messages)) if view["intact"] else 0
-    facts = store.chronicle.scene_facts(cid, sid)
-    shown = store.regex.view.view(messages[base:], cid=cid, phase="prompt",
-                                  offset=base, total=len(messages))
-    prompt = store.scene_break.build_prompt(
-        store.chronicle.transcript_text(shown, store.appearances.player_label(cid, sid)),
-        view["signals"], facts,
-        scene["meta"].get("title", ""))
+    scene_title = scene["meta"].get("title", "")
+
+    def prepare():
+        # Store reads and template renders, so off the loop: the follow-up a
+        # landed turn schedules awaits this on the lifespan loop (CODE-M1).
+        facts = store.chronicle.scene_facts(cid, sid)
+        shown = store.regex.view.view(messages[base:], cid=cid, phase="prompt",
+                                      offset=base, total=len(messages))
+        transcript = store.chronicle.transcript_text(
+            shown, store.appearances.player_label(cid, sid))
+        item = store.scene_break.build_item(transcript, view["signals"], facts, scene_title)
+        return facts, transcript, item, store.scene_break.explain()
+
+    facts, transcript, item, explanation = await run_in_threadpool(prepare)
     try:
-        with store.usage.meter("scene-break", campaign=cid, scene=sid) as m:
-            text = await client.complete(prompt, conn, m.usage)
+        decision = await operations.decide(
+            "scene-break", [item], client=client, resolved=resolved,
+            explain=explanation, campaign=cid, scene=sid)
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
-    answer = store.scene_break.parse_output(text)
+    # The title is "" here: it is drafted below, and only for a YES that lands.
+    answer = store.scene_break.verdict_of(decision.items[0])
     # The prefix the question was asked ABOUT, digested before the write goes
     # anywhere near the file. `rolling_summary.covered_digest` is the right tool
     # and is reused rather than reimplemented: same transcript, same question
@@ -4104,6 +4146,13 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
         # play loop fires this after releasing the scene). There is nowhere to
         # put the answer and this call is fire-and-forget from the client.
         return {**_break_body(view, every), "asked": False}
+    if result["landed"] and answer["break"]:
+        title = await _break_title(cid, sid, transcript, facts, scene_title,
+                                   answer["reason"], client)
+        if title:
+            result = {**result, "scene": await _break_titled(
+                cid, sid, view["watermark"], digest, answer["reason"], title,
+                result["scene"])}
     # Scored OUTSIDE the hold, from the scene the commit read back. Sizing a
     # time skip runs the campaign's calendar provider, which is user-authored
     # code, and this codebase does not run that under the campaign lock --
@@ -4113,6 +4162,32 @@ async def _break_ask(cid: str, sid: str, scene: dict, view: dict, every: int,
     return {**_break_body(_break_view(result["scene"], every, provider,
                                       store.appearances.player_label(cid, sid)), every),
             "asked": result["landed"]}
+
+
+async def _break_titled(cid: str, sid: str, watermark: dict, digest: str,
+                        reason: str, title: str, scene: dict) -> dict:
+    """The scene after writing `title` onto the verdict it was drafted for
+    (`_break_title_commit`), or `scene` -- the one the verdict's commit read
+    back -- when the title could not be written. Never raises for that: the
+    verdict landed first, so a failed title write is the title lost, not the
+    question."""
+    try:
+        titled = await run_in_threadpool(_break_title_commit, cid, sid, watermark,
+                                         digest, reason, title)
+    except store.scenes.SceneNotFound:
+        # Renamed or deleted while the title was drafted: the verdict landed
+        # (it is on the scene, wherever it went), the title is dropped, and the
+        # answer is the verdict's.
+        return scene
+    except Exception as exc:  # noqa: BLE001 - the verdict already landed
+        # A busy store or an unwritable file (CODE-M2): the answer is the
+        # verdict's, untitled, rather than a 409 or a 500 over a proposal that
+        # stands. Logged by kind, as `_break_title`'s skip is. Cancellation is
+        # not an `Exception`, and passes through.
+        log.warning("scene-break title not written for %s/%s: %s",
+                    cid, sid, type(exc).__name__)
+        return scene
+    return titled["scene"]
 
 
 def _break_commit(cid: str, sid: str, watermark: dict, answer: dict,
@@ -4176,6 +4251,90 @@ def _break_commit(cid: str, sid: str, watermark: dict, answer: dict,
             store.revision.bump(cid)
             scene = store.scenes.read_scene(cid, sid)
         return {"landed": landed, "scene": scene}
+
+
+async def _break_title(cid: str, sid: str, transcript: str, facts: dict | None,
+                       title: str, reason: str, client: LLMClient) -> str:
+    """The title a stored YES suggests for the next scene, or "" for none.
+
+    Its own call on its own task, `scene-break-title`, which the `summary`
+    route claims -- so it is drafted by that route's model, not the Decision
+    role's: the verdict is a closed question any decider can answer, the title
+    is prose. Shown the same head and transcript the verdict was formed from,
+    plus the verdict's reason (`build_title_prompt`), and read back cleaned
+    and capped (`parse_title`), since it is one frontmatter line shown in a
+    chip.
+
+    Never raises for the failures this call can have. A route that cannot
+    resolve (`_soft_resolved`), a failure preparing the call (a store read
+    while resolving, the prompt's render) and a provider error are each "" --
+    the verdict is already on file and stands without a title. The meter files a
+    provider's failure, which is the one place LLM failures are recorded; a
+    route that cannot resolve makes no call and so no ledger row, and is
+    logged here instead, so an untitled proposal can be explained. The line
+    carries the refusal's KIND and never its sentence, which names the
+    provider and model."""
+    # Both off the loop (CODE-M1): resolving reads `config.md`, the
+    # connections and the catalog sidecar, and the prompt renders templates.
+    try:
+        resolved, _why, kind = await run_in_threadpool(
+            _soft_resolved, lambda: require_inference("scene-break-title", cid))
+        if resolved is not None:
+            prompt = await run_in_threadpool(
+                store.scene_break.build_title_prompt, transcript, facts, title, reason)
+    except Exception as exc:  # noqa: BLE001 - the verdict already landed
+        # An unreadable store file while resolving, or a broken override
+        # template under `GRIMOIRE_TEMPLATES`: the title is lost, not the
+        # question. Logged by kind, as the skip below and `_break_titled` are;
+        # cancellation is not an `Exception`, and passes through.
+        log.warning("scene-break title skipped for %s/%s: %s", cid, sid,
+                    type(exc).__name__)
+        return ""
+    if resolved is None:
+        log.warning("scene-break title skipped for %s/%s: the summary route "
+                    "cannot run (%s)", cid, sid, kind or "unknown")
+        return ""
+    try:
+        with store.usage.meter("scene-break-title", campaign=cid, scene=sid) as m:
+            text = await client.complete(prompt, resolved.conn, m.usage)
+    except LLMError:
+        return ""
+    return store.scene_break.parse_title(text)
+
+
+def _break_title_commit(cid: str, sid: str, watermark: dict, digest: str,
+                        reason: str, title: str) -> dict:
+    """Write `title` onto the verdict it was drafted for, if that verdict is
+    still the one on file; report the scene either way.
+
+    The verdict was committed first (`_break_commit`) and the title call ran
+    after it, outside any hold. Anything may have moved in between -- a
+    dismissal, a newer question, a rewind that voided the watermark -- and a
+    title is prose ABOUT one specific verdict. So the write lands only when
+    the stored proposal still reads exactly as `_break_commit` left it: the
+    same watermark (position, moves and advances) and digest, a `yes`, the
+    same reason, and no title yet. Otherwise nothing is written and the paid title is dropped.
+
+    Read-verify-write under one campaign hold, as `_break_commit`, and it bumps
+    the campaign's write token where it writes for the same reason (#409): a
+    background run has no response line for the middleware to stamp.
+    """
+    with store.locks.campaign_lock(cid):
+        scene = store.scenes.read_scene(cid, sid)
+        stored = store.scenes.scene_break_fields(scene["meta"])
+        drafted_for = (stored["at"] == watermark["at"]
+                       and stored["locs"] == watermark["locs"]
+                       and stored["times"] == watermark["times"]
+                       and stored["digest"] == digest
+                       and stored["verdict"] == "yes" and stored["reason"] == reason
+                       and stored["title"] == "")
+        if drafted_for:
+            store.scenes.set_scene_break(
+                cid, sid, watermark["at"], watermark["locs"], watermark["times"],
+                digest, "yes", reason, title)
+            store.revision.bump(cid)
+            scene = store.scenes.read_scene(cid, sid)
+        return {"scene": scene}
 
 
 @router.post("/campaigns/{cid}/scenes/{sid}/scene-break/dismiss")

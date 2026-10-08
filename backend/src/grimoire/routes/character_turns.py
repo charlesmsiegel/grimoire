@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import logging
 import random
 from collections.abc import Callable
@@ -14,7 +13,8 @@ import anyio
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import content_parts, llm_reasoning, prompts, store
+from .. import content_parts, decisions, llm_reasoning, prompts, store
+from .. import inference as operations
 from ..llm import (
     ATTEMPTED,
     FALLBACK_KEY,
@@ -53,11 +53,7 @@ def enabled():
 
 
 def roster(cid, sid):
-    return [
-        {"ref": f"{a['kind']}:{a['id']}", "name": a["name"]}
-        for a in store.appearances.scene_cast(cid, sid)
-        if a["role"] != "player"
-    ]
+    return store.response_protocol.npc_roster(store.appearances.scene_cast(cid, sid))
 
 
 def validate_actor(cid, sid, actor_ref):
@@ -160,6 +156,17 @@ def start(
             if not conn and (planned["actor_ref"]
                              or not (automatic and planned["mode"] == "manual")):
                 conn = require_inference("chat", cid).conn
+            if (planned["actor_ref"] is None and len(planned["eligible"]) > 1
+                    and not (automatic and planned["mode"] == "manual")):
+                # The first speaker will be picked (`_first_actor` -> `_select`).
+                # `refuse_an_unanswerable_pick` already asked this before the
+                # send wrote anything; this is the defence for a settings change
+                # in between, and refusing here, rather than inside the run,
+                # keeps the refusal a 409 instead of an opaque `run_failed`.
+                # `post_chat` takes its post back when it lands. `_select`
+                # resolves again in the run, so a change after this is still
+                # honoured.
+                require_inference("response-selector", cid, operation="decide")
             chain = {}
             if kind == "post" and planned["mode"] != "manual":
                 # The rounds a player post may run on for (`_follow_on`);
@@ -364,6 +371,44 @@ def _last_contribution(cid, sid, history):
     return {"ref": ref, "text": last["content"]}
 
 
+def _may_pick(cid, sid, kind):
+    """Whether a fresh round of `kind` (with no explicit lead) may open on the
+    speaker pick (`_first_actor` -> `_select`), answered from the scene alone.
+
+    `_plan` is the exact answer, but it draws on `_rng`, and drawing here
+    would move every seeded plan after it. This is the same reading with the
+    random part taken at its widest, so it errs towards "may":
+
+    - a post: Manual generates nothing and List and Natural always name their
+      lead; Directed hands the selector whoever passes the talkativeness
+      roll, which is at most everyone available (and a Directed chain's
+      follow-on rounds go through the selector as well);
+    - an empty send: List and Natural name the next speaker, Directed and
+      Manual leave it to the selector;
+    - a director note: every order leaves it to the selector.
+
+    Either way it is a pick only with more than one available to pick from."""
+    settings = _settings(cid, sid)
+    mode = settings["order"]
+    if kind == "post" and mode != "directed":
+        return False
+    if kind == "continue" and mode not in ("directed", "manual"):
+        return False
+    return len(store.group_play.available(settings, roster(cid, sid))) > 1
+
+
+def refuse_an_unanswerable_pick(cid, sid, *, kind, actor_ref):
+    """The speaker pick's 409 (spec 5.3's `incapable`: the Decision role on a
+    model that cannot answer it, with no generating fallback), raised while
+    the request is here to be told and BEFORE `post_chat` reserves or writes
+    anything -- a refusal after its first mutator would tell the player
+    nothing happened when the post, a retired roll proposal and a started
+    tracker update say otherwise. `start` resolves again as a defence."""
+    if actor_ref or not _may_pick(cid, sid, kind):
+        return
+    require_inference("response-selector", cid, operation="decide")
+
+
 def answers_nothing(cid, sid, *, director, content, speaker_ref):
     """Whether a send will generate nothing, so needs no connection: a player
     post naming no speaker in a Manual scene appends the post and completes its
@@ -411,35 +456,17 @@ def _successor(cid, sid, round_record, handoff, cancelled, actor=None):
             "lead": lead}
 
 
-def _selector_messages(cid, sid, round_record):
+def _selector_item(cid, sid, round_record):
+    """The speaker pick as a decision item: the round's eligible roster, and
+    the observable transcript gathered by `response_protocol` through the
+    prompt-phase regex view (stored text is raw; the pick reads what a model
+    is shown)."""
     messages = store.scenes.read_scene(cid, sid)["messages"]
-    # The last twelve posts IN CONTEXT: a hidden post neither shows nor takes
-    # one of the twelve slots.
-    kept = [i for i, m in enumerate(messages) if not store.scenes.is_excluded(m)][-12:]
-    lo = kept[0] if kept else len(messages)
-    # The prompt view of the posts it reads, depth counted over the whole scene.
-    window = store.regex.view.view(messages[lo:], cid=cid, phase="prompt",
-                                   offset=lo, total=len(messages))
-    shown = [window[i - lo] for i in kept]
-    public = [
-        {
-            "speaker": m.get("speaker") or ("You" if m["role"] == "user" else "Grimoire"),
-            "content": m["content"],
-        }
-        for m in shown
-        if m.get("speaker") not in store.scenes.SYNTHETIC_SPEAKERS
-    ]
-    return [
-        {
-            "role": "system",
-            "content": prompts.render(
-                "scene/response_selector.j2",
-                roster=round_record["eligible"],
-                conversation=public,
-                note=round_record.get("note", ""),
-            ),
-        }
-    ]
+    conversation = store.response_protocol.observable_conversation(
+        messages, lambda posts, offset, total: store.regex.view.view(
+            posts, cid=cid, phase="prompt", offset=offset, total=total))
+    return store.response_protocol.selector_item(
+        round_record["eligible"], conversation, round_record.get("note", ""))
 
 
 def _prepare(cid, sid, run, token, round_record, actor, conn, appended):
@@ -655,35 +682,38 @@ def _round_state(cid, sid, round_record, **fields):
 
 
 async def _select(cid, sid, client, round_record):
+    """`(next, issue)` for a round with no lead: one `decide()` item, a choice
+    over the eligible refs and `grimoire`, null allowed (spec 7.4). A round
+    of one or none needs no question. The seam's 409 comes first, as before;
+    an `LLMError` propagates as before, filed by the meter `decide` opens.
+
+    The capture records the decide prompt as it is sent (spec 9.4). Nothing
+    here reads a file on the event loop: the resolution, the scene read, the
+    regex view and the item's own templates run in the threadpool, `decide`
+    renders its prompt in a worker thread, and the capture is handed back to
+    the threadpool.
+
+    A request `decide` refuses before sending (two eligible refs that read as
+    one once normalised, or more than 254 of them, which with `grimoire` is
+    past a choice's 255 options) is today's invalid handoff: the round raises the
+    issue and control returns to the player, never a 500 mid-turn."""
     eligible = round_record["eligible"]
     if len(eligible) <= 1:
         return (eligible[0]["ref"] if eligible else "grimoire"), None
-    conn = await run_in_threadpool(lambda: require_inference("response-selector", cid).conn)
-    messages = await run_in_threadpool(_selector_messages, cid, sid, round_record)
-    meter = store.usage.meter(
-        "response-selector",
-        campaign=cid,
-        scene=sid,
-        post=round_record["post"],
-        round_id=round_record["id"],
-    )
-    await run_in_threadpool(_capture, cid, sid, "response-selector", messages, conn)
+    resolved = await run_in_threadpool(
+        lambda: require_inference("response-selector", cid, operation="decide"))
+    item = await run_in_threadpool(_selector_item, cid, sid, round_record)
     try:
-        answer = await client.complete(messages, conn, meter.usage)
-    except LLMError as exc:
-        meter.done("error", exc.kind, detail=exc.detail)
-        raise
-    except BaseException:
-        meter.done("aborted")
-        raise
-    meter.done()
-    try:
-        payload = json.loads(answer)
-    except ValueError:
-        payload = None
-    return store.response_protocol.validate_handoff(
-        payload, [r["ref"] for r in eligible] + ["grimoire"], []
-    )
+        decision = await operations.decide(
+            "response-selector", [item], client=client, resolved=resolved,
+            campaign=cid, scene=sid, post=round_record["post"], round_id=round_record["id"],
+            capture=lambda msgs: run_in_threadpool(
+                _capture, cid, sid, "response-selector", msgs, resolved.conn))
+    except decisions.DecideRequestError as exc:
+        _log.warning("speaker pick refused for %s/%s, control returns to the player: %s",
+                     cid, sid, exc)
+        return None, store.response_protocol.INVALID_HANDOFF
+    return store.response_protocol.selection_of(decision.items[0])
 
 
 def _reasoning_frame(event, watcher, liveness):

@@ -59,6 +59,13 @@ class Report:
             f"  expected …{expected[max(0, i - 60):i + 60]!r}…\n"
             f"  actual   …{actual[max(0, i - 60):i + 60]!r}…")
 
+    def require(self, label: str, ok: bool, message: str) -> None:
+        """A comparison that is not byte-for-byte -- a fragment that must be
+        present -- counted whether or not it passes."""
+        self.checks += 1
+        if not ok:
+            self.failures.append(f"{label}: {message}")
+
     def note(self, label: str, message: str) -> None:
         """A failure that is not a text mismatch -- a role shape that differs,
         where comparing the contents would be comparing different things."""
@@ -101,6 +108,7 @@ from grimoire.store import (  # noqa: E402
     dossiers,
     overlay,
     relationships,
+    response_protocol,
     rolling_summary,
     scenario,
     scene_break,
@@ -205,22 +213,14 @@ MSG2 = "voice anchor user is unbounded again -- a long description dominates the
 assert len(long_user) < voice_anchors.VOICE_SOURCE_CAP + 1000, MSG2
 
 anchor = "Clipped. Never uses contractions.\nAnswers questions with questions."
-exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript)
-check("voice drift system", exp[0]["content"], render("voice_drift/system.j2"))
-check("voice drift user", exp[1]["content"],
-      render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor,
-             transcript=transcript, correction=""))
-
-# BOTH branches of the optional correction, because they are different prompts
-# and only one of them is the ordinary case. The scene prompt tells the writer a
-# correction outranks the anchor, so a judge that could not see it would flag the
-# model for obeying its instructions -- the block exists for that, and a
-# verifier that only rendered the empty branch would not notice it disappearing.
+# The voice-drift judge is a decision item (slice F), checked with the other
+# decide-era templates below. BOTH branches of its optional correction, because
+# they are different prompts and only one of them is the ordinary case. The
+# scene prompt tells the writer a correction outranks the anchor, so a judge
+# that could not see it would flag the model for obeying its instructions --
+# the block exists for that, and a verifier that only rendered the empty branch
+# would not notice it disappearing.
 correction = "Use contractions; the last scene was too stiff."
-exp = voice_drift.build_prompt("Seraphine Vale", anchor, transcript, correction=correction)
-check("voice drift user with a correction", exp[1]["content"],
-      render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor,
-             transcript=transcript, correction=correction))
 
 # Both folds, because the user template branches on `prior` and the two branches
 # label the transcript differently -- a from-scratch fold that said "posts since
@@ -239,23 +239,255 @@ for prior in ("", "Seraphine held the dock; the ledger was still missing."):
               render("rolling_summary/user.j2", prior=prior, transcript=transcript,
                      facts=facts))
 
-# Every head combination, because the user template builds its head out of four
-# independently-optional parts and a scene with none of them must render no head
-# at all rather than an empty one -- and both signal states, since a forced
-# question can reach the model having crossed no threshold, which is the one
-# case that renders the reason list empty.
+# The scene-break question as a decision item (slice F, spec 7.4). Every head
+# combination, because the context template builds its head out of four
+# independently-optional parts and a scene with none of them must render no
+# head at all rather than an empty one -- and both signal states, since a
+# forced question can reach the model having crossed no threshold, which is
+# the one case that renders the reason list empty. Its one predicate's
+# instructions are `question.j2`. The title is a second call's -- with and
+# without the verdict's reason, over the same heads.
 BREAK_SIGNALS = [{"kind": "length", "weight": 2, "detail": "44 posts since this was last considered"},
                  {"kind": "time", "weight": 2, "detail": "the clock advanced 15 hours — a long skip"}]
 for signals in ([], BREAK_SIGNALS):
     for title in ("", "The Long Walk Back"):
         for facts in (None, {"location": "", "date": "", "cast": []}, ROLLING_FACTS):
-            exp = scene_break.build_prompt(transcript, signals, facts, title)
-            check(f"scene break system (signals={bool(signals)})", exp[0]["content"],
-                  render("scene_break/system.j2"))
-            check(f"scene break user (signals={bool(signals)}, title={bool(title)}, "
-                  f"facts={bool(facts)})", exp[1]["content"],
+            label = f"signals={bool(signals)}, title={bool(title)}, facts={bool(facts)}"
+            item = scene_break.build_item(transcript, signals, facts, title)
+            check(f"scene break item context ({label})", item.context,
                   render("scene_break/user.j2", transcript=transcript, signals=signals,
                          facts=facts, title=title))
+            REPORT.require(f"scene break item questions ({label})",
+                           [q.id for q in item.questions] == [scene_break.QUESTION_ID],
+                           f"asks {[q.id for q in item.questions]}")
+            check(f"scene break item question ({label})", item.questions[0].instructions,
+                  render("scene_break/question.j2"))
+            for reason in ("", "The ledger changed hands."):
+                check_messages(f"scene break title ({label}, reason={bool(reason)})",
+                               [{"role": "system",
+                                 "content": render("scene_break_title/system.j2")},
+                                {"role": "user",
+                                 "content": render("scene_break_title/user.j2",
+                                                   transcript=transcript, facts=facts,
+                                                   title=title, reason=reason)}],
+                               scene_break.build_title_prompt(transcript, facts, title, reason))
+check("scene break explain", scene_break.explain(), render("scene_break/explain.j2"))
+
+
+def _source(name: str) -> str:
+    """A template's source with its `{# #}` comments removed and every
+    whitespace run collapsed to one space: what a fragment is looked for in. A
+    comment is documentation, so a fragment quoted there carries nothing."""
+    text = (REPO / "templates" / name).read_text(encoding="utf-8")
+    return " ".join(re.sub(r"\{#.*?#\}", " ", text, flags=re.DOTALL).split())
+
+
+#: Scene-break's criteria, carried out of the legacy one-call prompt (the
+#: `scene_break/system.j2` slice F deleted) into the decide-era templates word
+#: for word (I8): (fragment, the template it went to). Invent no criterion, and
+#: drop none. While the legacy prompt existed, a coverage check held that every
+#: sentence of it was inside these fragments or its reply format, which
+#: `decide/system.j2` owns now.
+SCENE_BREAK_CARRIED = (
+    (("You are watching a role-play scene that is still being played, and answering one "
+      "question about it: has the scene reached a natural place to stop?"),
+     "scene_break/question.j2"),
+    (("A scene ends when the beat it was about has resolved — an argument has said what "
+      "it had to say, a journey has arrived, a decision has been taken, a confrontation "
+      "has broken off. A scene has NOT ended merely because the characters walked into "
+      "another room, because the clock moved, or because a lot of posts have gone by. "
+      "Movement in the middle of an unresolved beat is pacing, not a boundary."),
+     "scene_break/question.j2"),
+    (("You will be told which mechanical signals prompted the question. Treat them as the "
+      "reason you are being asked, never as evidence for a yes: they are counts, and they "
+      "cannot see whether anything was settled."),
+     "scene_break/question.j2"),
+    ("one sentence saying what resolved", "scene_break/explain.j2"),
+    ("when the scene is still mid-beat", "scene_break/explain.j2"),
+    ("one sentence saying what is still unresolved", "scene_break/explain.j2"),
+    ("a title for the scene that would start next", "scene_break_title/system.j2"),
+    (("a short phrase — no more than about six words, no quotation marks, no trailing "
+      "punctuation"), "scene_break_title/system.j2"),
+    (("Do not invent events the transcript does not show, and do not describe what "
+      "happens next beyond naming the scene it would be."), "scene_break_title/system.j2"),
+)
+for fragment, target in SCENE_BREAK_CARRIED:
+    REPORT.require(f"scene break carried ({target}: {fragment[:40]}…)",
+                   fragment in _source(target), f"not in {target}")
+
+# The voice-drift judge as a decision item (slice F, spec 7.4), as the absorb
+# phase sends it. Both correction branches (`correction`, above): the item's
+# context is `user.j2`, the legacy user message unchanged. Its one choice is
+# `question.j2`'s, and each of its three options is described by `option.j2`
+# for that verdict.
+for corr in ("", correction):
+    label = f"correction={bool(corr)}"
+    item = voice_drift.build_item("Seraphine Vale", anchor, transcript, correction=corr)
+    check(f"voice drift item context ({label})", item.context,
+          render("voice_drift/user.j2", name="Seraphine Vale", anchor=anchor,
+                 transcript=transcript, correction=corr))
+    REPORT.require(f"voice drift item questions ({label})",
+                   [q.id for q in item.questions] == [voice_drift.QUESTION_ID],
+                   f"asks {[q.id for q in item.questions]}")
+    (choice,) = item.questions
+    check(f"voice drift item question ({label})", choice.instructions,
+          render("voice_drift/question.j2"))
+    REPORT.require(f"voice drift item options ({label})",
+                   [o.id for o in choice.options]
+                   == [voice_drift.DRIFT, voice_drift.IN_VOICE, voice_drift.NOT_ENOUGH]
+                   and not choice.allow_none,
+                   f"offers {[o.id for o in choice.options]} (allow_none={choice.allow_none})")
+    for opt in choice.options:
+        check(f"voice drift option {opt.id} ({label})", opt.description,
+              render("voice_drift/option.j2", verdict=opt.id))
+        REPORT.require(f"voice drift option {opt.id} described ({label})",
+                       bool(opt.description.strip()), "option.j2 rendered nothing")
+check("voice drift explain", voice_drift.explain(), render("voice_drift/explain.j2"))
+
+#: The voice-drift judge's standard and criteria, carried out of its legacy
+#: one-call prompt (the `voice_drift/system.j2` slice F deleted) into the
+#: decide-era templates word for word (I8): (fragment, the template it went
+#: to). Invent no criterion, and drop none. While the legacy prompt existed, a
+#: coverage check held that every sentence of it was inside these fragments,
+#: the verdict bullets (`VOICE_DRIFT_OPTIONS`, under their labels) or its
+#: reply format, which `decide/system.j2` owns now.
+VOICE_DRIFT_CARRIED = (
+    (("You are checking one character's dialogue in a played scene against their voice "
+      "standard: their voice anchor, as modified by any outstanding correction shown with "
+      "it."), "voice_drift/question.j2"),
+    (("Judge ONLY how the character sounds. A character may do anything, feel anything, or "
+      "change their mind; that is the story, not drift. Drift is unsupported register, "
+      "diction, or rhythm — flattening into generic narrator prose, acquiring vocabulary or "
+      "formality the standard excludes, violating an explicit enduring speech constraint, or "
+      "persistently sounding interchangeable with the rest of the cast. Judge in context: "
+      "topic, familiarity, urgency, or emotion can change delivery. Omitting a habitual "
+      "catchphrase, using a plain shared answer, or speaking sincerely instead of joking is "
+      "not sufficient evidence of drift. Do not turn tendencies or example lines into "
+      "compulsory routines."), "voice_drift/question.j2"),
+    (("Where a correction is shown, it SUPERSEDES the anchor on expression wherever the two "
+      "conflict. Lines obeying it are not drift even where the anchor alone would rule them "
+      "out. Neither a correction nor an anchor can require an earlier decision, demand, or "
+      "event to recur, or override current facts, player control, or knowledge limits. Do "
+      "not issue a corrective that would undo the story to restore a verbal habit."),
+     "voice_drift/question.j2"),
+    (("Be conservative. If the lines are consistent with that standard, report `in_voice`. "
+      "A false alarm costs the next scene a correction it did not need."),
+     "voice_drift/question.j2"),
+    (("the corrective the model will be given on its next turn: one or two sentences, "
+      "addressed to the writer, naming the specific way the voice slipped and what to do "
+      "instead."), "voice_drift/explain.j2"),
+    ("Quote a short offending line if it helps.", "voice_drift/explain.j2"),
+    ("empty unless the verdict is `drift`.", "voice_drift/explain.j2"),
+)
+#: Each verdict's description, carried out of its legacy bullet word for word
+#: after the label, keyed by the verdict it describes: `option.j2` must render
+#: exactly this text for exactly this verdict. A description that moved to the
+#: wrong verdict inverts the judge, and the gate (parser-only) cannot see it.
+VOICE_DRIFT_OPTIONS = {
+    voice_drift.DRIFT: "they spoke, and they sounded wrong against that standard.",
+    voice_drift.IN_VOICE: ("they spoke enough to judge, and they sounded right against "
+                           "that standard."),
+    voice_drift.NOT_ENOUGH: (
+        "they were silent, or said too little to tell. This is a real answer, not a "
+        "fallback: use it whenever you cannot actually hear the voice in this scene. Do "
+        "NOT report `in_voice` for a character who barely spoke — saying nothing is not "
+        "evidence of sounding right, and a standing correction stays in force until a "
+        "scene shows otherwise."),
+}
+for fragment, target in VOICE_DRIFT_CARRIED:
+    REPORT.require(f"voice drift carried ({target}: {fragment[:40]}…)",
+                   fragment in _source(target), f"not in {target}")
+for verdict, text in VOICE_DRIFT_OPTIONS.items():
+    check(f"voice drift option carried ({verdict})",
+          text, render("voice_drift/option.j2", verdict=verdict))
+REPORT.require("voice drift options are the item's",
+               list(VOICE_DRIFT_OPTIONS)
+               == [o.id for o in voice_drift.build_item(
+                   "Seraphine Vale", anchor, transcript).questions[0].options],
+               f"carried descriptions for {list(VOICE_DRIFT_OPTIONS)}")
+
+# The speaker pick as a decision item (slice F, spec 7.4), which `_select`
+# sends through `decide()`. Both branches of the round's user direction,
+# since the context renders its line only when there is one. Its one choice
+# is `response_selector_question.j2`'s, over the round's eligible refs (each
+# described by its name) and `grimoire` (described by
+# `response_selector_grimoire.j2`), with null allowed: null is the hand-back.
+SELECTOR_ROSTER = [{"ref": "characters:mara", "name": "Mara"},
+                   {"ref": "characters:winifred", "name": "Winifred"}]
+SELECTOR_CONVERSATION = [{"speaker": "You", "content": "Winifred, where were you?"},
+                         {"speaker": "Mara", "content": "Tell her <nothing> & go."}]
+for note in ("", "Let Mara answer first."):
+    label = f"note={bool(note)}"
+    item = response_protocol.selector_item(SELECTOR_ROSTER, SELECTOR_CONVERSATION, note)
+    check(f"selector item context ({label})", item.context,
+          render("scene/response_selector_context.j2", conversation=SELECTOR_CONVERSATION,
+                 note=note))
+    REPORT.require(f"selector item user direction ({label})",
+                   ("User direction:" in item.context) == bool(note),
+                   "the user direction line does not follow the round's note")
+    REPORT.require(f"selector item questions ({label})",
+                   [q.id for q in item.questions] == [response_protocol.SELECTOR_QUESTION],
+                   f"asks {[q.id for q in item.questions]}")
+    (choice,) = item.questions
+    check(f"selector item question ({label})", choice.instructions,
+          render("scene/response_selector_question.j2"))
+    REPORT.require(f"selector item options ({label})",
+                   [(o.id, o.description) for o in choice.options[:-1]]
+                   == [(e["ref"], e["name"]) for e in SELECTOR_ROSTER]
+                   and choice.options[-1].id == response_protocol.GRIMOIRE_REF
+                   and choice.allow_none,
+                   f"offers {[o.id for o in choice.options]} (allow_none={choice.allow_none})")
+    check(f"selector option grimoire ({label})", choice.options[-1].description,
+          render("scene/response_selector_grimoire.j2"))
+
+#: The selector's criteria, carried out of its retired one-call prompt into
+#: the decide-era templates word for word (I8): (fragment, the template it
+#: went to). Invent no criterion, and drop none. Two were deliberately
+#: reworded, not dropped (controller ruling, Task 9 fix round 1), because the
+#: decide prompt lays the same material out differently: `decide/user.j2`
+#: puts the item's context ABOVE its questions, so the transcript is no
+#: longer "below", and the roster is the choice's options rather than an
+#: "Available NPCs:" listing, so a character is missing "from the options".
+SELECTOR_CARRIED = (
+    ("Choose at most one initial speaker for the observable conversation above.",
+     "scene/response_selector_question.j2"),
+    ("Choose a listed NPC reference", "scene/response_selector_question.j2"),
+    ("or null to return control to the player.", "scene/response_selector_question.j2"),
+    (("An established NPC's actions or physical reactions belong to that NPC, even without "
+      "speech."), "scene/response_selector_question.j2"),
+    ("Choose their reference for those contributions.",
+     "scene/response_selector_question.j2"),
+    ("Grimoire does not continue their actions or provide a closing recap.",
+     "scene/response_selector_question.j2"),
+    (("A character already established in the cast or transcript is not new just because "
+      "they are missing from the options."), "scene/response_selector_question.j2"),
+    (("Choose null when there is no distinct contribution or the player's decision is "
+      "needed."), "scene/response_selector_question.j2"),
+    ("Never invent private knowledge or script reactions.",
+     "scene/response_selector_question.j2"),
+    ("Observable transcript:", "scene/response_selector_context.j2"),
+    ("User direction:", "scene/response_selector_context.j2"),
+)
+#: What the retired prompt said `grimoire` is chosen for, keyed by the option
+#: it describes: `response_selector_grimoire.j2` must render exactly this text,
+#: and it must be the `grimoire` option's. The listed NPCs' options are the
+#: roster's own, each described by its name.
+SELECTOR_OPTIONS = {
+    response_protocol.GRIMOIRE_REF: ("general scene information, an independent scene event "
+                                     "or a genuinely new character's entrance"),
+}
+for fragment, target in SELECTOR_CARRIED:
+    REPORT.require(f"selector carried ({target}: {fragment[:40]}…)",
+                   fragment in _source(target), f"not in {target}")
+for ref, text in SELECTOR_OPTIONS.items():
+    check(f"selector option carried ({ref})", text,
+          render("scene/response_selector_grimoire.j2"))
+REPORT.require("selector options are the item's",
+               list(SELECTOR_OPTIONS)
+               == [o.id for o in response_protocol.selector_item(
+                   SELECTOR_ROSTER, SELECTOR_CONVERSATION).questions[0].options][
+                       len(SELECTOR_ROSTER):],
+               f"carried descriptions for {list(SELECTOR_OPTIONS)}")
 
 #: The driver keys of the suggestion snapshot (`build_snapshot(drivers=True)`,
 #: which has no `upcoming`), empty.
@@ -653,6 +885,40 @@ for label, payload in RECONCILE_INPUTS.items():
             shown = f" ({rec['type']})" if rec["type"] else ""
             assert f"{rec['letter']}{shown}: {rec['line']}" in exp[1]["content"], \
                 f"continuity reconcile user ({label}) does not show {rec['ref']}'s line"
+
+# Structured decisions (slice F, spec 7.4): `inference.structured_messages`
+# against direct renders of `decide/`. Every branch the templates take: the
+# rationale on and off; a predicate, a choice with and without `allow_none`, and
+# a score; one item and two -- so a branch that moved cannot hide behind one
+# that did not.
+from grimoire import decisions as dec  # noqa: E402
+from grimoire import inference  # noqa: E402
+
+_DECIDE_ITEMS = [
+    dec.Item("Mara closes the door behind her.\nThe lamp gutters.", (
+        dec.Predicate("over", "Is the scene over?"),
+        dec.Choice("next", "Who speaks next?",
+                   (dec.Option("seraphine", "Seraphine, at the window"),
+                    dec.Option("mara", "Mara", aliases=("Mara Vale",))),
+                   allow_none=True),
+        dec.Score("tone", "How tense is the room?", ("calm", "uneasy", "tense")))),
+    dec.Item("Winifred counts the stalls of Saltmarch.", (
+        dec.Choice("verdict", "Has Winifred's voice drifted?",
+                   (dec.Option("drift", "Drifted from the anchor"),
+                    dec.Option("in_voice", "In voice"))),)),
+]
+for _explain in ("", "Say in one sentence what settled it."):
+    for _n in (1, 2):
+        _items = _DECIDE_ITEMS[:_n]
+        _label = f"{_n} item(s), explain={bool(_explain)}"
+        check_messages(f"decide ({_label})",
+                       [{"role": "system",
+                         "content": render("decide/system.j2",
+                                           schema=dec.schema(_items, explain=bool(_explain)),
+                                           explain=bool(_explain))},
+                        {"role": "user",
+                         "content": render("decide/user.j2", items=_items, explain=_explain)}],
+                       inference.structured_messages(_items, explain=_explain))
 
 # ------------------------------------------------------------- store fixture
 

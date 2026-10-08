@@ -35,7 +35,7 @@ from grimoire.store import (
 )
 from grimoire.store.tracker import prompt as tracker_prompt
 from tests import review_runs
-from tests.llm_fakes import from_entries
+from tests.llm_fakes import decision_reply, from_entries
 
 ABSORB_JSON = (
     '{"one_line": "They met.", "summary": "A meeting.", "keywords": [],'
@@ -46,7 +46,10 @@ ABSORB_JSON = (
 _EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
 _AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
 _DOSSIER = {"system_contains": "You are updating a game master's dossier"}
-_VOICE = {"system_contains": "You are checking one character's dialogue"}
+#: The voice check is a `decide()` call, told apart from other decisions by
+#: its context (slice F).
+_VOICE = {"system_contains": "You answer closed questions about material you are given.",
+          "user_contains": "Voice anchor:"}
 
 MARA, SERAPHINE = "characters:mara", "pcs:seraphine"
 
@@ -64,7 +67,7 @@ STATE = {
 def _fake():
     return from_entries([{"when": _EXTRACTION, "reply": ABSORB_JSON},
                          {"when": _DOSSIER, "reply": "Mara is wary."},
-                         {"when": _VOICE, "reply": '{"verdict": "in_voice", "note": ""}'},
+                         {"when": _VOICE, "reply": decision_reply({"verdict": "in_voice"})},
                          {"when": _AUDIT, "reply": '{"warnings": [], "sheet_deltas": []}'}])
 
 
@@ -187,7 +190,7 @@ def test_a_departed_characters_state_edit_is_staged_and_applied(client):
         ' "quote": "The tide is turning.", "speaker": "Seraphine", "certainty": 0.9}]')
     fake = from_entries([{"when": _EXTRACTION, "reply": reply},
                          {"when": _DOSSIER, "reply": "Mara is wary."},
-                         {"when": _VOICE, "reply": '{"verdict": "in_voice", "note": ""}'},
+                         {"when": _VOICE, "reply": decision_reply({"verdict": "in_voice"})},
                          {"when": _AUDIT, "reply": '{"warnings": [], "sheet_deltas": []}'}])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     r = review_runs.absorb(client, cid, sid)

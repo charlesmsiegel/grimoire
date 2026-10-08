@@ -18,7 +18,8 @@ code change.
   choosing which file to render.
 - `snippets/` holds line formats that feed prompt *content* (transcripts,
   relationship lines, plot-thread lines, commitment lines, standing-fact lines)
-  and are shared across calls.
+  and are shared across calls, plus `scene_break_head.j2`, the head that
+  `scene_break/user.j2` and `scene_break_title/user.j2` both include.
 - Files starting with `_` are macro libraries, not messages.
 
 Rendering contract: `jinja2.Environment(loader=FileSystemLoader("templates"),
@@ -76,33 +77,53 @@ not read: it describes the situation every character in it shares, so it can
 only push anchors toward each other. Preview only; the caller persists via PUT.
 
 ### `voice_drift/` — the per-NPC voice check inside POST …/absorb
-Mirrors `store/voice_drift.py:build_prompt` (one call per present NPC **that
-has a voice anchor** — an anchorless character is never judged, which is what
-keeps the extra calls opt-in).
-`user.j2` vars: `name`, `anchor` (never ""), `transcript` (render
-`snippets/transcript.j2` over the scene's messages), and `correction`
-(optional, `""` when there is none). The correction is the character's
-outstanding drift note, and the CALLER owns deciding it is still in force --
-`_stage_voice_drift` checks its fingerprint against the current anchor first,
-because a note judged against a REPLACED anchor is suppressed for the writer
-and must not be shown to the judge as current. `system.j2` treats it as
-superseding the anchor wherever the two conflict, which is what the scene
-prompt tells the writer, so a judge that could not see it would flag the model
-for obeying its instructions.
-The reply is one JSON object, `{"verdict": str, "note": str}`, parsed by
-`voice_drift.parse_output` through `absorb.extract_object`. `note` becomes the
-corrective `scene/voice_correction.j2` renders on the next turn.
+One `decide()` item (spec 7.4) per present NPC **that has a voice anchor** — an
+anchorless character is never judged, which is what keeps the extra calls
+opt-in — on the `voice_drift` route, which runs on the Decision role. No
+messages of its own: `store/voice_drift.py:build_item` makes the item and
+`decide/` renders the prompt around it.
+`user.j2` is the item's context. Its vars: `name`, `anchor` (never ""),
+`transcript` (render `snippets/transcript.j2` over the scene's messages), and
+`correction` (optional, `""` when there is none). The correction is the
+character's outstanding drift note, and the CALLER owns deciding it is still in
+force -- `store/voice_drift.py:judge_item`, which `_stage_voice_drift` builds
+through, passes it only while `voice_drift.live_correction` finds its
+fingerprint naming the current anchor, because a note judged against a
+REPLACED anchor is suppressed for the writer and must not be shown to the judge
+as current. `question.j2` treats it as superseding the anchor wherever the two
+conflict, which is what the scene prompt tells the writer, so a judge that
+could not see it would flag the model for obeying its instructions.
+`judge_item` sends the effective anchor (`voice_anchors.effective(...)`), and
+`voice_drift.locked_name` names the character as the transcript labels its
+lines (the locked card's raw name).
 
-`verdict` is an enum, **not** a boolean, and the reason is that clearing a
-standing flag is a write: only an explicit `in_voice` justifies one.
-- `drift` — spoke, sounded wrong; `note` carries the corrective.
+The item's one choice (id `verdict`) takes `question.j2` as its instructions —
+the standard and criteria of the legacy one-call prompt, moved there whole —
+and is **not** a boolean, because clearing a standing flag is a write: only an
+explicit `in_voice` justifies one. Its three options, each described by
+`option.j2` (var `verdict`, the option's id) with that verdict's legacy bullet,
+word for word after its label:
+- `drift` — spoke, sounded wrong; the rationale carries the corrective.
 - `in_voice` — spoke enough to judge, sounded right → stages a clear.
 - `not_enough` — silent or too few lines to tell. A real answer, not a
   fallback: silence is not evidence of sounding right, so a standing flag
-  survives it.
-- anything unparseable maps to `voice_drift.UNKNOWN`, which the absorb route
-  reports as a failed check. Collapsing it into `in_voice` would let a garbled
-  reply retire a real corrective on a default-approved review.
+  survives it. It keeps the legacy synonyms `insufficient` and `unclear` as
+  aliases (`voice_drift.ALIASES`).
+
+There is no none-of-these: `voice_drift.finding_of` maps an answer of `None`,
+for any reason, to `voice_drift.UNKNOWN`, which the absorb route reports as a
+failed check. Collapsing it into `in_voice` would let a garbled reply retire a
+real corrective on a default-approved review. `store/voice_drift.py:explain`
+renders `explain.j2`, the rationale instruction: the corrective
+`scene/voice_correction.j2` renders on the next turn, empty unless the verdict
+is `drift`. Neither `question.j2` nor `explain.j2` takes vars, and none of the
+three restates the reply format: that is `decide/system.j2`'s.
+`voice_drift.check_failure` is the route's three per-finding refusals —
+unreadable, a drift with no corrective, a corrective over `MAX_NOTE` — with its
+words. `scripts/verify_templates.py` holds that each criterion of the legacy
+prompt is in a decide-era template verbatim (`VOICE_DRIFT_CARRIED`), and that
+`option.j2` renders each verdict's own description and no other
+(`VOICE_DRIFT_OPTIONS`, keyed by verdict).
 
 ### `scene_suggestions/` — POST /campaigns/{cid}/scene-suggestions
 Mirrors `store/suggest.py:build_prompt`. Messages: system, user.
@@ -283,12 +304,15 @@ key and a multi-line value corrupts the file. Display-only: this summary is
 deliberately absent from `scene/sections/`.
 
 ### `scene_break/` — POST /campaigns/{cid}/scenes/{sid}/scene-break
-The confirmation half of heuristic scene-break detection (#84). Mirrors
-`store/scene_break.py:build_prompt`. Messages: system, user.
-`user.j2` vars: `title` (the scene's own, so a proposed NEXT title is not a
-restatement of it), `facts` (`chronicle.scene_facts()`), `signals`
-(`scene_break.evaluate`'s `[{kind, weight, detail}]` — only `detail` is
-rendered), `transcript` (`snippets/transcript.j2`).
+The confirmation half of heuristic scene-break detection (#84), asked as a
+`decide()` item (spec 7.4) on the `scene_break` route, which runs on the
+Decision role. No messages of its own: `store/scene_break.py:build_item` makes
+the item and `decide/` renders the prompt around it. `user.j2` is the item's
+context. Its vars: `title` (the scene's own), `facts`
+(`chronicle.scene_facts()`; these two render as the head,
+`snippets/scene_break_head.j2`), `signals` (`scene_break.evaluate`'s
+`[{kind, weight, detail}]` — only `detail` is rendered), `transcript`
+(`snippets/transcript.j2`).
 
 `facts` carries the same weight here as in `rolling_summary/` and for the same
 reason: the first location and the first date are set silently, so on the
@@ -301,12 +325,41 @@ half of the feature pointless. `signals` is empty on a forced question that
 crossed no threshold, and the template renders no reason list at all there
 rather than an empty one.
 
-The system prompt states outright that the signals are the reason for the
-question and never evidence for a yes: they are counts, and a count cannot see
-whether anything was settled. The reply is a JSON object
-(`{"break", "reason", "title"}`); an unreadable one parses as `break: false`
-with empty prose, because this runs automatically off the play loop. Nothing
-here ends or splits a scene — the answer is a suggestion in the inspector.
+The item's one predicate (id `over`) takes `question.j2` as its instructions:
+the criteria of the legacy one-call prompt, moved there word for word, which
+state outright that the signals are the reason for the question and never
+evidence for a yes — they are counts, and a count cannot see whether anything
+was settled. `store/scene_break.py:explain` renders `explain.j2`, the rationale
+instruction, whose answer is the stored reason. Neither template takes vars,
+and neither restates the reply format: that is `decide/system.j2`'s.
+`scene_break.verdict_of` maps the item's answer to the stored verdict, where an
+unreadable answer is no break, because this runs automatically off the play
+loop. Nothing here ends or splits a scene — the answer is a suggestion in the
+inspector. `scripts/verify_templates.py` holds that each criterion of the
+legacy prompt is still in a decide-era template verbatim (`SCENE_BREAK_CARRIED`).
+
+### `scene_break_title/` — the title a proposed scene break suggests
+Mirrors `store/scene_break.py:build_title_prompt`. Messages: system, user.
+Sent only once a YES verdict has landed and been stored, because a closed
+question cannot carry prose, and metered as `scene-break-title` on the
+`summary` route — so the title is drafted by that route's model, not the
+Decision role's. A YES therefore costs two calls and two copies of the
+transcript. A title that fails leaves the stored verdict with an empty title,
+and one whose verdict moved on while it was drafted is dropped. Since the
+verdict is written first, a read between the two writes sees a YES with no
+title, and the inspector may show the proposal untitled until its next refresh.
+`system.j2` takes no vars: the title criteria the legacy one-call prompt asked
+for beside the verdict, verbatim, and "Reply with the title alone."
+`user.j2` vars: `title`, `facts` and `transcript`, rendered as the head and
+transcript of `scene_break/user.j2` (both include `snippets/scene_break_head.j2`,
+so the two heads cannot drift), and `reason` (the stored verdict's, rendered
+as "Why it ended: …"; `""` renders nothing). The reply is cleaned by
+`scene_break.parse_title`: its first non-empty line only (a model that explains
+its title on the next line has not made that part of it), whitespace
+collapsed, a quotation mark that opens and closes the whole title stripped as
+a pair (an apostrophe alone, as in "'Tis the Season", is the title's own) and
+trailing punctuation stripped, then cut at `scene_break.TITLE_MAX`, since a
+title is one frontmatter line shown in a chip.
 
 ### `tracker/` — the scene state tracker's update call, after every post
 Mirrors `store/tracker/prompt.py:build_messages`. Messages: system, user. One
@@ -327,6 +380,24 @@ current values and the new post, and replies with only what the post changes
   character the tracker has not recorded yet. A read that fails is `""`
 - `context_posts` and `post` -- `{speaker, content}`; the new post is last in
   the message, so the reply is anchored on it
+
+### `decide/` — every structured decision (`inference.decide`, slice F)
+Mirrors `grimoire/inference.py:structured_messages`. Messages: system, user.
+One call per chunk of items (at most `decisions.MAX_ITEMS_PER_CALL`, and at most
+`decisions.MAX_ENUM_VALUES` enum values across its schema); each item is a
+context and its ordered questions, and the reply is the JSON object
+`decisions.schema` describes, read back by `decisions.parse`.
+`system.j2` vars:
+- `schema` -- the batch's JSON Schema, rendered with `tojson`. Always in the
+  prompt, whether or not the attempt is also sent its provider's structured
+  mode, so a fallback without the mode answers from the same prompt
+- `explain` -- bool: whether each entry carries a `rationale`
+`user.j2` vars:
+- `items` -- `decisions.Item`s, numbered from 0; each question renders its id,
+  its type (yes/no, choice, scale) and its instructions, a choice its options
+  (`id: description`, and whether null is allowed), a score its levels
+  (`index: description`). Option aliases are the parser's and never shown
+- `explain` -- the rationale instruction, rendered last; "" renders nothing
 
 ### `scene/` — the context builder (`store/context/`)
 Serves POST …/chat, …/retry, …/regenerate (via `build_messages` /
@@ -570,6 +641,45 @@ never persisted (the steer's text is recorded in the steering log).
 - `extend_instruction.j2` (user, after the partial reply in instruction mode):
   vars `words` (the response's word target, or none) and `guidance` (`""`
   when no steer). A prefill-mode extend sends no instruction at all.
+
+### Speaker selection — the `speaker` route's decide item
+When two or more NPCs could open a Directed round, `routes.character_turns._select`
+asks who speaks first: one `decide()` item (spec 7.4) on the `speaker` route,
+which runs on the Decision role. No messages of its own:
+`store/response_protocol.py:selector_item` makes the item and `decide/` renders the
+prompt around it. Its inputs are gathered by
+`store/response_protocol.py:observable_conversation` (the last twelve posts in
+context, each through the prompt-phase regex view the caller hands in, as
+`{speaker, content}`, synthetic lines dropped) and the round's eligible roster
+(`store/response_protocol.py:npc_roster`'s `{ref, name}` shape); the
+`decide-speaker` eval case gathers through the same two helpers.
+- `response_selector_context.j2` is the item's context. Vars: `conversation`, and
+  `note` (the round's user direction, or `""`); the user direction line renders
+  only when `note` is set. The roster is not listed: the choice's options are the
+  roster.
+- `response_selector_question.j2` is the one choice's instructions (id `next`,
+  `response_protocol.SELECTOR_QUESTION`, null allowed). No vars. The retired
+  one-call prompt's criteria, moved there whole but for two rewordings that follow
+  the decide prompt's layout: the transcript is "above" the question, and a
+  character is missing "from the options" rather than "the available list".
+- Its options are each eligible ref, described by its name, and `grimoire`
+  (`response_protocol.GRIMOIRE_REF`), described by
+  `response_selector_grimoire.j2` (no vars): the retired prompt's words for what
+  grimoire is chosen for.
+
+No rationale is asked for. `store/response_protocol.py:selection_of` maps the answer
+back to the `(next, issue)` pair `_round_state` stores, with the two issue strings
+the retired parse raised: an explicit null hands control back with no issue, an
+answer naming nobody offered is `response_protocol.INELIGIBLE`, and anything else
+unreadable is `response_protocol.INVALID_HANDOFF` -- as is a roster `decide()`
+refuses before sending: two refs that read as one once normalised, or more than
+254 refs, which with `grimoire` is past the 255 options a choice may offer
+(`decisions.MAX_OPTIONS`).
+`scripts/verify_templates.py` holds that each criterion of the retired prompt is in
+a decide-era template verbatim (`SELECTOR_CARRIED`) and that
+`response_selector_grimoire.j2` renders the `grimoire` option's own description
+(`SELECTOR_OPTIONS`). The capture the prompt log keeps for the pick is this
+decide prompt.
 
 ## Keeping templates honest
 

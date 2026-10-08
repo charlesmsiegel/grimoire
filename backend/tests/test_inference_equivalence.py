@@ -32,6 +32,34 @@ def without_retired(observed: dict) -> dict:
     return {k: v for k, v in observed.items() if k not in RETIRED}
 
 
+#: Tasks claimed since the JSON was recorded, each by the route sibling whose
+#: cells it must equal (slice F, Task 6). `scene-break-title` is the title a
+#: YES suggests, drafted on the `summary` route beside `rolling-summary`, so
+#: it resolves wherever that does -- at both scopes, in every state.
+NEW_TASKS = {"scene-break-title": "rolling-summary"}
+
+
+def without_new_tasks(observed: dict, cells: tuple[str, ...] = ("tasks",)) -> dict:
+    """`observed` with each `NEW_TASKS` cell asserted equal to its sibling's
+    and then dropped, under each path in `cells` (a dotted path to a
+    `{task: {"global", "campaign"}}` map), so the frozen JSON, which never saw
+    the task, compares against the rest unchanged."""
+    out = dict(observed)
+    for path in cells:
+        *parents, leaf = path.split(".")
+        holder = out
+        for key in parents:
+            holder[key] = dict(holder[key])
+            holder = holder[key]
+        by_task = dict(holder[leaf])
+        for task, sibling in NEW_TASKS.items():
+            assert by_task[task] == by_task[sibling], (path, task, by_task[task])
+            assert set(by_task[task]) == {"global", "campaign"}
+            del by_task[task]
+        holder[leaf] = by_task
+    return out
+
+
 def test_every_state_has_a_recorded_baseline():
     assert sorted(BASELINE) == sorted(baseline.STATES)
 
@@ -42,7 +70,8 @@ def test_resolution_matches_the_baseline(state, tmp_path):
     minus `routing`, whose endpoints slice C's Task 8 retired (`RETIRED`)."""
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
-        assert without_retired(baseline.observe(client, ctx)) == without_retired(BASELINE[state])
+        observed = without_new_tasks(baseline.observe(client, ctx))
+        assert without_retired(observed) == without_retired(BASELINE[state])
 
 
 #: The only differences a migrated store may show against the frozen baseline
@@ -59,7 +88,9 @@ def test_resolution_matches_the_baseline(state, tmp_path):
 #:   Not dropped but rewritten (`migrated_expectation`): the cell must then
 #:   carry exactly the standing route's sampling.
 #:
-#: Nothing else may differ -- the fallback cells included.
+#: Nothing else may differ -- the fallback cells included. (A task claimed
+#: since, `NEW_TASKS`, is held to its sibling and dropped before either
+#: comparison.)
 ALLOWED_AFTER_MIGRATION = ("routing",)
 PROVIDER_ONLY_OVERRIDES = ("connection", "unknown_connection", "keyless_connection",
                            "openrouter_connection")
@@ -103,5 +134,6 @@ def test_each_baseline_state_resolves_identically_after_migration(state, tmp_pat
         got = baseline.migrate_state(state)
         assert got.state == "done", got
         assert store.inference_keys.is_current(store.read_config())
-        assert (without_allowed_differences(baseline.observe(client, ctx))
+        observed = without_new_tasks(baseline.observe(client, ctx))
+        assert (without_allowed_differences(observed)
                 == without_allowed_differences(migrated_expectation(BASELINE[state])))

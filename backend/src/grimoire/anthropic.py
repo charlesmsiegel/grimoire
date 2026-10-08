@@ -270,21 +270,31 @@ class AnthropicClient:
     def _headers(self, key: str) -> dict[str, str]:
         return {"x-api-key": key, "anthropic-version": API_VERSION}
 
-    def _payload(self, messages: list[dict], model: str, effective: dict | None) -> dict:
+    def _payload(self, messages: list[dict], model: str, effective: dict | None,
+                 schema: dict | None = None) -> dict:
         """`effective` first, so the request's own fields always win over a
         preset (see `openrouter._payload`); `max_tokens` is required by the
         API, and `effective` always carries it when it came from
-        `llm_sampling.effective` -- the default is for a direct caller."""
+        `llm_sampling.effective` -- the default is for a direct caller.
+
+        `schema` asks for structured output (spec 7.2): `output_config.format`
+        with `json_schema`, not a forced tool, which current models answer with
+        a 400. MERGED into `output_config`, because adaptive thinking's effort
+        lives there too and must survive beside it. Only ever given for an
+        attempt its resolver flagged capable."""
         system, turns = _messages(messages)
         body = {**(effective or {}), "model": model, "messages": turns, "stream": True}
         body.setdefault("max_tokens", llm_sampling.ANTHROPIC_MAX_TOKENS)
+        if schema is not None:
+            body["output_config"] = {**body.get("output_config", {}),
+                                     "format": {"type": "json_schema", "schema": schema}}
         if system:
             body["system"] = system
         return body
 
     async def stream(self, messages, model: str, key: str,
                      usage: dict | None = None, effective: dict | None = None,
-                     base_url: str = "") -> AsyncIterator[str]:
+                     base_url: str = "", schema: dict | None = None) -> AsyncIterator[str]:
         """`usage`, when given, is filled in place (see `llm_usage`):
         `prompt_tokens` is input + cache read + cache write, because the API's
         `input_tokens` counts only what was neither, and the two cache counts
@@ -293,7 +303,7 @@ class AnthropicClient:
             raise AnthropicError("missing_key", "Anthropic API key is not set")
         reader = _Reader(usage)
         try:
-            body = self._payload(messages, model, effective)
+            body = self._payload(messages, model, effective, schema)
             http = self._client()
             async with http.stream(
                 "POST", _root(base_url) + "/v1/messages",

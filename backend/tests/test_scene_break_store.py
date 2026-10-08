@@ -1,17 +1,23 @@
-"""The scene-break heuristic and its prompt/parse halves (#84).
+"""The scene-break heuristic, its decision item and its title halves (#84).
 
 What these pin, beyond the arithmetic: that the scorer never fires on a
 transition alone (a party walking through a door is the middle of a scene, not
 its end), that a rewound scene reads as "nothing new" rather than as a negative
 count, that the first location and the first date are placement rather than
-movement, and that an unreadable reply is a quiet "no" rather than an exception
+movement, and that an unreadable answer is a quiet "no" rather than an exception
 raised over a scene somebody is playing.
+
+The legacy reply parser's tests are gone with it: every input they handed it is
+an entry of the decide gate's corpus (`evals/gate.py`, held there by
+`test_decide_gate.test_every_legacy_parse_case_is_a_gate_entry`), scored by the
+outcome the route acts on.
 """
 
 from __future__ import annotations
 
 import pytest
 
+from grimoire import decisions, prompts
 from grimoire.store import calendars, scene_break
 
 EVERY = 10
@@ -175,58 +181,112 @@ def test_moves_is_the_one_definition_both_halves_use():
     assert scene_break.moves(["gate", "market"]) == 1
 
 
-# ---- the prompt ----
-def test_the_prompt_carries_the_signals_as_the_reason_it_is_asking():
-    signals = [{"kind": "length", "weight": 2, "detail": "40 posts since this was last considered"}]
-    system, user = scene_break.build_prompt("Mara waits.", signals,
-                                            {"location": "Saltmarch", "date": "2026-07-05",
-                                             "cast": ["characters/mara"]},
-                                            "The Salt Gate")
-    assert "natural place to stop" in system["content"]
-    body = user["content"]
+# ---- the decision item (slice F: what `decide()` is asked) ----
+
+_FACTS = {"location": "Saltmarch", "date": "2026-07-05", "cast": ["characters/mara"]}
+_SIGNALS = [{"kind": "length", "weight": 2, "detail": "40 posts since this was last considered"}]
+
+
+def test_build_item_carries_the_old_user_message_as_context():
+    """The decide prompt is shown exactly what the legacy user message showed
+    -- head, signals, transcript (`scene_break/user.j2`) -- and asks one
+    yes/no question, the old system prompt's criteria moved into its
+    instructions."""
+    for signals, facts, title in ((_SIGNALS, _FACTS, "The Salt Gate"), ([], None, "")):
+        item = scene_break.build_item("Mara waits.", signals, facts, title)
+        old = prompts.render("scene_break/user.j2", transcript="Mara waits.",
+                             signals=signals, facts=facts, title=title)
+        assert item.context == old
+        assert item.questions == (decisions.Predicate(
+            scene_break.QUESTION_ID, prompts.render("scene_break/question.j2")),)
+    assert scene_break.QUESTION_ID == "over"
+    assert "natural place to stop" in item.questions[0].instructions
+    decisions.validate([item])
+    assert "still unresolved" in scene_break.explain()
+
+
+def test_the_item_carries_the_signals_as_the_reason_it_is_asking():
+    item = scene_break.build_item("Mara waits.", _SIGNALS, _FACTS, "The Salt Gate")
+    assert "natural place to stop" in item.questions[0].instructions
+    body = item.context
     assert "40 posts since this was last considered" in body
     assert "Saltmarch" in body and "The Salt Gate" in body and "Mara waits." in body
 
 
 def test_a_scene_with_no_facts_and_no_signals_renders_no_empty_head():
-    body = scene_break.build_prompt("Mara waits.", [], None, "")[1]["content"]
+    body = scene_break.build_item("Mara waits.", [], None, "").context
     assert not body.startswith("\n")
     assert "You are being asked because" not in body
 
 
-# ---- the parse ----
-def test_a_confirmation_is_read_as_one():
-    answer = scene_break.parse_output(
-        '{"break": true, "reason": "The ledger changed hands.", "title": "The Long Walk Back"}')
-    assert answer == {"break": True, "reason": "The ledger changed hands.",
-                      "title": "The Long Walk Back"}
+def _result(answer, rationale: str = "") -> decisions.ItemResult:
+    reason = "unreadable" if answer is None else ""
+    return decisions.ItemResult({"over": decisions.Answer(answer, reason)}, rationale)
 
 
-def test_prose_around_the_object_is_tolerated():
-    answer = scene_break.parse_output(
-        'Sure!\n```json\n{"break": false, "reason": "They are mid-argument."}\n```')
-    assert answer["break"] is False and answer["reason"] == "They are mid-argument."
+def test_verdict_of_an_unreadable_answer_is_no_break():
+    """`None` is today's safe direction: nobody is asked, nothing is raised."""
+    assert scene_break.verdict_of(_result(None)) == {"break": False, "reason": "", "title": ""}
+    assert scene_break.verdict_of(_result(None, "Half a thought.")) == {
+        "break": False, "reason": "Half a thought.", "title": ""}
+    assert scene_break.verdict_of(_result(False, "They are mid-argument.")) == {
+        "break": False, "reason": "They are mid-argument.", "title": ""}
+    assert scene_break.verdict_of(_result(True, "The ledger changed hands.")) == {
+        "break": True, "reason": "The ledger changed hands.", "title": ""}
 
 
-def test_an_unreadable_reply_is_a_quiet_no_rather_than_an_exception():
-    """This runs automatically off the play loop. The cost of a missed
-    suggestion is that nobody is asked; the cost of raising is an error banner
-    over a scene somebody is in the middle of."""
-    for reply in ("", "no idea", "[1, 2, 3]", "null"):
-        assert scene_break.parse_output(reply) == {"break": False, "reason": "", "title": ""}
+def test_a_multi_line_rationale_is_collapsed():
+    """The reason goes to frontmatter, one line per key, and its writer does
+    not escape newlines: a reason containing one would be read back as junk --
+    or, if it began `---`, as the end of the frontmatter block."""
+    verdict = scene_break.verdict_of(_result(True, "They parted.\n---\ndone: false"))
+    assert verdict["reason"] == "They parted. --- done: false"
 
 
-def test_a_multi_line_reason_is_collapsed_before_it_can_reach_frontmatter():
-    """Scene frontmatter is one line per key and its writer does not escape
-    newlines, so a reply containing one would be read back as junk — or, if it
-    began `---`, as the end of the frontmatter block."""
-    answer = scene_break.parse_output(
-        '{"break": true, "reason": "They parted.\\n---\\ndone: false", "title": "A\\nB"}')
-    assert "\n" not in answer["reason"] and "\n" not in answer["title"]
+def test_parse_title_strips_quotes_and_punctuation_collapses_lines_and_caps_length():
+    assert scene_break.parse_title("The Long Walk Back") == "The Long Walk Back"
+    assert scene_break.parse_title('"The Long Walk Back."') == "The Long Walk Back"
+    assert scene_break.parse_title("'The Long Walk Back'") == "The Long Walk Back"
+    assert scene_break.parse_title("`The Long Walk Back`!") == "The Long Walk Back"
+    assert scene_break.parse_title('"The Long Walk Back".') == "The Long Walk Back"
+    assert scene_break.parse_title("\u201cThe Long Walk Back\u201d") == "The Long Walk Back"
+    assert scene_break.parse_title("  The Long   Walk\tBack?:; \n") == "The Long Walk Back"
+    long = scene_break.parse_title("Saltmarch " * 20)
+    assert len(long) <= scene_break.TITLE_MAX == 80
+    assert long == ("Saltmarch " * 20)[:80].rstrip()
 
 
-def test_a_non_boolean_break_is_not_a_break():
-    """A model that answers `"yes"` has not answered the question that was
-    asked, and reading a truthy string as a confirmation would put a proposal
-    on screen that the model never made."""
-    assert scene_break.parse_output('{"break": "yes", "reason": "r"}')["break"] is False
+def test_parse_title_strips_quotes_only_as_a_surrounding_pair():
+    """An apostrophe that belongs to the title is not a quotation mark: only a
+    quote that opens AND closes the whole reply is decoration."""
+    for title in ("'Tis the Season", "The Sisters'", "Mara's Ledger",
+                  '"The Long Walk Back" -- a quiet close', "'Tis the Sisters' Pier"):
+        assert scene_break.parse_title(title) == title, title
+
+
+def test_parse_title_takes_the_first_line_and_never_joins_an_explanation():
+    """The title call's reply is free text; a model that explains its title on
+    the next line has not made the explanation part of it."""
+    reply = "\n  The Long Walk Back\n\nThis title reflects the resolved debt."
+    assert scene_break.parse_title(reply) == "The Long Walk Back"
+    assert scene_break.parse_title("A\nB") == "A"
+    assert scene_break.parse_title('\n\n"Saltmarch at Low Tide"\nbecause the tide went out') == \
+        "Saltmarch at Low Tide"
+
+
+def test_parse_title_of_nothing_is_empty():
+    for text in ("", "   ", "\n\n", '""', "''", "``", "...", '"."'):
+        assert scene_break.parse_title(text) == "", text
+
+
+def test_the_title_prompt_carries_the_head_the_reason_and_the_transcript():
+    system, user = scene_break.build_title_prompt("Mara waits.", _FACTS, "The Salt Gate",
+                                                  "The ledger changed hands.")
+    assert system["content"] == prompts.render("scene_break_title/system.j2")
+    assert "Reply with the title alone." in system["content"]
+    body = user["content"]
+    assert body.startswith("Scene: The Salt Gate\nLocation: Saltmarch")
+    assert "Why it ended: The ledger changed hands." in body
+    assert body.endswith("Mara waits.")
+    bare = scene_break.build_title_prompt("Mara waits.", None, "", "")[1]["content"]
+    assert "Why it ended" not in bare and not bare.startswith("\n")

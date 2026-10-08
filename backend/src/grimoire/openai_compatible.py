@@ -143,7 +143,8 @@ class OpenAICompatibleClient:
     async def stream(self, messages, model: str, key: str, base_url: str,
                       strict: bool = False, usage: dict | None = None,
                       reasoning_effort: str = "",
-                      sampling: dict | None = None) -> AsyncIterator[str]:
+                      sampling: dict | None = None,
+                      schema: dict | None = None) -> AsyncIterator[str]:
         """`usage` is filled in place when the endpoint volunteers an accounting
         block — see `llm_usage`.
 
@@ -169,6 +170,14 @@ class OpenAICompatibleClient:
                    "stream": True}
         if reasoning_effort:
             payload["reasoning_effort"] = reasoning_effort
+        # Structured output (spec 7.2), only ever given for an attempt whose
+        # resolver knows the endpoint takes it: a strict endpoint refuses a
+        # field it does not know, which is why nothing here sends it unasked.
+        # Spelled here rather than borrowed: each adapter owns its wire body.
+        if schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "reply", "strict": True, "schema": schema}}
         try:
             http = self._client()
             async with http.stream(

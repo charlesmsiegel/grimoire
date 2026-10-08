@@ -1,6 +1,6 @@
 """The eval suite, run in replay mode as part of the ordinary test run.
 
-This repo has no CI, so pytest IS the gate — an eval suite that only ran when
+pytest (and so `make check` and CI) IS the gate — an eval suite that only ran when
 someone remembered to invoke it would not catch the prompt edit it exists to
 catch. Replay is offline and deterministic, so it belongs here; the live mode
 (`evals/run.py --live`) costs money and is never a test.
@@ -22,6 +22,7 @@ if str(REPO) not in sys.path:
 
 from evals import cases as case_mod  # noqa: E402
 from evals import runner  # noqa: E402
+from evals.graders import Check  # noqa: E402
 
 PAIRS = [(case, rec) for case in case_mod.CASES for rec in case.recordings]
 
@@ -97,3 +98,147 @@ def test_a_live_run_resolves_through_the_seam_not_the_active_connection(
     config.write_config(role_primary_provider="openrouter", role_primary_model="vendor/m")
     with pytest.raises(RuntimeError, match="OpenRouter key not set"):
         runner.resolve_connections((case_mod.BY_ID["scene-length"],))
+
+
+def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
+    """I9: a case with a `schema` is a decide case. Live, its task resolves as
+    a decide operation and the reply is asked for with `schema=`, so it
+    measures what production sends; replay scores the recording and never
+    builds a schema."""
+    from grimoire.store import config, llm_connections
+    from grimoire.store.inference import migrate
+    from tests.llm_fakes import FakeLLM
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path / "home"))
+    config.read_config()
+    llm_connections.create_connection("openai_compatible", "Mara Local",
+                                      base_url="http://localhost:1234/v1")
+    llm_connections.create_connection("openai_compatible", "Winifred Local",
+                                      base_url="http://localhost:5678/v1")
+    assert migrate.ensure().state == "done"
+    config.write_config(role_primary_provider="mara-local", role_primary_model="big",
+                        role_decision_provider="winifred-local",
+                        role_decision_model="small", use_scene_break="decision")
+
+    reply = '{"0": {"answers": {"break": true}, "rationale": "They left."}}'
+    asked: list[dict] = []
+    wanted = {"type": "object", "properties": {}}
+
+    def schema(ctx: dict) -> dict:
+        asked.append(ctx)
+        return wanted
+
+    case = case_mod.Case(
+        id="planted-decide", hypothesis="a planted decide case",
+        build=lambda: {"fixture": True},
+        prompt=lambda ctx: [{"role": "user", "content": "Is the scene over?"}],
+        grade=lambda ctx, out: [Check("planted.reply", out == reply)],
+        recordings=(case_mod.Recording(case_mod.BASELINE),),
+        task="scene-break", schema=schema)
+    plain = case_mod.BY_ID["scene-length"]
+
+    conns = runner.resolve_connections((case, plain))
+    decide_conn = conns[runner.conn_key(case)]
+    assert (decide_conn["id"], decide_conn["model"]) == ("winifred-local", "small")
+    assert conns[runner.conn_key(plain)]["id"] == "mara-local"
+    assert runner.conn_key(plain) == "chat"
+
+    fake = FakeLLM([[reply]])
+    result = runner.live(case, decide_conn, client=fake)
+    assert result.passed, result.error or result.failures
+    assert fake.schemas == [wanted]
+    assert fake.conn is decide_conn
+    assert asked and asked[0]["fixture"] is True
+
+    # Replay of the same case reads its recording and asks for no schema.
+    asked.clear()
+    monkeypatch.setattr(case_mod, "RECORDINGS", tmp_path)
+    (tmp_path / "planted-decide.compliant.md").write_text(reply, encoding="utf-8")
+    assert runner.replay(case, case.baseline).passed
+    assert asked == []
+    assert fake.calls == 1
+
+
+def test_a_generate_case_is_sent_with_no_schema(monkeypatch, tmp_path):
+    from tests.llm_fakes import FakeLLM
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["scene-length"]
+    assert case.schema is None and runner.operation(case) == "generate"
+    fake = FakeLLM([["Seraphine Vale shrugs."]])
+    runner.live(case, {"kind": "openrouter", "id": "openrouter"}, client=fake)
+    assert fake.schemas == [None]
+
+
+def test_decide_scene_break_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent scene-break decide case: its prompt is the structured
+    prompt production sends for `build_item`'s item, a live run sends that
+    item's schema, and each counterexample isolates one output check."""
+    from grimoire import decisions, inference
+    from grimoire.store import scene_break
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-scene-break"]
+    assert case.task == "scene-break"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("decide.json",),
+        "wrong": ("decide.answer",), "no-reason": ("decide.rationale",)}
+    ctx = runner.prepare(case)
+    (item,) = ctx["items"]
+    assert item.questions[0].id == scene_break.QUESTION_ID
+    assert ctx["messages"] == inference.structured_messages(
+        [item], explain=scene_break.explain())
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema([item], explain=True)
+
+
+def test_decide_voice_drift_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent voice-drift decide case: its prompt is the structured
+    prompt the switch will send for `build_item`'s item -- the outstanding
+    correction included -- a live run sends that item's schema, and each
+    counterexample isolates one output check."""
+    from grimoire import decisions, inference
+    from grimoire.store import voice_drift
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-voice-drift"]
+    assert case.task == "voice-drift"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("decide.json",),
+        "wrong": ("decide.answer",), "no-note": ("decide.rationale",),
+        "long-note": ("decide.rationale",)}
+    ctx = runner.prepare(case)
+    (item,) = ctx["items"]
+    assert item.questions[0].id == voice_drift.QUESTION_ID
+    assert ctx["correction"] and ctx["correction"] in item.context
+    assert "Clipped. Never uses contractions." in item.context
+    assert ctx["messages"] == inference.structured_messages(
+        [item], explain=voice_drift.explain())
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema([item], explain=True)
+
+
+def test_decide_speaker_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent speaker decide case: its prompt is the structured prompt
+    the switch will send for `selector_item`'s item -- no rationale asked for,
+    the roster as options beside `grimoire`, null allowed -- a live run sends
+    that item's schema, and each counterexample isolates the answer."""
+    from grimoire import decisions, inference
+    from grimoire.store import response_protocol
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-speaker"]
+    assert case.task == "response-selector"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("decide.json",),
+        "off-roster": ("decide.answer",), "abstained": ("decide.answer",)}
+    ctx = runner.prepare(case)
+    (item,) = ctx["items"]
+    (choice,) = item.questions
+    assert choice.id == response_protocol.SELECTOR_QUESTION and choice.allow_none
+    assert [o.id for o in choice.options] == ["characters:mara", "characters:winifred",
+                                              response_protocol.GRIMOIRE_REF]
+    assert ctx["messages"] == inference.structured_messages([item])
+    assert "Rationale" not in ctx["messages"][1]["content"]
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema([item], explain=False)

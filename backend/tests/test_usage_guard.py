@@ -17,9 +17,12 @@ Honest about its reach, the house standard:
   codebase's own convention -- the dependency is injected as
   ``client: LLMClient = Depends(get_llm)`` at every route -- not a proof. A
   generation reached through a differently-named binding is not seen.
-- **The generation checks scan only ``routes/``.** Nothing else in the package
-  holds an ``LLMClient``; the adapters underneath take a holder from the facade,
-  and the facade is covered by its own tests. **The embeddings check walks the
+- **The generation checks scan only ``routes/``, and ``EXTRA_SOURCES``.**
+  Nothing else in the package holds an ``LLMClient`` except the operations
+  module (``grimoire/inference.py``), whose ``decide`` opens the meter itself,
+  so "decide is metered" (spec 14.1) is checked here too. The adapters
+  underneath take a holder from the facade, and the facade is covered by its
+  own tests. **The embeddings check walks the
   whole package**, because store modules hold the embeddings client: every
   request to it that is not the embed operation (`test_operation_guard.py`'s
   recogniser, imported so there is one) passes ``usage=`` a meter's holder.
@@ -39,12 +42,15 @@ from __future__ import annotations
 import ast
 import pathlib
 
+import grimoire.inference as inference_mod
 import grimoire.routes as routes_pkg
 
 from . import guard_markers
 from .test_operation_guard import CLIENT_MODULE, _walk, client_calls
 
 ROUTES = pathlib.Path(routes_pkg.__file__).parent
+#: Files outside `routes/` that hold an `LLMClient` and are scanned beside it.
+EXTRA_SOURCES = (pathlib.Path(inference_mod.__file__),)
 
 #: The `LLMClient` methods that reach a provider. `aclose` does not. `single`
 #: is the model test call's one attempt (slice B Task 9): it spends money like
@@ -82,8 +88,17 @@ def _is_metered(node: ast.Call) -> bool:
     return any(isinstance(a, ast.Attribute) and a.attr == _HOLDER for a in candidates)
 
 
+def _sources():
+    """Every scanned file: `routes/`, then `EXTRA_SOURCES`."""
+    return [*sorted(ROUTES.rglob("*.py")), *EXTRA_SOURCES]
+
+
+def _where(path: pathlib.Path) -> pathlib.Path:
+    return path.relative_to(ROUTES.parent)
+
+
 def _offenders():
-    for path in sorted(ROUTES.rglob("*.py")):
+    for path in _sources():
         src = path.read_text(encoding="utf-8")
         calls = list(_generation_calls(ast.parse(src)))
         for node in calls:
@@ -91,13 +106,13 @@ def _offenders():
                 continue
             others = [n for n in calls if n is not node]
             if guard_markers.marker_reason(MARKER, src, node, others) is None:
-                yield f"{path.relative_to(ROUTES)}:{node.lineno}: {node.func.attr}()"
+                yield f"{_where(path)}:{node.lineno}: {node.func.attr}()"
 
 
 def test_every_generation_route_meters_what_it_spends():
     offenders = list(_offenders())
     assert not offenders, (
-        "LLM call(s) in routes/ that file no ledger row — wrap them in a "
+        "LLM call(s) in routes/ or EXTRA_SOURCES that file no ledger row — wrap them in a "
         "`with store.usage.meter(<task>, ...) as m:` and pass `m.usage`, or "
         "annotate the line with `# usage-ok: <why this one is not counted>`:\n  "
         + "\n  ".join(offenders))
@@ -107,7 +122,7 @@ def test_the_marker_is_not_a_rubber_stamp():
     """Every exemption is a call missing from every total, so they must stay few
     and must say why. A bare `# usage-ok:` is not a reason."""
     marked = []
-    for path in sorted(ROUTES.rglob("*.py")):
+    for path in _sources():
         src = path.read_text(encoding="utf-8")
         calls = list(_generation_calls(ast.parse(src)))
         for node in calls:
@@ -116,7 +131,7 @@ def test_the_marker_is_not_a_rubber_stamp():
             others = [n for n in calls if n is not node]
             reason = guard_markers.marker_reason(MARKER, src, node, others)
             if reason is not None:
-                marked.append((f"{path.relative_to(ROUTES)}:{node.lineno}", reason))
+                marked.append((f"{_where(path)}:{node.lineno}", reason))
 
     unexplained = [loc for loc, reason in marked if len(reason) < 15]
     assert not unexplained, f"`usage-ok` with no real reason: {unexplained}"
@@ -204,3 +219,11 @@ def test_the_embeddings_check_flags_and_passes_planted_cases():
                 ("from .inference import embed\n"
                  "embed.embed_sync('semantic-search', t, space=s, client=c)\n")):
         assert _unmetered_embeds(ast.parse(src), where) == [], src
+
+
+def test_the_extra_sources_are_scanned():
+    """Vacuity insurance for `EXTRA_SOURCES`: `decide`'s facade call is seen,
+    and it hands over its meter's holder."""
+    (path,) = EXTRA_SOURCES
+    calls = list(_generation_calls(ast.parse(path.read_text(encoding="utf-8"))))
+    assert calls and all(_is_metered(c) for c in calls), path

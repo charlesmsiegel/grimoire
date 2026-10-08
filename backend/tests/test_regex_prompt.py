@@ -18,7 +18,13 @@ from grimoire.store.absorb import routing
 from grimoire.store.regex import view as regex_view
 from grimoire.store.scenes import serialize
 from tests import draft_runs, review_runs
-from tests.llm_fakes import CapturingOpenRouter, FakeLLM, FakeOpenRouterComplete, from_entries
+from tests.llm_fakes import (
+    CapturingOpenRouter,
+    FakeLLM,
+    FakeOpenRouterComplete,
+    decision_reply,
+    from_entries,
+)
 
 THINK = {"name": "Strip thinking", "pattern": r"<think>[\s\S]*?</think>", "replacement": ""}
 
@@ -138,8 +144,7 @@ def test_response_selector_reads_the_prompt_view(client):
     reply(cid, sid, "<think>plotting</think>Hello")
     put_rules(client, "/api/llm-connections/openrouter/regex", THINK)
 
-    rendered = text_of(character_turns._selector_messages(
-        cid, sid, {"eligible": [], "note": ""}))
+    rendered = character_turns._selector_item(cid, sid, {"eligible": [], "note": ""}).context
     assert "Hello" in rendered and "plotting" not in rendered
 
 
@@ -195,14 +200,17 @@ ABSORB = {"one_line": "They met.", "summary": "A meeting.", "keywords": ["tea"],
 _EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
 _AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
 _DOSSIER = {"system_contains": "You are updating a game master's dossier"}
-_VOICE = {"system_contains": "You are checking one character's dialogue"}
+#: The voice check is a `decide()` call, told apart from other decisions by
+#: its context (slice F).
+_VOICE = {"system_contains": "You answer closed questions about material you are given.",
+          "user_contains": "Voice anchor:"}
 
 
 def absorb_fake(**extraction):
     return from_entries([
         {"when": _EXTRACTION, "reply": json.dumps({**ABSORB, **extraction})},
         {"when": _DOSSIER, "reply": "Aese is steady."},
-        {"when": _VOICE, "reply": '{"verdict": "in_voice", "note": ""}'},
+        {"when": _VOICE, "reply": decision_reply({"verdict": "in_voice"})},
         {"when": _AUDIT, "reply": '{"warnings": [], "sheet_deltas": []}'}])
 
 

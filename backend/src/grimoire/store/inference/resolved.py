@@ -17,6 +17,11 @@ not to have. The seam refuses on `missing`. A non-empty `fallback_missing`
 drops the fallback from the chain (spec §5.3): it stays in `attempts`, so a
 surface can say why, but it is never attached to the primary, so it is never
 sent.
+
+Slice F adds what a decide resolution needs: each attempt's `decision_mode`
+(which backend would answer it first), and the decide skip (spec 5.5, I5) --
+a primary that cannot generate is passed over for a fallback that can, which
+is then the attempt `conn` names.
 """
 
 from __future__ import annotations
@@ -65,6 +70,12 @@ class Attempt:
     #: fallback none. Informational for now -- the facade keeps its own budget
     #: (`LLMClient._retry_count`), which reads the same setting.
     retries: int = 0
+    #: On a decide resolution, the backend that would answer this attempt
+    #: first (`resolve.decision_mode`): "structured" when the attempt is not
+    #: known unable to generate. "" on a generate resolution, and on an
+    #: attempt that cannot generate. The capability answer only -- the backend
+    #: stamps the mode a call actually used on a copy of its account block.
+    decision_mode: str = ""
 
 
 @dataclass(frozen=True)
@@ -83,7 +94,8 @@ class ResolvedInference:
     #: "campaign" | "global" | "none".
     scope: str
     #: Primary first, then the fallback as the facade sends it: none when it
-    #: cannot be read, cannot send, or is the primary's own connection; and
+    #: cannot be read, cannot send, or is the primary's own connection (unless
+    #: the decide skip lands on it, `skipped`); and
     #: carrying the route's sampling when the route has a preset (campaign or
     #: global scope). Still listed when it is known incapable
     #: (`fallback_missing`), though not sent. Empty when nothing resolved.
@@ -112,7 +124,8 @@ class ResolvedInference:
     fallback_missing: tuple[str, ...] = ()
     #: Why the chosen fallback is left out of `attempts` though it exists: it
     #: cannot send at all (`resolve.problem`: no key, no base URL), or it is on
-    #: the primary's own provider (`resolve.SAME_PROVIDER`). None when it is
+    #: the primary's own provider (`resolve.SAME_PROVIDER`; lifted where the
+    #: decide skip lands on it). None when it is
     #: attempted, or there is no fallback to send. Never refused on -- the primary is
     #: what the call runs on -- so the settings view is where it shows.
     fallback_problem: str | None = None
@@ -122,15 +135,44 @@ class ResolvedInference:
     #: a model, an endpoint, and nothing in `missing`; None otherwise, and
     #: always None for a generative resolution.
     space_id: str | None = None
+    #: The decide skip (spec 5.5, I5): on a decide resolution whose primary is
+    #: known unable to generate while its fallback can, the primary's missing
+    #: needs. The primary is then not sent at all -- `conn` is the fallback's,
+    #: `missing` is empty (so `incapable` does not refuse), and no fallback is
+    #: attached behind it. Empty everywhere else. Slice H replaces the skip
+    #: with the native backend.
+    skipped: tuple[str, ...] = ()
+
+    @property
+    def _sent(self) -> Attempt | None:
+        """The attempt the facade is sent: the fallback when the primary was
+        skipped, else the primary; None when nothing resolved."""
+        if not self.attempts:
+            return None
+        return self.attempts[1] if self.skipped else self.attempts[0]
 
     @property
     def conn(self) -> dict | None:
-        """The primary attempt's connection dict, or None when nothing resolved."""
-        return self.attempts[0].conn if self.attempts else None
+        """The connection dict the facade is sent: the primary attempt's, or
+        the fallback's when the primary was `skipped`. None when nothing
+        resolved."""
+        sent = self._sent
+        return sent.conn if sent is not None else None
 
     @property
     def fallback(self) -> dict | None:
         """The fallback attempt's connection dict (`llm.fallback_sampling`
         applied, `llm._same_route` honoured), or None when there is none. What
-        the facade sends -- unless `fallback_missing` dropped it (spec 5.3)."""
+        the facade sends -- unless `fallback_missing` dropped it (spec 5.3).
+        None when the primary was `skipped`: the attempt it would name is the
+        one sent, and nothing stands behind it."""
+        if self.skipped:
+            return None
         return self.attempts[1].conn if len(self.attempts) > 1 else None
+
+    @property
+    def decision_mode(self) -> str | None:
+        """The decision mode of the attempt the facade is sent (`conn`'s), or
+        None when it has none or nothing resolved."""
+        sent = self._sent
+        return (sent.decision_mode or None) if sent is not None else None

@@ -653,9 +653,6 @@
     "B017": 1,
     "SIM117": 1
   },
-  "backend/tests/test_voice_drift_store.py": {
-    "UP031": 3
-  },
   "backend/tests/test_weather_absorb.py": {
     "RUF059": 3
   },

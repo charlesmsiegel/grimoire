@@ -1,0 +1,21 @@
+{#- The speaker pick's one question, as `decide()` asks it
+    (`response_protocol.selector_item`, a choice under the id `next`, with
+    null allowed). No vars. The criteria are the retired one-call prompt's
+    (`response_selector.j2`, deleted when slice F switched the pick onto
+    `decide()`), moved here whole (`verify_templates.py`'s SELECTOR_CARRIED
+    holds each fragment), but for two words reworded to fit where the decide
+    prompt puts things: the transcript is ABOVE the question, and the roster
+    is the choice's options rather than a listing.
+    The options are the round's eligible refs, each described by its name,
+    and `grimoire`, described by `response_selector_grimoire.j2`; the
+    transcript and the user direction are the item's context
+    (`response_selector_context.j2`), and the reply format is
+    `decide/system.j2`'s. -#}
+Choose at most one initial speaker for the observable conversation above.
+Choose a listed NPC reference, "grimoire", or null to return control to the player.
+An established NPC's actions or physical reactions belong to that NPC, even without speech.
+Choose their reference for those contributions. Grimoire does not continue their actions
+or provide a closing recap. A character already established in the cast or transcript
+is not new just because they are missing from the options.
+Choose null when there is no distinct contribution or the player's decision is needed.
+Never invent private knowledge or script reactions.

@@ -1,4 +1,5 @@
-{#- The confirmation call's one user message. Vars:
+{#- The scene-break decision item's context (`scene_break.build_item`), which
+    `decide/user.j2` shows above the question. Vars:
       title — the scene's own title, so a proposed NEXT title is not a
               restatement of the one already on screen. "" when untitled.
       facts — dict from chronicle.scene_facts(): location (str), date (str),
@@ -13,15 +14,7 @@
               mean nothing to a reader.
       transcript — str (see snippets/transcript.j2): the posts since this scene
               was last considered, NOT the whole scene. -#}
-{%- set head = [] -%}
-{%- if title -%}{%- set _ = head.append("Scene: " ~ title) -%}{%- endif -%}
-{%- if facts and facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
-{%- if facts and facts.get("date") -%}{%- set _ = head.append("Date: " ~ facts.date) -%}{%- endif -%}
-{%- if facts and facts.get("cast") -%}{%- set _ = head.append("Present: " ~ (facts.cast | join(", "))) -%}{%- endif -%}
-{%- if head -%}
-{{ head | join("\n") }}
-
-{% endif -%}
+{%- include "snippets/scene_break_head.j2" -%}
 {%- if signals -%}
 You are being asked because:
 {% for s in signals %}- {{ s.detail }}

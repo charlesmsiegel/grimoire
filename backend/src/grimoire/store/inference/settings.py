@@ -131,10 +131,13 @@ def _sel(resolved: ResolvedInference) -> dict | None:
 
 
 def _problem(resolved: ResolvedInference) -> str | None:
-    """The seam's refusal of `resolved`, as the sentence it would answer with."""
+    """The seam's refusal of `resolved`, as the sentence it would answer with;
+    else, for a decide resolution whose primary was skipped (spec 5.5), the
+    sentence saying so (`resolve.skip_text`), so the row shows why its model
+    is not the one answering."""
     refused = resolve.refusal(resolved)
     if refused is None:
-        return None
+        return resolve.skip_text(resolved)
     body = refused[1]
     return str(body["detail"]) if isinstance(body, dict) else body
 
@@ -142,6 +145,20 @@ def _problem(resolved: ResolvedInference) -> str | None:
 def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
     silence = resolve.Silence(scope, frozenset(keys.role_key(role, p) for p in keys.PARTS))
     resolved = resolve.resolve("", cid, role=role)
+    # The card reads the role as a generation, which is right for a generate
+    # route that uses it -- and wrong, for the fallback, on the decide routes
+    # the Decision card lists: a decide-only Decision model is skipped for its
+    # fallback there (spec 5.5), so a same-provider fallback that a generation
+    # would drop as a retry is the one call those routes send. Until slice H
+    # gives the card an operation of its own, it reads Decision both ways and
+    # says what the decide routes do (`decide_skip`, `skip_text`'s sentence)
+    # rather than "never tried" about the fallback answering them.
+    decided = (resolve.resolve("", cid, role=role, operation="decide")
+               if role == "decision" else None)
+    skip = resolve.skip_text(decided) if decided is not None else None
+    fallback_problem = resolved.fallback_problem
+    if skip is not None and fallback_problem == resolve.SAME_PROVIDER:
+        fallback_problem = None
     return {"stored": _stored(own, functools.partial(keys.role_key, role)),
             "fallback": _stored(own, functools.partial(keys.fallback_key, role)),
             "resolves": _sel(resolved),
@@ -153,10 +170,14 @@ def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
             "fallback_missing": list(resolved.fallback_missing),
             # Why the fallback cannot send at all (no key, no base URL), so it
             # is left out: as silent at the seam as a dropped one.
-            "fallback_problem": resolved.fallback_problem}
+            "fallback_problem": fallback_problem,
+            # On Decision: that the decide routes skip its decide-only model
+            # for the fallback; None otherwise, and on every other role.
+            "decide_skip": skip}
 
 
-def _route_row(route: routing.Route, own: dict, scope: str, cid: str) -> dict:
+def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
+               uses: str) -> dict:
     task = route.tasks[0]
     resolved = resolve.resolve(task, cid, operation=route.operation)
     inherited = resolve.resolve(task, cid, operation=route.operation,
@@ -173,7 +194,10 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str) -> dict:
             "fallback_missing": list(resolved.fallback_missing),
             "fallback_problem": resolved.fallback_problem,
             # The role that supplied the selection; None for a pin, or nothing.
-            "role": resolved.role or None}
+            "role": resolved.role or None,
+            # The role the route walks to get there (`cascade.walked_role`):
+            # what the Decision card lists, inheriting or not. None for a pin.
+            "uses": uses or None}
 
 
 def _embedding_card(cfg: dict, lookup: translate.Lookup) -> dict:
@@ -236,12 +260,17 @@ def view(scope: str, cid: str = "") -> dict:
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
     current = keys.is_current(cfg)
+    glob = translate.global_view(cfg, lookup)
     if scope == "campaign":
         own = translate.campaign_view(in_use.campaign_meta(cid, strict=False), lookup,
                                       current=current)
     else:
         cid = ""
-        own = translate.global_view(cfg, lookup)
+        own = glob
+
+    def uses(route: routing.Route) -> str:
+        return cascade.walked_role(route, campaign=own if scope == "campaign" else {},
+                                   glob=glob, exists=lambda c: lookup(c) is not None)
     roles: dict[str, dict] = {role: _role_card(role, own, scope, cid)
                               for role in keys.GENERATIVE_ROLES}
     if scope == "global":
@@ -251,7 +280,7 @@ def view(scope: str, cid: str = "") -> dict:
         "newer": keys.is_newer(cfg),
         "migration": migrate.status().as_dict(),
         "roles": roles,
-        "routes": [_route_row(r, own, scope, cid) for r in routing.ROUTES
+        "routes": [_route_row(r, own, scope, cid, uses(r)) for r in routing.ROUTES
                    if scope == "global" or r.campaign_scoped],
         "providers": _providers(),
         "presets": [{"id": p["id"], "name": p["name"]}

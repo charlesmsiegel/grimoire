@@ -36,6 +36,17 @@ here, so there is one recogniser.
 There is no marker family: an operation call that cannot name its task is the
 bug this exists to catch.
 
+The decide half (slice F). `decide` is a common method name too --
+`Examination.decide` in continuity, `self.decide` in world-info activation --
+so only a call through a binding of `grimoire.inference` is an operation call:
+
+- every `decide` call passes a first positional string literal whose route
+  (`routing.route`) has `operation == "decide"`, and passes `resolved=`;
+- the operation is never handed around as a value (a `decide` passed to
+  `run_in_threadpool` would hide its literal);
+- the safety rule (spec 14), both ways: every task of a decide route is the
+  literal of some call, and a route defaulting to the Decision role decides.
+
 **Where the space comes from** (spec 7.3, rule 2). `embed_sync` never
 re-resolves the space it is handed, so nothing in it stops a call site from
 building one by hand -- a dict off a connection's `base_url` and `api_key`
@@ -77,7 +88,7 @@ from __future__ import annotations
 
 import ast
 import functools
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 import pytest
 
@@ -893,3 +904,163 @@ def test_bindings_resolve_the_embed_module():
     # One level up from a top-level store module is `grimoire.store`.
     one = ast.parse("from .inference import embed\n")
     assert bindings(one, "grimoire.store.semsearch", EMBED_MODULE)[0] == {"embed"}
+
+
+# ---- the decide half (slice F) ----
+
+#: The module `decide` lives in, and the operation's name there.
+DECIDE_MODULE = "grimoire.inference"
+DECIDE = "decide"
+
+#: At least this many operation calls exist (vacuity insurance): scene-break
+#: (Task 6), voice drift (Task 8) and the speaker pick (Task 10).
+MIN_DECIDE_CALLS = 3
+
+
+def _decide_refs(tree: ast.AST, modname: str, is_pkg: bool) -> Iterator[tuple[ast.AST, bool]]:
+    """Every reference to the `decide` operation in one module, and whether it
+    is a call's `func` (False: loaded as a value)."""
+    modules, names = bindings(tree, modname, DECIDE_MODULE, is_pkg=is_pkg)
+    aliases = {local for local, name in names.items() if name == DECIDE}
+    if not modules and not aliases:
+        return
+    funcs = {id(n.func) for n in ast.walk(tree) if isinstance(n, ast.Call)}
+    for node in ast.walk(tree):
+        through_module = (isinstance(node, ast.Attribute) and node.attr == DECIDE
+                          and _dotted(node.value) in modules)
+        by_name = (isinstance(node, ast.Name) and node.id in aliases
+                   and isinstance(node.ctx, ast.Load))
+        if through_module or by_name:
+            yield node, id(node) in funcs
+
+
+def decide_calls(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[ast.Call]:
+    """Every operation call: `x.decide(...)` for a module binding `x`, or
+    `y(...)` for a name binding `y` of `decide`."""
+    called = {id(ref) for ref, is_call in _decide_refs(tree, modname, is_pkg) if is_call}
+    return [n for n in ast.walk(tree) if isinstance(n, ast.Call) and id(n.func) in called]
+
+
+def decide_problems(tree: ast.AST, modname: str, is_pkg: bool = False, *,
+                    route_of: Callable[[str], routing.Route | None] = routing.route,
+                    ) -> list[str]:
+    """What is wrong with one module's use of the `decide` operation."""
+    out: list[str] = []
+    for ref, is_call in _decide_refs(tree, modname, is_pkg):
+        if not is_call:
+            out.append(f"{modname}:{ref.lineno}: decide handed around as a value")
+    for call in decide_calls(tree, modname, is_pkg):
+        task = _task(call)
+        if task is None:
+            out.append(f"{modname}:{call.lineno}: decide's task is not a string literal")
+            continue
+        route = route_of(task)
+        if route is None or route.operation != "decide":
+            out.append(f"{modname}:{call.lineno}: {task!r} is not a task of a decide route")
+        if not any(k.arg == "resolved" for k in call.keywords):
+            out.append(f"{modname}:{call.lineno}: decide({task!r}) passes no resolved=")
+    return out
+
+
+def _decided_tasks() -> set[str]:
+    return {task for modname, tree, is_pkg in _walk()
+            for call in decide_calls(tree, modname, is_pkg)
+            if (task := _task(call)) is not None}
+
+
+def test_every_decide_names_a_task_on_a_decide_route():
+    found = [p for modname, tree, is_pkg in _walk() for p in decide_problems(tree, modname, is_pkg)]
+    assert not found, ("inference.decide must name, as a literal, a task whose route "
+                       "decides, and pass resolved=:\n  " + "\n  ".join(found))
+
+
+@pytest.mark.parametrize("task", sorted(
+    task for r in routing.ROUTES if r.operation == "decide" for task in r.tasks))
+def test_every_decide_task_is_decided_by_a_call_site(task):
+    """The safety rule (spec 14): a route flips to `decide` only in the task
+    whose call site calls `decide()` for it."""
+    assert task in _decided_tasks(), f"{task!r} is on a decide route that nothing decides"
+
+
+def test_a_route_defaulting_to_the_decision_role_decides():
+    wrong = [r.key for r in routing.ROUTES
+             if r.default_role == "decision" and r.operation != "decide"]
+    assert not wrong, f"routes on the Decision role that do not decide: {wrong}"
+
+
+def test_the_walk_finds_the_decide_call_sites():
+    found = sum(len(decide_calls(tree, modname, is_pkg)) for modname, tree, is_pkg in _walk())
+    assert found >= MIN_DECIDE_CALLS, f"only {found} decide calls found; did they move?"
+
+
+# ---- planted cases (decide) ----
+_DECIDE_PLANTED_IN = "grimoire.routes.scenes"
+
+
+def _planted_decide_problems(src: str, modname: str = _DECIDE_PLANTED_IN) -> list[str]:
+    """`decide_problems` over planted source, against the real routes: `scene-break`
+    is a decide route and `chat` is not."""
+    return decide_problems(ast.parse(src), modname)
+
+
+@pytest.mark.parametrize("src", [
+    # Not a decide route.
+    ("from .. import inference as operations\n"
+     "operations.decide('chat', items, client=c, resolved=r)\n"),
+    # Not a literal.
+    ("from .. import inference as operations\n"
+     "operations.decide(task, items, client=c, resolved=r)\n"),
+    # A decide route, but no resolution.
+    ("from .. import inference as operations\n"
+     "operations.decide('scene-break', items, client=c)\n"),
+    # A name binding, aliased.
+    ("from ..inference import decide as pick\n"
+     "pick('chat', items, client=c, resolved=r)\n"),
+    # The operation handed around as a value.
+    ("from .. import inference as operations\n"
+     "run_in_threadpool(operations.decide, 'scene-break', items, resolved=r)\n"),
+    ("from ..inference import decide\n"
+     "run_in_threadpool(decide, 'scene-break', items, resolved=r)\n"),
+    # Absolute spellings bind the same module.
+    "import grimoire.inference as ops\nops.decide('chat', items, client=c, resolved=r)\n",
+    ("import grimoire.inference\n"
+     "grimoire.inference.decide('chat', items, client=c, resolved=r)\n"),
+    "from grimoire import inference\ninference.decide(t, items, client=c, resolved=r)\n",
+])
+def test_the_decide_guard_flags_planted_cases(src):
+    assert _planted_decide_problems(src), src
+
+
+@pytest.mark.parametrize(("src", "modname"), [
+    # A route that decides, as scene-break does.
+    (("from .. import inference as operations\n"
+      "operations.decide('scene-break', items, client=c, resolved=r)\n"), _DECIDE_PLANTED_IN),
+    (("from ..inference import decide as pick\n"
+      "pick('scene-break', items, client=c, resolved=r)\n"), _DECIDE_PLANTED_IN),
+    # Other objects' `decide`, in a module that binds the operation too.
+    ("from .. import inference as operations\nexam.decide(rows)\n", _DECIDE_PLANTED_IN),
+    ("from .. import inference as operations\nself.decide(p, level, pullers)\n",
+     _DECIDE_PLANTED_IN),
+    # `inference` bound to the STORE's resolver, as routes/common.py binds it.
+    ("from ..store.inference import resolve as inference\ninference.decide('chat')\n",
+     _DECIDE_PLANTED_IN),
+    # A local `decide` in a module that never imports grimoire.inference.
+    ("def decide(x):\n    return x\ndecide('chat')\nrun(decide)\n",
+     "grimoire.store.context.activation"),
+])
+def test_the_decide_guard_passes_planted_cases(src, modname):
+    assert _planted_decide_problems(src, modname) == [], src
+
+
+def test_bindings_resolve_the_decide_module():
+    tree = ast.parse("from .. import inference as a\n"
+                     "from ..inference import decide as b, structured_messages\n"
+                     "from grimoire import inference\n"
+                     "import grimoire.inference as c\n"
+                     "from ..store import inference as not_it\n")
+    modules, names = bindings(tree, "grimoire.routes.scenes", DECIDE_MODULE)
+    assert modules == {"a", "inference", "c"}
+    assert names == {"b": "decide", "structured_messages": "structured_messages"}
+    # From a package's own `__init__`, one level up is the package itself.
+    pkg = ast.parse("from .. import inference as a\n")
+    assert bindings(pkg, "grimoire.routes", DECIDE_MODULE, is_pkg=True)[0] == {"a"}

@@ -204,7 +204,7 @@ class _AbsorbFake:
     async def stream(self, m, cfg, usage=None):
         yield "{}"
 
-    async def complete(self, m, cfg, usage=None):
+    async def complete(self, m, cfg, usage=None, *, schema=None):
         return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
 
 

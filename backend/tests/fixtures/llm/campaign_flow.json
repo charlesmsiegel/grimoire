@@ -1,5 +1,5 @@
 {
-  "note": "One cassette covering every kind of call a played campaign makes: the scene turn itself, then the absorb pass and the refreshes that hang off it, plus the two JSON side-calls (scene suggestions, tagline). Entries are matched on a phrase from the prompt that OWNS that call — see tests/test_llm_fakes.py, which renders each template and fails if its phrase has moved. Replies are hand-authored, never recorded from a provider, and are written against the frozen campaign in fixtures/frozen_campaign (ids: the-debt, salt-owed, seraphine, winifred).",
+  "note": "One cassette covering every kind of call a played campaign makes: the scene turn itself, then the absorb pass and the refreshes that hang off it, plus the two JSON side-calls (scene suggestions, tagline). Entries are matched on a phrase from the prompt that OWNS that call (a decide() call shares its system prompt with every decision, so its entry adds a phrase of its own item's context, and sits before any other entry keyed on that system phrase) — see tests/test_llm_fakes.py, which renders each template and fails if its phrase has moved. Replies are hand-authored, never recorded from a provider, and are written against the frozen campaign in fixtures/frozen_campaign (ids: the-debt, salt-owed, seraphine, winifred).",
   "entries": [
     {
       "when": {"system_contains": "You are absorbing a completed role-play scene"},
@@ -26,8 +26,8 @@
       "reply": "Speaks in short declaratives, almost never contracts, and answers a question with the ledger entry it corresponds to. Under pressure the sentences get shorter, not louder."
     },
     {
-      "when": {"system_contains": "You are checking one character's dialogue"},
-      "reply": "{\"verdict\": \"consistent\", \"note\": \"Short declaratives throughout; no contractions.\"}"
+      "when": {"system_contains": "You answer closed questions about material you are given.", "user_contains": "Voice anchor:"},
+      "reply": "{\"0\": {\"answers\": {\"verdict\": \"in_voice\"}, \"rationale\": \"\"}}"
     },
     {
       "when": {"system_contains": "propose 3-4 DISTINCT scene openings"},

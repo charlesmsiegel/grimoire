@@ -1,5 +1,8 @@
+import json
+
 import pytest
 
+from grimoire import decisions, prompts
 from grimoire.store import characters, voice_drift, worlds
 
 
@@ -46,74 +49,20 @@ def test_read_rejects_ids_that_escape_the_characters_dir(monkeypatch, tmp_path):
 
 
 # ----------------------------------------------------------------- the judge
+#
+# Asked through `decide()` (slice F): the item, its prompt and the mapping back
+# are pinned under "the judge as a decision item" below. Today's parse tests
+# went with `parse_output`; every input they fed it is a legacy reply in the
+# gate corpus (`evals/gate.py`'s `legacy_cases`, held by
+# `test_every_legacy_parse_case_is_a_gate_entry`).
 
-def test_build_prompt_includes_name_anchor_and_transcript():
-    msgs = voice_drift.build_prompt("Winifred", "Never uses contractions.",
-                                    "USER: hi\nWINIFRED: I do not.")
-    assert msgs[0]["role"] == "system"
-    body = msgs[1]["content"]
+def _context(name: str, anchor: str, transcript: str, correction: str = "") -> str:
+    return voice_drift.build_item(name, anchor, transcript, correction).context
+
+
+def test_the_item_context_includes_name_anchor_and_transcript():
+    body = _context("Winifred", "Never uses contractions.", "USER: hi\nWINIFRED: I do not.")
     assert "Winifred" in body and "contractions" in body and "I do not" in body
-
-
-def test_parse_output_reads_the_enum_not_the_prose():
-    """The note's prose is ambiguous by nature -- "no drift, though she was a
-    little terse" and "drift: she was a little terse" are the same sentence with
-    opposite meanings. Only the verdict decides."""
-    got = voice_drift.parse_output('{"verdict": "in_voice", "note": "a little terse"}')
-    assert got == {"verdict": voice_drift.IN_VOICE, "note": "a little terse"}
-
-
-def test_parse_output_tolerates_a_fenced_reply():
-    got = voice_drift.parse_output(
-        'Here you go:\n```json\n{"verdict": "drift", "note": "She used contractions."}\n```')
-    assert got == {"verdict": voice_drift.DRIFT, "note": "She used contractions."}
-
-
-def test_parse_output_accepts_unambiguous_synonyms():
-    """The judge is an LLM; rejecting a reply that plainly said the right thing
-    in the wrong word would turn a good judgment into a reported failure."""
-    for raw, want in (("in voice", voice_drift.IN_VOICE), ("in-voice", voice_drift.IN_VOICE),
-                      ("not enough", voice_drift.NOT_ENOUGH),
-                      ("insufficient", voice_drift.NOT_ENOUGH),
-                      ("unclear", voice_drift.NOT_ENOUGH),
-                      ("  DRIFT  ", voice_drift.DRIFT)):
-        assert voice_drift.parse_output('{"verdict": "%s"}' % raw)["verdict"] == want
-
-
-def test_an_ambiguous_word_never_authorizes_a_clear():
-    """Leniency is asymmetric: IN_VOICE is the only verdict that proposes a
-    destructive clear, so a word that could mean something else must not reach
-    it. "none" can mean "no drift" OR "no judgment"; "ok" can be an
-    acknowledgement. Both fall through to UNKNOWN, which preserves the flag."""
-    for raw in ("none", "ok", "fine", "n/a", "yes"):
-        assert voice_drift.parse_output('{"verdict": "%s"}' % raw)["verdict"] \
-            == voice_drift.UNKNOWN
-
-
-def test_an_unreadable_reply_is_unknown_not_in_voice():
-    """The distinction this enum exists for. A no-drift verdict is not inert --
-    with a flag standing it proposes a CLEAR -- so a garbled reply must never
-    collapse into "they sounded fine"."""
-    for bad in ("I'm sorry, I can't do that.", '{"note": "no verdict"}',
-                '{"verdict": null}', '{"verdict": "maybe?"}', '{"verdict": true}'):
-        assert voice_drift.parse_output(bad)["verdict"] == voice_drift.UNKNOWN
-
-
-def test_parse_output_nulls_collapse_to_empty():
-    assert voice_drift.parse_output('{"verdict": "drift", "note": null}')["note"] == ""
-
-
-def test_a_non_string_note_is_not_stringified_into_a_corrective():
-    """`str()` on an object or a list renders it as Python source -- nonempty
-    text that reads as a usable corrective, stages default-approved, and is then
-    injected verbatim into every following turn's system prompt. Blank instead,
-    which routes it to the caller's "drift reported with no corrective" failure."""
-    for bad in ('{"tone": "terse"}', '["terse", "clipped"]', '42', 'true'):
-        got = voice_drift.parse_output('{"verdict": "drift", "note": %s}' % bad)
-        assert got["verdict"] == voice_drift.DRIFT   # the verdict itself was readable
-        assert got["note"] == ""
-        # and with no note there is nothing to stage, so no junk reaches disk
-        assert voice_drift.stage_edit("winifred", "Winifred", "", got) is None
 
 
 # ------------------------------------------------------------- stage_edit
@@ -333,10 +282,17 @@ def test_an_oversized_note_is_not_a_usable_corrective():
 
 
 # ---- the judge is shown the correction the writer was actually given ----
+def _prompt(name: str, anchor: str, transcript: str, correction: str = "") -> list[dict]:
+    """What `decide()` sends for one judge item."""
+    from grimoire import inference
+    return inference.structured_messages(
+        [voice_drift.build_item(name, anchor, transcript, correction)],
+        explain=voice_drift.explain())
+
+
 def test_the_judge_is_told_the_correction_supersedes_the_anchor():
-    msgs = voice_drift.build_prompt(
-        "Mara", "Never uses contractions.", "Mara: I'm fine.",
-        correction="Use contractions; the last scene was too stiff.")
+    msgs = _prompt("Mara", "Never uses contractions.", "Mara: I'm fine.",
+                   correction="Use contractions; the last scene was too stiff.")
     blob = "\n".join(m["content"] for m in msgs)
     assert "Use contractions; the last scene was too stiff." in blob
     assert "supersede" in blob.lower()
@@ -346,17 +302,16 @@ def test_the_judge_prompt_no_longer_defines_drift_against_the_anchor_alone():
     """The NEGATIVE half, and the reason this test exists: an implementation
     that bolts a precedence sentence onto the old absolute wording satisfies
     the positive assertion while still contradicting itself."""
-    system = voice_drift.build_prompt("Mara", "Never uses contractions.", "x")[0]["content"]
-    assert "the anchor rules out" not in system
-    assert "consistent with the anchor" not in system
+    blob = "\n".join(m["content"] for m in _prompt("Mara", "Never uses contractions.", "x"))
+    assert "the anchor rules out" not in blob
+    assert "consistent with the anchor" not in blob
 
 
-def test_no_correction_leaves_the_user_message_as_it_was():
+def test_no_correction_leaves_the_context_as_it_was():
     """Byte-for-byte against the pre-change shape, not merely "the word
-    'correction' is absent" -- that weaker assertion is satisfied by a user
-    message which has lost the name, the anchor or the transcript entirely."""
-    user = voice_drift.build_prompt("Mara", "Clipped.", "Mara: Fine.")[1]["content"]
-    assert user.splitlines() == [
+    'correction' is absent" -- that weaker assertion is satisfied by a context
+    which has lost the name, the anchor or the transcript entirely."""
+    assert _context("Mara", "Clipped.", "Mara: Fine.").splitlines() == [
         "Character: Mara",
         "",
         "Voice anchor:",
@@ -365,3 +320,225 @@ def test_no_correction_leaves_the_user_message_as_it_was():
         "Scene transcript:",
         "Mara: Fine.",
     ]
+
+
+# ---- the judge as a decision item (slice F, spec 7.4) ----
+#
+# What the absorb phase sends through `decide()`, and how it maps the answer
+# back to what `_stage_voice_drift` stores.
+
+def _parse(reply: str, item: decisions.Item) -> decisions.ItemResult:
+    (result,) = decisions.parse(reply, (item,), explain=True)
+    return result
+
+
+def _reply(verdict: object, rationale: object = "") -> str:
+    return json.dumps({"0": {"answers": {"verdict": verdict}, "rationale": rationale}})
+
+
+def test_build_item_keeps_the_user_message_and_offers_three_verdicts():
+    """The item's context is the legacy user message (`user.j2`) byte for
+    byte, with and without a correction; its one choice offers exactly today's three real
+    verdicts, described by `option.j2`, and never a none-of-these."""
+    for correction in ("", "Keep her answers short; the last scene let her ramble."):
+        item = voice_drift.build_item("Mara", "Clipped.", "Mara: Fine.", correction)
+        assert item.context == prompts.render("voice_drift/user.j2", name="Mara",
+                                              anchor="Clipped.", transcript="Mara: Fine.",
+                                              correction=correction)
+        decisions.validate([item])
+        (q,) = item.questions
+        assert isinstance(q, decisions.Choice)
+        assert q.id == voice_drift.QUESTION_ID == "verdict"
+        assert q.allow_none is False
+        assert q.instructions == prompts.render("voice_drift/question.j2")
+        assert [o.id for o in q.options] == [voice_drift.DRIFT, voice_drift.IN_VOICE,
+                                             voice_drift.NOT_ENOUGH]
+        for o in q.options:
+            assert o.description == prompts.render("voice_drift/option.j2", verdict=o.id)
+            assert o.description.strip(), o.id
+            assert o.aliases == voice_drift.ALIASES.get(o.id, ())
+        # UNKNOWN is the failed check, never something the judge may answer.
+        assert voice_drift.UNKNOWN not in {o.id for o in q.options}
+    assert len({o.description for o in q.options}) == 3
+    assert voice_drift.explain() == prompts.render("voice_drift/explain.j2")
+    assert "corrective" in voice_drift.explain()
+
+
+def test_the_two_synonyms_still_mean_not_enough():
+    """Today's parser maps "insufficient" and "unclear" to `not_enough`; they
+    survive as the option's aliases (ruling 6), so the conservative outcome
+    is still reached by the words a judge reasonably uses for it."""
+    assert voice_drift.ALIASES == {voice_drift.NOT_ENOUGH: ("insufficient", "unclear")}
+    item = voice_drift.build_item("Mara", "Clipped.", "Mara: Fine.")
+    for word in ("insufficient", "unclear", "  Unclear ", "not enough", "not-enough"):
+        assert voice_drift.finding_of(_parse(_reply(word), item)) == {
+            "verdict": voice_drift.NOT_ENOUGH, "note": ""}, word
+    # An alias may never stand for a second option once normalised: `validate`
+    # refuses the item before anything is sent.
+    (q,) = item.questions
+    clash = decisions.Choice(q.id, q.instructions, (
+        *q.options[:2],
+        decisions.Option(voice_drift.NOT_ENOUGH, "too little", ("insufficient", "In Voice"))))
+    with pytest.raises(decisions.DecideRequestError):
+        decisions.validate([decisions.Item(item.context, (clash,))])
+
+
+def test_an_unreadable_answer_is_unknown_not_in_voice():
+    """`None` -- for whatever reason -- is `UNKNOWN`, today's failed check,
+    never `in_voice`: a no-drift verdict with a flag standing proposes a
+    default-approved CLEAR, so garbage must not read as "they sounded fine"."""
+    item = voice_drift.build_item("Mara", "Clipped.", "Mara: Fine.")
+    for reply in ("I'm sorry, I can't do that.", _reply(None), _reply("maybe?"),
+                  _reply(True), _reply("none"), _reply("ok"), _reply("unknown"),
+                  '{"0": {"answers": {}, "rationale": "no verdict"}}'):
+        finding = voice_drift.finding_of(_parse(reply, item))
+        assert finding["verdict"] == voice_drift.UNKNOWN, reply
+        assert voice_drift.check_failure(finding) == "unreadable verdict from the voice judge"
+    # A reason other than unreadable is no answer either.
+    for reason in decisions.REASONS:
+        result = decisions.ItemResult({"verdict": decisions.Answer(None, reason)})
+        assert voice_drift.finding_of(result) == {"verdict": voice_drift.UNKNOWN, "note": ""}
+    # A readable verdict carries its rationale as the note.
+    assert voice_drift.finding_of(_parse(_reply("drift", " She used contractions. "), item)) == {
+        "verdict": voice_drift.DRIFT, "note": "She used contractions."}
+
+
+def _route_source():
+    import ast
+    import inspect
+    import textwrap
+
+    from grimoire.routes import scenes
+
+    # With `_voice_item`, the helper the route hands to a worker thread so the
+    # item renders off the loop: what it calls, the route calls.
+    return ast.parse("\n".join(textwrap.dedent(inspect.getsource(fn))
+                               for fn in (scenes._stage_voice_drift, scenes._voice_item)))
+
+
+def _route_reasons() -> set[str]:
+    """Every reason string `_stage_voice_drift` appends to `failed` as a
+    literal or an f-string over `store` alone, evaluated."""
+    import ast
+
+    from grimoire import store
+
+    found = set()
+    for node in ast.walk(_route_source()):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key, value in zip(node.keys, node.values, strict=True):
+            if not (isinstance(key, ast.Constant) and key.value == "reason"):
+                continue
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                found.add(value.value)
+            elif isinstance(value, ast.JoinedStr) and {
+                    n.id for n in ast.walk(value) if isinstance(n, ast.Name)} <= {"store"}:
+                found.add(eval(compile(ast.Expression(value), "<route>", "eval"),
+                               {"store": store}))
+    return found
+
+
+def _route_calls() -> set[str]:
+    """The dotted names `_stage_voice_drift` calls."""
+    import ast
+
+    return {ast.unparse(node.func) for node in ast.walk(_route_source())
+            if isinstance(node, ast.Call)}
+
+
+def test_check_failure_reasons_match_the_route():
+    """The three per-finding failures `_stage_voice_drift` reports are
+    `check_failure`'s: the route calls it rather than keeping the checks
+    inline, so no reason string of its own survives there -- same order, same
+    checks, same words, in one place."""
+    unreadable = "unreadable verdict from the voice judge"
+    no_note = "drift reported with no corrective"
+    too_long = (f"the voice judge returned a corrective over {voice_drift.MAX_NOTE} "
+                f"characters, too long to put in front of every following turn")
+    assert "store.voice_drift.check_failure" in _route_calls()
+    assert not {unreadable, no_note, too_long} & _route_reasons()
+
+    long_note = "She hedged. " * 100
+    assert len(long_note.strip()) > voice_drift.MAX_NOTE
+    cases = [
+        ({"verdict": voice_drift.UNKNOWN, "note": ""}, unreadable),
+        ({"verdict": voice_drift.UNKNOWN, "note": "junk"}, unreadable),
+        ({"verdict": voice_drift.DRIFT, "note": ""}, no_note),
+        ({"verdict": voice_drift.DRIFT, "note": long_note}, too_long),
+        ({"verdict": voice_drift.DRIFT, "note": "x" * voice_drift.MAX_NOTE}, None),
+        ({"verdict": voice_drift.DRIFT, "note": "She used contractions."}, None),
+        # Both note checks are drift-only: no other verdict stores a note.
+        ({"verdict": voice_drift.IN_VOICE, "note": ""}, None),
+        ({"verdict": voice_drift.IN_VOICE, "note": long_note}, None),
+        ({"verdict": voice_drift.NOT_ENOUGH, "note": long_note}, None),
+    ]
+    for finding, want in cases:
+        assert voice_drift.check_failure(finding) == want, finding
+
+
+# ---- the gathering the absorb phase does per NPC, as store helpers ----
+
+def test_the_route_gathers_each_npc_through_the_store_helpers():
+    """`_stage_voice_drift` builds what it sends from the same helpers the
+    eval case does (`evals/cases.py`), so the two cannot drift apart: the
+    locked name, the item over the effective anchor and the correction still
+    in force (`judge_item`, through `live_correction`), and the answer mapped
+    back by `finding_of`. None of that gathering is restated inline."""
+    calls = _route_calls()
+    assert {"store.voice_drift.locked_name", "store.voice_drift.read_record",
+            "store.voice_drift.judge_item", "store.voice_drift.explain",
+            "store.voice_drift.finding_of", "operations.decide"} <= calls
+    assert not {"store.voice_drift.build_item", "store.voice_drift.live_correction",
+                "store.voice_drift.fingerprint_matches", "store.voice_anchors.effective",
+                "store.characters.read_card", "client.complete"} & calls
+
+
+def test_live_correction_keeps_only_a_note_still_in_force():
+    """`context/cast.py`'s test, the judge's side: a blank provenance predates
+    the field and counts; a note fingerprinted to a replaced anchor does not."""
+    record = {"text": "Clipped.\nNever uses contractions.", "id": "nonce1"}
+    current = voice_drift.anchor_fingerprint(record["text"], record["id"])
+    legacy = voice_drift._digest(record["text"].strip(), record["id"])
+    stale = voice_drift.anchor_fingerprint("Warm and rambling.", "nonce1")
+    for stored, want in (("", "She hedged."), (current, "She hedged."),
+                         (legacy, "She hedged."), (stale, "")):
+        assert voice_drift.live_correction({"note": "She hedged.", "anchor": stored},
+                                           record) == want, stored
+    assert voice_drift.live_correction({"note": "", "anchor": ""}, record) == ""
+
+
+def test_judge_item_sends_the_effective_anchor_and_the_live_correction(monkeypatch):
+    record = {"text": "Clipped.", "id": "nonce1"}
+    flag = {"note": "Keep it short.",
+            "anchor": voice_drift.anchor_fingerprint("Clipped.", "nonce1")}
+    monkeypatch.setattr(voice_drift.voice_anchors, "effective", lambda text: f"<{text}>")
+    item = voice_drift.judge_item("Mara", record, "Mara: Fine.", flag)
+    assert item == voice_drift.build_item("Mara", "<Clipped.>", "Mara: Fine.",
+                                          correction="Keep it short.")
+    stale = {**flag, "anchor": voice_drift.anchor_fingerprint("Warm.", "nonce1")}
+    assert voice_drift.judge_item("Mara", record, "Mara: Fine.", stale) == \
+        voice_drift.build_item("Mara", "<Clipped.>", "Mara: Fine.")
+
+
+def test_locked_name_reads_the_locked_cards_raw_name(monkeypatch, tmp_path):
+    from grimoire.store import appearances, campaigns, scenes
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    sera, _ = characters.create_character(wroot, "Seraphine Vale", "default",
+                                          characters.blank_card("Seraphine Vale"))
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    sid = scenes.create_scene(cid, "The Night Dock")
+    appearances.appear(cid, sid, "characters", sera, "default", "npc")
+    assert voice_drift.locked_name(cid, sera) == "Seraphine Vale"
+    with pytest.raises(LookupError):
+        voice_drift.locked_name(cid, "mara")      # never appeared here
+    # Raw, never checked or substituted: the caller decides what to do with it.
+    monkeypatch.setattr(voice_drift.characters, "read_card",
+                        lambda root, cid_, vid: {"data": {"name": 42}})
+    assert voice_drift.locked_name(cid, sera) == 42
+    monkeypatch.setattr(voice_drift.characters, "read_card",
+                        lambda root, cid_, vid: {"data": ["not", "an", "object"]})
+    assert voice_drift.locked_name(cid, sera) is None

@@ -238,6 +238,34 @@ def test_unset_fast_and_decision_inherit(client):
     assert _row(got, "absorb")["role"] == "fast"
 
 
+def test_a_route_row_names_the_role_it_walks(client):
+    """CODE-M3: `uses` is the role a route walks (spec 5.1) -- what the
+    Decision card lists -- where `role` is the one that SUPPLIED the
+    selection. With Decision unset the three decide routes still use it,
+    while Fast (and, unset too, Primary) supplies them; a pin uses none."""
+    cid = _fresh(client)
+    got = _global(client)
+    deciding = {r.key for r in routing.ROUTES if r.default_role == "decision"}
+    assert deciding == {"speaker", "scene_break", "voice_drift"}
+    assert {r["key"] for r in got["routes"] if r["uses"] == "decision"} == deciding
+    assert {_row(got, k)["role"] for k in deciding} == {"primary"}
+    assert _row(got, "absorb")["uses"] == "fast"
+    got = _ok(client, {"routes": {"absorb": {"use": "decision"},
+                                  "scene_break": {"use": "model", "pin": {
+                                      "provider": "spare", "model": "vendor/pin"}}}})
+    assert _row(got, "absorb")["uses"] == "decision"
+    assert _row(got, "scene_break")["uses"] is None
+    # At the campaign the global pin answers a row that names nothing...
+    campaign = client.get(f"/api/campaigns/{cid}/inference").json()
+    assert _row(campaign, "scene_break")["uses"] is None
+    # ...until the campaign sets the role the route uses, which outranks it
+    # (spec 5.1 step 3).
+    got = _ok(client, {"roles": {"decision": {"selection": {
+        "provider": "spare", "model": "vendor/decide"}}}}, cid)
+    assert _row(got, "scene_break")["uses"] == "decision"
+    assert _row(got, "scene_break")["role"] == "decision"
+
+
 def test_a_role_without_a_provider_reports_the_seams_problem(client):
     _fresh(client)
     _ok(client, {"roles": {"primary": {"selection": {"provider": ""}}}})

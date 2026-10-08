@@ -60,7 +60,7 @@ MAX_MARKERS = 3
 #: Readers that turn posts into prompt text without `transcript_text`.
 PINNED = {
     "store/context/assemble.py": ("_assemble",),
-    "routes/character_turns.py": ("_selector_messages",),
+    "routes/character_turns.py": ("_selector_item",),
     "routes/tracker.py": ("_locate", "_context_posts"),
     "routes/passage_characters.py": ("draft_character",),
 }

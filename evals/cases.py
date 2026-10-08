@@ -36,7 +36,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from grimoire import prompts
+import jinja2
+
+from grimoire import decisions, inference, prompts
 from grimoire.store import absorb as absorb_store
 from grimoire.store import (
     appearances,
@@ -54,23 +56,28 @@ from grimoire.store import (
     events,
     facts,
     groupstate,
+    overlay,
     pcs,
     playstate,
     plot,
     relationships,
     response_protocol,
     response_targets,
+    scene_break,
     scenes,
     sheets,
     state_fence,
     steering,
     styles,
     suggest,
+    voice_anchors,
+    voice_drift,
     worlds,
 )
 from grimoire.store.absorb import parse as absorb_parse
 from grimoire.store.continuity import canon, identity, pending, pressure, reconcile
 from grimoire.store.continuity import drivers as continuity_drivers
+from grimoire.store.regex import view as regex_view
 from grimoire.store.tracker import records as tracker_records
 from grimoire.store.tracker import walk as tracker_walk
 
@@ -78,6 +85,10 @@ from . import graders, slop
 from .graders import Check
 
 RECORDINGS = Path(__file__).resolve().parent / "recordings"
+
+#: Renders a decide case's schema as `decide/system.j2` does (`tojson`), so the
+#: prompt check compares the text the template would write.
+_SCHEMA_ENV = jinja2.Environment(undefined=jinja2.StrictUndefined)
 
 # The variant that `--record` overwrites with real model output. Every other
 # variant is a hand-authored counterexample and is never touched by a live run.
@@ -119,6 +130,11 @@ class Case:
     #: live run resolves it through the app's seam, so the case is graded on
     #: the model the app would send that prompt to.
     task: str = "chat"
+    #: Set on a decide case (`decide-*`): the JSON Schema `decide` would send
+    #: for this fixture (`decisions.schema`). A live run then resolves `task`
+    #: as a decide operation and asks for the reply with `schema=`, so it
+    #: measures what production sends (I9). Replay never calls it.
+    schema: Callable[[dict], dict] | None = None
 
     @property
     def baseline(self) -> Recording:
@@ -1306,6 +1322,287 @@ def grade_scene_suggestions(ctx: dict, output: str) -> list[Check]:
     ]
 
 
+# ------------------------------------------- case 10: decide, scene-break
+
+#: The cadence the fixture is scored at: six posts is twice it, so the length
+#: signal fires on its own at full weight and nothing else does.
+DECIDE_BREAK_EVERY = 3
+
+
+def build_decide_scene_break() -> dict:
+    """A Saltmarch scene whose beat has resolved: Seraphine settles Mara's debt
+    and the ledger changes hands. Placed at the pier on a date, with the cast
+    seated, so the item's context carries the whole head."""
+    wid, wroot, sera = _world_with_sera()
+    mara, _ = characters.create_character(wroot, "Mara", "default",
+                                          characters.blank_card("Mara"))
+    pier = entities.create_entity(wroot, "locations", "Saltmarch Pier",
+                                  "Salt-white planks over black water.")
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    croot = campaigns.campaign_root(cid)
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+
+    sid = scenes.create_scene(cid, "The Debt at the Pier")
+    appearances.appear(cid, sid, "characters", sera, "default", "npc")
+    appearances.appear(cid, sid, "characters", mara, "default", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    scenes.set_location(cid, sid, pier)
+    sid = scenes.set_datetime(cid, sid, "2026-07-05")["id"]
+
+    scenes.append_message(cid, sid, "user", "I set Seraphine's purse on the crate between them.",
+                          speaker="Winifred")
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Seraphine Vale", "content": "Count it, Mara. Every coin you are owed, "
+                                                 "and the tide's interest besides."},
+    ])
+    scenes.append_message(cid, sid, "user", "I watch Mara count.", speaker="Winifred")
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Mara", "content": "It is all here. We are square, Seraphine."},
+        {"speaker": None, "content": "Mara slides the ledger across the crate, and Seraphine "
+                                     "tucks it under her coat."},
+    ])
+    scenes.append_message(cid, sid, "user", "I tell them I am glad that is over.",
+                          speaker="Winifred")
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Seraphine Vale", "content": "So am I. Nobody on this pier owes anybody "
+                                                 "anything tonight."},
+    ])
+    return {"cid": cid, "sid": sid}
+
+
+def _decide_scene_break_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item `build_item` makes from this scene,
+    gathered as `routes/scenes._break_ask` gathers it -- the posts through the
+    prompt-phase regex view, the facts, the signals the scorer found."""
+    cid, sid = ctx["cid"], ctx["sid"]
+    scene = scenes.read_scene(cid, sid)
+    messages = scene["messages"]
+    history = scenes.histories(scene["meta"])
+    scored = scene_break.evaluate(messages, history["locations"], history["times"],
+                                  {"at": 0, "locs": 0, "times": 0}, DECIDE_BREAK_EVERY)
+    assert scored["due"] and len(scored["signals"]) == 1, scored
+    shown = regex_view.view(messages, cid=cid, phase="prompt", offset=0, total=len(messages))
+    transcript = chronicle.transcript_text(shown, appearances.player_label(cid, sid))
+    item = scene_break.build_item(transcript, scored["signals"],
+                                  chronicle.scene_facts(cid, sid),
+                                  scene["meta"].get("title", ""))
+    ctx.update(items=(item,), transcript=transcript, explain=scene_break.explain())
+    return inference.structured_messages([item], explain=ctx["explain"])
+
+
+def _decide_scene_break_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=bool(ctx["explain"]))
+
+
+def grade_decide_scene_break(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    system = messages[0]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_decide_scene_break_schema(ctx))
+    explain = ctx["explain"]
+    return [*graders.grade_prompt_section(messages, "question", "scene_break/question.j2"),
+            Check("prompt.context", ctx["transcript"] in text,
+                  "the scene's transcript is not in the prompt"),
+            Check("prompt.schema", schema in system,
+                  "the reply's JSON Schema is not in the system message"),
+            Check("prompt.explain", bool(explain) and explain in text,
+                  "scene_break/explain.j2 no longer reaches the prompt"),
+            *graders.grade_decision(output, ctx["items"], explain=bool(explain),
+                                    question=scene_break.QUESTION_ID, expected=True)]
+
+
+# ------------------------------------------- case 11: decide, voice drift
+
+#: Seraphine's voice anchor: the standard the judge holds her lines to.
+DECIDE_DRIFT_ANCHOR = ("Clipped. Never uses contractions. Answers a question with a "
+                       "question, and volunteers nothing.")
+
+#: Her outstanding correction from an earlier scene. It narrows the anchor
+#: without loosening it, so the lines below break both and the right verdict
+#: stays `drift` -- the case proves the correction reaches the judge, not that
+#: it changes the answer.
+DECIDE_DRIFT_CORRECTION = ("Keep Seraphine's answers to a sentence; last scene she "
+                           "explained herself at length.")
+
+
+def build_decide_voice_drift() -> dict:
+    """A night-dock scene where Seraphine, whose anchor is clipped and
+    contraction-free, chatters loosely in contractions -- with a standing
+    correction in force, fingerprinted to the anchor it was judged against."""
+    wid, wroot, sera = _world_with_sera()
+    voice_anchors.write(wroot, sera, DECIDE_DRIFT_ANCHOR)
+    cid = campaigns.create_campaign("Saltmarch Nights", wid)
+    croot = campaigns.campaign_root(cid)
+    pid, _ = pcs.create_pc(croot, "Winifred", [], persona=pcs.blank_persona("Winifred"))
+    sid = scenes.create_scene(cid, "The Night Dock")
+    appearances.appear(cid, sid, "characters", sera, "default", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    record = overlay.voice_anchor_record(cid, sera)
+    voice_drift.write(appearances.locked_actor_root(cid), sera, DECIDE_DRIFT_CORRECTION,
+                      voice_drift.anchor_fingerprint(record["text"], record["id"]))
+
+    scenes.append_message(cid, sid, "user", "I ask Seraphine where she was last night.",
+                          speaker="Winifred")
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Seraphine Vale",
+         "content": "Oh, y'know, I couldn't sleep, so I just wandered down to the pier "
+                    "for a bit. It's quiet there, isn't it? I didn't want to wake "
+                    "anybody, so I figured I'd let you all rest."},
+    ])
+    scenes.append_message(cid, sid, "user", "I ask whether she met anyone.",
+                          speaker="Winifred")
+    scenes.append_reply(cid, sid, [
+        {"speaker": "Seraphine Vale",
+         "content": "Nah, not really. Well, there was this fisherman, and we got to "
+                    "talking about the tides, and honestly I'd have stayed all night if "
+                    "it hadn't started raining. You'd have liked him."},
+    ])
+    return {"cid": cid, "sid": sid, "char": sera}
+
+
+def _decide_voice_drift_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item the absorb phase makes for Seraphine,
+    gathered through the store helpers `_stage_voice_drift` calls: the
+    absorb transcript through the prompt-phase regex view, the locked card's
+    name (`locked_name`), and the effective anchor with the correction only
+    while it is in force (`judge_item`)."""
+    cid, sid, aid = ctx["cid"], ctx["sid"], ctx["char"]
+    scene = scenes.read_scene(cid, sid)
+    shown = regex_view.view(scene["messages"], cid=cid, phase="prompt")
+    transcript = chronicle.transcript_text(shown, appearances.player_label(cid, sid))
+    record = overlay.voice_anchor_record(cid, aid)
+    flag = voice_drift.read_record(appearances.locked_actor_root(cid), aid)
+    name = voice_drift.locked_name(cid, aid)
+    assert isinstance(name, str), name
+    item = voice_drift.judge_item(name, record, transcript, flag)
+    ctx.update(items=(item,), transcript=transcript,
+               correction=voice_drift.live_correction(flag, record),
+               explain=voice_drift.explain())
+    return inference.structured_messages([item], explain=ctx["explain"])
+
+
+def _decide_voice_drift_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=bool(ctx["explain"]))
+
+
+def grade_decide_voice_drift(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    system = messages[0]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_decide_voice_drift_schema(ctx))
+    (choice,) = ctx["items"][0].questions
+    missing = [opt.id for opt in choice.options
+               if f"- {opt.id}: {prompts.render('voice_drift/option.j2', verdict=opt.id)}"
+               not in text]
+    return [*graders.grade_prompt_section(messages, "question", "voice_drift/question.j2"),
+            Check("prompt.options", not missing,
+                  f"verdicts missing from the prompt, or not described by option.j2: {missing}"),
+            Check("prompt.context", ctx["transcript"] in text
+                  and DECIDE_DRIFT_ANCHOR in text,
+                  "the scene's transcript or the voice anchor is not in the prompt"),
+            Check("prompt.correction", bool(ctx["correction"])
+                  and ctx["correction"] in text,
+                  "the outstanding correction did not reach the prompt"),
+            Check("prompt.schema", schema in system,
+                  "the reply's JSON Schema is not in the system message"),
+            *graders.grade_decision(output, ctx["items"], explain=bool(ctx["explain"]),
+                                    question=voice_drift.QUESTION_ID,
+                                    expected=voice_drift.DRIFT,
+                                    max_rationale=voice_drift.MAX_NOTE)]
+
+
+# ------------------------------------------- case 12: decide, speaker
+
+#: The scene's posts, oldest first, as `(role, speaker, content)`: the
+#: player's post last, putting a question to Winifred by name. The director
+#: note between them is a synthetic line the pick never reads.
+DECIDE_SPEAKER_POSTS = [
+    ("user", "", ("I set the lantern on the crate between Mara and Winifred and wait "
+                  "for the tide bell.")),
+    ("assistant", "Mara", "Well? Somebody say something, or I am going home."),
+    ("assistant", scenes.DIRECTOR_SPEAKER, "Keep Mara impatient."),
+    ("user", "", "Winifred, where were you when the tide turned?"),
+]
+
+
+def build_decide_speaker() -> dict:
+    """Two NPCs who could open the round -- Mara cast first, and the last to
+    speak -- and a player who has just asked the other one a question
+    directly: the pick is Winifred."""
+    wid = worlds.create_world("Realm")
+    wroot = worlds.world_root(wid)
+    npcs = [characters.create_character(wroot, name, "default",
+                                        characters.blank_card(name))[0]
+            for name in ("Mara", "Winifred")]
+    cid = campaigns.create_campaign("Saltmarch", wid)
+    croot = campaigns.campaign_root(cid)
+    pid, _ = pcs.create_pc(croot, "Rowan", [], persona=pcs.blank_persona("Rowan"))
+    sid = scenes.create_scene(cid, "The Tide Bell")
+    for npc in npcs:
+        appearances.appear(cid, sid, "characters", npc, "default", "npc")
+    appearances.appear(cid, sid, "pcs", pid, "default", "player")
+    for role, speaker, content in DECIDE_SPEAKER_POSTS:
+        scenes.append_message(cid, sid, role, content, **({"speaker": speaker} if speaker
+                                                          else {}))
+    return {"cid": cid, "sid": sid}
+
+
+def _decide_speaker_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the item `_select` sends, gathered through the
+    store helpers `_selector_item` calls: the present cast but the player
+    (`npc_roster`, every NPC eligible, as in a round nobody sits out of) and
+    the observable transcript through the prompt-phase regex view
+    (`observable_conversation`). No rationale is asked for."""
+    cid, sid = ctx["cid"], ctx["sid"]
+    roster = response_protocol.npc_roster(appearances.scene_cast(cid, sid))
+    messages = scenes.read_scene(cid, sid)["messages"]
+    # The twin of `_selector_item`'s lambda (routes/character_turns.py), the
+    # one `test_regex_prompt_guard.py` holds to the prompt phase: keep the two
+    # identical, since only the route's is guarded.
+    conversation = response_protocol.observable_conversation(
+        messages, lambda posts, offset, total: regex_view.view(
+            posts, cid=cid, phase="prompt", offset=offset, total=total))
+    item = response_protocol.selector_item(roster, conversation)
+    ctx.update(items=(item,), roster=roster, conversation=conversation)
+    return inference.structured_messages([item])
+
+
+def _decide_speaker_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=False)
+
+
+def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    system = messages[0]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_decide_speaker_schema(ctx))
+    grimoire = prompts.render("scene/response_selector_grimoire.j2")
+    wanted = [f"- {response_protocol.SELECTOR_QUESTION} (choice, or null for none of these): ",
+              *(f"- {entry['ref']}: {entry['name']}" for entry in ctx["roster"]),
+              f"- {response_protocol.GRIMOIRE_REF}: {grimoire}"]
+    missing = [line for line in wanted if line not in text]
+    heard = [turn["content"] for turn in ctx["conversation"] if turn["content"] not in text]
+    return [*graders.grade_prompt_section(messages, "question",
+                                          "scene/response_selector_question.j2"),
+            Check("prompt.options", bool(grimoire.strip()) and not missing,
+                  f"the roster, grimoire or null is missing from the choice: {missing}"),
+            Check("prompt.context", ctx["items"][0].context in text and not heard,
+                  f"the observable transcript is not in the prompt: {heard}"),
+            Check("prompt.posts", len(ctx["conversation"]) == 3,
+                  f"the pick read {len(ctx['conversation'])} posts, not the scene's three "
+                  "story posts (the gathering kept a synthetic line or lost a post)"),
+            Check("prompt.synthetic", DECIDE_SPEAKER_POSTS[2][2] not in text,
+                  "a director note reached the speaker pick's prompt"),
+            Check("prompt.schema", schema in system,
+                  "the reply's JSON Schema is not in the system message"),
+            *graders.grade_decision(output, ctx["items"], explain=False,
+                                    question=response_protocol.SELECTOR_QUESTION,
+                                    expected="characters:winifred")]
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1494,6 +1791,67 @@ CASES: tuple[Case, ...] = (
          recordings=(
              Recording(BASELINE, ext="json"),
              Recording("undecodable", ("suggest.json",), "json"))),
+    Case(id="decide-scene-break",
+         task="scene-break",
+         hypothesis="asked through decide() whether a scene whose beat has resolved is "
+                    "over, the reply is the schema's object, answers yes, and says why",
+         build=build_decide_scene_break,
+         prompt=_decide_scene_break_prompt,
+         grade=grade_decide_scene_break,
+         schema=_decide_scene_break_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-rationale: nothing decodes, so the answer and
+             # rationale checks are not reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # Well formed, with a reason, and the wrong answer.
+             Recording("wrong", ("decide.answer",), "json"),
+             # The right answer and nothing said about why.
+             Recording("no-reason", ("decide.rationale",), "json"))),
+    Case(id="decide-voice-drift",
+         task="voice-drift",
+         hypothesis="asked through decide() whether a character with a clipped, "
+                    "contraction-free anchor and a standing correction drifted when she "
+                    "chattered in contractions, the reply is the schema's object, answers "
+                    "drift, and gives a corrective short enough to store",
+         build=build_decide_voice_drift,
+         prompt=_decide_voice_drift_prompt,
+         grade=grade_decide_voice_drift,
+         schema=_decide_voice_drift_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-corrective: nothing decodes, so the answer and
+             # rationale checks are not reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # Well formed, and judged in voice: the clear a garbled judge
+             # must never reach, reached by a readable wrong answer.
+             Recording("wrong", ("decide.answer",), "json"),
+             # Drift with no corrective: the route reports it as a failed
+             # check, so the case fails it too.
+             Recording("no-note", ("decide.rationale",), "json"),
+             # Drift with a corrective over MAX_NOTE, which the route refuses
+             # to put in front of every following turn.
+             Recording("long-note", ("decide.rationale",), "json"))),
+    Case(id="decide-speaker",
+         task="response-selector",
+         hypothesis="asked through decide() who opens a round in which the player has "
+                    "just put a question to one of two NPCs by name, the reply is the "
+                    "schema's object and picks that NPC",
+         build=build_decide_speaker,
+         prompt=_decide_speaker_prompt,
+         grade=grade_decide_speaker,
+         schema=_decide_speaker_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-reference: nothing decodes, so the answer check is
+             # not reported rather than failed.
+             Recording("undecodable", ("decide.json",), "json"),
+             # Well formed, naming an NPC the round does not offer: today's
+             # "ineligible or repeated speaker".
+             Recording("off-roster", ("decide.answer",), "json"),
+             # Well formed, and a null: control handed back to the player
+             # when the player had asked someone a question.
+             Recording("abstained", ("decide.answer",), "json"))),
 )
 
 BY_ID = {c.id: c for c in CASES}

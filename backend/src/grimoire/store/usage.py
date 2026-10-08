@@ -295,7 +295,7 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
 
     What served the call (spec 9.1-9.3), each written only when it has a
     value, so an older build reads the row exactly as it did: ``operation``
-    (``generate``, ``embed``, ...), ``provider_id`` (the provider's store id;
+    (``generate``, ``embed``, ``decide``, ...), ``provider_id`` (the provider's store id;
     ``provider`` stays the adapter kind it has always been), ``requested_model``
     (the model asked for, only when the answer named another -- a dated
     snapshot -- because a model's rates are stated under what was asked),

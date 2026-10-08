@@ -791,7 +791,7 @@ const NONE = { provider: "", model: "", preset: "" };
 /** A role this campaign leaves to the library: it inherits Saltmarch's model. */
 function inheritedRole(model: string) {
   return { stored: NONE, fallback: NONE, problem: null, fallback_missing: [],
-           fallback_problem: null,
+           fallback_problem: null, decide_skip: null,
            resolves: RESOLVED("saltmarch", "Saltmarch Router", model),
            inherits: RESOLVED("saltmarch", "Saltmarch Router", model) };
 }
@@ -1109,6 +1109,24 @@ describe("the Models section", () => {
     expect(await section.findByText(
       "The fallback cannot be sent (Endpoint base URL not set), so it is never tried."))
       .toBeInTheDocument();
+  });
+
+  test("the Decision role says its decide routes skip a decide-only model", async () => {
+    // Brutal-2 #1: the server's `decide_skip`, in place of a same-provider
+    // "never tried" about the fallback answering the decide routes.
+    const skip = "This decision runs on the Decision role (vendor/decider on Saltmarch "
+      + "Router), which cannot generate; until native decisions arrive it is answered by "
+      + "the fallback (vendor/haiku on Saltmarch Router).";
+    const base = campaignInference();
+    (api.getCampaignInference as any).mockResolvedValue(campaignInference({
+      roles: { ...base.roles,
+               decision: { ...inheritedRole("vendor/decider"),
+                           fallback: { provider: "saltmarch", model: "vendor/haiku", preset: "" },
+                           decide_skip: skip } } }));
+    const section = await openModels();
+    fireEvent.click(section.getByRole("button", { name: /^Decision/ }));
+    expect(await section.findByText(skip)).toBeInTheDocument();
+    expect(section.queryByText(/never tried/)).not.toBeInTheDocument();
   });
 
   test("a role whose fallback is sent says nothing of a dropped one", async () => {

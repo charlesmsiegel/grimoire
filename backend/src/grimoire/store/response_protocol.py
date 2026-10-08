@@ -1,11 +1,15 @@
-"""Hidden response control, independent of provider chunk boundaries."""
+"""Hidden response control, independent of provider chunk boundaries -- and
+the speaker pick that opens a Directed round, as a decision item."""
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 
+from .. import decisions, prompts
 from . import fence, state_fence
+from .scenes import serialize as scenes_serialize
 
 _HANDOFF = re.compile(r"```[ \t]*handoff\b", re.IGNORECASE)
 _PREFIX = re.compile(
@@ -16,21 +20,129 @@ _PREFIX = re.compile(
 _PREFIX_RUN = frozenset("` \thandofHANDOF\n")
 
 
+#: The two issues a speaker pick or a handoff block can raise before anyone
+#: speaks: nothing readable came back, or what came back names nobody the
+#: round offers. `routes/character_turns._HANDOFF_ISSUES` ends a Directed
+#: chain on either, and `_round_state` stores the string as it is.
+INVALID_HANDOFF = "missing or invalid handoff"
+INELIGIBLE = "ineligible or repeated speaker"
+
+
 def validate_handoff(payload, eligible, used):
     """`(next, issue)` for a handoff payload. A ref that is eligible but has
     already spoken is reported as `"repeated speaker"`, apart from an
     ineligible one: with automatic rounds remaining, the caller turns that
     repeat into the next round's lead instead of rejecting it."""
     if not isinstance(payload, dict) or set(payload) != {"next"}:
-        return None, "missing or invalid handoff"
+        return None, INVALID_HANDOFF
     ref = payload["next"]
     if ref is None:
         return None, None
     if not isinstance(ref, str) or ref not in eligible:
-        return None, "ineligible or repeated speaker"
+        return None, INELIGIBLE
     if ref in used:
         return None, "repeated speaker"
     return ref, None
+
+
+# --- the speaker pick, asked through decide() (spec 7.4) --------------------
+#
+# `npc_roster` and `observable_conversation` gather what the pick reads,
+# `selector_item` is its request as a decision item, and `selection_of` maps
+# its answer back to the `(next, issue)` pair `_select` hands `_round_state`,
+# with today's two issue strings. Pure: the caller reads the scene, hands in
+# the prompt-phase regex view (`store.regex.view.view(..., phase="prompt")`,
+# which `test_regex_prompt_guard.py` holds the route to asking for itself) and
+# owns the call. The route and the `decide-speaker` eval case gather through
+# the same two helpers.
+
+#: The choice's id: the key today's reply format names the speaker under.
+SELECTOR_QUESTION = "next"
+
+#: The option for a contribution that belongs to no listed NPC.
+GRIMOIRE_REF = "grimoire"
+
+
+#: How many posts IN CONTEXT the pick reads, oldest first: a hidden post
+#: neither shows nor takes one of them.
+SELECTOR_POSTS = 12
+
+#: The prompt-phase view of a window of the transcript: `(posts, offset,
+#: total)`, where `offset` is the window's first index in the whole and `total`
+#: the whole's length, so a depth-limited rule counts over the whole scene.
+View = Callable[[list[dict], int, int], list[dict]]
+
+
+def npc_roster(cast: list[dict]) -> list[dict]:
+    """A scene's present cast (`appearances.scene_cast`) as roster entries,
+    `{"ref": "kind:id", "name"}` in cast order, with the player's character
+    left out: the shape `group_play` plans over and `selector_item` offers."""
+    return [{"ref": f"{a['kind']}:{a['id']}", "name": a["name"]}
+            for a in cast if a["role"] != "player"]
+
+
+def observable_conversation(messages: list[dict], view: View) -> list[dict]:
+    """The observable transcript the pick reads, as `{speaker, content}`: the
+    last `SELECTOR_POSTS` posts in context, each as `view` shows it to a model.
+    `view` is handed the window from the first kept post on, never the raw
+    transcript's text. A synthetic line (a roll, a transition, a director
+    note) keeps its slot and is not shown; a post with no speaker is the
+    player's ("You") or the narrator's ("Grimoire") by its role."""
+    kept = [i for i, m in enumerate(messages)
+            if not scenes_serialize.is_excluded(m)][-SELECTOR_POSTS:]
+    lo = kept[0] if kept else len(messages)
+    window = view(messages[lo:], lo, len(messages))
+    shown = [window[i - lo] for i in kept]
+    return [{"speaker": m.get("speaker") or ("You" if m["role"] == "user" else "Grimoire"),
+             "content": m["content"]}
+            for m in shown
+            if m.get("speaker") not in scenes_serialize.SYNTHETIC_SPEAKERS]
+
+
+def selector_item(roster: list[dict], conversation: list[dict],
+                  note: str = "") -> decisions.Item:
+    """The speaker pick as a decision item: the observable transcript (and the
+    round's user direction, when there is one) as its context, and one choice
+    over the eligible refs -- each described by its name -- and `grimoire`,
+    whose instructions are the legacy one-call prompt's criteria
+    (`scene/response_selector_question.j2`).
+
+    `allow_none`: null is a real answer, the one that returns control to the
+    player, so an explicit null is `abstained` rather than unreadable. The
+    roster is not repeated in the context, because the options are the
+    roster. `roster` is the round record's `eligible` (dicts with `ref` and
+    `name`)."""
+    context = prompts.render("scene/response_selector_context.j2",
+                             conversation=conversation, note=note)
+    options = (*(decisions.Option(entry["ref"], entry["name"]) for entry in roster),
+               decisions.Option(GRIMOIRE_REF,
+                                prompts.render("scene/response_selector_grimoire.j2")))
+    return decisions.Item(context, (decisions.Choice(
+        SELECTOR_QUESTION, prompts.render("scene/response_selector_question.j2"),
+        options, allow_none=True),))
+
+
+def selection_of(result: decisions.ItemResult) -> tuple[str | None, str | None]:
+    """`(next, issue)` from the item's result, as `validate_handoff` reported
+    today's reply:
+
+    - an answer is that speaker, with no issue;
+    - an explicit null (`abstained`) hands control back, with no issue;
+    - an answer present and naming nobody offered (`unreadable` with
+      `detail == "not_an_option"`) is `INELIGIBLE`, as an off-roster ref is;
+    - anything else -- no object, no answer, a refusal, an error -- is
+      `INVALID_HANDOFF`.
+
+    Either issue ends the chain and returns control to the player: nothing
+    unreadable is ever guessed into a speaker."""
+    answer = result.answers.get(SELECTOR_QUESTION)
+    if answer is not None and isinstance(answer.answer, str):
+        return answer.answer, None
+    if answer is not None and answer.reason == "abstained":
+        return None, None
+    if answer is not None and answer.detail == decisions.NOT_AN_OPTION:
+        return None, INELIGIBLE
+    return None, INVALID_HANDOFF
 
 
 class _PreparationPrefix:
@@ -165,7 +277,7 @@ class ResponseWatcher:
                 self.handoff = json.loads(closed.group(1)) if closed else None
             except (ValueError, TypeError):
                 self.handoff = None
-        self.issue = None if self.handoff is not None else "missing or invalid handoff"
+        self.issue = None if self.handoff is not None else INVALID_HANDOFF
         if match is None and _PREFIX.search(self.raw) is None:
             out += self.redactor.feed(self.raw[self.visible :])
         out += self.redactor.finish()
