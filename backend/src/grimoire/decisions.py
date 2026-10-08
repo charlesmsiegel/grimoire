@@ -266,20 +266,25 @@ class ItemResult:
 @dataclass(frozen=True)
 class Decision:
     """What `decide` returns: one `ItemResult` per item, in input order, the
-    backend that answered (one of `BACKENDS`), what answered, and each call's
-    usage row.
+    backend that answered (one of `BACKENDS`, or `""` when stages with
+    different backends answered items of one batch -- each `ItemResult`'s own
+    `backend` is the per-item truth), what answered, and each call's usage
+    row.
 
     What answered is `served`: every `(provider id, model)` that answered at
-    least one chunk, each once, in the order it first answered. A batch is
-    chunked (`chunks`), and each chunk is its own call down the attempt chain,
-    so one chunk may be answered by the primary and the next by its fallback.
-    A chunk that failed answered nothing and names nothing.
+    least one call, each once, in the order it first answered, across every
+    stage of the chain (`inference.stages`). A structured stage chunks its
+    items (`chunks`), and each chunk is its own call down the attempt chain;
+    a native stage makes one call per item. So one call may be answered by
+    the primary and the next by its fallback. A call that failed answered
+    nothing and names nothing.
 
     `provider` and `model` are that selection when it was the only one --
-    every answering chunk was answered by the same route -- and both `""` when
+    every answering call was answered by the same route -- and both `""` when
     `served` names more than one: no single selection answered the decision,
-    and naming the last chunk's (or the first's) would attribute the other
-    chunks' answers to a model that never saw them."""
+    and naming the last call's (or the first's) would attribute the other
+    calls' answers to a model that never saw them. `backend` follows the same
+    rule over the stages' backends."""
 
     items: tuple[ItemResult, ...]
     backend: str
@@ -287,16 +292,21 @@ class Decision:
     model: str = ""
     usage: tuple[dict[str, Any], ...] = ()
     served: tuple[tuple[str, str], ...] = ()
-    #: Each failed chunk's error, in chunk order: what `decide` would have
-    #: raised for that chunk alone -- after its schema-refusal re-sends, so a
-    #: refusing route's failure is composed with the others' as the facade
-    #: composes any both-failed call. An `llm_errors.LLMError`; typed loosely
-    #: because this module imports nothing from the package. Empty when every
-    #: chunk answered.
+    #: Each failed unit's final error, in input order: what `decide` would
+    #: have raised for that unit alone. A unit is a chunk on a structured
+    #: stage and an item on a native stage -- the units of the last stage the
+    #: items reached. Final means after the chunk's schema-refusal re-sends,
+    #: and after every stage: an item that failed on one stage and answered
+    #: on the next contributes nothing, and one that failed on every stage
+    #: contributes the stages' failures composed as the facade composes any
+    #: both-failed call (`llm.routes_failed`, each stage's own failure kept
+    #: as `words`). An `llm_errors.LLMError`; typed loosely because this
+    #: module imports nothing from the package. Empty when every item
+    #: answered.
     errors: tuple[Exception, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.backend not in BACKENDS:
+        if self.backend and self.backend not in BACKENDS:
             raise ValueError(f"unknown backend {self.backend!r}")
 
 

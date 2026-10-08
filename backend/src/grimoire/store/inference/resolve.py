@@ -705,19 +705,26 @@ def _chain(attempts: list[Attempt], operation: str, needs: frozenset[str], *,
     return _Tail(tuple(attempts), missing, fallback_missing, skipped)
 
 
+def generates(attempt: Attempt) -> bool:
+    """Whether `attempt` can generate: `generate` is not among what it is
+    KNOWN (`_missing`) not to do, so `unknown` and a name-rule guess both
+    still generate. The one test `decision_mode`, the decide skip and the
+    decide chain (`inference.stages`) ask."""
+    return not _missing(attempt, frozenset({"generate"}))
+
+
 def decision_mode(attempt: Attempt) -> str:
     """The backend that would answer `attempt` first on a decide resolution:
-    "structured" (`generate(schema=)` and the parser) unless the attempt is
-    KNOWN unable to generate -- the `_missing` rule, so `unknown` and a
-    name-rule guess both still generate. "" for an attempt that cannot.
-    Slice H returns "native" where `decide_native` is `yes`."""
-    return "" if _missing(attempt, frozenset({"generate"})) else "structured"
+    "structured" (`generate(schema=)` and the parser) when the attempt
+    `generates`, "" for an attempt that cannot. Slice H returns "native"
+    where `decide_native` is `yes`."""
+    return "structured" if generates(attempt) else ""
 
 
 def _skippable(primary: Attempt, operation: str) -> bool:
     """Whether `primary` is a decide primary known unable to generate -- the
     one the decide skip passes over, if its fallback can answer."""
-    return operation == "decide" and bool(_missing(primary, frozenset({"generate"})))
+    return operation == "decide" and not generates(primary)
 
 
 def _skipped(attempts: list[Attempt], operation: str, missing: tuple[str, ...],

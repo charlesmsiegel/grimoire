@@ -849,6 +849,29 @@ async def test_the_fallback_answers_once_the_primary_is_exhausted():
     assert provider.models == ["primary", "primary", "backup"]
 
 
+async def test_complete_retries_overrides_only_the_primary_count():
+    """Slice H ruling 12: a decide chain's fallback STAGE is its own call, with
+    the one attempt a fallback gets. `retries=` replaces the primary route's
+    count and nothing else -- the fallback the dict carries is still tried
+    once -- and without it `complete` makes exactly the requests it did."""
+    both = {"primary", "backup"}
+    provider = RouteRecorder(failing=both)
+    client = _retry_client(provider, retries=3, fallback=lambda: _route("b", "backup"))
+    with pytest.raises(LLMError):
+        await client.complete([], _route("a", "primary"), retries=1)
+    assert provider.models == ["primary", "primary", "backup"]
+
+    provider.models.clear()
+    with pytest.raises(LLMError):
+        await client.complete([], _route("a", "primary"), retries=0)
+    assert provider.models == ["primary", "backup"]
+
+    provider.models.clear()
+    with pytest.raises(LLMError):
+        await client.complete([], _route("a", "primary"))
+    assert provider.models == ["primary"] * 4 + ["backup"]
+
+
 async def test_the_fallback_is_tried_for_non_retryable_failures_too():
     """A repeat cannot fix a bad key, but a different connection can — that is
     the whole condition someone configures a fallback for."""

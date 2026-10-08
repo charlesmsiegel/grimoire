@@ -569,10 +569,13 @@ def test_answer_holds_its_invariants():
             bad()
 
 
-def test_decision_backend_is_one_of_backends():
+def test_decision_backend_is_one_of_backends_or_none_on_a_mixed_batch():
     for backend in decisions.BACKENDS:
         assert decisions.Decision((), backend).backend == backend
-    for bad in ("", "Structured", "openrouter"):
+    # Stages with different backends answered the batch (slice H): no one
+    # backend did, and each ItemResult says which answered it.
+    assert decisions.Decision((), "").backend == ""
+    for bad in ("Structured", "openrouter"):
         with pytest.raises(ValueError):
             decisions.Decision((), bad)
 

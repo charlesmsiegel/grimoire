@@ -1210,11 +1210,12 @@ class LLMClient:
         except (TypeError, ValueError):
             return DEFAULT_RETRIES
 
-    def _routes(self, conn: dict) -> list[tuple[dict, int]]:
+    def _routes(self, conn: dict, retries: int | None = None) -> list[tuple[dict, int]]:
         """The connections one generation may be attempted on, in order.
 
-        The primary with its retry budget, then the fallback with a single
-        attempt. The fallback is the one the CALL carries (`FALLBACK_KEY`, the
+        The primary with its retry budget -- `retries` when the call names
+        one (`complete(retries=)`), else the client's -- then the fallback
+        with a single attempt. The fallback is the one the CALL carries (`FALLBACK_KEY`, the
         resolver's own per-call choice) when it carries the key at all, and
         otherwise the constructor's `fallback` -- which the shipped client no
         longer sets (`routes.common.build_llm`), and which a client built by
@@ -1227,7 +1228,7 @@ class LLMClient:
         generation the primary would have served.
         """
         primary = _without_fallback(conn)
-        routes = [(primary, self._retry_count())]
+        routes = [(primary, self._retry_count() if retries is None else max(0, retries))]
         if FALLBACK_KEY in conn:
             fallback = conn[FALLBACK_KEY]
         else:
@@ -1246,7 +1247,8 @@ class LLMClient:
             routes.append((fallback_sampling(primary, _without_fallback(fallback)), 0))
         return routes
 
-    def _usable_routes(self, messages: list[dict], conn: dict) -> list[tuple[dict, int]]:
+    def _usable_routes(self, messages: list[dict], conn: dict,
+                       retries: int | None = None) -> list[tuple[dict, int]]:
         """`_routes`, minus a FALLBACK that cannot carry these messages.
 
         An image description is drafted from a multimodal message, and the
@@ -1262,7 +1264,7 @@ class LLMClient:
         route above returns a 409 the reader can act on, and answering "no
         route at all" from this layer would replace that with something worse.
         """
-        routes = self._routes(conn)
+        routes = self._routes(conn, retries)
         if _carries_parts(messages):
             routes = routes[:1] + [(c, n) for c, n in routes[1:]
                                    if c.get("kind", "openrouter") not in TEXT_ONLY_KINDS]
@@ -1420,21 +1422,34 @@ class LLMClient:
         anyway. The caller puts the schema in the prompt too, so an unflagged
         attempt can still answer it.
         """
+        return self._streamed(messages, conn, usage, schema, None)
+
+    def _streamed(self, messages: list[dict], conn: dict, usage: dict | None,
+                  schema: dict | None, retries: int | None):
+        """`stream`'s body, with the primary's retry count `complete` may
+        name (`_routes`)."""
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
             sink = None
         return _resilient(lambda route, holder: self._dispatch(messages, route, holder, schema),
-                          self._usable_routes(messages, conn), self._timeout_seconds(),
+                          self._usable_routes(messages, conn, retries), self._timeout_seconds(),
                           usage=usage, observer=self._observer, capture=sink,
                           counter=self._count_tokens)
 
     async def complete(self, messages: list[dict], conn: dict,
-                       usage: dict | None = None, *, schema: dict | None = None) -> str:
+                       usage: dict | None = None, *, schema: dict | None = None,
+                       retries: int | None = None) -> str:
         """`stream`, joined. `schema` is `stream`'s; slice F's only caller is
-        `decide` (spec 7.2's `generate(schema=)` until slice I)."""
-        return "".join([chunk async for chunk in self.stream(messages, conn, usage,
-                                                             schema=schema)])
+        `decide` (spec 7.2's `generate(schema=)` until slice I).
+
+        `retries`, when given, is the primary route's retry count in place of
+        the client's, and nothing else changes: a decide chain's fallback
+        STAGE is sent as a call of its own, and gets the one attempt a
+        fallback gets (spec 5.4, slice H ruling 12). Absent, the call is
+        exactly `stream`'s."""
+        return "".join([chunk async for chunk in self._streamed(messages, conn, usage,
+                                                                schema, retries)])
 
     async def single(self, messages: list[dict], conn: dict,
                      usage: dict | None = None) -> str:

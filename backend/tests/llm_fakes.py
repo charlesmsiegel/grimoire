@@ -5,7 +5,7 @@ is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
     async def stream(messages, conn, usage=None, *, schema=None) -> AsyncIterator[str]
-    async def complete(messages, conn, usage=None, *, schema=None) -> str
+    async def complete(messages, conn, usage=None, *, schema=None, retries=None) -> str
     async def single(messages, conn, usage=None) -> str
     async def decide_native(item, conn, usage=None, *, retries=None) -> ItemResult
     async def list_models(conn) -> list[dict]
@@ -26,6 +26,12 @@ overrides `stream(messages, conn, usage=None)` alone still takes it. `stream`
 accepts it for signature parity and records nothing: the facade's decide path
 only completes. `single` takes no `schema`, exactly as the facade's does not:
 a model test asks one model one question, and nothing asks it for a schema.
+
+`retries` is the primary's retry count a decide chain's fallback stage names
+(slice H, ruling 12). `complete` records it in `retries`, one entry per call
+(None when the call named none), and forwards it nowhere: a fake makes one
+attempt whatever it is told. `decide` passes it only when it is not None, so
+every inline fake written before it existed is still called as it was.
 
 `usage` is the accounting holder the real facade fills in place (#152). Every
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
@@ -252,6 +258,9 @@ class FakeLLM:
         #: The `schema=` each `complete` call passed, in order (None for a call
         #: that passed none).
         self.schemas: list[dict | None] = []
+        #: The `retries=` each `complete` call passed, in order (None for a
+        #: call that passed none).
+        self.retries: list[int | None] = []
         #: The connections `list_models`/`check` were asked about, in order,
         #: and the outcomes a route filed back through `note_outcome`.
         self.listed: list[dict] = []
@@ -308,11 +317,13 @@ class FakeLLM:
             raise entry
         return entry if entry.backend else replace(entry, backend="native")
 
-    async def complete(self, messages, conn, usage=None, *, schema=None) -> str:
-        # The schema is recorded here and NOT forwarded to `stream`: the
-        # subclasses that hold or rewrite a request override
-        # `stream(messages, conn, usage=None)` and need not know it exists.
+    async def complete(self, messages, conn, usage=None, *, schema=None,
+                       retries=None) -> str:
+        # The schema and the retry count are recorded here and NOT forwarded
+        # to `stream`: the subclasses that hold or rewrite a request override
+        # `stream(messages, conn, usage=None)` and need not know they exist.
         self.schemas.append(schema)
+        self.retries.append(retries)
         # Consumes `stream`, exactly as the real `LLMClient.complete` does,
         # rather than reaching for the next turn itself. That is not a style
         # choice: a fake whose two methods are written separately drifts, and it
@@ -528,10 +539,11 @@ class StallingGateway(FakeCatalog):
             await asyncio.sleep(self.seconds)
         await super().check(conn)
 
-    async def complete(self, messages, conn, usage=None, *, schema=None) -> str:
+    async def complete(self, messages, conn, usage=None, *, schema=None,
+                       retries=None) -> str:
         if self.where == "complete":
             await asyncio.sleep(self.seconds)
-        return await super().complete(messages, conn, usage, schema=schema)
+        return await super().complete(messages, conn, usage, schema=schema, retries=retries)
 
     async def single(self, messages, conn, usage=None) -> str:
         if self.where == "single":
