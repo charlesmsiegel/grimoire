@@ -177,6 +177,41 @@ def test_each_chunk_is_its_own_metered_row(client):
     assert len(rows) == 2 and len(got.usage) == 2
     assert fake.schemas == [decisions.schema(items[:8], explain=False),
                             decisions.schema(items[8:], explain=False)]
+    # Both chunks answered by the primary: it is the decision's selection.
+    assert got.served == (("openrouter", "vendor/active"),)
+    assert (got.provider, got.model) == ("openrouter", "vendor/active")
+
+
+def test_chunks_answered_by_different_routes_name_every_one(client):
+    """A batch's chunks each run down the attempt chain on their own: the
+    primary answers the first chunk, fails on the second, and its fallback
+    answers that one. `served` names both, in the order they first answered,
+    and `provider`/`model` name neither -- the last chunk's route did not
+    answer the first chunk's items."""
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([[decision_reply(*[{"over": False}] * 8)],
+                                  LLMError("network", "connection reset"),
+                                  [decision_reply({"over": True})]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert [r.answers["over"].answer for r in got.items] == [False] * 8 + [True]
+    assert [r["model"] for r in provider.requests] == [
+        "vendor/active", "vendor/active", "vendor/spare"]
+    assert got.served == (("openrouter", "vendor/active"), ("spare", "vendor/spare"))
+    assert (got.provider, got.model) == ("", "")
+    assert len(got.usage) == 2
+
+
+def test_a_failed_chunk_names_nothing_in_served(client):
+    """A chunk that failed answered nothing: beside an answered one, the
+    decision names only the selection that answered, and that one is its."""
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)]],
+                   error=LLMError("network", "connection reset"), fail_after=1)
+    got = _decide(fake, items)
+    assert got.served == (("openrouter", "vendor/active"),)
+    assert (got.provider, got.model) == ("openrouter", "vendor/active")
 
 
 def test_no_chunk_exceeds_the_enum_value_budget(client):

@@ -997,6 +997,11 @@ backends ignore aliases.
 `distribution`, and when `answer` is `None` a `reason` (`unreadable`,
 `refused`, `abstained`, `error`). Plus `backend` (`native` | `structured`), the
 selection that answered, and usage. Missing distributions stay missing.
+What answered is per chunk, since each chunk runs down the attempt chain on
+its own: `served` names every `(provider, model)` that answered one, in the
+order it first answered, and `provider`/`model` name the selection only when
+it is the one `served` holds (both empty when chunks were answered by
+different routes, the primary on one and its fallback on another).
 An explicit `null` on a choice with `allow_none` is `answer: None, reason:
 abstained`; a `null` on a choice without it is `unreadable`. `unreadable` may
 carry a `detail` sub-reason (`not_an_option`: an answer present and not null

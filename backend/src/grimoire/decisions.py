@@ -192,14 +192,27 @@ class ItemResult:
 @dataclass(frozen=True)
 class Decision:
     """What `decide` returns: one `ItemResult` per item, in input order, the
-    backend that answered (one of `BACKENDS`), the selection that answered,
-    and each call's usage row."""
+    backend that answered (one of `BACKENDS`), what answered, and each call's
+    usage row.
+
+    What answered is `served`: every `(provider id, model)` that answered at
+    least one chunk, each once, in the order it first answered. A batch is
+    chunked (`chunks`), and each chunk is its own call down the attempt chain,
+    so one chunk may be answered by the primary and the next by its fallback.
+    A chunk that failed answered nothing and names nothing.
+
+    `provider` and `model` are that selection when it was the only one --
+    every answering chunk was answered by the same route -- and both `""` when
+    `served` names more than one: no single selection answered the decision,
+    and naming the last chunk's (or the first's) would attribute the other
+    chunks' answers to a model that never saw them."""
 
     items: tuple[ItemResult, ...]
     backend: str
     provider: str = ""
     model: str = ""
     usage: tuple[dict[str, Any], ...] = ()
+    served: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.backend not in BACKENDS:
