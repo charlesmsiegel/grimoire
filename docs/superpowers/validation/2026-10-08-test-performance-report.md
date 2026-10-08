@@ -242,4 +242,11 @@ never elapse. None appears among the profile's slow tests.
 - **Sharding (§10.4):** not needed; four workers on one runner bring the
   critical path well under the spec's stretch target.
 - **Performance budget (§13):** `profile_report.py budget` against
-  `backend/tests/perf_budget.json`, warnings only, on the 3.11 leg.
+  `backend/tests/perf_budget.json`, warnings only, on the 3.11 leg. Session
+  time is judged on the median of five comparable runs -- this one and the
+  newest four earlier CI runs (this branch's, then `main`'s) whose
+  `backend-profile` the job can fetch, with the same Python minor version,
+  workers, scheduler and coverage setting, run to completion -- and with fewer
+  than five it shows the median and warns of nothing. Collected and skipped
+  counts and the slow-test line are judged per run. The total critical path
+  across jobs is not budgeted automatically; §3 reports it.

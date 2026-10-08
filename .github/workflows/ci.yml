@@ -32,6 +32,10 @@ jobs:
     # 2026-10-08-test-performance-report.md) and below the serial one's worst,
     # so `WORKERS=0` here would need it raised -- deliberately, in this file.
     timeout-minutes: 45
+    # actions: read lets the budget below fetch earlier runs' profiles.
+    permissions:
+      contents: read
+      actions: read
     strategy:
       # Without this a 3.11 failure would hide a 3.14 one, and 3.11 has never
       # been exercised at all -- it is only a floor pyproject.toml declares.
@@ -46,15 +50,43 @@ jobs:
       - run: pip install -e "./backend[dev]"
       - run: pip check
       - run: make check-py PY=python PROFILE_OUT=build/perf/backend-profile.json
-      # The lightweight performance budget (spec section 13): this run's
-      # session time, collected and skipped counts and slowest tests against
-      # backend/tests/perf_budget.json, as ::warning:: annotations and a job
-      # summary. It never fails the job -- one run on a shared runner is a
-      # signal, not a measurement -- and reads a missing profile (a run that
-      # died first) as a warning too. On the 3.11 leg only, which the budget's
-      # figures describe.
+      # The budget judges session time on the median of five comparable runs
+      # (spec section 13), so this fetches the profiles of up to four earlier
+      # runs, newest first: this branch's, then main's. Best effort -- an
+      # expired artifact, a run that never wrote one or an API error leaves
+      # the window shorter, and the budget says how many runs it had.
       - if: ${{ !cancelled() && matrix.python == '3.11' }}
-        run: python scripts/profile_report.py budget build/perf/backend-profile.json backend/tests/perf_budget.json | tee -a "$GITHUB_STEP_SUMMARY"
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+        run: |
+          n=0; seen=" $GITHUB_RUN_ID "
+          for branch in "$BRANCH" main; do
+            for id in $(gh run list --repo "$GITHUB_REPOSITORY" --workflow ci.yml \
+                --branch "$branch" --status completed --limit 20 \
+                --json databaseId --jq '.[].databaseId' 2>/dev/null); do
+              [ "$n" -ge 4 ] && break 2
+              case "$seen" in *" $id "*) continue ;; esac
+              seen="$seen$id "
+              if gh run download "$id" --repo "$GITHUB_REPOSITORY" --name backend-profile \
+                  --dir "build/perf/previous/$n" 2>/dev/null; then n=$((n + 1)); fi
+            done
+          done
+          echo "$n earlier profile(s) fetched"
+      # The lightweight performance budget (spec section 13): session time,
+      # collected and skipped counts and slowest tests against
+      # backend/tests/perf_budget.json, as ::warning:: annotations and a job
+      # summary. It never fails the job, and reads a missing profile (a run
+      # that died first) as a warning too. Session time is judged on the
+      # five-run median alone -- one run on a shared runner is noise. On the
+      # 3.11 leg only, which the budget's figures describe.
+      - if: ${{ !cancelled() && matrix.python == '3.11' }}
+        run: >-
+          python scripts/profile_report.py budget build/perf/backend-profile.json
+          backend/tests/perf_budget.json
+          --previous build/perf/previous/{0,1,2,3}/backend-profile.json
+          | tee -a "$GITHUB_STEP_SUMMARY"
       - if: ${{ !cancelled() && matrix.python == '3.11' }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:

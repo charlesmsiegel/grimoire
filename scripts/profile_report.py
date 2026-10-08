@@ -7,10 +7,18 @@ acceleration work argues from (`docs/superpowers/specs/2026-10-08-test-suite-acc
 operations it went to, and -- between two runs -- which nodes appeared,
 disappeared or changed outcome. Standard library only.
 
-    python scripts/profile_report.py summary PROFILE.json [--top N]
+    python scripts/profile_report.py summary PROFILE.json [--top N] [--exit-with-run]
     python scripts/profile_report.py manifest PROFILE.json
     python scripts/profile_report.py compare BEFORE.json AFTER.json
-    python scripts/profile_report.py budget PROFILE.json BUDGET.json
+    python scripts/profile_report.py budget PROFILE.json BUDGET.json [--previous P.json ...]
+
+`summary --exit-with-run` prints the summary and then exits with the status
+pytest recorded for the profiled run, so a target that profiles a failing
+selection still prints where the time went and still fails.
+
+`manifest` prints what the run collected -- a node that never reported (`-x`,
+an interrupt, a crash) is still in it -- falling back to the reported nodes
+for a profile that recorded no collection.
 
 `compare` exits 1 when a node in BEFORE is missing from AFTER, when a node's
 outcome changed (per phase, so a teardown error cannot mask a call that began
@@ -19,12 +27,16 @@ quietly ran less is the failure every other number here would hide. Nodes
 AFTER added are listed and do not fail it.
 
 `budget` is the lightweight performance budget CI runs after the backend
-suite (spec §13): it compares one run against a committed, versioned
-reference and prints GitHub `::warning::` lines -- a session more than the
-tolerance slower, fewer tests collected, more skipped, a single test over the
-slow-test line -- plus a short Markdown summary. It always exits 0. One run on
-a shared runner is a signal to look at, not a measurement to fail a pull
-request on; the reference moves deliberately, in the commit that moves it.
+suite (spec §13): it compares a run against a committed, versioned reference
+and prints GitHub `::warning::` lines -- fewer tests collected, more skipped,
+a single test over the slow-test line, and a session slower than the
+tolerance -- plus a short Markdown summary. It always exits 0. Session time is
+judged on the median of five comparable runs, never on one: `--previous`
+names earlier runs' profiles, newest first, and those with the same Python
+minor version, worker count, scheduler and coverage measurement as this one
+make up the window. With fewer than five the summary shows the median so far
+and warns of nothing, since one run on a shared runner is noise, not a
+regression. The reference moves deliberately, in the commit that moves it.
 """
 
 from __future__ import annotations
@@ -122,7 +134,7 @@ def summarize(doc: dict, top: int = 100) -> dict:
 
 
 def manifest(doc: dict) -> list[str]:
-    return sorted(doc["tests"])
+    return sorted(doc.get("collected") or doc["tests"])
 
 
 def compare(before: dict, after: dict) -> dict:
@@ -165,19 +177,43 @@ def failed(diff: dict) -> bool:
     return bool(diff["missing"] or diff["outcome_changed"] or diff["unreported"])
 
 
-def budget_findings(doc: dict, ref: dict) -> list[tuple[str, str]]:
+WINDOW = 5
+
+
+def _settings(doc: dict) -> tuple:
+    """What makes two runs' session times comparable."""
+    minor = ".".join(str(doc.get("python") or "").split(".")[:2])
+    return (minor, doc.get("workers"), doc.get("distribution"), bool(doc.get("coverage")))
+
+
+def session_window(doc: dict, previous: list[dict] = ()) -> list[float]:
+    """This run's session seconds, then those of up to WINDOW - 1 comparable
+    earlier runs (`previous` is newest first). An earlier run counts only if it
+    ran to the end -- pytest's 0 or 1 -- since an interrupted session's time
+    says nothing about the suite's."""
+    mine = _settings(doc)
+    earlier = [p["wall_s"] for p in previous
+               if _settings(p) == mine and p.get("wall_s") is not None
+               and p.get("exitstatus") in (0, 1)]
+    return [doc.get("wall_s") or 0.0, *earlier[:WINDOW - 1]]
+
+
+def budget_findings(doc: dict, ref: dict, previous: list[dict] = ()) -> list[tuple[str, str]]:
     """(kind, message) for each way `doc` departs from the budget `ref`.
 
     `kind` is one of slower, fewer-tests, more-tests, more-skips, slow-test;
     `more-tests` is a notice (tests were added), every other kind a warning.
+    `slower` is judged on the median of a full window of comparable runs.
     """
     found = []
     tolerance = ref.get("tolerance", 0.2)
-    wall, budget = doc.get("wall_s") or 0.0, ref["wall_s"]
-    if wall > budget * (1 + tolerance):
-        found.append(("slower", (f"the session took {wall:.0f}s against a budget of "
-                                 f"{budget:.0f}s (+{wall / budget - 1:.0%}); check the runner "
-                                 f"and dependency versions before calling it a regression")))
+    window, budget = session_window(doc, previous), ref["wall_s"]
+    median = statistics.median(window)
+    if len(window) >= WINDOW and median > budget * (1 + tolerance):
+        found.append(("slower", (f"the median session of the last {len(window)} comparable "
+                                 f"runs took {median:.0f}s against a budget of {budget:.0f}s "
+                                 f"(+{median / budget - 1:.0%}); check the runner and "
+                                 f"dependency versions before calling it a regression")))
     collected = len(doc.get("collected") or doc["tests"])
     if collected < ref["collected"]:
         found.append(("fewer-tests", (f"{ref['collected'] - collected} fewer tests collected "
@@ -197,14 +233,19 @@ def budget_findings(doc: dict, ref: dict) -> list[tuple[str, str]]:
     return found
 
 
-def _print_budget(doc: dict, ref: dict, found: list) -> None:
+def _print_budget(doc: dict, ref: dict, found: list, window: list[float]) -> None:
     for kind, message in found:
         level = "notice" if kind == "more-tests" else "warning"
         print(f"::{level} title=test budget ({kind})::{message}")
+    median = statistics.median(window)
+    judged = ("" if len(window) >= WINDOW
+              else f"; {WINDOW} are needed before it is judged")
     print("\n### Backend test budget\n")
     print(f"| | this run | budget |\n|---|---|---|\n"
           f"| session | {doc.get('wall_s', 0):.0f}s | {ref['wall_s']:.0f}s "
           f"(+{ref.get('tolerance', 0.2):.0%} allowed) |\n"
+          f"| session, median of {len(window)} comparable run(s){judged} "
+          f"| {median:.0f}s | {ref['wall_s']:.0f}s |\n"
           f"| collected | {len(doc.get('collected') or doc['tests'])} | {ref['collected']} |\n"
           f"| skipped | {sum(1 for r in doc['tests'].values() if r.get('outcome') == 'skipped')}"
           f" | {ref['skipped']} |")
@@ -237,6 +278,37 @@ def _print_summary(s: dict, top: int) -> None:
     print("\noperations:", ", ".join(f"{k} {v}" for k, v in s["ops"].items()) or "none")
 
 
+def _summary_command(args: argparse.Namespace) -> int:
+    s = summarize(load(args.profile), top=max(args.top, 100) if args.json else args.top)
+    if args.json:
+        print(json.dumps(s, indent=1, sort_keys=True))
+    else:
+        _print_summary(s, args.top)
+    if args.exit_with_run:
+        status = s["header"].get("exitstatus")
+        return 1 if status is None else int(status)
+    return 0
+
+
+def _budget_command(args: argparse.Namespace) -> int:
+    """Always 0: see the module docstring."""
+    if not pathlib.Path(args.profile).exists():
+        print(f"::warning title=test budget::no profile at {args.profile} -- "
+              "the suite stopped before writing one; its own step says why")
+        return 0
+    doc, ref = load(args.profile), load(args.budget)
+    previous = []
+    for path in args.previous:
+        if not pathlib.Path(path).exists():
+            continue
+        try:
+            previous.append(load(path))
+        except (OSError, ValueError):
+            print(f"(skipped an unreadable earlier profile: {path})")
+    _print_budget(doc, ref, budget_findings(doc, ref, previous), session_window(doc, previous))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -244,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("profile")
     p.add_argument("--top", type=int, default=30)
     p.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p.add_argument("--exit-with-run", action="store_true",
+                   help="exit with the status pytest recorded for the profiled run")
     p = sub.add_parser("manifest")
     p.add_argument("profile")
     p = sub.add_parser("compare")
@@ -252,23 +326,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("budget")
     p.add_argument("profile")
     p.add_argument("budget")
+    p.add_argument("--previous", nargs="*", default=[],
+                   help="earlier runs' profiles, newest first; missing paths are skipped")
     args = parser.parse_args(argv)
 
     if args.cmd == "summary":
-        s = summarize(load(args.profile), top=max(args.top, 100) if args.json else args.top)
-        if args.json:
-            print(json.dumps(s, indent=1, sort_keys=True))
-        else:
-            _print_summary(s, args.top)
-        return 0
+        return _summary_command(args)
     if args.cmd == "budget":
-        if not pathlib.Path(args.profile).exists():
-            print(f"::warning title=test budget::no profile at {args.profile} -- "
-                  "the suite stopped before writing one; its own step says why")
-            return 0
-        doc, ref = load(args.profile), load(args.budget)
-        _print_budget(doc, ref, budget_findings(doc, ref))
-        return 0
+        return _budget_command(args)
     if args.cmd == "manifest":
         print("\n".join(manifest(load(args.profile))))
         return 0
