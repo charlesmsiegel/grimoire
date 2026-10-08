@@ -220,19 +220,21 @@ def test_fixture_seconds_land_on_the_fixture_that_spent_them(tmp_path):
     rec = doc["tests"]["test_synthetic.py::test_pass"]
     assert rec["fixtures_s"]["slow"] >= 0.05
     assert rec["setup_s"] >= rec["fixtures_s"]["slow"]
-    # Nothing else is charged the sleep.
-    others = {k: v for k, v in rec["fixtures_s"].items() if k != "slow"}
-    assert all(v < 0.05 for v in others.values()), others
+    # Nothing else is charged the sleep: what every fixture claims adds up to
+    # no more than the phase took. Relational on purpose -- an upper bound in
+    # seconds is a coin flip on a loaded machine (#351, #314).
+    assert sum(rec["fixtures_s"].values()) <= rec["setup_s"] + 1e-6
 
 
 def test_a_fixture_fetched_from_inside_another_is_not_charged_twice(tmp_path):
     """`outer` sleeps once and fetches `inner`, which sleeps once: each owns one
-    sleep, and together they do not claim more than setup took."""
+    sleep, and together they do not claim more than setup took. Charging
+    `outer` inclusively would claim `inner`'s sleep twice, and the sum would
+    exceed the phase by exactly that -- however loaded the machine is."""
     _, _, doc = _profiled(tmp_path)
     rec = doc["tests"]["test_synthetic.py::test_nested"]
     spent = rec["fixtures_s"]
-    assert 0.05 <= spent["outer"] < 0.1, spent
-    assert 0.05 <= spent["inner"] < 0.1, spent
+    assert spent["outer"] >= 0.05 and spent["inner"] >= 0.05, spent
     assert sum(spent.values()) <= rec["setup_s"] + 1e-6
 
 
@@ -248,7 +250,7 @@ def test_an_async_fixture_owns_its_time_and_not_its_runner(tmp_path):
     rec = doc["tests"]["test_synthetic.py::test_async"]
     spent = rec["fixtures_s"]
     assert "_function_scoped_runner" in spent, spent
-    assert 0.05 <= spent["async_value"] < 0.1, spent
+    assert spent["async_value"] >= 0.05, spent
     assert sum(spent.values()) <= rec["setup_s"] + 1e-6
 
 

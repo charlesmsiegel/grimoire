@@ -2298,9 +2298,14 @@ def test_a_reclassification_is_visible_before_it_is_approved(monkeypatch, tmp_pa
 _LIST_SECTIONS = [k for k, v in absorb.parse_output("{}").items() if isinstance(v, list)]
 
 
+#: One row each list section accepts: a dict everywhere but `keywords`, which
+#: is a list of strings.
+def _one_row(section: str) -> list:
+    return ["salt"] if section == "keywords" else [{"id": "x"}]
+
+
 @pytest.mark.parametrize("value", ["null", "1", "true", '"a string"', "{}"])
-@pytest.mark.parametrize("section", _LIST_SECTIONS)
-def test_parse_output_treats_a_non_list_section_as_empty(section, value):
+def test_parse_output_treats_a_non_list_section_as_empty(value):
     """`"commitment_movements": null` is valid JSON a model really returns, and
     `.get(key, [])` hands back the null. Nothing catches parse errors between the
     extraction call and the reviewer, so iterating it is a 500 on a usable reply.
@@ -2308,9 +2313,25 @@ def test_parse_output_treats_a_non_list_section_as_empty(section, value):
     Every non-list shape, not just null: `or []` was the first fix and a truthy
     scalar raised straight through it. A bare string is the nastiest of them —
     it iterates without raising, so `keywords` would come back as a list of
-    single characters rather than as nothing."""
-    out = absorb.parse_output('{"%s": %s}' % (section, value))
-    assert out[section] == []
+    single characters rather than as nothing.
+
+    Every section per shape, in one reply: each is read on its own (`_rows`),
+    so the sections are split in two and each half takes a turn carrying the
+    bad value while the other half carries one well-formed row. Every section
+    is then checked both ways -- broken, it comes back empty; beside a broken
+    neighbour, it keeps its row -- and the comparison names every section that
+    went wrong, not the first. Batched (test-suite acceleration, C7) from one
+    case per section and shape."""
+    halves = (_LIST_SECTIONS[::2], _LIST_SECTIONS[1::2])
+    for broken, sound in (halves, halves[::-1]):
+        reply = {s: _one_row(s) for s in sound}
+        text = json.dumps(reply)[:-1] + "".join(f', "{s}": {value}' for s in broken) + "}"
+        out = absorb.parse_output(text)
+        leaked = {s: out[s] for s in broken if out[s] != []}
+        lost = {s: out[s] for s in sound if len(out[s]) != 1}
+        assert (leaked, lost) == ({}, {}), (
+            f"broken sections not emptied: {leaked}; sound sections that lost "
+            f"their row: {lost}")
 
 # ---- the failure contract for the non-sheet kinds (#271) ----
 def test_apply_edits_reports_a_failed_non_sheet_write(scene_with_sheeted_cast, monkeypatch):

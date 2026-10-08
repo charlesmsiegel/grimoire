@@ -4843,19 +4843,60 @@ def test_an_override_only_reroll_still_reaches_the_variant_that_lands(client):
     assert body["alternates"][1]["model"] == "llama3"
 
 
-def test_a_rerolls_snapshot_names_the_model_the_reroll_was_sent_to(client):
-    """The frozen prompt panel measures its context percentage against the model
-    it recorded. A reroll filed under the campaign's 200k model, sent to a 32k
-    endpoint, reads comfortable for a prompt that did not fit."""
+def test_a_rerolls_snapshot_and_cost_name_the_model_it_ran_on(client):
+    """One reroll sent to another connection names that connection's model in
+    BOTH places a model is recorded for it (#77).
+
+    The frozen prompt panel measures its context percentage against the model
+    it recorded: a reroll filed under the campaign's 200k model, sent to a 32k
+    endpoint, reads comfortable for a prompt that did not fit. And the ledger
+    names the route, not the campaign's -- a reroll sent to a paid provider
+    must not be filed under the free local endpoint, nor the other way round.
+    The ledger comes out right because the meter is stamped from the `conn` the
+    stream is handed, which is the overridden one (`llm._stamp` in the real
+    facade; this fake stamps the same way), so a future override that forgets
+    to reach the meter is caught.
+
+    Merged (test-suite acceleration, C3) from
+    `test_a_rerolls_snapshot_names_the_model_the_reroll_was_sent_to` and
+    `test_a_rerolls_cost_is_billed_to_the_model_it_ran_on`. The two stamps are
+    written by different code (`_record_prompt`'s `model=` and the meter), so
+    either can break alone: both are compared in one dict, and each surface is
+    read again after the other so a read that wrote would show."""
     _fake, cid, sid = _rerollable(client)
     other = _local_endpoint(client, model="llama3")
 
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
-                json={"connection_id": other})
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
+                    json={"connection_id": other})
 
-    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
-    latest = next(r for r in rows if r["task"] == "regenerate")
-    assert latest["model"] == "llama3"
+    def snapshot() -> dict | None:
+        rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/prompts").json()["entries"]
+        return next((row for row in rows if row["task"] == "regenerate"), None)
+
+    def billed() -> dict | None:
+        rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["turns"]
+        return next((row for row in rows if row["task"] == "regenerate"), None)
+
+    first_snapshot = snapshot()
+    first_billed = billed()
+    got = {
+        "status": r.status_code,
+        "snapshot model": (first_snapshot or {}).get("model"),
+        "billed model": (first_billed or {}).get("model"),
+        "snapshot unchanged after reading the ledger": snapshot() == first_snapshot,
+        "ledger unchanged after reading the snapshot": billed() == first_billed,
+    }
+    want = {
+        "status": 200,
+        "snapshot model": "llama3",
+        "billed model": "llama3",
+        "snapshot unchanged after reading the ledger": True,
+        "ledger unchanged after reading the snapshot": True,
+    }
+    assert got == want, (
+        "a reroll was filed under the wrong model: "
+        f"{ {k: {'got': got[k], 'want': want[k]} for k in want if got[k] != want[k]} }"
+        f"\nsnapshot row: {first_snapshot}\nledger row: {first_billed}")
 
 
 @pytest.mark.parametrize("task, send", [
@@ -4877,23 +4918,6 @@ def test_a_turn_with_no_override_records_the_resolved_model(client, task, send):
     assert latest["model"] == "repointed/model"
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["model"] == latest["model"]
-
-
-def test_a_rerolls_cost_is_billed_to_the_model_it_ran_on(client):
-    """The ledger names the route, not the campaign's — a reroll sent to a paid
-    provider must not be filed under the free local endpoint, nor the other way
-    round. It comes out right because the meter is stamped from the `conn` the
-    facade was handed (`llm._stamp`), which is the overridden one; asserted
-    here so a future override that forgets to reach the meter is caught."""
-    _fake, cid, sid = _rerollable(client)
-    other = _local_endpoint(client, model="llama3")
-
-    client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
-                json={"connection_id": other})
-
-    rows = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["turns"]
-    latest = next(r for r in rows if r["task"] == "regenerate")
-    assert latest["model"] == "llama3"
 
 
 def test_a_reroll_onto_claude_stamps_the_model_the_dispatcher_substitutes(client):
@@ -11338,8 +11362,20 @@ def test_director_note_in_a_normal_scene_is_recorded_but_is_not_a_post(client):
     `usage.record`'s `post` is a transcript index, so a note that is nowhere in
     the transcript has no index, and a director turn was the only generation in
     the app whose cost had nowhere to sit. It is stored now -- as a marked
-    user-role message, which is not a player post: it is what the player typed
-    to steer the turn rather than to say in it.
+    message which is not a player post: it is what the player typed to steer
+    the turn rather than to say in it.
+
+    And that is the reason notes are stored at all. A turn's ledger row
+    carries the transcript index it was answering, so a post and its rerolls
+    bucket together. A director turn had no such index and was recorded
+    against nothing -- the cost landed in the scene's totals and could not be
+    shown beside the line that bought it.
+
+    Merged (test-suite acceleration, C4) with
+    `test_a_director_turn_is_charged_to_its_own_note`.
+    One send; the prompt, the transcript and the ledger are each read once, in
+    that order, and compared as one dict. The empty-send counterweight,
+    `test_a_director_turn_with_no_note_is_charged_to_nothing`, stays separate.
     """
     _, cid = _campaign(client)
     sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
@@ -11350,50 +11386,48 @@ def test_director_note_in_a_normal_scene_is_recorded_but_is_not_a_post(client):
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "the storm intensifies", "director": True}) as r:
         r.read()
-    # The note rode the call as the final user turn, exactly as before...
-    assert cap.messages[-1] == {"role": "user", "content": "the storm intensifies"}
-    # ...and exactly ONCE. The stored copy must not also arrive as history, or
-    # every later turn of the scene would carry the player's stage directions
-    # as though they were dialogue.
-    assert sum(1 for m in cap.messages
-               if "storm intensifies" in m.get("content", "")) == 1
+    # Read first, as the original did: `messages` is the LAST request's.
+    sent = list(cap.messages or [])
 
     msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    note = [m for m in msgs if store.scenes.is_director_note(m)]
-    assert len(note) == 1
-    assert note[0]["content"] == "the storm intensifies"
-    # The MARKER is what tells it apart, not the role: the transcript format
-    # derives the role from the label and `You` is the only label that means
-    # user, so a marked message is assistant-role by construction. It must
-    # therefore never be counted as a reply, and being in `SYNTHETIC_SPEAKERS`
-    # is what makes that true everywhere at once.
-    assert store.scenes.DIRECTOR_SPEAKER in store.scenes.SYNTHETIC_SPEAKERS
-    # ...and it is not a player post either. Nothing here is user-role.
-    assert not any(m["role"] == "user" for m in msgs)
-
-
-def test_a_director_turn_is_charged_to_its_own_note(client):
-    """The reason notes are stored at all.
-
-    A turn's ledger row carries the transcript index it was answering, so a
-    post and its rerolls bucket together. A director turn had no such index and
-    was recorded against nothing -- the cost landed in the scene's totals and
-    could not be shown beside the line that bought it.
-    """
-    _, cid = _campaign(client)
-    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "T"}).json()["id"]
-    store.scenes.append_message(cid, sid, "assistant", "The tavern hums.")
-    client.put("/api/llm-connections/openrouter", json={"api_key": "k"})
-    cap = CapturingOpenRouter()
-    client.app.dependency_overrides[routes.get_llm] = lambda: cap
-    with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
-                       json={"content": "the storm intensifies", "director": True}) as r:
-        r.read()
-
-    msgs = client.get(f"/api/campaigns/{cid}/scenes/{sid}").json()["messages"]
-    at = next(i for i, m in enumerate(msgs) if store.scenes.is_director_note(m))
+    at = next((i for i, m in enumerate(msgs) if store.scenes.is_director_note(m)), None)
     by_post = client.get(f"/api/campaigns/{cid}/scenes/{sid}/usage").json()["by_post"]
-    assert [b["post"] for b in by_post] == [at]
+
+    got = {
+        "status": r.status_code,
+        # The note rode the call as the final user turn, exactly as before...
+        "final sent message": sent[-1] if sent else None,
+        # ...and exactly ONCE. The stored copy must not also arrive as history,
+        # or every later turn would carry the player's stage directions as
+        # though they were dialogue.
+        "times the note was sent": sum(1 for m in sent
+                                       if "storm intensifies" in m.get("content", "")),
+        "stored notes": [m["content"] for m in msgs if store.scenes.is_director_note(m)],
+        # The MARKER is what tells it apart, not the role: the transcript format
+        # derives the role from the label and `You` is the only label that
+        # means user, so a marked message is assistant-role by construction. It
+        # must therefore never be counted as a reply, and being in
+        # `SYNTHETIC_SPEAKERS` is what makes that true everywhere at once.
+        "note speaker is synthetic":
+            store.scenes.DIRECTOR_SPEAKER in store.scenes.SYNTHETIC_SPEAKERS,
+        # ...and it is not a player post either. Nothing here is user-role.
+        "user-role messages": [m for m in msgs if m["role"] == "user"],
+        # The turn is charged to the note that bought it, and to nothing else.
+        "charged posts": [b["post"] for b in by_post],
+    }
+    want = {
+        "status": 200,
+        "final sent message": {"role": "user", "content": "the storm intensifies"},
+        "times the note was sent": 1,
+        "stored notes": ["the storm intensifies"],
+        "note speaker is synthetic": True,
+        "user-role messages": [],
+        "charged posts": [at],
+    }
+    assert at is not None and got == want, (
+        "a director note was sent, stored or charged wrongly: "
+        f"{ {k: {'got': got[k], 'want': want[k]} for k in want if got[k] != want[k]} }"
+        f"\nnote index: {at}\ntranscript: {msgs}")
 
 
 def test_a_director_turn_with_no_note_is_charged_to_nothing(client):
