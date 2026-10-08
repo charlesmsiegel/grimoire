@@ -1479,6 +1479,13 @@ def get_connection_facts(conn_id: str, model: str = ""):
     return _facts_body(conn, model.strip() or facts.model_of(conn))
 
 
+#: A facts write that could not read the file it merges onto (`facts
+#: .FactsUnreadableError`): refused rather than written over the models it
+#: could not see.
+FACTS_UNREADABLE = ("This provider's model facts could not be read just now "
+                    "(another program may hold the file); nothing was saved. Try again.")
+
+
 @router.put("/llm-connections/{conn_id}/facts")
 def put_connection_facts(conn_id: str, body: FactsUpdate):
     """State `vision`, `prefill`, `post_process` and capability `overrides`
@@ -1517,6 +1524,9 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
+    except facts.FactsUnreadableError:
+        # Held by another program: nothing was written, and a retry may land.
+        raise HTTPException(status_code=503, detail=FACTS_UNREADABLE) from None
     return _facts_body(_facts_conn(conn_id), model)
 
 

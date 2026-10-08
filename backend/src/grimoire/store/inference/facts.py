@@ -23,7 +23,13 @@ Two kinds of fact, and they age differently:
   are the user's own word about the model and survive a rev change.
 
 Reads never raise: the file is one a sync or a hand can mangle into any JSON,
-and it is read on the path of a turn. A write replaces a mangled file. Writes
+and it is read on the path of a turn. A write the user asked for replaces a
+mangled file; no write replaces one it could not READ (a sharing violation, a
+file a sync client holds) -- that raises `FactsUnreadableError` instead, since
+what it would write is the one entry it was changing and every other model's
+verdicts and overrides would be gone. The migration's copy
+(`adopt_legacy`) is stricter still: unattended, it refuses a mangled, empty or
+truncated file too, and the run that asked retries on the next start. Writes
 are read-merge-write under one module lock, because two probes of different
 models on one provider would otherwise each rewrite the file from a copy that
 lacks the other's result. Global to the provider, so it takes no campaign lock.
@@ -60,6 +66,42 @@ def _load(provider_id: str) -> dict[str, dict]:
     except (OSError, ValueError):
         return {}
     if not isinstance(raw, dict):
+        return {}
+    return {m: e for m, e in raw.items() if isinstance(e, dict)}
+
+
+class FactsUnreadableError(OSError):
+    """A provider's facts file that a WRITE could not read: there, but held by
+    another program or (for the migration's strict read) empty, truncated or
+    not a JSON object. Nothing is written; rewriting it from an empty read
+    would drop every other model's verified results and overrides."""
+
+
+def _load_for_write(provider_id: str, *, strict: bool = False) -> dict[str, dict]:
+    """The file as a writer merges onto it. Absent is empty. A read that fails
+    raises `FactsUnreadableError`; so, when `strict`, does a file that is not
+    a JSON object of objects (empty, truncated, hand-mangled). Not `strict`, a
+    mangled file is replaced, as `_load` reads it -- the user's own edit."""
+    path = llm_connections.facts_path(provider_id)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError) as exc:
+        raise FactsUnreadableError(
+            f"the model facts of {provider_id} could not be read: {exc}") from exc
+    try:
+        raw = json.loads(text)
+    except ValueError as exc:
+        if strict:
+            raise FactsUnreadableError(
+                f"the model facts of {provider_id} are not readable JSON: {exc}") from exc
+        return {}
+    if not isinstance(raw, dict) or (strict and not all(isinstance(e, dict)
+                                                        for e in raw.values())):
+        if strict:
+            raise FactsUnreadableError(
+                f"the model facts of {provider_id} are not an object of models")
         return {}
     return {m: e for m, e in raw.items() if isinstance(e, dict)}
 
@@ -170,7 +212,7 @@ def record_verified(provider_id: str, model: str, rev: str,
             if not rev or current != rev:
                 return False
             with _lock:
-                doc = _load(provider_id)
+                doc = _load_for_write(provider_id)
                 entry = doc.setdefault(model, {})
                 old = entry.get("verified")
                 caps = (_clean_results(old.get("caps"))
@@ -215,7 +257,7 @@ def _write_existing(provider_id: str, model: str,
         rev = llm_connections.read_connection_raw(provider_id).get("rev", "")
         rev = rev if isinstance(rev, str) else ""
         with _lock:
-            doc = _load(provider_id)
+            doc = _load_for_write(provider_id)
             before = _view(doc.get(model, {}), rev)
             entry = doc.setdefault(model, {})
             change(entry)
@@ -320,3 +362,84 @@ def state(provider_id: str, model: str, *, vision: object = None, prefill: objec
             entry.pop("overrides", None)
 
     _write_existing(provider_id, model, change, guard)
+
+
+#: The stated fields a connection's legacy record carried (`vision`, `prefill`,
+#: `post_process`), which the format-2 migration copies into its model's facts.
+LEGACY_FIELDS: tuple[str, ...] = ("vision", "prefill", "post_process")
+
+#: The key, in a model's entry, recording what the migration copied there
+#: (`{field: value}`): what makes its copy re-doable. Never read as a fact.
+MIGRATED_KEY = "migrated"
+
+
+def _checked_legacy(stated: dict[str, object]) -> tuple[dict[str, object], dict[str, str]]:
+    """`(the fields of `stated` the writer takes, {field: why} for the rest)`."""
+    valid: dict[str, object] = {}
+    refused: dict[str, str] = {}
+    for field, value in stated.items():
+        if field not in LEGACY_FIELDS:
+            raise ValueError(f"not a legacy model field: {field!r}")
+        try:
+            valid.update(_check_stated(**{f: (value if f == field else None)
+                                          for f in LEGACY_FIELDS}))
+        except ValueError as exc:
+            refused[field] = str(exc)
+    return valid, refused
+
+
+def _take_back_copies(doc: dict[str, dict]) -> None:
+    """Undo, in place, every copy an earlier migration run recorded: each
+    copied field still holding the value copied is removed (one holding
+    anything else is somebody's own word, and stays), and so is the record.
+    An entry left with nothing is dropped."""
+    for name in list(doc):
+        entry = doc[name]
+        copied = entry.pop(MIGRATED_KEY, None)
+        if copied is None:
+            continue
+        if isinstance(copied, dict):
+            for field, value in copied.items():
+                if field in LEGACY_FIELDS and entry.get(field) == value:
+                    entry.pop(field)
+        if not entry:
+            doc.pop(name)
+
+
+def adopt_legacy(provider_id: str, model: str, stated: dict[str, object]) -> dict[str, str]:
+    """The migration's copy of a connection's legacy model fields: `stated`
+    (`{field: value}`, the fields of `LEGACY_FIELDS` the record sets to
+    something other than the default) become `model`'s stated facts. Returns
+    `{field: why}` for each value refused; the others still land, as one write.
+
+    Re-doable, because a run can stop after copying and resume after the user
+    changed the record at format 1 -- set a field back to its default, or
+    pointed the connection at another model. What was copied is recorded in
+    the entry under `MIGRATED_KEY`, and a re-run takes exactly that back
+    first, on every model of the provider: each copied field still holding the
+    value copied is removed, and one that holds anything else is left -- a
+    value somebody wrote over the copy is theirs. Then `stated` is copied
+    afresh. So the facts end up saying what the record says now, and nothing
+    the migration did not write is touched.
+
+    Strict, unlike the user's writes: a file it cannot read, or one that is
+    empty, truncated or mangled, raises `FactsUnreadableError` and nothing is
+    written -- an unattended rewrite from an empty read would drop every other
+    model's verified results and overrides. `ConnectionNotFound` when the
+    provider is gone, `config.NewerFormatError` on a store a newer build
+    switched; both in `_write_existing`'s hold and lock order."""
+    _require_safe(provider_id)
+    valid, refused = _checked_legacy(stated)
+    with llm_connections.LOCK, config.format_hold():
+        llm_connections.read_connection_raw(provider_id)
+        with _lock:
+            doc = _load_for_write(provider_id, strict=True)
+            before = json.dumps(doc, sort_keys=True)
+            _take_back_copies(doc)
+            if valid:
+                entry = doc.setdefault(model, {})
+                entry.update(valid)
+                entry[MIGRATED_KEY] = dict(valid)
+            if json.dumps(doc, sort_keys=True) != before:
+                _store(provider_id, doc)
+    return refused

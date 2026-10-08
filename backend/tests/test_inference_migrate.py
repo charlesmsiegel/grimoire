@@ -271,12 +271,14 @@ def test_model_facts_are_written_from_the_legacy_fields(home):
         path = llm_connections.facts_path(conn_id)
         return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
+    copied = {"vision": "off", "prefill": True, "post_process": "strict"}
+    # Beside the copy, a record of it: what makes a resumed run's copy re-doable.
     assert stated("openrouter") == {
-        "vendor/active": {"vision": "off", "prefill": True, "post_process": "strict"}}
+        "vendor/active": {**copied, facts.MIGRATED_KEY: copied}}
     # Nothing was stated for Claude, so nothing is written for it.
     assert stated("claude") == {}
     # Any other empty model is keyed "".
-    assert stated("blank") == {"": {"vision": "on"}}
+    assert stated("blank") == {"": {"vision": "on", facts.MIGRATED_KEY: {"vision": "on"}}}
     assert facts.of("blank", "", "")["vision"] == "on"
 
 
@@ -882,7 +884,7 @@ def test_a_model_facts_write_that_fails_is_skipped_not_fatal(home, monkeypatch):
     def unwritable(*_a, **_kw):
         raise OSError("facts file is read-only")
 
-    monkeypatch.setattr(facts, "set_stated", unwritable)
+    monkeypatch.setattr(facts, "adopt_legacy", unwritable)
     got = migrate.ensure()
 
     assert got.state == "done", got
@@ -1202,3 +1204,244 @@ def test_a_campaign_whose_connection_is_unreadable_is_skipped_and_retried(home, 
     assert FORMAT not in _meta(cid)
     assert migrate.ensure().state == "done"
     assert _meta(cid)["use_scene_model"] == "vendor/spare"
+
+
+# ---- brutal review 1: what the migration may never write over ----
+
+_PLACEHOLDERS = [b"", b"---\nname: Saltmarch\nworld: realm\nroute_summary: openrouter\ncrea",
+                 b"---\n---\n"]
+_PLACEHOLDER_IDS = ["zero-byte", "unfenced", "empty-block"]
+
+
+@pytest.mark.parametrize("placeholder", _PLACEHOLDERS, ids=_PLACEHOLDER_IDS)
+def test_a_campaign_md_holding_no_record_is_never_rewritten(home, placeholder):
+    """A zero-byte or unfenced `campaign.md` (a sync placeholder, a conflict
+    stub, a hand edit that lost its closing fence) parses as `{}`. Taken for a
+    campaign with nothing set, it was overwritten with a marker-only file and
+    marked -- its name, world and every override gone for good. It is skipped,
+    left byte for byte, and finished once the file is whole."""
+    _legacy()
+    good_cid = _campaign("Saltmarch")
+    cid = _campaign("Winifred")
+    path = campaigns.paths.campaign_meta_path(cid)
+    whole = path.read_bytes()
+    path.write_bytes(placeholder)
+
+    got = migrate.ensure()
+
+    assert path.read_bytes() == placeholder
+    assert any(cid in item and "no settings" in item for item in got.skipped), got
+    assert _meta(good_cid)[FORMAT] == "2"
+    assert any(cid in item for item in migrate.status().skipped)
+    # The campaign step itself refuses it too (the settings write calls it).
+    with locks.campaign_lock(cid), pytest.raises(migrate.RecordUnreadableError):
+        migrate.campaign(cid)
+    assert path.read_bytes() == placeholder
+
+    path.write_bytes(whole)
+    assert migrate.ensure().state == "done"
+    assert _meta(cid)[FORMAT] == "2" and _meta(cid)["name"] == "Winifred"
+
+
+@pytest.mark.parametrize("placeholder", _PLACEHOLDERS, ids=_PLACEHOLDER_IDS)
+def test_a_config_md_holding_no_record_fails_the_run_and_is_never_rewritten(
+        home, placeholder):
+    """A `config.md` that holds no record is not a legacy store with nothing
+    set: switched, it was stamped current over an empty layout, so the legacy
+    keys were never read again once the real file arrived. The run fails,
+    writes nothing, says why, and the next start finishes."""
+    _legacy()
+    cid = _campaign()
+    path = home / "config.md"
+    whole = path.read_bytes()
+    path.write_bytes(placeholder)
+    before = _digest(home)
+
+    got = migrate.ensure()
+
+    assert got.state == "failed", got
+    assert "config.md" in got.reason
+    assert path.read_bytes() == placeholder
+    assert _digest(home) == before
+    assert migrate.status().state == "failed"
+
+    path.write_bytes(whole)
+    assert migrate.ensure().state == "done"
+    assert _raw_config(home)[FORMAT] == "2"
+    assert _raw_config(home)["role_primary_model"] == "vendor/active"
+    assert _meta(cid)[FORMAT] == "2"
+
+
+def test_a_config_md_emptied_before_the_switch_fails_the_run(home, monkeypatch):
+    """The same rule in the switch's own hold: a placeholder arriving after
+    the run began is not stamped either."""
+    _legacy()
+    path = home / "config.md"
+    whole = path.read_bytes()
+    real = migrate._providers
+
+    def then_placeholder(run):
+        out = real(run)
+        path.write_bytes(b"")
+        return out
+
+    monkeypatch.setattr(migrate, "_providers", then_placeholder)
+    got = migrate.ensure()
+
+    assert got.state == "failed", got
+    assert path.read_bytes() == b""
+    monkeypatch.setattr(migrate, "_providers", real)
+    path.write_bytes(whole)
+    assert migrate.ensure().state == "done"
+
+
+def _verified_other(conn_id: str = "openrouter") -> bytes:
+    """A facts file holding a paid test's results for another model."""
+    rev = llm_connections.read_connection_raw(conn_id)["rev"]
+    assert facts.record_verified(conn_id, "vendor/other", rev, {"vision": {"ok": True}})
+    return llm_connections.facts_path(conn_id).read_bytes()
+
+
+@pytest.mark.parametrize("placeholder", [b"", b'{"vendor/other": {"verif', b"[]"],
+                         ids=["zero-byte", "truncated", "not-an-object"])
+def test_a_facts_file_that_cannot_be_read_fails_the_run_and_is_kept(home, placeholder):
+    """A provider's facts file the migration cannot read is not an empty one:
+    rewritten from `{}`, it held only the copy and every verified result (paid
+    test calls) and override of its other models was gone. The run fails,
+    the file is left, and the next start copies onto the whole file."""
+    _legacy()
+    llm_connections.update_connection("openrouter", vision="off")
+    whole = _verified_other()
+    path = llm_connections.facts_path("openrouter")
+    path.write_bytes(placeholder)
+
+    got = migrate.ensure()
+
+    assert got.state == "failed", got
+    assert "openrouter" in got.reason
+    assert path.read_bytes() == placeholder
+    assert not inference_keys.is_current(config.read_config())
+
+    path.write_bytes(whole)
+    assert migrate.ensure().state == "done"
+    doc = facts.read("openrouter")
+    assert doc["vendor/other"]["verified"]["caps"]["vision"]["ok"] is True
+    assert facts.of("openrouter", "vendor/active", "")["vision"] == "off"
+
+
+def test_a_facts_file_a_sync_client_holds_fails_the_run(home, monkeypatch):
+    _legacy()
+    llm_connections.update_connection("openrouter", vision="off")
+    whole = _verified_other()
+    path = llm_connections.facts_path("openrouter")
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == path:
+            raise PermissionError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+    got = migrate.ensure()
+    monkeypatch.setattr(Path, "read_text", real)
+
+    assert got.state == "failed", got
+    assert "sync client" in got.reason
+    assert path.read_bytes() == whole
+    assert migrate.ensure().state == "done"
+    assert set(facts.read("openrouter")) == {"vendor/other", "vendor/active"}
+
+
+def _stated_of(conn_id: str, model: str) -> tuple:
+    got = facts.of(conn_id, model, "")
+    return got["vision"], got["prefill"], got["post_process"]
+
+
+def test_a_resumed_run_takes_back_a_copied_fact_the_user_reset(home, monkeypatch):
+    """A run copies the legacy fields into the facts and fails before the
+    marker; at format 1 the user resets them to their defaults; the resumed
+    run states nothing for them -- and the copy the first run made must not
+    go on saying the old values at format 2."""
+    _legacy()
+    llm_connections.update_connection("openrouter", vision="off", prefill=True,
+                                      post_process="strict")
+    _failing_marker(monkeypatch)
+    assert migrate.ensure().state == "failed"
+    assert _stated_of("openrouter", "vendor/active") == ("off", True, "strict")
+    monkeypatch.setattr(config, "write_config", _REAL_WRITE)
+
+    llm_connections.update_connection("openrouter", vision="", prefill=False,
+                                      post_process="none")
+    assert migrate.ensure().state == "done"
+
+    assert _stated_of("openrouter", "vendor/active") == ("", None, "")
+    assert facts.read("openrouter") == {}
+
+
+def test_a_resumed_run_moves_a_copied_fact_to_the_model_now_named(home, monkeypatch):
+    _legacy()
+    llm_connections.update_connection("openrouter", vision="off", prefill=True)
+    whole = _verified_other()
+    _failing_marker(monkeypatch)
+    assert migrate.ensure().state == "failed"
+    monkeypatch.setattr(config, "write_config", _REAL_WRITE)
+
+    llm_connections.update_connection("openrouter", model="vendor/next", prefill=False)
+    assert migrate.ensure().state == "done"
+
+    assert _stated_of("openrouter", "vendor/active") == ("", None, "")
+    assert _stated_of("openrouter", "vendor/next") == ("off", None, "")
+    # What the migration never wrote is never taken back.
+    assert json.loads(whole)["vendor/other"] == facts.read("openrouter")["vendor/other"]
+
+
+def test_a_resumed_run_leaves_a_fact_somebody_wrote_over_the_copy(home, monkeypatch):
+    _legacy()
+    llm_connections.update_connection("openrouter", vision="off")
+    _failing_marker(monkeypatch)
+    assert migrate.ensure().state == "failed"
+    monkeypatch.setattr(config, "write_config", _REAL_WRITE)
+    facts.set_stated("openrouter", "vendor/active", vision="on")
+
+    llm_connections.update_connection("openrouter", vision="")
+    assert migrate.ensure().state == "done"
+
+    assert _stated_of("openrouter", "vendor/active")[0] == "on"
+
+
+def test_a_newer_marker_landing_during_the_campaigns_stops_the_marking(home, monkeypatch):
+    """A newer build switching the store while the campaign loop runs: the
+    campaigns it has not reached are not this build's to mark (spec 11.3)."""
+    _legacy()
+    first = _campaign("Saltmarch")
+    second = _campaign("Winifred")
+    real = migrate._campaign_step
+
+    def newer_meanwhile(cid, skipped):
+        config.write_config(**{FORMAT: "3"})
+        return real(cid, skipped)
+
+    monkeypatch.setattr(migrate, "_campaign_step", newer_meanwhile)
+    got = migrate.ensure()
+
+    assert got.state == "newer", got
+    assert FORMAT not in _meta(first) and FORMAT not in _meta(second)
+    assert migrate.status().state == "newer"
+
+
+def test_a_newer_marker_seen_by_the_switch_stops_the_run(home, monkeypatch):
+    _legacy()
+    cid = _campaign()
+    real = migrate._providers
+
+    def newer_meanwhile(run):
+        out = real(run)
+        config.write_config(**{FORMAT: "3"})
+        return out
+
+    monkeypatch.setattr(migrate, "_providers", newer_meanwhile)
+    got = migrate.ensure()
+
+    assert got.state == "newer", got
+    assert FORMAT not in _meta(cid)
+    assert _raw_config(home)[FORMAT] == "3"

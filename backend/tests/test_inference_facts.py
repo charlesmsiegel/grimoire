@@ -185,6 +185,59 @@ def test_a_mangled_file_is_replaced_by_the_next_write(conn):
     assert facts.of(cid, "m", rev)["overrides"] == {"vision": "yes"}
 
 
+@pytest.mark.parametrize("write", ["state", "verified"])
+def test_no_write_replaces_a_file_it_could_not_read(conn, monkeypatch, write):
+    """A mangled file is the user's to replace; one that could not be READ (a
+    sharing violation, a sync client holding it) is not mangled -- rewritten
+    from an empty read, it would hold only this write, and every other model's
+    verified results and overrides would be gone."""
+    from pathlib import Path
+
+    cid, rev = conn
+    assert facts.record_verified(cid, "other", rev, {"vision": _ok()})
+    p = llm_connections.facts_path(cid)
+    before = p.read_bytes()
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == p:
+            raise PermissionError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+    with pytest.raises(facts.FactsUnreadableError):
+        if write == "state":
+            facts.state(cid, "m", vision="off")
+        else:
+            facts.record_verified(cid, "m", rev, {"vision": _ok()})
+    monkeypatch.setattr(Path, "read_text", real)
+    assert p.read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", ["", "{not json", "[]", '{"m": 3}'])
+def test_the_migrations_copy_refuses_a_mangled_file(conn, raw):
+    cid, _ = conn
+    p = llm_connections.facts_path(cid)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(raw, encoding="utf-8")
+    with pytest.raises(facts.FactsUnreadableError):
+        facts.adopt_legacy(cid, "m", {"vision": "off"})
+    assert p.read_text(encoding="utf-8") == raw
+
+
+def test_the_migrations_copy_states_nothing_without_writing(conn):
+    cid, _ = conn
+    assert facts.adopt_legacy(cid, "m", {}) == {}
+    assert not llm_connections.facts_path(cid).exists()
+
+
+def test_the_migrations_copy_reports_a_refused_value_and_lands_the_rest(conn):
+    cid, rev = conn
+    refused = facts.adopt_legacy(cid, "m", {"vision": "off", "post_process": "sideways"})
+    assert set(refused) == {"post_process"}
+    assert facts.of(cid, "m", rev)["vision"] == "off"
+
+
 @pytest.mark.parametrize("bad", ["../escape", "a/b", "", "..", "a:b"])
 def test_an_unsafe_provider_id(conn, bad):
     _, rev = conn

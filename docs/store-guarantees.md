@@ -1012,21 +1012,31 @@ Every value is derived from the legacy settings deterministically, so two runs
 either passes over what is already done — a connection that has a preset, a
 campaign carrying its marker, a `config.md` already at or past the current
 format, checked again inside the lock that would write it — or, for a model's
-facts, states the same value again. Every write is atomic (see
+facts, takes back exactly what an earlier run copied (recorded beside the
+copy) and states what the connection says now, so a field reset to its
+default between two runs, or a model the connection moved off, does not keep
+the old copy. Every write is atomic (see
 [Atomic writes](#atomic-writes)), so a run killed anywhere leaves each file
 whole — the store still on the old layout before the marker, and after it
 some campaigns still unmarked and read through the translation — and the
 next start goes on from there.
 
-The archive, the final `config.md` write and a connection file that exists
-but cannot be read fail the migration. The last is not treated as a missing
-connection: every step writes down what it read, so a read a sync client
-blocked would otherwise be persisted beside the marker as a selection with
-an empty model and no preset. A connection that does not exist at all is a
-dangling reference and is persisted as one. An item that cannot be moved — an
-unreadable `campaign.md`, a campaign naming an unreadable connection, a
-connection or facts write that fails or is refused — is skipped with its
-reason in the status's `skipped`, and the run carries on.
+The archive, the final `config.md` write, a connection file that exists
+but cannot be read, a `config.md` that holds no record (zero bytes, or a
+frontmatter fence that never arrived) and a model-facts file that cannot be
+read (held, empty, truncated) fail the migration and write nothing over
+them. None is treated as absent: every step writes down what it read, so a
+read a sync client blocked would otherwise be persisted for good — a
+selection with an empty model and no preset, an empty layout stamped
+current, a facts file holding only the copy. A connection that does not
+exist at all is a dangling reference and is persisted as one. An item that
+cannot be moved — an unreadable `campaign.md` (undecodable, or holding no
+record, which is never rewritten), a campaign naming an unreadable
+connection, a connection or facts write that fails or is refused — is
+skipped with its reason in the status's `skipped`, and the run carries on.
+A newer build's marker, seen at the start, in the switch's hold or under a
+campaign's own hold while the campaigns are moved, ends the run as `newer`
+with nothing more marked.
 
 ### Campaigns, each under its own lock
 

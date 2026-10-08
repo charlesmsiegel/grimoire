@@ -79,6 +79,8 @@ WRITERS: dict[str, Callable[[str], object]] = {
     "facts.set_overrides": lambda cid: facts.set_overrides(
         "spare", "vendor/spare", {"vision": "yes"}),
     "facts.state": lambda cid: facts.state("spare", "vendor/spare", overrides={"embed": "no"}),
+    "facts.adopt_legacy": lambda cid: facts.adopt_legacy(
+        "spare", "vendor/spare", {"vision": "off"}),
     "create_preset": lambda cid: sampler_presets.create_preset("hot", {"temperature": 1.2}),
     "update_preset": lambda cid: sampler_presets.update_preset(
         "warm", "warm", {"temperature": 0.5}),
@@ -271,11 +273,11 @@ def test_each_model_settings_read_is_inside_the_cross_process_hold(client, monke
     cid = _current(client)
     seen: list[bool] = []
     if case == "facts write":
-        _spy(monkeypatch, facts, "_load", seen)
+        _spy(monkeypatch, facts, "_load_for_write", seen)
         facts.set_stated("spare", "vendor/spare", vision="off")
     elif case == "verdict":
         rev = llm_connections.read_connection_raw("spare")["rev"]
-        _spy(monkeypatch, facts, "_load", seen)
+        _spy(monkeypatch, facts, "_load_for_write", seen)
         _spy(monkeypatch, llm_connections, "read_connection_raw", seen)
         assert facts.record_verified("spare", "vendor/spare", rev, {"generate": {"ok": True}})
     elif case == "provider edit":
@@ -297,7 +299,7 @@ def test_the_migration_copies_facts_inside_the_cross_process_hold(client, monkey
     llm_connections.update_connection("openrouter", vision="off")
     assert not keys.is_current(store.read_config())
     seen: list[bool] = []
-    _spy(monkeypatch, facts, "set_stated", seen)
+    _spy(monkeypatch, facts, "_load_for_write", seen)
     assert migrate.ensure().state == "done"
     assert seen and all(seen), seen
 

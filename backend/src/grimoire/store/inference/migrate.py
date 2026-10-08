@@ -16,6 +16,8 @@ write), then
 3. **model facts** -- each connection's legacy `vision`, `prefill` and
    `post_process`, where they differ from the defaults, become the facts of its
    model (an unset Claude model is `opus`; any other empty model is keyed "").
+   What is copied is recorded beside it (`facts.adopt_legacy`), so a resumed
+   run takes back a copy the record no longer says before copying afresh.
    Copied in the `llm_connections.LOCK` hold that writes the marker
    (`_switch`), so a legacy edit made before it is not switched past;
 4. *(derived reasoning presets: slice I, ruling 3)*;
@@ -66,14 +68,20 @@ checks read the caller's `stop` flag, which lifespan shutdown sets; a stopped
 run is `pending` and resumes on the next `ensure`.
 
 **Failure policy.** A failed backup, an I/O error on the final global write,
-and a connection file that exists but cannot be read fail the migration (no
-marker; the next start retries). The last is not "no such connection": every
-step persists what it reads, so a read a sync client blocked would otherwise
-be written down for good as an empty model with no preset. An item that
-cannot be migrated -- an unreadable `campaign.md` (or one naming an unreadable
-connection), a connection or model-facts write that fails or is refused, a
-busy campaign -- is skipped, its reason recorded in `skipped`, and the run
-goes on.
+a connection file that exists but cannot be read, a `config.md` that holds no
+record (zero bytes, or unfenced: `RecordUnreadableError`) and a model-facts
+file that cannot be read (`facts.FactsUnreadableError`) fail the migration (no
+marker; the next start retries). None of them is "nothing there": every step
+persists what it reads, so a read a sync client blocked would otherwise be
+written down for good -- an empty model with no preset, an empty layout
+stamped current, a facts file holding only the copy. An item that cannot be
+migrated -- an unreadable `campaign.md` (undecodable, or holding no record;
+it is never rewritten), one naming an unreadable connection, a connection or
+model-facts write that fails or is refused, a busy campaign -- is skipped, its
+reason recorded in `skipped`, and the run goes on. A newer build's marker,
+whenever it is seen -- at the start, in the switch's hold, or under a
+campaign's hold while the loop runs -- ends the run as `newer` and nothing
+more is marked.
 
 **Status.** `done`, `pending` and `newer` are derived from the store on every
 call: the global marker, and whether any readable campaign is unmarked (an
@@ -223,6 +231,33 @@ def _config_exists(root: Path) -> bool:
     return (root / "config.md").exists()
 
 
+class RecordUnreadableError(OSError):
+    """A `config.md` or `campaign.md` the migration would rewrite that is there
+    but holds no record: zero bytes, or a frontmatter block that is unfenced or
+    never closed (a sync placeholder mid-download, a conflict stub, a hand edit
+    that lost its closing `---`). `parse_frontmatter` reads all of those as
+    `{}`, and a migration that took that for a record with no settings would
+    publish a marker-only file over it -- which a sync client can then upload
+    over the real one -- and mark it, so the settings it held are never read
+    again. The rule `llm_connections`' strict read keeps for a connection."""
+
+
+def _record(path: Path, what: str) -> tuple[dict[str, str], str]:
+    """`path`'s frontmatter and body, raising `RecordUnreadableError` when it
+    holds no record (see there). Every record this app writes has keys."""
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    if not meta:
+        raise RecordUnreadableError(f"{what} holds no settings (empty, or unfenced); "
+                                    "it is left as it is and retried on the next start")
+    return meta, body
+
+
+def _config_record(root: Path) -> dict[str, str]:
+    """`config.md`'s raw frontmatter; `RecordUnreadableError` (or the read's
+    own `OSError`/`UnicodeDecodeError`) when it cannot be read as a record."""
+    return _record(root / "config.md", "config.md")[0]
+
+
 def _campaign_marks() -> tuple[dict[str, bool], dict[str, str]]:
     """(cid -> whether its `campaign.md` carries the current (or a newer)
     marker, cid -> why it cannot be read) -- every campaign is in exactly
@@ -233,8 +268,8 @@ def _campaign_marks() -> tuple[dict[str, bool], dict[str, str]]:
         if not paths.safe_id(cid):
             continue
         try:
-            meta, _ = parse_frontmatter(campaign_paths.campaign_meta_path(cid)
-                                        .read_text(encoding="utf-8"))
+            meta, _ = _record(campaign_paths.campaign_meta_path(cid),
+                              f"campaign {cid}'s campaign.md")
         except (OSError, UnicodeDecodeError, ValueError) as exc:
             unreadable[cid] = str(exc)
             continue
@@ -376,16 +411,23 @@ def campaign(cid: str) -> bool:
     atomic, bumps the campaign's revision in the same hold, and does NOT stamp
     `updated`: the library is ordered by it, and an upgrade is not something
     that happened in the campaign.
+
+    A `campaign.md` that holds no record (`RecordUnreadableError`) is never
+    rewritten. The read, the check and the write are in `config.format_hold`
+    (reentrant: the settings write calls this inside its own), so a store a
+    newer build switched -- before this campaign's turn or while the loop ran
+    -- raises `config.NewerFormatError` and this campaign is not marked.
     """
     if not locks.holds_campaign(cid):
         raise RuntimeError(f"migrate.campaign({cid!r}) needs the caller to hold its lock")
     mp = campaign_paths.campaign_meta_path(cid)
-    meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
-    if keys.is_current(meta) or keys.is_newer(meta):
-        return False
-    meta.update(campaign_fields(meta, _lookup()))
-    meta[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
-    atomic.write_text(mp, dump_frontmatter(meta, body))
+    with config.format_hold():
+        meta, body = _record(mp, f"campaign {cid}'s campaign.md")
+        if keys.is_current(meta) or keys.is_newer(meta):
+            return False
+        meta.update(campaign_fields(meta, _lookup()))
+        meta[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
+        atomic.write_text(mp, dump_frontmatter(meta, body))
     revision.bump(cid)
     return True
 
@@ -451,6 +493,17 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
     ended, else the Status to report (a failure, a stop, a root that moved)."""
     if not _config_exists(root):
         return None                        # a fresh store is never migrated
+    # A `config.md` that holds no record is not a legacy store with nothing
+    # set: switched, it would be stamped current over an empty layout and its
+    # legacy keys never read again once they arrive. Nothing is written --
+    # the connection seeding below would write it too -- and the next start
+    # retries.
+    try:
+        _config_record(root)
+    except (OSError, UnicodeDecodeError) as exc:
+        reason = f"the upgrade stopped: {exc}"
+        _remember(root, running=False, failed=reason, safety=_kept_safety(_recall(root)))
+        return Status("failed", reason)
     # A newer build's store first: it is not this build's to touch at all, and
     # the connection seeding below writes (which it refuses on its own too).
     if keys.is_newer(config.read_config()):
@@ -499,7 +552,12 @@ def _steps(run: _Run, current: bool, left: list[str]) -> Status | None:
     for cid in left:
         if why := run.halted():
             return Status("pending", why)
-        _campaign_step(cid, run.skipped)
+        try:
+            _campaign_step(cid, run.skipped)
+        except config.NewerFormatError:
+            # A newer build switched the store while the loop ran: what is
+            # left is not this build's to mark (spec 11.3).
+            return Status("newer")
     return None
 
 
@@ -539,16 +597,22 @@ def _switch(run: _Run) -> Status | None:
     with llm_connections.LOCK:
         if why := run.halted():
             return Status("pending", why)
+        _config_record(run.root)           # a placeholder fails the run
         early = config.read_config()
-        if keys.is_current(early) or keys.is_newer(early):
+        if keys.is_newer(early):
+            return Status("newer")         # not this build's to go on with
+        if keys.is_current(early):
             return None                    # switched meanwhile, by another device
         if why := _facts(run):
             return Status("pending", why)
         with locks.config_lock():
             if why := run.halted():
                 return Status("pending", why)
+            _config_record(run.root)
             cfg = config.read_config()
-            if keys.is_current(cfg) or keys.is_newer(cfg):
+            if keys.is_newer(cfg):
+                return Status("newer")
+            if keys.is_current(cfg):
                 return None                # switched meanwhile, by another device
             fields = global_fields(cfg, _lookup())
             fields[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
@@ -581,37 +645,45 @@ def _providers(run: _Run) -> str:
     return ""
 
 
-def _stated(conn: dict) -> dict[str, Callable[[str, str], None]]:
-    """A connection's legacy model fields that differ from the defaults, each
-    as the facts write that states it (provider id, model)."""
-    out: dict[str, Callable[[str, str], None]] = {}
+def _stated(conn: dict) -> dict[str, object]:
+    """A connection's legacy model fields that differ from the defaults, as
+    `{field: value}` -- what `facts.adopt_legacy` states of its model."""
+    out: dict[str, object] = {}
     vision = str(conn.get("vision") or "")
     if vision:
-        out["vision"] = lambda pid, model: facts.set_stated(pid, model, vision=vision)
+        out["vision"] = vision
     if conn.get("prefill") is True:
-        out["prefill"] = lambda pid, model: facts.set_stated(pid, model, prefill=True)
+        out["prefill"] = True
     post_process = str(conn.get("post_process") or "")
     if post_process not in ("", "none"):
-        out["post_process"] = lambda pid, model: facts.set_stated(
-            pid, model, post_process=post_process)
+        out["post_process"] = post_process
     return out
 
 
 def _facts(run: _Run) -> str:
-    """Step 3: each connection's stated model behaviour, as its model's facts.
+    """Step 3: each connection's stated model behaviour, as its model's facts
+    (`facts.adopt_legacy`, which first takes back whatever an earlier,
+    interrupted run copied, so a field the user reset to its default since, or
+    a model the connection moved off, is not left stating the old value).
+    Every connection is visited, one that states nothing too, for that reason.
     A value the writer refuses, or a write that fails, is skipped alone; the
     others still land. Returns why it stopped early, or "". A connection that
-    cannot be read fails the run, as in `_providers`."""
+    cannot be read fails the run, as in `_providers` -- and so does a facts
+    file that cannot be read (`facts.FactsUnreadableError`): skipped, its
+    copy would be switched past and never made."""
     for conn in llm_connections.list_connections_strict():
         if why := run.halted():
             return why
         model = facts.model_of(conn)
-        for field, state in _stated(conn).items():
-            try:
-                state(conn["id"], model)
-            except (ValueError, *_UNREADABLE) as exc:
-                run.skipped.append(
-                    f"facts {conn['id']} {model or '(no model)'} {field}: {exc}")
+        label = f"facts {conn['id']} {model or '(no model)'}"
+        try:
+            refused = facts.adopt_legacy(conn["id"], model, _stated(conn))
+        except facts.FactsUnreadableError:
+            raise
+        except (ValueError, *_UNREADABLE) as exc:
+            run.skipped.append(f"{label}: {exc}")
+            continue
+        run.skipped.extend(f"{label} {field}: {why}" for field, why in refused.items())
     return ""
 
 

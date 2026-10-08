@@ -439,14 +439,14 @@ def test_the_facts_confirm_is_compared_in_the_hold_that_writes(client, monkeypat
     pid = _spare(client)
     store.llm_connections.set_cached_models(
         pid, [{"id": "vendor/embed-small", "outputs": ["text"]}], _raw(pid)["rev"])
-    real = facts._load
+    real = facts._load_for_write
 
-    def role_moves_first(provider_id):
+    def role_moves_first(provider_id, **kw):
         store.write_config(**{keys.role_key("embedding", "provider"): pid,
                               keys.role_key("embedding", "model"): "vendor/embed-small"})
-        return real(provider_id)
+        return real(provider_id, **kw)
 
-    monkeypatch.setattr(facts, "_load", role_moves_first)
+    monkeypatch.setattr(facts, "_load_for_write", role_moves_first)
     got = client.put(f"/api/llm-connections/{pid}/facts",
                      json={"model": "vendor/embed-small", "overrides": {"embed": "yes"}})
     assert got.status_code == 400, got.text
@@ -836,3 +836,30 @@ def test_a_no_op_update_keeps_the_rev(client):
     store.llm_connections.update_connection(pid)
     store.llm_connections.update_connection(pid, name="spare", api_key="")
     assert _raw(pid)["rev"] == rev
+
+
+def test_a_facts_write_that_cannot_read_the_file_is_refused_and_writes_nothing(
+        client, monkeypatch):
+    """A facts file another program holds is not an empty one: the write is
+    refused (503, try again) rather than replacing every other model's facts."""
+    from pathlib import Path
+
+    _format("2")
+    pid = _spare(client)
+    assert facts.record_verified(pid, "vendor/other", _raw(pid)["rev"],
+                                 {"vision": {"ok": True}})
+    path = store.llm_connections.facts_path(pid)
+    before = path.read_bytes()
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == path:
+            raise PermissionError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+    got = client.put(f"/api/llm-connections/{pid}/facts",
+                     json={"model": "vendor/m", "vision": "off"})
+    monkeypatch.setattr(Path, "read_text", real)
+    assert got.status_code == 503, got.text
+    assert path.read_bytes() == before
