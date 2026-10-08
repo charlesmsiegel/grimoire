@@ -1418,6 +1418,7 @@ def test_an_empty_campaign_emits_none_of_the_optional_ledger_sections(monkeypatc
     optional = {"Story so far", "Plot threads", "Character state", "Relationships"}
     assert sorted(labels & optional) == [], "sections an empty campaign emitted"
 
+
 def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
     from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))

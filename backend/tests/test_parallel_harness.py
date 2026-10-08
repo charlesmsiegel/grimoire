@@ -25,6 +25,7 @@ import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
+import pytest
 from coverage import CoverageData
 
 from grimoire.store import paths
@@ -36,12 +37,26 @@ sys.path.insert(0, str(REPO / "scripts"))
 import profile_report  # noqa: E402 -- the sys.path line above is what makes it importable
 
 MIXED = '''
+import time
+
+import fastapi
 import pytest
+
+
+@pytest.fixture
+def slow():
+    time.sleep(0.02)
+    return 1
 
 
 @pytest.mark.parametrize("n", range(6))
 def test_passes(n):
     assert n >= 0
+
+
+def test_with_a_fixture_and_an_app(slow):
+    fastapi.FastAPI()
+    assert slow == 1
 
 
 def test_fails():
@@ -79,6 +94,15 @@ PACKAGE = {
 }
 
 
+HANG = '''
+import time
+
+
+def test_hangs_on_purpose():
+    time.sleep(120)
+'''
+
+
 def _profile(root: Path, name: str) -> dict:
     return json.loads((root / name).read_text(encoding="utf-8"))
 
@@ -91,9 +115,13 @@ def test_a_failure_on_one_worker_fails_the_run(tmp_path):
     assert (doc["workers"], doc["distribution"]) == (2, "load")
     assert doc["tests"]["test_mixed.py::test_fails"]["outcome"] == "failed"
     assert doc["exitstatus"] == 1
-    # The reports came from workers, and the controller wrote them down.
+    # The reports came from workers, and the controller wrote them down --
+    # the fixture seconds and operation counts a worker attached included.
     assert {rec.get("worker") for rec in doc["tests"].values()} <= {"gw0", "gw1"}
     assert all(rec.get("worker") for rec in doc["tests"].values())
+    annotated = doc["tests"]["test_mixed.py::test_with_a_fixture_and_an_app"]
+    assert annotated["fixtures_s"]["slow"] >= 0.02
+    assert annotated["ops"] == {"app_built": 1}
 
 
 def test_a_worker_that_dies_fails_the_run_and_names_the_node(tmp_path):
@@ -106,6 +134,30 @@ def test_a_worker_that_dies_fails_the_run_and_names_the_node(tmp_path):
     assert doc["tests"]["test_crash.py::test_after"]["outcome"] == "passed"
 
 
+def test_a_hung_test_never_reads_green_and_is_named(tmp_path):
+    """A hang is ended from outside -- CI's job timeout -- and must leave a
+    run that did not pass, with the stuck test named. pyproject.toml's
+    `faulthandler_timeout` is what names it; here at one second, there five
+    minutes. Serial, so killing the run cannot orphan a worker."""
+    root = synthetic_suite.write(tmp_path / "s", {"test_hang.py": HANG})
+    with pytest.raises(subprocess.TimeoutExpired) as stopped:
+        synthetic_suite.run(root, "-o", "faulthandler_timeout=1", timeout=8)
+    seen = (stopped.value.stdout or b"") + (stopped.value.stderr or b"")
+    seen = seen.decode() if isinstance(seen, bytes) else seen
+    assert "test_hangs_on_purpose" in seen, seen
+    assert "passed" not in seen
+
+
+def test_a_slow_test_on_a_worker_is_named_too(tmp_path):
+    """The same dump, from inside an xdist worker: its stderr reaches the
+    controller's log, so a hang under -n is named as well."""
+    slow = HANG.replace("time.sleep(120)", "time.sleep(2.5)")
+    root = synthetic_suite.write(tmp_path / "s", {"test_slow.py": slow})
+    proc = synthetic_suite.run(root, "-n", "2", "-o", "faulthandler_timeout=1")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "test_hangs_on_purpose" in proc.stdout + proc.stderr
+
+
 def test_the_workers_collect_exactly_what_a_serial_run_collects(tmp_path):
     root = synthetic_suite.write(tmp_path / "s", {"test_mixed.py": MIXED,
                                                   "test_crash_free.py": MIXED})
@@ -114,7 +166,7 @@ def test_the_workers_collect_exactly_what_a_serial_run_collects(tmp_path):
     serial, parallel = _profile(root, "serial.json"), _profile(root, "parallel.json")
     assert parallel["collection_agrees"] is True
     assert parallel["collected"] == serial["collected"]
-    assert len(serial["collected"]) == 14
+    assert len(serial["collected"]) == 16
     diff = profile_report.compare(serial, parallel)
     assert not profile_report.failed(diff), diff
 

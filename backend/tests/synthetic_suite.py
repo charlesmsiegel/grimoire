@@ -70,5 +70,9 @@ def run(root: Path, *args: str, timeout: float = 180) -> subprocess.CompletedPro
     """`pytest -q -p no:cacheprovider *args` in `root`, as a child process."""
     return subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
-        cwd=root, env=child_env(GRIMOIRE_HOME=str(root / "home")),
+        # GIT_CEILING_DIRECTORIES: a tmp root that happens to sit inside some
+        # git work tree (a dotfiles home, a --basetemp under the checkout)
+        # must still read as "no checkout" to the profile's git calls.
+        cwd=root, env=child_env(GRIMOIRE_HOME=str(root / "home"),
+                                GIT_CEILING_DIRECTORIES=str(root.parent)),
         capture_output=True, text=True, timeout=timeout, check=False)

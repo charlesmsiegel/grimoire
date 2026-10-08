@@ -130,6 +130,54 @@ def test_compare_passes_when_nothing_went_missing(tmp_path):
     assert profile_report.main(["compare", str(path), str(path)]) == 0
 
 
+def _budget(**over) -> dict:
+    return {"schema_version": 1, "wall_s": 100.0, "tolerance": 0.2, "collected": 3,
+            "skipped": 1, "slow_test_s": 10.0} | over
+
+
+def _budgeted(wall=100.0, collected=("t.py::a", "t.py::b", "t.py::c"), skipped=1,
+              slow=None) -> dict:
+    tests = {nid: _node(call=0.1) for nid in collected}
+    for nid in list(tests)[:skipped]:
+        tests[nid] = _node(outcome="skipped")
+    if slow:
+        tests[collected[-1]] = _node(call=slow)
+    return _profile(tests, wall_s=wall, collected=list(collected))
+
+
+def test_a_run_within_budget_warns_of_nothing():
+    assert profile_report.budget_findings(_budgeted(wall=119.0), _budget()) == []
+
+
+def test_the_budget_warns_on_time_count_skips_and_slow_tests():
+    found = profile_report.budget_findings(
+        _budgeted(wall=125.0, collected=("t.py::a", "t.py::b", "t.py::c"), skipped=2,
+                  slow=11.0),
+        _budget(collected=4))
+    kinds = sorted(kind for kind, _ in found)
+    assert kinds == ["fewer-tests", "more-skips", "slow-test", "slower"]
+
+
+def test_more_tests_is_a_notice_not_a_warning():
+    found = profile_report.budget_findings(
+        _budgeted(collected=("t.py::a", "t.py::b", "t.py::c", "t.py::d")), _budget())
+    assert [kind for kind, _ in found] == ["more-tests"]
+
+
+def test_the_budget_command_never_fails_the_job(tmp_path, capsys):
+    """A warning is something to investigate on a shared runner, not a red
+    gate -- and a run that died before writing its profile says so the same
+    way."""
+    (tmp_path / "b.json").write_text(json.dumps(_budget()), encoding="utf-8")
+    (tmp_path / "p.json").write_text(json.dumps(_budgeted(wall=500.0)), encoding="utf-8")
+    assert profile_report.main(["budget", str(tmp_path / "p.json"),
+                                str(tmp_path / "b.json")]) == 0
+    assert "::warning" in capsys.readouterr().out
+    assert profile_report.main(["budget", str(tmp_path / "missing.json"),
+                                str(tmp_path / "b.json")]) == 0
+    assert "no profile" in capsys.readouterr().out
+
+
 # ------------------------------------------------------------ coverage_arcs
 
 def _source_tree(tmp_path: pathlib.Path) -> pathlib.Path:

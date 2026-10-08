@@ -1,0 +1,11 @@
+{
+ "_about": "The backend suite's performance budget, read by `scripts/profile_report.py budget` after CI's py3.11 check-py (spec section 13). Warnings only: a session more than `tolerance` over `wall_s`, fewer tests collected than `collected`, more skipped than `skipped`, any test over `slow_test_s`. Figures are CI's (GitHub-hosted ubuntu-24.04, 4 workers, coverage on), not a laptop's. Move them deliberately, in the commit that moves the suite, and say why.",
+ "schema_version": 1,
+ "python": "3.11",
+ "workers": 4,
+ "wall_s": 700,
+ "tolerance": 0.2,
+ "collected": 14275,
+ "skipped": 8,
+ "slow_test_s": 120
+}
