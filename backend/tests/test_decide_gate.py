@@ -608,22 +608,30 @@ def test_continuity_reconcile_decide_reads_every_entry():
     verdict without a rationale, a fourth cited scene, a scene the item does
     not show, a reply in today's format to the decide prompt, and a reply
     naming a candidate we did not send -- whose decide twin carries an index
-    past the batch, which leaves the whole reply unread (slice F). The
-    structured parse loses nothing -- a candidate it never reached gets no
-    proposal, and a repeated key keeps its first value."""
+    past the batch, which leaves the whole reply unread (slice F), real
+    verdicts beside it included. The structured parse loses nothing -- a
+    candidate it never reached gets no proposal, and a repeated key keeps its
+    first value."""
     conv = _reconcile_gate()
     result = gate.judge(conv)
     assert result.passed, "\n".join(result.regressions)
     assert result.decide_right == result.entries
     ruled = [e for e in gate.load(conv) if e.ruling]
-    assert result.legacy_right == result.entries - len(ruled) == result.entries - 6
+    assert result.legacy_right == result.entries - len(ruled) == result.entries - 7
     entries = {entry.shape: entry for entry in gate.load(conv)}
     assert {"todays-format", "two-scenes-cited", "four-scenes-cited",
             "evidence-from-another-candidate", "one-item-unreadable", "null-decision",
             "related-without-letters", "closure-without-rationale",
-            "unknown-keys-and-repeated-candidate", "repeated-candidate"} <= set(entries)
+            "unknown-keys-and-repeated-candidate", "repeated-candidate",
+            "stray-index-beside-real-answers"} <= set(entries)
     assert entries["todays-format"].intended == {}
     assert entries["unknown-keys-and-repeated-candidate"].intended == {}
+    # The stray index's price, printed with something to lose: today's parse
+    # keeps two real verdicts, decide neither.
+    stray = entries["stray-index-beside-real-answers"]
+    assert stray.intended == {}
+    assert sorted(p["decision"] for p in conv.settle(conv.legacy(stray.legacy)).values()) == [
+        "close", "duplicate"]
     # The repeated key, apart from the foreign indices: its first value stands.
     assert [p["decision"] for p in entries["repeated-candidate"].intended.values()] == [
         "uncertain"]
@@ -822,7 +830,8 @@ def test_the_corpora_mark_their_deliberate_changes():
                      ("continuity-reconcile", "four-scenes-cited"),
                      ("continuity-reconcile", "evidence-from-another-candidate"),
                      ("continuity-reconcile", "todays-format"),
-                     ("continuity-reconcile", "unknown-keys-and-repeated-candidate")}
+                     ("continuity-reconcile", "unknown-keys-and-repeated-candidate"),
+                     ("continuity-reconcile", "stray-index-beside-real-answers")}
     printed = gate.report([gate.judge(conv) for conv in gate.GATES])
     assert printed.count("ruling: ") == len(ruled)
     assert "ruling: entry 6 (multi-line), legacy loses: " in printed

@@ -1071,7 +1071,19 @@ Templates live under `templates/decide/` and go through
   reply in today's format keeps its corrective. With two items either is
   unreadable. An item keyed by its index whose question ids sit directly under
   the key (`{"0": {"over": true}}`, the `answers` level dropped) is read as the
-  flattened shape under that key, for any number of items. A
+  flattened shape under that key, for any number of items. A reply keyed by
+  index but not by ours is read as no item's: an all-digit key that is not one
+  of the indices sent (`"2"` beside two items) or is not canonical (`"01"`)
+  leaves every item `unreadable` with detail `no_item`, the in-range keys
+  beside it included, because a key past the batch is most likely the model
+  numbering from 1, and renumbering it is a guess (an answer left unread,
+  never misattributed). The cost lands differently per call site: a
+  continuity-reconcile chunk's candidates get no proposal and the next sweep
+  asks them again, while a continuity-identity chunk's rows stage with hints
+  only for that absorb, since the phase has no retry. A reply numbered from 1
+  that skipped an item can stay in range, and no test on the keys alone tells
+  it from a reply keyed from 0 that skipped item 0, so it is read as keyed;
+  `decisions._foreign_index` records that limit. A
   predicate is a JSON boolean only (the string `"true"` is unreadable), a
   score an integer inside its levels (a boolean is not), and a choice an option
   id or alias. Valid JSON in any other shape is `None` with `unreadable`, never

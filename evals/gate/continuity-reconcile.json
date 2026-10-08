@@ -484,7 +484,7 @@
     "intended": {},
     "legacy": "{\"decisions\": [{\"candidate\": \"c9\", \"decision\": \"close\", \"reason\": \"x\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}, {\"candidate\": 1, \"decision\": \"close\"}, \"not an object\", {\"candidate\": \"  Candidate C5 \", \"decision\": \"Merge it\", \"reason\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"second answer\"}]}",
     "decide": "{\"6\": {\"answers\": {\"decision\": \"close\"}}, \"7\": {\"answers\": {\"decision\": \"close\"}}, \"8\": \"not an object\", \"4\": {\"answers\": {\"decision\": \"Merge it\"}, \"rationale\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\"}, \"rationale\": \"second answer\"}}",
-    "ruling": "an index the batch did not send leaves the whole reply unread (slice F): a key past the batch may be the model's numbering, so none of its keys is read as an item's"
+    "ruling": "accepted recall loss: a reply naming a candidate the batch did not send answers none of its items (slice F's index rule: a key past the batch may be the model's numbering, so none of its keys is read as an item's). Today's parse, which reads candidate names rather than indices, kept c5's verdict (stored uncertain); decide keeps nothing, and every candidate in the chunk is asked again by the next sweep. Entry 46 prints the same trade with real verdicts"
   },
   {
     "shape": "repeated-candidate",
@@ -648,7 +648,7 @@
     },
     "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"fulfilled\", \"reason\": \"Mara gave the ring back on the Realm road.\", \"evidence_scenes\": [\"0002--realm-road\"]}]}",
     "decide": "{\"5\": {\"answers\": {\"decision\": \"fulfilled\", \"evidence_scene\": \"0002--realm-road\", \"evidence_scene_2\": null}, \"rationale\": \"Mara gave the ring back on the Realm road.\"}}",
-    "ruling": "an item cites only what it shows"
+    "ruling": "accepted recall loss: today's one-call prompt showed every candidate's scenes in one chronicle, so a closure citing a scene shown beside another candidate cited a line the model was really shown, and today's parse rightly kept it as fulfilled; a decide item is self-contained (ruling 7) and offers only its own scenes, so that citation is no longer an option and the verdict is stored uncertain"
   },
   {
     "shape": "one-item-unreadable",
@@ -733,5 +733,12 @@
     },
     "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"related\", \"reason\": \"Both lead to the reef.\"}]}",
     "decide": "{\"0\": {\"answers\": {\"decision\": \"related\", \"from\": null, \"to\": null, \"evidence_scene\": null, \"evidence_scene_2\": null, \"evidence_scene_3\": null}, \"rationale\": \"Both lead to the reef.\"}}"
+  },
+  {
+    "shape": "stray-index-beside-real-answers",
+    "intended": {},
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Both name the chart Mara lost.\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}, {\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"The chart burned on the Saltmarch quay.\", \"evidence_scenes\": [\"0004--saltmarch-quay\"]}, {\"candidate\": \"c9\", \"decision\": \"close\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"Both name the chart Mara lost.\"}, \"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0004--saltmarch-quay\"}, \"rationale\": \"The chart burned on the Saltmarch quay.\"}, \"6\": {\"answers\": {\"decision\": \"close\"}}}",
+    "ruling": "accepted recall loss, entry 32's rule with real verdicts beside the stray key: today's parse kept c1's duplicate and c5's closure, each on a scene the item shows; decide keeps neither, because one key past the batch leaves every answer in the chunk unread (asked again by the next sweep) -- the cost of never misattributing an answer to a candidate the model did not mean"
   }
 ]
