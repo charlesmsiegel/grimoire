@@ -297,7 +297,7 @@ def test_an_empty_chain_is_refused(client):
     _structured_store(client)
     with pytest.raises(ValueError):
         asyncio.run(inference.run_stages("scene-break", [_item()], (),
-                                         client=FakeLLM([["x"]]), resolved=_resolved()))
+                                         client=FakeLLM([["x"]])))
 
 
 # ---- the chain ----
@@ -378,6 +378,68 @@ def test_a_cancelled_native_batch_files_aborted_rows_and_leaves_no_task(client):
     assert len(rows) == NATIVE_CONCURRENCY
     assert {(r["status"], r["decision_mode"]) for r in rows} == {("aborted", NATIVE)}
     assert fake.calls == 0       # the fallback stage never ran
+
+
+def test_a_cancel_under_an_abandoning_around_files_aborted_rows_and_leaves_no_task(
+        client, monkeypatch):
+    """Review Focus 4 under the continuity sweep's own hook: `_bounded_call`
+    runs each call as a task of its own and, on a cancel, abandons it rather
+    than waiting for it. Every opened meter still files `aborted`, every task
+    `_native` created has ended when `decide` raises, and the abandoned calls
+    unwind within a few turns of the loop."""
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(6)
+    fake = _Endpoint([["unused"]], {i.context: HOLD for i in items})
+    children: list[asyncio.Task] = []
+    create_task = asyncio.TaskGroup.create_task
+
+    def recording(group, coro, **kwargs):
+        task = create_task(group, coro, **kwargs)
+        children.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio.TaskGroup, "create_task", recording)
+
+    async def main():
+        task = asyncio.create_task(inference.decide(
+            "scene-break", items, client=fake, resolved=resolved,
+            around=lambda call, holder: common._bounded_call(call, ceiling=60)))
+        await fake.full.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        ended = [child.done() for child in children]
+        for _ in range(10):
+            await asyncio.sleep(0)
+        return ended, [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+
+    ended, left = asyncio.run(main())
+    assert len(ended) == len(items) and all(ended)
+    assert left == []
+    assert sorted(fake.cancelled) == sorted(i.context for i in items[:NATIVE_CONCURRENCY])
+    rows = _rows()
+    assert len(rows) == NATIVE_CONCURRENCY
+    assert {(r["status"], r["decision_mode"]) for r in rows} == {("aborted", NATIVE)}
+    assert fake.calls == 0
+
+
+@pytest.mark.parametrize("stop", [False, True], ids=["alone", "after-a-stop"])
+def test_an_item_that_raises_cancelled_error_itself_is_a_cancel(client, stop):
+    """An item whose call raises `CancelledError` with no cancel behind it
+    ends its task cancelled, which a TaskGroup does not propagate. It is
+    still a cancel: raised as one, never an `IndexError` (alone), and never
+    charged to an earlier connection-wide stop and sent on to the fallback
+    as if it had been held back (after a stop)."""
+    resolved = _native_resolution(client, fallback=True)
+    items = _items(3)
+    native: dict[str, object] = {i.context: _yes() for i in items}
+    native[items[1].context] = asyncio.CancelledError()
+    if stop:
+        native[items[0].context] = LLMError("auth", "invalid key", status=401)
+    fake = _Endpoint([[decision_reply({"over": True})]], native)
+    with pytest.raises(asyncio.CancelledError):
+        _decide(fake, items, resolved=resolved)
+    assert fake.sent == 3 and fake.calls == 0
 
 
 def test_an_unexpected_exception_cancels_the_other_native_items(client):
@@ -519,12 +581,16 @@ def test_an_unrepresentable_item_moves_to_the_fallback_with_its_reason(client):
     assert [r["decision_mode"] for r in _rows()] == [STRUCTURED]
 
     alone = dataclasses.replace(resolved, attempts=resolved.attempts[:1])
+    before = store.errors.summary(days=1, module="scene-break")["total"]
     with pytest.raises(LLMError) as exc:
         _decide(FakeLLM([["unused"]], decisions=[_yes()]), [wide], resolved=alone)
     assert exc.value.code == "native_unrepresentable" and exc.value.detail == gap
     assert len(_rows()) == 1                       # no row for the unsent call
+    # ...and exactly one failure recorded for it, this one.
     recorded = store.errors.summary(days=1, module="scene-break")
-    assert recorded["total"] >= 1
+    assert recorded["total"] == before + 1
+    newest = recorded["rows"][0]
+    assert (newest["kind"], newest["message"]) == ("bad_response", gap)
 
 
 def test_around_runs_inside_each_native_meter(client):

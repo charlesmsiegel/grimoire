@@ -1019,20 +1019,29 @@ backends ignore aliases.
 `distribution`, and when `answer` is `None` a `reason` (`unreadable`,
 `refused`, `abstained`, `error`). Plus `backend` (`native` | `structured`), the
 selection that answered, and usage. Missing distributions stay missing.
-What answered is per chunk, since each chunk runs down the attempt chain on
-its own: `served` names every `(provider, model)` that answered one, in the
-order it first answered, and `provider`/`model` name the selection only when
-it is the one `served` holds (both empty when chunks were answered by
-different routes, the primary on one and its fallback on another).
-`errors` holds each failed chunk's final error, in chunk order: what `decide`
-would raise for that chunk alone, after its re-sends (each refusing route's
-prompt-only re-send, its failure composed with the other route's as the
-facade composes any both-failed call, the routes' own failures kept as
-`words`). It is empty when every chunk answered. A backend fills it for every
-chunk whose items it marks `error`: call sites report a batch's failure from
-it (the first entry, which is the error `decide` raises when no chunk
-answers), so a backend that left it empty would turn a rate limit into a
-bare `error` and lose its kind and `retry_after`. Under slice H
+What answered is per call, since each structured chunk runs down the
+attempt chain on its own and a native stage makes one call per item:
+`served` names every `(provider, model)` that answered one, across every
+stage, in the order it first answered, and `provider`/`model` name the
+selection only when it is the one `served` holds (both empty when calls were
+answered by different routes, the primary on one and its fallback on
+another).
+`errors` holds each failed unit's final error, in input order. A unit is a
+chunk on a structured stage and an item on a native stage: the units of the
+last stage the items reached. Final means after a chunk's re-sends (each
+refusing route's prompt-only re-send, its failure composed with the other
+route's as the facade composes any both-failed call, the routes' own
+failures kept as `words`) and after every stage of the chain: an item that
+failed on one stage and was answered by a later one contributes nothing, and
+an item that failed on every stage contributes its stages' failures composed
+the same way (`llm.routes_failed`: the first stage's kind and
+`retry_after`, the later stages' failures named after it, each kept as
+`words`). It is empty when every item answered. A backend fills it for every
+unit whose items it marks `error`: call sites report a batch's failure from
+it (the first entry, which is the error `decide` raises when no item
+answers, read through `_decide_error`), so a backend that left it empty
+would turn a rate limit into a bare `error` and lose its kind and
+`retry_after`. Under slice H
 `Decision.backend` follows the same rule as `provider`/`model`: it names the
 one backend that answered, and is empty when stages with different backends
 answered items of one batch. Each `ItemResult` carries its own `backend`,
@@ -1101,11 +1110,11 @@ Templates live under `templates/decide/` and go through
   meter's live holder, so an overrun is filed as an `error/timeout` row as
   today. Operation and decision mode reach the ledger through the account block
   (§9.3); `decide` adds no meter parameter and writes nothing into the holder.
-- **Provider errors propagate.** An `LLMError` from a chunk is re-raised as
-  such when no chunk answered; `reason: error` marks only a failed chunk's
-  items, and only when another chunk answered. `Decision.errors` holds each
-  failed chunk's final error, which the call sites read through
-  `_decide_error`.
+- **Provider errors propagate.** When no item answered, the first failed
+  unit's final error is re-raised (composed across stages, as "Result"
+  says); `reason: error` marks only a failed unit's items, and only when
+  another item answered. `Decision.errors` holds each failed unit's final
+  error, which the call sites read through `_decide_error`.
 - **`capture`** is a hook called after each call settles (§9.4).
 - **Reading the reply.** The parser never raises and answers every item. It
   reads a fenced or surrounded object, and for a single item two shapes a

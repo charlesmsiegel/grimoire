@@ -132,7 +132,8 @@ def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
     While slice F's decide skip exists, a skipped resolution is F's one stage
     on the fallback it skipped to (`resolved.conn`)."""
     if resolved.skipped:
-        assert resolved.conn is not None    # a skip lands on a fallback
+        if resolved.conn is None:
+            raise ValueError("a skipped resolution names no connection to send")
         return (Stage(STRUCTURED, resolved.conn, None),)
     if not resolved.attempts:
         return ()
@@ -159,7 +160,6 @@ class _Call:
 
     task: str
     client: LLMClient
-    resolved: ResolvedInference
     explain: str
     campaign: str
     scene: str
@@ -288,6 +288,7 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
     failed: list[tuple[tuple[int, ...], LLMError]] = []
     served: list[tuple[str, str]] = []
     for offset, chunk in decisions.chunks(items):
+        unit = tuple(range(offset, offset + len(chunk)))
         # Off the loop: the template loader touches the filesystem.
         messages = await asyncio.to_thread(structured_messages, chunk, explain=call.explain)
         if call.capture is not None:
@@ -301,7 +302,7 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
                 served.append(by)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
-            failed.append((tuple(range(offset, offset + len(chunk))), error))
+            failed.append((unit, error))
     return _Answered(tuple(results), tuple(failed), tuple(rows), tuple(served))
 
 
@@ -340,6 +341,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
     errors: list[LLMError | None] = [None] * len(items)
     rows: list[dict | None] = [None] * len(items)
     holders: list[dict | None] = [None] * len(items)
+    started = [False] * len(items)
     stopped: list[LLMError] = []
 
     async def one(index: int, item: decisions.Item) -> None:
@@ -348,6 +350,7 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
                 return
             m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
                                   post=call.post, round_id=call.round_id)
+            started[index] = True
             try:
                 with m:
                     pending = client.decide_native(item, conn, m.usage, retries=call.retries)
@@ -371,6 +374,12 @@ async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:
         # raised as itself, so a caller's `except` sees what it would have
         # seen from a single call -- an `Abandoned` stays an `Abandoned`.
         raise grouped.exceptions[0] from None
+    if any(s and r is None and e is None for s, r, e in zip(started, results, errors,
+                                                           strict=True)):
+        # An item that raised `CancelledError` of its own: its task ended
+        # cancelled, which a TaskGroup does not propagate. Cancellation
+        # passes through untouched, as it would from a single call.
+        raise asyncio.CancelledError()
     # An item never started carries the failure that stopped it.
     failed = tuple(((index,), errors[index] or stopped[0])
                    for index, result in enumerate(results) if result is None)
@@ -404,7 +413,7 @@ _BACKENDS: dict[str, Backend] = {STRUCTURED: _structured, NATIVE: _native}
 
 
 async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence[Stage], *,
-                     client: LLMClient, resolved: ResolvedInference, explain: str = "",
+                     client: LLMClient, explain: str = "",
                      campaign: str = "", scene: str = "", post: int | None = None,
                      round_id: str = "", capture: Capture | None = None,
                      around: Around | None = None) -> decisions.Decision:
@@ -432,7 +441,7 @@ async def run_stages(task: str, items: Sequence[decisions.Item], chain: Sequence
     decisions.validate(items)
     if not chain:
         raise ValueError(f"{task!r} has no decide stage to answer it")
-    call = _Call(task=task, client=client, resolved=resolved, explain=explain,
+    call = _Call(task=task, client=client, explain=explain,
                  campaign=campaign, scene=scene, post=post, round_id=round_id,
                  capture=capture, around=around, conn=chain[0].conn,
                  retries=chain[0].retries)
@@ -503,6 +512,6 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     chain = stages(resolved)
     if not chain:
         raise ValueError(f"no decision backend for mode {resolved.decision_mode!r}")
-    return await run_stages(task, items, chain, client=client, resolved=resolved,
+    return await run_stages(task, items, chain, client=client,
                             explain=explain, campaign=campaign, scene=scene, post=post,
                             round_id=round_id, capture=capture, around=around)
