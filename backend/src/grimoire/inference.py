@@ -147,8 +147,7 @@ def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
         chain.append(Stage(NATIVE, _alone(primary.conn), None))
     elif resolve.generates(primary):
         chain.append(Stage(STRUCTURED, _alone(primary.conn) if apart else primary.conn, None))
-    if apart:
-        assert fallback is not None
+    if apart and fallback is not None:
         chain.append(Stage(fallback.decision_mode, _alone(fallback.conn), 0))
     return tuple(chain)
 
