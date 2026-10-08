@@ -165,6 +165,27 @@ cd backend && PYTHONPATH=src .venv/bin/python -m pytest tests/test_scenes.py -q
 cd frontend && npx vitest run src/components/GreetingEditor.test.tsx
 ```
 
+### Faster loops, which are not the gate
+
+Three `make` targets shorten the edit-and-retry loop on the backend. None of
+them is a `check-*` target or part of `make check`, each prints `NOT A GATE`
+before it starts, and none measures coverage unless asked — so a green one
+means "these tests pass", never "the suite passes". Like the gate, each puts
+this checkout's `backend/src` first on the import path, so a worktree run
+tests the worktree (pass `PY` as above).
+
+| Target | Runs |
+|---|---|
+| `make test-py-fast TESTS=backend/tests/test_scenes.py` | the paths or node IDs in `TESTS` (default: the whole suite), stopping at the first failure; `ARGS="-k reroll"` is handed to pytest |
+| `make test-py-failed` | only what failed last time; with nothing on record it selects nothing and pytest exits 5 |
+| `make test-py-profile TESTS=… [COV=1]` | the selection with a per-node phase profile written to `build/perf/profile.json`, then a summary of where the time went; `COV=1` adds the exact coverage arguments `check-py` uses |
+
+The profile behind the last one is the `--phase-profile` option in
+`backend/tests/phase_profile.py`; `scripts/profile_report.py` summarizes and
+compares profiles, and `scripts/coverage_arcs.py` compares the line and branch
+sets two coverage runs executed. Before pushing, `make check` is still the
+command.
+
 ---
 
 ## The architecture guards

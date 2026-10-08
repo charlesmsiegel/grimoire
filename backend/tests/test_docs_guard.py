@@ -293,6 +293,23 @@ def test_contributing_names_every_check_target():
     assert not missing, f"CONTRIBUTING.md does not mention these make targets: {missing}"
 
 
+def test_development_targets_are_documented_and_never_gates():
+    """The `test-py-*` targets select, skip coverage or profile -- none of them
+    is the suite passing. So none may be a prerequisite of `check`, where a
+    green one would read as the gate, and each is named in CONTRIBUTING.md,
+    which is where a contributor is told what a green one does and does not
+    mean."""
+    makefile = _read(ROOT / "Makefile")
+    dev = set(re.findall(r"^(test-py-[a-z0-9-]+):", makefile, re.MULTILINE))
+    assert dev, "the Makefile no longer defines any test-py-* target"
+    check = re.search(r"^check:([^\n]*)$", makefile, re.MULTILINE)
+    assert check, "the Makefile has no `check:` target"
+    assert not dev & set(check.group(1).split()), "a development target is in `check:`"
+    text = _read(CONTRIBUTING)
+    assert not [t for t in sorted(dev) if t not in text], (
+        "CONTRIBUTING.md does not mention every test-py-* target")
+
+
 @pytest.mark.parametrize(
     "a,b",
     [(a, b) for a, b in itertools.combinations(PROSE, 2)],
