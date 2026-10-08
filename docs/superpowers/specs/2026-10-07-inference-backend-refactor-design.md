@@ -1539,12 +1539,12 @@ go through `useHotkeys`.
   - "This model can't generate text, so it can't be Primary."
   - "This route sends images; the chosen model is unverified for vision."
   - "No native decision API; structured generation will be used."
+  - "This model can't create embeddings."
 
   The decide warning is keyed on the resolution's `decision_mode` (slice H):
   native; structured on a model that could also decide natively; structured
   with no native API; or the refusal's own sentence. The frontend keeps no
   capability rule of its own.
-  - "This model can't create embeddings."
 
 **Presets editor**: today's `SamplerPresetEditor`, renamed, with
 `reasoning_effort` and a **Preview on…** model picker rendering §8's states.
