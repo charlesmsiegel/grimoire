@@ -775,8 +775,10 @@ def _adapt(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -
 def _twin(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -> str:
     """The decide twin of a source: the same adapted elements in the decide
     shape. A candidate key becomes its item index, and one the fixture does
-    not hold (or an element with none) an index past the batch, which no item
-    reads; a repeated candidate becomes a repeated index key, which the parse
+    not hold (or an element with none) an index past the batch -- which, since
+    slice F's rule that an index we did not send makes the reply's keys not
+    ours (`decisions._foreign_index`), leaves every item of that reply unread;
+    a repeated candidate becomes a repeated index key, which the parse
     reads first-wins as today's `seen` does (I3). A letter stays a letter
     (an empty one is null, the decide spelling of none), on a pair item only.
     A list of cited scenes is spread over `reconcile.EVIDENCE_IDS` in order,

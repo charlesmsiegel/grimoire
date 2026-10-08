@@ -481,6 +481,13 @@
   },
   {
     "shape": "unknown-keys-and-repeated-candidate",
+    "intended": {},
+    "legacy": "{\"decisions\": [{\"candidate\": \"c9\", \"decision\": \"close\", \"reason\": \"x\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}, {\"candidate\": 1, \"decision\": \"close\"}, \"not an object\", {\"candidate\": \"  Candidate C5 \", \"decision\": \"Merge it\", \"reason\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"second answer\"}]}",
+    "decide": "{\"6\": {\"answers\": {\"decision\": \"close\"}}, \"7\": {\"answers\": {\"decision\": \"close\"}}, \"8\": \"not an object\", \"4\": {\"answers\": {\"decision\": \"Merge it\"}, \"rationale\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\"}, \"rationale\": \"second answer\"}}",
+    "ruling": "an index the batch did not send leaves the whole reply unread (slice F): a key past the batch may be the model's numbering, so none of its keys is read as an item's"
+  },
+  {
+    "shape": "repeated-candidate",
     "intended": {
       "possible_thread_closure-08a055422eba9c1b": {
         "decision": "uncertain",
@@ -492,8 +499,8 @@
         "evidence_scenes": []
       }
     },
-    "legacy": "{\"decisions\": [{\"candidate\": \"c9\", \"decision\": \"close\", \"reason\": \"x\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}, {\"candidate\": 1, \"decision\": \"close\"}, \"not an object\", {\"candidate\": \"  Candidate C5 \", \"decision\": \"Merge it\", \"reason\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"second answer\"}]}",
-    "decide": "{\"6\": {\"answers\": {\"decision\": \"close\"}}, \"7\": {\"answers\": {\"decision\": \"close\"}}, \"8\": \"not an object\", \"4\": {\"answers\": {\"decision\": \"Merge it\"}, \"rationale\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\"}, \"rationale\": \"second answer\"}}"
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"Merge it\", \"reason\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"second answer\"}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"Merge it\"}, \"rationale\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\"}, \"rationale\": \"second answer\"}}"
   },
   {
     "shape": "non-string-decision",

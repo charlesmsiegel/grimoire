@@ -606,7 +606,9 @@ def test_continuity_reconcile_is_gated_on_the_proposals_the_sweep_stores():
 def test_continuity_reconcile_decide_reads_every_entry():
     """Today's parse loses only what the slice settled by ruling: a status
     verdict without a rationale, a fourth cited scene, a scene the item does
-    not show, and a reply in today's format to the decide prompt. The
+    not show, a reply in today's format to the decide prompt, and a reply
+    naming a candidate we did not send -- whose decide twin carries an index
+    past the batch, which leaves the whole reply unread (slice F). The
     structured parse loses nothing -- a candidate it never reached gets no
     proposal, and a repeated key keeps its first value."""
     conv = _reconcile_gate()
@@ -614,12 +616,17 @@ def test_continuity_reconcile_decide_reads_every_entry():
     assert result.passed, "\n".join(result.regressions)
     assert result.decide_right == result.entries
     ruled = [e for e in gate.load(conv) if e.ruling]
-    assert result.legacy_right == result.entries - len(ruled) == result.entries - 5
+    assert result.legacy_right == result.entries - len(ruled) == result.entries - 6
     entries = {entry.shape: entry for entry in gate.load(conv)}
     assert {"todays-format", "two-scenes-cited", "four-scenes-cited",
             "evidence-from-another-candidate", "one-item-unreadable", "null-decision",
-            "related-without-letters", "closure-without-rationale"} <= set(entries)
+            "related-without-letters", "closure-without-rationale",
+            "unknown-keys-and-repeated-candidate", "repeated-candidate"} <= set(entries)
     assert entries["todays-format"].intended == {}
+    assert entries["unknown-keys-and-repeated-candidate"].intended == {}
+    # The repeated key, apart from the foreign indices: its first value stands.
+    assert [p["decision"] for p in entries["repeated-candidate"].intended.values()] == [
+        "uncertain"]
     assert len(entries["four-scenes-cited"].intended[
         gate._RECONCILE_PAYLOAD["candidates"][4]["id"]]["evidence_scenes"]) == 3
     unread = entries["one-item-unreadable"].intended
@@ -814,7 +821,8 @@ def test_the_corpora_mark_their_deliberate_changes():
                      ("continuity-reconcile", "closure-without-rationale-spaces"),
                      ("continuity-reconcile", "four-scenes-cited"),
                      ("continuity-reconcile", "evidence-from-another-candidate"),
-                     ("continuity-reconcile", "todays-format")}
+                     ("continuity-reconcile", "todays-format"),
+                     ("continuity-reconcile", "unknown-keys-and-repeated-candidate")}
     printed = gate.report([gate.judge(conv) for conv in gate.GATES])
     assert printed.count("ruling: ") == len(ruled)
     assert "ruling: entry 6 (multi-line), legacy loses: " in printed
