@@ -342,6 +342,7 @@ REJECTED_STATUSES = frozenset({400, 404, 413, 415, 422})
 #: marked failing. A revoked key answers 401 and stays observed (M6).
 NATIVE_REJECTED_STATUSES = REJECTED_STATUSES | {403}
 
+
 class NativeAdapter(NamedTuple):
     """How one connection kind reaches its native decisions endpoint: the pure
     builder of its request body (`native_body`), and the `LLMClient` attribute
