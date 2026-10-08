@@ -1552,8 +1552,23 @@ def test_the_sweep_without_a_generating_fallback_lands_with_llm_off(client):
     assert run["result"]["reason"].startswith(
         "The Continuity checks route runs on the Decision role (vendor/decider on "
         "OpenRouter)"), run["result"]["reason"]
+    assert run["result"]["reason_kind"] == "incapable"
     assert PAIR in _records(cid)
     assert fake.requests == []
+
+
+def test_no_connection_lands_with_its_reason_kind(client):
+    """A store with no usable connection lands `off` with the refusal's fixed
+    kind beside its sentence."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    _install(client, from_entries([_entry(_reply())]))
+
+    result = _settled(client, cid, _refresh(client, cid))["result"]
+
+    assert result["llm"] == "off"
+    assert result["reason"]
+    assert result["reason_kind"] == "missing_key"
 
 
 def test_the_decision_role_now_serves_the_sweep(client):

@@ -29,13 +29,40 @@ import {
   type ReconcileRunError,
 } from "../../api/client";
 import type { RunHandle } from "../../api/stream";
-import type { ContinuityGroup } from "../../api/types";
+import type { ContinuityGroup, ReconcileResult } from "../../api/types";
 import { errorText } from "../../api/errors";
 import { dismissedUnreadable, findingsUnreadable, reviewedUnreadable } from "./labels";
 
 /** What a landed sweep with no model connection did (§12.9). */
 export const NO_MODEL_NOTE =
   "No model connection — findings are listed without a suggested decision.";
+/** A sweep whose model answered some of its findings (M6). It does not promise
+ *  the others are asked again: a model-only nomination in a failed chunk is not
+ *  stored (M7). */
+export const PARTIAL_NOTE =
+  "The model check answered only some of the findings; the others have no suggested decision yet.";
+/** A sweep whose model answered none of them (N4): "only some" would read wrong. */
+export const NONE_NOTE =
+  "The model check gave no suggested decisions this time; the findings are listed without one.";
+
+/** What a landed sweep says about its model check, or null when there is
+ *  nothing to say. A failed run never reaches this: it throws, and
+ *  `failedNote` words it. */
+export function landedNote(result: Pick<
+    ReconcileResult, "llm" | "reason" | "reason_kind" | "adjudicated" | "unanswered">
+): string | null {
+  if (result.llm === "off") {
+    // A configured model that cannot serve continuity is never "no connection" (M8).
+    return result.reason_kind === "incapable" && result.reason
+      ? `${result.reason} Findings are listed without a suggested decision.`
+      : NO_MODEL_NOTE;
+  }
+  if (result.llm === "ok" && result.unanswered > 0) {
+    return result.adjudicated === 0 ? NONE_NOTE : PARTIAL_NOTE;
+  }
+  return null;
+}
+
 /** What a failed sweep still did: persist 1 landed before the model call. */
 export const FAILED_NOTE = "The model check did not finish — basic findings are listed.";
 /** A sweep that saved nothing: the start was refused, or persist 1 was. */
@@ -208,7 +235,7 @@ export function useContinuityReview(cid: string, epoch: number,
       // adopted sweep is the only way to get an incremental answer, so a
       // second one is a race with another End Scene -- and never a third.
       for (let pass = 0; pass < 2; pass++) {
-        let outcome: { result?: { sweep?: string; llm?: string }; error?: unknown };
+        let outcome: { result?: ReconcileResult; error?: unknown };
         try {
           outcome = { result: await api.reconcileContinuity(cid, signal) };
         } catch (error) {
@@ -216,7 +243,7 @@ export function useContinuityReview(cid: string, epoch: number,
         }
         if (signal.aborted) return;
         setRefreshNote(outcome.result
-          ? (outcome.result.llm === "off" ? NO_MODEL_NOTE : null)
+          ? landedNote(outcome.result)
           : `${failedNote(outcome.error)} ${errorText(outcome.error)}`);
         // Landed or failed alike, re-read: a failure after persist 1 still
         // landed its findings, and one before it changed nothing. What a 409 laid over the last read is the sweep's to answer now: it

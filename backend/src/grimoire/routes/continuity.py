@@ -591,7 +591,8 @@ async def _persist(run, call: Callable[[], dict]) -> dict:
 
 def _blank_result(full: bool, sweep: reconcile.Sweep) -> dict:
     return {"sweep": "full" if full else "incremental", "matching": sweep.matching,
-            "embedding": sweep.embedding, "llm": "off", "reason": "", "candidates": 0,
+            "embedding": sweep.embedding, "llm": "off", "reason": "", "reason_kind": "",
+            "candidates": 0,
             "adjudicated": 0, "unanswered": 0, "pairs_capped": sweep.pairs_capped,
             "superseded": False, "continuity": sweep.continuity, "follow_on": False}
 
@@ -639,12 +640,12 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     never reached (a failed or garbled chunk beside an answered one) is
     counted `unanswered`: it gets no proposal, never ``uncertain``, and the
     next sweep asks it again (I1)."""
-    resolved, why, _kind = await run_in_threadpool(
+    resolved, why, kind = await run_in_threadpool(
         _soft_resolved,
         lambda: require_inference("continuity-reconcile", cid, operation="decide"))
     selected = await run_in_threadpool(reconcile.select, cid, sweep)
     if resolved is None:
-        result.update(llm="off", reason=why)
+        result.update(llm="off", reason=why, reason_kind=kind)
         return {"state": "landed", "result": result}, {}
     if not selected:
         result["llm"] = "skipped"

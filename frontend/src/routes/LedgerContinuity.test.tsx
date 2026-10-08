@@ -11,6 +11,7 @@ import type {
 } from "../api/client";
 import LedgerView from "./LedgerView";
 import { DECISION_LABELS, STALE_SENTENCES } from "../components/continuity/labels";
+import { NONE_NOTE, PARTIAL_NOTE } from "../components/continuity/useContinuityReview";
 import {
   EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, Here, installLedgerMocks, renderLedger,
 } from "../testkit/ledgerHarness";
@@ -100,7 +101,7 @@ const REVIEWED: ContinuityState = {
 
 const RESULT = {
   sweep: "full", matching: "basic", embedding: "off", llm: "ok", reason: "",
-  candidates: 0, adjudicated: 0, pairs_capped: false, superseded: false,
+  reason_kind: "", candidates: 0, adjudicated: 0, unanswered: 0, pairs_capped: false, superseded: false,
   continuity: "ok", follow_on: false,
 };
 
@@ -319,6 +320,48 @@ test("refresh is enabled with no connection, and says what it did", async () => 
   expect(await column().findByText(
     "No model connection — findings are listed without a suggested decision."))
     .toBeInTheDocument();
+});
+
+test("a model that cannot serve the sweep says why, not 'No model connection'", async () => {
+  const why = "The Continuity checks route runs on the Decision role (vendor/decider on "
+    + "OpenRouter), which cannot generate. Set a model that can.";
+  (api.reconcileContinuity as any).mockResolvedValue(
+    { ...RESULT, llm: "off", reason: why, reason_kind: "incapable" });
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: "Refresh continuity review" }));
+  const shown = await column().findByText(
+    (text) => text.startsWith("The Continuity checks route"), { selector: "p.field-hint" });
+  expect(shown.textContent).toBe(`${why} Findings are listed without a suggested decision.`);
+  expect(column().queryByText(/No model connection/)).toBeNull();
+});
+
+describe("a partial sweep says some findings have no suggestion yet", () => {
+  async function landed(extra: object) {
+    (api.reconcileContinuity as any).mockResolvedValue({ ...RESULT, ...extra });
+    renderLedger();
+    fireEvent.click(await column().findByRole("button",
+      { name: "Refresh continuity review" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+  }
+
+  test("some answered", async () => {
+    await landed({ llm: "ok", candidates: 4, adjudicated: 2, unanswered: 2 });
+    expect(await column().findByText(PARTIAL_NOTE)).toBeInTheDocument();
+    expect(column().queryByText(NONE_NOTE)).toBeNull();
+  });
+
+  test("none answered says so, not 'only some' (N4)", async () => {
+    await landed({ llm: "ok", candidates: 3, adjudicated: 0, unanswered: 3 });
+    expect(await column().findByText(NONE_NOTE)).toBeInTheDocument();
+    expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+  });
+
+  test("all answered shows no note", async () => {
+    await landed({ llm: "ok", candidates: 3, adjudicated: 3, unanswered: 0 });
+    expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+    expect(column().queryByText(NONE_NOTE)).toBeNull();
+    expect(column().queryByText(/model/i, { selector: "p.field-hint" })).toBeNull();
+  });
 });
 
 test("a sweep running on load is followed and its findings appear", async () => {
@@ -1713,6 +1756,22 @@ describe("the finding detail", () => {
     expect(main().getByRole("link", { name: "Untitled scene" }))
       .toHaveAttribute("href", `/campaigns/run/scenes/${untitled}`);
   });
+  test("a proposal with no reason shows its verdict without a note", async () => {
+    const bare = finding("possible_thread_closure-8888888888888888",
+                         "possible_thread_closure", "closures", [CORONATION], {
+      proposal: { decision: "close", from: "", to: "", relation: "", status: "",
+                  reason: "", evidence_scenes: ["001--realm-road"] },
+    });
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, candidates: [...DETAIL.candidates, bare] });
+    renderLedger(at(bare));
+    await sidebar();
+    const proposal = within(document.querySelector(".continuity-proposal") as HTMLElement);
+    expect(proposal.getByText(DECISION_LABELS.close)).toBeInTheDocument();
+    expect(proposal.getByRole("link", { name: "Realm road" })).toBeInTheDocument();
+    expect(document.querySelector(".continuity-proposal p.field-hint")).toBeNull();
+  });
+
   // ---- a refreshed finding opens its action form fresh ---------------------
 
   /** Pressing `press`, answered by an evidence 409 (the finding goes stale and
