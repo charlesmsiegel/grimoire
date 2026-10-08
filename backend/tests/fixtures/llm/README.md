@@ -62,3 +62,25 @@ tutorial, https://openrouter.ai/blog/tutorials/how-to-use-jev/, both checked
 - `error_400` -- the error body: from the reference's error schema
   (`{"error": {"code", "message", "metadata"}, "user_id"}`), which is the
   chat API's documented error shape.
+
+`native/openai/` -- hand-authored from OpenAI's API reference,
+https://developers.openai.com/api/reference/resources/decisions/methods/create
+(its `Decision` schema and example response), and from the Decisions guide,
+https://developers.openai.com/api/docs/guides/decisions, both checked
+2026-10-08; never recorded. Every body carries the reference's `usage` block.
+
+- `answered` -- one `predicate`, one `choice` with the reserved `none` offered,
+  and one `score` whose probability-weighted `score` (1.1, the guide's own
+  example value) is fractional and whose argmax level (2) is not its rounding
+  (1). Its `usage` reports a cache hit beside the input count.
+- `none` -- a `choice` answered with the reserved `none` value.
+- `nullable_one` -- a one-option nullable choice answered with its option.
+- `refused` -- three questions, the `choice` among them answered
+  `{"type": "refusal", "name"}` (the reference's per-answer refusal) and the
+  other two answered.
+- `unanswered` -- the envelope, with an empty `answers` array.
+- `malformed` -- a 200 with no `answers` array.
+- `error_400` -- the error body. Neither page documents one for this
+  endpoint, so it is OpenAI's standard API error shape
+  (`{"error": {"message", "type", "param", "code"}}`), which `_extract_error`
+  reads.

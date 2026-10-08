@@ -1,0 +1,8 @@
+{
+  "error": {
+    "message": "Invalid value for 'questions[1].choices': each choice must be unique.",
+    "type": "invalid_request_error",
+    "param": "questions[1].choices",
+    "code": null
+  }
+}

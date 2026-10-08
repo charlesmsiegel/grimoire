@@ -26,6 +26,7 @@ from . import (
     llm_sampling,
     llm_usage,
     model_guidance,
+    openai_compatible,
     openrouter,
 )
 from .anthropic import AnthropicClient
@@ -345,18 +346,26 @@ NATIVE_REJECTED_STATUSES = REJECTED_STATUSES | {403}
 
 class NativeAdapter(NamedTuple):
     """How one connection kind reaches its native decisions endpoint: the pure
-    builder of its request body (`native_body`), and the `LLMClient` attribute
-    holding the adapter whose `decide` sends it (`LLMClient.decide_native`)."""
+    builder of its request body (`native_body`), the `LLMClient` attribute
+    holding the adapter whose `decide` sends it (`LLMClient.decide_native`),
+    and the connection fields that `decide` takes by name beside the model and
+    key -- an `openai_compatible` endpoint's `base_url`, which is the
+    connection's and not the adapter's."""
 
     body: Callable[[decisions.Item, str], dict]
     client: str
+    conn_fields: tuple[str, ...] = ()
 
 
 #: Connection kinds with a native decisions endpoint. The ONE dispatch table:
 #: `native_body` and `decide_native` both choose by kind through it, so a kind
 #: is never sent through another kind's adapter -- with that kind's key.
+#: `openai_compatible` is reached only by the OpenAI preset: every other preset
+#: of that kind lists `decide_native` in `never`, so nothing resolves it native.
 NATIVE_DECISION_KINDS: dict[str, NativeAdapter] = {
     "openrouter": NativeAdapter(openrouter.decision_body, "_openrouter"),
+    "openai_compatible": NativeAdapter(openai_compatible.decision_body, "_openai_compatible",
+                                       ("base_url",)),
 }
 
 
@@ -1486,7 +1495,9 @@ class LLMClient:
         """
         conn = _without_fallback(conn)
         kind = _native_kind(conn)
-        adapter = getattr(self, NATIVE_DECISION_KINDS[kind].client)
+        entry = NATIVE_DECISION_KINDS[kind]
+        adapter = getattr(self, entry.client)
+        extra = {field: conn.get(field, "") for field in entry.conn_fields}
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
@@ -1511,7 +1522,7 @@ class LLMClient:
             try:
                 result = await adapter.decide(
                     item, effective_model(conn), conn.get("api_key", ""), usage=usage,
-                    bound=self._timeout_seconds())
+                    bound=self._timeout_seconds(), **extra)
                 outcome = "complete"
             except LLMError as exc:
                 outcome = "error"

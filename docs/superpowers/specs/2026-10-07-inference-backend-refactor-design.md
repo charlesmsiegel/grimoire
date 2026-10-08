@@ -1197,10 +1197,17 @@ stops the task rather than being guessed around.
   code="native_unrepresentable")`. It moves to a structured fallback stage when
   there is one; on a model that cannot generate with no such stage it fails
   with that reason, which reaches the caller and the error store.
-- **Usage and price.** OpenRouter's `{input_tokens, output_tokens, cost}` is
-  mapped explicitly, never through the chat parser; OpenAI documents no usage,
-  so its rows carry no counts. A native row is priced only from what the
-  provider reports (§9.3).
+- **Usage and price.** Both providers' usage blocks are mapped explicitly,
+  never through the chat parser: OpenRouter's `{input_tokens, output_tokens,
+  cost}`, and OpenAI's `{input_tokens, output_tokens, input_tokens_details
+  {cached_tokens, cache_write_tokens}}` (its API reference documents the block
+  though the guide does not, checked 2026-10-08), each count filed as reported
+  and an absent field filing nothing. A native row is priced only from what the
+  provider reports (§9.3): with a reported cost it is spend, and without one it
+  is unpriced. It is **never modelled**, enforced at read time --
+  `store.usage.Rates.estimate` returns None for a row whose `decision_mode` is
+  `native`, whatever its counts and the rates -- because a decisions endpoint
+  is not billed like chat (OpenAI bills input tokens only).
 - **Concurrency.** `NATIVE_CONCURRENCY = 4`, argued structurally (a provider
   call per item, the continuity sweep sending one item per row) and to be
   tuned later against real prompts. The native items of one stage run in one
@@ -1413,7 +1420,11 @@ resolution is never mutated and a fallback attempt carries its own.
   `usage.cost`), and reported tokens are filed as reported. `modelled_usd` is
   never computed for a native row: neither provider is documented as billing
   decisions per token on both sides as chat is (OpenAI bills input only), so
-  chat rates would mis-model it. Without a reported cost the row is unpriced,
+  chat rates would mis-model it. It is enforced at read time, not at filing:
+  `store.usage.Rates.estimate` returns None for a row whose `decision_mode` is
+  `native`, so no rollup, per-turn row or rail aggregate models one (the
+  rail's `usage_rollup.VERSION` moved to 5 with it), and `unpriced_models`
+  never offers a rate for one. Without a reported cost the row is unpriced,
   it never carries a local token estimate, and it is never read as zero.
 - `provider` stays the adapter kind, as every existing row already writes it
   and an append-only ledger cannot change a field's meaning under rows older
@@ -2015,15 +2026,53 @@ picker; newer-format banner.
   optional `provider`, `session_id`, `trace` and `user` fields are not sent;
   and the meaning of 403 for a key without alpha access is inferred from its
   description, not stated.
-- OpenAI Decisions: `POST /v1/decisions`, `{model, input, questions}`, with
-  `questions` an array, each with a unique `name`; question types `predicate`
-  (`probability`), `choice` (`choices`; `choice`, `probabilities`,
-  `confidence`) and `score` (`levels`; a fractional weighted `score`,
-  `probabilities`, `confidence`); answers an array matched by `name`, with a
-  per-answer `"type": "refusal"` for a refusal; the guide recommends a fallback
-  option such as `"other"` and documents no explicit none; no usage shape is
-  documented; public beta, `gpt-6-luna` at the time.
-  https://developers.openai.com/api/docs/guides/decisions
+- **OpenAI Decisions (checked 2026-10-08)**, re-read by slice H before its
+  adapter was coded. Two sources: the **guide**,
+  https://developers.openai.com/api/docs/guides/decisions, and the **API
+  reference** "Create a decision",
+  https://developers.openai.com/api/reference/resources/decisions/methods/create.
+  Every ruled wire fact held:
+  - `POST {base_url}/decisions` (`https://api.openai.com/v1` on the OpenAI
+    preset), `Authorization: Bearer <key>`; **no beta header** in either
+    source, so none is sent. Public beta ("we expect to GA in the coming
+    weeks"); `gpt-6-luna` is the only model.
+  - Body `{model, input, questions}` (plus an optional `safety_identifier`,
+    not sent); `questions` an array of `{type, name, instructions}` (`name`
+    optional in the reference, which the guide says to make unique and the
+    API echoes; Grimoire always sends its question id).
+  - `predicate` → answer `{type, name, probability}`.
+  - `choice` → `choices [{value: string|boolean, description?}]`, **2 to 255
+    choices**, each unique (so `NATIVE_MAX_OPTIONS = 255` stands for both
+    providers); answer `{type, name, choice: string|boolean, probabilities
+    [{value, probability}], confidence}`.
+  - `score` → `levels [{label, description?}]`, lowest first; answer `{type,
+    name, score (the probability-weighted average of 0-based level indices,
+    "so it can fall between levels"), probabilities [{value: int, label,
+    probability}], confidence}`.
+  - `refusal` → `{type: "refusal", name}`, per question: "Other questions in
+    the same request can still receive answers."
+  - Response `{model, answers, usage}`, `answers` an array returned in the
+    order asked (Grimoire still matches by `name`).
+  - **Usage is documented in the reference** (the guide shows none):
+    `{input_tokens, input_tokens_details {cached_tokens, cache_write_tokens},
+    output_tokens, output_tokens_details {reasoning_tokens}, total_tokens}`. No
+    cost is reported. Billing is input tokens only ($0.10 per 1M for
+    `gpt-6-luna`; no cache or output-token charge), which is why a native row
+    is never modelled (§7.4).
+  - No explicit none: the guide recommends a fallback option such as
+    `"other"`, so the reserved none is added.
+
+  Still open: no character set is documented for a question `name` or a choice
+  `value` (the reference bounds strings at 1 MiB only), so ids go verbatim; no
+  bound is documented on the number of `levels` or of questions per request;
+  an answer's `name` may be null (an unnamed question), which matches nothing;
+  and no error body is documented for this endpoint (the adapter reads
+  OpenAI's standard `{error: {message, type, param, code}}` through
+  `_extract_error`; a third-party report shows a 403 "Decision API is not
+  enabled for this user" in that shape, which `NATIVE_REJECTED_STATUSES`
+  keeps from marking the connection failing). The reference also accepts
+  public HTTP(S) image URLs where the guide says only data URLs; Grimoire
+  sends a string `input`, so neither matters yet.
 - z.ai: pay-as-you-go `https://api.z.ai/api/paas/v4`; GLM Coding Plan keys work
   only at `https://api.z.ai/api/coding/paas/v4`.
   https://docs.z.ai/api-reference/introduction

@@ -13,7 +13,7 @@ not change what a figure means: what it reports is the same all-time rollup
 ``usage`` would compute, arrived at by not re-reading bytes it has already
 read.
 
-**The aggregate is derived, never authoritative.** ``<home>/usage/rollup-v4.json``
+**The aggregate is derived, never authoritative.** ``<home>/usage/rollup-v5.json``
 can be deleted at any moment and the next read rebuilds it from the ledger. No
 caller may ever treat it as a record of anything -- the JSONL files are the
 ledger, and this is a bookmark in them.
@@ -99,7 +99,10 @@ from . import atomic, pricing, usage
 #: structural zero (`usage._completion_count`), so a v2 file holds embed rows
 #: as unmetered and unpriced that the same rates now model. 4: the pricing
 #: table also matches the model asked for, and a model's own rates outrank it.
-VERSION = 4
+#: 5: a native decision row is never modelled (`usage._modellable`). No build
+#: before this one files such a row, but an older build sharing a synced
+#: ledger would fold one at chat rates into the file it shares with this one.
+VERSION = 5
 
 #: What a caller gets for a campaign the ledger has never mentioned, and what a
 #: failed scan degrades to. `partial` is the field that keeps it honest -- see

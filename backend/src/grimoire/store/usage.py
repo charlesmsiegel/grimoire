@@ -838,7 +838,13 @@ class Rates:
         an absent count into 0, and 0 is exactly the value that must stay
         distinguishable from "not counted" here. The one exception is
         structural rather than a guess: an embed row's completion (`_counts`).
+
+        None, too, for a native decision row (`_modellable`), whatever its
+        counts and whatever the rates: every read that models a row comes
+        through here, so this one check is the whole of that rule.
         """
+        if not _modellable(row):
+            return None
         entry = self.entry(row.get("model"), provider_id=row.get("provider_id"),
                            requested_model=row.get("requested_model"))
         if entry is None:
@@ -867,6 +873,26 @@ def _counts(row: dict) -> tuple[int | None, int | None]:
     still unmetered (`_metered`).
     """
     return _count(row.get("prompt_tokens")), _completion_count(row)
+
+
+#: The `decision_mode` of a call a provider's native decisions endpoint
+#: served (slice H). Spelled here rather than imported: the store sits below
+#: the facade that stamps it, and a ledger row is read as text either way.
+NATIVE_DECISION_MODE = "native"
+
+
+def _modellable(row: dict) -> bool:
+    """Whether any rate may model this row: every row but a native decision.
+
+    A native decisions endpoint is not billed like a chat call -- OpenAI bills
+    its decisions on input tokens only, and neither provider documents a
+    per-token price for both sides -- so a chat rate times its counts would be
+    a figure for a call nobody sold that way (slice H, ruling 10). Such a row
+    is spend when its provider reported a cost and unpriced when it did not;
+    its counts are filed as reported and still sum into the token totals.
+    Decided at read time, so a rate the user sets later cannot model one
+    either."""
+    return row.get("decision_mode") != NATIVE_DECISION_MODE
 
 
 def _metered(row: dict) -> bool:
@@ -1737,7 +1763,8 @@ def unpriced_models(months: int = 2) -> list[dict]:
     both token counts present (an embed row's completion is 0, `_counts`). A
     call nobody metered cannot be rescued by a rate (rates times nothing is
     zero), so listing its model here would send the reader to write an entry
-    that changes nothing.
+    that changes nothing. Nor is a native decision row, which no rate models
+    (`_modellable`).
 
     Bounded to the newest `months` ledger files rather than the whole history:
     this backs a chore and a hint, both opened casually, and `lifetime_since`
@@ -1806,7 +1833,10 @@ def _month_unpriced(path: Path) -> tuple[tuple[tuple[str, str, str], int], ...]:
                     continue
                 if not isinstance(row, dict) or _float(row.get("cost_usd")) is not None:
                     continue
-                if not _metered(row):
+                # A native decision row is never modelled, so naming its
+                # model here would send the reader to set a rate that prices
+                # nothing (`_modellable`).
+                if not _metered(row) or not _modellable(row):
                     continue
                 model = str(row.get("model") or "")
                 if model:
