@@ -80,7 +80,7 @@ ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
         check check-py check-web check-lint check-mypy check-eslint \
         check-templates check-pydantic1 check-apk web-dist frontend-deps \
         baseline sync-phone sync-phone-apply \
-        test-py-fast test-py-failed test-py-profile
+        test-py-fast test-py-failed test-py-profile test-py-parallel
 
 apk:
 	$(GRADLEW) :app:assembleDebug $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
@@ -137,6 +137,13 @@ COV_ARGS = --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:
 check-py:
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(COV_ARGS)
 
+# Parallel workers for the backend suite (pytest-xdist). WORKERS=0 is the
+# serial run, with no -n at all -- the one-variable rollback. DIST is xdist's
+# scheduler (load, loadfile, loadscope, loadgroup, worksteal).
+WORKERS ?= 0
+DIST ?= load
+XDIST = $(if $(filter-out 0,$(WORKERS)),-n $(WORKERS) --dist=$(DIST),)
+
 # ---- development commands. NOT gates: none is named check-*, none is in
 # `check:` above, and each says so before it runs, so a green one cannot be
 # mistaken for the suite passing. Each puts this checkout's backend/src first
@@ -146,6 +153,7 @@ check-py:
 #   make test-py-fast TESTS=backend ARGS="-k reroll"
 #   make test-py-failed                       what failed last time, only
 #   make test-py-profile [TESTS=...] [COV=1]  per-node phase profile + summary
+#   make test-py-parallel WORKERS=4 [DIST=load]  the gate's run, in parallel
 #
 # TESTS is relative to the repo root; ARGS goes to pytest as it is.
 TESTS ?= backend
@@ -163,9 +171,15 @@ test-py-failed:
 	@echo NOT A GATE: re-runs only what failed last time, without coverage. Exit 5 means nothing failed last time.
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend --lf --lfnf=none --tb=short $(ARGS)
 
+# The whole suite, with the gate's exact coverage arguments, across WORKERS
+# processes -- the opt-in parallel run measured against `check-py`'s serial one.
+test-py-parallel:
+	@echo NOT A GATE: the full suite across $(WORKERS) workers ($(DIST)). make check-py is the gate.
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(XDIST) $(COV_ARGS) $(ARGS)
+
 test-py-profile:
 	@echo NOT A GATE: a diagnostic profile, written to $(PROFILE).
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_ARGS),) $(ARGS)
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q $(XDIST) --phase-profile=$(PROFILE) $(if $(COV),$(COV_ARGS),) $(ARGS)
 	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE)
 
 # `test:coverage`, not `test`: same suite, same pass/fail, plus it drops

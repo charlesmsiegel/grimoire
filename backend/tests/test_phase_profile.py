@@ -19,32 +19,16 @@ from __future__ import annotations
 
 import importlib
 import json
-import os
 import subprocess
-import sys
 from pathlib import Path
 
 import fastapi
 import uvicorn
 from starlette import testclient
 
-from tests import phase_profile
+from tests import phase_profile, synthetic_suite
 
-BACKEND = Path(__file__).resolve().parents[1]
-
-CONFTEST = f'''
-import sys
-sys.path.insert(0, {str(BACKEND)!r})
-from tests import phase_profile
-
-
-def pytest_addoption(parser):
-    phase_profile.add_option(parser)
-
-
-def pytest_configure(config):
-    phase_profile.register(config)
-'''
+BACKEND = synthetic_suite.BACKEND
 
 SUITE = '''
 import subprocess
@@ -166,25 +150,11 @@ OUTCOMES = {
 
 
 def _suite(tmp_path: Path) -> Path:
-    root = tmp_path / "suite"
-    root.mkdir()
-    # Its own ini, so the child never walks up into a config it was not given.
-    (root / "pytest.ini").write_text("[pytest]\nasyncio_mode = auto\n",
-                                     encoding="utf-8")
-    (root / "conftest.py").write_text(CONFTEST, encoding="utf-8")
-    (root / "test_synthetic.py").write_text(SUITE, encoding="utf-8")
-    return root
+    return synthetic_suite.write(tmp_path / "suite", {"test_synthetic.py": SUITE})
 
 
 def _run(root: Path, *args: str) -> subprocess.CompletedProcess:
-    env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("COV_", "COVERAGE"))}
-    # Belt and braces: nothing here touches a store, but a child of the suite
-    # never gets to resolve the developer's real one either.
-    env["GRIMOIRE_HOME"] = str(root / "home")
-    return subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *args],
-        cwd=root, env=env, capture_output=True, text=True, timeout=120, check=False)
+    return synthetic_suite.run(root, *args)
 
 
 def _profiled(tmp_path: Path) -> tuple[subprocess.CompletedProcess, Path, dict]:
