@@ -232,6 +232,30 @@ def test_a_stable_facts_file_costs_a_stat_not_a_parse(pid, monkeypatch):
     assert parsed == [path, path]
 
 
+def test_a_file_that_could_not_be_opened_is_not_remembered_as_empty(pid, monkeypatch):
+    """A sync client or antivirus holding the file for one read is an OSError,
+    not a file with no rates in it. The memo is keyed on the stat signature,
+    and the holder lets go of an *unchanged* file -- so an empty answer cached
+    under that signature would hide the rates until the file next changed."""
+    facts.state(pid, MODEL, rates=BOTH)
+    path = _facts_file(pid)
+    old = path.stat().st_mtime - 60       # outside statcache's racy window
+    os.utime(path, (old, old))
+    real = Path.read_text
+    held = [True]
+
+    def read_text(self, *a, **kw):
+        if self == path and held:
+            held.clear()
+            raise PermissionError(13, "held by another process", str(self))
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", read_text)
+    assert pid not in pricing.provider_rates()          # held: skipped, not cached
+    assert not held
+    assert pricing.provider_rates()[pid] == {MODEL: BOTH}
+
+
 def test_provider_rates_hands_back_a_copy(pid):
     facts.state(pid, MODEL, rates=BOTH)
     path = _facts_file(pid)

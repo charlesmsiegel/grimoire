@@ -412,11 +412,19 @@ _PROVIDER_ENTRIES = 256
 
 
 def _read_provider_file(path: Path) -> dict[str, dict]:
-    """One facts file's usable rates as `{model: entry}`; `{}` for anything that
-    cannot be read. Raises nothing, so the memo stores the empty answer too."""
+    """One facts file's usable rates as `{model: entry}`; `{}` for content that
+    is not a usable facts document (bad JSON, bytes that are not UTF-8, a
+    non-object), which the memo may remember because the stat signature keys
+    the content.
+
+    Raises OSError rather than answering empty, as `usage._month_unpriced`
+    does: a file a sync client or antivirus held for one read is not a file
+    with no rates in it, and the memo would otherwise keep that empty answer
+    under the signature of a file that never changed. `provider_rates` skips
+    the file for this read and caches nothing."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except ValueError:      # UnicodeDecodeError included: content, not access
         return {}
     if not isinstance(raw, dict):
         return {}
@@ -469,8 +477,8 @@ def provider_rates() -> dict[str, dict[str, dict]]:
             sig = statcache.signature(path)
             rates = statcache.memo("pricing:provider", sig, partial(_read_provider_file, path),
                                    pool=_PROVIDER_POOL, max_entries=_PROVIDER_ENTRIES)
-        except Exception:   # noqa: BLE001 -- one file never costs the rest
-            continue
+        except Exception:   # noqa: BLE001 -- one file never costs the rest; an
+            continue        # OSError reaches here uncached, so the next read retries
         if rates:
             out[provider_id] = {m: dict(e) for m, e in rates.items()}
     return out
