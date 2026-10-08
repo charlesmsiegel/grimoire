@@ -263,7 +263,11 @@ prices them at its own rates. Only `modelled_usd` ever moves; no rate touches a
 row a provider priced. A true `tokens_estimated` marks counts this side made:
 the facade (`llm._resilient`) counts on a worker thread, never the event loop,
 only for an attempt whose stream ended on its own, and only the half the
-provider left out. `Meter.done` never counts, and a bucket says how many of its
+provider left out. An embed call that returned without a prompt count is the
+other counter: `inference.embed.estimate_prompt` (`tokens.count_if_loaded`,
+which never starts an encoder load) counts it on the caller's thread, which is
+a threadpool worker for every caller today -- the model test's probe hands it
+to one. `Meter.done` never counts, and a bucket says how many of its
 calls rest on such counts in `estimated_token_calls`.
 
 Attribution is per *player post*: a turn's ledger row carries the transcript

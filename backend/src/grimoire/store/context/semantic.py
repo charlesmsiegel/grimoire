@@ -69,13 +69,16 @@ turned into an endpoint in one place, `embed_space.endpoint`)
 ## The cost, stated plainly
 
 `activate` is synchronous, reached from a synchronous `build_messages` that
-async route handlers call directly, so a recall blocks the event loop for the
-length of its HTTP call. That is why `embeddings.TIMEOUT` is tight, why entry
-vectors are cached by content hash (`store/vectors.py`) so the steady state is
-one small request per context build, and why the whole layer is off unless
-somebody turns it on. Making it non-blocking means making the context builder
-async to its roots — a bigger change than the retrieval strategy it would be
-serving, and one worth doing only if this proves its worth first.
+the `def` turn handlers call, which FastAPI runs on a threadpool worker -- so
+a recall holds that worker, not the event loop, for the length of its HTTP
+call (and of `inference.embed.estimate_prompt`'s local count, when the
+endpoint reported none). A held worker still delays the turn it is building.
+That is why `embeddings.TIMEOUT` is tight, why entry vectors are cached by
+content hash (`store/vectors.py`) so the steady state is one small request per
+context build, and why the whole layer is off unless somebody turns it on.
+Making it non-blocking means making the context builder async to its roots —
+a bigger change than the retrieval strategy it would be serving, and one worth
+doing only if this proves its worth first.
 """
 
 from __future__ import annotations

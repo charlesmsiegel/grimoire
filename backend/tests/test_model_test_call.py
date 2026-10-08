@@ -1062,6 +1062,35 @@ def test_an_embed_probe_row_carries_what_the_endpoint_reported(client, monkeypat
     assert "completion_tokens" not in rows[0]
 
 
+def test_an_embed_probes_local_count_runs_off_the_event_loop(client, monkeypatch):
+    """`_embed_probe` is a coroutine on the lifespan loop, and the estimate
+    can count with an encoder: it runs in a worker, as the embed does."""
+    import asyncio
+
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    _embedder(monkeypatch, lambda _r: httpx.Response(200, json={
+        "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}]}))
+    real = store.inference.embed.estimate_prompt
+    on_loop: list[bool] = []
+
+    def spy(holder, texts):
+        try:
+            asyncio.get_running_loop()
+            on_loop.append(True)
+        except RuntimeError:
+            on_loop.append(False)
+        return real(holder, texts)
+
+    monkeypatch.setattr(store.inference.embed, "estimate_prompt", spy)
+
+    run = _run(client, conn, ["embed"])
+
+    assert run["result"]["results"]["embed"]["ok"] is True
+    assert on_loop == [False]
+    assert _rows()[0]["tokens_estimated"] is True
+
+
 def test_an_embed_probe_failure_logs_only_its_kind_and_status(client, monkeypatch, tmp_path):
     """I1: a redirect's `Location` can carry a key, and the probe's error row
     is its kind and status only -- while the verdict the user reads still

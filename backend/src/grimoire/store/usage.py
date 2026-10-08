@@ -86,6 +86,14 @@ nothing. Images are not estimated: there is no portable per-image count, and
 the row's ``images`` already says they rode along. ``Meter.done`` counts
 nothing and loads no encoder; it reads what the facade wrote.
 
+The facade is not the only counter. An ``embed`` call that returned without a
+prompt count is estimated by ``inference.embed.estimate_prompt``
+(``tokens.count_if_loaded``: an encoder that has already loaded, else the
+characters/4 heuristic, and never a load), synchronously on the caller's
+thread with no ``llm.COUNT_TIMEOUT_S``. Every caller is off the event loop: the
+embed operation is reached from threadpool workers, and the model test's probe
+hands its count to a worker.
+
 **The cache pair is a breakdown, not a component** (#148).
 ``cache_read_tokens`` and ``cache_write_tokens`` are slices of
 ``prompt_tokens`` — the part of the prompt that was already cached, and the

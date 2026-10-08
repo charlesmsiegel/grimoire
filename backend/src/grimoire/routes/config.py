@@ -1162,8 +1162,10 @@ async def _embed_probe(raw: dict, conn: dict, model: str) -> dict:
             store.inference.embed.record_failure(m, exc)
             raise
         # A prompt count the endpoint did not report is estimated locally, as
-        # the embed operation estimates one (`embed.estimate_prompt`).
-        store.inference.embed.estimate_prompt(m.usage, [probes.EMBED_TEXT])
+        # the embed operation estimates one (`embed.estimate_prompt`) -- in a
+        # worker too, since a loaded encoder counts synchronously.
+        await asyncio.to_thread(store.inference.embed.estimate_prompt,
+                                m.usage, [probes.EMBED_TEXT])
     return {"ok": True, "dims": len(vectors[0])}
 
 
