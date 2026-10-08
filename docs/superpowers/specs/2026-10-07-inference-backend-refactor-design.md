@@ -1974,17 +1974,47 @@ picker; newer-format banner.
   `video`, `rerank`, `decisions`, …; the endpoint defaults to `text`, filter
   with `output_modalities=…|all`), `supported_parameters`.
   https://openrouter.ai/docs/api-reference/models/get-models
-- OpenRouter Decisions (Jev): `POST /api/alpha/decisions`, `{model, state,
-  questions}`, with `questions` an object keyed by question id; question types
-  `choice` (criteria map; the page recommends adding a `none` option and
-  documents no explicit one), `noul` (true/false probability) and `score`
-  (2–10 ordered levels, a fractional weighted `score` plus per-level
-  `probabilities`); answers are an object keyed by question id, each tagged with
-  `type`, with `confidence` and distributions; usage `{input_tokens,
-  output_tokens, cost}`; model id at the time `typesafe/jev-1.13`. Read
-  2026-10-08 on the **tutorial** page, not an API reference; the slice adds an
-  API-reference URL if it finds one.
-  https://openrouter.ai/blog/tutorials/how-to-use-jev/
+- **OpenRouter Decisions (checked 2026-10-08)**, re-read by slice H before
+  its adapter was coded. Two sources: the **API reference**,
+  https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
+  (`DecisionsRequest` / `DecisionsResponse`), and the Jev **tutorial**,
+  https://openrouter.ai/blog/tutorials/how-to-use-jev/, which is a tutorial
+  and not a reference. Every ruled fact held:
+  - `POST https://openrouter.ai/api/alpha/decisions` (the operation overrides
+    the `/api/v1` server), `Authorization: Bearer <key>`, any OpenRouter key;
+    body `{model, state, questions}` (all required), `questions` an object
+    keyed by question id, each question discriminated by `type`, with its
+    instructions under `instructions` (required).
+  - `noul`: `criteria` optional (when sent it must hold both `"true"` and
+    `"false"`, so Grimoire sends none); answer `{type, noul}`, `noul` a number
+    (the tutorial: the probability of true).
+  - `choice`: `criteria` an object, option name to description; answer
+    `{type, choice (required string), confidence, probabilities}`, the
+    probabilities keyed by option name.
+  - `score`: `criteria` an ordered array; answer `{type, score (required,
+    probability-weighted), confidence, legend, probabilities}`, the
+    probabilities keyed by zero-based level index as strings.
+  - Response `{id, model (a dated build), provider, answers, usage}`, answers
+    keyed by question id; `usage {input_tokens, output_tokens (required
+    integers), cost (optional number)}`.
+  - **No refusal answer type** in either source, so none is mapped.
+  - **Errors**: 400, 401, 402, 403 ("authenticated but insufficient
+    permissions"), 404, 413, 429, 500, 502, 503, 524 and 529, each with the
+    body `{error: {code, message, metadata}, user_id}` -- the chat API's error
+    shape, so `_extract_error` reads it unchanged.
+  - **Ids**: no character set or length is documented for a question id or a
+    criteria key, so Grimoire ids are sent verbatim.
+  - Model id at the time `typesafe/jev-1.13` (`~typesafe/jev-latest` tracks
+    the newest release).
+
+  Still open: the 255-option limit per choice and the 2–10 levels per score
+  are the tutorial's only (the reference sets a score's `criteria` at
+  `minItems: 1` and bounds neither); no limit on questions per request or on
+  the `state`'s length is documented in either source, so `native_gap` names
+  no further limit (a 413 is the only sign one exists); the documented
+  optional `provider`, `session_id`, `trace` and `user` fields are not sent;
+  and the meaning of 403 for a key without alpha access is inferred from its
+  description, not stated.
 - OpenAI Decisions: `POST /v1/decisions`, `{model, input, questions}`, with
   `questions` an array, each with a unique `name`; question types `predicate`
   (`probability`), `choice` (`choices`; `choice`, `probabilities`,

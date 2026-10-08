@@ -18,12 +18,14 @@ from concurrent.futures import Executor, Future
 
 from . import (
     content_parts,
+    decisions,
     llm_capture,
     llm_errors,
     llm_reasoning,
     llm_sampling,
     llm_usage,
     model_guidance,
+    openrouter,
 )
 from .anthropic import AnthropicClient
 from .claude_agent import ClaudeAgentClient
@@ -330,6 +332,18 @@ DEGRADE = "_degrade"
 #: when no endpoint it may route to takes images; a 404 for a genuinely missing
 #: model costs one extra text attempt that fails the same way.
 REJECTED_STATUSES = frozenset({400, 404, 413, 415, 422})
+
+#: The statuses a native decisions request answers when the ENDPOINT refused
+#: that model, key or request (spec 7.4, ruling 11): `REJECTED_STATUSES` plus
+#: 403. OpenRouter's reference documents 403 as "authenticated but insufficient
+#: permissions", which is what a key without access to an alpha endpoint gets
+#: while it serves every chat call -- so the connection answered, and is not
+#: marked failing. A revoked key answers 401 and stays observed (M6).
+NATIVE_REJECTED_STATUSES = REJECTED_STATUSES | {403}
+
+#: Connection kinds with a native decisions endpoint, and the adapter module
+#: that builds each one's request body (`native_body`).
+NATIVE_DECISION_KINDS = {"openrouter": openrouter}
 
 
 def _with_degrades(routes: list[tuple[dict, int]]) -> list[tuple[dict, int]]:
@@ -1090,6 +1104,22 @@ async def _resilient(open_stream, routes, timeout: float,
                              words=words)
 
 
+def _native_kind(conn: dict) -> str:
+    """`conn`'s kind, when it has a native decisions endpoint; raises the
+    `bad_response` a call on any other kind is refused with, unsent."""
+    kind = conn.get("kind", "openrouter")
+    if kind not in NATIVE_DECISION_KINDS:
+        raise LLMError("bad_response", f"{kind} connections have no native decisions endpoint")
+    return kind
+
+
+def native_body(item: decisions.Item, conn: dict) -> dict:
+    """The body a native decision on `conn` sends for `item`: its adapter's
+    `decision_body` on the model the call runs on. Pure, and holds no key or
+    URL, so a capture can record what was asked."""
+    return NATIVE_DECISION_KINDS[_native_kind(conn)].decision_body(item, effective_model(conn))
+
+
 class LLMClient:
     """Dispatches each call to the resolved connection's kind."""
 
@@ -1419,6 +1449,70 @@ class LLMClient:
                           [(_without_fallback(conn), 0)], self._timeout_seconds(), usage=usage,
                           capture=sink, counter=self._count_tokens)
         return "".join([chunk async for chunk in agen])
+
+    async def decide_native(self, item: decisions.Item, conn: dict, usage: dict | None = None,
+                            *, retries: int | None = None) -> decisions.ItemResult:
+        """Ask `item` of `conn`'s native decisions endpoint (spec 7.4): one
+        attempt, retried, and never fallen back -- the chain of stages is
+        `inference.decide`'s, so the fallback the dict carries is taken off.
+
+        Refused unsent, before any stamp (so a meter files no row, and still
+        records the failure): a kind with no native endpoint, and an item the
+        endpoint cannot represent (`decisions.native_gap`, ruling 25), as a
+        `bad_response` with the code `native_unrepresentable`.
+
+        Retries are `_resilient`'s rule: only `RETRYABLE_KINDS`, never past a
+        `Retry-After` over `RETRY_AFTER_CAP`, after the longer of the backoff
+        and the provider's window. `retries` overrides the client's count.
+        Each attempt is stamped and captured like a generation's; none is
+        estimated (no `Estimate`, no `note_prompt`), because a native row's
+        billing unit is not a chat prompt, and none is sent sampling, which a
+        decision takes none of (spec 8). A status in
+        `NATIVE_REJECTED_STATUSES` is not reported to the observer.
+        """
+        conn = _without_fallback(conn)
+        kind = _native_kind(conn)
+        gap = decisions.native_gap(item)
+        if gap:
+            raise LLMError("bad_response", gap, code="native_unrepresentable")
+        try:
+            sink = self._capture() if self._capture is not None else None
+        except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
+            sink = None
+        if usage is None and sink is not None:
+            usage = {}  # the adapter receives its recorder through the holder
+        call_id = uuid.uuid4().hex if sink is not None else ""
+        attempts = 1 + (self._retry_count() if retries is None else max(0, retries))
+        last: LLMError | None = None
+        for tries in range(1, attempts + 1):
+            if last is not None:
+                await asyncio.sleep(max(_backoff_delay(tries - 2), last.retry_after or 0.0))
+            _stamp(usage, conn, tries)
+            if sink is not None and usage is not None:
+                usage[llm_capture.KEY] = llm_capture.Capture(
+                    sink, call_id, tries, effective_model(conn), kind)
+                llm_capture.emit(usage, "start", None)
+            outcome = "interrupted"
+            try:
+                result = await self._openrouter.decide(
+                    item, effective_model(conn), conn.get("api_key", ""), usage=usage,
+                    timeout=self._timeout_seconds())
+                outcome = "complete"
+            except LLMError as exc:
+                outcome = "error"
+                if exc.status not in NATIVE_REJECTED_STATUSES:
+                    _observe(self._observer, conn, exc)
+                retryable = (exc.kind in RETRYABLE_KINDS
+                             and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
+                if not retryable or tries == attempts:
+                    raise
+                last = exc
+                continue
+            finally:
+                llm_capture.emit(usage, "end", {"status": outcome})
+            _observe(self._observer, conn, None)
+            return result
+        raise AssertionError("unreachable: the last attempt returns or raises")
 
     def note_outcome(self, conn: dict, error: LLMError | None) -> None:
         """File an outcome this facade did not itself observe (#146).

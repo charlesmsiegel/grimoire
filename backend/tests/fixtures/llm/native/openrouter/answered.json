@@ -1,0 +1,22 @@
+{
+  "id": "gen-dec-1789738314-handAuthoredAnswered",
+  "model": "typesafe/jev-1.13-20260917",
+  "provider": "TypeSafe",
+  "answers": {
+    "over": {"type": "noul", "noul": 0.82},
+    "speaker": {
+      "type": "choice",
+      "choice": "characters:winifred",
+      "confidence": 0.7,
+      "probabilities": {"characters:mara": 0.2, "characters:winifred": 0.7, "none": 0.1}
+    },
+    "tension": {
+      "type": "score",
+      "score": 1.4,
+      "confidence": 0.5,
+      "legend": {"0": "Calm.", "1": "Uneasy.", "2": "Heated."},
+      "probabilities": {"0": 0.1, "1": 0.4, "2": 0.5}
+    }
+  },
+  "usage": {"cost": 0.0000187, "input_tokens": 412, "output_tokens": 58}
+}

@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import ssl
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 
 import certifi
 import httpx
 
-from . import catalog, content_parts, llm_capture, llm_reasoning, llm_usage
+from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
+
+log = logging.getLogger(__name__)
 
 #: Everything this provider is reached at hangs off one root. Spelled once
 #: because there are now three endpoints on it -- generation, the model catalog
@@ -33,6 +36,11 @@ KEY_URL = f"{BASE_URL}/key"
 #: indistinguishable from a hung app. Connect gets the smaller half: a host that
 #: will not accept a socket within ten seconds is not about to serve a catalog.
 PROBE_TIMEOUT = httpx.Timeout(20.0, connect=10.0)
+#: The decisions endpoint (Jev, slice H). Not under `BASE_URL`: the reference
+#: says the operation overrides the `/api/v1` server, and it is an alpha, so it
+#: is spelled whole rather than derived from a root it does not share.
+#: https://openrouter.ai/docs/api/api-reference/alphadecisions/submit-a-decisions-request
+DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
 
 
 class OpenRouterError(LLMError):
@@ -98,6 +106,125 @@ def _http_error(resp: httpx.Response) -> OpenRouterError:
                             retry_after_seconds(resp.headers), status=resp.status_code)
     error.upstream = _upstream(resp.text)
     return error
+
+
+# --- native decisions (slice H, spec 7.4) ------------------------------------
+#
+# One item per request. Question and option ids are sent verbatim: the
+# reference documents no character set or length for a question id or a
+# criteria key, so a ref such as `characters:mara` goes as itself.
+
+#: The wire `type` each question kind is asked, and answered, as.
+_TYPES = {decisions.Predicate: "noul", decisions.Choice: "choice", decisions.Score: "score"}
+
+
+def _criteria(q: decisions.Choice) -> dict[str, str]:
+    """A choice's criteria: `{wire key: description}`, the reserved none (when
+    the choice allows one) described by `NATIVE_NONE_TEXT`."""
+    described = {opt.id: opt.description for opt in q.options}
+    return {wire: (decisions.NATIVE_NONE_TEXT if key == decisions.NONE_KEY else described[key])
+            for wire, key in decisions.native_choice_keys(q)}
+
+
+def _question(q: decisions.Question) -> dict:
+    asked: dict[str, object] = {"type": _TYPES[type(q)], "instructions": q.instructions}
+    # A predicate sends no criteria: they are optional, and a Grimoire
+    # predicate has no description of either side to put in them.
+    if isinstance(q, decisions.Choice):
+        asked["criteria"] = _criteria(q)
+    elif isinstance(q, decisions.Score):
+        asked["criteria"] = list(q.levels)
+    return asked
+
+
+def decision_body(item: decisions.Item, model: str) -> dict:
+    """The request body asking `item` of `model`. Aliases are the structured
+    parser's and are not sent; nothing asks for a rationale, which this
+    endpoint does not return."""
+    return {"model": model, "state": item.context,
+            "questions": {q.id: _question(q) for q in item.questions}}
+
+
+#: What an unoffered wire key spelled `NONE_KEY` is handed over as. Mapping an
+#: unknown key to itself is what makes it `not_an_option`, but this one
+#: spelling would read as the reserved none, so it goes as a value no option id
+#: and no distribution key can equal.
+_UNOFFERED = object()
+
+
+def _from_wire(keys: dict[str, str], wire: object) -> object:
+    """A choice's wire key read back as Grimoire's: an offered key as its
+    option id (the reserved none as `NONE_KEY`), anything else as itself."""
+    if isinstance(wire, str) and wire in keys:
+        return keys[wire]
+    return _UNOFFERED if wire == decisions.NONE_KEY else wire
+
+
+def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
+    """One answer object read through `decisions.native_answer`. An answer of
+    another `type` than the one asked is `unreadable`; `confidence` and a
+    score's `legend` are not carried, and a score's weighted `score` is never
+    its answer (the per-level argmax is)."""
+    if not isinstance(raw, Mapping) or raw.get("type") != _TYPES[type(q)]:
+        return decisions.Answer(None, "unreadable")
+    if isinstance(q, decisions.Predicate):
+        # `noul` is P(true). A distribution is never sent for a predicate.
+        return decisions.native_answer(q, probability=raw.get("noul"))
+    if isinstance(q, decisions.Choice):
+        keys = dict(decisions.native_choice_keys(q))
+        probabilities = raw.get("probabilities")
+        if isinstance(probabilities, Mapping):
+            probabilities = {_from_wire(keys, k): v for k, v in probabilities.items()}
+        chosen = _from_wire(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
+        return decisions.native_answer(q, chosen=chosen, distribution=probabilities)
+    # A score's levels are keyed by index on the wire, as Grimoire keys them.
+    return decisions.native_answer(q, distribution=raw.get("probabilities"))
+
+
+def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
+    """`body`, a decisions response, read as `item`'s answers.
+
+    Raises `bad_response` when `body` is not the documented envelope, and when
+    it is but answers none of `item`'s questions: that is not an answer, and the
+    item falls through. A question missing beside answered ones is
+    `unreadable`, with one warning per call."""
+    answers = body.get("answers") if isinstance(body, Mapping) else None
+    if not isinstance(answers, Mapping):
+        raise OpenRouterError("bad_response", "the decisions reply held no answers")
+    missing = [q.id for q in item.questions if q.id not in answers]
+    if len(missing) == len(item.questions):
+        raise OpenRouterError("bad_response", "the decisions reply answered none of the questions")
+    if missing:
+        log.warning("OpenRouter's decisions reply left %d of %d questions unanswered",
+                    len(missing), len(item.questions))
+    return decisions.ItemResult(
+        {q.id: (_answer(q, answers[q.id]) if q.id in answers
+                else decisions.Answer(None, "unreadable")) for q in item.questions},
+        rationale="", backend="native")
+
+
+def _decision_usage(body: object, usage: dict | None) -> None:
+    """The response's `usage` block, mapped onto the holder's fields -- never
+    through the chat parser, whose shape this is not. An absent or unusable
+    field files nothing. The served `model` (a dated build) overwrites the one
+    asked for, as a chat reply's does."""
+    if usage is None or not isinstance(body, Mapping):
+        return
+    model = body.get("model")
+    if isinstance(model, str) and model:
+        usage["model"] = model
+    block = body.get("usage")
+    if not isinstance(block, Mapping):
+        return
+    for wire, field in (("input_tokens", "prompt_tokens"), ("output_tokens", "completion_tokens")):
+        count = llm_usage.tokens(block.get(wire))
+        if count is not None:
+            usage[field] = count
+    # Credits, which are USD one-for-one, as on the chat endpoint.
+    cost = llm_usage.money(block.get("cost"))
+    if cost is not None:
+        usage["cost_usd"] = cost
+        usage["cost_basis"] = llm_usage.BILLED
 
 
 class OpenRouterClient:
@@ -227,6 +354,47 @@ class OpenRouterClient:
     async def complete(self, messages, model: str, key: str,
                        usage: dict | None = None) -> str:
         return "".join([chunk async for chunk in self.stream(messages, model, key, usage)])
+
+    async def decide(self, item: decisions.Item, model: str, key: str, *,
+                     usage: dict | None = None,
+                     # It is httpx's read bound, applied to the one request, and
+                     # the facade's own setting by its own name (spec 7.4).
+                     timeout: float | None = None,  # noqa: ASYNC109
+                     ) -> decisions.ItemResult:
+        """Ask `item` of the decisions endpoint: one POST, never retried here
+        (the facade decides that). Errors are the chat endpoint's: a status
+        through `_http_error`, `Retry-After` included, and a transport failure
+        as `network`. `timeout` is the read bound (None or <= 0: none), and a
+        reply that does not arrive within it is a `timeout`, which the facade
+        does not retry.
+
+        The body is captured before any field is read, and the usage block is
+        filed before the answers are, so a billed envelope that answers nothing
+        still reports what it cost."""
+        if not key:
+            raise OpenRouterError("missing_key", "OpenRouter API key is not set")
+        read = timeout if timeout is not None and timeout > 0 else None
+        try:
+            resp = await self._client().post(
+                DECISIONS_URL, headers=self._headers(key), json=decision_body(item, model),
+                timeout=httpx.Timeout(read, connect=30.0, write=30.0, pool=30.0))
+        except httpx.ReadTimeout as exc:
+            raise OpenRouterError(
+                "timeout", f"the model sent nothing for {timeout:g}s — giving up") from exc
+        except httpx.HTTPError as exc:
+            raise OpenRouterError("network", str(exc)) from exc
+        except Exception as exc:  # client/TLS setup and other unexpected failures
+            raise OpenRouterError("network", str(exc)) from exc
+        if resp.status_code >= 400:
+            llm_capture.emit(usage, "http_error_body", content_parts.scrub(resp.text))
+            raise _http_error(resp)
+        llm_capture.emit(usage, "decision_body", content_parts.scrub(resp.text))
+        try:
+            body = resp.json()
+        except ValueError as exc:
+            raise OpenRouterError("bad_response", f"the decisions reply was not JSON: {exc}") from exc
+        _decision_usage(body, usage)
+        return decision_result(body, item)
 
     async def _get(self, url: str, key: str,
                    params: dict[str, str] | None = None) -> httpx.Response:

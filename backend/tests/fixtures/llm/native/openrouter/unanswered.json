@@ -1,0 +1,7 @@
+{
+  "id": "gen-dec-1789738318-handAuthoredUnanswered",
+  "model": "typesafe/jev-1.13-20260917",
+  "provider": "TypeSafe",
+  "answers": {},
+  "usage": {"cost": 0.0000064, "input_tokens": 412, "output_tokens": 0}
+}

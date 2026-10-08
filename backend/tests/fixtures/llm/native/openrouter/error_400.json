@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": 400,
+    "message": "Invalid request: questions.speaker.criteria must be an object",
+    "metadata": null
+  },
+  "user_id": null
+}
