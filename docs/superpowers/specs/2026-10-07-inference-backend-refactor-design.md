@@ -477,24 +477,19 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
   OpenRouter), which cannot answer decide() for this question type — choose
   another Decision model or pin this route." A pinned route says "is pinned
   to <model> on <provider>" and suggests another model for the route.
-- **decide, with no native backend** (all of F–G): a primary known unable to
-  `generate` is **skipped**, not refused, when the role fallback can generate.
-  The fallback is then the attempt sent, nothing goes to the skipped model, and
-  the settings row's `problem` says so, in the register of the 409's sentence
-  (`skip_text`, composed by the resolver: why the route's model is not the one
-  answering). With no generating fallback the 409 above stands. Slice H
-  replaces the skip: a `decide_native` primary is served natively, and
-  `OPERATION_CAPABILITY` (the table of which capability an operation needs of
-  its primary; decide needs `generate` today) widens decide's entry to
-  "decide_native or generate".
-  Until then the Decision role card reads the role both ways. Resolved with
-  no task as a `generate`, it shows the 409's `incapable` sentence, which is
-  true of any generate route that uses Decision. Resolved as a `decide` too,
-  it shows the decide routes' `skip_text` beside it (`decide_skip`) when the
-  skip lands, and then does not report `SAME_PROVIDER` for a fallback on the
-  primary's own provider -- which those routes do send, so "never tried"
-  would be false of every route the card lists. Slice H reconciles the two
-  sentences, when a decide-only model stops being skipped.
+- **decide** (slice H): there is no skip. A primary that is known unable to
+  `generate` and not known unable to `decide_native` is served natively
+  (§5.5); an `unknown` `decide_native` is allowed, as everywhere. A model that
+  can generate is served by structured generation whatever its `decide_native`
+  says (§5.5, §16). `OPERATION_CAPABILITY` (the table of which capability an
+  operation needs of its primary) widens decide's entry to "decide_native or
+  generate", so a decide primary is refused only when both are known `no`, and
+  its sentence then reads "cannot generate text or make native decisions",
+  composed in `incapable_text` from the two capabilities' own phrases rather
+  than from a new key in `CANNOT`.
+  The Decision role card is resolved as a `decide`, so the card and the decide
+  routes' rows read one refusal: `skip_text`, `decide_skip` and the skip notice
+  are deleted, and a role card and its row can no longer disagree.
 - **known incompatible** on a fallback attempt → that attempt is dropped from
   the chain (generalising today's "text-only fallback is dropped for
   image-bearing messages"). From slice C; slice B reports it in
@@ -519,9 +514,9 @@ ResolvedInference(
     provenance,            # which scope/role supplied the selection and the preset
     attempts,              # ordered: primary, then fallback — each an Attempt
     space_id=None,         # embed only; set only when the role embeds
-    skipped=(),            # decide only: the primary's gaps when §5.3's skip applied
     decision_mode=None,    # decide only: "native" | "structured"; a property over
                            # the attempt that is sent (Attempt.decision_mode)
+                           # (there is no `skipped`: slice H deletes the skip)
 )
 
 Attempt(
@@ -529,7 +524,8 @@ Attempt(
     model, facts,           # vision/prefill/post_process/rates from model facts
     capabilities,           # {name: (value, source)}
     preset_id, controls,    # effective controls (§8)
-    retries,                # primary: llm_retries; fallback: 0
+    retries,                # primary: llm_retries; every fallback stage: 0,
+                            # structured included (slice H, ruling 12)
     decision_mode="",       # decide only: the capability answer (see below)
 )
 ```
@@ -545,9 +541,13 @@ it; the backend stamps the mode per call on a copy of the **account block**
 `operation`, `role` and the like, which the facade copies into the usage
 holder so the ledger row learns what the resolver knew; §9.3), so no block of
 the resolution is mutated. `ResolvedInference.decision_mode` reads the same
-answer off the attempt that is sent, and `ResolvedInference.skipped` names the
-primary's gaps when the decide skip of §5.3 applied (empty otherwise; the
-fallback is then the attempt sent).
+answer off the attempt that is sent. `ResolvedInference.skipped` is removed
+with the skip (§5.3). `Attempt.decision_mode` gains `native` in slice H, and it
+is `native` only when `generate` is a known non-guess `no` and `decide_native`
+is not a known `no`; it is `structured` whenever the attempt can generate,
+whatever `decide_native` says (§5.5). A fallback stage takes `retries: 0`,
+native or structured, and `LLMClient.complete` takes an optional `retries=`
+that overrides the primary route's count only when given.
 
 Slice B adds `provider_kind`, `base_url`, `rev`, `billing`, `provider_preset`
 (the §6.1 preset id — named apart from the sampler `preset_id`), `facts`,
@@ -561,11 +561,11 @@ role/via/scope provenance, the standing selection and the attempts. Each
 later slice adds the fields it introduces — B: `provider_kind`, `base_url`,
 `rev`, `billing`, `facts`, `capabilities`, `controls`; C: `retries` and the
 facade consuming the attempts; D: `space_id`; F: `Attempt.decision_mode` and `skipped`; H: the
-`native` value. The
+`native` value, and `skipped` removed. The
 fallback attempt already carries what the facade sends: the primary's
 route-scoped preset when the primary's came from a route (§5.2), and no
-fallback at all when it would be the primary's own provider (except for the
-decide skip, §5.5).
+fallback at all when it would be the primary's own provider (except for a
+decide primary that cannot generate, §5.5).
 
 `space_id` is set only when the Embedding role embeds: it names a model and an
 endpoint, and the model is not a known `no` for `embed` (§7.3). A role that is
@@ -582,21 +582,37 @@ unset, half-set or known not to embed resolves with no `space_id`.
 - One attempt, as today, dropped when it resolves to the same **provider** as
   the primary (the facade's rule since #144: a second attempt on the same
   provider is a retry, which the retry budget already covers) or when it is
-  known incapable (§5.3). The decide skip of §5.3 is the one exception to the
-  first: its primary is never sent, so a generating fallback on the primary's
-  own provider is the only call rather than a retry, and the skip reaches it
-  (one OpenRouter account with a decide-only Decision model and one of its
-  generating models behind it). A same-provider fallback the skip does not
-  land on is dropped as before. `fallback_problem` reads off the same
-  condition: `SAME_PROVIDER` is lifted exactly where the drop is, so a row
-  the skip lands on names no problem with its fallback, and one it does not
-  land on says `SAME_PROVIDER`, or the credential problem it shares with the
-  primary (no key on that provider), as it always did.
-- `decide` chain: native (if the selection is `decide_native`) → structured
-  generation on the same selection (if it can `generate`) → the role fallback
-  (native or structured, by its own capabilities). Until slice H there is no
-  native backend, and the chain is the skip of §5.3: a primary that cannot
-  `generate` is passed over for a generating role fallback.
+  known incapable (§5.3). The one exception is a decide primary that cannot
+  generate (slice H, ruling 6): its next step is a different model on another
+  backend, not a retry, so a same-provider fallback is kept (one OpenRouter
+  account with a native-only Decision model and one of its generating models
+  behind it). A same-provider fallback behind a primary that generates is
+  dropped as before. `fallback_problem` reads off the same condition:
+  `SAME_PROVIDER` is lifted exactly where the drop is, so a row that keeps the
+  fallback names no problem with it, and one that drops it says `SAME_PROVIDER`,
+  or the credential problem it shares with the primary (no key on that
+  provider), as it always did.
+- `decide` chain: the selection's one backend — native when it is known unable
+  to `generate` and not known unable to `decide_native`, otherwise structured
+  generation when it can `generate` — then the role fallback, chosen by the
+  same rule, in one attempt. Native is not tried first for a model that also
+  generates (§16). Whether it should be is a later user decision, made only
+  after `evals/run.py --live --decide-backend` has compared the two backends on
+  one model.
+  - Each stage runs the items still pending down its own backend. **What moves
+    an item to the next stage is a failed call**: an `LLMError`, including a 2xx
+    body that is not the documented envelope or that answers none of the item's
+    questions (`bad_response`), and an item refused unsent as one a decisions
+    endpoint cannot represent (code `native_unrepresentable`, §7.4). An answer
+    never moves an item, a native `refused` and a `None` from a well-formed body
+    included.
+  - The fallback gets **one stage**, native or structured by the same rule
+    applied to its own capabilities. It rides the facade (`FALLBACK_KEY`) only
+    when it is structured and the primary generates; otherwise it is its own
+    stage.
+  - A `PresetRefusalError` stops the chain, as it stops the facade, including a
+    native fallback stage that would take no sampling: the user should fix the
+    preset.
 - `embed`: no fallback (§7.3).
 
 ### 5.6 Per-call override (reroll, #77)
@@ -780,7 +796,13 @@ Optional; offered on unverified rows and on the model-facts panel.
    - vision: a small solid-colour PNG (64×64, one tile; some vision stacks
      refuse a 1×1 image for reasons that have nothing to do with vision) and a
      one-word question
-   - decide_native: one predicate (lands with the native adapters, slice H)
+   - decide_native: one fixed predicate. It is **never priced**: the probe is
+     `priceable=False`, read by every estimator, because a catalog row does not
+     say how a decision is billed and a probe with no reported tokens must not
+     read as "$0.00". The Decision picker offers it only for a model known
+     unable to generate (a model that can generate is served structured, §5.5,
+     so the answer would change nothing); the provider page's explicit Test…
+     may list it for any model
 3. Results go to `facts.json[model].verified`, stamped with the provider's
    `rev` when the test started (nothing is recorded if it moved meanwhile). A
    failure is recorded only when the provider refused the probe itself
@@ -1010,7 +1032,11 @@ facade composes any both-failed call, the routes' own failures kept as
 chunk whose items it marks `error`: call sites report a batch's failure from
 it (the first entry, which is the error `decide` raises when no chunk
 answers), so a backend that left it empty would turn a rate limit into a
-bare `error` and lose its kind and `retry_after`.
+bare `error` and lose its kind and `retry_after`. Under slice H
+`Decision.backend` follows the same rule as `provider`/`model`: it names the
+one backend that answered, and is empty when stages with different backends
+answered items of one batch. Each `ItemResult` carries its own `backend`,
+which is the per-item truth when a batch is split across stages.
 An explicit `null` on a choice with `allow_none` is `answer: None, reason:
 abstained`; a `null` on a choice without it is `unreadable`. `unreadable` may
 carry a `detail` sub-reason (`not_an_option`: an answer present and not null
@@ -1037,8 +1063,11 @@ a short `rationale` per item; native backends return none, and callers must
 work without it. For reconcile, a status word stands on an answered evidence
 scene alone, on either backend, and stores `reason: ""` when no rationale came
 back; nothing is invented in its place. Voice drift on a native backend with no rationale is slice H's
-branch (the verdict is shown without a note); F keeps "drift needs a
-corrective" for the structured backend, which always has a rationale field.
+branch, settled: a native `drift` with no note is usable, stages nothing, keeps
+any standing flag and is listed in `noteless`, and a native `in_voice` still
+proposes the clear; the over-cap and unknown checks still apply. F keeps "drift
+needs a corrective" for the structured backend, which always has a rationale
+field.
 
 **Structured backend.** One `generate(schema=…)` call per batch, items keyed
 by index, chunked above a size cap (a constant justified structurally and
@@ -1054,12 +1083,12 @@ Templates live under `templates/decide/` and go through
   summed over every choice's options and every score's levels in its schema),
   OpenAI strict mode's documented budget; an item that alone exceeds it is
   refused by `validate`. That is the only strict-mode schema limit F enforces.
-  Two more are documented and not yet bounded: 15,000 characters of enum
-  strings across a schema with more than 250 enum values, and 120,000
-  characters of property names, definition names and enum values in total.
-  No F caller comes near either (the speaker's roster is the only open-ended
-  enum, and it has its own cap below), so bounding them is slice H's, or I's
-  with the adapter registry, before a caller that could.
+  Two more are documented: 15,000 characters of enum strings across a schema
+  with more than 250 enum values, and 120,000 characters of property names,
+  definition names and enum values in total. Slice H enforces both in
+  `decisions.validate` and `chunks`, whatever the backend, because the chain
+  can fall to a structured fallback stage; the figures are re-checked against
+  OpenAI's documentation when the constants are written.
 - **One meter per chunk, opened inside `decide`.** A caller's time budget runs
   inside it through the `around` hook, which is handed the facade call and the
   meter's live holder, so an overrun is filed as an `error/timeout` row as
@@ -1067,9 +1096,10 @@ Templates live under `templates/decide/` and go through
   (§9.3); `decide` adds no meter parameter and writes nothing into the holder.
 - **Provider errors propagate.** An `LLMError` from a chunk is re-raised as
   such when no chunk answered; `reason: error` marks only a failed chunk's
-  items, and only when another chunk answered.
-- **`capture`** is a hook called with each chunk's messages before they are
-  sent (§9.4).
+  items, and only when another chunk answered. `Decision.errors` holds each
+  failed chunk's final error, which the call sites read through
+  `_decide_error`.
+- **`capture`** is a hook called after each call settles (§9.4).
 - **Reading the reply.** The parser never raises and answers every item. It
   reads a fenced or surrounded object, and for a single item two shapes a
   model answering in today's style produces: the *unwrapped* (`{"answers":
@@ -1100,16 +1130,78 @@ Templates live under `templates/decide/` and go through
   the rule both continuity parsers have today; the scene-break, voice-drift and
   speaker call sites inherit it, and none of F's gate corpora repeats a key.
 
-**Native backends** (slice H), one request per item, bounded concurrency:
+**Native backends** (slice H), one request per item, bounded concurrency. A
+native stage serves a selection that cannot generate (§5.5); the wire shapes
+below are from the two providers' pages as read on 2026-10-08 (Appendix B), and
+the slice re-reads them before coding. A contradiction of a fact stated here
+stops the task rather than being guessed around.
 
-- OpenRouter: `POST https://openrouter.ai/api/alpha/decisions`, body
-  `{model, state: context, questions}`; Grimoire `predicate` → `noul`,
-  `choice` → `choice` (criteria map from option descriptions; `allow_none`
-  maps to its explicit `none`), `score` → `score` (ordered criteria).
-- OpenAI: `POST https://api.openai.com/v1/decisions`, body
-  `{model, input: context, questions}`; questions as `predicate` / `choice`
-  (`choices`) / `score` (`levels`), each with `name` and `instructions`.
-- Both normalise to the result above. A native refusal is `reason: refused`.
+- **Requests.**
+  - OpenRouter: `POST https://openrouter.ai/api/alpha/decisions`, body
+    `{model, state: context, questions}`, with `questions` an object keyed by
+    question id; answers are an object keyed by question id, each tagged with
+    its `type`.
+  - OpenAI: `POST https://api.openai.com/v1/decisions`, body
+    `{model, input: context, questions}`, with `questions` an array, each
+    carrying a unique `name`; answers are an array matched by `name`.
+  - Grimoire ids are sent verbatim unless a documented character set forbids
+    one, and then positionally and reversibly, inside the adapter.
+- **Question kinds map one to one.**
+  - `predicate`: OpenRouter `noul` (no criteria) / OpenAI `predicate`; the
+    answer is read from P(true).
+  - `choice`: `choice`, with OpenRouter criteria `{key: description}` / OpenAI
+    `choices [{value, description}]`; the answer is the explicit `choice`, else
+    the argmax of `probabilities`.
+  - `score`: `score`, with OpenRouter criteria `[descriptions]` / OpenAI
+    `levels [{label: str(i), description}]`. **Both providers return a
+    fractional, probability-weighted `score`, and neither has an explicit
+    "none".** The answer is the argmax of the per-level probabilities, a tie is
+    `abstained`, and with no usable probabilities it is `unreadable`; the
+    weighted `score` is never rounded into an answer.
+- **`allow_none` adds one reserved option.** Neither provider documents an
+  explicit none (OpenRouter's tutorial recommends adding a `none` option,
+  OpenAI's guide a fallback option such as `"other"`), so the adapter adds one.
+  Its wire key is `none`, or `none_2`, `none_3`, … when an option already uses
+  it; its description is a fixed sentence (`NATIVE_NONE_TEXT`); `NONE_KEY`
+  (`"<none>"`) is its reserved key in a distribution. Choosing it, or a
+  distribution whose argmax is on it, is `answer: None, reason: abstained`.
+  A choice with `allow_none` that offers a single option (above) is therefore a
+  two-option native choice.
+- **Normalisation.** The provider's explicit answer wins (a choice's `choice`; a
+  predicate's bool, which neither provider sends today); otherwise the argmax
+  of its distribution, and a tie is `abstained`. A predicate's probability is
+  P(true), and exactly 0.5 is `abstained`. Distributions are keyed by option id
+  or level index, with `NONE_KEY` for the reserved none, and an invalid report
+  (values that are not probabilities) is dropped,
+  never repaired. A well-formed body whose answer is not an offered option, or
+  is missing, is `None` with `unreadable` (`not_an_option` where it applies); an
+  envelope that answers *none* of the item's questions is not an answer but a
+  `bad_response` (§5.5), and one that answers some leaves the rest `unreadable`.
+  OpenAI's per-answer `"type": "refusal"` is `refused` for that question;
+  OpenRouter documents none, so none is mapped until a reference does; an
+  answer of the wrong `type` is `unreadable`.
+- **`confidence` is not carried, from either provider**: the contract has no
+  field for it, and a synthetic confidence is forbidden above.
+- **An item a decisions endpoint cannot represent cannot go native.** Today
+  that is a choice with `allow_none` whose options plus the reserved none pass
+  255 (a speaker roster of 254 refs plus `grimoire`); the slice adds any
+  further documented limit. `decisions.native_gap` names it and the native call
+  refuses it unsent with `LLMError("bad_response", <the sentence>,
+  code="native_unrepresentable")`. It moves to a structured fallback stage when
+  there is one; on a model that cannot generate with no such stage it fails
+  with that reason, which reaches the caller and the error store.
+- **Usage and price.** OpenRouter's `{input_tokens, output_tokens, cost}` is
+  mapped explicitly, never through the chat parser; OpenAI documents no usage,
+  so its rows carry no counts. A native row is priced only from what the
+  provider reports (§9.3).
+- **Concurrency.** `NATIVE_CONCURRENCY = 4`, argued structurally (a provider
+  call per item, the continuity sweep sending one item per row) and to be
+  tuned later against real prompts. The native items of one stage run in one
+  `asyncio.TaskGroup`, so an unexpected exception or a cancel leaves no request
+  running, and every meter opened files `aborted`. Results keep input order.
+- **Health.** A native 4xx in `NATIVE_REJECTED_STATUSES` (`REJECTED_STATUSES`
+  plus 403) does not mark the connection failing: the connection answered, and
+  the decisions endpoint refused that model, key or request.
 
 **The five conversions** (slices F and G):
 
@@ -1145,7 +1237,13 @@ today's parse on them, offline. Native backends are measured with
   an adapted case's intended outcome differs from legacy, the entry carries a
   `ruling`, which the report prints.
 - `--live` resolves the Decision role and sends the schema, so it measures what
-  production sends; replay measures the parser.
+  production sends; replay measures the parser. Under slice H it runs each
+  decide case through the chain on the whole resolution by default and grades
+  `decisions.render` of the result. `--decide-backend native|structured`
+  forces one backend on the resolved primary, which is how "native beats
+  structured" is measured on one model (§16), and `--provider/--model` selects
+  through `override_inference`, writing no settings. Every `--live` run spends
+  money and needs the user's explicit approval.
 
 ---
 
@@ -1162,7 +1260,7 @@ parameters and describes them. For each control:
 | `translated` | sent under the provider's spelling | sent | editable, shows the mapping |
 | `unsupported` | known not to work | not sent | greyed out; stored value kept |
 | `unknown` | cannot be proven | sent, per today's rule (marked unverified; standard-only on strict endpoints unless `sampler_support` is on) | distinguishable from unsupported |
-| `n/a` | the operation takes no sampling (embed, native decide) — produced from slices D/H, when operations reach the controls API | not sent | the panel says so |
+| `n/a` | the operation takes no sampling (embed, native decide) — produced from slices D/H, when operations reach the controls API: the controls API takes `operation`, and a native attempt reports every control `n/a` | not sent | the panel says so |
 
 `reasoning_effort` translations:
 
@@ -1303,6 +1401,13 @@ onward. `usage.Meter.done` remains the one place LLM failures are logged
 the decide backend stamps the mode per call, on a copy of the block, so a
 resolution is never mutated and a fallback attempt carries its own.
 
+- A native row is priced only from what the provider reports (slice H).
+  `cost_usd` is filed when the provider reports a cost (OpenRouter's
+  `usage.cost`), and reported tokens are filed as reported. `modelled_usd` is
+  never computed for a native row: neither provider is documented as billing
+  decisions per token on both sides as chat is (OpenAI bills input only), so
+  chat rates would mis-model it. Without a reported cost the row is unpriced,
+  it never carries a local token estimate, and it is never read as zero.
 - `provider` stays the adapter kind, as every existing row already writes it
   and an append-only ledger cannot change a field's meaning under rows older
   builds still read. The provider goes in `provider_id`, and `connection`
@@ -1350,7 +1455,19 @@ absent, never as the earlier batches' partial sum.
   compete in the prompt log's Turn-history rail with the turns the reader
   inspects, and `taskLabel` has no label for them. H owns mode, normalised answers and distributions (in F the
   mode is always `structured`, which the ledger already records, and
-  distributions exist only natively).
+  distributions exist only natively), under these rules (slice H):
+  - **The capture runs after each call settles**, as `(messages, outcome,
+    conn)`. The messages are the request as sent: a structured chunk's
+    messages, or a native item's normalised body as one JSON message. They are
+    built only when a capture is given, and off the loop.
+  - The outcome is `decisions.outcome`, recorded as a zero-token `decision`
+    section. A native stage's conn is captured without `sampling`.
+  - The capture runs outside the meter and guarded, so it can never fail an
+    answered decision or file an error row.
+  - One structured call is one capture, its schema-refusal retry included. A
+    failed or timed-out call is captured with its error. A cancelled call is
+    not: a cancel is the player's own act, and a write during cancellation would
+    itself be cancelled or delay it.
 - `embed`: one Debug-level line per call that sent a request, through the one
   writer (a call that sends nothing writes none). It carries the counts
   (`inputs`), `bytes`, `dimension`, `space_id`, and cache hits (`cached`) and
@@ -1422,6 +1539,11 @@ go through `useHotkeys`.
   - "This model can't generate text, so it can't be Primary."
   - "This route sends images; the chosen model is unverified for vision."
   - "No native decision API; structured generation will be used."
+
+  The decide warning is keyed on the resolution's `decision_mode` (slice H):
+  native; structured on a model that could also decide natively; structured
+  with no native API; or the refusal's own sentence. The frontend keeps no
+  capability rule of its own.
   - "This model can't create embeddings."
 
 **Presets editor**: today's `SamplerPresetEditor`, renamed, with
@@ -1647,10 +1769,9 @@ raises it as the 409s above, and the settings view reports it as a role's or
 route's `problem` (§10): the seam's answer, not a copy that could drift from
 what a turn would be told. Likewise, an Embedding model that is a known `no`
 for `embed` (§5.3) switches embedding off rather than refusing a turn, and the
-Embedding card's `problem` says why. Where a decide resolution is
-skipped rather than refused (§5.3), the same resolution carries the skip
-notice: a route row's `problem` is the refusal, else the skip notice, both
-read off the one resolution.
+Embedding card's `problem` says why. A decide route row's `problem` is
+that same refusal (§5.3): slice H deletes the skip notice, because a model that
+cannot generate is served natively, so a row has a refusal or nothing.
 
 ---
 
@@ -1684,14 +1805,16 @@ against this spec) and lands green under `make check`. Order is chosen so that
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag (D's embed rows included: E stamps their account fields and estimates an unreported prompt, §9.1), the Housekeeping chore | Yes |
 | **F — `decide()`** (settled) | The contract (`decisions.py`), `generate(schema=)`, the structured backend, the decide skip of §5.3, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
 | **G — Continuity decisions** (settled) | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision`. Both conversions switch in one change, because they share the `continuity` route and the safety rule flips a route only where its call sites decide; neither is refused at request time (both resolutions stay soft) | the Decision role serves the duplicate check and the continuity sweep; a partial sweep says so |
-| **H — Native decisions** (lands after G; its native chain serves G's continuity items) | OpenRouter and OpenAI decision adapters, the native → structured → fallback chain (the native backend stamps `"native"`, replaces F's skip and widens `OPERATION_CAPABILITY["decide"]`), §9.4's mode, normalised answers and distributions capture, voice drift's native "verdict without a note" branch, `--live` evals; reconciles the Decision role card's `incapable` sentence with a decide route row's `skip_text` (§5.3), and bounds strict mode's schema limits beyond the 1,000-value enum budget (§7.4) unless I's adapter registry does | Opt-in |
+| **H — Native decisions** (settled; lands after G; its native chain serves G's continuity items) | OpenRouter and OpenAI decision adapters; the chain of §5.5 (the selection's one backend, native only for a model that cannot generate, then the role fallback in one attempt; the native backend stamps `"native"`, replaces F's skip and widens `OPERATION_CAPABILITY["decide"]`); §9.4's capture of mode, normalised answers and distributions; voice drift's native "verdict without a note" branch; `--live` evals with `--decide-backend`; the Decision role card and its routes read one refusal (the skip and `skip_text` are deleted, §5.3); and strict mode's schema limits beyond the 1,000-value enum budget, enforced for every backend (§7.4). OpenRouter's `provider.require_parameters` stays out (the schema is always in the prompt, so routing to a provider that ignores `response_format` is harmless) and is left to I | Opt-in |
 | **I — Retirement** | §11.4, including the derived reasoning presets of §11.2 step 4 (`openai_compatible` GLM connections only, representable values only) as the legacy GLM `reasoning_effort` stops being read; the adapter registry, with `inference.generate`; deletion of the connection-dict lowering, with `FALLBACK_KEY` and `STRUCTURED_KEY` | No |
 
 **Safety rule across slices**: a route's `default_role` stays `fast` until
 its tasks call `decide()` (F/G). Pointing the Decision role at a decide-only
 model during C–E therefore cannot break any task; nothing uses that role yet.
 After F, a decide-only Decision model is skipped for a generating fallback
-(§5.3), and refused only when no fallback can generate. The flip has one
+(§5.3), and refused only when no fallback can generate; after H it is served
+natively, and refused only when it is known unable both to generate and to
+decide natively. The flip has one
 consequence for campaign overrides, noted in §5.1: on a decide route a
 campaign's Fast override no longer outranks a global pin.
 
@@ -1760,7 +1883,7 @@ validation; no fallback on any axis; degradation paths unchanged; metering.
 **Decide**: request validation (option and level bounds); structured parsing
 of predicate/choice/score; malformed and partial output → `None` with reason;
 batching and chunking; native normalisation for both APIs (canned bodies in
-`llm_fakes`/cassettes, never live); native failure → structured → fallback;
+`llm_fakes`/cassettes, never live); a native failure → the role fallback in one attempt, a model that can also generate staying structured;
 no specialised decision model required; the five conversions' eval cases.
 
 **Pricing**: precedence; facts rates before `pricing.json`; subscription tag;
@@ -1779,7 +1902,10 @@ picker; newer-format banner.
 
 - A Vision role, a role per modality, or a model database.
 - Requiring a native decision model, or making native decisions the default
-  before they win on evals.
+  before they win on evals. Slice H serves native only a model that cannot
+  generate; "native first for a model that also generates" is recorded as a
+  later user decision, gated on `evals/run.py --live --decide-backend`
+  measuring both backends on one model.
 - Embedding fallback of any kind.
 - Historical retrieval, agent orchestration, tool use.
 - Replacing file-backed configuration with a database.
@@ -1842,18 +1968,29 @@ picker; newer-format banner.
   with `output_modalities=…|all`), `supported_parameters`.
   https://openrouter.ai/docs/api-reference/models/get-models
 - OpenRouter Decisions (Jev): `POST /api/alpha/decisions`, `{model, state,
-  questions}`, question types `choice` (criteria map, explicit `none`), `noul`
-  (true/false probability), `score` (2–10 ordered levels); answers keyed by
-  question id with distributions; model id at the time `typesafe/jev-1.13`.
+  questions}`, with `questions` an object keyed by question id; question types
+  `choice` (criteria map; the page recommends adding a `none` option and
+  documents no explicit one), `noul` (true/false probability) and `score`
+  (2–10 ordered levels, a fractional weighted `score` plus per-level
+  `probabilities`); answers are an object keyed by question id, each tagged with
+  `type`, with `confidence` and distributions; usage `{input_tokens,
+  output_tokens, cost}`; model id at the time `typesafe/jev-1.13`. Read
+  2026-10-08 on the **tutorial** page, not an API reference; the slice adds an
+  API-reference URL if it finds one.
   https://openrouter.ai/blog/tutorials/how-to-use-jev/
-- OpenAI Decisions: `POST /v1/decisions`, `{model, input, questions}`, question
-  types `predicate` (`probability`), `choice` (`choices`; `choice`,
-  `probabilities`, `confidence`), `score` (`levels`; `score`, `probabilities`,
-  `confidence`); public beta, `gpt-6-luna` at the time.
+- OpenAI Decisions: `POST /v1/decisions`, `{model, input, questions}`, with
+  `questions` an array, each with a unique `name`; question types `predicate`
+  (`probability`), `choice` (`choices`; `choice`, `probabilities`,
+  `confidence`) and `score` (`levels`; a fractional weighted `score`,
+  `probabilities`, `confidence`); answers an array matched by `name`, with a
+  per-answer `"type": "refusal"` for a refusal; the guide recommends a fallback
+  option such as `"other"` and documents no explicit none; no usage shape is
+  documented; public beta, `gpt-6-luna` at the time.
   https://developers.openai.com/api/docs/guides/decisions
 - z.ai: pay-as-you-go `https://api.z.ai/api/paas/v4`; GLM Coding Plan keys work
   only at `https://api.z.ai/api/coding/paas/v4`.
   https://docs.z.ai/api-reference/introduction
 
-These are planning-time facts. The slice that implements each adapter
-re-checks its reference before coding.
+These are planning-time facts (the two decisions pages re-read 2026-10-08 for
+slice H). The slice that implements each adapter re-checks its reference before
+coding, and records an open point here.
