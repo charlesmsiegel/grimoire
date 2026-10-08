@@ -469,9 +469,15 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     parser: it passes locally in 0.07s and failed CI at 0.72s under load. And
     raising the ceiling would have hidden the bug -- by this docstring's own
     numbers quadratic parsing reaches ~0.67s at 20k words, right where the
-    contended run landed. Doubling the input costs ~2x when linear and ~4x when
-    quadratic, and both halves run under whatever load the machine is already
-    under, so the comparison holds where an absolute bound does not.
+    contended run landed. Quadrupling the input costs ~4x when linear and ~16x
+    when quadratic, and both sizes run under whatever load the machine is
+    already under, so the comparison holds where an absolute bound does not.
+
+    Four times the words, not two, and the bound at the geometric mean of the
+    two answers (8): with a doubling the bound sat 1.5x above linear and 1.33x
+    below quadratic, and a four-worker run on four vCPUs reddened it at 3.4x
+    with the parser unchanged. Here either answer is 2x from the bound, so the
+    margin against noise and against a quadratic parser both widened.
     """
     import time
 
@@ -499,16 +505,19 @@ def test_the_query_parser_is_linear_in_the_word_count(world):
     # Best-of-five at each size. A single sample is dominated by whatever the
     # machine was doing at that instant -- the first call alone measured a 0.74x
     # "scaling" here, which is noise, not sublinearity. The minimum is the run
-    # least interfered with, which is what the comparison wants.
-    def _best(n, rounds=5):
-        return min(_parse(n) for _ in range(rounds))
-
-    _best(20000)                       # warm the interpreter, not the measure
-    small = max(_best(20000), 1e-4)    # a floor, so a fast machine cannot divide by ~0
-    large = _best(40000)
-    assert large / small < 3, (
-        f"parsing scaled {large / small:.1f}x for 2x the words -- linear is ~2, "
-        f"quadratic is ~4")
+    # least interfered with, which is what the comparison wants. The two sizes'
+    # samples alternate, so a burst of load from a neighbouring worker lands on
+    # both rather than on whichever size happened to be measured through it.
+    _parse(20000)                      # warm the interpreter, not the measure
+    smalls, larges = [], []
+    for _ in range(5):
+        smalls.append(_parse(20000))
+        larges.append(_parse(80000))
+    small = max(min(smalls), 1e-4)     # a floor, so a fast machine cannot divide by ~0
+    large = min(larges)
+    assert large / small < 8, (
+        f"parsing scaled {large / small:.1f}x for 4x the words -- linear is ~4, "
+        f"quadratic is ~16")
 
 
 def test_a_store_with_no_worlds_or_campaigns_yet_searches_to_nothing(home):
