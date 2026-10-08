@@ -22,6 +22,7 @@ Every provider, name and key below is invented.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import time
 import types
@@ -173,12 +174,22 @@ def test_the_asked_model_is_not_restated_when_it_answered(space):
 
 def test_the_resolution_never_writes_the_stored_record():
     """The account block is the lowered copy's: resolving the role stamps
-    nothing onto what a later read of the provider returns."""
+    nothing onto the record the lookup handed it. Held on the lookup's own
+    dict, not the disk -- the resolution never writes a connection file, so a
+    re-read would pass whatever it did to the dict in memory."""
     conn = _provider()
     _role(conn)
-    got = inference_resolve.embedding()
+    lookup = inference_resolve.connection_lookup()
+    raw = lookup(conn)
+    assert raw is not None
+    before = copy.deepcopy(raw)
+    got = inference_resolve.embedding(lookup=lookup)
     assert got.attempts[0].conn[inference_resolve.ACCOUNT_KEY] == {
         "billing": "metered", "operation": "embed", "role": "embedding"}
+    assert got.attempts[0].conn is not raw
+    assert lookup(conn) is raw
+    assert raw == before
+    assert inference_resolve.ACCOUNT_KEY not in raw
     assert inference_resolve.ACCOUNT_KEY not in llm_connections.read_connection_raw(conn)
 
 
