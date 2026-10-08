@@ -80,11 +80,16 @@ class Probe(NamedTuple):
     #: To be tuned against real ledger rows.
     prompt_tokens: int
     completion_tokens: int
+    #: How many images the probe sends, each priced at the row's per-image
+    #: price (`image`) on top of the tokens -- where a provider bills an image
+    #: by the image rather than as tokens, the token guess alone would
+    #: understate it.
+    images: int = 0
 
 
 PROBES: dict[str, Probe] = {p.capability: p for p in (
     Probe("generate", "generate", 20, MAX_TOKENS),
-    Probe("vision", "generate", 300, MAX_TOKENS),
+    Probe("vision", "generate", 300, MAX_TOKENS, images=1),
     Probe("embed", "embed", 10, 0),
 )}
 
@@ -138,7 +143,8 @@ def describe(cap: str, capped: bool = True) -> str:
 
 
 def _rate(value: object) -> float | None:
-    """A per-token price from a catalog row, or None when it states none.
+    """A per-token (or per-image) price from a catalog row, or None when it
+    states none -- or states something that is not a number.
 
     Negative is a sentinel some catalogs use for "varies" (a router's own
     pseudo-model), never a price."""
@@ -155,8 +161,10 @@ def estimate_usd(row: dict | None, caps: Iterable[str]) -> float | None:
     """What probing `caps` should cost, from the model's catalog row.
 
     None whenever a price the estimate needs is not stated -- "a price nobody
-    reported is never rendered as zero". A row stating `0` is a free model,
-    which is a reported price and estimates to 0.0."""
+    reported is never rendered as zero". That includes the per-image price for
+    a probe that sends an image: a row with token prices and no image price
+    leaves the vision probe, and so the whole estimate, unknown. A row stating
+    `0` is a free model, which is a reported price and estimates to 0.0."""
     if not isinstance(row, dict):
         return None
     total = 0.0
@@ -171,6 +179,11 @@ def estimate_usd(row: dict | None, caps: Iterable[str]) -> float | None:
             if completion is None:
                 return None
             total += probe.completion_tokens * completion
+        if probe.images:
+            image = _rate(row.get("image"))
+            if image is None:
+                return None
+            total += probe.images * image
     return total
 
 

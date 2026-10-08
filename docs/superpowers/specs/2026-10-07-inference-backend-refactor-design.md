@@ -646,7 +646,11 @@ Optional; offered on unverified rows and on the model-facts panel.
 1. The user clicks **Test…**. A confirmation states the provider, model, what
    will be sent, and the estimated cost when the catalog states a price
    (otherwise "cost unknown — one tiny request"; the user's rates and
-   `pricing.json` join the estimate with slice E).
+   `pricing.json` join the estimate with slice E). The vision probe also adds
+   one image at the catalog row's per-image price (OpenRouter's
+   `pricing.image`, kept on the normalised row as `image`); a row that states
+   token prices but no parseable non-negative image price leaves the vision
+   probe, and so the whole estimate, unknown — never priced as free.
 2. On confirm, one probe per capability asked about:
    - generate: a fixed instruction, the reply capped at 64 tokens (the vision
      probe takes the same cap)

@@ -36,6 +36,18 @@ def test_an_entry_keeps_missing_metadata_missing():
         "prompt": None, "completion": None, "vision": None}
 
 
+def test_an_entry_keeps_the_per_image_price_as_reported():
+    """OpenRouter's `pricing.image` (USD per image) sits beside the per-token
+    prices, stored as the provider wrote it; a row that states none has no
+    `image` key at all, which reads as "not reported", never as free."""
+    row = catalog.entry({"id": "m", "pricing": {"prompt": "0.000001", "completion": "0.000002",
+                                                "image": "0.0025"}})
+    assert (row["prompt"], row["completion"], row["image"]) == ("0.000001", "0.000002",
+                                                                "0.0025")
+    assert "image" not in catalog.entry({"id": "m", "pricing": {"prompt": "0"}})
+    assert "image" not in catalog.entry({"id": "m", "pricing": {"image": None}})
+
+
 def test_the_context_window_is_read_from_vllms_field_too():
     """vLLM names the window it serves as `max_model_len`; without reading it a
     local model's context bar has nothing to be a fraction of."""

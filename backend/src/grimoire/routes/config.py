@@ -932,9 +932,10 @@ def post_connection_test_preview(conn_id: str, body: ModelTestPreview):
     nothing, meters nothing, starts no run.
 
     `estimated_cost_usd` is the probes' stated token guesses
-    (`probes.PROBES`) at the model's cached catalog prices, and null when the
-    catalog states no price -- "a price nobody reported is never rendered as
-    zero"; the confirmation then says the cost is unknown."""
+    (`probes.PROBES`) at the model's cached catalog prices, plus the vision
+    probe's one image at the row's per-image price, and null when the catalog
+    states no price the estimate needs -- "a price nobody reported is never
+    rendered as zero"; the confirmation then says the cost is unknown."""
     raw, model, caps = _test_plan(conn_id, body)
     probes = store.inference.probes
     capped = "max_tokens" in llm_sampling.sent_names(inference.lower(raw, probes.sampling(), model))

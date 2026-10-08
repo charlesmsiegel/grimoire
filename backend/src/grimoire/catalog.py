@@ -31,6 +31,14 @@ def entry(raw: dict) -> dict:
            "context": _context(raw),
            "prompt": pricing.get("prompt"), "completion": pricing.get("completion"),
            "vision": _vision(raw)}
+    # The price of one input image (OpenRouter's `pricing.image`, USD per
+    # image), stored as the provider wrote it, like the per-token prices. Kept
+    # only when stated, so the rows of every provider that names none keep
+    # their shape; an absent key is "not reported", which the test call's
+    # estimate reads as unknown rather than free.
+    image = pricing.get("image")
+    if image is not None:
+        out["image"] = image
     # Which request parameters the model takes, when the provider says
     # (OpenRouter's `supported_parameters`). Kept only as a list of strings and
     # only when present: an absent list means "unknown", which the sampler split

@@ -144,6 +144,72 @@ def test_an_estimate_needs_every_price_it_uses():
     assert probes.estimate_usd({"prompt": "0", "completion": "0"}, ["generate"]) == 0.0
 
 
+def _tokens(cap, prompt, completion):
+    probe = probes.PROBES[cap]
+    return probe.prompt_tokens * prompt + probe.completion_tokens * completion
+
+
+def test_the_vision_probe_adds_one_image_at_the_rows_image_price():
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000001", "completion": "0.000002",
+                                                  "image": "0.0025"}})
+    assert row["image"] == "0.0025"
+    vision = _tokens("vision", 0.000001, 0.000002) + 0.0025
+    assert probes.estimate_usd(row, ["vision"]) == pytest.approx(vision)
+    both = vision + _tokens("generate", 0.000001, 0.000002)
+    assert probes.estimate_usd(row, ["generate", "vision"]) == pytest.approx(both)
+
+
+def test_a_free_image_is_a_reported_zero():
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0", "completion": "0",
+                                                  "image": "0"}})
+    assert probes.estimate_usd(row, ["vision"]) == 0.0
+
+
+@pytest.mark.parametrize("image", [None, "", "free", "-1", "nan", "inf", True, [], {}])
+def test_an_unreported_image_price_makes_the_vision_probe_unknown(image):
+    pricing = {"prompt": "0.000001", "completion": "0.000002"}
+    if image is not None:
+        pricing["image"] = image
+    row = catalog.entry({"id": MODEL, "pricing": pricing})
+    assert probes.estimate_usd(row, ["vision"]) is None
+    # ... and so the whole test's total, never the text probes' share alone.
+    assert probes.estimate_usd(row, ["generate", "vision"]) is None
+
+
+def test_a_text_only_test_ignores_the_image_price():
+    priced = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000001",
+                                                     "completion": "0.000002",
+                                                     "image": "0.0025"}})
+    unpriced = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000001",
+                                                       "completion": "0.000002"}})
+    expected = _tokens("generate", 0.000001, 0.000002)
+    for row in (priced, unpriced):
+        assert probes.estimate_usd(row, ["generate"]) == pytest.approx(expected)
+        assert probes.estimate_usd(row, ["embed"]) == pytest.approx(
+            probes.PROBES["embed"].prompt_tokens * 0.000001)
+
+
+def test_the_preview_prices_the_vision_probes_image(client):
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    priced = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003",
+                                                     "completion": "0.000015",
+                                                     "image": "0.004"}})
+    store.llm_connections.set_cached_models(conn, [priced], _rev(conn))
+    body = client.post(f"/api/llm-connections/{conn}/test/preview",
+                       json={"model": MODEL, "capabilities": ["generate", "vision"]}).json()
+    expected = (_tokens("generate", 0.000003, 0.000015)
+                + _tokens("vision", 0.000003, 0.000015) + 0.004)
+    assert body["estimated_cost_usd"] == pytest.approx(expected)
+
+    unpriced = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003",
+                                                       "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [unpriced], _rev(conn))
+    body = client.post(f"/api/llm-connections/{conn}/test/preview",
+                       json={"model": MODEL, "capabilities": ["generate", "vision"]}).json()
+    assert body["estimated_cost_usd"] is None
+
+
 # ---- preview -----------------------------------------------------------------
 
 def test_the_preview_sends_nothing_meters_nothing_and_starts_no_run(client):
