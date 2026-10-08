@@ -516,8 +516,8 @@ def _identity_settle(answers: object) -> object:
     return [taken, [[e.decision, e.status, e.reason, e.target] for e in exam.rows]]
 
 
-#: Verbatim, every input `test_continuity_identity.py`'s parse tests hand
-#: `parse_output`: the fenced one built by the test's own expression.
+#: Verbatim, every input the retired `test_continuity_identity.py` parse tests
+#: handed `parse_output`: the fenced one built by the test's own expression.
 _IDENTITY_FENCED = "Here you go:\n```json\n" + json.dumps({"decisions": [
     "not a row",
     {"decision": "new", "id": "", "reason": "no row key"},
@@ -639,8 +639,12 @@ def _reconcile_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -
     return reconcile.proposals_of(_RECONCILE_PAYLOAD, results)
 
 
-#: Every `_reply(...)` that `test_continuity_reconcile_prompt.py`'s parse
-#: tests hand `parse_output`, as `(source test, elements, keys, scenes)`. The
+#: Every `_reply(...)` the retired parse tests handed `parse_output`, as
+#: `(source test, elements, keys, scenes)`. Those tests went with the switch
+#: (the production parser is gone), so these copies are what is left of them:
+#: the source name is the retired test's, kept for provenance, and nothing
+#: reads the parse tests any more -- `legacy_cases` below draws from this list,
+#: and `test_decide_gate.py` holds each entry to a corpus pair. The
 #: elements are copied verbatim as literals; where a test builds them from
 #: runtime values -- `keys[key]`, a computed candidate key, `s0`, `gone` -- the
 #: copy keeps the runtime value's name as a placeholder, and where a test
@@ -821,8 +825,9 @@ CONTINUITY_RECONCILE = Conversion(
     legacy=functools.partial(legacy.reconcile_parse_output, payload=_RECONCILE_PAYLOAD),
     decide=_reconcile_decide,
     corpus=GATE_DIR / "continuity-reconcile.json",
-    # Verbatim, the parse tests' literal inputs, then every `_reply(...)`
-    # they build, adapted through its test's own maps (ruling 11, M11).
+    # Verbatim, the retired parse tests' literal inputs, then every
+    # `RECONCILE_SOURCES` reply, adapted through its test's own maps
+    # (ruling 11, M11).
     legacy_cases=(
         "I think so.", "", "{}", '{"decisions": 4}', '{"decisions": [3, "x", null]}',
         *(_adapt(elements, keys, scenes) for _, elements, keys, scenes in RECONCILE_SOURCES),

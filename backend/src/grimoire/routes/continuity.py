@@ -32,6 +32,14 @@ Discovery, the items and both persists live in `store.continuity.reconcile`;
 the routed resolution, the `decide` call and the run's work live here, because
 `test_routing_guard` reads only `routes/`. Nothing the run does writes a
 ledger (§11.5).
+
+**Wall time.** Each chunk runs under the full `llm_call_budget` ceiling, inside
+its own meter, and so does a schema-refusal retry of it. A sweep that selects
+`RECONCILE_MAX_CANDIDATES` findings is three chunks, so it can hold the
+campaign's one background run -- refusing `PUT /config/data-dir` while it
+lives, and making End Scene adopt the live run rather than start its own --
+for up to three times as long as the single call it replaced, and six times
+with every chunk retried. The ceiling bounds each call, not the sweep.
 """
 
 from __future__ import annotations

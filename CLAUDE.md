@@ -783,10 +783,10 @@ would answer neither question.
   one that names the primary's own connection (a retry, which the retry budget
   covers; the decide skip below is the exception), nor one that cannot carry
   the call's images. A reroll's connection override goes through `override_inference`, and
-  absorb's secondary phases hand `_soft_inference` a thunk (voice drift hands
-  one to `_soft_resolved`, which keeps the whole resolution `decide` takes), so
-  a phase that cannot resolve reports itself failed with a reason instead of
-  losing the review.
+  absorb's secondary phases hand `_soft_inference` a thunk (voice drift and the
+  duplicate check hand one to `_soft_resolved`, which keeps the whole
+  resolution `decide` takes), so a phase that cannot resolve reports itself
+  failed with a reason instead of losing the review.
   **A yes/no, pick-one or graded question is a `decide` call**, never prose
   parsed afterwards. Resolve it with `require_inference(<task>, cid,
   operation="decide")` on a route whose `operation` is `decide`, bind the
@@ -795,6 +795,20 @@ would answer neither question.
   client=…, resolved=…)`, which refuses a resolution for another task or
   operation. It opens one meter per chunk itself, so a caller with a time
   budget hands it over as `around` and the budget runs inside that meter.
+  The continuity pair are decide calls too -- absorb's duplicate check
+  (`continuity-identity`) asks one item per examined row, and the
+  reconciliation sweep (`continuity-reconcile`) one per candidate -- each one
+  `decide()` over the whole batch, chunked at 8 items to a metered call, so the
+  per-item wording repeats once per item and the chunking bounds each call. An
+  item the reply never reached is not an item it answered badly: a row stays
+  `unchecked` and a candidate gets no proposal (so the sweep lands with it
+  counted `unanswered`, and asks it again next time -- except a model-only
+  nomination, which is not stored), while an item that was read and answered
+  badly is `uncertain`. A status word stands on its known evidence scene
+  alone; the rationale is display text and nothing stands on it. Each chunk
+  runs under the full `llm_call_budget` ceiling (a schema-refusal retry too),
+  so a full sweep can hold the campaign's background run for up to three times
+  as long as the one call it replaced.
   `test_operation_guard.py` finds the call by import binding (a continuity
   `Examination.decide` is not one), fails a task literal that is not on a
   decide route or a call with no `resolved=`, and holds the safety rule both
@@ -818,10 +832,12 @@ would answer neither question.
   since the skipped primary is never sent -- and the route row's `problem`
   says so (`resolve.skip_text`); with no such fallback the 409 `incapable`
   stands, and for the speaker pick `post_chat` raises it before it writes
-  anything (`refuse_an_unanswerable_pick`). The three decide routes use the
-  Decision role, which inherits Fast, so on them a campaign's own Fast
-  override no longer outranks a global pin (spec 5.1): a campaign that wants
-  that sets its own Decision role. A call site converts only behind `evals/run.py --gate`, whose corpus
+  anything (`refuse_an_unanswerable_pick`). The four decide routes (`speaker`,
+  `scene_break`, `voice_drift` and `continuity`) use the Decision role, which
+  inherits Fast, so on them a campaign's own Fast override no longer outranks
+  a global pin (spec 5.1) -- the duplicate check and the sweep included, which
+  a Fast override used to reach: a campaign that wants that sets its own
+  Decision role. A call site converts only behind `evals/run.py --gate`, whose corpus
   starts from the legacy parser's own tests (`evals/README.md`). The speaker
   pick turns a roster `decide` refuses before sending -- two refs that read as
   one once normalised, or more than 254 refs (with `grimoire`, past a choice's

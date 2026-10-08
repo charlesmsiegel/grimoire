@@ -223,7 +223,9 @@ scene's roll-log entries), `transcript` (`snippets/transcript.j2`).
 ### `continuity_identity/` — the duplicate check inside POST …/absorb
 Mirrors `store/continuity/identity.py:build_items`. One `decide()` item per
 `Examination.prompt_rows()` row, in order, with `decide/` rendering the prompt
-around them: one proposed-new plot thread or commitment that has a plausible
+around them, one `decide()` over every examined row and chunked when the batch
+is long (the per-item wording repeats once per row, which is why each call is
+bounded): one proposed-new plot thread or commitment that has a plausible
 same-type neighbour, each row `{key, kind ("thread" | "commitment"), title,
 beat, status, commitment_kind, due, quote, speaker, certainty, why_new,
 distinguished_from, candidates}`; each candidate is `{id (bare canonical id),
@@ -259,7 +261,8 @@ blank optional one renders nothing.
 
 `identity.answers_of` maps the parsed batch to the decision dicts
 `Examination.decide` reads, leaving out an item the reply never reached
-(`decisions.was_read`), so its row stays `unchecked`; `identity.take` decides
+(`decisions.was_read`), so its row stays `unchecked` (one the reply reached and
+answered badly was read, and is `uncertain`); `identity.take` decides
 or, for no readable answer at all, makes every row a hint only. An undecodable
 reply means the phase is `failed` (every examined row keeps its hints); a
 decodable one with nothing usable is no decisions. The replies, including each
@@ -271,10 +274,12 @@ keyed by decision, `IDENTITY_REWORDED` with why); the reply format is
 `decide/system.j2`'s.
 
 ### `continuity_reconcile/` — the reconciliation sweep after End Scene or a refresh
-Mirrors `store/continuity/reconcile.py:build_items`. One call per sweep, over
-at most `RECONCILE_MAX_CANDIDATES` findings chosen by `reconcile.select`, as
-one `decide()` item per payload candidate, in order, with `decide/` rendering
-the prompt around them. `reconcile.build_payload()` supplies `now` (the
+Mirrors `store/continuity/reconcile.py:build_items`. One `decide()` per sweep,
+chunked, over at most `RECONCILE_MAX_CANDIDATES` findings chosen by
+`reconcile.select`, as one item per payload candidate, in order, with `decide/`
+rendering the prompt around them. The question and evidence wording repeats
+once per item, so the overhead grows linearly with the findings, and the
+chunking bounds each call. `reconcile.build_payload()` supplies `now` (the
 campaign date, or blank), `chronicle` (`[{id, one_line}]` — the chronicle lines
 of every beat scene shown and of the last `RECONCILE_RECENT_SCENES` scenes),
 `recent` (that recent window itself, in play order) and `candidates`, each
@@ -317,7 +322,9 @@ with an earlier one dropped from the item's options and lines.
 
 `reconcile.proposals_of` maps the parsed batch to cache proposals through
 `_decide`, leaving out a candidate the reply never reached
-(`decisions.was_read`), so it gets no proposal and is asked again. A word
+(`decisions.was_read`), so it gets no proposal and is asked again (a
+model-only nomination is not stored, and is nominated afresh); one the reply
+reached and answered badly was read, and is `uncertain`. A word
 outside the candidate's vocabulary, a direction the link rules refuse, or a
 closure or resolution without an evidence scene its item showed is
 `uncertain`; a status word stands on a shown scene without a rationale, its

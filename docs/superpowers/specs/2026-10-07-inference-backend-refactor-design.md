@@ -431,9 +431,9 @@ its own Fast role. In that campaign, summaries run on the campaign's Fast
 model. In every other campaign they run on the pin.
 
 **On the decide routes that is no longer so for Fast.** Step 3 reads the
-campaign's slot of the role the route *uses*, and since slice F the
-three decide routes (`speaker`, `scene_break`, `voice_drift`) use Decision, which
-inherits Fast (slice G's `continuity` will be the fourth). A campaign that overrides Fast and not Decision reaches them
+campaign's slot of the role the route *uses*, and since slices F and G the
+four decide routes (`speaker`, `scene_break`, `voice_drift` and `continuity`)
+use Decision, which inherits Fast. A campaign that overrides Fast and not Decision reaches them
 only at step 5, by that inheritance, after a global pin at step 4. So with
 scene-break checks pinned globally and a campaign Fast override, the checks
 in that campaign ran on the campaign's Fast model before F and run on the pin
@@ -441,8 +441,9 @@ after it; the campaign gets the old behaviour back by setting its own
 Decision role. This is deliberate (the route uses Decision, and step 3 is
 about that role, inheriting or not), and the migration-equivalence check
 cannot see it, because a migrated store has no campaign role slots: the case
-exists only once someone sets one in the new layout. Slice G's `continuity`
-route is the fourth, and the same case applies to it.
+exists only once someone sets one in the new layout. `continuity` (slice G) is
+the fourth, and the same case applies to it: the duplicate check and the sweep
+ran on a campaign's Fast model before G and run on the pin after it.
 
 A reference to a provider that no longer exists, or a preset id that names no
 preset, is "no opinion" and the walk continues (today's rule, for today's

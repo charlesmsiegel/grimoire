@@ -72,8 +72,11 @@ filtered by verdict here, against the same `pending.Current` discovery read, so
 a pair the reader dismissed or linked, or a re-check under a Keep open that
 still holds, is never re-asked.
 
-**Adjudication** (§11.2-§11.4, Decision 13) is one model call per sweep, never
-one per finding. `select` chooses what it asks -- overdue resolutions, then
+**Adjudication** (§11.2-§11.4, Decision 13) is one `decide()` per sweep, never
+one per finding: one item per finding, chunked (at most
+`decisions.MAX_ITEMS_PER_CALL` items to a metered call), so a sweep is a few
+calls and each is bounded where one prompt over every finding grew with the
+sweep. `select` chooses what it asks -- overdue resolutions, then
 duplicates strongest first, then the rest, capped at `RECONCILE_MAX_CANDIDATES`
 -- from the findings with no proposal, re-checking each model-only nomination
 so nothing the reader dismissed or linked is sent. `build_payload` sends the
@@ -82,8 +85,20 @@ its last beats with their scenes, its pressure, links and people, and the
 chronicle lines around them -- never a transcript. The scenes it shows are the
 only evidence `proposals_of` accepts. It trusts no field of the reply:
 a word outside the candidate's vocabulary, a direction the link rules refuse,
-or a closure without a reason and a known evidence scene is ``uncertain``, and
-a reply with no decodable object is None -- a failed run, not "no proposals".
+or a closure whose evidence is not a scene its item showed is ``uncertain``,
+and a reply with no decodable object is None -- a failed run, not "no
+proposals". A status word stands on its known evidence scene alone, with no
+rationale (I4): the rationale is display text, and nothing is invented in its
+place.
+
+**A partial sweep lands.** A candidate no chunk reached (a chunk that failed or
+was refused beside one that answered) gets no proposal, never ``uncertain``:
+the sweep counts it `unanswered`, its cached record keeps no proposal and the
+next sweep's `select` asks it again (I1). The exception is a model-only
+nomination, which is cached only with its proposal, so one the reply never
+reached is not stored at all and is nominated afresh next time (M7). A
+candidate the reply reached and answered badly was read, and is ``uncertain``
+(N8).
 
 **Two persists** (§11.1 steps 2 and 4, Decisions 7 and 8) share one campaign
 lock hold. Persist 1 writes what the sweep found plus every cached record it
@@ -156,9 +171,10 @@ RECONCILE_MAX_PAIRS = 20_000
 #: prompts later.
 RECONCILE_TOP_K = similarity.IDENTITY_TOP_K
 
-#: Findings one adjudication call carries. Each renders two short records, a
-#: few beats and a signal line, so this keeps the one prompt in the few-thousand
-#: token range absorb's runs in. To be tuned against real prompts later.
+#: Findings one sweep sends. Each renders two short records, a few beats and a
+#: signal line, and the question and evidence wording repeats once per item, so
+#: the overhead grows linearly with the count; `decide()` chunks them, which
+#: bounds each call. To be tuned against real prompts later.
 RECONCILE_MAX_CANDIDATES = 24
 
 #: Beats sent per record: the identity text's latest plus two earlier ones
@@ -182,9 +198,9 @@ RECONCILE_ACTORS = 4
 #: Bytes of stored text one record shows -- its id, kind, status, title, due,
 #: beats, link titles and actor names together. The counts above bound how
 #: many of each are sent, not how long they are, and a ledger route takes a
-#: title or beat of any length; this is the bound the identity resolver puts on
+#: title or beat of any length; this is the bound the identity decision puts on
 #: the same records (`similarity.CONTINUITY_IDENTITY_BYTES`), so a pasted note
-#: can neither push the one call past the model's context nor, by failing it
+#: can neither push a chunk's call past the model's context nor, by failing it
 #: on every pass, keep the other candidates in it from ever being decided. To
 #: be tuned against real prompts later.
 RECONCILE_RECORD_BYTES = similarity.CONTINUITY_IDENTITY_BYTES
@@ -195,7 +211,7 @@ RECONCILE_RECORD_BYTES = similarity.CONTINUITY_IDENTITY_BYTES
 #: later.
 RECONCILE_SCENE_LINE_BYTES = 500
 
-#: A proposal's reason, clipped -- the bound identity's resolver uses
+#: A proposal's reason, clipped -- the bound identity's decision uses
 #: (`identity.REASON_CHARS`), one short sentence.
 RECONCILE_REASON_CHARS = 280
 
@@ -1010,7 +1026,7 @@ def _item(key: str, record: dict) -> dict:
 
 
 def select(cid: str, sweep: Sweep) -> list[dict]:
-    """What the one model call is asked (§11.1 step 3, Decision 13), at most
+    """What the sweep's `decide()` is asked (§11.1 step 3, Decision 13), at most
     `RECONCILE_MAX_CANDIDATES`, by priority.
 
     Read from the cache as persist 1 left it: every record with no proposal
@@ -1265,7 +1281,7 @@ def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]
 
 
 def build_payload(cid: str, selected: list[dict]) -> dict:
-    """The one call's bounded input (§11.2, Decision 13) for `select`'s items,
+    """The sweep's bounded input (§11.2, Decision 13) for `select`'s items,
     keyed ``c1``... in selection order. Only the records the candidates name
     are sent, with their last beats and the chronicle lines around them --
     never a transcript -- and every stored text is cut to a byte bound

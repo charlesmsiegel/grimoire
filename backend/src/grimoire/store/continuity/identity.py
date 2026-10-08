@@ -42,11 +42,21 @@ and structural candidates still stand.
 **The check is a set of `decide()` items** (spec §7.4): `build_items` makes one
 per examined row, showing the row, its citation and identity fields, and its
 candidates with their signals, and nothing else of the campaign. Each asks
-`decision` and then, when the row has a candidate it may offer, `id`.
+`decision` and then, when the row has a candidate it may offer, `id`. The
+phase is one `decide()` over every examined row, chunked, so a long batch is
+several metered calls and the per-item wording repeats once per row.
 `answers_of` rebuilds the answers field by field into the dicts
 `Examination.decide` reads; a reply with no decodable object is None -- a
 failed check -- never ``[]``, which is a decodable reply with nothing usable in
 it (§24).
+
+**An item the reply never reached is not an item it answered badly.** A row
+whose chunk failed, was refused or held nothing that reads as it stays
+`unchecked` (I1), whatever the other chunks said, and the phase is never `ok`.
+A row the reply did reach and answered badly -- an empty answers object, a null
+decision, a word outside the options -- was read, and is `uncertain` (N8), as
+today's unknown word has always been. The rationale is display text and
+nothing stands on it (I4).
 
 **Deciding** (`Examination.decide`) is where the reply is not trusted: an
 ``existing`` is accepted only onto an offered, live candidate no other row in
@@ -84,10 +94,10 @@ SECTIONS: dict[str, similarity.Kind] = {"plot_movements": "thread",
 #: materialize to build the as-new alternative from.
 AS_NEW_KEY = "_identity_as_new"
 
-#: What the resolver may answer for a row (spec §10.2).
+#: What the decision may answer for a row (spec §10.2).
 DECISIONS = ("existing", "new", "uncertain")
 
-#: What a row's `identity_check.decision` may say: a resolver word, or
+#: What a row's `identity_check.decision` may say: a decision word, or
 #: ``unchecked`` for a row the check never answered.
 CHECK_DECISIONS = (*DECISIONS, "unchecked")
 
@@ -95,7 +105,7 @@ CHECK_DECISIONS = (*DECISIONS, "unchecked")
 #: guard, or a hint only (no usable answer).
 STATUSES = ("accepted", "downgraded", "hint_only")
 
-#: A resolver reason is display text; clipping it keeps a runaway reply out of
+#: A decision's reason is display text; clipping it keeps a runaway reply out of
 #: the stored review. To be tuned against real prompts later.
 REASON_CHARS = 280
 
@@ -153,7 +163,7 @@ def _certainty(value) -> float | None:
 
 def _fixed(subject: similarity.Subject) -> tuple[str, str]:
     """The candidate fields the prompt cannot cut: its bare canonical id, which
-    the resolver names it back by, and its kind, which a cut to nothing would
+    the decision names it back by, and its kind, which a cut to nothing would
     show as the ``promise`` a blank kind means."""
     return subject.ref.partition(":")[2], _text(subject.record.get("kind"))
 
@@ -163,13 +173,13 @@ def _offerable(subject: similarity.Subject) -> bool:
     slugifies a title of any length into the record's id, and an id cannot be
     clipped without losing the record it names, so a record whose id and kind
     together overrun the bound is never a candidate: it is left out of the pool rather
-    than carried whole into the shared resolver prompt."""
+    than carried whole into the shared decide prompt."""
     return (sum(len(text.encode("utf-8")) for text in _fixed(subject))
             <= similarity.CONTINUITY_IDENTITY_BYTES)
 
 
 def _candidate(subject: similarity.Subject, signals: dict) -> dict:
-    """One neighbour as the resolver prompt shows it: its bare canonical id,
+    """One neighbour as the decide item shows it: its bare canonical id,
     what it is, its latest beat and up to `similarity.PREVIOUS_BEATS` earlier
     ones, newest first.
 
@@ -571,8 +581,8 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
 
 
 def _signal_text(signals: dict) -> str:
-    """The signals as fixed-order phrases. Hints for the resolver, never a
-    verdict -- the system prompt says so."""
+    """The signals as fixed-order phrases. Hints for the decision, never a
+    verdict -- the question says so."""
     parts: list[str] = []
     if signals.get("title_equal"):
         parts.append("same title")

@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is fifteen pass/fail
+This suite closes that. It is not an eval framework; it is thirteen pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -134,8 +134,7 @@ and the result is a report, never a gate.
 
 `decide()` (spec 7.4) replaces call sites' hand-written prompts and
 parsers -- the scene-break check, the voice-drift check, the next-speaker
-pick and, being prepared, absorb's duplicate check and the reconciliation
-sweep -- with one decision
+pick, absorb's duplicate check and the reconciliation sweep -- with one decision
 contract answered by structured generation. Each
 call site switches only when the structured parse **equals or beats** today's
 on recorded replies, offline: `evals/gate.py`, run by `--gate` and by pytest
@@ -183,7 +182,13 @@ on recorded replies, offline: `evals/gate.py`, run by `--gate` and by pytest
   ruling is visible beside the score instead of counted as a parser win.
 - **A conversion's batch is its fixture items, at most one call's worth.**
   `gate.judge` refuses a conversion whose items would take more than one
-  `decisions.chunks` call (a corpus reply answers one call). A corpus reply
+  `decisions.chunks` call (a corpus reply answers one call): the duplicate
+  check and the reconciliation sweep each send one item per row or candidate
+  and are chunked in production (`decisions.MAX_ITEMS_PER_CALL`, eight), but
+  their fixtures are sized to a single chunk, so the gate scores what one
+  call's reply is parsed into and never a chunk boundary. A chunk that failed
+  beside one that answered (its items stay unchecked or unanswered) is the
+  route and store suites' ground, not the corpus's. A corpus reply
   answers the whole batch, keyed by item index, as a structured call does, and
   the conversion's `decide` is handed every item's result at once. Legacy
   replies answer a whole batch too (`{"decisions": [...]}` across rows or

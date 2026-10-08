@@ -396,10 +396,8 @@ def _record_answer(result: decisions.ItemResult) -> object:
 
 # ------------------------------------------------------------------- reconcile
 
-#: The words whose meaning depends on which record is which, and the status
-#: words that need positive evidence -- borrowed, so the grader and the parser
-#: cannot disagree about either list.
-RECONCILE_DIRECTED = reconcile._DIRECTED
+#: The status words that need positive evidence -- borrowed, so the grader and
+#: the parser cannot disagree about the list.
 RECONCILE_STATUS = frozenset(reconcile._STATUS_OF)
 
 
