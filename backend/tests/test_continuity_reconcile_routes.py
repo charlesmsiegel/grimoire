@@ -1494,6 +1494,29 @@ def test_an_errored_chunk_beside_a_garbled_one_reports_the_error(client, monkeyp
     assert _records(cid)[PAIR]["proposal"] is None
 
 
+@pytest.mark.parametrize(("kind", "status", "retry_after"), [
+    ("rate_limit", 429, "13"), ("timeout", 504, None)])
+def test_a_chunk_error_keeps_the_status_a_whole_failure_has(
+        client, monkeypatch, kind, status, retry_after):
+    """M2: a chunk error with nothing read fails the run as the same error
+    failing the whole call would -- its status by kind, and a rate limit's
+    window in the body -- however many chunks the sweep needed."""
+    cid, _temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    _install(client, FakeLLM([["no json"]], error=LLMError(kind, "slow down", 12.4),
+                             fail_after=1))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "failed", run
+    error = run["error"]
+    assert (error["kind"], error["status"], error.get("retry_after")) == (
+        kind, status, retry_after)
+    assert error["saved"] is True
+    assert run["result"]["llm"] == "failed"
+
+
 def test_a_closure_without_a_rationale_is_stored_with_an_empty_reason(client):
     """I4: a status verdict stands on the evidence scene it cites; with no
     rationale it is stored with `reason: ""`, nothing invented in its place."""

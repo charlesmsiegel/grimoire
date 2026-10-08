@@ -72,10 +72,11 @@ from . import ledger as ledger_routes
 from . import runs
 from .common import (
     _bounded_call,
-    _decide_error_kind,
+    _decide_error,
     _llm_http_error,
     _noting,
     _soft_resolved,
+    _watching,
     computes_only,
     get_llm,
     require_inference,
@@ -662,6 +663,7 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     # Both render templates, so both run off the loop (the loader stats files).
     items = await run_in_threadpool(reconcile.build_items, payload)
     explain = await run_in_threadpool(reconcile.explain)
+    failures: list[LLMError] = []
     try:
         # Each chunk runs under the full ceiling, inside its own meter
         # (`around`): an overrun is that meter's `error/timeout` row, noted
@@ -669,8 +671,8 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
         decision = await operations.decide(
             "continuity-reconcile", items, client=client, resolved=resolved, explain=explain,
             campaign=cid,
-            around=lambda call, holder: _bounded_call(
-                call, on_timeout=_noting(client, resolved.conn, holder)))
+            around=_watching(lambda call, holder: _bounded_call(
+                call, on_timeout=_noting(client, resolved.conn, holder)), failures))
     except LLMError as exc:
         result["llm"] = "failed"
         return _failed(result, run_error(_llm_http_error(exc))), {}
@@ -681,11 +683,13 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
         result["llm"] = "failed"
         return _failed(result, {"kind": "invalid_request", "detail": str(exc),
                                 "status": 500}), {}
-    if kind := _decide_error_kind(decision, reconcile.DECISION_ID):
+    if error := _decide_error(decision, reconcile.DECISION_ID, failures):
         # A chunk failed and no chunk was read (M12): the run fails with that
-        # error, never as an undecodable reply.
+        # error, never as an undecodable reply -- and as that error fails a
+        # whole call, its status by kind and a rate limit's window kept (M2).
         result["llm"] = "failed"
-        return _failed(result, {"kind": kind, "detail": _CHUNKS_FAILED, "status": 502}), {}
+        return _failed(result, run_error(_llm_http_error(LLMError(
+            error.kind, _CHUNKS_FAILED, error.retry_after)))), {}
     proposals = reconcile.proposals_of(payload, decision.items)
     if proposals is None:
         result["llm"] = "failed"

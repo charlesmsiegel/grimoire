@@ -1266,3 +1266,66 @@ def test_an_errored_chunk_beside_a_garbled_one_reports_the_error(
     assert (block["status"], block["reason"]) == ("failed", "duplicate check failed: network")
     assert _checks(body) == [("unchecked", "hint_only")] * 2
     assert sorted(r["status"] for r in _identity_rows(cid)) == ["error", "ok"]
+
+
+def test_a_chunk_error_is_reported_over_a_retried_schema_refusal(client, scene, monkeypatch):
+    """M1: the error a failed chunk reports is that chunk's own. A later chunk
+    whose provider refused the structured field, and whose retry without it
+    answered (garbled), files an `error` row too -- but it answered, so its
+    refusal is not the failure the phase names."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"},
+        "fallback": {"provider": ""}}}})
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active",
+                        "params": ["temperature", "structured_outputs"]}], rev)
+    refused = llm_errors.LLMError(
+        "bad_response", "response_format: json_schema strict mode is not supported", status=400)
+    provider = SequencedProvider([[_two_rows()],
+                                  llm_errors.LLMError("network", "connection reset"),
+                                  refused, ["no json"]])
+    _install(client, LLMClient(openrouter=provider, timeout=0, retries=0))
+
+    body = _absorb(client, cid, sid)
+
+    block = body["identity"]
+    assert (block["status"], block["reason"]) == ("failed", "duplicate check failed: network")
+    assert _checks(body) == [("unchecked", "hint_only")] * 2
+    assert [(r["status"], r.get("error")) for r in _identity_rows(cid)] == [
+        ("error", "network"), ("error", "bad_response"), ("ok", None)]
+
+
+def test_a_budget_spent_after_a_garbled_chunk_says_the_check_ran_partly(
+        client, scene, monkeypatch):
+    """M3: a chunk was sent and came back garbled, then the clock refused the
+    next one. Nothing was read, so the phase fails on the clock -- but the
+    check DID run, so its reason must not say it never could."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    parse = decisions.parse
+
+    def parse_then_spend(*args, **kwargs):
+        clock[0] = 1e6                      # the first chunk came back; the clock ran out
+        return parse(*args, **kwargs)
+
+    monkeypatch.setattr(decisions, "parse", parse_then_spend)
+    fake = _llm(client, _two_rows(), "no json")
+
+    body = _absorb(client, cid, sid)
+
+    assert len(identity_requests(fake)) == 1
+    assert _checks(body) == [("unchecked", "hint_only")] * 2
+    block = body["identity"]
+    assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
+        "failed", True, True)
+    assert block["reason"] == routes.scenes._IDENTITY_CUT_SHORT
+    assert "could run" not in block["reason"]

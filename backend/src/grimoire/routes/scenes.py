@@ -38,7 +38,7 @@ from . import tracker as tracker_routes
 from .common import (
     UsableInference,
     _campaign_root_or_404,
-    _decide_error_kind,
+    _decide_error,
     _dump,
     _llm_http_error,
     _noting,
@@ -50,6 +50,7 @@ from .common import (
     _soft_inference,
     _soft_resolved,
     _turn_override,
+    _watching,
     _write_response,
     computes_only,
     draft_completion,
@@ -2026,6 +2027,10 @@ _SEMANTIC_UNAVAILABLE = "semantic matching unavailable — basic matching used"
 _SEMANTIC_BUDGET = ("the absorb time budget ran out during semantic matching — "
                     "basic matching used")
 _IDENTITY_REFUSED = "the absorb time budget ran out before the duplicate check could run"
+#: The same clock, after the check had sent at least one chunk: it ran partly,
+#: and the rows it did not answer are unchecked.
+_IDENTITY_CUT_SHORT = ("the absorb time budget ran out partway through the duplicate check; "
+                       "the rows it did not answer are unchecked")
 _IDENTITY_STAGING_FAILED = ("the duplicate check's staging step failed; "
                             "rows staged without alternatives")
 
@@ -2100,21 +2105,25 @@ async def _resolve_identity(cid: str, sid: str, client: LLMClient,
     # `_noting` reads the live holder, so a fallback that had taken over is the
     # connection told. The attempt is recorded by `run`, which alone can decide
     # it atomically with the deadline.
+    failures: list[LLMError] = []
     decision = await operations.decide(
         "continuity-identity", items, client=client, resolved=resolved, explain=explain,
         campaign=cid, scene=sid,
-        around=lambda call, holder: budget.run(
+        around=_watching(lambda call, holder: budget.run(
             call, lambda: block.__setitem__("attempted", True),
-            on_timeout=_noting(client, resolved.conn, holder)))
-    if kind := _decide_error_kind(decision, continuity_identity.DECISION_ID):
+            on_timeout=_noting(client, resolved.conn, holder)), failures))
+    if error := _decide_error(decision, continuity_identity.DECISION_ID, failures):
         # A chunk failed and no chunk was read: the failure is the phase's
-        # (M12), by its kind -- a chunk's error survives only as its ledger
-        # row's -- never the unreadable reply the garbled chunk beside it was.
+        # (M12), by the failing chunk's own kind -- never the unreadable reply
+        # the garbled chunk beside it was.
         if budget.spent():
-            exam.hint_only(_IDENTITY_REFUSED)
-            block.update(status="failed", budget_exhausted=True, reason=_IDENTITY_REFUSED)
+            # The clock is why. A chunk that went out means the check ran
+            # partly (M3); only a check that never sent one "could not run".
+            reason = _IDENTITY_CUT_SHORT if block["attempted"] else _IDENTITY_REFUSED
+            exam.hint_only(reason)
+            block.update(status="failed", budget_exhausted=True, reason=reason)
         else:
-            reason = f"duplicate check failed: {kind}"
+            reason = f"duplicate check failed: {error.kind}"
             exam.hint_only(reason)
             block.update(status="failed", reason=reason)
         return
