@@ -48,8 +48,9 @@ def _legacy(text: str) -> object:
     return [word.strip() == "yes", reason.strip()]
 
 
-def _decide(result: decisions.ItemResult, entry: gate.Entry) -> object:
+def _decide(results: tuple[decisions.ItemResult, ...], entry: gate.Entry) -> object:
     """A stand-in for a call site's mapping: the stored break and reason."""
+    (result,) = results
     return [result.answers["break"].answer is True, result.rationale]
 
 
@@ -110,7 +111,7 @@ def test_outcomes_compare_as_json_values(tmp_path):
     as_tuples = gate.Conversion(
         id=conv.id, items=conv.items, explain=conv.explain,
         legacy=lambda text: tuple(_legacy(text)),  # type: ignore[arg-type]
-        decide=lambda result, entry: tuple(_decide(result, entry)),  # type: ignore[arg-type]
+        decide=lambda results, entry: tuple(_decide(results, entry)),  # type: ignore[arg-type]
         corpus=conv.corpus, legacy_cases=())
     assert gate.judge(as_tuples).decide_right == 1
 
@@ -120,8 +121,8 @@ def test_a_boolean_is_not_its_integer(tmp_path):
     conv = _planted(tmp_path, [BOTH_RIGHT])
     as_ints = gate.Conversion(
         id=conv.id, items=conv.items, explain=conv.explain, legacy=conv.legacy,
-        decide=lambda result, entry: [int(result.answers["break"].answer is True),
-                                      result.rationale],
+        decide=lambda results, entry: [int(results[0].answers["break"].answer is True),
+                                       results[0].rationale],
         corpus=conv.corpus, legacy_cases=())
     assert gate.judge(as_ints).regressions
 
@@ -134,7 +135,7 @@ def test_the_decide_side_reads_aux_through_its_entry(tmp_path):
     conv = _planted(tmp_path, [entry])
     conv = gate.Conversion(
         id=conv.id, items=conv.items, explain=conv.explain, legacy=conv.legacy,
-        decide=lambda result, e: seen.append(dict(e.aux)) or _decide(result, e),
+        decide=lambda results, e: seen.append(dict(e.aux)) or _decide(results, e),
         corpus=conv.corpus, legacy_cases=())
     assert gate.judge(conv).passed
     assert seen == [{"title": "The Long Night"}]
@@ -160,13 +161,49 @@ def test_load_refuses_a_malformed_corpus(tmp_path, bad):
         gate.load(conv)
 
 
-def test_judge_refuses_a_conversion_of_several_items(tmp_path):
+def _three_items() -> tuple[decisions.Item, ...]:
+    return tuple(decisions.Item(f"Scene {n}.", (_BREAK,)) for n in range(3))
+
+
+def _batch_decide(results: tuple[decisions.ItemResult, ...], entry: gate.Entry) -> object:
+    return [r.answers[q].answer for r in results for q in r.answers]
+
+
+def _batch_legacy(text: str) -> object:
+    return [word.strip() == "yes" for word in text.split(",")]
+
+
+def _batch(answers: list[bool]) -> str:
+    return json.dumps({str(i): {"answers": {"break": a}} for i, a in enumerate(answers)})
+
+
+def test_judge_scores_a_batch_of_several_items(tmp_path):
+    """A conversion of three items is scored whole on both sides, and a
+    regression on item 2 alone is reported."""
+    ok = {"shape": "all-three", "intended": [True, False, True],
+          "legacy": "yes, no, yes", "decide": _batch([True, False, True])}
+    loses = {"shape": "second-item", "intended": [False, True, False],
+             "legacy": "no, yes, no", "decide": _batch([False, False, False])}
+    corpus = tmp_path / "batch.json"
+    corpus.write_text(json.dumps([ok, loses]), encoding="utf-8")
+    conv = gate.Conversion(id="batch", items=_three_items, explain=False,
+                           legacy=_batch_legacy, decide=_batch_decide, corpus=corpus,
+                           legacy_cases=())
+    result = gate.judge(conv)
+    assert (result.entries, result.legacy_right, result.decide_right) == (2, 2, 1)
+    assert len(result.regressions) == 1
+    assert "second-item" in result.regressions[0]
+    assert not result.passed
+
+
+def test_judge_refuses_a_batch_that_would_not_fit_one_call(tmp_path):
     conv = _planted(tmp_path, [BOTH_RIGHT])
-    two = gate.Conversion(id=conv.id, items=lambda: _items() * 2, explain=True,
-                          legacy=_legacy, decide=_decide, corpus=conv.corpus,
-                          legacy_cases=())
-    with pytest.raises(ValueError, match="one item"):
-        gate.judge(two)
+    nine = gate.Conversion(
+        id=conv.id, explain=True, legacy=_legacy, decide=_decide, corpus=conv.corpus,
+        items=lambda: tuple(decisions.Item(f"Scene {n}.", (_BREAK,)) for n in range(9)),
+        legacy_cases=())
+    with pytest.raises(ValueError, match=r"planted: .*needs 2 calls"):
+        gate.judge(nine)
 
 
 # --- the real conversions ---------------------------------------------------
@@ -209,11 +246,11 @@ def test_scene_break_is_gated_on_what_the_call_site_stores():
     (item,) = conv.items()
     yes = '{"0": {"answers": {"over": true}, "rationale": "The ledger changed hands."}}'
     entry = gate.Entry("planted", None, "", yes, {"title": '"The Long Walk Back."'})
-    (parsed,) = decisions.parse(yes, (item,), explain=True)
+    parsed = decisions.parse(yes, (item,), explain=True)
     assert conv.decide(parsed, entry) == [True, "The ledger changed hands.",
                                           "The Long Walk Back"]
     no = '{"0": {"answers": {"over": false}, "rationale": "Not yet."}}'
-    (parsed,) = decisions.parse(no, (item,), explain=True)
+    parsed = decisions.parse(no, (item,), explain=True)
     assert conv.decide(parsed, entry) == [False, "Not yet.", ""]
 
 
@@ -337,9 +374,9 @@ def test_voice_drift_is_gated_on_what_the_call_site_stores():
     (item,) = conv.items()
     entry = gate.Entry("planted", None, "", "")
     drift = '{"0": {"answers": {"verdict": "drift"}, "rationale": "She used contractions."}}'
-    (parsed,) = decisions.parse(drift, (item,), explain=True)
+    parsed = decisions.parse(drift, (item,), explain=True)
     assert conv.settle(conv.decide(parsed, entry)) == ["drift", "She used contractions."]
-    (parsed,) = decisions.parse('{"0": {"answers": {"verdict": "drift"}}}', (item,),
+    parsed = decisions.parse('{"0": {"answers": {"verdict": "drift"}}}', (item,),
                                 explain=True)
     assert conv.settle(conv.decide(parsed, entry)) == [
         "failed", "drift reported with no corrective"]
@@ -421,7 +458,7 @@ def test_speaker_is_gated_on_what_the_call_site_stores():
                         ('{"0": {"answers": {"next": null}}}', (None, None)),
                         ('{"0": {"answers": {"next": "absent"}}}', (None, rp.INELIGIBLE)),
                         ("not json", (None, rp.INVALID_HANDOFF))):
-        (parsed,) = decisions.parse(reply, (item,), explain=False)
+        parsed = decisions.parse(reply, (item,), explain=False)
         assert conv.decide(parsed, entry) == want, reply
 
 

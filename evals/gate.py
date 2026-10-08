@@ -6,9 +6,10 @@ What it compares is *parsers*, on recorded reply shapes, scored by what the
 call site would do with each:
 
 - **A conversion** (`Conversion`) is one call site moving to `decide()`. It
-  names the items its production builder makes (from fixed fixture inputs),
-  today's parse (`legacy`, a frozen copy in `evals/legacy.py`), the production
-  mapping from a parsed `ItemResult` to what the call site stores or raises
+  names the items its production builder makes (from fixed fixture inputs,
+  at most one call's worth), today's parse (`legacy`, a frozen copy in
+  `evals/legacy.py`), the production mapping from the parsed batch (one
+  `ItemResult` per item) to what the call site stores or raises
   (`decide`), and its corpus.
 - **A corpus** (`evals/gate/<id>.json`) is a list of entries. Each pairs a
   reply to today's prompt with a reply *of the same shape* to the decide
@@ -85,8 +86,9 @@ class Conversion:
     explain: bool
     #: Today's reply -> today's outcome, through the frozen parser.
     legacy: Callable[[str], object]
-    #: The parsed item -> the outcome, through the production mapping.
-    decide: Callable[[decisions.ItemResult, Entry], object]
+    #: The parsed batch (one `ItemResult` per item, in order) -> the outcome,
+    #: through the production mapping.
+    decide: Callable[[tuple[decisions.ItemResult, ...], Entry], object]
     #: `GATE_DIR / f"{id}.json"`.
     corpus: Path
     #: The input strings of today's parse tests, copied verbatim.
@@ -233,9 +235,10 @@ def judge(conv: Conversion) -> GateResult:
     _check_settle(conv)
     items = conv.items()
     decisions.validate(items)
-    if len(items) != 1:
-        raise ValueError(f"{conv.id}: the gate scores conversions of one item "
-                         f"(no caller sends more); this one builds {len(items)}")
+    calls = len(decisions.chunks(items))
+    if calls != 1:
+        raise ValueError(f"{conv.id}: the gate scores one call's batch; "
+                         f"this one needs {calls} calls")
     legacy_right = decide_right = 0
     regressions: list[str] = []
     rulings: list[str] = []
@@ -243,7 +246,7 @@ def judge(conv: Conversion) -> GateResult:
     entries = load(conv)
     for index, entry in enumerate(entries):
         legacy = conv.settle(conv.legacy(entry.legacy))
-        (parsed,) = decisions.parse(entry.decide, items, explain=conv.explain)
+        parsed = decisions.parse(entry.decide, items, explain=conv.explain)
         decided = conv.settle(conv.decide(parsed, entry))
         seen |= {_key(legacy), _key(decided)}
         legacy_ok, decide_ok = _same(legacy, entry.intended), _same(decided, entry.intended)
@@ -292,8 +295,8 @@ def _break_legacy(text: str) -> object:
     return [answer["break"], answer["reason"], answer["title"] if answer["break"] else ""]
 
 
-def _break_decide(result: decisions.ItemResult, entry: Entry) -> object:
-    verdict = scene_break.verdict_of(result)
+def _break_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    verdict = scene_break.verdict_of(results[0])
     title = scene_break.parse_title(entry.aux.get("title", "")) if verdict["break"] else ""
     return [verdict["break"], verdict["reason"], title]
 
@@ -334,8 +337,8 @@ def _drift_items() -> tuple[decisions.Item, ...]:
     return (voice_drift.build_item("Seraphine Vale", _DRIFT_ANCHOR, _DRIFT_TRANSCRIPT),)
 
 
-def _drift_decide(result: decisions.ItemResult, entry: Entry) -> object:
-    return voice_drift.finding_of(result)
+def _drift_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return voice_drift.finding_of(results[0])
 
 
 def _drift_settle(finding: object) -> object:
@@ -406,8 +409,8 @@ def _speaker_items() -> tuple[decisions.Item, ...]:
     return (response_protocol.selector_item(_SPEAKER_ROSTER, _SPEAKER_CONVERSATION),)
 
 
-def _speaker_decide(result: decisions.ItemResult, entry: Entry) -> object:
-    return response_protocol.selection_of(result)
+def _speaker_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return response_protocol.selection_of(results[0])
 
 
 SPEAKER = Conversion(

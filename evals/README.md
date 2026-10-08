@@ -174,13 +174,14 @@ on recorded replies, offline: `evals/gate.py`, run by `--gate` and by pytest
   `ruling`: the sentence saying why. `--gate` prints each one under its
   conversion's line, with whether today's parse loses it, so a legacy loss by
   ruling is visible beside the score instead of counted as a parser win.
-- **One item per conversion.** `gate.judge` refuses a conversion whose
-  builder makes more than one decision item: every call site converted so far
-  sends one. A conversion whose call site sends several (slice G's
-  continuity checks, one item per row or candidate, against legacy parsers
-  that answer a whole batch) either extends `judge` to score a multi-item
-  reply as one outcome, or writes its corpus as per-entry items, one row or
-  candidate per entry.
+- **A conversion's batch is its fixture items, at most one call's worth.**
+  `gate.judge` refuses a conversion whose items would take more than one
+  `decisions.chunks` call (a corpus reply answers one call). A corpus reply
+  answers the whole batch, keyed by item index, as a structured call does, and
+  the conversion's `decide` is handed every item's result at once. Legacy
+  replies answer a whole batch too (`{"decisions": [...]}` across rows or
+  candidates), so a batch fixture is the shape both sides share; the
+  conversions with one item read `results[0]`.
 - **Today's parsers are frozen** in `legacy.py`, verbatim, and imported from
   nowhere in production: the switch deletes the originals, and the gate has to
   keep measuring against what they did. The copies are never edited.
