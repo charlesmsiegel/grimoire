@@ -13,7 +13,7 @@ import logging
 import httpx
 import pytest
 
-from grimoire import decisions, llm, llm_usage
+from grimoire import decisions, llm, llm_usage, openrouter
 from grimoire.decisions import Answer, Choice, Item, ItemResult, Option, Predicate, Score
 from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
@@ -169,6 +169,25 @@ def test_an_unoffered_key_spelled_like_the_reserved_none_is_not_an_option():
         "unreadable", decisions.NOT_AN_OPTION, None)
 
 
+def test_a_null_choice_is_unreadable_even_where_none_is_allowed():
+    # `choice` is a required string; only the reserved none key abstains.
+    null = body("none")
+    null["answers"]["speaker"]["choice"] = None
+    answer = decision_result(null, SPEAKER_ONLY).answers["speaker"]
+    assert (answer.answer, answer.reason, answer.detail) == (None, "unreadable", "")
+    assert answer.distribution == {"characters:mara": 0.15, "characters:winifred": 0.25,
+                                   decisions.NONE_KEY: 0.6}
+    closed = Item(CONTEXT, (Choice("speaker", "Who speaks next?", (MARA, WINIFRED)),))
+    bare = {"answers": {"speaker": {"type": "choice", "choice": None}}}
+    assert decision_result(bare, closed).answers["speaker"] == Answer(None, "unreadable")
+
+
+def test_a_score_with_no_probabilities_is_unreadable():
+    weighted = body("answered")
+    del weighted["answers"]["tension"]["probabilities"]
+    assert decision_result(weighted, ITEM).answers["tension"] == Answer(None, "unreadable")
+
+
 def test_an_envelope_answering_no_question_is_a_bad_response():
     with pytest.raises(LLMError) as exc:
         decision_result(body("unanswered"), ITEM)
@@ -311,6 +330,7 @@ async def test_a_refused_native_request_does_not_mark_the_connection_failing(sta
 
 
 @pytest.mark.parametrize("failure", [(500, {"error": {"code": 500, "message": "boom"}}),
+                                     (401, {"error": {"code": 401, "message": "revoked"}}),
                                      httpx.ConnectError("refused")])
 async def test_a_failing_native_request_marks_the_connection(failure):
     seen: list = []
@@ -342,6 +362,34 @@ async def test_facade_decide_native_strips_the_fallback_and_sends_no_sampling():
     assert wire.sent() == decision_body(ITEM, MODEL)
     assert FALLBACK_KEY not in holder[llm.ATTEMPTED]
     assert FALLBACK_KEY in conn  # the caller's dict is left as it was
+
+
+class RecordingNative:
+    """An adapter standing in for another kind's: records what it was sent."""
+
+    def __init__(self):
+        self.calls: list[tuple] = []
+
+    async def decide(self, item, model, key, *, usage=None, bound=None):
+        self.calls.append((item, model, key))
+        return ItemResult({"over": Answer(False)}, backend="native")
+
+
+async def test_decide_native_sends_each_kind_through_its_own_adapter(monkeypatch):
+    # Another native kind is registered as the table registers one; the call
+    # must reach that kind's adapter, never OpenRouter's with that kind's key.
+    monkeypatch.setitem(llm.NATIVE_DECISION_KINDS, "openai_compatible",
+                        llm.NativeAdapter(openrouter.decision_body, "_openai_compatible"))
+    wire = Wire((200, body("answered")))
+    other = RecordingNative()
+    client = LLMClient(openrouter=adapter(wire), openai_compatible=other)
+    conn = {"kind": "openai_compatible", "model": "local/judge", "api_key": "sk-local",
+            "base_url": "https://judge.example.test/v1"}
+    result = await client.decide_native(Item(CONTEXT, (OVER,)), conn)
+    assert result.answers["over"].answer is False
+    assert wire.requests == []
+    assert other.calls == [(Item(CONTEXT, (OVER,)), "local/judge", "sk-local")]
+    assert llm.native_body(ITEM, conn) == decision_body(ITEM, "local/judge")
 
 
 @pytest.mark.parametrize("kind", ["anthropic", "claude"])
@@ -423,4 +471,27 @@ async def test_fake_decide_native_scripts_and_stamps():
 
     with pytest.raises(AssertionError, match="FakeLLM has no native decisions scripted"):
         await FakeLLM([["x"]]).decide_native(item, CONN)
+    with pytest.raises(ValueError, match="at least one native decision"):
+        FakeLLM([["x"]], decisions=[])
+
+
+@pytest.mark.parametrize("kind", ["anthropic", "claude"])
+async def test_fake_decide_native_refuses_a_kind_the_facade_refuses(kind):
+    fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
+    holder: dict = {}
+    with pytest.raises(LLMError) as exc:
+        await fake.decide_native(Item(CONTEXT, (OVER,)), {**CONN, "kind": kind}, holder)
+    assert (exc.value.kind, exc.value.detail) == (
+        "bad_response", f"{kind} connections have no native decisions endpoint")
+    assert holder == {} and fake.native_requests == []
+
+
+async def test_fake_decide_native_strips_the_fallback_before_it_stamps():
+    fake = FakeLLM([["x"]], decisions=[ItemResult({"over": Answer(True)})])
+    conn = {**CONN, FALLBACK_KEY: {"kind": "openrouter", "model": "spare/model"}}
+    holder: dict = {}
+    await fake.decide_native(Item(CONTEXT, (OVER,)), conn, holder)
+    assert holder[llm.ATTEMPTED] == CONN and FALLBACK_KEY not in holder[llm.ATTEMPTED]
+    assert fake.native_requests[0][1] == CONN
+    assert FALLBACK_KEY in conn
 

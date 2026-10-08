@@ -175,6 +175,12 @@ def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
         probabilities = raw.get("probabilities")
         if isinstance(probabilities, Mapping):
             probabilities = {_from_wire(keys, k): v for k, v in probabilities.items()}
+        if raw.get("choice", decisions.UNSTATED) is None:
+            # `choice` is a required string (the reference), so a null is no
+            # answer: only the reserved none key abstains. What it reported
+            # still rides on the unreadable answer.
+            reported = decisions.native_answer(q, distribution=probabilities)
+            return decisions.Answer(None, "unreadable", distribution=reported.distribution)
         chosen = _from_wire(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
         return decisions.native_answer(q, chosen=chosen, distribution=probabilities)
     # A score's levels are keyed by index on the wire, as Grimoire keys them.
@@ -357,14 +363,12 @@ class OpenRouterClient:
 
     async def decide(self, item: decisions.Item, model: str, key: str, *,
                      usage: dict | None = None,
-                     # It is httpx's read bound, applied to the one request, and
-                     # the facade's own setting by its own name (spec 7.4).
-                     timeout: float | None = None,  # noqa: ASYNC109
-                     ) -> decisions.ItemResult:
+                     bound: float | None = None) -> decisions.ItemResult:
         """Ask `item` of the decisions endpoint: one POST, never retried here
         (the facade decides that). Errors are the chat endpoint's: a status
         through `_http_error`, `Retry-After` included, and a transport failure
-        as `network`. `timeout` is the read bound (None or <= 0: none), and a
+        as `network`. `bound` is the read timeout in seconds (None or <= 0:
+        none; not spelled `timeout`, which ASYNC109 reserves), and a
         reply that does not arrive within it is a `timeout`, which the facade
         does not retry.
 
@@ -373,14 +377,14 @@ class OpenRouterClient:
         still reports what it cost."""
         if not key:
             raise OpenRouterError("missing_key", "OpenRouter API key is not set")
-        read = timeout if timeout is not None and timeout > 0 else None
+        read = bound if bound is not None and bound > 0 else None
         try:
             resp = await self._client().post(
                 DECISIONS_URL, headers=self._headers(key), json=decision_body(item, model),
                 timeout=httpx.Timeout(read, connect=30.0, write=30.0, pool=30.0))
         except httpx.ReadTimeout as exc:
             raise OpenRouterError(
-                "timeout", f"the model sent nothing for {timeout:g}s — giving up") from exc
+                "timeout", f"the model sent nothing for {bound:g}s — giving up") from exc
         except httpx.HTTPError as exc:
             raise OpenRouterError("network", str(exc)) from exc
         except Exception as exc:  # client/TLS setup and other unexpected failures

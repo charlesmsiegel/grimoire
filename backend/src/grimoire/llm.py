@@ -13,8 +13,9 @@ import random
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Sequence
 from concurrent.futures import Executor, Future
+from typing import NamedTuple
 
 from . import (
     content_parts,
@@ -341,9 +342,21 @@ REJECTED_STATUSES = frozenset({400, 404, 413, 415, 422})
 #: marked failing. A revoked key answers 401 and stays observed (M6).
 NATIVE_REJECTED_STATUSES = REJECTED_STATUSES | {403}
 
-#: Connection kinds with a native decisions endpoint, and the adapter module
-#: that builds each one's request body (`native_body`).
-NATIVE_DECISION_KINDS = {"openrouter": openrouter}
+class NativeAdapter(NamedTuple):
+    """How one connection kind reaches its native decisions endpoint: the pure
+    builder of its request body (`native_body`), and the `LLMClient` attribute
+    holding the adapter whose `decide` sends it (`LLMClient.decide_native`)."""
+
+    body: Callable[[decisions.Item, str], dict]
+    client: str
+
+
+#: Connection kinds with a native decisions endpoint. The ONE dispatch table:
+#: `native_body` and `decide_native` both choose by kind through it, so a kind
+#: is never sent through another kind's adapter -- with that kind's key.
+NATIVE_DECISION_KINDS: dict[str, NativeAdapter] = {
+    "openrouter": NativeAdapter(openrouter.decision_body, "_openrouter"),
+}
 
 
 def _with_degrades(routes: list[tuple[dict, int]]) -> list[tuple[dict, int]]:
@@ -1117,7 +1130,7 @@ def native_body(item: decisions.Item, conn: dict) -> dict:
     """The body a native decision on `conn` sends for `item`: its adapter's
     `decision_body` on the model the call runs on. Pure, and holds no key or
     URL, so a capture can record what was asked."""
-    return NATIVE_DECISION_KINDS[_native_kind(conn)].decision_body(item, effective_model(conn))
+    return NATIVE_DECISION_KINDS[_native_kind(conn)].body(item, effective_model(conn))
 
 
 class LLMClient:
@@ -1472,6 +1485,7 @@ class LLMClient:
         """
         conn = _without_fallback(conn)
         kind = _native_kind(conn)
+        adapter = getattr(self, NATIVE_DECISION_KINDS[kind].client)
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
@@ -1494,9 +1508,9 @@ class LLMClient:
                 llm_capture.emit(usage, "start", None)
             outcome = "interrupted"
             try:
-                result = await self._openrouter.decide(
+                result = await adapter.decide(
                     item, effective_model(conn), conn.get("api_key", ""), usage=usage,
-                    timeout=self._timeout_seconds())
+                    bound=self._timeout_seconds())
                 outcome = "complete"
             except LLMError as exc:
                 outcome = "error"

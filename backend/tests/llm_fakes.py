@@ -14,9 +14,10 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 `decide_native` is a native decisions endpoint's one attempt (slice H, spec
 7.4). `FakeLLM(decisions=[...])` scripts it by call order like `turns`, each
 entry an `ItemResult` to return or an `LLMError` to raise; the calls are
-recorded in `native_requests`. It refuses an item `decisions.native_gap` names
-before recording or stamping anything, exactly as the facade does, so a chain
-test sees the same refusal.
+recorded in `native_requests`. Like the facade, it takes the fallback off
+the connection, and refuses a kind with no native endpoint and an item
+`decisions.native_gap` names before recording or stamping anything, with the
+facade's own errors, so a chain test sees the same refusal.
 
 `schema` is the JSON Schema `decide` asks the facade for (slice F, spec 7.2).
 `complete` records it in `schemas`, one entry per call (None when the call
@@ -80,7 +81,7 @@ from pathlib import Path
 import anyio
 
 from grimoire import decisions, llm_usage
-from grimoire.llm import ATTEMPTED, effective_model
+from grimoire.llm import ATTEMPTED, _native_kind, _without_fallback, effective_model
 from grimoire.llm_errors import LLMError
 
 FIXTURES = Path(__file__).parent / "fixtures" / "llm"
@@ -222,6 +223,10 @@ class FakeLLM:
             # IndexError from inside the fake with nothing pointing at the test
             # that built it.
             raise ValueError("FakeLLM needs at least one turn")
+        if decisions is not None and not decisions:
+            # The same reason: an empty script would fail at the first call
+            # as an IndexError from inside the fake.
+            raise ValueError("FakeLLM needs at least one native decision, or decisions=None")
         self.turns = [list(t) for t in (turns or [])]
         self.cassette = cassette
         self.error = error
@@ -289,6 +294,10 @@ class FakeLLM:
         the row the real facade's would."""
         if self.decisions is None:
             raise AssertionError("FakeLLM has no native decisions scripted")
+        # The facade's own boundary, in its order: the fallback off, then a
+        # kind with no endpoint, then the gap -- each before any stamp.
+        conn = _without_fallback(conn)
+        _native_kind(conn)
         gap = decisions.native_gap(item)
         if gap:
             raise LLMError("bad_response", gap, code="native_unrepresentable")
