@@ -11,7 +11,7 @@ import type {
 } from "../api/client";
 import LedgerView from "./LedgerView";
 import { DECISION_LABELS, STALE_SENTENCES } from "../components/continuity/labels";
-import { NONE_NOTE, PARTIAL_NOTE } from "../components/continuity/useContinuityReview";
+import { NONE_NOTE, NO_MODEL_NOTE, PARTIAL_NOTE } from "../components/continuity/useContinuityReview";
 import {
   EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, Here, installLedgerMocks, renderLedger,
 } from "../testkit/ledgerHarness";
@@ -354,6 +354,18 @@ describe("a partial sweep says some findings have no suggestion yet", () => {
     await landed({ llm: "ok", candidates: 3, adjudicated: 0, unanswered: 3 });
     expect(await column().findByText(NONE_NOTE)).toBeInTheDocument();
     expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+  });
+
+  test.each(["failed", "skipped", "off"])(
+    "a %s sweep never claims a partial answer, whatever unanswered says", async (llm) => {
+      await landed({ llm, candidates: 3, adjudicated: 1, unanswered: 2 });
+      expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+      expect(column().queryByText(NONE_NOTE)).toBeNull();
+    });
+
+  test("an incapable kind with no reason falls through to the no-model note", async () => {
+    await landed({ llm: "off", reason: "", reason_kind: "incapable" });
+    expect(await column().findByText(NO_MODEL_NOTE)).toBeInTheDocument();
   });
 
   test("all answered shows no note", async () => {
