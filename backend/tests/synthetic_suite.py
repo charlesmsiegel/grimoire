@@ -11,8 +11,10 @@ writes its suite here and runs it in a child `pytest`:
 - with a `conftest.py` that wires `tests/phase_profile.py` through the same
   `add_option`/`register` pair the real `conftest.py` calls, so what passes
   here is what the gate runs;
-- with coverage's environment stripped, because the parent may itself be
-  running under the gate's coverage and a child must not report into it;
+- with coverage's and pytest's environment stripped, because the parent may
+  itself be running under the gate's coverage, or be an xdist worker, and a
+  child must neither report into the one nor inherit the other's state
+  (`PYTEST_XDIST_*`, `PYTEST_ADDOPTS`, `PYTEST_CURRENT_TEST`);
 - with `GRIMOIRE_HOME` pointed inside the suite: nothing here touches a store,
   but no child of the suite gets to resolve the developer's real one either.
 """
@@ -56,8 +58,10 @@ def write(root: Path, files: dict[str, str]) -> Path:
 
 
 def child_env(**extra: str) -> dict[str, str]:
-    """This process's environment less coverage's variables, plus `extra`."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("COV_", "COVERAGE"))}
+    """This process's environment less coverage's and pytest's variables,
+    plus `extra`."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("COV_", "COVERAGE", "PYTEST_"))}
     env.update(extra)
     return env
 

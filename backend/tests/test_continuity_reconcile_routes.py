@@ -163,7 +163,16 @@ def test_refresh_with_a_connection_adjudicates_once(client):
 
 def test_an_llm_failure_keeps_deterministic_candidates(client):
     """§26: the first persist already landed, so a failed call costs only the
-    proposals."""
+    proposals -- and the failed run says so everywhere a client reads it.
+
+    One refresh, one settle, every field read off the same terminal run.
+    Merged (test-suite acceleration, C1) with `test_a_failed_run_carries_its_sweep_in_the_error`
+    (Decision 24: a client keeps only `error` for a run that did not land, so
+    the sweep it ran rides there too) and
+    `test_a_failed_model_call_says_the_findings_were_saved` (`error.saved` says
+    persist 1 landed, so the Refresh note may say the basic findings are
+    listed). The fields are compared as one dict, so one regression cannot
+    hide another behind the first failing assert."""
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
     _key(client)
@@ -173,31 +182,44 @@ def test_an_llm_failure_keeps_deterministic_candidates(client):
 
     run = _settled(client, cid, _refresh(client, cid))
 
-    assert run["state"] == "failed", run
-    assert run["error"]["kind"] == "network"
-    assert run["result"]["llm"] == "failed"
-    assert PAIR in _records(cid)
-    assert _records(cid)[PAIR]["proposal"] is None
-
-
-def test_a_failed_run_carries_its_sweep_in_the_error(client):
-    """Decision 24: a client keeps only `error` for a run that did not land, so
-    the sweep it ran rides there too."""
-    _wid, cid, sid = _campaign(client)
-    _threads(cid, sid)
-    _key(client)
-    _install(client, from_entries([{"when": {"system_contains": SYSTEM},
-                                     "error": {"kind": "network",
-                                               "message": "connection reset"}}]))
-
-    run = _settled(client, cid, _refresh(client, cid))
-
-    assert run["state"] == "failed"
-    assert run["error"]["sweep"] == "full"
+    error = run.get("error") or {}
+    records = _records(cid)
+    got = {
+        "state": run.get("state"),
+        "error.kind": error.get("kind"),
+        "error.sweep": error.get("sweep"),
+        # `is True`, as the original asserted: a truthy stand-in is not `saved`.
+        "error.saved is True": error.get("saved") is True,
+        "result.llm": (run.get("result") or {}).get("llm"),
+        # Model failure must not erase what discovery found (§26)...
+        "duplicate cached": PAIR in records,
+        # ...and must not leave a proposal behind either.
+        "duplicate proposal": (records.get(PAIR) or {}).get("proposal", "<no record>"),
+    }
+    want = {
+        "state": "failed",
+        "error.kind": "network",
+        "error.sweep": "full",
+        "error.saved is True": True,
+        "result.llm": "failed",
+        "duplicate cached": True,
+        "duplicate proposal": None,
+    }
+    assert got == want, (
+        "a failed model call reported the wrong outcome: "
+        f"{ {k: {'got': got[k], 'want': want[k]} for k in want if got[k] != want[k]} }"
+        f"\nrun: {run}")
 
 
 def test_an_undecodable_reply_fails_the_run_and_keeps_candidates(client):
-    """§24: no decodable object is a failed run, not an empty answer."""
+    """§24: no decodable object is a failed run, not an empty answer -- and,
+    as with a failed call (§26), persist 1's findings stand and the run says
+    they were saved.
+
+    One refresh, one settle. Merged (test-suite acceleration, C2) with
+    `test_an_undecodable_reply_says_the_findings_were_saved`. Kept apart from
+    the network-failure test on purpose: the two failures leave `_adjudicate`
+    by different branches (`LLMError` vs `parse_output` returning None)."""
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
     _key(client)
@@ -205,11 +227,32 @@ def test_an_undecodable_reply_fails_the_run_and_keeps_candidates(client):
 
     run = _settled(client, cid, _refresh(client, cid))
 
-    assert run["state"] == "failed", run
-    assert (run["error"]["kind"], run["error"]["status"]) == ("undecodable", 502)
-    assert run["error"]["sweep"] == "full"
-    assert run["result"]["llm"] == "failed"
-    assert _records(cid)[PAIR]["proposal"] is None
+    error = run.get("error") or {}
+    records = _records(cid)
+    got = {
+        "state": run.get("state"),
+        "error.kind": error.get("kind"),
+        "error.status": error.get("status"),
+        "error.sweep": error.get("sweep"),
+        "error.saved is True": error.get("saved") is True,
+        "result.llm": (run.get("result") or {}).get("llm"),
+        "duplicate cached": PAIR in records,
+        "duplicate proposal": (records.get(PAIR) or {}).get("proposal", "<no record>"),
+    }
+    want = {
+        "state": "failed",
+        "error.kind": "undecodable",
+        "error.status": 502,
+        "error.sweep": "full",
+        "error.saved is True": True,
+        "result.llm": "failed",
+        "duplicate cached": True,
+        "duplicate proposal": None,
+    }
+    assert got == want, (
+        "an undecodable reply reported the wrong outcome: "
+        f"{ {k: {'got': got[k], 'want': want[k]} for k in want if got[k] != want[k]} }"
+        f"\nrun: {run}")
 
 
 # ------------------------------------------ whether a failed run saved anything
@@ -218,32 +261,6 @@ def test_an_undecodable_reply_fails_the_run_and_keeps_candidates(client):
 # deterministic findings this sweep made are the ones the section now lists.
 # The Refresh note is chosen from it (§26): "basic findings are listed" is true
 # only when it is.
-
-
-def test_a_failed_model_call_says_the_findings_were_saved(client):
-    _wid, cid, sid = _campaign(client)
-    _threads(cid, sid)
-    _key(client)
-    _install(client, from_entries([{"when": {"system_contains": SYSTEM},
-                                     "error": {"kind": "network",
-                                               "message": "connection reset"}}]))
-
-    run = _settled(client, cid, _refresh(client, cid))
-
-    assert run["state"] == "failed", run
-    assert run["error"]["saved"] is True
-
-
-def test_an_undecodable_reply_says_the_findings_were_saved(client):
-    _wid, cid, sid = _campaign(client)
-    _threads(cid, sid)
-    _key(client)
-    _install(client, from_entries([_entry("I think they are the same.")]))
-
-    run = _settled(client, cid, _refresh(client, cid))
-
-    assert run["error"]["kind"] == "undecodable"
-    assert run["error"]["saved"] is True
 
 
 @pytest.mark.parametrize("exc, kind", [(OSError("disk full"), "io"),

@@ -426,8 +426,7 @@
     "RUF059": 2
   },
   "backend/tests/test_absorb_store.py": {
-    "RUF059": 3,
-    "UP031": 1
+    "RUF059": 3
   },
   "backend/tests/test_alternates_store.py": {
     "RUF002": 2,

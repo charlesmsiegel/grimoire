@@ -1396,14 +1396,27 @@ def test_story_so_far_section_is_injected(monkeypatch, tmp_path):
     assert "They first met." in text and text.startswith("# Story so far")
 
 
-def test_story_so_far_absent_when_empty(monkeypatch, tmp_path):
+def test_an_empty_campaign_emits_none_of_the_optional_ledger_sections(monkeypatch, tmp_path):
+    """With nothing chronicled, no open plot thread, no character state and no
+    relationship, the context carries none of those four sections -- not an
+    empty heading for any of them.
+
+    One empty campaign and one `context_sections` call, checked for all four
+    labels at once, so the message names every section that leaked rather than
+    the first. Merged (test-suite acceleration, C5) from
+    `test_story_so_far_absent_when_empty`, `test_plot_threads_absent_when_none`,
+    `test_character_state_absent_when_none` and
+    `test_relationships_absent_when_none`, which each built this same campaign
+    to check one label. The garbled-file and populated-section tests stay
+    apart: they reach different code."""
     from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     wid = worlds.create_world("W")
     cid = campaigns.create_campaign("Run", wid)
     sid = scenes.create_scene(cid, "Now")
-    assert "Story so far" not in {s["label"] for s in context.context_sections(cid, sid)}
-
+    labels = {s["label"] for s in context.context_sections(cid, sid)}
+    optional = {"Story so far", "Plot threads", "Character state", "Relationships"}
+    assert sorted(labels & optional) == [], "sections an empty campaign emitted"
 
 def test_story_so_far_tolerates_garbled_chronicle(monkeypatch, tmp_path):
     from grimoire.store import campaigns, context, scenes, worlds
@@ -1522,14 +1535,6 @@ def test_plot_threads_section_injected(monkeypatch, tmp_path):
     assert "Done" not in section  # closed excluded
 
 
-def test_plot_threads_absent_when_none(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, context, scenes, worlds
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
-    sid = scenes.create_scene(cid, "Now")
-    assert "Plot threads" not in {s["label"] for s in context.context_sections(cid, sid)}
-
-
 def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
     from grimoire.store import campaigns, context, scenes, worlds
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
@@ -1537,15 +1542,6 @@ def test_plot_threads_tolerates_garbled(monkeypatch, tmp_path):
     sid = scenes.create_scene(cid, "Now")
     (campaigns.campaign_root(cid) / "plot.json").write_text("{ not json", encoding="utf-8")
     context.context_sections(cid, sid)  # must not raise
-
-
-def test_character_state_absent_when_none(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, context, scenes, worlds
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    wid = worlds.create_world("W")
-    cid = campaigns.create_campaign("Run", wid)
-    sid = scenes.create_scene(cid, "Now")
-    assert "Character state" not in {s["label"] for s in context.context_sections(cid, sid)}
 
 
 def test_relationships_section_injected(monkeypatch, tmp_path):
@@ -1572,14 +1568,6 @@ def test_relationships_section_injected(monkeypatch, tmp_path):
     assert "Ann → Bo: trust 4, affection 3, tension 1 (warm)" in system["Relationships"]
 
 
-def test_relationships_absent_when_none(monkeypatch, tmp_path):
-    from grimoire.store import campaigns, context, scenes, worlds
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    cid = campaigns.create_campaign("Run", worlds.create_world("W"))
-    sid = scenes.create_scene(cid, "Now")
-    assert "Relationships" not in {s["label"] for s in context.context_sections(cid, sid)}
-
-
 def test_history_projection_labels_and_merges(monkeypatch, tmp_path):
     wid, cid, sid = _campaign(monkeypatch, tmp_path)
     pid, pvid = pcs.create_pc(worlds.world_root(wid), "Elara Vane", [])
@@ -1593,6 +1581,34 @@ def test_history_projection_labels_and_merges(monkeypatch, tmp_path):
         {"role": "assistant",
          "content": '**Seraphine Vale:** "You dare?"\n\n**Grimoire:** Thunder rolls.'},
     ]
+
+
+def test_a_stored_director_note_never_reaches_a_later_prompt(monkeypatch, tmp_path):
+    """A director note is stored only so the turn it bought can be charged to
+    it (#83); it is an instruction to the narrator, not a line of the scene.
+    So once it is in the transcript, no later prompt may carry it -- not an
+    ordinary turn's history, and not a later director turn's either, where it
+    would arrive twice. Two layers drop it -- `scenes.in_context` and
+    `_project_history`'s own skip -- so either one alone holds this green.
+
+    The route-level director test asks the same of the turn that stores the
+    note; this asks it of the turns AFTER it, which nothing else did. Written
+    during the test-suite consolidation, when mutation probes of the director
+    tests went looking for which test held which property."""
+    _wid, cid, sid = _campaign(monkeypatch, tmp_path)
+    scenes.append_message(cid, sid, "assistant", "The tavern hums.")
+    scenes.append_message(cid, sid, "assistant", "the storm intensifies",
+                          speaker=scenes.DIRECTOR_SPEAKER)
+    scenes.append_message(cid, sid, "assistant", "Rain lashes the shutters.")
+    scenes.append_message(cid, sid, "user", "I bar the door.")
+
+    def carrying(messages):
+        return [m["role"] for m in messages if "storm intensifies" in m["content"]]
+
+    assert carrying(context.build_messages(cid, sid)) == []
+    later = context.build_director_messages(cid, sid, "Have the lamps gutter.")
+    assert carrying(later) == []
+    assert later[-1] == {"role": "user", "content": "Have the lamps gutter."}
 
 
 def test_unstamped_user_lines_stay_bare(monkeypatch, tmp_path):
