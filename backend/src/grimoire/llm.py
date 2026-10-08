@@ -818,6 +818,15 @@ def routes_failed(words: Sequence[LLMError]) -> LLMError:
                                f"{fallback.detail}", word.retry_after)
 
 
+def _said(exc: LLMError) -> str:
+    """`exc.detail`, followed by what the upstream endpoint said when an
+    aggregator relayed its error under a message of its own (an `upstream`
+    attribute, `openrouter.OpenRouterError`'s)."""
+    upstream = getattr(exc, "upstream", "")
+    detail = exc.detail or ""
+    return f"{detail}: {upstream}" if isinstance(upstream, str) and upstream else detail
+
+
 def _schema_refusal(exc: LLMError, conn: dict) -> bool:
     """Whether `exc` is the structured envelope `conn` was sent being refused:
     an attempt flagged for the mode, a refusal status, and a message that
@@ -832,7 +841,10 @@ def _schema_refusal(exc: LLMError, conn: dict) -> bool:
     if (not envelope or exc.status not in PRESET_REFUSAL_STATUSES
             or llm_errors.account_limit(exc)):
         return False
-    detail = (exc.detail or "").lower()
+    # With what the upstream said, when an aggregator relayed its refusal
+    # under a wrapper message of its own (`openrouter.OpenRouterError`): the
+    # wrapper names nothing, and the endpoint's own sentence names the field.
+    detail = _said(exc).lower()
     if not any(form in detail for form in envelope if "." in form or "_" in form):
         return False
     shares = llm_sampling.sent_fields(conn)
@@ -1016,7 +1028,7 @@ async def _resilient(open_stream, routes, timeout: float,
                     # fail, the error carries this attempt, for `decide` to
                     # re-send once without the mode.
                     log.warning("structured output refused by %r: %s", _label(conn),
-                                exc.detail)
+                                _said(exc))
                 else:
                     _observe(observer, conn, exc)
                 if sent:
@@ -1030,7 +1042,7 @@ async def _resilient(open_stream, routes, timeout: float,
                                                            if k != DEGRADE}
                 else:
                     schema_refused.pop(0 if primary else 1, None)
-                last = (SchemaRefusalError(exc.kind, exc.detail, exc.retry_after,
+                last = (SchemaRefusalError(exc.kind, _said(exc), exc.retry_after,
                                            status=exc.status, code=exc.code)
                         if schema else exc)
                 sent_images = usage.get("images", 0) if usage is not None else 0

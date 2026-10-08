@@ -490,3 +490,40 @@ async def test_an_http_error_carries_its_status():
     with pytest.raises(OpenRouterError) as exc:
         [c async for c in client.stream([], "m", "k")]
     assert exc.value.status == 400
+
+
+#: OpenRouter's documented provider-error form: its own wrapper message, and
+#: the upstream endpoint's body under `metadata.raw` beside `provider_name`.
+def _relayed(raw) -> dict:
+    return {"error": {"message": "Provider returned error", "code": 400,
+                      "metadata": {"provider_name": "Saltmarch", "raw": raw}}}
+
+
+@pytest.mark.parametrize(("raw", "upstream"), [
+    ('{"error":{"message":"\'response_format\' of type \'json_schema\' is not supported"}}',
+     "'response_format' of type 'json_schema' is not supported"),
+    ({"error": {"message": "context length exceeded"}}, "context length exceeded"),
+    ("upstream timed out", "upstream timed out"),
+    ("", ""),
+    (None, "")])
+async def test_a_relayed_provider_error_keeps_what_the_upstream_said(raw, upstream):
+    """Brutal-1 #2: `detail` stays OpenRouter's own message, as every reader of
+    it saw before; what the upstream said rides beside it."""
+    def handler(request):
+        return httpx.Response(400, json=_relayed(raw))
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "k")]
+    assert exc.value.detail == "Provider returned error"
+    assert exc.value.upstream == upstream
+
+
+async def test_a_plain_error_carries_no_upstream():
+    def handler(request):
+        return httpx.Response(400, json={"error": {"message": "temperature out of range"}})
+
+    client = make_client(handler)
+    with pytest.raises(OpenRouterError) as exc:
+        [c async for c in client.stream([], "m", "k")]
+    assert exc.value.upstream == ""

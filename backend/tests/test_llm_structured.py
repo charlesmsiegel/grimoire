@@ -249,6 +249,55 @@ def test_a_schema_refusal_names_the_envelope_and_nothing_sent_beside_it(kind, de
     assert llm._schema_refusal(LLMError("bad_response", detail, status=500), conn) is False
 
 
+def _relaying_openrouter(raw: str) -> OpenRouterClient:
+    """OpenRouter relaying an upstream 400 in its documented provider-error
+    form: its own wrapper message, the upstream body under `metadata.raw`."""
+    body = {"error": {"message": "Provider returned error", "code": 400,
+                      "metadata": {"provider_name": "Saltmarch",
+                                   "raw": json.dumps({"error": {"message": raw}})}}}
+    return OpenRouterClient(http=_recording([], lambda r: httpx.Response(400, json=body)))
+
+
+async def test_a_schema_refusal_relayed_by_openrouter_is_a_schema_refusal():
+    """Brutal-1 #2: the wrapper's message names nothing; the upstream's names
+    the field. Read through the adapter's real error, it is a schema refusal --
+    not a health failure -- and `decide` gets the type it re-sends on."""
+    seen: list = []
+    client = LLMClient(
+        openrouter=_relaying_openrouter(
+            "'response_format' of type 'json_schema' is not supported"),
+        timeout=0, retries=0, observer=lambda conn, error: seen.append((conn["id"], error)))
+    with pytest.raises(llm.SchemaRefusalError) as exc:
+        await client.complete(MESSAGES, _or_conn("a", "vendor/a", **{STRUCTURED_KEY: True}),
+                              schema=SCHEMA)
+    assert "json_schema' is not supported" in exc.value.detail
+    assert seen == []
+
+
+async def test_another_upstream_400_relayed_by_openrouter_is_unchanged():
+    """A relayed 400 that is not the field refused is the attempt's failure, as
+    it always was -- observed, and not a preset refusal either, even naming a
+    sampler the preset sent (`detail`, which that match reads, is unchanged)."""
+    seen: list = []
+    fallback = ScriptedProvider(chunks=("{}",))
+    primary = _or_conn("a", "vendor/a", **{STRUCTURED_KEY: True})
+    for raw in ("context length exceeded", "temperature is not supported"):
+        seen.clear()
+        client = LLMClient(
+            openrouter=_relaying_openrouter(raw), openai_compatible=fallback,
+            timeout=0, retries=0,
+            observer=lambda conn, error: seen.append((conn["id"], error)))
+        conn = {**primary,
+                "sampling": {"preset_id": "p", "preset_name": "Warm", "scope": "connection",
+                             "params": {"temperature": 0.9}},
+                FALLBACK_KEY: {"id": "b", "name": "b", "kind": "openai_compatible",
+                               "model": "local", "api_key": "k",
+                               "base_url": "http://localhost:1234/v1"}}
+        assert await client.complete(MESSAGES, conn, schema=SCHEMA) == "{}"
+        assert [(cid, error is None) for cid, error in seen] == [("a", False), ("b", True)]
+        assert not isinstance(seen[0][1], llm.SchemaRefusalError)
+
+
 async def test_a_refused_effort_beside_a_schema_is_still_a_preset_refusal():
     sent: list = []
     fallback = ScriptedProvider(chunks=("{}",))
