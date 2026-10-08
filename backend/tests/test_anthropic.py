@@ -9,7 +9,7 @@ import json
 import httpx
 import pytest
 
-from grimoire import llm_capture, llm_reasoning, llm_sampling
+from grimoire import catalog, llm_capture, llm_reasoning, llm_sampling
 from grimoire.anthropic import (
     API_VERSION,
     PROBE_TIMEOUT,
@@ -125,6 +125,20 @@ async def test_effective_is_merged_into_the_body_and_the_adapter_owns_its_fields
     assert body["output_config"] == {"effort": "low"}
     assert body["temperature"] == 0.4
     assert body["model"] == "claude-test-1" and body["stream"] is True
+
+
+async def test_an_off_preset_on_a_model_that_can_turn_thinking_off_sends_disabled():
+    """End to end from the catalog row: an adaptive model that reports
+    `thinking.types.disabled.supported` is sent `thinking: disabled` for off."""
+    row = catalog.entry({"id": "claude-test-1", "type": "model", "display_name": "T",
+                         "capabilities": {"thinking": {"types": {
+                             "adaptive": {"supported": True}, "enabled": {"supported": True},
+                             "disabled": {"supported": True}}}}})
+    conn = {"kind": "anthropic", "model": "claude-test-1", "model_features": row["features"],
+            "sampling": {"params": {"reasoning_effort": "off"}}}
+    body = await _body_for(MSG, effective=llm_sampling.effective(conn)["effective"])
+    assert body["thinking"] == {"type": "disabled"}
+    assert "output_config" not in body
 
 
 async def test_leading_system_messages_become_the_top_level_system():

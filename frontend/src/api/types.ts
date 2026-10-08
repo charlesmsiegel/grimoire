@@ -37,6 +37,8 @@ export type Model = {
     structured_output?: boolean;
     adaptive_thinking?: boolean;
     enabled_thinking?: boolean;
+    /** False exactly when this model's thinking cannot be turned off. */
+    disabled_thinking?: boolean;
     effort?: string[];
     max_tokens?: number;
   };

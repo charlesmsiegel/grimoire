@@ -211,7 +211,8 @@ def _anthropic_row(**over):
                "image_input": {"supported": True},
                "structured_outputs": {"supported": True},
                "thinking": {"types": {"adaptive": {"supported": True},
-                                      "enabled": {"supported": False}}},
+                                      "enabled": {"supported": False},
+                                      "disabled": {"supported": True}}},
                "effort": {"low": {"supported": True}, "medium": {"supported": True},
                           "high": {"supported": True}, "xhigh": {"supported": False},
                           "max": {"supported": True}}}}
@@ -228,7 +229,7 @@ def test_an_anthropic_row_is_read_for_what_it_states():
     assert got["outputs"] == ["text"]
     assert got["features"] == {
         "structured_output": True, "adaptive_thinking": True, "enabled_thinking": False,
-        "effort": ["low", "medium", "high", "max"], "max_tokens": 64000}
+        "disabled_thinking": True, "effort": ["low", "medium", "high", "max"], "max_tokens": 64000}
 
 
 def test_an_anthropic_row_maps_only_the_keys_it_states():

@@ -109,7 +109,10 @@ def _anthropic(raw: dict, out: dict) -> None:
     thinking = caps.get("thinking")
     types = thinking.get("types") if isinstance(thinking, dict) else None
     if isinstance(types, dict):
-        for key, name in (("adaptive", "adaptive_thinking"), ("enabled", "enabled_thinking")):
+        # `disabled.supported` is False exactly when sending `thinking:
+        # {type: disabled}` is a 400 -- a model whose thinking cannot be off.
+        for key, name in (("adaptive", "adaptive_thinking"), ("enabled", "enabled_thinking"),
+                          ("disabled", "disabled_thinking")):
             flag = _supported(types.get(key))
             if flag is not None:
                 features[name] = flag

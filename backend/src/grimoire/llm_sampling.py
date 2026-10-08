@@ -127,6 +127,8 @@ WHY_REASONING_OFF = ("off sends no reasoning setting, so the model's own default
                      "applies, and it may still reason")
 WHY_THINKING_OFF = ("off sends no thinking setting; some current Claude models think "
                     "anyway and cannot turn it off")
+WHY_THINKING_DISABLED = "sent as thinking disabled: left unset, this model would think"
+WHY_THINKING_ALWAYS = "the catalog says this model's thinking cannot be turned off"
 WHY_THINKING_UNKNOWN = ("the catalog does not say which thinking this model takes, so "
                         "none is sent")
 WHY_THINKING_NONE = "the catalog says this model takes no thinking"
@@ -407,6 +409,26 @@ def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
     return _Control(UNKNOWN, "reasoning_effort", WHY_REASONING_ENDPOINT, "unknown", fields)
 
 
+def _thinking_off(c: _Conn, adaptive: bool, omission_is_off: bool) -> _Control:
+    """`off` on the Anthropic API. Left unset, an adaptive model runs adaptive
+    thinking -- even one that also lists budgeted thinking, as Claude Opus 5
+    does -- so off has to be SENT there, and only to a model whose catalog says
+    it takes `disabled` (one that cannot turn thinking off answers it with a
+    400). On a budget-only model, or one that does not think at all
+    (`omission_is_off`), sending nothing is off."""
+    if adaptive:
+        disabled = c.features.get("disabled_thinking")
+        if disabled is True:
+            return _Control(TRANSLATED, "thinking", WHY_THINKING_DISABLED, "catalog",
+                            {"thinking": {"type": "disabled"}})
+        if disabled is False:
+            return _Control(UNSUPPORTED, None, WHY_THINKING_ALWAYS, "catalog")
+        return _Control(UNKNOWN, None, WHY_THINKING_OFF, "catalog")
+    if omission_is_off:
+        return _Control(SUPPORTED, None, "", "catalog")
+    return _Control(UNKNOWN, None, WHY_THINKING_OFF, "unknown")
+
+
 def _thinking(c: _Conn, value: str | None, max_tokens: int) -> _Control:
     """The Anthropic API's thinking for a preset effort (spec 8, as amended):
     adaptive thinking at that effort where the catalog lists it (current models
@@ -416,11 +438,7 @@ def _thinking(c: _Conn, value: str | None, max_tokens: int) -> _Control:
     adaptive, enabled = adaptive_flag is True, enabled_flag is True
     thinks_not = adaptive_flag is False and enabled_flag is False
     if value == "off":
-        # Omitting thinking is "off" on a model that takes budgeted thinking;
-        # on a current one it is the model's default, which may be to think.
-        if enabled or thinks_not:
-            return _Control(SUPPORTED, None, "", "catalog")
-        return _Control(UNKNOWN, None, WHY_THINKING_OFF, "catalog" if adaptive else "unknown")
+        return _thinking_off(c, adaptive, enabled or thinks_not)
     if thinks_not:
         return _Control(UNSUPPORTED, None, WHY_THINKING_NONE, "catalog")
     if not (adaptive or enabled):
@@ -490,7 +508,10 @@ def effective(conn: dict) -> dict:
     reasoning = (_Control(UNSUPPORTED, None, WHY_INVALID, "user")
                  if "reasoning_effort" in invalid
                  else _reasoning(c, conn, values.get("reasoning_effort"), max_tokens))
-    thinking = "thinking" in (reasoning.fields or {})
+    # Whether thinking is ON: `disabled` is the reasoning control's field too,
+    # and a model that takes sampling takes it with thinking turned off.
+    wired = (reasoning.fields or {}).get("thinking")
+    thinking = isinstance(wired, dict) and wired.get("type") != "disabled"
     sent: dict = {}
     controls: dict[str, dict] = {}
     for name in CONTROLS:
@@ -612,7 +633,12 @@ def report(conn: dict | None) -> dict | None:
         entry = eff["controls"][name]
         if name not in eff["requested"] or entry["state"] == UNSUPPORTED:
             continue
-        if _sent(eff, name):
+        if _sent(eff, name) and name == REASONING_PARAM.name:
+            # Its wire value is a translation (`thinking: {...}`, `reasoning:
+            # {effort}`); the reader asked for a level, and that is what was
+            # honoured.
+            applied[name] = eff["requested"][name]
+        elif _sent(eff, name):
             applied[name] = eff["effective"][entry["wire"]]
         elif entry["wire"] is None and entry["state"] == SUPPORTED:
             # Honoured by sending nothing (an `off` the model takes as off).

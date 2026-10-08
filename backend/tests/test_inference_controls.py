@@ -463,6 +463,97 @@ def test_off_omits_thinking():
     assert "off" in current["controls"]["reasoning_effort"]["why"]
 
 
+#: An Opus-5-shaped row: adaptive AND budgeted thinking, and thinking can be
+#: turned off (`thinking.types.disabled.supported`).
+OPUS_5 = {"adaptive_thinking": True, "enabled_thinking": True, "disabled_thinking": True,
+          "effort": ["low", "medium", "high", "xhigh", "max"], "max_tokens": 128000}
+
+
+def test_off_on_an_adaptive_model_that_can_turn_it_off_sends_disabled():
+    """Omitting `thinking` on an adaptive model runs adaptive thinking -- even
+    one that also lists budgeted thinking -- so off is sent as `disabled`."""
+    conn = _claude_api({"reasoning_effort": "off"}, OPUS_5, model="claude-opus-5")
+    eff = ls.effective(conn)
+    assert eff["effective"]["thinking"] == {"type": "disabled"}
+    assert "output_config" not in eff["effective"]
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("translated", "thinking",
+                                                                 "catalog")
+    assert ls.sent_names(conn) == ["reasoning_effort"]
+    assert ls.sent_fields(conn) == {"reasoning_effort": {"thinking": {"type": "disabled"}}}
+    report = ls.report(conn)
+    assert report["applied"] == {"reasoning_effort": "off"} and report["verified"]
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_off_on_an_adaptive_model_that_cannot_turn_it_off_is_unsupported(enabled):
+    features = {**OPUS_5, "enabled_thinking": enabled, "disabled_thinking": False}
+    conn = _claude_api({"reasoning_effort": "off"}, features, model="claude-opus-5")
+    eff = ls.effective(conn)
+    assert "thinking" not in eff["effective"]
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("unsupported", None, "catalog")
+    assert entry["why"]
+    assert ls.sent_names(conn) == []
+    report = ls.report(conn)
+    assert "reasoning_effort" not in report["applied"]
+    assert report["dropped"] == [{"param": "reasoning_effort", "reason": entry["why"]}]
+
+
+@pytest.mark.parametrize("disabled", [True, False, None])
+def test_off_on_a_budget_only_model_omits_thinking(disabled):
+    features = {**OLDER, **({"disabled_thinking": disabled} if disabled is not None else {})}
+    eff = ls.effective(_claude_api({"reasoning_effort": "off"}, features, model=OLDER_ID))
+    assert "thinking" not in eff["effective"]
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("supported", None, "catalog")
+
+
+def test_off_on_a_model_that_does_not_think_sends_nothing():
+    features = {"adaptive_thinking": False, "enabled_thinking": False, "disabled_thinking": True}
+    eff = ls.effective(_claude_api({"reasoning_effort": "off"}, features))
+    assert "thinking" not in eff["effective"]
+    assert eff["controls"]["reasoning_effort"]["state"] == "supported"
+
+
+@pytest.mark.parametrize("features", [
+    {"adaptive_thinking": True, "enabled_thinking": True},     # disabled not stated
+    {"adaptive_thinking": True},
+    {}, None])
+def test_off_where_the_catalog_does_not_say_is_unknown(features):
+    eff = ls.effective(_claude_api({"reasoning_effort": "off"}, features))
+    assert "thinking" not in eff["effective"]
+    entry = eff["controls"]["reasoning_effort"]
+    assert entry["state"] == "unknown" and entry["why"] == ls.WHY_THINKING_OFF
+
+
+async def test_disabled_thinking_reaches_the_anthropic_request():
+    from tests.test_llm import FakeProvider
+    an = FakeProvider("an")
+    client = LLMClient(openrouter=FakeProvider("or"), claude=FakeProvider("cl"),
+                       openai_compatible=FakeProvider("oc"), anthropic=an)
+    conn = _claude_api({"reasoning_effort": "off"}, OPUS_5, model="claude-opus-5",
+                       api_key="k")
+    [c async for c in client.stream([], conn)]
+    assert an.calls[0][1]["effective"]["thinking"] == {"type": "disabled"}
+
+
+def test_thinking_turned_off_leaves_sampling_to_a_model_that_takes_it():
+    """`disabled` is not thinking: a pre-4.7 model sent it still takes its
+    temperature, which the API refuses only while thinking is on."""
+    features = {"adaptive_thinking": True, "enabled_thinking": True, "disabled_thinking": True}
+    eff = ls.effective(_claude_api({"reasoning_effort": "off", "temperature": 0.7}, features,
+                                   model="claude-opus-4-6"))
+    assert eff["effective"]["thinking"] == {"type": "disabled"}
+    assert eff["effective"]["temperature"] == 0.7
+    assert eff["controls"]["temperature"]["state"] == "supported"
+
+
+def test_report_names_the_effort_level_not_its_wire_translation():
+    conn = _claude_api({"reasoning_effort": "high"}, CURRENT)
+    assert ls.report(conn)["applied"] == {"reasoning_effort": "high"}
+
+
 # ---- reasoning_effort on the other adapters ----
 def test_openrouter_sends_reasoning_effort_where_the_catalog_lists_it():
     eff = ls.effective(_conn("openrouter", {"reasoning_effort": "high"},
