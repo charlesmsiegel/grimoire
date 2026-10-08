@@ -36,6 +36,9 @@ frontend/*.tsbuildinfo
 frontend/coverage/
 backend/coverage.xml
 .coverage
+# Parallel, per-context and sharded runs write one data file per process
+# (`.coverage.<host>.<pid>.<random>`); a crashed run leaves them behind.
+.coverage.*
 
 # Build outputs staged by the Makefile (APKs)
 /build/

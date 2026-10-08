@@ -24,6 +24,7 @@ from grimoire.store import (
     sheets,
     worlds,
 )
+from tests import phase_profile
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 
 
@@ -77,7 +78,14 @@ def _isolate_bootstrap_pointer(monkeypatch, tmp_path):
     monkeypatch.setattr(paths, "DEFAULT_HOME", tmp_path / "default-home")
 
 
+def pytest_addoption(parser):
+    phase_profile.add_option(parser)
+
+
 def pytest_configure(config):
+    # Opt-in only: without `--phase-profile` nothing is registered, so a normal
+    # run carries none of the profiler's hooks or counters.
+    phase_profile.register(config)
     config.addinivalue_line(
         "markers", "tracker: keep the scene tracker's shipped default (on) for this test")
     config.addinivalue_line(
