@@ -815,9 +815,12 @@ would answer neither question.
   - **Cost:** an endpoint that reports no price (a local or
     OpenAI-compatible server) files an **unpriced** row on every recall or art
     turn, so the Costs totals read "incomplete" until the user sets rates for
-    that model; slice E prices such a row from those rates. An OpenRouter embed
-    reports its cost, which is real spend and counts against the campaign's
-    budget.
+    that model. An embedding generates nothing, so its row carries a prompt
+    count and no completion count, and `usage._completion_count` reads that
+    absence as zero output: a rate models the row into `modelled_usd`, and the
+    Costs card offers rates rather than saying nobody counted. An embed row
+    with no prompt count is still unmetered. An OpenRouter embed reports its
+    cost, which is real spend and counts against the campaign's budget.
   - `test_operation_guard.py` (the embed half) holds the task, the door, and
     where each call's `space=` comes from -- traced back through the package
     to `embed_space.endpoint`, so a space built by hand fails it -- and

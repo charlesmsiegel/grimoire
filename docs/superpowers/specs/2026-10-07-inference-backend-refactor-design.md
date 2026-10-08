@@ -818,8 +818,11 @@ Both live in `store/inference/embed.py` (§7.1).
 - **User-visible cost change.** From D onward every recall, art, search and
   continuity embed files a ledger row. An endpoint that reports no price (a
   local or `openai_compatible` server) files an **unpriced** row, so Costs
-  totals read "incomplete" until the user enters rates for that model; slice E
-  prices those rows.
+  totals read "incomplete" until the user enters rates for that model. An
+  embed row's absent completion count is a structural zero, not a count
+  nobody took, so those rates model it (`modelled_usd`, never spend) from D
+  onward rather than waiting for slice E; a row with no prompt count stays
+  unmetered.
 - **`space_id` keeps today's exact string** `f"{provider_id}\0{rev}\0{model}"`.
   Migration preserves every provider's `rev` (§11), so existing vector caches
   stay valid through the upgrade.

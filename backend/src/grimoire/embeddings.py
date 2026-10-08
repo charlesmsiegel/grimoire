@@ -207,6 +207,9 @@ class _Spend:
         or spent nothing unread and leaves the sums as they are.
 
         `completion_tokens` is never written: an embedding generates nothing.
+        The row's `operation: "embed"` is what tells a reader that absence is
+        a structural zero rather than an uncounted half
+        (`usage._completion_count`), so a rate can model the row.
         """
         body = body if isinstance(body, dict) else {}
         model = body.get("model")

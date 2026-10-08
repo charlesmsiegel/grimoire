@@ -97,6 +97,11 @@ from . import atomic, errors, paths, pricing, statcache
 #: kind it understands instead of assuming every row is a chat completion.
 KIND_LLM = "llm"
 
+#: The `operation` an embeddings request's row carries (spec 9.3). A row with
+#: none is a generation. The estimator reads it: an embed row's absent
+#: completion count is a structural zero (`_completion_count`).
+EMBED_OPERATION = "embed"
+
 #: The attribute an exception sets to say "I am not a provider failure".
 #:
 #: `Meter` cannot tell these apart by type -- the store does not import the
@@ -716,7 +721,7 @@ class Rates:
         return pricing.estimate(
             entry,
             prompt_tokens=_count(row.get("prompt_tokens")),
-            completion_tokens=_count(row.get("completion_tokens")),
+            completion_tokens=_completion_count(row),
             cache_read_tokens=_count(row.get("cache_read_tokens")),
             cache_write_tokens=_count(row.get("cache_write_tokens")))
 
@@ -729,6 +734,29 @@ def _count(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
         return None
     return max(0, value)
+
+
+def _completion_count(row: dict) -> int | None:
+    """`completion_tokens` as the estimator needs it, with one structural zero.
+
+    An embedding request generates nothing, so an `operation: "embed"` row has
+    no completion count because there is nothing to count -- not because
+    nobody counted (`embeddings._Spend.fold` never writes one). Its prompt
+    count is then the whole call, and a rate prices it completely; reading the
+    absent field as "unmeasured" left every unpriced embed row unmodellable and
+    told the Costs card no rate could ever help.
+
+    This is arithmetic over a count somebody did report, never a price: the
+    prompt count is still required (`pricing.estimate`), so an embed row whose
+    provider counted nothing stays unmetered, and the figure a rate makes of it
+    lands in `modelled_usd` like any other. Only *absent* reads as zero -- a
+    count the row does carry is used as it is -- and only for embed rows: a
+    generation missing its completion count is still half a call counted.
+    """
+    count = _count(row.get("completion_tokens"))
+    if count is None and row.get("operation") == EMBED_OPERATION:
+        return 0
+    return count
 
 
 def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
@@ -779,8 +807,10 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
             # row rather than from the estimator's verdict: the question is
             # "could ANY rate have priced this", and the answer is no whenever
             # a count is missing -- see `pricing.estimate`, which requires both.
+            # An embed row's absent completion count is a structural zero
+            # (`_completion_count`), not a count nobody took.
             if _count(row.get("prompt_tokens")) is None \
-                    or _count(row.get("completion_tokens")) is None:
+                    or _completion_count(row) is None:
                 bucket["unmetered_calls"] += 1
         else:
             bucket["modelled_calls"] += 1

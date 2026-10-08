@@ -69,7 +69,7 @@ def _stamp(holder: dict, space: dict) -> None:
         "connection": space.get("provider_name") or space.get("provider", ""),
         "provider": space.get("provider_kind", ""),
         "attempts": 1,
-        "operation": "embed",
+        "operation": usage.EMBED_OPERATION,
     })
 
 
