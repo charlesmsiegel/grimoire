@@ -147,7 +147,9 @@ WHY_OPENAI_REASONING_UNVERIFIED = ("whether this model takes reasoning_effort is
 #: which `llm._preset_refusal` would turn into a refusal that skips the
 #: fallback. An id in neither is sent it unverified.
 _OPENAI_REASONING = re.compile(r"o\d|gpt-5|gpt-oss")
-_OPENAI_NOT_REASONING = re.compile(r"gpt-4|gpt-3|chatgpt-")
+#: `gpt-5-chat-latest` and its kin are the non-reasoning chat snapshots of a
+#: reasoning family: checked before `_OPENAI_REASONING` would claim them.
+_OPENAI_NOT_REASONING = re.compile(r"gpt-4|gpt-3|chatgpt-|gpt-5[^/]*-chat")
 WHY_GLM = "this GLM model takes low or high (or max, set on the connection)"
 
 
@@ -433,14 +435,14 @@ def _openai_api_reasoning(c: _Conn, value: str | None) -> _Control:
     sending nothing), and an id in neither family is sent it unverified."""
     family = c.model.lower().rsplit("/", 1)[-1]
     fields = {"reasoning_effort": value} if value and value != "off" else {}
-    if _OPENAI_REASONING.match(family):
-        if value == "off":
-            return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset")
-        return _Control(SUPPORTED, "reasoning_effort", "", "name", fields)
     if _OPENAI_NOT_REASONING.match(family):
         if value == "off":
             return _Control(SUPPORTED, None, "", "name")
         return _Control(UNSUPPORTED, None, WHY_OPENAI_NOT_REASONING, "name")
+    if _OPENAI_REASONING.match(family):
+        if value == "off":
+            return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset")
+        return _Control(SUPPORTED, "reasoning_effort", "", "name", fields)
     if value == "off":
         return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset")
     return _Control(UNKNOWN, "reasoning_effort", WHY_OPENAI_REASONING_UNVERIFIED, "unknown",

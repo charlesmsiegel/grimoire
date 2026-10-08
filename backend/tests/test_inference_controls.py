@@ -267,7 +267,8 @@ def test_an_openai_reasoning_model_is_sent_reasoning_effort(model):
 
 
 @pytest.mark.parametrize("model", ["gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo",
-                                   "chatgpt-4o-latest", "GPT-4-turbo", "openai/gpt-4.1"])
+                                   "chatgpt-4o-latest", "GPT-4-turbo", "openai/gpt-4.1",
+                                   "gpt-5-chat-latest", "gpt-5.1-chat-latest"])
 def test_an_openai_non_reasoning_model_is_not_sent_reasoning_effort(model):
     conn = _openai_model(model)
     eff = ls.effective(conn)
