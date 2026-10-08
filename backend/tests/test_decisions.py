@@ -499,6 +499,15 @@ def test_was_read():
         assert not decisions.was_read(Answer(None, reason))
 
 
+def test_held_no_object():
+    assert decisions.held_no_object(Answer(None, "unreadable", detail=decisions.NO_OBJECT))
+    assert not decisions.held_no_object(Answer(None, "unreadable", detail=decisions.NO_ITEM))
+    assert not decisions.held_no_object(Answer(None, "unreadable"))
+    assert not decisions.held_no_object(Answer(None, "error"))
+    assert not decisions.held_no_object(Answer("yes"))
+    assert not decisions.held_no_object(None)
+
+
 def test_offerable_is_what_validate_refuses():
     assert not decisions.offerable("")
     assert not decisions.offerable("   ")

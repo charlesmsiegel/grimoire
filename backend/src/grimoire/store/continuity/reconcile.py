@@ -1546,11 +1546,7 @@ def proposals_of(payload: dict,
                    "evidence_scenes": [_answered(answers.get(slot)) for slot in EVIDENCE_IDS
                                        if _answered(answers.get(slot))]}
         out[cand["id"]] = _decide(element, cand, set(item_scenes(payload, cand)))
-    if not read and results and all(_no_object(result) for result in results):
+    if not read and results and all(decisions.held_no_object(result.answers.get(DECISION_ID))
+                                    for result in results):
         return None
     return out
-
-
-def _no_object(result: decisions.ItemResult) -> bool:
-    answer = result.answers.get(DECISION_ID)
-    return answer is not None and answer.detail == decisions.NO_OBJECT

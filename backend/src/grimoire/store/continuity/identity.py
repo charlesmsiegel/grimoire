@@ -741,14 +741,10 @@ def answers_of(rows: list[dict],
                     "decision": decision.answer if isinstance(decision.answer, str) else "",
                     "id": rid.answer if rid is not None and isinstance(rid.answer, str) else "",
                     "reason": result.rationale.strip()[:REASON_CHARS]})
-    if not out and results and all(_no_object(result) for result in results):
+    if not out and results and all(decisions.held_no_object(result.answers.get(DECISION_ID))
+                                    for result in results):
         return None
     return out
-
-
-def _no_object(result: decisions.ItemResult) -> bool:
-    answer = result.answers.get(DECISION_ID)
-    return answer is not None and answer.detail == decisions.NO_OBJECT
 
 
 def take(exam: Examination, answers: list[dict] | None) -> bool:

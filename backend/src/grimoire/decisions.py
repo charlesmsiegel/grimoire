@@ -446,6 +446,16 @@ def was_read(answer: Answer) -> bool:
     return answer.reason == "unreadable" and answer.detail in ("", NOT_AN_OPTION)
 
 
+def held_no_object(answer: Answer | None) -> bool:
+    """Whether `answer` says its reply held no JSON object at all (`NO_OBJECT`).
+
+    The other side of `was_read`, for the same mappings: a batch none of whose
+    deciding answers was read is undecodable only when every one of them held
+    no object -- an object that holds no item is a reply that answered
+    nothing, not one nobody could read. None (no such answer) is not."""
+    return answer is not None and answer.detail == NO_OBJECT
+
+
 def _read_choice(q: Choice, value: object) -> Answer:
     if value is None:
         return Answer(None, "abstained") if q.allow_none else _UNREADABLE
