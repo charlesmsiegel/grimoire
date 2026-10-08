@@ -13,7 +13,7 @@ from typing import Literal, NamedTuple
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
-from .. import catalog, embeddings, health, llm, llm_sampling, store
+from .. import catalog, embeddings, health, llm, llm_errors, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.inference import capabilities, controls
@@ -831,23 +831,28 @@ def _records(exc: LLMError) -> bool:
     (`capabilities._stated`), outranking the catalog, so everything else is
     reported to whoever asked and never filed: no status at all (a transport failure, a malformed stream), a 402,
     a 408, a 429, a 5xx. The chat adapters map most of those to
-    `bad_response`, so the kind cannot make this call.
+    `bad_response`, so the kind cannot make this call. Nor is an account
+    limit (`llm_errors.account_limit`): a spend limit the user set answers a
+    400, which is otherwise exactly the status a refusal has.
 
     Nor is a refusal of the probe's OWN setting. `llm._preset_refusal` reads a
     400 naming a parameter the request sent -- here the reply cap, the only
     one a probe sends -- as that parameter refused, and raises it as
     `llm.PresetRefusalError`; a provider that refused the cap has said nothing
     about whether the model can do what was asked."""
-    return exc.status in llm.REJECTED_STATUSES and not isinstance(exc, llm.PresetRefusalError)
+    return (exc.status in llm.REJECTED_STATUSES and not isinstance(exc, llm.PresetRefusalError)
+            and not llm_errors.account_limit(exc))
 
 
 def _halts(exc: LLMError) -> bool:
     """Whether a failure answers for every probe after it, so none is sent
-    (`_HALTING_KINDS`, `_HALTING_STATUSES`, any 5xx). A refusal, a refused
-    cap, a rate limit or an unexplained bad response is this probe's own
-    answer, and the next probe asks a different question."""
+    (`_HALTING_KINDS`, `_HALTING_STATUSES`, any 5xx, and an account limit --
+    `llm_errors.account_limit`, the same test `_records` reads: a spend limit
+    every further probe would hit and pay nothing to learn). A refusal, a
+    refused cap, a rate limit or an unexplained bad response is this probe's
+    own answer, and the next probe asks a different question."""
     return (exc.kind in _HALTING_KINDS or exc.status in _HALTING_STATUSES
-            or (exc.status or 0) >= 500)
+            or (exc.status or 0) >= 500 or llm_errors.account_limit(exc))
 
 
 class _Outcome(NamedTuple):

@@ -663,6 +663,11 @@ Optional; offered on unverified rows and on the model-facts panel.
    that error (§6.2). Rate limits, outages, 402/408, auth and transport
    failures are reported to the caller and not recorded, and a failure that
    answers for every probe stops the probes after it (reported "not sent").
+   An account limit (`llm_errors.account_limit`) is both: never recorded and
+   always halting -- a 402, a 429 carrying `enforced_spend_limit_reached`, and
+   a 400 whose message opens "You have reached your specified" (a spend limit
+   the user set, which answers with a refusal's status). The same test keeps
+   such a 400 from ever reading as a sampler preset refused.
    Each probe runs **once — no retries and no fallback** — and succeeds when
    the request is accepted and the response completes (text is not required:
    a thinking model may spend a small cap thinking).
@@ -1053,7 +1058,7 @@ never migrated in place; tests migrate a copy.
 | Migration backup failed | no write; Settings banner; translation serves |
 | Decide question unanswerable | `answer: None` + `reason`; never a guessed default |
 | Embedding provider fails | caller degrades as today; no fallback |
-| Test call fails | a refusal of the probe itself is recorded in `verified` with the provider's error text and resolves as `unknown`, so the row stays "unverified" with that error shown and the call is never refused for it; transient failures (rate limit, outage, credits, auth, transport) are reported and not recorded |
+| Test call fails | a refusal of the probe itself is recorded in `verified` with the provider's error text and resolves as `unknown`, so the row stays "unverified" with that error shown and the call is never refused for it; transient failures (rate limit, outage, credits or a spend limit, auth, transport) are reported and not recorded |
 
 Reads fail soft (a mangled `facts.json`, catalog or preset reads as empty);
 writes fail visibly.

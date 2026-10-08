@@ -24,7 +24,7 @@ KINDS = frozenset({
 
 class LLMError(Exception):
     def __init__(self, kind: str, detail: str = "", retry_after: float | None = None,
-                 status: int | None = None):
+                 status: int | None = None, code: str | None = None):
         super().__init__(detail or kind)
         #: One of `KINDS` -- unvalidated on purpose. This constructor runs on
         #: the failure path, where raising over a typo would replace the error
@@ -51,6 +51,42 @@ class LLMError(Exception):
         #: spec); and a refusal of a request that carried pictures is retried
         #: once as text on the same connection (#377).
         self.status = status
+        #: The provider's machine-readable error code, where its error body
+        #: names one beside the message (the Anthropic API's
+        #: `error.details.error_code`), else None. Read by `account_limit`:
+        #: a 429 that is a spend cap and one that is a rate limit differ only
+        #: there.
+        self.code = code
+
+
+#: How the Anthropic API opens the message of a 400 that is a spend limit the
+#: user set -- "You have reached your specified API usage limits" and its
+#: "... workspace API usage limits" twin. Matched as a prefix, case-folded.
+SPEND_LIMIT_PREFIX = "you have reached your specified"
+#: The error codes that make a 429 the account's spend cap rather than a rate
+#: limit (no retry-after: waiting does not lift it).
+SPEND_LIMIT_CODES = frozenset({"enforced_spend_limit_reached"})
+
+
+def account_limit(exc: LLMError) -> bool:
+    """Whether `exc` is the ACCOUNT refused for money, not the request: a spend
+    limit the user set (a 400 whose message opens `SPEND_LIMIT_PREFIX`), the
+    tier's spend cap (a 429 carrying a `SPEND_LIMIT_CODES` code), or no credit
+    at all (any 402).
+
+    One answer for every reader that has to tell it apart: it is no verdict on
+    any model (the model test files nothing for it), every further request
+    meets the same limit (the test sends nothing more), and it is never a
+    sampler preset refused -- the 400 carries no parameter name, whatever its
+    wording happens to contain."""
+    status = exc.status
+    if status == 402:
+        return True
+    if status == 429:
+        return exc.code in SPEND_LIMIT_CODES
+    if status == 400:
+        return (exc.detail or "").lstrip().lower().startswith(SPEND_LIMIT_PREFIX)
+    return False
 
 
 def retry_after_seconds(headers) -> float | None:

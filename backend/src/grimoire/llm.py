@@ -12,7 +12,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator
 
-from . import content_parts, llm_capture, llm_reasoning, llm_sampling, model_guidance
+from . import content_parts, llm_capture, llm_errors, llm_reasoning, llm_sampling, model_guidance
 from .anthropic import AnthropicClient
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
@@ -516,7 +516,8 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     primary's health dot would go red over a temperature, and nothing would
     ever say the preset was the problem.
     """
-    if exc.status not in PRESET_REFUSAL_STATUSES:
+    if exc.status not in PRESET_REFUSAL_STATUSES or llm_errors.account_limit(exc):
+        # A spend limit's 400 is the account refused, whatever its prose says.
         return None
     shares = llm_sampling.sent_fields(conn)
     sent = list(shares)
@@ -546,7 +547,7 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
         f"{exc.detail} — this request carried sampler preset “{name}” "
         f"({', '.join(sent)}) and the provider's refusal names one of them, so "
         "the fallback connection was not tried",
-        exc.retry_after, status=exc.status)
+        exc.retry_after, status=exc.status, code=exc.code)
 
 
 async def _resilient(open_stream, routes, timeout: float,

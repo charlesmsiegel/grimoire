@@ -16,7 +16,7 @@ from grimoire.anthropic import (
     AnthropicClient,
     AnthropicError,
 )
-from grimoire.llm_errors import LLMError
+from grimoire.llm_errors import LLMError, account_limit
 
 KEY = "test-key-anthropic-0000"
 MSG = [{"role": "user", "content": "hi"}]
@@ -485,6 +485,48 @@ async def test_a_rate_limit_carries_the_providers_retry_after(status):
         await _drain(_client(_error(status, "overloaded_error",
                                     headers={"retry-after": "12"})).stream(MSG, "m", KEY))
     assert err.value.retry_after == 12.0
+
+
+def _spend_cap(_request):
+    return httpx.Response(429, json={"type": "error", "error": {
+        "type": "rate_limit_error", "message": "Spend limit reached.",
+        "details": {"error_code": "enforced_spend_limit_reached"}}})
+
+
+async def test_a_spend_caps_error_code_survives_on_the_error():
+    """The message alone cannot tell a spend cap's 429 from a rate limit's."""
+    with pytest.raises(AnthropicError) as err:
+        await _drain(_client(_spend_cap).stream(MSG, "m", KEY))
+    assert err.value.code == "enforced_spend_limit_reached"
+    assert err.value.detail == "Spend limit reached."
+    assert account_limit(err.value)
+    with pytest.raises(AnthropicError) as plain:
+        await _drain(_client(_error(429, "rate_limit_error")).stream(MSG, "m", KEY))
+    assert plain.value.code is None
+    assert not account_limit(plain.value)
+
+
+async def test_the_catalog_request_keeps_the_error_code_too():
+    with pytest.raises(AnthropicError) as err:
+        await _client(_spend_cap).list_models(KEY)
+    assert err.value.code == "enforced_spend_limit_reached"
+
+
+@pytest.mark.parametrize("status, message, code, limited", [
+    (400, ("You have reached your specified API usage limits. You will regain access "
+           "on 2026-11-01 at 00:00 UTC."), None, True),
+    (400, "you have reached your specified workspace API usage limits.", None, True),
+    (400, "max_tokens: you have reached your specified ... not at the start", None, False),
+    (400, "prompt is too long", None, False),
+    (429, "Spend limit reached.", "enforced_spend_limit_reached", True),
+    (429, "Number of requests exceeded.", None, False),
+    (429, "Number of requests exceeded.", "rate_limited", False),
+    (402, "Your credit balance is too low.", None, True),
+    (500, "You have reached your specified API usage limits.", None, False),
+    (None, "You have reached your specified API usage limits.", None, False)])
+def test_account_limit_reads_the_status_the_message_and_the_code(status, message, code,
+                                                                  limited):
+    assert account_limit(LLMError("bad_response", message, status=status, code=code)) is limited
 
 
 async def test_an_error_body_is_captured_and_scrubbed():

@@ -614,6 +614,94 @@ def test_a_truncated_anthropic_stream_is_a_failed_probe_not_an_accepted_one(clie
     assert facts.read(conn) == {}
 
 
+def _anthropic_wire(client, handler) -> tuple[str, list[httpx.Request]]:
+    """An Anthropic connection and a REAL facade whose Anthropic adapter talks
+    to a `MockTransport` that records."""
+    conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
+                       api_key="sk-ant-fake-0001", model="claude-model-x")
+    seen: list[httpx.Request] = []
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    adapter = AnthropicClient(http=httpx.AsyncClient(transport=httpx.MockTransport(record)))
+    client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(anthropic=adapter)
+    return conn, seen
+
+
+def _anthropic_run(client, conn: str, caps) -> dict:
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": "claude-model-x", "capabilities": list(caps),
+                          "confirm": True})
+    assert r.status_code == 202, r.text
+    return _wait(client, r.json()["run"]["id"])
+
+
+def _anthropic_error(status: int, etype: str, message: str, **error):
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={"type": "error", "error": {
+            "type": etype, "message": message, **error}})
+    return handler
+
+
+@pytest.mark.parametrize("handler", [
+    _anthropic_error(400, "invalid_request_error",
+                     "You have reached your specified API usage limits. You will regain "
+                     "access on 2026-11-01 at 00:00 UTC."),
+    _anthropic_error(400, "invalid_request_error",
+                     "You have reached your specified workspace API usage limits. You will "
+                     "regain access on 2026-11-01 at 00:00 UTC."),
+    _anthropic_error(429, "rate_limit_error", "Spend limit reached for this organization.",
+                     details={"error_code": "enforced_spend_limit_reached"}),
+    _anthropic_error(402, "billing_error", "Your credit balance is too low."),
+], ids=["api-limit-400", "workspace-limit-400", "spend-cap-429", "billing-402"])
+def test_an_account_limit_is_not_a_verdict_and_stops_the_rest(client, handler):
+    """A spend limit says the ACCOUNT may not spend, not what the model can
+    do: nothing is filed, and every probe after it would meet the same limit,
+    so none is sent."""
+    conn, seen = _anthropic_wire(client, handler)
+
+    run = _anthropic_run(client, conn, ["generate", "vision"])
+
+    assert len(seen) == 1
+    results = run["result"]["results"]
+    assert results["generate"]["ok"] is False
+    assert results["vision"]["kind"] == "not_sent"
+    assert run["result"]["recorded"] is False
+    assert facts.read(conn) == {}
+
+
+def test_an_ordinary_anthropic_capability_refusal_is_still_recorded(client):
+    def handler(request: httpx.Request) -> httpx.Response:
+        if '"image"' in request.content.decode():
+            return _anthropic_error(400, "invalid_request_error",
+                                    "this model does not support image input")(request)
+        return _anthropic_error(400, "invalid_request_error",
+                                "the requested model cannot generate text")(request)
+
+    conn, seen = _anthropic_wire(client, handler)
+
+    run = _anthropic_run(client, conn, ["generate", "vision"])
+
+    assert len(seen) == 2
+    assert run["result"]["recorded"] is True
+    verified = facts.of(conn, "claude-model-x", _rev(conn))["verified"]
+    assert verified["generate"]["ok"] is False
+    assert verified["vision"]["ok"] is False
+    assert "image input" in verified["vision"]["error"]
+
+
+def test_a_429_without_the_spend_code_is_neither_filed_nor_halting(client):
+    conn, seen = _anthropic_wire(
+        client, _anthropic_error(429, "rate_limit_error", "Number of requests exceeded."))
+
+    run = _anthropic_run(client, conn, ["generate", "vision"])
+
+    assert len(seen) == 2
+    assert run["result"]["recorded"] is False
+
+
 def _land_inside_the_window(monkeypatch, other) -> list[threading.Thread]:
     """Run `other` on a second thread the first time the CURRENT thread reads
     a connection, and give it a second to finish before that read returns.

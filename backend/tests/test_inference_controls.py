@@ -718,6 +718,18 @@ async def test_an_unrelated_400_beside_an_adaptive_effort_still_falls_back():
     assert [m for m, _ in provider.calls] == ["claude-opus-4-7", "backup"]
 
 
+@pytest.mark.parametrize("why", [
+    ("You have reached your specified API usage limits. You will regain access on "
+     "2026-11-01 at 00:00 UTC."),
+    # A wording that happened to name a sent field is still the account refused.
+    ("You have reached your specified workspace API usage limits for max_tokens and "
+     "output_config.effort.")])
+def test_a_spend_limit_400_is_never_a_preset_refusal(why):
+    from grimoire.llm import _preset_refusal
+    conn = _claude_api({"reasoning_effort": "high", "max_tokens": 900, "stop": ["x"]}, CURRENT)
+    assert _preset_refusal(LLMError("bad_response", why, status=400), conn) is None
+
+
 def test_a_thinking_type_is_not_a_spelling_of_its_own():
     """`thinking.type` is a discriminator, not a setting: a 400 about some
     other `type` (a content block's) must not read as the preset refused."""

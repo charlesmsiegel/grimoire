@@ -109,6 +109,19 @@ def _extract_error(text: str) -> str:
     return content_parts.scrub(_message_of(err))
 
 
+def _error_code(text: str) -> str | None:
+    """The `error.details.error_code` of an error body, or None: what tells a
+    spend cap's 429 from a rate limit's (`llm_errors.account_limit`)."""
+    try:
+        obj = json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    err = obj.get("error") if isinstance(obj, dict) else None
+    details = err.get("details") if isinstance(err, dict) else None
+    code = details.get("error_code") if isinstance(details, dict) else None
+    return code if isinstance(code, str) and code else None
+
+
 def _frame_error(obj: dict) -> AnthropicError:
     """The error an in-stream `error` frame stands for. No `status`: the frame
     arrived inside a 200, and `LLMError.status` is an HTTP response's."""
@@ -296,7 +309,8 @@ class AnthropicClient:
                     raise AnthropicError(_status_kind(resp.status_code),
                                          _extract_error(resp.text),
                                          retry_after_seconds(resp.headers),
-                                         status=resp.status_code)
+                                         status=resp.status_code,
+                                         code=_error_code(resp.text))
                 async for line in resp.aiter_lines():
                     llm_capture.emit(usage, "sse_line", content_parts.scrub_line(line))
                     # Every line is proof of life -- an `event:` line, a ping,
@@ -336,7 +350,8 @@ class AnthropicClient:
             raise AnthropicError("network", str(exc)) from exc
         if resp.status_code >= 400:
             raise AnthropicError(_status_kind(resp.status_code), _extract_error(resp.text),
-                                 retry_after_seconds(resp.headers), status=resp.status_code)
+                                 retry_after_seconds(resp.headers), status=resp.status_code,
+                                 code=_error_code(resp.text))
         return resp
 
     async def list_models(self, key: str, base_url: str = "") -> list[dict]:
