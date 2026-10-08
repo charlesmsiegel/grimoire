@@ -818,6 +818,33 @@ def test_a_colliding_roster_raises_an_issue_not_a_500(client, monkeypatch, caplo
     assert any(cid in m and sid in m for m in warned), warned
 
 
+def test_a_roster_past_the_schema_string_budget_raises_an_issue(client, monkeypatch):
+    """254 eligible refs plus `grimoire` is a legal option count, but ids this
+    long put the choice's enum strings past strict mode's 15,000-character
+    budget for an enum of more than 250 values. `decide()` refuses that before
+    anything is sent, whatever the backend, so the round carries today's
+    invalid-handoff issue and control returns to the player."""
+    from grimoire import decisions
+    from grimoire.routes import character_turns
+
+    refs = [f"characters:mara-{i:03d}-".ljust(60, "x") for i in range(254)]
+    assert sum(map(len, refs)) > decisions.MAX_ENUM_STRING_CHARS
+    cid, sid = seed(client)
+    monkeypatch.setattr(character_turns, "roster", lambda _cid, _sid: [
+        {"ref": ref, "name": f"Mara {i}"} for i, ref in enumerate(refs)])
+    fake = FakeLLM([["must not be sent"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = _chat(client, cid, sid)
+    assert "error" not in response.text, response.text
+    record = _round(cid, sid)
+    assert len(record["eligible"]) == 254
+    assert record["issue"] == store.response_protocol.INVALID_HANDOFF
+    assert record["actor_ref"] is None and record["status"] == "complete"
+    assert fake.calls == 0
+    assert [r for r in store.usage.calls(campaign=cid)
+            if r.get("task") == "response-selector"] == []
+
+
 PERCEPTION_REPLY = (
     '```perception\n{"known": [], "heard_or_seen": [], "unknown": []}\n```\n'
     'Mara answers.\n```handoff\n{"next":null}\n```'

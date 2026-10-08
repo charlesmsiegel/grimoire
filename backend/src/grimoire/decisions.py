@@ -6,7 +6,12 @@ voice -- answered by a value drawn from a set the caller fixed in advance,
 never by prose a call site has to pick apart. This module holds that contract
 and everything about it that is pure: the request and result types, the
 request's validation, the JSON Schema of one batch, the tolerant parser that
-reads a reply back, and the chunking of a long batch.
+reads a reply back, and the chunking of a long batch -- and, for slice H's
+native backends, the one mapping both adapters share: the reserved none an
+`allow_none` choice adds (`native_choice_keys`), what an endpoint cannot carry
+(`native_gap`), how a provider's report becomes an `Answer` (`native_answer`),
+the capture's record of a call (`outcome`) and the structured rendering of a
+native result (`render`).
 
 It is a gateway leaf on purpose, and imports nothing from the package (spec
 §7.4, ruling 15): the operation itself is `grimoire.inference`, and slice H's
@@ -36,10 +41,11 @@ Three rules the rest of the module follows:
 from __future__ import annotations
 
 import json
+import math
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Final
 
 #: Why an answer is `None`. Closed: a backend that cannot say which of these
 #: happened says `unreadable` rather than adding a fifth.
@@ -65,6 +71,13 @@ NO_OBJECT = "no_object"
 #: `allow_none`, keep no detail.)
 NO_ITEM = "no_item"
 
+#: Grimoire's key for the reserved none of an `allow_none` choice, in a native
+#: distribution and as a native `chosen` (slice H). Never an option id or
+#: alias: `offerable` refuses it, so every builder drops it and `validate`
+#: never sees it. No slug or ref can contain `<`, so no caller loses an option
+#: to the reservation.
+NONE_KEY = "<none>"
+
 MIN_OPTIONS, MAX_OPTIONS = 2, 255
 #: A nullable choice has two possible answers with one option (it, or null).
 MIN_OPTIONS_WITH_NONE = 1
@@ -84,6 +97,47 @@ MAX_ITEMS_PER_CALL = 8
 #: one, so a batch is chunked under this as well as under
 #: `MAX_ITEMS_PER_CALL`, and an item that alone exceeds it is refused.
 MAX_ENUM_VALUES = 1000
+
+#: Strict mode's string budgets, from the same page, checked 2026-10-08: "For a
+#: single enum property with string values, the total string length of all
+#: enum values cannot exceed 15,000 characters when there are more than 250
+#: enum values", and "the total string length of all property names,
+#: definition names, enum values, and const values cannot exceed 120,000
+#: characters". The first is per choice (`validate`); the second is per schema,
+#: so `chunks` closes a chunk before it and `validate` refuses an item that
+#: alone exceeds it. A batch schema has no definitions and no consts, so its
+#: count is property names and enum strings (`schema_chars`). Enforced
+#: whatever the backend, because the chain can fall to a structured fallback
+#: (ruling 14).
+MAX_ENUM_STRING_CHARS = 15_000
+ENUM_STRING_CHARS_ABOVE = 250
+MAX_SCHEMA_STRING_CHARS = 120_000
+
+#: Strict mode's other schema limit a legal request can reach (same page,
+#: checked 2026-10-08): "A schema may have up to 5000 object properties total,
+#: with up to 10 levels of nesting." `validate` bounds no item's question
+#: count, so an item of about 5,000 predicates reaches the first; it is held
+#: like the string budget (`schema_properties`, `validate`, `chunks`). The
+#: nesting limit cannot be reached: a batch schema is four objects deep
+#: (batch, item, answers, a question's value) whatever it is asked.
+MAX_SCHEMA_PROPERTIES = 5000
+
+#: Options one native `choice` may offer, OpenRouter's documented per-choice
+#: limit (Task 3 lowers it if OpenAI documents a lower one: the lower governs
+#: both, so the chain never depends on which provider serves). Counted with
+#: the reserved none (`native_choice_keys`), which is why a nullable choice of
+#: 255 options cannot go native (`native_gap`).
+NATIVE_MAX_OPTIONS = 255
+
+#: The reserved none's wire key (or the first free `none_2`, `none_3`, ...)
+#: and the description it is offered with (ruling 23). Neither provider
+#: documents an explicit none, so the adapters add this option.
+NATIVE_NONE = "none"
+NATIVE_NONE_TEXT = "None of the other options fits."
+
+#: `native_answer`'s "the body named no answer", told apart from an explicit
+#: `None` (which a nullable choice reads as abstained).
+UNSTATED: Final = object()
 
 #: Question ids an item's object already uses for itself. Refusing them (and
 #: all-digit ids, which are item indices) keeps the wrapped, unwrapped and
@@ -183,10 +237,20 @@ class Answer:
 @dataclass(frozen=True)
 class ItemResult:
     """One item's answers, keyed by question id in question order, and its
-    rationale (empty unless one was asked for and given)."""
+    rationale (empty unless one was asked for and given).
+
+    `backend` is the backend that answered this item (one of `BACKENDS`), the
+    per-item truth when one batch is split across stages; `""` on an item
+    nothing answered (`unanswered`) and on what `parse` returns, since the
+    backend stamps it, not the parser."""
 
     answers: dict[str, Answer]
     rationale: str = ""
+    backend: str = ""
+
+    def __post_init__(self) -> None:
+        if self.backend and self.backend not in BACKENDS:
+            raise ValueError(f"unknown backend {self.backend!r}")
 
 
 @dataclass(frozen=True)
@@ -239,10 +303,12 @@ def normalise(word: str) -> str:
 
 def offerable(spelling: str) -> bool:
     """Whether `spelling` can be an option id or alias: it must survive
-    `normalise` non-empty. `_check_choice` refuses what this refuses, through
-    this one function, so a builder can drop what `validate` would refuse
-    instead of failing the request."""
-    return bool(normalise(spelling))
+    `normalise` non-empty, and not as `NONE_KEY`, which is reserved for the
+    native none. `_check_choice` refuses what this refuses, through this one
+    function, so a builder can drop what `validate` would refuse instead of
+    failing the request."""
+    key = normalise(spelling)
+    return bool(key) and key != NONE_KEY
 
 
 def _check_choice(q: Choice) -> None:
@@ -255,17 +321,23 @@ def _check_choice(q: Choice) -> None:
     for opt in q.options:
         if not isinstance(opt, Option):
             raise DecideRequestError(f"choice {q.id!r} has an option that is not an Option")
-        if not offerable(opt.id):
-            raise DecideRequestError(f"choice {q.id!r} has an empty option id")
         for spelling in (opt.id, *opt.aliases):
             if not offerable(spelling):
-                raise DecideRequestError(f"option {opt.id!r} has an empty alias")
+                raise DecideRequestError(
+                    f"choice {q.id!r} cannot offer {spelling!r}: it is empty once "
+                    f"normalised, or reserved")
             key = normalise(spelling)
             if key in seen:
                 raise DecideRequestError(
                     f"choice {q.id!r}: {spelling!r} collides with {seen[key]!r} "
                     f"once normalised")
             seen[key] = spelling
+    chars = sum(len(opt.id) for opt in q.options)
+    if len(q.options) > ENUM_STRING_CHARS_ABOVE and chars > MAX_ENUM_STRING_CHARS:
+        raise DecideRequestError(
+            f"choice {q.id!r} offers {len(q.options)} options whose ids total {chars} "
+            f"characters; an enum of more than {ENUM_STRING_CHARS_ABOVE} values "
+            f"carries at most {MAX_ENUM_STRING_CHARS}")
 
 
 def _check_question(q: object, index: int) -> None:
@@ -297,9 +369,14 @@ def validate(items: Sequence[Item]) -> None:
 
     Raises `DecideRequestError` for: no items; an item with no questions; a
     question id that is empty, all digits, reserved or repeated within its item;
-    an option or level count out of bounds; an empty option id; any two
-    option ids or aliases that collide once normalised; and an item whose own
-    enum values exceed `MAX_ENUM_VALUES`, which no chunk could carry.
+    an option or level count out of bounds; an option id or alias `offerable`
+    refuses; any two option ids or aliases that collide once normalised; a
+    choice of more than `ENUM_STRING_CHARS_ABOVE` options whose ids total more
+    than `MAX_ENUM_STRING_CHARS` characters; and an item whose own schema no
+    chunk could carry -- more than `MAX_ENUM_VALUES` enum values, more than
+    `MAX_SCHEMA_STRING_CHARS` characters (`schema_chars`) or more than
+    `MAX_SCHEMA_PROPERTIES` properties (`schema_properties`). The schema limits
+    are strict mode's, refused whatever the backend.
     """
     if not items:
         raise DecideRequestError("a decision needs at least one item")
@@ -318,6 +395,15 @@ def validate(items: Sequence[Item]) -> None:
             raise DecideRequestError(
                 f"item {index} offers {enum_values(item)} enum values; one call "
                 f"carries at most {MAX_ENUM_VALUES}")
+        properties, chars = _tally(schema([item], explain=True))
+        if chars > MAX_SCHEMA_STRING_CHARS:
+            raise DecideRequestError(
+                f"item {index}'s schema holds {chars} characters of names and enum "
+                f"values; one call carries at most {MAX_SCHEMA_STRING_CHARS}")
+        if properties > MAX_SCHEMA_PROPERTIES:
+            raise DecideRequestError(
+                f"item {index}'s schema holds {properties} properties; one call "
+                f"carries at most {MAX_SCHEMA_PROPERTIES}")
 
 
 # --- schema -----------------------------------------------------------------
@@ -349,6 +435,46 @@ def schema(items: Sequence[Item], *, explain: bool) -> dict[str, Any]:
         return _obj(props)
 
     return _obj({str(i): item_schema(item) for i, item in enumerate(items)})
+
+
+def _tally(node: object) -> tuple[int, int]:
+    """(properties, characters) of a schema as strict mode counts them: every
+    entry of every `properties` mapping, and the characters of its key and of
+    every string `enum` value. A key under `properties` is a name, never a
+    keyword, so a question called `enum` is counted as a property."""
+    properties = chars = 0
+    below: list[object] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "properties" and isinstance(value, dict):
+                properties += len(value)
+                chars += sum(len(name) for name in value)
+                below.extend(value.values())
+            elif key == "enum" and isinstance(value, list):
+                chars += sum(len(v) for v in value if isinstance(v, str))
+            else:
+                below.append(value)
+    elif isinstance(node, list):
+        below.extend(node)
+    for sub in below:
+        p, c = _tally(sub)
+        properties, chars = properties + p, chars + c
+    return properties, chars
+
+
+def schema_chars(items: Sequence[Item]) -> int:
+    """The characters strict mode's 120,000 budget counts in `items`' batch
+    schema: every property name and every string enum value. Counted with
+    `explain=True`, the worst case, so `rationale` counts whether asked or
+    not; integer enums (a score's levels) count nothing."""
+    return _tally(schema(items, explain=True))[1]
+
+
+def schema_properties(items: Sequence[Item]) -> int:
+    """The object properties strict mode's 5,000 limit counts in `items`' batch
+    schema, with `explain=True`: each item's index, its `answers` and
+    `rationale`, and one per question."""
+    return _tally(schema(items, explain=True))[0]
 
 
 # --- parse ------------------------------------------------------------------
@@ -565,11 +691,14 @@ def unanswered(items: Sequence[Item], reason: str) -> tuple[ItemResult, ...]:
 
 
 def chunks(items: Sequence[Item], size: int = MAX_ITEMS_PER_CALL,
-           budget: int = MAX_ENUM_VALUES) -> list[tuple[int, tuple[Item, ...]]]:
+           budget: int = MAX_ENUM_VALUES, chars: int = MAX_SCHEMA_STRING_CHARS,
+           properties: int = MAX_SCHEMA_PROPERTIES) -> list[tuple[int, tuple[Item, ...]]]:
     """`(offset, chunk)` pairs covering `items` in order, each at most `size`
-    items and at most `budget` enum values (`enum_values`) -- except an item
-    that alone exceeds `budget`, which is a chunk of its own (`validate`
-    refuses one before `decide` chunks)."""
+    items, at most `budget` enum values (`enum_values`), at most `chars`
+    schema characters (`schema_chars`) and at most `properties` schema
+    properties (`schema_properties`) -- except an item that alone exceeds one
+    of them, which is a chunk of its own (`validate` refuses one before
+    `decide` chunks)."""
     if size < 1:
         raise ValueError("a chunk holds at least one item")
     out: list[tuple[int, tuple[Item, ...]]] = []
@@ -577,11 +706,212 @@ def chunks(items: Sequence[Item], size: int = MAX_ITEMS_PER_CALL,
     start = values = 0
     for index, item in enumerate(items):
         count = enum_values(item)
-        if held and (len(held) == size or values + count > budget):
-            out.append((start, tuple(held)))
-            start, held, values = index, [], 0
+        if held:
+            props, text = _tally(schema([*held, item], explain=True))
+            if (len(held) == size or values + count > budget or text > chars
+                    or props > properties):
+                out.append((start, tuple(held)))
+                start, held, values = index, [], 0
         held.append(item)
         values += count
     if held:
         out.append((start, tuple(held)))
     return out
+
+
+# --- native -----------------------------------------------------------------
+#
+# Slice H's native backends send one item per request to a provider's
+# decisions endpoint. What both adapters share lives here, so the reserved
+# none, the endpoint's limits and the reading of a report are one rule for
+# both providers.
+
+def native_choice_keys(q: Choice) -> tuple[tuple[str, str], ...]:
+    """`(wire key, Grimoire key)` per option a native `choice` offers: each
+    option as itself, in order, and with `allow_none` one more, the reserved
+    none -- `NATIVE_NONE`, or the first of `none_2`, `none_3`, ... that no
+    option id equals -- mapped to `NONE_KEY`. A one-option nullable choice is
+    therefore a two-option native choice."""
+    keys = tuple((opt.id, opt.id) for opt in q.options)
+    if not q.allow_none:
+        return keys
+    taken = {opt.id for opt in q.options}
+    wire, n = NATIVE_NONE, 1
+    while wire in taken:
+        n += 1
+        wire = f"{NATIVE_NONE}_{n}"
+    return (*keys, (wire, NONE_KEY))
+
+
+def native_gap(item: Item) -> str:
+    """`""` when a decisions endpoint can carry `item`; otherwise one sentence
+    naming what it cannot (ruling 25), which the native call refuses unsent.
+    Today that is a choice whose options, with the reserved none, pass
+    `NATIVE_MAX_OPTIONS`. A limit is named here, never met by truncating."""
+    for q in item.questions:
+        if isinstance(q, Choice) and (n := len(native_choice_keys(q))) > NATIVE_MAX_OPTIONS:
+            return (f"Question {q.id} offers {n} options including none; "
+                    f"a decisions endpoint takes at most {NATIVE_MAX_OPTIONS}.")
+    return ""
+
+
+def _probability(value: object) -> float | None:
+    """`value` as a probability: a finite number (never a bool) in [0, 1]."""
+    if (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and 0 <= value <= 1):
+        return float(value)
+    return None
+
+
+def _legal_keys(q: Question) -> set[str]:
+    if isinstance(q, Choice):
+        return {opt.id for opt in q.options} | ({NONE_KEY} if q.allow_none else set())
+    if isinstance(q, Score):
+        return {str(i) for i in range(len(q.levels))}
+    return set()
+
+
+def _distribution(q: Question, value: object) -> dict[str, float] | None:
+    """`value` as `q`'s distribution, or None: a non-empty mapping whose every
+    key is legal for `q` and whose every value is a probability. An invalid
+    report is dropped whole, never repaired."""
+    if not isinstance(value, Mapping) or not value:
+        return None
+    legal = _legal_keys(q)
+    out: dict[str, float] = {}
+    for key, weight in value.items():
+        p = _probability(weight)
+        if not isinstance(key, str) or key not in legal or p is None:
+            return None
+        out[key] = p
+    return out
+
+
+def _argmax(distribution: dict[str, float]) -> str | None:
+    """The distribution's one most probable key; None on a tie at the top."""
+    top = max(distribution.values())
+    winners = [key for key, weight in distribution.items() if weight == top]
+    return winners[0] if len(winners) == 1 else None
+
+
+def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object = None,
+                  distribution: object = None, refused: bool = False) -> Answer:
+    """A native endpoint's report for `q` as an `Answer`.
+
+    The adapter hands over keys already mapped back to Grimoire's (option ids
+    or `NONE_KEY`, level indices as `str(i)`), and never a provider's
+    probability-weighted `score` as `chosen` (ruling 24). `refused` is
+    `refused`. Otherwise `probability` is kept only when it is a probability
+    and `distribution` only when it is valid for `q` (`_distribution`), and
+    both ride on the answer, an answer of None included.
+
+    - A predicate: a `bool` `chosen` is the answer, whatever the probability
+      beside it says (M11); else P(true) above 0.5 is True, below is False,
+      exactly 0.5 is `abstained`; with no usable probability, `unreadable`.
+    - A choice: `chosen` an exact option id is that option (aliases are the
+      structured parser's, §7.4); `NONE_KEY` or None is `abstained` with
+      `allow_none` and `unreadable` without; any other value is `unreadable`
+      with `NOT_AN_OPTION`. With nothing chosen, the distribution's argmax --
+      `abstained` on a tie or on `NONE_KEY` -- and with no usable
+      distribution, `unreadable`.
+    - A score: `chosen` an `int` index (never a bool or a float); else the
+      distribution's argmax under the same tie rule; else `unreadable`.
+    """
+    if refused:
+        return Answer(None, "refused")
+    p = _probability(probability)
+    dist = _distribution(q, distribution)
+    if isinstance(q, Predicate):
+        value, reason, detail = _native_predicate(chosen, p)
+    elif isinstance(q, Choice):
+        value, reason, detail = _native_choice(q, chosen, dist)
+    else:
+        value, reason, detail = _native_score(q, chosen, dist)
+    return Answer(value, reason, probability=p, distribution=dist, detail=detail)
+
+
+#: `(answer, reason, detail)`: an `Answer` before its report rides on it.
+_Read = tuple[bool | str | int | None, str, str]
+
+
+def _native_predicate(chosen: object, p: float | None) -> _Read:
+    if isinstance(chosen, bool):
+        return chosen, "", ""
+    if p is None:
+        return None, "unreadable", ""
+    if p == 0.5:
+        return None, "abstained", ""
+    return p > 0.5, "", ""
+
+
+def _from_distribution(dist: dict[str, float] | None) -> tuple[str | None, str]:
+    """`(key, "")` for the distribution's argmax; `(None, reason)` when there
+    is no usable distribution (`unreadable`), or its top is a tie or the
+    reserved none (`abstained`)."""
+    if dist is None:
+        return None, "unreadable"
+    top = _argmax(dist)
+    return (None, "abstained") if top in (None, NONE_KEY) else (top, "")
+
+
+def _native_choice(q: Choice, chosen: object, dist: dict[str, float] | None) -> _Read:
+    if chosen is UNSTATED:
+        key, reason = _from_distribution(dist)
+        return key, reason, ""
+    if isinstance(chosen, str) and chosen in {opt.id for opt in q.options}:
+        return chosen, "", ""
+    if chosen is None or chosen == NONE_KEY:
+        return None, "abstained" if q.allow_none else "unreadable", ""
+    return None, "unreadable", NOT_AN_OPTION
+
+
+def _native_score(q: Score, chosen: object, dist: dict[str, float] | None) -> _Read:
+    if isinstance(chosen, int) and not isinstance(chosen, bool) and 0 <= chosen < len(q.levels):
+        return chosen, "", ""
+    key, reason = _from_distribution(dist)
+    return (None if key is None else int(key)), reason, ""
+
+
+def _present(record: dict[str, Any]) -> dict[str, Any]:
+    """`record` without its keys whose value is empty or None."""
+    return {key: value for key, value in record.items()
+            if value is not None and value != "" and value != {} and value != []}
+
+
+def outcome(mode: str, provider: str, model: str,
+            results: Sequence[ItemResult] | None = None, error: str = "") -> dict[str, Any]:
+    """The capture's record of one call (spec §9.4): its mode and what served
+    it, then each item's backend, normalised answers -- `answer`, always
+    present (None as null), with its `reason`, `detail`, `probability` and
+    `distribution` -- and rationale; or, on a failure, the `error`. A key
+    whose value is empty or None is left out (an answer's own `answer`
+    excepted)."""
+    head = _present({"mode": mode, "provider": provider, "model": model})
+    if error:
+        return {**head, "error": error}
+    items = []
+    for result in results or ():
+        answers = {
+            qid: {"answer": a.answer, **_present({
+                "reason": a.reason, "detail": a.detail, "probability": a.probability,
+                "distribution": dict(a.distribution) if a.distribution else None})}
+            for qid, a in result.answers.items()}
+        items.append(_present({"backend": result.backend, "answers": answers,
+                               "rationale": result.rationale}))
+    return {**head, "items": items}
+
+
+def render(results: Sequence[ItemResult], items: Sequence[Item], *, explain: bool) -> str:
+    """`results` written as the structured backend's reply to `items` --
+    `{"0": {"answers": {qid: value}, "rationale": ...}}`, a None answer as
+    JSON null and `rationale` only when `explain` -- so the structured
+    graders can read a native `Decision` (`evals/run.py --live`)."""
+    out: dict[str, Any] = {}
+    for index, (result, item) in enumerate(zip(results, items, strict=True)):
+        entry: dict[str, Any] = {"answers": {
+            q.id: (result.answers[q.id].answer if q.id in result.answers else None)
+            for q in item.questions}}
+        if explain:
+            entry["rationale"] = result.rationale
+        out[str(index)] = entry
+    return json.dumps(out)

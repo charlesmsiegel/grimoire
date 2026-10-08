@@ -811,6 +811,21 @@ def test_build_items_drops_a_scene_whose_id_collides_once_normalised():
     assert reconcile.item_scenes(loud, loud["candidates"][0]) == []
 
 
+def test_build_items_drops_a_scene_whose_id_is_the_reserved_none():
+    """`<none>` is the native none's distribution key (slice H, N5), which
+    `decisions.offerable` refuses: a hand-edited chronicle holding it as a
+    scene id loses that scene from the item rather than failing the request."""
+    payload = _hand(_cand(1, "thread", _shown("A", MAP, D1, "<none>", D2)),
+                    lines=((D1, "Mara came ashore."), ("<none>", "A scene named for nothing."),
+                           (D2, "The road was long.")))
+    assert "<none>" in payload["known_scenes"]
+    items = reconcile.build_items(payload)
+    decisions.validate(items)
+    assert reconcile.item_scenes(payload, payload["candidates"][0]) == [D1, D2]
+    assert _evidence_options(items[0]) == [[D1, D2], [D1, D2]]
+    assert "A scene named for nothing." not in items[0].context
+
+
 def test_a_citation_of_a_dropped_colliding_scene_is_a_scene_not_shown():
     """M8: on a hand-edited chronicle two scene ids collide once normalised,
     and the record block's beat markers show both. A citation of the one the

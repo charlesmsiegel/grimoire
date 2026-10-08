@@ -1278,6 +1278,18 @@ def test_build_items_drops_a_candidate_whose_id_collides_once_normalised():
     assert "the-map: The map" in items[0].context
 
 
+def test_build_items_drops_a_candidate_whose_id_is_the_reserved_none():
+    """`<none>` is the native none's distribution key (slice H, N5), which
+    `decisions.offerable` refuses: a hand-edited ledger holding it as an id
+    loses that candidate rather than failing the request."""
+    rows = [_decision_row("r1", "thread", "The ledger",
+                          ["<none>", "find-the-ledger", "<NONE>"])]
+    items = identity.build_items(rows, {})
+    decisions.validate(items)
+    assert [o.id for o in items[0].questions[1].options] == ["find-the-ledger"]
+    assert len(_candidate_lines(items[0].context)) == 1
+
+
 def test_build_items_never_builds_a_request_validate_refuses():
     # A hand-edited ledger: a `thread:` key with no id, two ids that read as
     # one once normalised, and an earlier candidate whose alias source spells

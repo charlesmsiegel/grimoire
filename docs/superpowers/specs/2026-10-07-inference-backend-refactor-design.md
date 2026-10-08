@@ -1083,12 +1083,19 @@ Templates live under `templates/decide/` and go through
   summed over every choice's options and every score's levels in its schema),
   OpenAI strict mode's documented budget; an item that alone exceeds it is
   refused by `validate`. That is the only strict-mode schema limit F enforces.
-  Two more are documented: 15,000 characters of enum strings across a schema
-  with more than 250 enum values, and 120,000 characters of property names,
-  definition names and enum values in total. Slice H enforces both in
-  `decisions.validate` and `chunks`, whatever the backend, because the chain
-  can fall to a structured fallback stage; the figures are re-checked against
-  OpenAI's documentation when the constants are written.
+  Three more are documented and reachable (OpenAI's Structured Outputs,
+  "Supported schemas", checked 2026-10-08): 15,000 characters of enum strings
+  in a single enum of more than 250 values (`MAX_ENUM_STRING_CHARS`,
+  `ENUM_STRING_CHARS_ABOVE`; refused per choice), 120,000 characters of
+  property names, definition names, enum values and const values in total
+  (`MAX_SCHEMA_STRING_CHARS`, counted by `schema_chars` over the schema with
+  `rationale`, the worst case), and 5,000 object properties in total
+  (`MAX_SCHEMA_PROPERTIES`, counted by `schema_properties`; nothing bounds an
+  item's question count, so an item of about 5,000 predicates reaches it).
+  Slice H enforces all three in `decisions.validate`, and the last two in
+  `chunks` too, whatever the backend, because the chain can fall to a
+  structured fallback stage. The page's fourth limit, 10 levels of nesting,
+  cannot be reached: a batch schema is four objects deep whatever it asks.
 - **One meter per chunk, opened inside `decide`.** A caller's time budget runs
   inside it through the `around` hook, which is handed the facade call and the
   meter's live holder, so an overrun is filed as an `error/timeout` row as
