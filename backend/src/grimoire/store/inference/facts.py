@@ -14,8 +14,11 @@ Two kinds of fact, and they age differently:
 - **Verified** results come from probing the endpoint, so they describe the
   endpoint as it was configured then. They are tagged with the connection's
   `rev` (the same value `llm_connections.cached_models` gates its sidecar on)
-  and `of` hides them once the rev has moved on -- the gate is on read, so
-  there is no window for an edit to land between a probe and its write.
+  and `of` hides them once the rev has moved on. The write is gated too:
+  `record_verified` files results only while their rev is still the
+  connection's own, checked and written under the connection lock every
+  connection write holds -- otherwise a run that started on an old rev would
+  replace the new rev's results, or recreate a deleted connection's file.
 - **Stated** facts (`overrides`, `vision`, `prefill`, `post_process`, `rates`)
   are the user's own word about the model and survive a rev change.
 
@@ -38,6 +41,8 @@ from .providers import CAPABILITIES
 OVERRIDE_VALUES: tuple[str, ...] = ("yes", "no")
 _VISION = ("", "on", "off")
 
+#: The file's read-merge-write. Taken INSIDE `llm_connections.LOCK` where both
+#: are held (`record_verified`), never around it.
 _lock = threading.Lock()
 
 
@@ -106,8 +111,18 @@ def _require_safe(provider_id: str) -> None:
 
 
 def record_verified(provider_id: str, model: str, rev: str,
-                    results: dict[str, dict]) -> None:
-    """Merge probe `results` (`{cap: {"ok", "at"?, "error"?}}`) into the model.
+                    results: dict[str, dict]) -> bool:
+    """Merge probe `results` (`{cap: {"ok", "at"?, "error"?}}`) into the model,
+    if `rev` is still the connection's own. Whether it wrote is the answer.
+
+    `rev` is the one the probes STARTED on. When the connection has moved past
+    it (an edit landed while they were out, so they describe a different
+    endpoint) or is gone, nothing is written and the answer is False: writing
+    would replace the new rev's results, or recreate the facts file of a
+    deleted connection. The compare and the write are one step, under
+    `llm_connections.LOCK` -- which every connection write holds -- and then
+    this module's `_lock`, always in that order; a check made before taking
+    them is no check, because an edit can land between it and the write.
 
     Results already held under the same `rev` are kept and overlaid; results
     under any other rev are replaced, never blended with the new ones.
@@ -119,15 +134,23 @@ def record_verified(provider_id: str, model: str, rev: str,
         if not isinstance(result, dict):
             raise ValueError(f"result for {cap!r} must be an object")
     stamped = {c: {**r, "at": r.get("at") or now_iso()} for c, r in results.items()}
-    with _lock:
-        doc = _load(provider_id)
-        entry = doc.setdefault(model, {})
-        old = entry.get("verified")
-        caps = (_clean_results(old.get("caps"))
-                if isinstance(old, dict) and old.get("rev") == rev else {})
-        caps.update(stamped)
-        entry["verified"] = {"rev": rev, "caps": caps}
-        _store(provider_id, doc)
+    with llm_connections.LOCK:
+        try:
+            current = llm_connections.read_connection_raw(provider_id)["rev"]
+        except llm_connections.ConnectionNotFound:
+            return False
+        if not rev or current != rev:
+            return False
+        with _lock:
+            doc = _load(provider_id)
+            entry = doc.setdefault(model, {})
+            old = entry.get("verified")
+            caps = (_clean_results(old.get("caps"))
+                    if isinstance(old, dict) and old.get("rev") == rev else {})
+            caps.update(stamped)
+            entry["verified"] = {"rev": rev, "caps": caps}
+            _store(provider_id, doc)
+    return True
 
 
 def set_overrides(provider_id: str, model: str, overrides: dict[str, str]) -> None:

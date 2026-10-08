@@ -97,7 +97,7 @@
 **Interfaces:**
 - `read(provider_id) -> dict[str, dict]` (defensive: mangled/scalar/unsafe → `{}`).
 - `of(provider_id, model, rev) -> dict` — `{"vision": ""|"on"|"off", "prefill": bool|None, "post_process": str, "rates": dict|None, "verified": {cap: {"ok", "at", "error"?}}, "overrides": {cap: "yes"|"no"}}`; verified entries from another `rev` dropped.
-- `record_verified(provider_id, model, rev, results)` and `set_overrides(provider_id, model, overrides)` — read-merge-write under a module-level `threading.Lock` (concurrent test calls on one provider never lose a result), atomic write; `set_overrides` validates names/values (`ValueError`).
+- `record_verified(provider_id, model, rev, results)` and `set_overrides(provider_id, model, overrides)` — read-merge-write under a module-level `threading.Lock` (concurrent test calls on one provider never lose a result), atomic write; `record_verified` (amended after review) writes only while `rev` is still the connection's own, checked and written under `llm_connections.LOCK` (held by every connection write; taken before the facts lock), and returns whether it wrote; `set_overrides` validates names/values (`ValueError`).
 - [ ] **Step 1: Failing tests:** round-trip; stale-rev verified hidden; mangled → `{}`; unsafe id; delete removes it; two threads recording different models both land; `test_atomic_guard`, `test_paths_guard`, `test_lock_domain_guard` green (classify as global, outside the campaign domain, if asked).
 - [ ] **Step 2–4:** FAIL → implement → PASS.
 - [ ] **Step 5: Commit** — `feat(inference): per-model facts beside each provider`

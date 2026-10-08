@@ -354,8 +354,11 @@ def test_caps_for_names_another_model(home):
 
 
 def test_caps_for_ignores_a_stale_rev(home):
-    conn = _conn(base_url="http://localhost:1234/v1", model="mara-7b")
-    facts.record_verified(conn["id"], "mara-7b", "an-old-rev", {"vision": {"ok": True}})
+    old = _conn(base_url="http://localhost:1234/v1", model="mara-7b")
+    assert facts.record_verified(old["id"], "mara-7b", old["rev"], {"vision": {"ok": True}})
+    llm_connections.update_connection(old["id"], base_url="http://localhost:5678/v1")
+    conn = llm_connections.read_connection_raw(old["id"])
+    assert conn["rev"] != old["rev"]
     assert capabilities.caps_for(conn)["vision"] == Cap("unknown", "unknown")
     facts.record_verified(conn["id"], "mara-7b", conn["rev"], {"vision": {"ok": True}})
     assert capabilities.caps_for(conn)["vision"] == Cap("yes", "test")

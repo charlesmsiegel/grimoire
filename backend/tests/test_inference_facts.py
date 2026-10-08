@@ -61,12 +61,40 @@ def test_recording_again_merges_results_under_one_rev(conn):
 
 def test_verified_from_another_rev_is_hidden_and_replaced(conn):
     cid, rev = conn
-    facts.record_verified(cid, "m", rev, {"vision": _ok()})
+    assert facts.record_verified(cid, "m", rev, {"vision": _ok()}) is True
     assert facts.of(cid, "m", "some-other-rev")["verified"] == {}
     # Recording under a new rev starts over rather than blending two eras.
-    facts.record_verified(cid, "m", "some-other-rev", {"embed": _ok()})
-    assert facts.of(cid, "m", "some-other-rev")["verified"] == {"embed": _ok()}
+    llm_connections.update_connection(cid, base_url="http://localhost:5678/v1")
+    new = llm_connections.read_connection_raw(cid)["rev"]
+    assert new != rev
+    assert facts.record_verified(cid, "m", new, {"embed": _ok()}) is True
+    assert facts.of(cid, "m", new)["verified"] == {"embed": _ok()}
     assert facts.of(cid, "m", rev)["verified"] == {}
+
+
+def test_a_rev_that_is_not_the_connections_own_writes_nothing(conn):
+    """The compare and the write are one step in the store: results probed
+    under a rev the connection has moved past describe another endpoint, and
+    writing them would replace what the current rev holds."""
+    cid, rev = conn
+    llm_connections.update_connection(cid, base_url="http://localhost:5678/v1")
+    new = llm_connections.read_connection_raw(cid)["rev"]
+    assert facts.record_verified(cid, "m", new, {"embed": _ok()}) is True
+    before = llm_connections.facts_path(cid).read_text(encoding="utf-8")
+
+    assert facts.record_verified(cid, "m", rev, {"vision": {"ok": False, "at": "t"}}) is False
+    assert facts.record_verified(cid, "m", "never-a-rev", {"vision": _ok()}) is False
+    assert llm_connections.facts_path(cid).read_text(encoding="utf-8") == before
+    assert facts.of(cid, "m", new)["verified"] == {"embed": _ok()}
+
+
+def test_a_connection_that_is_gone_gets_no_facts_file(conn):
+    cid, rev = conn
+    llm_connections.delete_connection(cid)
+    assert facts.record_verified(cid, "m", rev, {"vision": _ok()}) is False
+    assert not llm_connections.facts_path(cid).exists()
+    assert facts.record_verified("nobody-here", "m", rev, {"vision": _ok()}) is False
+    assert not llm_connections.facts_path("nobody-here").exists()
 
 
 def test_a_rev_change_does_not_hide_what_the_user_stated(conn):

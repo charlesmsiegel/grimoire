@@ -906,21 +906,19 @@ async def _probe_all(client: LLMClient, caps: tuple[str, ...], raw: dict, conn: 
 
 def _record_verdicts(conn_id: str, model: str, rev: str, verdicts: dict[str, dict]) -> bool:
     """File `verdicts` under the `rev` the test STARTED on, unless that rev
-    has moved: an edit that landed while the probes were out describes a
-    different endpoint, and `facts.record_verified` replaces another rev's
-    results outright -- so the stale verdict would overwrite whatever the new
-    rev already holds. `verdicts` holds only what `_records` let through.
-    Whether anything was filed is the answer."""
+    has moved or the connection is gone: an edit that landed while the probes
+    were out describes a different endpoint, and its verdict would replace
+    whatever the new rev already holds. That compare-and-write is
+    `facts.record_verified`'s, under the lock every connection write holds --
+    a rev read here, before it, would leave an edit room to land between.
+    `verdicts` holds only what `_records` let through. Whether anything was
+    filed is the answer."""
     if not verdicts:
         return False
     try:
-        if store.llm_connections.read_connection_raw(conn_id)["rev"] != rev:
-            return False
-        store.inference.facts.record_verified(conn_id, model, rev, verdicts)
-    except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy,
-            OSError, UnicodeDecodeError):
+        return store.inference.facts.record_verified(conn_id, model, rev, verdicts)
+    except (store.locks.StoreBusy, OSError, UnicodeDecodeError):
         return False
-    return True
 
 
 @router.post("/llm-connections/{conn_id}/test/preview")

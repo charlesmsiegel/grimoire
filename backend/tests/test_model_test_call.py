@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import threading
 import time
 import zlib
 
@@ -611,6 +612,83 @@ def test_a_truncated_anthropic_stream_is_a_failed_probe_not_an_accepted_one(clie
     assert got["kind"] == "network"
     assert run["result"]["recorded"] is False
     assert facts.read(conn) == {}
+
+
+def _land_inside_the_window(monkeypatch, other) -> list[threading.Thread]:
+    """Run `other` on a second thread the first time the CURRENT thread reads
+    a connection, and give it a second to finish before that read returns.
+
+    That read is the rev check `_record_verdicts` makes before it files a
+    verdict. Without one serialization boundary over the check and the write,
+    `other` (an edit, a delete) finishes inside the window, between them;
+    with it, `other` waits for the lock the record holds, the wait times out,
+    and it lands after the record -- deterministic either way."""
+    real = store.llm_connections.read_connection_raw
+    caller = threading.get_ident()
+    started: list[threading.Thread] = []
+
+    def hooked(conn_id):
+        got = real(conn_id)
+        if not started and threading.get_ident() == caller:
+            t = threading.Thread(target=other)
+            started.append(t)
+            t.start()
+            t.join(timeout=1.0)
+        return got
+
+    monkeypatch.setattr(store.llm_connections, "read_connection_raw", hooked)
+    return started
+
+
+def test_an_edit_inside_the_record_window_keeps_the_newer_revs_verdicts(client, monkeypatch):
+    """A probe run started on rev A files its verdict while an edit (rev B)
+    and that rev's own test land: B's verdicts must survive, and nothing of
+    A's may replace them."""
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    stale = _rev(conn)
+    newer: dict = {}
+
+    def edit_and_test() -> None:
+        store.llm_connections.update_connection(conn, api_key="sk-fake-rotated")
+        newer["rev"] = _rev(conn)
+        facts.record_verified(conn, MODEL, newer["rev"], {"vision": {"ok": True, "at": "b"}})
+
+    threads = _land_inside_the_window(monkeypatch, edit_and_test)
+    config_routes._record_verdicts(conn, MODEL, stale, {"vision": {"ok": False, "error": "a"}})
+    for t in threads:
+        t.join(timeout=10)
+
+    assert newer["rev"] != stale
+    assert facts.of(conn, MODEL, newer["rev"])["verified"] == {"vision": {"ok": True, "at": "b"}}
+    assert facts.read(conn)[MODEL]["verified"]["rev"] == newer["rev"]
+
+
+def test_a_delete_inside_the_record_window_leaves_no_facts_file(client, monkeypatch):
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    rev = _rev(conn)
+
+    threads = _land_inside_the_window(
+        monkeypatch, lambda: store.llm_connections.delete_connection(conn))
+    config_routes._record_verdicts(conn, MODEL, rev, {"vision": {"ok": True}})
+    for t in threads:
+        t.join(timeout=10)
+
+    with pytest.raises(store.llm_connections.ConnectionNotFound):
+        store.llm_connections.read_connection_raw(conn)
+    assert not store.llm_connections.facts_path(conn).exists()
+
+
+def test_a_record_after_the_rev_moved_writes_nothing(client):
+    """The ordinary case: the edit landed before the record was asked for."""
+    conn = _endpoint(client, "Mara Endpoint", "primary.example")
+    stale = _rev(conn)
+    store.llm_connections.update_connection(conn, api_key="sk-fake-rotated")
+    new = _rev(conn)
+    assert facts.record_verified(conn, MODEL, new, {"embed": {"ok": True, "at": "b"}})
+
+    assert config_routes._record_verdicts(conn, MODEL, stale, {"vision": {"ok": True}}) is False
+    assert facts.of(conn, MODEL, new)["verified"] == {"embed": {"ok": True, "at": "b"}}
+    assert config_routes._record_verdicts(conn, MODEL, new, {"vision": {"ok": True}}) is True
 
 
 def test_the_rev_moving_during_the_run_records_nothing(client):
