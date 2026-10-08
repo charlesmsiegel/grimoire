@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from grimoire import decisions
 from grimoire.store import llm_connections, pricing, usage, usage_rollup
 from grimoire.store.inference import facts
 
@@ -432,8 +433,8 @@ def test_only_the_bytes_appended_since_are_read(home, monkeypatch):
 def test_the_rail_never_models_a_native_decision_row(home):
     pricing.write_pricing({"realm/opus": {"prompt_usd_per_1k": 1.0,
                                           "completion_usd_per_1k": 2.0}})
-    _call(ts="2026-08-01T00:00:00Z", operation="decide", decision_mode="native")
-    _call(ts="2026-08-01T00:00:01Z", operation="decide", decision_mode="structured")
+    _call(ts="2026-08-01T00:00:00Z", operation="decide", decision_mode=decisions.NATIVE_BACKEND)
+    _call(ts="2026-08-01T00:00:01Z", operation="decide", decision_mode=decisions.STRUCTURED_BACKEND)
 
     out = usage_rollup.campaign_totals("saltmarch")
     # Only the structured row is modelled: 1000 at $1/1k plus 200 at $2/1k.

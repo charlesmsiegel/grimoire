@@ -236,13 +236,13 @@ def test_decision_result_reads_the_canned_bodies(provider, caplog):
 
     short = canned(provider, "answered")
     drop_answer(provider, short, "tension")
-    logger = "grimoire.openrouter" if provider == "openrouter" else "grimoire.openai_compatible"
-    with caplog.at_level(logging.WARNING, logger=logger):
+    with caplog.at_level(logging.WARNING, logger="grimoire.decisions"):
         partial = read(provider)(short, ITEM)
     assert partial.answers["tension"] == Answer(None, "unreadable")
     assert partial.answers["over"].answer is True
-    warnings = [r for r in caplog.records if r.name == logger]
+    warnings = [r for r in caplog.records if r.name == "grimoire.decisions"]
     assert len(warnings) == 1 and "1 of 3" in warnings[0].getMessage()
+    assert ("OpenRouter's" if provider == "openrouter" else "OpenAI's") in warnings[0].getMessage()
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)
@@ -839,7 +839,6 @@ async def test_fake_decide_native_strips_the_fallback_before_it_stamps():
     assert holder[llm.ATTEMPTED] == CONN and FALLBACK_KEY not in holder[llm.ATTEMPTED]
     assert fake.native_requests[0][1] == CONN
     assert FALLBACK_KEY in conn
-
 
 
 async def test_fake_decide_native_accepts_openai_compatible():

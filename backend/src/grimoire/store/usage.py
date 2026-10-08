@@ -122,6 +122,7 @@ from datetime import date, timedelta
 from functools import partial
 from pathlib import Path
 
+from .. import decisions
 from . import atomic, errors, paths, pricing, statcache
 
 #: The row kinds this ledger holds. ``llm`` is the only one written today;
@@ -875,12 +876,6 @@ def _counts(row: dict) -> tuple[int | None, int | None]:
     return _count(row.get("prompt_tokens")), _completion_count(row)
 
 
-#: The `decision_mode` of a call a provider's native decisions endpoint
-#: served (slice H). Spelled here rather than imported: the store sits below
-#: the facade that stamps it, and a ledger row is read as text either way.
-NATIVE_DECISION_MODE = "native"
-
-
 def _modellable(row: dict) -> bool:
     """Whether any rate may model this row: every row but a native decision.
 
@@ -891,8 +886,9 @@ def _modellable(row: dict) -> bool:
     is spend when its provider reported a cost and unpriced when it did not;
     its counts are filed as reported and still sum into the token totals.
     Decided at read time, so a rate the user sets later cannot model one
-    either."""
-    return row.get("decision_mode") != NATIVE_DECISION_MODE
+    either. The mode is the backend's own name (`decisions.BACKENDS`), which
+    is what the decide chain stamps on the row."""
+    return row.get("decision_mode") != decisions.NATIVE_BACKEND
 
 
 def _metered(row: dict) -> bool:

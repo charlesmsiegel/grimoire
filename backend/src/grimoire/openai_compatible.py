@@ -7,7 +7,6 @@ docs/superpowers/specs/2026-07-18-llm-connections-design.md.
 from __future__ import annotations
 
 import json
-import logging
 import os
 import ssl
 from collections.abc import AsyncIterator, Mapping
@@ -17,8 +16,6 @@ import httpx
 
 from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
-
-log = logging.getLogger(__name__)
 
 #: Bound for the health probe (#146). The client's own 120s default is sized
 #: for a generation; a reader who pressed "Test connection" is watching a
@@ -128,9 +125,11 @@ def _strict_messages(messages: list[dict]) -> list[dict]:
 # https://developers.openai.com/api/reference/resources/decisions/methods/create
 # (checked 2026-10-08), documents no character set for a question `name` or a
 # choice `value` -- only a length far past any Grimoire id -- so ids go
-# verbatim, as `openrouter`'s do. Written here rather than shared with it: the
-# two wire shapes differ in every container, and this module shares no code
-# with that one (the module docstring).
+# verbatim, as `openrouter`'s do. The wire shapes are written here rather than
+# shared with it -- the two differ in every container, and this module shares
+# no code with that one (the module docstring) -- while the rules both obey
+# (the reserved none, reading a key back, the envelope that answered nothing)
+# are `decisions`'.
 
 #: The wire `type` each question kind is asked, and answered, as.
 _TYPES = {decisions.Predicate: "predicate", decisions.Choice: "choice",
@@ -166,27 +165,14 @@ def decision_body(item: decisions.Item, model: str) -> dict:
             "questions": [_question(q) for q in item.questions]}
 
 
-#: What an unoffered wire value spelled `NONE_KEY` is handed over as (see
-#: `_from_wire`): a value no option id and no distribution key can equal.
-_UNOFFERED = object()
-
-
-def _from_wire(keys: dict[str, str], wire: object) -> object:
-    """A choice's wire value read back as Grimoire's: an offered value as its
-    option id (the reserved none as `NONE_KEY`), anything else as itself --
-    which `native_answer` reads as `not_an_option` -- except the one spelling
-    that would read as the reserved none."""
-    if isinstance(wire, str) and wire in keys:
-        return keys[wire]
-    return _UNOFFERED if wire == decisions.NONE_KEY else wire
-
-
 def _choice_distribution(keys: dict[str, str], reported: object) -> dict | None:
     """A choice's `probabilities` array as a mapping keyed by Grimoire's keys,
     or None for a report that is not one. A value listed twice makes the whole
     report invalid -- which of its two probabilities is meant cannot be told --
-    so it is dropped, never repaired. A value that is not a string reads as
-    itself and fails `native_answer`'s check whole."""
+    so it is dropped, never repaired, and so is an entry whose value is
+    neither a string nor a boolean. A boolean value (the reference types
+    values as either) reads as itself, which no option id equals, so
+    `native_answer` drops the report whole."""
     if not isinstance(reported, list):
         return None
     out: dict[object, object] = {}
@@ -198,7 +184,7 @@ def _choice_distribution(keys: dict[str, str], reported: object) -> dict | None:
         if not isinstance(wire, (str, bool)) or (type(wire), wire) in seen:
             return None
         seen.add((type(wire), wire))
-        out[_from_wire(keys, wire)] = entry.get("probability")
+        out[decisions.native_key(keys, wire)] = entry.get("probability")
     return out
 
 
@@ -249,7 +235,7 @@ def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
             # still rides on the unreadable answer.
             reported = decisions.native_answer(q, distribution=probabilities)
             return decisions.Answer(None, "unreadable", distribution=reported.distribution)
-        chosen = _from_wire(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
+        chosen = decisions.native_key(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
         return decisions.native_answer(q, chosen=chosen, distribution=probabilities)
     return decisions.native_answer(q, distribution=_score_distribution(q, raw.get("probabilities")))
 
@@ -276,17 +262,15 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
         if name in by_name:
             twice.add(name)
         by_name[name] = raw
-    missing = [q.id for q in item.questions if q.id not in by_name]
-    if len(missing) == len(item.questions):
+    result = decisions.native_result(
+        item, {q.id: (decisions.Answer(None, "unreadable") if q.id in twice
+                      else _answer(q, by_name[q.id]))
+               for q in item.questions if q.id in by_name},
+        "OpenAI")
+    if result is None:
         raise OpenAICompatibleError("bad_response",
                                     "the decisions reply answered none of the questions")
-    if missing:
-        log.warning("OpenAI's decisions reply left %d of %d questions unanswered",
-                    len(missing), len(item.questions))
-    return decisions.ItemResult(
-        {q.id: (_answer(q, by_name[q.id]) if q.id in by_name and q.id not in twice
-                else decisions.Answer(None, "unreadable")) for q in item.questions},
-        rationale="", backend="native")
+    return result
 
 
 def _decision_usage(body: object, usage: dict | None) -> None:

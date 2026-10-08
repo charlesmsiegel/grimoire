@@ -8,8 +8,10 @@ and everything about it that is pure: the request and result types, the
 request's validation, the JSON Schema of one batch, the tolerant parser that
 reads a reply back, and the chunking of a long batch -- and, for slice H's
 native backends, the one mapping both adapters share: the reserved none an
-`allow_none` choice adds (`native_choice_keys`), what an endpoint cannot carry
-(`native_gap`), how a provider's report becomes an `Answer` (`native_answer`),
+`allow_none` choice adds (`native_choice_keys`) and how a wire key is read
+back (`native_key`), what an endpoint cannot carry (`native_gap`), how a
+provider's report becomes an `Answer` (`native_answer`) and a reply an
+`ItemResult` (`native_result`),
 the capture's record of a call (`outcome`) and the structured rendering of a
 native result (`render`).
 
@@ -41,19 +43,27 @@ Three rules the rest of the module follows:
 from __future__ import annotations
 
 import json
+import logging
 import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
+log = logging.getLogger(__name__)
+
 #: Why an answer is `None`. Closed: a backend that cannot say which of these
 #: happened says `unreadable` rather than adding a fifth.
 REASONS = ("unreadable", "refused", "abstained", "error")
 
 #: How a decision was answered: through `generate(schema=)` and the parser
-#: below, or by a provider's own decisions endpoint (slice H).
-BACKENDS = ("structured", "native")
+#: below, or by a provider's own decisions endpoint (slice H). These are also
+#: the values a ledger row's `decision_mode` takes (`inference` stamps the
+#: backend that served the call), so `store.usage` keys its native-row rule on
+#: `NATIVE_BACKEND` rather than on a spelling of its own.
+STRUCTURED_BACKEND = "structured"
+NATIVE_BACKEND = "native"
+BACKENDS = (STRUCTURED_BACKEND, NATIVE_BACKEND)
 
 #: The `detail`s of an `unreadable` answer (none is a reason). `NOT_AN_OPTION`:
 #: a choice answered with a value that is present, not null, and names no
@@ -741,6 +751,41 @@ def native_choice_keys(q: Choice) -> tuple[tuple[str, str], ...]:
         n += 1
         wire = f"{NATIVE_NONE}_{n}"
     return (*keys, (wire, NONE_KEY))
+
+
+#: What `native_key` hands over for an unoffered wire key spelled `NONE_KEY`.
+_UNOFFERED: Final = object()
+
+
+def native_key(keys: Mapping[str, str], wire: object) -> object:
+    """A choice's wire key read back as Grimoire's, through `keys` (a
+    `dict(native_choice_keys(q))`): an offered key as its option id (the
+    reserved none as `NONE_KEY`), anything else as itself, so `native_answer`
+    reads it as `not_an_option` and a distribution keyed by it as invalid.
+    The one exception is an unoffered key spelled `NONE_KEY`, which would read
+    as the reserved none: it goes as a value no option id and no distribution
+    key can equal."""
+    if isinstance(wire, str) and wire in keys:
+        return keys[wire]
+    return _UNOFFERED if wire == NONE_KEY else wire
+
+
+def native_result(item: Item, answers: Mapping[str, Answer], provider: str) -> ItemResult | None:
+    """`item`'s result from one decisions reply: `answers` holds an `Answer`
+    for each of its questions the reply answered, keyed by question id, and a
+    question it left out is `unreadable` (one warning per call, naming
+    `provider`). None when the reply answered none of them: that is not an
+    answer but a failed call (ruling 4, I2), which the adapter raises as its
+    own `bad_response` so the item falls through to the next stage."""
+    missing = [q.id for q in item.questions if q.id not in answers]
+    if len(missing) == len(item.questions):
+        return None
+    if missing:
+        log.warning("%s's decisions reply left %d of %d questions unanswered",
+                    provider, len(missing), len(item.questions))
+    return ItemResult({q.id: answers.get(q.id, Answer(None, "unreadable"))
+                       for q in item.questions},
+                      rationale="", backend=NATIVE_BACKEND)
 
 
 def native_gap(item: Item) -> str:

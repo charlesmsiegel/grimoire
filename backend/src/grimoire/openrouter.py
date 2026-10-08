@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import ssl
 from collections.abc import AsyncIterator, Mapping
@@ -13,8 +12,6 @@ import httpx
 
 from . import catalog, content_parts, decisions, llm_capture, llm_reasoning, llm_usage
 from .llm_errors import LLMError, retry_after_seconds
-
-log = logging.getLogger(__name__)
 
 #: Everything this provider is reached at hangs off one root. Spelled once
 #: because there are now three endpoints on it -- generation, the model catalog
@@ -145,21 +142,6 @@ def decision_body(item: decisions.Item, model: str) -> dict:
             "questions": {q.id: _question(q) for q in item.questions}}
 
 
-#: What an unoffered wire key spelled `NONE_KEY` is handed over as. Mapping an
-#: unknown key to itself is what makes it `not_an_option`, but this one
-#: spelling would read as the reserved none, so it goes as a value no option id
-#: and no distribution key can equal.
-_UNOFFERED = object()
-
-
-def _from_wire(keys: dict[str, str], wire: object) -> object:
-    """A choice's wire key read back as Grimoire's: an offered key as its
-    option id (the reserved none as `NONE_KEY`), anything else as itself."""
-    if isinstance(wire, str) and wire in keys:
-        return keys[wire]
-    return _UNOFFERED if wire == decisions.NONE_KEY else wire
-
-
 def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
     """One answer object read through `decisions.native_answer`. An answer of
     another `type` than the one asked is `unreadable`; `confidence` and a
@@ -174,14 +156,14 @@ def _answer(q: decisions.Question, raw: object) -> decisions.Answer:
         keys = dict(decisions.native_choice_keys(q))
         probabilities = raw.get("probabilities")
         if isinstance(probabilities, Mapping):
-            probabilities = {_from_wire(keys, k): v for k, v in probabilities.items()}
+            probabilities = {decisions.native_key(keys, k): v for k, v in probabilities.items()}
         if raw.get("choice", decisions.UNSTATED) is None:
             # `choice` is a required string (the reference), so a null is no
             # answer: only the reserved none key abstains. What it reported
             # still rides on the unreadable answer.
             reported = decisions.native_answer(q, distribution=probabilities)
             return decisions.Answer(None, "unreadable", distribution=reported.distribution)
-        chosen = _from_wire(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
+        chosen = decisions.native_key(keys, raw["choice"]) if "choice" in raw else decisions.UNSTATED
         return decisions.native_answer(q, chosen=chosen, distribution=probabilities)
     # A score's levels are keyed by index on the wire, as Grimoire keys them.
     return decisions.native_answer(q, distribution=raw.get("probabilities"))
@@ -197,16 +179,12 @@ def decision_result(body: object, item: decisions.Item) -> decisions.ItemResult:
     answers = body.get("answers") if isinstance(body, Mapping) else None
     if not isinstance(answers, Mapping):
         raise OpenRouterError("bad_response", "the decisions reply held no answers")
-    missing = [q.id for q in item.questions if q.id not in answers]
-    if len(missing) == len(item.questions):
+    result = decisions.native_result(
+        item, {q.id: _answer(q, answers[q.id]) for q in item.questions if q.id in answers},
+        "OpenRouter")
+    if result is None:
         raise OpenRouterError("bad_response", "the decisions reply answered none of the questions")
-    if missing:
-        log.warning("OpenRouter's decisions reply left %d of %d questions unanswered",
-                    len(missing), len(item.questions))
-    return decisions.ItemResult(
-        {q.id: (_answer(q, answers[q.id]) if q.id in answers
-                else decisions.Answer(None, "unreadable")) for q in item.questions},
-        rationale="", backend="native")
+    return result
 
 
 def _decision_usage(body: object, usage: dict | None) -> None:

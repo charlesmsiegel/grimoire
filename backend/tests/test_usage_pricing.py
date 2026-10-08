@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from grimoire import llm_usage
+from grimoire import decisions, llm_usage
 from grimoire.store import llm_connections, pricing, usage
 from grimoire.store.inference import facts
 
@@ -332,7 +332,7 @@ def test_a_native_decision_row_without_a_cost_is_unpriced_whatever_the_rates(pid
     # its `cost`), and a rate on both layers for exactly this model.
     facts.state(pid, "vendor/judge", rates=FACTS)
     pricing.write_pricing({"vendor/judge": TABLE})
-    _call(task="speaker", operation="decide", decision_mode="native", provider=provider,
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND, provider=provider,
           provider_id=pid, model="vendor/judge", scene="harbour",
           prompt_tokens=420, completion_tokens=0, cache_read_tokens=0)
 
@@ -349,7 +349,7 @@ def test_a_native_decision_row_without_a_cost_is_unpriced_whatever_the_rates(pid
 
 def test_a_native_decision_row_with_a_reported_cost_is_spend(pid):
     facts.state(pid, "vendor/judge", rates=FACTS)
-    _call(task="speaker", operation="decide", decision_mode="native", provider="openrouter",
+    _call(task="speaker", operation="decide", decision_mode=decisions.NATIVE_BACKEND, provider="openrouter",
           provider_id=pid, model="vendor/judge", prompt_tokens=412, completion_tokens=58,
           cost_usd=0.25, cost_basis=llm_usage.BILLED)
 
@@ -361,7 +361,7 @@ def test_a_native_decision_row_with_a_reported_cost_is_spend(pid):
 
 def test_a_structured_decision_row_is_modelled_as_before(pid):
     facts.state(pid, "vendor/judge", rates=FACTS)
-    _call(task="speaker", operation="decide", decision_mode="structured",
+    _call(task="speaker", operation="decide", decision_mode=decisions.STRUCTURED_BACKEND,
           provider_id=pid, model="vendor/judge")
 
     totals = _totals()
