@@ -349,9 +349,23 @@ def _flattened(obj: dict[str, Any], item: Item) -> tuple[object, object]:
     return obj, next((obj[k] for k in keys if k in obj), None)
 
 
+def _foreign_index(obj: dict[str, Any], count: int) -> bool:
+    """Whether `obj` has an index key (all digits; no question id is one) that
+    is not one of the `count` items sent: `"2"` beside two items, or `"01"`.
+
+    Such a reply was not keyed by our indices -- numbered from 1, most likely
+    -- and its `"1"` may well be the model's answer to item 0. Renumbering it is
+    a guess, so none of its keys is read as ours."""
+    return any(key.isdigit() and not (key == str(int(key)) and int(key) < count)
+               for key in obj)
+
+
 def _item_object(obj: dict[str, Any], index: int, items: Sequence[Item]) -> tuple[object, object]:
     """(answers, rationale) for item `index`, or (None, None) when the reply
-    holds nothing that can be read as that item."""
+    holds nothing that can be read as that item -- for every item, when the
+    reply carries an index we did not send (`_foreign_index`)."""
+    if _foreign_index(obj, len(items)):
+        return None, None
     key = str(index)
     if key in obj:
         entry = obj[key]
@@ -408,7 +422,9 @@ def parse(text: str, items: Sequence[Item], *, explain: bool) -> tuple[ItemResul
     and flattened (question ids at the top level) shapes; a flattened shape,
     keyed or not, takes its rationale from `rationale`, else from a
     `LEGACY_RATIONALE_KEYS` key. Anything else, and
-    any value of the wrong type, is `None` with reason `unreadable`.
+    any value of the wrong type, is `None` with reason `unreadable` -- every
+    item of a reply that carries an index outside the items sent, whose keys
+    are not ours to read (an answer left unread, never one misattributed).
     """
     obj = find_object(text) if isinstance(text, str) else None
     results = []

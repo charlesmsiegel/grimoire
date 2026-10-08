@@ -319,6 +319,39 @@ def test_parse_reads_an_indexed_item_with_the_answers_level_dropped():
     assert result == ItemResult({"over": Answer(None, "unreadable")})
 
 
+def test_a_reply_numbered_from_one_answers_no_item():
+    """Brutal-1 #3: two items whose questions share ids, answered `"1"`, `"2"`
+    by a fallback without structured mode. Its `"1"` is item 0's answer, not
+    item 1's -- so a reply carrying an index outside the items sent has keys
+    that are not ours, and every item is left unread rather than any answer
+    being guessed onto another item."""
+    items = [Item("a", (Predicate("over", "i"),)), Item("b", (Predicate("over", "i"),))]
+    unread = ItemResult({"over": Answer(None, "unreadable")})
+    for reply in ({"1": {"answers": {"over": True}}, "2": {"answers": {"over": False}}},
+                  {"0": {"answers": {"over": True}}, "1": {"answers": {"over": False}},
+                   "2": {"answers": {"over": True}}},
+                  {"1": {"over": True}, "2": {"over": False}},
+                  {"01": {"answers": {"over": True}}, "1": {"answers": {"over": False}}}):
+        assert decisions.parse(json.dumps(reply), items, explain=False) == (unread, unread), reply
+    # One item: `{"1": ...}` was already nothing to read, and stays so.
+    (result,) = decisions.parse('{"1": {"answers": {"over": true}}}', items[:1], explain=False)
+    assert result == unread
+
+
+def test_a_reply_whose_keys_are_all_in_range_is_read_as_before():
+    """Every index key one we sent: read as today, an item left out included
+    (it is unread; the other is answered)."""
+    items = [Item("a", (Predicate("over", "i"),)), Item("b", (Predicate("over", "i"),))]
+    first, second = decisions.parse(
+        '{"0": {"answers": {"over": true}}, "1": {"answers": {"over": false}}}', items,
+        explain=False)
+    assert (first.answers["over"], second.answers["over"]) == (Answer(True), Answer(False))
+    first, second = decisions.parse('{"1": {"answers": {"over": false}}}', items,
+                                    explain=False)
+    assert first.answers["over"] == Answer(None, "unreadable")
+    assert second.answers["over"] == Answer(False)
+
+
 def test_parse_flattened_reads_what_it_holds():
     """A flattened reply that answers some questions leaves the rest unreadable."""
     (answers,) = _answers('{"over": true}', [_item()])
