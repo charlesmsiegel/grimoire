@@ -672,6 +672,33 @@ def test_a_title_route_that_cannot_resolve_keeps_the_verdict(client, caplog):
     assert "keyless" not in skipped[0] and "vendor/" not in skipped[0]
 
 
+@pytest.mark.parametrize("seam", ["_soft_resolved", "build_title_prompt"])
+def test_a_title_that_cannot_be_prepared_keeps_the_verdict(client, monkeypatch, caplog,
+                                                           seam):
+    """Brutal-1 nit: the YES verdict lands before the title is drafted, so an
+    unreadable store file while resolving the title's route, or a broken
+    override template, is the title lost -- never a 500 over a verdict already
+    on file. Logged by kind; no title call is made."""
+    _key(client)
+    llm = _use(client, _judge(YES))
+    cid, sid = _scene(client, posts=40)
+
+    def broken(*_args, **_kwargs):
+        raise OSError("unreadable")
+
+    target = scenes_routes if seam == "_soft_resolved" else store.scene_break
+    monkeypatch.setattr(target, seam, broken)
+    with caplog.at_level(logging.INFO, logger="grimoire.routes.scenes"):
+        r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "yes" and r.json()["title"] == ""
+    assert store.scenes.get_scene_break(cid, sid)["verdict"] == "yes"
+    assert llm.calls == 1 and _rows("scene-break-title") == []
+    logged = [rec.getMessage() for rec in caplog.records
+              if "scene-break title" in rec.getMessage()]
+    assert logged == [f"scene-break title skipped for {cid}/{sid}: OSError"]
+
+
 def test_a_title_that_resolves_logs_nothing(client, caplog):
     _key(client)
     _use(client, _judge(YES))

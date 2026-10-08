@@ -4254,8 +4254,9 @@ async def _break_title(cid: str, sid: str, transcript: str, facts: dict | None,
     chip.
 
     Never raises for the failures this call can have. A route that cannot
-    resolve (`_soft_resolved`) and a provider error are each "" -- the
-    verdict is already on file and stands without a title. The meter files a
+    resolve (`_soft_resolved`), a failure preparing the call (a store read
+    while resolving, the prompt's render) and a provider error are each "" --
+    the verdict is already on file and stands without a title. The meter files a
     provider's failure, which is the one place LLM failures are recorded; a
     route that cannot resolve makes no call and so no ledger row, and is
     logged here instead, so an untitled proposal can be explained. The line
@@ -4263,14 +4264,24 @@ async def _break_title(cid: str, sid: str, transcript: str, facts: dict | None,
     provider and model."""
     # Both off the loop (CODE-M1): resolving reads `config.md`, the
     # connections and the catalog sidecar, and the prompt renders templates.
-    resolved, _why, kind = await run_in_threadpool(
-        _soft_resolved, lambda: require_inference("scene-break-title", cid))
+    try:
+        resolved, _why, kind = await run_in_threadpool(
+            _soft_resolved, lambda: require_inference("scene-break-title", cid))
+        if resolved is not None:
+            prompt = await run_in_threadpool(
+                store.scene_break.build_title_prompt, transcript, facts, title, reason)
+    except Exception as exc:  # noqa: BLE001 - the verdict already landed
+        # An unreadable store file while resolving, or a broken override
+        # template under `GRIMOIRE_TEMPLATES`: the title is lost, not the
+        # question. Logged by kind, as the skip below and `_break_titled` are;
+        # cancellation is not an `Exception`, and passes through.
+        log.warning("scene-break title skipped for %s/%s: %s", cid, sid,
+                    type(exc).__name__)
+        return ""
     if resolved is None:
         log.warning("scene-break title skipped for %s/%s: the summary route "
                     "cannot run (%s)", cid, sid, kind or "unknown")
         return ""
-    prompt = await run_in_threadpool(
-        store.scene_break.build_title_prompt, transcript, facts, title, reason)
     try:
         with store.usage.meter("scene-break-title", campaign=cid, scene=sid) as m:
             text = await client.complete(prompt, resolved.conn, m.usage)
