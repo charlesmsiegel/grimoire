@@ -84,18 +84,43 @@ def test_manifest_is_the_sorted_node_ids():
 
 
 def test_compare_fails_on_a_node_that_went_missing(tmp_path, capsys):
-    before = _profile({"t.py::a": _node(), "t.py::b": _node(), "t.py::c": _node()})
-    after = _profile({"t.py::a": _node(), "t.py::c": _node(outcome="failed"),
-                      "t.py::d": _node()})
+    before = _profile({"t.py::a": _node(), "t.py::b": _node()})
+    after = _profile({"t.py::a": _node(), "t.py::d": _node()})
     (tmp_path / "b.json").write_text(json.dumps(before), encoding="utf-8")
     (tmp_path / "a.json").write_text(json.dumps(after), encoding="utf-8")
     diff = profile_report.compare(before, after)
     assert diff["missing"] == ["t.py::b"]
     assert diff["added"] == ["t.py::d"]
-    assert diff["outcome_changed"] == [("t.py::c", "passed", "failed")]
     assert profile_report.main(["compare", str(tmp_path / "b.json"),
                                 str(tmp_path / "a.json")]) == 1
     assert "MISSING  t.py::b" in capsys.readouterr().out
+
+
+def test_compare_fails_on_an_outcome_change_even_behind_a_teardown_error():
+    """Both runs say `error` in one word; the call underneath went from passed
+    to failed, and that is a regression the per-phase record still shows."""
+    was = _node(outcome="error", phases={"setup": "passed", "call": "passed",
+                                         "teardown": "failed"})
+    now = _node(outcome="error", phases={"setup": "passed", "call": "failed",
+                                         "teardown": "failed"})
+    diff = profile_report.compare(_profile({"t.py::a": was}), _profile({"t.py::a": now}))
+    assert [nid for nid, _, _ in diff["outcome_changed"]] == ["t.py::a"]
+    assert profile_report.failed(diff)
+
+
+def test_compare_fails_on_a_collected_node_that_never_reported():
+    before = _profile({"t.py::a": _node(), "t.py::b": _node()},
+                      collected=["t.py::a", "t.py::b"])
+    after = _profile({"t.py::a": _node()}, collected=["t.py::a", "t.py::b"])
+    diff = profile_report.compare(before, after)
+    assert diff["missing"] == [] and diff["unreported"] == ["t.py::b"]
+    assert profile_report.failed(diff)
+
+
+def test_added_nodes_alone_do_not_fail_compare():
+    diff = profile_report.compare(_profile({"t.py::a": _node()}),
+                                  _profile({"t.py::a": _node(), "t.py::new": _node()}))
+    assert diff["added"] == ["t.py::new"] and not profile_report.failed(diff)
 
 
 def test_compare_passes_when_nothing_went_missing(tmp_path):
@@ -190,3 +215,22 @@ def test_a_lost_line_alone_fails_the_diff():
     before = {"files": {"grimoire/a.py": {"lines": [1, 5], "arcs": []}}}
     after = {"files": {"grimoire/a.py": {"lines": [1], "arcs": []}}}
     assert coverage_arcs.diff(before, after)["lost"]["grimoire/a.py"]["lines"] == [5]
+
+
+def test_contexts_reports_what_each_matching_test_executed(tmp_path):
+    """A `--cov-context=test` run tags every arc with the test that ran it;
+    `contexts` reads them back per test, for the tests asked about."""
+    src = _source_tree(tmp_path)
+    a = str(src / "grimoire" / "a.py")
+    path = tmp_path / "ctx"
+    data = CoverageData(basename=str(path))
+    for ctx, arcs in (("tests/t.py::test_one|run", {(1, 2)}),
+                      ("tests/t.py::test_two|run", {(1, 3)}),
+                      ("tests/u.py::test_other|run", {(1, 4)})):
+        data.set_context(ctx)
+        data.add_arcs({a: arcs})
+    data.write()
+    out = coverage_arcs.contexts(path, "tests/t.py::", src=src)
+    assert out == {"tests/t.py::test_one|run": {"grimoire/a.py": [[1, 2]]},
+                   "tests/t.py::test_two|run": {"grimoire/a.py": [[1, 3]]}}
+
