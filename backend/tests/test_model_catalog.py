@@ -205,7 +205,7 @@ def test_an_entry_whose_row_states_no_outputs_has_none():
 
 
 def _anthropic_row(**over):
-    row = {"id": "claude-test-1", "display_name": "Claude Test One",
+    row = {"id": "claude-test-1", "type": "model", "display_name": "Claude Test One",
            "max_input_tokens": 200000, "max_tokens": 64000,
            "capabilities": {
                "image_input": {"supported": True},
@@ -252,6 +252,33 @@ def test_a_mangled_anthropic_row_never_raises(caps):
     assert got["id"] == "claude-test-1" and got["outputs"] == ["text"]
     assert got["context"] is None
     assert got.get("features", {}).get("effort", []) == []
+
+
+def test_an_anthropic_row_with_no_capability_tree_keeps_what_else_it_states():
+    """`capabilities` is nullable in the Models API: a null tree says nothing
+    about capabilities, but the row is still Anthropic's -- its name, window
+    and reply cap are read, and the cap reaches the request's `max_tokens`."""
+    from grimoire import llm_sampling as ls
+    got = catalog.entry(_anthropic_row(capabilities=None))
+    assert got["name"] == "Claude Test One"
+    assert got["context"] == 200000
+    assert got["outputs"] == ["text"]
+    assert got["vision"] is None
+    assert got["features"] == {"max_tokens": 64000}
+    conn = {"kind": "anthropic", "model": "claude-test-1", "model_features": got["features"],
+            "sampling": {"params": {"max_tokens": 100000}}}
+    assert ls.effective(conn)["effective"]["max_tokens"] == 64000
+
+
+@pytest.mark.parametrize("row", [
+    {"id": "a/chat", "name": "Chat", "context_length": 8000, "architecture": {},
+     "pricing": {"prompt": "0.1"}, "supported_parameters": ["temperature"]},
+    {"id": "gpt-x", "object": "model", "created": 1, "owned_by": "someone"},
+    {"id": "m", "display_name": "No type field", "capabilities": None},
+])
+def test_rows_from_other_catalogs_are_not_read_as_anthropic(row):
+    got = catalog.entry(row)
+    assert "features" not in got and "outputs" not in got
 
 
 def test_listable_keeps_text_and_unstated_rows_only():

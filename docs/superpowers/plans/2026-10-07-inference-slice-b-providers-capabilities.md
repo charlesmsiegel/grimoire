@@ -109,7 +109,7 @@
 **Files:** Modify `catalog.py`, `openrouter.py` (`list_models`), `routes/config.py` (connection detail, refresh result, `POST /model-catalog`), `frontend/src/api/types.ts` (`Model.outputs?`, `Model.features?`); Test `tests/test_model_catalog.py`, `tests/test_openrouter.py`, `tests/test_routes.py`, `tests/test_draft_runs.py`
 
 **Interfaces:**
-- `catalog.entry(raw)` adds `outputs` (list, only when `architecture.output_modalities` is a list) and, for an Anthropic models-API row (dict `capabilities` + `display_name`): `name`←`display_name`, `context`←`max_input_tokens`, `vision`←`capabilities.image_input.supported`, `outputs=["text"]`, `features={"structured_output", "adaptive_thinking", "enabled_thinking", "effort": [levels], "max_tokens": int}` — only keys the row states.
+- `catalog.entry(raw)` adds `outputs` (list, only when `architecture.output_modalities` is a list) and, for an Anthropic models-API row (`type: "model"` + `display_name`, whatever its `capabilities` -- that tree is nullable, and a null one states no capability): `name`←`display_name`, `context`←`max_input_tokens`, `vision`←`capabilities.image_input.supported`, `outputs=["text"]`, `features={"structured_output", "adaptive_thinking", "enabled_thinking", "effort": [levels], "max_tokens": int}` — only keys the row states.
 - `catalog.listable(entries: list[dict]) -> list[dict]` — rows whose `outputs` contains `"text"` or that state no `outputs`.
 - `openrouter.list_models` sends `params={"output_modalities": "all"}`.
 - The three picker-facing responses return `catalog.listable(...)`; the sidecar keeps every row.

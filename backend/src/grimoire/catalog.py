@@ -68,7 +68,12 @@ _EFFORT_LEVELS = ("low", "medium", "high", "xhigh", "max")
 
 
 def _is_anthropic(raw: dict) -> bool:
-    return isinstance(raw.get("capabilities"), dict) and bool(raw.get("display_name"))
+    """An Anthropic Models API row, by the shape every one of them has: `type:
+    "model"` beside a `display_name`. Not by its `capabilities` tree, which that
+    API may send as null -- such a row still names its model, window and reply
+    cap. OpenRouter's rows carry neither key, and an OpenAI-style list says
+    `object: "model"`, not `type`."""
+    return raw.get("type") == "model" and bool(raw.get("display_name"))
 
 
 def _supported(node: object) -> bool | None:
@@ -87,9 +92,12 @@ def _anthropic(raw: dict, out: dict) -> None:
     That API names the model (`display_name`), its window (`max_input_tokens`)
     and a `capabilities` tree; every branch is read defensively because catalog
     rows are provider data, and a branch that is missing or the wrong shape
-    leaves its key absent rather than guessed. The models it lists produce text.
+    leaves its key absent rather than guessed -- a null tree included, which
+    states no capability at all. The models it lists produce text.
     """
-    caps = raw["capabilities"]
+    caps = raw.get("capabilities")
+    if not isinstance(caps, dict):
+        caps = {}
     out["name"] = str(raw["display_name"])
     out["context"] = _positive_int(raw.get("max_input_tokens"))
     out["vision"] = _supported(caps.get("image_input"))
