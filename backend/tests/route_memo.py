@@ -36,9 +36,10 @@ Test-only and opt-out:
   built fresh, never cached.
 
 A test that COUNTS FastAPI's analyses (`test_route_order.py`'s first-request
-test) must count with the memo bypassed -- `monkeypatch.setattr(fastapi.routing,
-TARGET, original())` -- or it counts the memo's misses, which depend on what
-earlier tests in the same worker happened to analyse.
+test) must count with the memo bypassed -- when `active()`,
+`monkeypatch.setattr(fastapi.routing, TARGET, original())` -- or it counts the
+memo's misses, which depend on what earlier tests in the same worker happened
+to analyse.
 
 Production builds one app per process and pays the analysis once; nothing in
 `backend/src` changes.
@@ -78,8 +79,9 @@ def available() -> bool:
 
 
 def original():
-    """The unmemoised builder, for comparing against."""
-    return _state["original"] or getattr(fastapi.routing, TARGET)
+    """The unmemoised builder, for comparing against -- None on a FastAPI
+    without the seam, where there is nothing to bypass."""
+    return _state["original"] or getattr(fastapi.routing, TARGET, None)
 
 
 def _memoised(*, path, call, dependencies):

@@ -308,7 +308,8 @@ def test_a_first_request_analyses_only_the_domains_it_walks(client, monkeypatch)
     tests had warmed most of the later routes counted (46, 110)."""
     import fastapi.routing
 
-    monkeypatch.setattr(fastapi.routing, route_memo.TARGET, route_memo.original())
+    if route_memo.active():
+        monkeypatch.setattr(fastapi.routing, route_memo.TARGET, route_memo.original())
     calls: list[int] = []
     real = fastapi.routing.get_dependant
 

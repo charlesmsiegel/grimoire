@@ -157,7 +157,8 @@ def test_the_switch_turns_it_off(monkeypatch):
         monkeypatch.setenv(route_memo.ENV, "0")
         assert route_memo.install() is False
         assert not route_memo.active()
-        assert getattr(fastapi.routing, route_memo.TARGET) is not route_memo._memoised
+        # A default: on a FastAPI without the seam there is no attribute at all.
+        assert getattr(fastapi.routing, route_memo.TARGET, None) is not route_memo._memoised
     finally:
         monkeypatch.delenv(route_memo.ENV)
         if was_on:
