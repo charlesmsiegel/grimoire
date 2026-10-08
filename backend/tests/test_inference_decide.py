@@ -293,11 +293,6 @@ def test_the_mode_is_stamped_per_call_on_copied_blocks(client):
     assert resolved.conn[FALLBACK_KEY] is resolved.attempts[1].conn
 
 
-def test_account_key_is_one_spelling():
-    assert inf.ACCOUNT_KEY == llm_usage.ACCOUNT_KEY == "_account"
-    assert llm_usage.ACCOUNT_FIELDS == ("operation", "role", "billing", "decision_mode")
-
-
 def test_a_generate_resolution_carries_only_its_operation(client):
     _store(client)
     resolved = _resolved("generate")

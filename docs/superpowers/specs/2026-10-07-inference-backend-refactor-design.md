@@ -589,7 +589,8 @@ unset, half-set or known not to embed resolves with no `space_id`.
   land on is dropped as before. `fallback_problem` reads off the same
   condition: `SAME_PROVIDER` is lifted exactly where the drop is, so a row
   the skip lands on names no problem with its fallback, and one it does not
-  land on says `SAME_PROVIDER` as it always did.
+  land on says `SAME_PROVIDER`, or the credential problem it shares with the
+  primary (no key on that provider), as it always did.
 - `decide` chain: native (if the selection is `decide_native`) → structured
   generation on the same selection (if it can `generate`) → the role fallback
   (native or structured, by its own capabilities). Until slice H there is no
