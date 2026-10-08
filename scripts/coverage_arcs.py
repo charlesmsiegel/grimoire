@@ -7,7 +7,7 @@ is the set of production lines and arcs (branch edges) the suite executed,
 compared as sets. That is what this writes and compares
 (`docs/superpowers/specs/2026-10-08-test-suite-acceleration-design.md` §4.4).
 
-    python scripts/coverage_arcs.py dump .coverage OUT.json
+    python scripts/coverage_arcs.py dump .coverage OUT.json [--src WORKTREE/backend/src]
     python scripts/coverage_arcs.py stable OUT.json RUN1.json RUN2.json RUN3.json
     python scripts/coverage_arcs.py diff BEFORE.json AFTER.json
     python scripts/coverage_arcs.py contexts .coverage OUT.json --match tests/test_x.py::
@@ -19,7 +19,9 @@ appears with empty sets rather than not at all, which is the same honesty
 `source = ["grimoire"]` buys the percentage. A measured file that does not
 belong to *this* checkout's `backend/src` is an error, not a skip: it means the
 run imported another tree (an editable install from a different worktree), and
-its numbers say nothing about this one.
+its numbers say nothing about this one. `--src` names a different tree on
+purpose -- a worktree the run was made in -- and the same rule then holds
+against that tree.
 
 **stable** is the intersection of several dumps, plus the remainder that some
 runs executed and others did not. Some production branches here depend on
@@ -182,6 +184,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("dump")
     p.add_argument("data_file")
     p.add_argument("out")
+    p.add_argument("--src", type=pathlib.Path, default=SRC,
+                   help="the backend/src the run imported (default: this checkout's)")
     p = sub.add_parser("stable")
     p.add_argument("out")
     p.add_argument("dumps", nargs="+")
@@ -192,10 +196,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("data_file")
     p.add_argument("out")
     p.add_argument("--match", required=True)
+    p.add_argument("--src", type=pathlib.Path, default=SRC,
+                   help="the backend/src the run imported (default: this checkout's)")
     args = parser.parse_args(argv)
 
     if args.cmd == "dump":
-        doc = dump(args.data_file)
+        doc = dump(args.data_file, src=args.src)
         _write(args.out, doc)
         print(json.dumps(fingerprint(doc), sort_keys=True))
         return 0
@@ -210,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                          sort_keys=True))
         return 0
     if args.cmd == "contexts":
-        found = contexts(args.data_file, args.match)
+        found = contexts(args.data_file, args.match, src=args.src)
         _write(args.out, found)
         print(f"{len(found)} context(s) matching {args.match!r}")
         return 0

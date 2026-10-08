@@ -174,6 +174,17 @@ def test_dump_refuses_a_file_from_another_checkout(tmp_path):
         coverage_arcs.dump(_data_file(tmp_path, "cov", {elsewhere: [(1, 2)]}), src=src)
 
 
+def test_dump_reads_a_run_made_in_another_tree_when_told_so(tmp_path):
+    """`--src` points the dump at the worktree the run was made in; the keys
+    come out the same as a dump made in place, so the two compare."""
+    src = _source_tree(tmp_path)
+    data = _data_file(tmp_path, "cov", {src / "grimoire" / "a.py": [(1, 2)]})
+    out = tmp_path / "dump.json"
+    assert coverage_arcs.main(["dump", str(data), str(out), "--src", str(src)]) == 0
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    assert doc["files"]["grimoire/a.py"]["arcs"] == [[1, 2]]
+
+
 def test_stable_keeps_what_every_run_executed_and_lists_the_rest():
     def run(arcs):
         return {"files": {"grimoire/a.py": {"lines": sorted({b for _, b in arcs if b > 0}),
