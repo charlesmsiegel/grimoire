@@ -1937,13 +1937,13 @@ def _absorbed_cast_refs(cid: str) -> set[str]:
         return set()
     if not isinstance(chronicle, dict):
         return set()
-    return {
-        ref
-        for scene in chronicle.values()
-        if isinstance(scene, dict)
-        for ref in (scene.get("cast") if isinstance(scene.get("cast"), list) else [])
-        if isinstance(ref, str)
-    }
+    refs: set[str] = set()
+    for scene in chronicle.values():
+        # One read, so the isinstance check narrows the value that is iterated.
+        cast = scene.get("cast") if isinstance(scene, dict) else None
+        if isinstance(cast, list):
+            refs.update(ref for ref in cast if isinstance(ref, str))
+    return refs
 
 
 @router.get("/campaigns/{cid}/appearances")
