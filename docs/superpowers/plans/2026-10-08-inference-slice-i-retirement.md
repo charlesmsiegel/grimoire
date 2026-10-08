@@ -322,12 +322,19 @@ G and H are planned in parallel with this plan. This section was rewritten again
 - **R2-7.** Under ratification item 6's fallback, the settings-only archive gets its own prefix, `pre-retirement-settings-`. It is never in `list_backups()`, the whole-store restore points, and so never counted by `backups.due()`. `GET /backups` lists it apart, as `partial: true`, as `create_image_backup`'s archives are. Tested.
 - **R2-8.** `test_a_failed_retirement_archive_writes_nothing` states that the archive precedes every write of the pass, marker-only writes included, which is why no `RETIRED_KEY` is written.
 
+### Round 3 minors
+
+- **R3-1.** Each retirement unit re-checks the archive decision inside its own hold. A unit whose in-hold plan now needs an archive the pass did not take is skipped and left for the next run. A `ConnectionUnreadableError` raised while building `pass_plan` drops only that unit.
+- **R3-2.** The migrate-mode record fallback is keyed on the record holding an entry for that connection, not on `config.md`'s marker. An entry already proves a strip happened.
+- **R3-3.** A §11.1 write refused because the record cannot be read answers a stated 409 `retirement_unreadable`, never a 500. This follows D's `facts_unreadable` precedent, and `test_the_write_path_reads_the_record_on_a_retired_store` asserts the status and the body.
+- **R3-4.** Task 6a adds `RETIRED_KEY` to `UPGRADED_DEFAULT`, and adds `tests/inference_fixtures.py` and `test_a_product_store_is_born_with_the_marker_alone` (now asserting both markers) to its Files and steps. From 6a on, the suite is born retired, so a test that needs an unretired format-2 store removes the marker explicitly.
+
 ### The plan's rulings (Task 2 folds each into the spec, as ratified)
 
 1. **Play is never refused, and it reads the legacy layout only through the planner, in memory** (CR1).
    - `resolve` makes one call, `legacy_plan.overlay(cfg, meta)`. It returns the format-2 view of the global and campaign settings, the virtual derived presets, the model-facts overlay and the notes. The resolver reads that view as format 2.
    - Below format 2, `overlay` plans the whole mapping. At format 2 it plans an unmarked campaign's mapping, and the derived-preset repoint of every scope without the retirement marker. A retired scope costs nothing, because the marker is already in the `cfg`/`meta` in hand.
-   - Play's lookup is fail-soft, as today's translation is (`mode="soft"`). The migration keeps C's lookup (`mode="migrate"`). It changes in one way only: once `config.md` is retired, a stripped connection answers from the retirement record, read strictly (R2-2). Retirement and every write it makes use `mode="retire"`, which raises on an unreadable, empty, unfenced or `kind`-less file and on an unparseable retirement record (N1, N6).
+   - Play's lookup is fail-soft, as today's translation is (`mode="soft"`). The migration keeps C's lookup (`mode="migrate"`). It changes in one way only: a stripped connection, one that has an entry in the retirement record, answers from that record, read strictly (R2-2, R3-2). Retirement and every write it makes use `mode="retire"`, which raises on an unreadable, empty, unfenced or `kind`-less file and on an unparseable retirement record (N1, N6).
    - The migration persists `Plan.mapped`, the old translation verbatim, and never a repoint. Retirement persists `mapped | repoint` after writing the derived presets. Play applies both in memory (N2).
    - Nothing is written on the play path. The banner, `GET /config`'s `ready` and §12's rows are unchanged. There is no retry loop: the next start retries, as §11.2 says.
 2. **The mapping moves; the translation is deleted.** `translate.global_view`/`campaign_view`/`embedding_view` move verbatim into `legacy_plan.py`, the one legacy reader, shared by `migrate`, `retire` and `resolve`. `translate.py` and every format-1 branch of `resolve`/`settings`/`in_use` go. `routing.legacy_key`/`routing.CONFIG_KEYS` stay as spelling data that the planner, the write refusals and retirement read.
@@ -600,11 +607,12 @@ def campaign_plan(meta: Mapping[str, str], *, global_current: bool, lookup: Look
 def legacy_embeds(cfg: Mapping[str, str], lookup: Lookup) -> bool   # in place of embed_space.resolve (no cycle)
 def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
     # "soft": translate's fail-soft read (play).
-    # "migrate": migrate._lookup moved verbatim -- C's behaviour (A12). From Task 6b, on a store whose
-    #   config.md carries RETIRED_KEY, a connection whose file exists and holds no non-empty
-    #   MODEL_FIELDS value answers from the retirement record, read strictly; an unparseable
-    #   record raises UnreadableError, so step 8 and the §11.1 write path leave the campaign
-    #   unwritten (R2-2).
+    # "migrate": migrate._lookup moved verbatim -- C's behaviour (A12). From Task 6b, a connection
+    #   whose file exists and holds no non-empty MODEL_FIELDS value answers from the retirement
+    #   record whenever the record holds an entry for that connection (R3-2: the entry proves a
+    #   strip; config.md's marker is not consulted). The record is read strictly: an unparseable
+    #   record raises UnreadableError, so step 8 leaves the campaign unwritten and the §11.1 write
+    #   path answers 409 retirement_unreadable (R2-2, R3-3).
     # "retire": raises ConnectionUnreadableError when the file exists and is unreadable, empty,
     #   unfenced or has no `kind` (read_strict(require="kind")) -- N1. From Task 6b it falls back to
     #   the record, read strictly (N6).
@@ -825,6 +833,8 @@ Two commits. **CI checkpoint after 6b.**
   - `store/backups.py`: `RETIRE_PREFIX`; `_PREFIXES`; `sweep`'s exclusion; `_sweep_abandoned_temps`' prefix list (N12); the listing; and, with item 6 declined only (Step 4), `create_backup(..., only=None)`, `RETIRE_SETTINGS_PREFIX` and `list_partial_backups()` (R2-7).
   - `store/sampler_presets.py`: `put_derived`.
   - `store/config.py`: `retire_write`; `birth_fields()` stamps `RETIRED_KEY` (N3).
+  - `tests/inference_fixtures.py`: `UPGRADED_DEFAULT` gains `RETIRED_KEY: "1"`, so it stays equal to `birth_fields()` (R3-4).
+  - `tests/test_inference_storage.py`: `test_a_product_store_is_born_with_the_marker_alone` asserts both markers, `FORMAT_KEY` and `RETIRED_KEY`, and still no Primary (R3-4).
   - `store/campaigns/lifecycle.py`: a new `_birth_marker()`, called only by `create_campaign`. It is `_inference_marker()`'s fields, plus `RETIRED_KEY` when `config.md` carries it (N3, R2-1). `_inference_marker()` and `set_campaign_inference` are unchanged.
   - `store/inference/legacy_plan.py`: `lookup(mode="retire")` (N1).
   - `store/inference/migrate.py`: the retirement stage; `Status.retirement`; the note's `retire_safety`/`retire_failed`; the `_run` early return.
@@ -865,6 +875,8 @@ Two commits. **CI checkpoint after 6b.**
   - `_retire(run)` runs after the marker, and on every `ensure` of a current store:
     0. `pass_plan(...)`, computed once;
     1. the archive (ruling 6.0), when `needs_archive(pass_plan)`, before the pass's first write of **any** kind, marker-only writes included. It is reused when the note names one that exists (R2-3);
+       - each unit (global, a campaign, a stray-key deletion, a connection's strip) re-plans inside its own hold. If that in-hold plan deletes or replaces a value and the pass took no archive, the unit is skipped and left for the next run (R3-1);
+       - a `ConnectionUnreadableError` raised while building `pass_plan` drops only the units that name that connection, not the whole plan (R3-1);
     2. `retire_global`;
     3. `retire_campaign` for each campaign under `campaign_lock_nowait`, where busy, unreadable or a strict lookup failure leaves that campaign;
     4. the strip (6b).
@@ -884,6 +896,10 @@ Two commits. **CI checkpoint after 6b.**
                                                                               # no .cache note -> one RETIRE_PREFIX archive, taken before that campaign's write
   def test_a_resumed_pass_with_only_the_strip_left_takes_an_archive(home)    # R2-3: every scope retired, fields still on connections
   def test_a_marker_only_pass_takes_no_archive(home)                    # R2-3: a C-era campaign with no legacy key -> RETIRED_KEY only, no archive
+  def test_a_unit_that_grew_work_after_planning_is_left_for_the_next_run(home, monkeypatch)   # R3-1: the pass plans marker-only; a patched hook
+                                                                              # writes a route_scene into the campaign before its unit -> that unit writes
+                                                                              # nothing; the next ensure() takes the archive and retires it
+  def test_an_unreadable_connection_drops_only_its_units_from_the_pass(home)   # R3-1
   def test_the_archive_is_taken_once_per_root_and_reused_on_resume(home)    # a later step fails; the next run reuses it
   def test_a_format_1_store_retires_under_its_pre_inference_archive(home)   # one archive, pre-inference-, none pre-retirement-
   def test_a_reused_pre_inference_archive_does_not_stand_in(home)       # N13: a pre-inference- archive kept from an earlier run -> a pre-retirement- one is taken
@@ -923,6 +939,7 @@ Two commits. **CI checkpoint after 6b.**
   Plus `test_planned_equals_persisted` (Task 5), whose persisted side is now retired, and `test_a_migrated_and_retired_copy_plays_a_turn` in `test_frozen_campaign.py`.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3: Implement** in ruling 6's order. Classify `retire.py` in `store/locks.py` beside `migrate`, in the same list and for the same reason: its campaign step runs under `campaign_lock_nowait`, taken by the caller.
+  - **Birth fixtures (R3-4).** Update `UPGRADED_DEFAULT` and `test_a_product_store_is_born_with_the_marker_alone` in the same commit. From here on the suite is born retired, so a test that needs an unretired format-2 store (Tasks 4–6's derivation cases, for example) removes `RETIRED_KEY` from `config.md` explicitly, through a `inference_fixtures.unretired()` helper.
 - [ ] **Step 4: The archive's form, by ratification item 6** (N7). Run exactly one branch, by the answer recorded in Task 1's report.
   - **Approved:** the full archive, `backups.create_backup(prefix=RETIRE_PREFIX)`.
   - **Declined (the fallback):** `backups.create_backup` gains `only: Iterable[str] | None = None`, a set of root-relative globs. Retirement passes `retire.TOUCHED = ("config.md", "campaigns/*/campaign.md", "llm_connections/*.md", "sampler_presets/**", "inference-retired.json")`.
@@ -955,7 +972,8 @@ Two commits. **CI checkpoint after 6b.**
   tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py tests/test_frozen_campaign.py
   tests/test_sampler_presets_store.py tests/test_backups*.py tests/test_config_store.py
   tests/test_lock_domain_guard.py tests/test_atomic_guard.py tests/test_legacy_reader_guard.py
-  tests/test_campaign_lifecycle*.py tests/test_inference_storage.py tests/test_docs_guard.py
+  tests/test_campaign_lifecycle*.py tests/test_inference_storage.py tests/test_inference_legacy_plan.py
+  tests/test_inference_format2.py tests/test_docs_guard.py
   ```
 
   Then the gates.
@@ -969,7 +987,9 @@ Two commits. **CI checkpoint after 6b.**
   - `store/inference/retired.py` (created in Task 4 with `Note`): the record.
   - `store/inference/retire.py`: `strip`; `left` widened; the facts check (N9).
   - `store/inference/legacy_plan.py`: `lookup` falls back to the record's `fields` for a connection whose file exists and holds no non-empty `MODEL_FIELDS` value. The `retire` mode, and the `migrate` mode once `config.md` is retired, read the record strictly (N6, N20, R2-2).
-  - `store/inference/migrate.py`: step 8 (`_campaign_step` → `migrate.campaign`) and the §11.1 write path build their lookup with `mode="migrate"`, which now reaches the record on a retired store, and treat `UnreadableError` as "leave this campaign" (R2-2).
+  - `store/inference/migrate.py`: step 8 (`_campaign_step` → `migrate.campaign`) and the §11.1 write path build their lookup with `mode="migrate"`, which now reaches the record for any connection the record holds (R3-2).
+    - Step 8 treats `UnreadableError` as "leave this campaign".
+    - The §11.1 write path's route answers **409** with detail `{"kind": "retirement_unreadable", "detail": "The record of retired model settings could not be read; try again once it has synced."}`, following D's `facts_unreadable` precedent. It is never a 500 (R3-3).
   - `store/llm_connections.py`: `strip_model_fields`; `_write_raw`; `ensure_migrated`; `_dangling`.
   - `store/config.py`: the legacy defaults out of `read_config` (kept in `_CONFIG_KEYS`).
   - `store/inference/settings.py`: `retirement_notes`.
@@ -1025,7 +1045,10 @@ Two commits. **CI checkpoint after 6b.**
                                                                         # repaired, step 8 migrates it with spare's recorded model and retirement retires it
   def test_the_write_path_reads_the_record_on_a_retired_store(client, home)   # R2-2: same late Saltmarch, reached first by a campaign
                                                                         # settings write (§11.1) -> use_scene_model is spare's recorded model, never "";
-                                                                        # with the record corrupted, the write is refused and nothing is written
+                                                                        # with the record corrupted: status 409, detail kind "retirement_unreadable",
+                                                                        # and nothing is written (R3-3)
+  def test_the_record_fallback_needs_no_config_marker(home)             # R3-2: strip, then drop RETIRED_KEY from config.md by hand -> step 8 still
+                                                                        # persists spare's recorded model for a late unmarked campaign
   def test_an_empty_legacy_field_still_falls_back_to_the_record(home)   # N6: a C-H edit wrote model: "" after the strip -> the fallback answers
   def test_the_record_never_answers_for_a_deleted_connection(home)      # N20
   def test_the_first_recorded_fields_win(home)                          # N20: a pre-C build re-adds model: "other"; the next strip keeps the first value
