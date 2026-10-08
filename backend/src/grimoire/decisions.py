@@ -17,7 +17,11 @@ Three rules the rest of the module follows:
 
 - **An answer nobody gave is `None` with a reason, never a default** (§12). The
   reasons are a closed vocabulary (`REASONS`); `unreadable` may carry a
-  `detail` sub-reason, which is not a new reason.
+  `detail` sub-reason, which is not a new reason. There are three details:
+  `NOT_AN_OPTION` (a choice answered with a value naming no option),
+  `NO_OBJECT` (the reply held no JSON object at all) and `NO_ITEM` (it held
+  one, but nothing in it reads as this item). `was_read` says which side of
+  that line an answer is on.
 - **The schema stays inside what both providers document.** OpenAI's strict
   mode and Anthropic's `output_config.format` accept different subsets of JSON
   Schema, so a batch schema uses only `type` (object, string, boolean,
@@ -45,11 +49,25 @@ REASONS = ("unreadable", "refused", "abstained", "error")
 #: below, or by a provider's own decisions endpoint (slice H).
 BACKENDS = ("structured", "native")
 
-#: The one `detail` this slice sets: a choice answered with a value that is
-#: present, not null, and names no option.
+#: The `detail`s of an `unreadable` answer (none is a reason). `NOT_AN_OPTION`:
+#: a choice answered with a value that is present, not null, and names no
+#: option.
 NOT_AN_OPTION = "not_an_option"
 
+#: The reply held no JSON object at all (`find_object` returned None); set on
+#: every answer of every item in it.
+NO_OBJECT = "no_object"
+
+#: The reply held an object, but nothing in it reads as this item: no index key
+#: and no unwrapped or flattened read applies, the entry is not an object, or
+#: its `answers` is not an object. Set on every answer of that item. (A question
+#: missing from an item that *was* read, and a null on a choice without
+#: `allow_none`, keep no detail.)
+NO_ITEM = "no_item"
+
 MIN_OPTIONS, MAX_OPTIONS = 2, 255
+#: A nullable choice has two possible answers with one option (it, or null).
+MIN_OPTIONS_WITH_NONE = 1
 MIN_LEVELS, MAX_LEVELS = 2, 10
 
 #: Items per structured call (ruling 16). Each item carries its own transcript
@@ -140,7 +158,9 @@ class Answer:
     """One question's answer.
 
     `reason` is set if and only if `answer is None`, and is one of `REASONS`.
-    `detail` is set only beside `reason == "unreadable"`. `probability` and
+    `detail` is set only beside `reason == "unreadable"`, and is one of
+    `NOT_AN_OPTION`, `NO_OBJECT` or `NO_ITEM` (none of them is a reason).
+    `probability` and
     `distribution` are what a backend actually reported; a missing one stays
     missing, and nothing computes a stand-in.
     """
@@ -197,21 +217,30 @@ def normalise(word: str) -> str:
     return _SEPARATORS.sub("_", word.casefold().strip())
 
 
+def offerable(spelling: str) -> bool:
+    """Whether `spelling` can be an option id or alias: it must survive
+    `normalise` non-empty. `_check_choice` refuses what this refuses, through
+    this one function, so a builder can drop what `validate` would refuse
+    instead of failing the request."""
+    return bool(normalise(spelling))
+
+
 def _check_choice(q: Choice) -> None:
-    if not MIN_OPTIONS <= len(q.options) <= MAX_OPTIONS:
+    low = MIN_OPTIONS_WITH_NONE if q.allow_none else MIN_OPTIONS
+    if not low <= len(q.options) <= MAX_OPTIONS:
         raise DecideRequestError(
             f"choice {q.id!r} offers {len(q.options)} options; "
-            f"it needs {MIN_OPTIONS}-{MAX_OPTIONS}")
+            f"it needs {low}-{MAX_OPTIONS}")
     seen: dict[str, str] = {}
     for opt in q.options:
         if not isinstance(opt, Option):
             raise DecideRequestError(f"choice {q.id!r} has an option that is not an Option")
-        if not normalise(opt.id):
+        if not offerable(opt.id):
             raise DecideRequestError(f"choice {q.id!r} has an empty option id")
         for spelling in (opt.id, *opt.aliases):
-            key = normalise(spelling)
-            if not key:
+            if not offerable(spelling):
                 raise DecideRequestError(f"option {opt.id!r} has an empty alias")
+            key = normalise(spelling)
             if key in seen:
                 raise DecideRequestError(
                     f"choice {q.id!r}: {spelling!r} collides with {seen[key]!r} "
@@ -307,9 +336,19 @@ def schema(items: Sequence[Item], *, explain: bool) -> dict[str, Any]:
 _FENCE = re.compile(r"```(?:json)?[ \t]*\n?(.*?)```", re.DOTALL | re.IGNORECASE)
 
 
+def _first_wins(pairs: list[tuple[Any, Any]]) -> dict[Any, Any]:
+    """An object that keeps a key's first occurrence, where JSON's default
+    keeps the last. Both continuity parsers always did, and a twin of the same
+    shape must not read differently."""
+    out: dict[Any, Any] = {}
+    for key, value in pairs:
+        out.setdefault(key, value)
+    return out
+
+
 def _loads(text: str) -> object:
     try:
-        return json.loads(text)
+        return json.loads(text, object_pairs_hook=_first_wins)
     except (ValueError, RecursionError):
         return None
 
@@ -317,7 +356,8 @@ def _loads(text: str) -> object:
 def find_object(text: str) -> dict[str, Any] | None:
     """The reply's object: the whole text, else a leading fence's body, else
     the span from the first `{` to the last `}`. The first that decodes to an
-    object wins, and `None` when none does.
+    object wins, and `None` when none does. A repeated key, at any level, keeps
+    its first value.
 
     `parse`'s first step, public because `parse` answers every item whatever
     it was sent: whether a reply held an object at all -- rather than one
@@ -337,14 +377,14 @@ def find_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _flattened(obj: dict[str, Any], item: Item) -> tuple[object, object]:
+def _flattened(obj: dict[str, Any], item: Item) -> tuple[object, object] | None:
     """(answers, rationale) for `item` answered with its question ids at the
-    top of `obj` -- today's style -- or (None, None) when `obj` names none of
+    top of `obj` -- today's style -- or None when `obj` names none of
     them. The rationale is `rationale`, else a `LEGACY_RATIONALE_KEYS` key
     that is not one of the item's own question ids."""
     asked = {q.id for q in item.questions}
     if not asked & set(obj):
-        return None, None
+        return None
     keys = ("rationale", *(k for k in LEGACY_RATIONALE_KEYS if k not in asked))
     return obj, next((obj[k] for k in keys if k in obj), None)
 
@@ -360,30 +400,50 @@ def _foreign_index(obj: dict[str, Any], count: int) -> bool:
                for key in obj)
 
 
-def _item_object(obj: dict[str, Any], index: int, items: Sequence[Item]) -> tuple[object, object]:
-    """(answers, rationale) for item `index`, or (None, None) when the reply
+def _item_object(obj: dict[str, Any], index: int,
+                 items: Sequence[Item]) -> tuple[object, object] | None:
+    """(answers, rationale) for item `index`, or None (no item) when the reply
     holds nothing that can be read as that item -- for every item, when the
-    reply carries an index we did not send (`_foreign_index`)."""
+    reply carries an index we did not send (`_foreign_index`), so each of them
+    reads `NO_ITEM`: the object was there, but none of its keys is ours."""
     if _foreign_index(obj, len(items)):
-        return None, None
+        return None
     key = str(index)
     if key in obj:
         entry = obj[key]
         if not isinstance(entry, dict):
-            return None, None
+            return None
         if "answers" in entry:
             return entry["answers"], entry.get("rationale")
         # Keyed by its index with the `answers` level dropped: the flattened
         # shape under the key (a fallback without structured mode can send it).
         return _flattened(entry, items[index])
     if len(items) != 1 or "0" in obj:
-        return None, None
+        return None
     if "answers" in obj:  # unwrapped: the item's object, with no index key
         return obj["answers"], obj.get("rationale")
     return _flattened(obj, items[0])  # flattened: today's style
 
 
 _UNREADABLE = Answer(None, "unreadable")
+_NO_OBJECT = Answer(None, "unreadable", detail=NO_OBJECT)
+_NO_ITEM = Answer(None, "unreadable", detail=NO_ITEM)
+
+
+def was_read(answer: Answer) -> bool:
+    """Whether the reply held and gave a value to this answer's question,
+    however bad that value was: any answer, or an `unreadable` one with no
+    detail or `NOT_AN_OPTION`. Not read: `NO_OBJECT`, `NO_ITEM`, `error`,
+    `refused` and `abstained`.
+
+    What it is for: an item the reply held and gave a value to may take a
+    mapping's safe default (`uncertain`); an item the reply never reached may
+    not, because storing a default would claim the model answered. A caller
+    asks it of the question whose answer decides whether the item was answered
+    (both continuity mappings ask it of `decision`, which never allows none)."""
+    if answer.answer is not None:
+        return True
+    return answer.reason == "unreadable" and answer.detail in ("", NOT_AN_OPTION)
 
 
 def _read_choice(q: Choice, value: object) -> Answer:
@@ -422,16 +482,22 @@ def parse(text: str, items: Sequence[Item], *, explain: bool) -> tuple[ItemResul
     and flattened (question ids at the top level) shapes; a flattened shape,
     keyed or not, takes its rationale from `rationale`, else from a
     `LEGACY_RATIONALE_KEYS` key. Anything else, and
-    any value of the wrong type, is `None` with reason `unreadable` -- every
-    item of a reply that carries an index outside the items sent, whose keys
-    are not ours to read (an answer left unread, never one misattributed).
+    any value of the wrong type, is `None` with reason `unreadable`; a reply
+    with no object marks every answer `NO_OBJECT`, and an item the object does
+    not hold marks its answers `NO_ITEM` -- every item of a reply that carries
+    an index outside the items sent, whose keys are not ours to read (an answer
+    left unread, never one misattributed). A repeated key keeps its first value.
     """
     obj = find_object(text) if isinstance(text, str) else None
     results = []
     for index, item in enumerate(items):
-        answers, rationale = _item_object(obj, index, items) if obj is not None else (None, None)
+        if obj is None:
+            results.append(ItemResult({q.id: _NO_OBJECT for q in item.questions}))
+            continue
+        found = _item_object(obj, index, items)
+        answers, rationale = found if found is not None else (None, None)
         if not isinstance(answers, dict):
-            results.append(ItemResult({q.id: _UNREADABLE for q in item.questions}))
+            results.append(ItemResult({q.id: _NO_ITEM for q in item.questions}))
             continue
         note = rationale.strip() if explain and isinstance(rationale, str) else ""
         results.append(ItemResult({q.id: _read(q, answers) for q in item.questions}, note))

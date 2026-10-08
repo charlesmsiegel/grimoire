@@ -60,6 +60,9 @@ def test_validate_bounds():
     for n in (1, 256):
         with pytest.raises(DecideRequestError):
             decisions.validate([_choice_item(_options(n))])
+    decisions.validate([_choice_item(_options(1), allow_none=True)])
+    with pytest.raises(DecideRequestError):
+        decisions.validate([_choice_item(_options(256), allow_none=True)])
 
     decisions.validate([Item("ctx", (Score("s", "i", ("a",) * 2),))])
     decisions.validate([Item("ctx", (Score("s", "i", ("a",) * 10),))])
@@ -238,7 +241,7 @@ def test_parse_unwrapped_single_item():
 
     for result in decisions.parse(text, [_item(), _item()], explain=True):
         assert result.rationale == ""
-        assert all(_unreadable(a) for a in result.answers.values())
+        assert all(_unreadable(a, decisions.NO_ITEM) for a in result.answers.values())
 
 
 def test_parse_flattened_single_item():
@@ -247,10 +250,10 @@ def test_parse_flattened_single_item():
     assert result == ItemResult({"over": Answer(True)}, "r")
 
     for result in decisions.parse('{"over": true, "rationale": "r"}', [item, item], explain=True):
-        assert result == ItemResult({"over": Answer(None, "unreadable")})
+        assert result == ItemResult({"over": Answer(None, "unreadable", detail=decisions.NO_ITEM)})
 
     (result,) = decisions.parse('{"unrelated": 1}', [item], explain=True)
-    assert result == ItemResult({"over": Answer(None, "unreadable")})
+    assert result == ItemResult({"over": Answer(None, "unreadable", detail=decisions.NO_ITEM)})
 
 
 def test_parse_flattened_takes_the_legacy_rationale_keys():
@@ -316,7 +319,7 @@ def test_parse_reads_an_indexed_item_with_the_answers_level_dropped():
     assert second.answers == {"p": Answer(True)}
     # Still nothing to read when the entry names none of the item's questions.
     (result,) = decisions.parse('{"0": {"unrelated": true}}', [item], explain=True)
-    assert result == ItemResult({"over": Answer(None, "unreadable")})
+    assert result == ItemResult({"over": Answer(None, "unreadable", detail=decisions.NO_ITEM)})
 
 
 def test_a_reply_numbered_from_one_answers_no_item():
@@ -324,9 +327,12 @@ def test_a_reply_numbered_from_one_answers_no_item():
     by a fallback without structured mode. Its `"1"` is item 0's answer, not
     item 1's -- so a reply carrying an index outside the items sent has keys
     that are not ours, and every item is left unread rather than any answer
-    being guessed onto another item."""
+    being guessed onto another item. Each reads `NO_ITEM`: the object was
+    there, but nothing in it is ours to read as that item -- so `was_read` says
+    no, and no mapping stores a safe default the model never gave."""
     items = [Item("a", (Predicate("over", "i"),)), Item("b", (Predicate("over", "i"),))]
-    unread = ItemResult({"over": Answer(None, "unreadable")})
+    unread = ItemResult({"over": Answer(None, "unreadable", detail=decisions.NO_ITEM)})
+    assert not decisions.was_read(unread.answers["over"])
     for reply in ({"1": {"answers": {"over": True}}, "2": {"answers": {"over": False}}},
                   {"0": {"answers": {"over": True}}, "1": {"answers": {"over": False}},
                    "2": {"answers": {"over": True}}},
@@ -340,7 +346,7 @@ def test_a_reply_numbered_from_one_answers_no_item():
 
 def test_a_reply_whose_keys_are_all_in_range_is_read_as_before():
     """Every index key one we sent: read as today, an item left out included
-    (it is unread; the other is answered)."""
+    (it is `NO_ITEM`; the other is answered)."""
     items = [Item("a", (Predicate("over", "i"),)), Item("b", (Predicate("over", "i"),))]
     first, second = decisions.parse(
         '{"0": {"answers": {"over": true}}, "1": {"answers": {"over": false}}}', items,
@@ -348,7 +354,7 @@ def test_a_reply_whose_keys_are_all_in_range_is_read_as_before():
     assert (first.answers["over"], second.answers["over"]) == (Answer(True), Answer(False))
     first, second = decisions.parse('{"1": {"answers": {"over": false}}}', items,
                                     explain=False)
-    assert first.answers["over"] == Answer(None, "unreadable")
+    assert first.answers["over"] == Answer(None, "unreadable", detail=decisions.NO_ITEM)
     assert second.answers["over"] == Answer(False)
 
 
@@ -372,7 +378,7 @@ def test_parse_reads_several_items_in_order():
 def test_parse_a_missing_item_is_unreadable():
     items = [_item(), Item("b", (Predicate("p", "i"),))]
     _, second = decisions.parse('{"0": {"answers": {"over": true}}}', items, explain=False)
-    assert second == ItemResult({"p": Answer(None, "unreadable")})
+    assert second == ItemResult({"p": Answer(None, "unreadable", detail=decisions.NO_ITEM)})
 
 
 def test_parse_normalises_spelling_and_aliases():
@@ -414,7 +420,94 @@ def test_unreadable_answers_carry_a_reason():
 
     for text in ("[]", "no json here"):
         for answers in _answers(text, [_item()]):
-            assert all(_unreadable(a) for a in answers.values()), text
+            assert all(_unreadable(a, decisions.NO_OBJECT) for a in answers.values()), text
+
+
+def test_a_reply_with_no_object_marks_every_answer():
+    for text in ("no json here", "", "[]"):
+        results = decisions.parse(text, [_item(), _item()], explain=False)
+        assert len(results) == 2
+        for result in results:
+            assert result.answers
+            assert all(a == Answer(None, "unreadable", detail=decisions.NO_OBJECT)
+                       for a in result.answers.values()), text
+
+
+def test_an_item_the_object_does_not_hold_is_no_item():
+    items = [_item(), _item()]
+
+    def no_item(text, index):
+        answers = decisions.parse(text, items, explain=False)[index].answers
+        assert answers
+        return all(a == Answer(None, "unreadable", detail=decisions.NO_ITEM)
+                   for a in answers.values())
+
+    assert no_item('{"0": {"answers": {"over": true, "who": null, "tone": 1}}}', 1)
+    assert no_item('{"0": 5}', 0)
+    assert no_item('{"0": {"answers": []}}', 0)
+    assert no_item("{}", 0) and no_item("{}", 1)
+
+
+def test_a_question_missing_from_a_read_item_has_no_detail():
+    (answers,) = _answers('{"0": {"answers": {}}}', [Item("ctx", (Predicate("over", "i"),))])
+    assert answers["over"] == Answer(None, "unreadable")
+    assert answers["over"].detail == ""
+
+
+def test_a_choice_that_allows_none_may_offer_one_option():
+    only = Option("find-the-ledger", "Find the ledger")
+    item = Item("ctx", (Choice("id", "i", (only,), allow_none=True),))
+    decisions.validate([item])
+    assert decisions.schema([item], explain=False)["properties"]["0"]["properties"][
+        "answers"]["properties"]["id"] == {
+            "anyOf": [{"type": "string", "enum": ["find-the-ledger"]}, {"type": "null"}]}
+    (read,) = _answers('{"0": {"answers": {"id": "find-the-ledger"}}}', [item])
+    assert read["id"] == Answer("find-the-ledger")
+    (none,) = _answers('{"0": {"answers": {"id": null}}}', [item])
+    assert none["id"] == Answer(None, "abstained")
+
+
+def test_a_choice_without_none_still_needs_two():
+    with pytest.raises(DecideRequestError):
+        decisions.validate([_choice_item(_options(1))])
+    with pytest.raises(DecideRequestError):
+        decisions.validate([_choice_item((), allow_none=True)])
+
+
+def test_a_repeated_key_keeps_its_first_value():
+    items = [Item("a", (Predicate("over", "i"),)), Item("b", (Predicate("over", "i"),))]
+    text = ('{"0": {"answers": {"over": true}}, "1": {"answers": {"over": true}}, '
+            '"0": {"answers": {"over": false}}}')
+    for wrapped in (text, f"```json\n{text}\n```", f"Here it is: {text} done."):
+        first, _ = _answers(wrapped, items)
+        assert first["over"] == Answer(True), wrapped
+    (inner,) = _answers('{"0": {"answers": {"over": true, "over": false}}}', items[:1])
+    assert inner["over"] == Answer(True)
+    assert decisions.find_object('{"a": 1, "a": 2}') == {"a": 1}
+    assert decisions.find_object('```json\n{"a": 1, "a": 2}\n```') == {"a": 1}
+    assert decisions.find_object('see {"a": 1, "a": 2} ok') == {"a": 1}
+
+
+def test_was_read():
+    assert decisions.was_read(Answer(True))
+    assert decisions.was_read(Answer(0))
+    assert decisions.was_read(Answer(None, "unreadable"))
+    assert decisions.was_read(Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION))
+    assert not decisions.was_read(Answer(None, "unreadable", detail=decisions.NO_OBJECT))
+    assert not decisions.was_read(Answer(None, "unreadable", detail=decisions.NO_ITEM))
+    for reason in ("error", "refused", "abstained"):
+        assert not decisions.was_read(Answer(None, reason))
+
+
+def test_offerable_is_what_validate_refuses():
+    assert not decisions.offerable("")
+    assert not decisions.offerable("   ")
+    assert decisions.offerable("the-map")
+    for bad in ("", "   "):
+        with pytest.raises(DecideRequestError):
+            decisions.validate([_choice_item((Option(bad, ""), MARA))])
+        with pytest.raises(DecideRequestError):
+            decisions.validate([_choice_item((Option("the-map", "", (bad,)), MARA))])
 
 
 def test_explicit_none_is_abstained():
@@ -480,7 +573,7 @@ def test_parse_reads_a_list_holding_one_object():
 def test_parse_a_list_holding_two_objects_is_unreadable():
     for result in decisions.parse(f"[{REPLY}, {REPLY}]", [_item()], explain=True):
         assert result.rationale == ""
-        assert all(_unreadable(a) for a in result.answers.values())
+        assert all(_unreadable(a, decisions.NO_OBJECT) for a in result.answers.values())
 
 
 def test_validate_refuses_whitespace_only_ids():
@@ -492,7 +585,7 @@ def test_validate_refuses_whitespace_only_ids():
 
 def test_parse_of_none_is_unreadable():
     (result,) = decisions.parse(None, [_item()], explain=True)  # type: ignore[arg-type]
-    assert result == ItemResult({q.id: Answer(None, "unreadable")
+    assert result == ItemResult({q.id: Answer(None, "unreadable", detail=decisions.NO_OBJECT)
                                  for q in _item().questions})
 
 
@@ -527,6 +620,9 @@ def test_constants():
     assert decisions.REASONS == ("unreadable", "refused", "abstained", "error")
     assert decisions.BACKENDS == ("structured", "native")
     assert decisions.NOT_AN_OPTION == "not_an_option"
+    assert decisions.NO_OBJECT == "no_object"
+    assert decisions.NO_ITEM == "no_item"
+    assert decisions.MIN_OPTIONS_WITH_NONE == 1
     assert (decisions.MIN_OPTIONS, decisions.MAX_OPTIONS) == (2, 255)
     assert (decisions.MIN_LEVELS, decisions.MAX_LEVELS) == (2, 10)
     assert decisions.MAX_ITEMS_PER_CALL == 8
