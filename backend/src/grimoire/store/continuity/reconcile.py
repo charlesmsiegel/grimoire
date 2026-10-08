@@ -125,6 +125,7 @@ from __future__ import annotations
 import hashlib
 import re
 import time
+from collections import Counter
 from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, TypeVar
 
@@ -1423,29 +1424,27 @@ def item_scenes(payload: dict, cand: dict) -> list[str]:
     """The scene ids one candidate's item shows: its records' beat scenes, and
     the chronicle lines it shows -- those of its own beat scenes and of the
     recent window (`payload["recent"]`) -- in `payload["known_scenes"]`
-    order. Walking that order, an id `decisions.offerable` refuses, or one
-    colliding once normalised with an id already taken, is dropped (Review
-    Focus 3, M4) -- from the item's evidence options and its chronicle lines;
-    a beat keeps its marker, as the record block is today's byte for byte --
-    so a hand-edited ledger or chronicle never builds a request
-    `decisions.validate` refuses. With no id dropped, the union over a
-    payload's candidates is today's `known_scenes`: each item may cite only
-    what it shows."""
+    order. An id `decisions.offerable` refuses is dropped, and so is EVERY id
+    of a group that collides once normalised (Review Focus 3, M4, M8) -- from
+    the item's evidence options and its chronicle lines; a beat keeps its
+    marker, as the record block is today's byte for byte -- so a hand-edited
+    ledger or chronicle never builds a request `decisions.validate` refuses.
+    Keeping one of a colliding group would be worse than keeping none: the
+    others' ids still show in the beat markers, and a citation of one of them
+    normalises onto the one kept, storing a scene the model did not cite.
+    Dropped, every id of the group is a scene the item did not show, so a
+    status word standing on one alone is ``uncertain`` by `_decide`'s rule.
+    With no id dropped, the union over a payload's candidates is today's
+    `known_scenes`: each item may cite only what it shows."""
     beats = {b["scene"] for r in cand["records"] for b in r["beats"]} - {""}
     recent = set(payload["recent"])
     lines = {line["id"] for line in payload["chronicle"]
              if line["id"] in beats or line["id"] in recent}
     shown = beats | lines
-    seen: set[str] = set()
-    out: list[str] = []
-    for sid in payload["known_scenes"]:
-        if sid not in shown or not decisions.offerable(sid):
-            continue
-        key = decisions.normalise(sid)
-        if key not in seen:
-            seen.add(key)
-            out.append(sid)
-    return out
+    offered = [sid for sid in payload["known_scenes"]
+               if sid in shown and decisions.offerable(sid)]
+    keys = Counter(decisions.normalise(sid) for sid in offered)
+    return [sid for sid in offered if keys[decisions.normalise(sid)] == 1]
 
 
 def _decision_item(payload: dict, cand: dict) -> decisions.Item:

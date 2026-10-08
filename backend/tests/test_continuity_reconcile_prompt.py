@@ -797,16 +797,42 @@ def test_build_items_drops_a_scene_whose_id_collides_once_normalised():
     assert {D1, twin, blank} <= set(payload["known_scenes"])
     items = reconcile.build_items(payload)
     decisions.validate(items)
-    assert reconcile.item_scenes(payload, payload["candidates"][0]) == [D1, D2]
-    assert _evidence_options(items[0]) == [[D1, D2], [D1, D2]]
+    # Every id of the colliding group is dropped, not all but one (M8).
+    assert reconcile.item_scenes(payload, payload["candidates"][0]) == [D2]
+    assert _evidence_options(items[0]) == [[D2]]
     assert "A twin of the docks." not in items[0].context
-    assert "Mara came ashore." in items[0].context
+    assert "Mara came ashore." not in items[0].context
+    assert "The road was long." in items[0].context
     # Collided twice over, a hand-edited payload still never builds a request
     # `validate` refuses.
     assert decisions.normalise(twin) == decisions.normalise(D1.upper())
     loud = _hand(_cand(1, "thread", _shown("A", MAP, D1.upper(), D1, twin)))
     decisions.validate(reconcile.build_items(loud))
-    assert reconcile.item_scenes(loud, loud["candidates"][0]) == [D1.upper()]
+    assert reconcile.item_scenes(loud, loud["candidates"][0]) == []
+
+
+def test_a_citation_of_a_dropped_colliding_scene_is_a_scene_not_shown():
+    """M8: on a hand-edited chronicle two scene ids collide once normalised,
+    and the record block's beat markers show both. A citation of the one the
+    item dropped normalises onto the one it kept, so neither is offered: the
+    dropped id is never stored as the kept scene, it reads as a scene the item
+    did not show, and a status word standing on it alone is `uncertain`. No
+    request is refused and nothing fails."""
+    twin = "0001--saltmarch_docks"
+    assert decisions.normalise(twin) == decisions.normalise(D1)
+    payload = _hand(_cand(1, "thread", _shown("A", MAP, D1, twin, D2)),
+                    lines=((D1, "Mara came ashore."), (twin, "A twin of the docks."),
+                           (D2, "The road was long.")))
+    [cand] = payload["candidates"]
+    decisions.validate(reconcile.build_items(payload))
+    for cited in (twin, D1):
+        got = _proposals(payload, {"decision": "close", "evidence_scene": cited})[cand["id"]]
+        assert (got["decision"], got["status"]) == ("uncertain", "")
+        assert D1 not in got["evidence_scenes"] and twin not in got["evidence_scenes"]
+    # A scene that collides with nothing still stands as evidence.
+    got = _proposals(payload, {"decision": "close", "evidence_scene": D2})[cand["id"]]
+    assert (got["decision"], got["status"], got["evidence_scenes"]) == (
+        "close", "closed", [D2])
 
 
 def test_proposals_of_runs_every_answer_through_todays_rules():
