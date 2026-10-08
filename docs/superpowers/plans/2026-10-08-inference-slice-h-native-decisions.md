@@ -37,6 +37,7 @@ This plan consumes from F's final head:
 It consumes from G:
 
 - `decisions.NO_OBJECT`, `decisions.NO_ITEM` and `MIN_OPTIONS_WITH_NONE = 1`: a choice that allows none may offer a single option (G's rulings 2 and 3);
+- `decisions.was_read(answer)` and `decisions.offerable(spelling)` (G's Task 1, I1 and M4). `was_read` is what both continuity mappings ask of the `decision` answer: an answer is read when it is not None, or is `unreadable` with detail `""` or `not_an_option`, and `no_object`, `no_item`, `error`, `refused` and `abstained` are not. `offerable` is the one test `validate` applies to an option id or alias, and G's builders (identity's and reconcile's collision walks) drop whatever it refuses, so `validate(build_items(...))` never raises. H preserves the first and extends the second (Task 1, and **Parallelism and coordination**);
 - the two continuity call sites on `decide()` (`routes/scenes._resolve_identity`, `routes/continuity._adjudicate`), and their decide-only tests in `test_absorb_identity.py` and `test_continuity_reconcile_routes.py`, which Task 5 converts;
 - `evals/gate.py`'s multi-item `judge`, and the cases `decide-continuity-identity` and `decide-continuity-reconcile`, which Task 10's `--live` must run.
 
@@ -191,7 +192,7 @@ It consumes from G:
 - Consumes: `decisions` as F and G left it (G's `NO_OBJECT`, `NO_ITEM`, `MIN_OPTIONS_WITH_NONE`). H's additions sit beside G's in `_check_choice` and `validate`.
 - Produces:
   - **`ItemResult.backend: str = ""`.** `"structured"` or `"native"` (a member of `BACKENDS`) on an answered item; `""` on one built by `unanswered`. `parse` leaves it `""`, and the backend stamps it (Task 4).
-  - **`NONE_KEY = "<none>"`.** Grimoire's distribution key for the reserved none of an `allow_none` choice. `_check_choice` refuses an option id or alias whose `normalise` equals `NONE_KEY`. No slug or ref can contain `<`, so no caller's option is lost to the reservation.
+  - **`NONE_KEY = "<none>"`.** Grimoire's distribution key for the reserved none of an `allow_none` choice. The refusal goes **inside G's `decisions.offerable`** (`offerable(spelling)` is False when `normalise(spelling)` equals `NONE_KEY`), not as a separate test in `_check_choice` (N5): `_check_choice` already refuses whatever `offerable` refuses, and G's builders drop exactly what `offerable` refuses, so a builder handed a hand-edited `<none>` id drops it and `validate` never sees it. A refusal written only in `_check_choice` would make that builder fail the request instead. No slug or ref can contain `<`, so no caller's option is lost to the reservation.
   - **`NATIVE_MAX_OPTIONS = 255`**, OpenRouter's documented per-`choice` limit. Task 3 lowers it if OpenAI documents a lower one (the lower governs both, so the chain never depends on which provider serves).
   - **`NATIVE_NONE = "none"`** and **`NATIVE_NONE_TEXT = "None of the other options fits."`**: the reserved option's wire key and description (ruling 23).
   - **`native_choice_keys(q: Choice) -> tuple[tuple[str, str], ...]`**, pure. Each pair is `(wire key, Grimoire key)`:
@@ -242,6 +243,7 @@ It consumes from G:
 - [ ] **Step 2: Write the failing tests** (`tests/test_decisions.py`):
   - `test_item_result_backend_defaults_empty_and_parse_leaves_it`
   - `test_none_key_is_refused_as_an_option`: `Option("<none>", "")` and an alias `"<NONE>"` both raise.
+  - `test_none_key_is_not_offerable` (N5): `offerable("<none>")` and `offerable("<NONE>")` are False and `offerable("the-map")` stays True; G's two builders, handed a candidate id or scene id of `<none>`, drop it and `validate(build_items(...))` passes (in `test_continuity_identity.py` and `test_continuity_reconcile_prompt.py`, appended beside G's `validate` tests).
   - `test_native_choice_keys_add_one_reserved_none`:
     - a two-option choice without `allow_none` gives its two ids;
     - with `allow_none` it gives a third pair `("none", NONE_KEY)`;
@@ -278,6 +280,7 @@ It consumes from G:
     - `chosen=1.4` with no distribution gives `unreadable`;
     - the bimodal `{"0": .45, "1": .1, "2": .45}` gives `abstained`, although its mean sits on level 1.
   - `test_native_answer_refused`
+  - `test_native_answer_outcomes_against_was_read` (N5): `was_read` is False for `refused` and for `abstained` (a tie, or the reserved none on a nullable choice), and True for `unreadable` with no detail (a `NONE_KEY` answer to a choice without `allow_none`) and for a chosen id.
   - `test_outcome_omits_empty_fields` and `test_outcome_of_a_failure`
   - `test_render_round_trips_answered_values`: for answered results of each type, `parse(render(r, items, explain=True), items, explain=True)` gives the same `answer` values and rationale.
   - In `tests/test_character_turns.py`, `test_a_roster_past_the_schema_string_budget_raises_an_issue`: 254 eligible refs whose ids push the choice past `MAX_ENUM_STRING_CHARS` give `INVALID_HANDOFF` through `_select`, and nothing is sent.
@@ -855,7 +858,7 @@ No resolution produces `"native"` until Task 5. This task's tests build one with
 
 | File | G | H | Merge rule |
 |---|---|---|---|
-| `decisions.py` | `NO_OBJECT`/`NO_ITEM`; `MIN_OPTIONS_WITH_NONE` in `_check_choice` | `ItemResult.backend`, `NONE_KEY` refusal in `_check_choice`, native helpers, string budgets in `validate`/`chunks`, `native_answer`, `outcome`, `render` | Both edit `_check_choice`: H keeps G's option bound and adds its `NONE_KEY` refusal after it. Native answers never carry G's details: a body that is not the envelope is `bad_response`, and a question missing from an answered envelope has no detail, as G rules for an item that was read. |
+| `decisions.py` | `NO_OBJECT`/`NO_ITEM`; `MIN_OPTIONS_WITH_NONE` in `_check_choice`; `was_read`; `offerable` | `ItemResult.backend`, `NONE_KEY` refusal **inside `offerable`**, native helpers, string budgets in `validate`/`chunks`, `native_answer`, `outcome`, `render` | Both edit `_check_choice`: H keeps G's option bound and gets its `NONE_KEY` refusal by editing `offerable`, which `_check_choice` calls, not by adding a second test beside it (N5). Native answers never carry G's details: a body that is not the envelope is `bad_response`, and a question missing from an answered envelope has no detail, as G rules for an item that was read. |
 | `backend/tests/test_decisions.py` | G's detail and one-option tests | H's native tests, including the one-option nullable choice | Append; keep every G test |
 | the spec: §7.4, §9.4, §14 (and §5.3, §5.5, §10, §16, App. B for H) | G's Task 0 lines (contract, conversions rows, eval gate, no continuity capture, row G) | H's Task 0 lines | H's Task 0 re-reads §7.4 and §9.4 as G left them and places each line beside G's; §9.4 keeps G's "no capture for either continuity decision" |
 | `evals/README.md` | the gate's multi-item batch; the two `decide-continuity-*` rows | `--live`, `--decide-backend`, `--provider/--model` | Separate sections |
@@ -871,6 +874,9 @@ No resolution produces `"native"` until Task 5. This task's tests build one with
   1. A native item that answered reaches the mapping as **read**: `backend == "native"`, `rationale == ""`, no `NO_ITEM` detail, no `error` reason. It is never mistaken for an unread item, which `proposals_of` would drop and `answers_of` would leave unchecked.
   2. Task 5 adds `test_a_native_close_verdict_without_a_rationale_takes_gs_mapping` (in `test_continuity_reconcile_routes.py`, on a native-only Decision model). It asserts whatever G's mapping gives as merged. Under G's plan as written, a status verdict with an evidence scene and no reason becomes `uncertain`, so no closure is proposed, the sweep lands, and the candidate is asked again. That is the safe direction. If G's review changes the mapping, the test asserts the new outcome.
   3. Task 5 adds `test_a_native_identity_answer_maps_with_an_empty_reason` (in `test_absorb_identity.py`): an `existing` answer on an offered id is accepted with `reason == ""`.
+- **`was_read` and `offerable` are G's, and H keeps them true** (N5). Two obligations:
+  1. **`offerable` carries `NONE_KEY`.** See Task 1. G's builders drop a `<none>` id with no change of their own.
+  2. **A native `refused` or `abstained` on a `decision` question is not read.** G's mappings leave that row `unchecked` or that candidate without a proposal, which agrees with ruling 4 (a refusal is final and unanswered). A native tie or `NONE_KEY` on a `decision` question is `abstained` (it never allows none, so a `NONE_KEY` answer is `unreadable` with no detail, which is read and becomes `uncertain`, as G's unknown-word rule does). H adds no new `Answer` reason or detail without updating `was_read` and its test in the same commit: a reason `was_read` does not know would be treated as read and stored as `uncertain`. Task 1's `test_native_answer_*` set gains one assertion over `was_read` for each outcome `native_answer` can give (`refused`, `abstained` and `unreadable` with no detail), and Task 5's native continuity tests assert that a refused item leaves its row `unchecked` and its candidate unproposed.
 - **The gate is untouched by H.** H changes no structured output, so `$PY evals/run.py --gate` prints G's two lines and F's three as PASS after Tasks 1, 4 and 5.
 - **Absorb's budget.** G's identity `around` is `budget.run`, which is stateless per call, so up to `NATIVE_CONCURRENCY` concurrent native items under it are safe. An item it refuses (`BudgetRefused`) moves on, and the next stage's `around` refuses it too, unsent.
 - **If G stalls**, the controller may reverse the order (H first through Task 5). In that case, Task 5's grep must include `test_absorb_identity.py` and the continuity route suites, and G must not add assertions on `skipped` or `skip_text`.
@@ -953,6 +959,7 @@ No resolution produces `"native"` until Task 5. This task's tests build one with
 - **I10** applied: `--decide-backend`, `--provider/--model` with no settings write, a throwaway `GRIMOIRE_HOME`, and approval still required.
 - **I11** re-derived against G's actual plan, and the controller rules **G first**: shared files, merge rules and the rationale obligation are under **Parallelism and coordination**.
 - **G's review I4** (controller): a native answer carries no rationale, and Task 5 tests that it reaches G's continuity mapping as a read item (coordination section).
+- **G's re-review N5** applied: H consumes `was_read` and `offerable`; `NONE_KEY` is refused inside `offerable` (Task 1, with a test that G's builders drop it), and a native `refused`/`abstained` is unread (coordination section).
 - **M1** applied: Base names `llm.SchemaRefusalError` and `inference._ask`; two retry tests added.
 - **M2** applied: `stages` copies, never pops, and is tested.
 - **M3** applied: the re-raised error names the fallback's failure.
