@@ -24,68 +24,109 @@ import zlib
 
 from . import config, llm_connections
 from .inference import resolve as inference_resolve
+from .inference import resolved as inference_resolved
 from .inference import translate
 
+#: The exceptions reading the role can raise, every one of which means "off":
+#: the store may be hand-edited or half-synced.
+_OFF_ERRORS = (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
+               KeyError, TypeError, ValueError)
 
-def resolve(cfg: dict | None = None) -> dict | None:
-    """`{model, base_url, key, space}` for the configured endpoint, or None.
 
-    None is the answer for every kind of "not set up": no model, no connection
-    id, an id naming a connection that was deleted, a connection of a kind that
-    serves no ``/embeddings`` route, one with no base URL, or a model it is
-    KNOWN not to embed with (`inference_resolve.embed_attempt`: no request is
-    sent that could only fail; a name-rule guess never counts). Callers treat all
-    of them the same way — the layer is off — so distinguishing them here would
-    buy nothing. The store this reads may be hand-edited or half-synced, so it
-    must not raise for any of them either.
+def resolution(cfg: dict | None = None) -> inference_resolved.ResolvedInference | None:
+    """`resolve.embedding(cfg)`, or None where reading it raised (`_OFF_ERRORS`).
+    One resolution a caller can ask `endpoint_of` and the card's reasons of."""
+    try:
+        return inference_resolve.embedding(cfg)
+    except _OFF_ERRORS:
+        return None
+
+
+def endpoint_of(got: inference_resolved.ResolvedInference | None) -> dict | None:
+    """`endpoint`'s answer for a resolution already in hand (`resolution`);
+    None when it names no space. Never raises."""
+    if got is None or got.space_id is None or not got.attempts:
+        return None
+    try:
+        attempt = got.attempts[0]
+        conn = attempt.conn
+        return {"model": attempt.model, "base_url": attempt.base_url,
+                "key": conn["api_key"], "space": got.space_id,
+                "provider": attempt.provider_id,
+                "provider_name": str(conn.get("name") or attempt.provider_id),
+                "provider_kind": attempt.provider_kind, "conn": conn}
+    except _OFF_ERRORS:
+        return None
+
+
+def endpoint(cfg: dict | None = None) -> dict | None:
+    """The Embedding role's endpoint, named for the ledger, or None when it
+    embeds nothing.
+
+    `{model, base_url, key, space}` -- what a request needs and the space its
+    vectors are saved under -- plus `provider` (the connection id),
+    `provider_name` (its name, else its id), `provider_kind`, and `conn`, the
+    attempt's lowered connection dict, which carries what the operation's
+    ledger row is stamped from. Built from `resolve.embedding`, the role's one
+    reader: None exactly when that names no space -- no model, no provider, a
+    provider that is gone, a provider file that could not be read (a busy
+    store included: the lookup reads it as no provider, so embedding is off
+    for that call rather than raising), one of a kind that serves no
+    ``/embeddings`` route here, one with no base URL, or a model it is known
+    not to embed with. Callers treat all of them the same way -- the layer is
+    off -- so distinguishing them here would buy nothing. The store this reads
+    may be hand-edited or half-synced, so it must not raise for any of them
+    either.
 
     `cfg` is a config mapping the caller has already read. `read_config` parses
     config.md on every call and nothing memoizes it, so a caller that wanted
-    the config for its own settings too — `context/semantic.settings`, on every
-    turn — would otherwise pay for the file twice.
+    the config for its own settings too -- `context/semantic.settings`, on every
+    turn -- would otherwise pay for the file twice.
+
+    Holds a key: nothing logs or serialises this dict.
     """
-    try:
-        cfg = config.read_config() if cfg is None else cfg
-        conn_id, model = translate.embedding_role(cfg)
-        if not model or not conn_id:
-            return None
-        return _resolved(cfg, llm_connections.read_connection_raw(conn_id), model)
-    except (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
-            KeyError, TypeError, ValueError):
-        return None
+    return endpoint_of(resolution(cfg))
 
 
-def _resolved(cfg: dict, conn: dict, model: str, *, catalog: bool = True) -> dict | None:
-    """`resolve`'s answer for the Embedding role served by `conn` at `model`,
-    or None when it embeds nothing: no endpoint, or a model `conn` is known not
-    to embed with. The rule and the space are `resolve.embed_attempt`'s (its
-    `space_of` says what a space is keyed on, and why); `catalog` False judges
-    it without the cached catalog row (see there, for `moved_by`)."""
-    got = inference_resolve.embed_attempt(str(conn["id"]), model, conn,
-                                          current=translate.is_current(cfg), catalog=catalog)
-    if got.space_id is None:
+def resolve(cfg: dict | None = None) -> dict | None:
+    """`{model, base_url, key, space}` for the configured endpoint, or None:
+    `endpoint`'s first four keys (see there)."""
+    got = endpoint(cfg)
+    if got is None:
         return None
-    return {"model": model, "base_url": got.attempt.base_url, "key": conn["api_key"],
-            "space": got.space_id}
+    return {k: got[k] for k in ("model", "base_url", "key", "space")}
+
+
+def _space(cfg: dict, conn: dict, model: str, *, catalog: bool = True) -> str | None:
+    """The space connection record `conn` would embed `model` in, or None when
+    it would embed nothing -- no endpoint, or a model it is known not to embed
+    with -- for `moved_by`, whose `after` is a record not (yet) on disk. The
+    rule is `resolve.embedding`'s own (`resolve.embed_attempt`); `catalog`
+    False judges it without the cached catalog row (see there)."""
+    return inference_resolve.embed_attempt(
+        str(conn["id"]), model, conn, current=translate.is_current(cfg),
+        catalog=catalog).space_id
 
 
 #: `problem`'s answer when none of its specific reasons applies.
 OFF = "Embedding is off"
 
 
-def problem(cfg: dict | None = None) -> str | None:
+def problem(cfg: dict | None = None, *, embeds: bool | None = None) -> str | None:
     """Why the Embedding role embeds nothing, as a short sentence for the
     Models page's Embedding card; None when it embeds (`resolve` is not None).
 
     The same conditions `resolve` and `resolve.embed_endpoint` walk, in the
-    order a reader fixes them: a provider, one that exists, of a kind that serves
-    ``/embeddings`` here, with the key or address it needs, then a model;
-    `OFF` when none of them is why. (A model known not to embed is the
+    order a reader fixes them: a provider, one that exists, of a kind that
+    serves ``/embeddings`` here, with the key or address it needs, then a
+    model; `OFF` when none of them is why. (A model known not to embed is the
     settings card's own reason, asked after these: `settings._embedding_card`.)
-    Never raises."""
+
+    `embeds` is whether the role embeds, when the caller has already resolved
+    it (`endpoint_of`); None resolves it here. Never raises."""
     try:
         cfg = config.read_config() if cfg is None else cfg
-        if resolve(cfg) is not None:
+        if endpoint(cfg) is not None if embeds is None else embeds:
             return None
         conn_id, model = translate.embedding_role(cfg)
         if not conn_id:
@@ -116,44 +157,33 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
     vector space that embeds: the edit that re-embeds the library, so the one
     a provider edit is confirmed for (spec 7.3, rule 1).
 
-    False when the role does not name this connection, has no model, or embeds
-    nothing afterwards (clearing an address re-embeds nothing). A role that
-    embedded nothing before and does now -- a key on a keyless OpenRouter
-    provider, or an address that leaves a provider known not to embed -- is a
-    move: the library is embedded from scratch. Never raises.
+    `after` is judged as `endpoint()` will read it once the write lands. A
+    rev restamp leaves the cached catalog row stale (its sidecar is gated on
+    the rev on disk) and drops the old rev's probe verdicts, so neither
+    speaks for `after` then: a `no` that came only from them does not survive
+    the save, and is not read here (`catalog=False`).
 
-    `after` is judged as `resolve()` will read it once the write lands. A rev
-    restamp leaves the cached catalog row stale (its sidecar is gated on the
-    rev on disk), so a catalog `no` does not speak for `after` then and is
-    not read (`catalog=False`); the adapter's, the preset's and the user's
-    `no` survive the save and still count.
+    False when the role does not name this connection, has no model, or embeds
+    nothing afterwards: clearing an address re-embeds nothing, and nor does an
+    edit of a provider known not to embed with the model by something the
+    edit leaves standing -- its adapter, its preset's hard `no`, the user's
+    own override, or (for a rev-neutral edit) the catalog. A role that
+    embedded nothing before and does now -- a key on a keyless OpenRouter
+    provider, an address that leaves a provider known not to embed, or a rev
+    restamp that leaves a catalog `no` behind -- is a move: the library is
+    embedded from scratch. Never raises.
     """
     try:
         conn_id, model = translate.embedding_role(cfg)
         if not model or not conn_id or conn_id != after.get("id"):
             return False
-        new = _resolved(cfg, after, model, catalog=after.get("rev") == before.get("rev"))
+        new = _space(cfg, after, model, catalog=after.get("rev") == before.get("rev"))
         if new is None:
             return False
-        old = _resolved(cfg, before, model)
-        return old is None or old["space"] != new["space"]
+        old = _space(cfg, before, model)
+        return old is None or old != new
     except (OSError, KeyError, TypeError, ValueError):
         return False
-
-
-def config_moved(before: dict, after: dict) -> bool:
-    """Whether replacing config mapping `before` with `after` starts the
-    Embedding role on a NEW vector space that embeds -- the `config.md` write
-    that re-embeds the library: the legacy `embeddings_connection_id` /
-    `embeddings_model` pair moved by `PUT /config` on a store not yet at
-    format 2. `moved_by`'s rule, for a change of the role's own keys rather
-    than of the provider it names: off to on is a move, a different space is
-    a move, and switching it off re-embeds nothing. Never raises."""
-    new = resolve(after)
-    if new is None:
-        return False
-    old = resolve(before)
-    return old is None or old["space"] != new["space"]
 
 
 def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
@@ -184,6 +214,21 @@ def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
     except (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
             KeyError, TypeError, ValueError):
         return False
+
+
+def config_moved(before: dict, after: dict) -> bool:
+    """Whether replacing config mapping `before` with `after` starts the
+    Embedding role on a NEW vector space that embeds -- the `config.md` write
+    that re-embeds the library: the legacy `embeddings_connection_id` /
+    `embeddings_model` pair moved by `PUT /config` on a store not yet at
+    format 2. `moved_by`'s rule, for a change of the role's own keys rather
+    than of the provider it names: off to on is a move, a different space is
+    a move, and switching it off re-embeds nothing. Never raises."""
+    new = resolve(after)
+    if new is None:
+        return False
+    old = resolve(before)
+    return old is None or old["space"] != new["space"]
 
 
 def clip(text: str, max_bytes: int, tail: bool = False) -> str:

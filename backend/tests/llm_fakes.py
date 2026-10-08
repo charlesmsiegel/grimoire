@@ -56,6 +56,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from collections.abc import Callable
 from copy import deepcopy
 from pathlib import Path
 
@@ -543,20 +544,28 @@ class FakeEmbeddings:
     directions per text. `error` is raised by every call after the first
     `fail_after` -- ``fail_after=1`` answers one chunk and fails the next,
     which is the shape a partial batch failure is tested against.
+
+    `usage_for`, when given, maps a call's texts to what the endpoint
+    "reported" (`{"prompt_tokens": 7}`), folded into the meter's holder the
+    way the real client folds a response's usage block.
     """
 
-    def __init__(self, vector_for=lambda t: [1.0, 0.0], error=None, fail_after=0):
+    def __init__(self, vector_for=lambda t: [1.0, 0.0], error=None, fail_after=0,
+                 usage_for: Callable[[list[str]], dict] | None = None):
         self.vector_for = vector_for
         self.error = error
         self.fail_after = fail_after
+        self.usage_for = usage_for
         self.calls: list[list[str]] = []
         self.deadlines: list[float | None] = []
 
-    def embed(self, texts, model, key, base_url, deadline=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
         self.calls.append(list(texts))
         self.deadlines.append(deadline)
         if self.error is not None and len(self.calls) > self.fail_after:
             raise self.error
+        if usage is not None and self.usage_for is not None:
+            usage.update(self.usage_for(list(texts)))
         return [self.vector_for(t) for t in texts]
 
 

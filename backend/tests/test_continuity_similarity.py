@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import embeddings
 from grimoire.main import create_app
-from grimoire.store import config, embed_space, llm_connections, vectors
+from grimoire.store import config, embed_space, llm_connections, logs, usage, vectors
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import effective, review, similarity
 from tests.llm_fakes import FakeEmbeddings
@@ -544,8 +544,8 @@ def test_a_wrong_length_reply_is_a_bad_response(home, monkeypatch):
     _configure()
 
     class Short(FakeEmbeddings):
-        def embed(self, texts, model, key, base_url, deadline=None):
-            return super().embed(texts, model, key, base_url, deadline)[:-1]
+        def embed(self, texts, model, key, base_url, deadline=None, usage=None):
+            return super().embed(texts, model, key, base_url, deadline, usage)[:-1]
 
     monkeypatch.setattr(similarity, "_CLIENT", Short())
     got = similarity.semantic(["Mara's map", "Realm"], [], deadline=_soon())
@@ -574,6 +574,77 @@ def test_deadline_is_shared_and_bounded(home, monkeypatch):
     assert len(double.deadlines) == 3
     assert len(set(double.deadlines)) == 1
     assert double.deadlines[0] <= time.monotonic() + embeddings.TIMEOUT
+
+
+def test_each_chunk_files_one_continuity_similarity_row(home, fake, monkeypatch):
+    """Every chunk is one `embed_sync` call, so one row, charged to the campaign
+    and scene it was embedded for (slice D)."""
+    _configure()
+    monkeypatch.setattr(embeddings, "BATCH", 2)
+    space = embed_space.endpoint()
+    similarity.embed_missing(space, ["Mara's map", "Winifred's chart", "Realm"],
+                             deadline=_soon(), campaign="saltmarch", scene="s1")
+    assert len(fake.calls) == 2
+    rows = list(usage.calls(days=1))
+    assert len(rows) == 2
+    for row in rows:
+        assert (row["task"], row["campaign"], row["scene"]) == (
+            "continuity-similarity", "saltmarch", "s1")
+
+
+@pytest.fixture
+def debug_log():
+    logs.forget_file_sizes()
+    logs.apply_level("debug")
+    yield
+    logs.forget_file_sizes()
+    logs.apply_level("info")
+
+
+def test_the_capture_counts_hits_and_misses(home, fake, debug_log):
+    _configure()
+    vectors.save(_space(), "Mara's map", [1.0, 0.0])
+    similarity.semantic(["Mara's map", "Realm"], [], deadline=_soon())
+    [line] = [r for r in logs.read(level="debug")["rows"] if r.get("module") == "embed"]
+    assert (line["cached"], line["uncached"], line["inputs"]) == (1, 1, 1)
+
+
+def test_a_continuity_deadline_cut_is_its_runs_budget(home, monkeypatch):
+    """Every continuity deadline is its run's budget (absorb's, the sweep's
+    `EmbedBudget`), so a request it cuts is `aborted` with nothing in the
+    error store -- the caller decides, and says, whether that was a failure."""
+    _configure()
+    monkeypatch.setattr(similarity, "_CLIENT", FakeEmbeddings(error=embeddings.EmbeddingsError(
+        "network", "embeddings response exceeded 30.0s", code=embeddings.DEADLINE)))
+    got = similarity.semantic(["Realm"], [], deadline=_soon(), campaign="realm")
+    assert got.mode == "failure"
+    [row] = usage.calls(days=1)
+    assert row["status"] == "aborted"
+    assert logs.read(level="error")["rows"] == []
+
+
+def test_a_runs_counts_are_on_its_first_line_only(home, fake, debug_log, monkeypatch):
+    """Every chunk of a run is its own call and line, but the run's hits and
+    misses are one count: only the first line carries them."""
+    _configure()
+    monkeypatch.setattr(embeddings, "BATCH", 1)
+    vectors.save(_space(), "Mara's map", [1.0, 0.0])
+    similarity.semantic(["Mara's map", "Realm", "Winifred's chart"], [], deadline=_soon())
+    lines = [r for r in reversed(logs.read(level="debug")["rows"])
+             if r.get("module") == "embed"]
+    assert len(lines) == 2
+    assert (lines[0]["cached"], lines[0]["uncached"]) == (1, 2)
+    assert "cached" not in lines[1] and "uncached" not in lines[1]
+
+
+def test_a_fully_cached_continuity_run_files_no_row(home, fake, debug_log):
+    _configure()
+    for text in ("Mara's map", "Realm"):
+        vectors.save(embed_space.resolve()["space"], text, [1.0, 0.0])
+    similarity.semantic(["Mara's map", "Realm"], [], deadline=_soon())
+    assert fake.calls == []
+    assert list(usage.calls(days=1)) == []
+    assert [r for r in logs.read(level="debug")["rows"] if r.get("module") == "embed"] == []
 
 
 def test_deadline_helper():

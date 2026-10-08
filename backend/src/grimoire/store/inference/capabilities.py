@@ -13,9 +13,12 @@ authority first -- the first one that says anything is the answer:
    nothing about the model, spec 4.2), then a
    probe that FAILED (`unknown`, source `test`, carrying the provider's
    `error`). A failed test is never a `no` (spec 12: the row stays unverified
-   with the error shown), so a test can never make the seam refuse; it still
-   outranks the steps below, so a catalog's `yes` does not hide what the test
-   found, but never the user's own word. The legacy connection `vision` field
+   with the error shown), so a test can never make the seam refuse; it
+   outranks a catalog's `yes`, so that `yes` does not hide what the test
+   found, but never the user's own word -- and never a catalog's `no`: an
+   `unknown` does not override a lower source's known `no`
+   (`_unknown_over_no`), so a failed test cannot lift a refusal or turn an
+   Embedding role that is off back on. The legacy connection `vision` field
    is NOT one of these: it is the post-image *setting*
    (`post_images.capability`), not a statement about the model.
 3. `catalog` -- what the provider publishes for the model: `outputs`
@@ -179,6 +182,17 @@ def _named(model: str) -> dict[str, Cap]:
     return {}
 
 
+def _unknown_over_no(higher: Cap, lower: Cap | None) -> bool:
+    """Whether `higher` is an `unknown` standing over a `lower` known `no`
+    -- which it never overrides. Only a failed test is a stated `unknown`,
+    and only the catalog is a lower source that can know `no` (the preset
+    knows only `yes`, the name rule only guesses), so this keeps a failed
+    test from lifting a catalog's `no`: an unanswered question is not an
+    answer, and lifting it would turn a refusal (or an Embedding role that
+    is off) back on to send what could only fail."""
+    return higher.value == UNKNOWN and lower is not None and lower.value == NO
+
+
 def resolve_caps(preset: providers.Preset, model: str, *, catalog_row: dict | None,
                  facts: dict) -> dict[str, Cap]:
     """Every capability of `model` behind `preset`, with its source. Pure."""
@@ -190,7 +204,7 @@ def resolve_caps(preset: providers.Preset, model: str, *, catalog_row: dict | No
     for cap in NAMES:
         if cap in never:
             out[cap] = Cap(NO, "adapter")
-        elif cap in stated:
+        elif cap in stated and not _unknown_over_no(stated[cap], listed.get(cap)):
             out[cap] = stated[cap]
         elif cap in listed:
             out[cap] = listed[cap]

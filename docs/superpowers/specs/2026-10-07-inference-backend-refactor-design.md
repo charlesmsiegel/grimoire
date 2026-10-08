@@ -25,9 +25,11 @@ raise it rather than working around it:
    that will cause re-embedding — states what it will send and what it may cost
    and waits for confirmation. Play is not gated: sending a turn *is* the
    request.
-2. **One resolver.** Exactly one function answers "what will serve this
-   inference?" The wire request and every screen that describes it are built
-   from its output. No call site and no frontend component reassembles
+2. **One resolver.** Exactly one entry point per operation family answers
+   "what will serve this inference?" (§5.4): `resolve` for `generate` and
+   `decide`, `resolve.embedding` for the Embedding role, which `resolve`
+   refuses to stand in for. The wire request and every screen that describes
+   it are built from that output. No call site and no frontend component reassembles
    provider/model/preset/capability configuration on its own.
 3. **Migration is behaviour-neutral.** After the upgrade every task resolves to
    the same provider, model, sampling and fallback it did before, until the
@@ -448,6 +450,8 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
 
 - **known incompatible** on the primary attempt → 409 `incapable`, naming the
   route, the role (if any), the provider and the model, and what is missing.
+  An embed task is the exception: a known `no` for `embed` turns embedding off
+  instead of refusing (§7.3).
   Only a `no` from the adapter, a user assertion or the catalog refuses: the
   name rule (§6.2 source 5) sorts pickers but never refuses a call, and a
   failed test call is `unknown`, not `no` (§6.4). Until slice C migrates it
@@ -466,15 +470,22 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
 
 ### 5.4 `ResolvedInference`
 
-The one answer, built by one function (`inference.resolve(task, cid, *,
-operation, override=None)`):
+The one answer, built by one function per operation family:
+`inference.resolve(task, cid, *, operation, override=None)` for `generate` and
+`decide`, and `resolve.embedding(cfg)` for the Embedding role. The Embedding
+role has its own entry point because it is global only (§4.4) and no task
+chooses it: `resolve.resolve` refuses an embed task, `operation="embed"` and
+`role="embedding"`, so embed work can never land on Primary as an unknown task.
+`resolve.embedding` reads the role through
+`cascade.role_selection("embedding", campaign={})`, and it is the one reader:
+the settings view, the migration and the operation all ask it.
 
 ```python
 ResolvedInference(
     task, operation, route,
     provenance,            # which scope/role supplied the selection and the preset
     attempts,              # ordered: primary, then fallback — each an Attempt
-    space_id=None,         # embed only
+    space_id=None,         # embed only; set only when the role embeds
     decision_mode=None,    # decide only: "native" | "structured" (per attempt)
 )
 
@@ -506,6 +517,10 @@ facade consuming the attempts; D: `space_id`; F/H: `decision_mode`. The
 fallback attempt already carries what the facade sends: the primary's
 route-scoped preset when the primary's came from a route (§5.2), and no
 fallback at all when it would be the primary's own provider.
+
+`space_id` is set only when the Embedding role embeds: it names a model and an
+endpoint, and the model is not a known `no` for `embed` (§7.3). A role that is
+unset, half-set or known not to embed resolves with no `space_id`.
 
 ### 5.5 Fallback
 
@@ -620,7 +635,10 @@ Sources, highest authority first:
    failed test. A `vision: off` fact is **not** read here: it stops post
    images and nothing else (§4.2). A failed test is `unknown` carrying its
    error, never `no`: it marks the row unverified without hiding it, and the
-   user's own override can still answer it.
+   user's own override can still answer it. An `unknown` never overrides a
+   known `no` from a lower source that is not a guess: a failed test outranks
+   the catalog's `yes` but not its `no`, so it can neither lift a refusal
+   (§5.3) nor turn an Embedding role that is off back on (§7.3).
 3. **Provider catalog** (`source: catalog`) — OpenRouter is fetched with
    `output_modalities=all` (its default is text-only, which is why no embedding
    or decision model reaches the catalog today): `text` → generate,
@@ -703,8 +721,12 @@ Optional; offered on unverified rows and on the model-facts panel.
    Each probe runs **once — no retries and no fallback** — and succeeds when
    the request is accepted and the response completes (text is not required:
    a thinking model may spend a small cap thinking).
-4. The call is metered under task `model-test` with no campaign (an `embed`
-   probe's row carries no token counts until slice D meters embeddings). `model-test`
+4. The call is metered under task `model-test` with no campaign. An `embed`
+   probe's row carries `operation: "embed"` and whatever counts the endpoint
+   reported, and a probe that fails is recorded with its kind and HTTP status
+   only (the verdict shown to the user still carries the provider's text).
+   The probe stays on the provider under test: it is not an embed task and does
+   not resolve the Embedding role. `model-test`
    is registered as a non-route task so the routing guard knows it (the
    catalog refresh and the health probe meter nothing, so they need no
    registration).
@@ -731,8 +753,13 @@ automatically, and the server refuses that check without `confirm: true`
   cascade), `capabilities.py`, `controls.py` (§8), `translate.py` (legacy →
   new, §11), `migrate.py`. It must respect `test_import_guard.py` (module-scope
   imports, submodule bindings across packages, acyclic).
-- `inference.py` (top level, beside `llm.py`) — the async API below, built on
-  `inference.resolve` and the existing `LLMClient`.
+- `store/inference/embed.py` — the `embed` / `embed_sync` operation (§7.3).
+  Every caller is a store module, and the store never imports `llm.py` (#239),
+  so the operation cannot sit beside `LLMClient`.
+- `inference.py` (top level, beside `llm.py`) — the async `generate` and
+  `decide` API below, built on `inference.resolve` and the existing
+  `LLMClient`. `decide` stays here. The two modules are disjoint, and neither
+  merges into the other.
 - `store/locks.py` classifies the new modules: global config modules are
   `OUTSIDE_DOMAIN` (they take no campaign lock), except `migrate.py`'s campaign
   step, which takes `campaign_lock_nowait(cid)` per campaign.
@@ -754,17 +781,45 @@ uses it.
 ### 7.3 `embed`
 
 ```python
-vectors = await inference.embed(task, texts)
-vectors = inference.embed_sync(task, texts)   # for today's synchronous callers
+vectors = embed_sync(task, texts, *, space, client, deadline=None, budgeted=False,
+                     campaign="", scene="", cached=None, uncached=None)
+vectors = await embed(task, texts, ...)   # the same, in a worker thread
 ```
+
+Both live in `store/inference/embed.py` (§7.1).
 
 - Tasks: `semantic-recall`, `semantic-search`, `art-catalog`,
   `continuity-similarity`. They are registered embed tasks (not routes) so the
-  guard and metering see them; all resolve through the **Embedding role**.
+  guard and metering see them; all resolve through the **Embedding role**. The
+  registry is `routing.EMBED_TASKS`, not a route: every embed task resolves
+  through the one global role, so a route would carry no choice, and the routes
+  table is what the frozen baselines enumerate.
+- **The space is handed in.** Every caller reads its vector cache under a space
+  before it embeds. Resolving again inside the call could embed with one model
+  and save under another space's key, so the caller passes the `space` it read
+  with. **The client is the caller's own** (`client`); each module keeps its
+  client, which is also its test seam. Deadlines, the vector cache and
+  degradation stay with the caller.
 - `embed_sync` wraps today's synchronous client; the async form runs it in a
   worker thread until a native async client replaces it. Callers that are
   already in the threadpool keep calling `embed_sync`.
-- Every embed call is metered (§9) with `operation: embed`.
+- **A known `no` for `embed` means off.** Known is §5.3's sense: an adapter
+  `no`, a preset's hard `no`, a user assertion or the catalog, and never the
+  name rule's guess. There is no 409 for this operation: no request is sent,
+  and every caller degrades exactly as it does when the role is unset. A
+  chat-only catalog model chosen as the Embedding model stops sending a request
+  that could only fail, and the Embedding card says so through its `problem`
+  (§10, §12).
+- Every embed call is metered (§9) with `operation: embed`. The row carries
+  the caller's `campaign` where it has one (and `scene`, where absorb's
+  identity check has one); resolution never reads either, because the space is
+  global (§4.4). A campaign's budget is measured by `cost_usd` per campaign,
+  and an OpenRouter embed is real spend.
+- **User-visible cost change.** From D onward every recall, art, search and
+  continuity embed files a ledger row. An endpoint that reports no price (a
+  local or `openai_compatible` server) files an **unpriced** row, so Costs
+  totals read "incomplete" until the user enters rates for that model; slice E
+  prices those rows.
 - **`space_id` keeps today's exact string** `f"{provider_id}\0{rev}\0{model}"`.
   Migration preserves every provider's `rev` (§11), so existing vector caches
   stay valid through the upgrade.
@@ -922,6 +977,18 @@ Each usage row keeps `task` and gains `operation`, `provider`, `model`,
 calls are metered from their first slice onward. `usage.Meter.done` remains
 the one place LLM failures are logged (CLAUDE.md, Observability).
 
+An embed call files **one row per `embed_sync` call**, covering all of its
+batches. `operation` lands with slice D, which is first to write it; no row is
+filed when nothing is sent (an empty input, or a deadline that lapses before
+the first request, whether at the call's own check or inside the meter), and
+no error either. When the caller's own budget (`budgeted=True`: absorb's
+identity check, the continuity sweep) cuts a request that went out, the row is
+`aborted` and nothing reaches the error store: the caller's clock is not a
+provider failure. A deadline that only bounds the provider (lore recall's and
+search's share one client timeout across a retry) cutting it is an error. A call whose later batch fails
+after its request went out but before its body was read files its counts as
+absent, never as the earlier batches' partial sum.
+
 ### 9.4 Capture
 
 - `generate`: unchanged prompt capture.
@@ -929,8 +996,16 @@ the one place LLM failures are logged (CLAUDE.md, Observability).
   answers and distributions, through the same prompt-capture path and under
   the same Settings privacy disclosure. No chain-of-thought is requested or
   stored; `rationale` is a requested output, not reasoning text.
-- `embed`: counts, bytes, dimension, `space_id`, cache hits/misses. **Embedded
-  text is never captured or logged.**
+- `embed`: one Debug-level line per call that sent a request, through the one
+  writer (a call that sends nothing writes none). It carries the counts
+  (`inputs`), `bytes`, `dimension`, `space_id`, and cache hits (`cached`) and
+  misses (`uncached`) named apart from `inputs`, plus the campaign and scene
+  when given and, on failure, `error`: the error kind, or `aborted` when the
+  caller's own budget cut the request. Hits and misses count a caller's run,
+  so they ride on the run's first call only; a retry or a later chunk of the
+  same run carries neither. **Embedded
+  text is never captured or logged**, nor a provider's message or a URL. An
+  embed failure's recorded detail is its kind and HTTP status only.
 
 Keys never reach logs, captures, diagnostics or API responses.
 
@@ -985,7 +1060,9 @@ go through `useHotkeys`.
   re-derivation.
 - Each role card and route row carries the backend's `problem` for it (no key,
   a known capability `no`), which is the seam's own refusal decision (§12),
-  not a copy that could drift from what a turn would be told.
+  not a copy that could drift from what a turn would be told. The Embedding
+  card's `problem` also names a known `no` for `embed`, which switches
+  embedding off (§7.3).
 - Capability warnings inline on the card or row concerned:
   - "This model can't generate text, so it can't be Primary."
   - "This route sends images; the chosen model is unverified for vision."
@@ -1119,8 +1196,12 @@ migration write. Then:
    (inherit). Embedding = `embeddings_connection_id` + `embeddings_model`
    **only when the legacy configuration actually embeds**
    (`embed_space.resolve` answers non-None); a legacy choice that does not —
-   an OpenRouter connection, which had no embeddings route — leaves the role
-   unset, so it stays off as §6.1 promises. `fallback_connection_id` → the
+   an OpenRouter connection, which had no embeddings route, or a known `no`
+   for `embed` such as a z.ai connection (its preset's hard `no`) — leaves the
+   role unset, so it stays off as §6.1 promises. User-visible: from slice D a
+   legacy z.ai choice is already off at format 1 (it sends no request that
+   could only fail), and after the switch the Embedding card shows no
+   selection rather than the old one. `fallback_connection_id` → the
    fallback of Primary, Fast and Decision.
 6. **Routes** — global `route_<k>=<conn>` → `use_<k>=model` +
    `use_<k>_{provider,model,preset}` from that connection. `preset_<k>`
@@ -1199,7 +1280,7 @@ never migrated in place; tests migrate a copy.
 | Claude-subscription health check without `confirm: true` | 400; nothing sent (rule 1) |
 | Migration backup failed | no write; Settings banner ("Upgrade pending: the safety backup failed (reason)"); translation serves; the next start retries |
 | Decide question unanswerable | `answer: None` + `reason`; never a guessed default |
-| Embedding provider fails | caller degrades as today; no fallback |
+| Embedding provider fails | caller degrades as today; no fallback; one metered error row per `embed_sync` call that sent a request, its detail the kind and HTTP status only |
 | Test call fails | a refusal of the probe itself is recorded in `verified` with the provider's error text and resolves as `unknown`, so the row stays "unverified" with that error shown and the call is never refused for it; transient failures (rate limit, outage, credits or a spend limit, auth, transport) are reported and not recorded |
 
 Reads fail soft (a mangled `facts.json`, catalog or preset reads as empty);
@@ -1209,7 +1290,9 @@ writes fail visibly.
 known capability `no` — is decided once, by `inference.refusal`. The seam
 raises it as the 409s above, and the settings view reports it as a role's or
 route's `problem` (§10): the seam's answer, not a copy that could drift from
-what a turn would be told.
+what a turn would be told. Likewise, an Embedding model that is a known `no`
+for `embed` (§5.3) switches embedding off rather than refusing a turn, and the
+Embedding card's `problem` says why.
 
 ---
 
@@ -1239,7 +1322,7 @@ against this spec) and lands green under `make check`. Order is chosen so that
 | **A — Resolver substrate** | `store/inference/` (keys, cascade, translation, resolver), the 15-route registry with `operation`/`default_role`/`requires` (legacy surfaces keep the original 12), `ResolvedInference` + lowering, `require_inference`, per-role fallback chain, `embed_space` resolved through the Embedding role, guard updates. Reads legacy state through the translation; writes nothing new | No. A behaviour-equivalence test pins every task's resolved provider, model, preset and fallback against the baseline resolver |
 | **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources) and the §5.3 capability check, OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
 | **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI, dropping an incapable fallback attempt (§5.3; B reports it); legacy settings UI removed. Also: the format-2 lowering overlaying model facts (§4.2); the migration run in the background with 409 `not_migrated` until it completes, the never-pruned `pre-inference-` safety backup, campaign markers, and fresh stores born at format 2 (§11); legacy keys refused at format 2 (§11.3); one refusal decision shared by the seam and the settings view (§12); the server-enforced confirmations for the Claude health check and for an **Embedding role change** (`confirm_embedding`, §10) — C makes paid OpenRouter embeddings selectable, so rule 1 cannot wait for D | **Yes** |
-| **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering (the confirmation on an Embedding-role change already landed in C and stays), and one reader of the Embedding role (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
+| **D — Embedding operation** (settled) | `embed` / `embed_sync` in `store/inference/embed.py`, embed tasks (`routing.EMBED_TASKS`), metering (the confirmation on an Embedding-role change already landed in C and stays), and one reader of the Embedding role, `resolve.embedding` (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag, the Housekeeping chore | Yes |
 | **F — `decide()`** | The contract, `generate(schema=)`, the structured backend, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
 | **G — Continuity decisions** | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision` | — |
@@ -1255,8 +1338,12 @@ model during C–E therefore cannot break any task; nothing uses that role yet.
 - `test_routing_guard.py`: follows `require_inference`; fails an operation
   mismatch between call site and route; knows the registered non-route tasks
   (`model-test`) and embed tasks.
-- New guard: every `inference.embed`/`embed_sync` names a registered embed
-  task; every `inference.decide` names a task on a `decide` route.
+- New guard, `test_operation_guard.py`: every `embed`/`embed_sync` names a
+  registered embed task, its `space=` traces back to `embed_space.endpoint`
+  (the Embedding role's one reader, §7.3), and only the operation and the
+  model test reach the embeddings client (slice D); every `inference.decide` names a task on a
+  `decide` route (slice F adds that half to the same file, and appends to the
+  same `CONTRIBUTING.md` row).
 - `test_usage_guard.py`: decide and embed are metered.
 - `test_import_guard.py`, `test_lock_domain_guard.py`: classify the new
   modules.

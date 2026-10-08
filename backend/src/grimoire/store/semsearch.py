@@ -70,6 +70,7 @@ from collections.abc import Iterator
 from .. import embeddings
 from ..llm_errors import LLMError
 from . import embed_space, search, vectors
+from .inference import embed
 
 #: The mode name this module answers to, on the route and in the response.
 MODE = "semantic"
@@ -225,7 +226,9 @@ def _records(scope: str, root: str) -> Iterator[dict]:
                "texts": [_passage_text(doc["name"], c) for c in chunks]}
 
 
-def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] | None:
+def _embed(cfg: dict, query_text: str, missing: list[str], *,
+           cached: int | None = None,
+           uncached: int | None = None) -> list[list[float]] | None:
     """Vectors for the query and this query's warm run, or None if the endpoint
     could not answer at all.
 
@@ -239,12 +242,18 @@ def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] 
     failure that says the endpoint itself is unavailable gets no retry — the
     same answer is coming, and asking again leans on a provider that may
     already be throttling.
+
+    Each request is one `embed_sync` call under ``semantic-search``, so one
+    ledger row, charged to no campaign: search is library-wide. `cached` and
+    `uncached` are the corpus's hits and misses as pass one counted them, for
+    the first call's capture line only (a retry is the same run).
     """
     deadline = time.monotonic() + embeddings.TIMEOUT
     kind = "bad_response"
     try:
-        got = _CLIENT.embed([query_text, *missing], cfg["model"], cfg["key"],
-                            cfg["base_url"], deadline=deadline)
+        got = embed.embed_sync("semantic-search", [query_text, *missing], space=cfg,
+                               client=_CLIENT, deadline=deadline, cached=cached,
+                               uncached=uncached)
         if len(got) == 1 + len(missing):  # defensive: the client promises this
             return got
     except LLMError as exc:
@@ -254,9 +263,11 @@ def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] 
     if not missing or kind != "bad_response":
         return None
     try:
-        got = _CLIENT.embed([query_text], cfg["model"], cfg["key"], cfg["base_url"],
-                            deadline=deadline)
+        got = embed.embed_sync("semantic-search", [query_text], space=cfg, client=_CLIENT,
+                               deadline=deadline)
     except (LLMError, OSError):
+        # Silent here: the meter has recorded the failed request, and the
+        # caller answers in keyword mode.
         return None
     return got + [[] for _ in missing] if len(got) == 1 else None
 
@@ -277,7 +288,7 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     against or it could not be reached — the caller answers in keyword mode.
     """
     search.validate(scope, kinds)
-    cfg = embed_space.resolve()
+    cfg = embed_space.endpoint()
     if cfg is None:
         raise Unavailable("Semantic search needs an embeddings connection and model, "
                           "set on the Configuration page.")
@@ -305,12 +316,13 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
     # two) was rejected: a file that exists and fails its checksum has to count
     # as missing, or it is never re-embedded and its record is unscorable for
     # good — the exact permanent-stuck failure `warm_window` exists to avoid.
-    uncached = _uncached(space, _records(scope, root))
+    uncached, hits = _uncached(space, _records(scope, root))
     query_text = embed_space.clip(query, QUERY_BYTES)
     missing = embed_space.warm_window(uncached, query_text, WARM_LIMIT)
+    misses = len(uncached)
     del uncached
 
-    got = _embed(cfg, query_text, missing)
+    got = _embed(cfg, query_text, missing, cached=hits, uncached=misses)
     if got is None:
         raise Unavailable("The embeddings endpoint could not be reached. "
                           "Check the connection on the Configuration page.")
@@ -357,8 +369,9 @@ def search_semantic(q: str, *, scope: str = "", root: str = "",
             "indexed": indexed, "corpus": len(counted)}
 
 
-def _uncached(space: str, records: Iterator[dict]) -> list[str]:
-    """The corpus's passages that have no vector yet, in walk order, deduped.
+def _uncached(space: str, records: Iterator[dict]) -> tuple[list[str], int]:
+    """The corpus's passages that have no vector yet, in walk order, deduped,
+    and how many of the deduped passages do (the capture line's hits).
 
     Reads the cache and keeps none of it — see `search_semantic`. Existence
     would be cheaper than a read, but a file that exists and fails its checksum
@@ -376,7 +389,7 @@ def _uncached(space: str, records: Iterator[dict]) -> list[str]:
             seen.add(key)
             if text not in cached:
                 out.append(text)
-    return out
+    return out, len(seen) - len(out)
 
 
 def _best_passage(space: str, known: dict, query_vector: list[float],

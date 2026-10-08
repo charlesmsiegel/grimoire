@@ -1,8 +1,9 @@
 """What a task resolved to: the attempts it runs, and how they were chosen.
 
-Built by `resolve.resolve` and nowhere else. Until the facade takes attempts
-directly (spec §13), each `Attempt` carries its lowered connection dict -- the
-shape `LLMClient` reads today -- so `conn` is what a call site hands the facade.
+Built by `resolve.resolve` (and, for the Embedding role, `resolve.embedding`)
+and nowhere else. Until the facade takes attempts directly (spec §13), each
+`Attempt` carries its lowered connection dict -- the shape `LLMClient` reads
+today -- so `conn` is what a call site hands the facade.
 From slice C that dict carries the fallback too: the fallback attempt's own
 lowered dict, under `llm.FALLBACK_KEY` (`resolve.FALLBACK_KEY`), which is what
 the facade sends when that primary fails (spec §5.2, §5.4, §5.5). There is no
@@ -115,6 +116,12 @@ class ResolvedInference:
     #: attempted, or there is no fallback to send. Never refused on -- the primary is
     #: what the call runs on -- so the settings view is where it shows.
     fallback_problem: str | None = None
+    #: The vector space an Embedding-role resolution embeds in
+    #: (`resolve.embedding`): `f"{provider_id}\0{rev}\0{model}"`, the key every
+    #: vector cache is read and written under. Set only when the role embeds --
+    #: a model, an endpoint, and nothing in `missing`; None otherwise, and
+    #: always None for a generative resolution.
+    space_id: str | None = None
 
     @property
     def conn(self) -> dict | None:

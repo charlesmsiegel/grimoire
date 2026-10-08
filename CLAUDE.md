@@ -766,6 +766,63 @@ would answer neither question.
   role has no seam to refuse at, so the same known `no` for `embed` turns
   embedding off instead: `embed_space.resolve` names no space, no request is
   sent that could only fail, and the Embedding card says why.
+- **Adding an embedding call site?** There is one door,
+  `store.inference.embed.embed_sync(<task>, texts, space=embed_space.endpoint(),
+  client=…, campaign=…)`, and the task must be in `routing.EMBED_TASKS` (a
+  route would carry no choice: every embed task resolves through the global
+  Embedding role, and the frozen observer enumerates `TASK_ROUTE`). The caller
+  resolves the space **once**, from that role (`resolve.embedding`, which
+  `resolve.resolve` refuses to stand in for), reads its vector cache under it
+  and hands it in, because `embed_sync` never re-resolves: embedding with one
+  model and saving under another space's key is how vectors from two models
+  end up in one cache. No embed resolution reads a campaign; there is no
+  fallback on any axis. The model-test probe is the only other door to the
+  embeddings client, and it stays on the provider under test.
+  - **Every call that sent a request files one ledger row**, `operation:
+    "embed"`, under its embed task, covering all of its batches. It carries the
+    caller's campaign where there is one (lore recall, art and continuity do,
+    and absorb's identity check adds its scene) because spend is measured per
+    campaign; library-wide semantic search has none and is unattributed. A
+    call that sends nothing files nothing -- no row, no error, no capture line
+    -- whether its input was empty or its deadline lapsed before the first
+    request. When the caller's own budget cuts a request that did go out
+    (`budgeted=True`: absorb's identity check and the continuity sweep), the
+    row is `aborted` and nothing reaches the error store: that is the
+    caller's clock, not the provider failing. A deadline that only bounds the
+    provider (recall's, search's) cutting it is an error like any other.
+  - **A failure is recorded at `Meter.done` like any LLM call, and only its
+    kind and HTTP status are recorded** -- never the provider's text, a URL or
+    a key, since an error body can echo the input and a redirect's `Location`
+    can carry a key. The caller still sees the provider's own words and still
+    degrades silently, writing no line of its own. So a failed continuity
+    sweep legitimately files **two** error entries: a `continuity-similarity`
+    row for the failed request and reconcile's own `continuity-reconcile` row
+    for the degraded sweep; a failed absorb identity check likewise files a
+    `continuity-similarity` row and a `continuity-identity` record. They answer
+    different questions, and a test that counts one filters on `task`. (A
+    request the run's own budget cut is not a failed request: its row is
+    `aborted`, and only the caller says what running out meant.)
+  - **A known `no` turns embedding off rather than refusing**: the adapter, a
+    preset's hard `no`, the user's facts or the catalog (never the name rule's
+    guess, and never a failed test, which is `unknown`) mean no request is
+    sent and every caller degrades as it does when the role is unset. The
+    Embedding card's `problem` says why. An edit of a provider known not to
+    embed by its adapter, its preset or the user's override asks for no
+    `confirm_embedding`; a `no` that only the catalog or the old rev's probe
+    verdicts gave does not survive a `rev` restamp, so `moved_by` judges the
+    edited provider as it will read after the save, and an edit that leaves
+    embedding on is a move that asks.
+  - **Cost:** an endpoint that reports no price (a local or
+    OpenAI-compatible server) files an **unpriced** row on every recall or art
+    turn, so the Costs totals read "incomplete" until the user sets rates for
+    that model; slice E prices such a row from those rates. An OpenRouter embed
+    reports its cost, which is real spend and counts against the campaign's
+    budget.
+  - `test_operation_guard.py` (the embed half) holds the task, the door, and
+    where each call's `space=` comes from -- traced back through the package
+    to `embed_space.endpoint`, so a space built by hand fails it -- and
+    `test_usage_guard.py` holds that every embeddings request passes a meter's
+    holder.
 - **A settings surface never spends unasked, and the server is what holds
   that.** Play is not gated -- sending a turn *is* the request -- but a call a
   settings page starts that may cost money says what it will send and waits

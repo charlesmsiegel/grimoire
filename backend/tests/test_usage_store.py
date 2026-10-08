@@ -344,6 +344,26 @@ def test_the_meter_records_what_the_facade_filled_in(home, monkeypatch):
     assert row["duration_ms"] >= 0
 
 
+def test_a_row_carries_a_named_operation(home):
+    row = usage.record(task="semantic-recall", operation="embed")
+
+    assert row["operation"] == "embed"
+
+
+def test_a_row_names_no_operation_by_default(home):
+    row = usage.record(task="chat")
+
+    assert "operation" not in row
+
+
+def test_the_meter_files_the_holders_operation(home):
+    with usage.meter("art-catalog") as m:
+        m.usage.update(model="m", operation="embed")
+
+    row, = _rows(home)
+    assert row["operation"] == "embed"
+
+
 def test_a_failed_call_is_still_a_row_carrying_the_failure_kind(home):
     from grimoire.llm_errors import LLMError
 

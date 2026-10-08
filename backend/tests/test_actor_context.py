@@ -493,7 +493,7 @@ def test_unknown_lore_never_takes_a_recall_slot_on_another_npcs_call(cast_scene,
                            keys="unsaid-toll")
     scores = {"mara-ledger": 0.9, "harbour-toll": 0.5}
 
-    def top_one(candidates, _text):
+    def top_one(candidates, _text, **_):
         ranked = sorted(candidates, key=lambda e: -scores.get(e["id"], 0.0))
         return [(e, scores.get(e["id"], 0.0)) for e in ranked[:1]]
 

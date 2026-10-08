@@ -17,9 +17,12 @@ Honest about its reach, the house standard:
   codebase's own convention -- the dependency is injected as
   ``client: LLMClient = Depends(get_llm)`` at every route -- not a proof. A
   generation reached through a differently-named binding is not seen.
-- **Only ``routes/`` is scanned.** Nothing else in the package holds an
-  ``LLMClient``; the adapters underneath take a holder from the facade, and the
-  facade is covered by its own tests.
+- **The generation checks scan only ``routes/``.** Nothing else in the package
+  holds an ``LLMClient``; the adapters underneath take a holder from the facade,
+  and the facade is covered by its own tests. **The embeddings check walks the
+  whole package**, because store modules hold the embeddings client: every
+  request to it that is not the embed operation (`test_operation_guard.py`'s
+  recogniser, imported so there is one) passes ``usage=`` a meter's holder.
 - **"Metered" is approximated by the argument being ``<something>.usage``.**
   The real property is "this holder belongs to a ``store.usage.Meter`` that will
   file a row", which no static check can decide. What this catches is the actual
@@ -39,6 +42,7 @@ import pathlib
 import grimoire.routes as routes_pkg
 
 from . import guard_markers
+from .test_operation_guard import CLIENT_MODULE, _walk, client_calls
 
 ROUTES = pathlib.Path(routes_pkg.__file__).parent
 
@@ -159,3 +163,44 @@ def test_the_guard_sees_the_call_sites_it_is_meant_to_cover():
     found = sum(len(list(_generation_calls(ast.parse(p.read_text(encoding="utf-8")))))
                 for p in ROUTES.rglob("*.py"))
     assert found >= 10, f"only {found} generation call sites found; did routes/ move?"
+
+
+# ---- the embeddings client (slice D, spec 14.1: embed is metered) ----
+
+def _embed_is_metered(node: ast.Call) -> bool:
+    """Whether a client `.embed(...)` hands it a holder: the keyword ``usage=``,
+    an attribute named ``usage``. Keyword only -- the client's third positional
+    is the key, not a holder."""
+    return any(k.arg == _HOLDER and isinstance(k.value, ast.Attribute)
+               and k.value.attr == _HOLDER for k in node.keywords)
+
+
+def _unmetered_embeds(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[str]:
+    if modname == CLIENT_MODULE:
+        return []
+    return [f"{modname}:{call.lineno}: .embed()"
+            for call in client_calls(tree, modname, is_pkg) if not _embed_is_metered(call)]
+
+
+def test_every_embeddings_request_is_metered():
+    offenders = [o for modname, tree, is_pkg in _walk()
+                 for o in _unmetered_embeds(tree, modname, is_pkg)]
+    assert not offenders, (
+        "embeddings request(s) that file no ledger row -- embed through "
+        "`store.inference.embed.embed_sync`, or pass `usage=m.usage` from a "
+        "`store.usage.meter(...)`:\n  " + "\n  ".join(offenders))
+
+
+def test_the_embeddings_check_flags_and_passes_planted_cases():
+    where = "grimoire.store.semsearch"
+    for src in ("_CLIENT.embed(texts, m, k, u)\n",
+                "_CLIENT.embed(texts, m, k, u, usage=None)\n",
+                "_CLIENT.embed(texts, m, k.usage, u)\n"):
+        assert _unmetered_embeds(ast.parse(src), where), src
+    for src in ("_CLIENT.embed(texts, m, k, u, usage=m.usage)\n",
+                # An operation call, not a client call: the operation meters.
+                ("from .. import store\n"
+                 "store.inference.embed.embed('semantic-search', t, space=s, client=c)\n"),
+                ("from .inference import embed\n"
+                 "embed.embed_sync('semantic-search', t, space=s, client=c)\n")):
+        assert _unmetered_embeds(ast.parse(src), where) == [], src

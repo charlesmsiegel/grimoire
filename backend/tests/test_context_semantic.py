@@ -21,7 +21,9 @@ from grimoire.store import (
     entities,
     groupstate,
     llm_connections,
+    logs,
     scenes,
+    usage,
     vectors,
     worlds,
 )
@@ -48,7 +50,7 @@ class FakeProvider:
         self.error = error
         self.calls: list[list[str]] = []
 
-    def embed(self, texts, model, key, base_url, deadline=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
         self.calls.append(list(texts))
         if self.error is not None:
             raise self.error
@@ -405,7 +407,7 @@ def test_any_provider_error_degrades_to_keyword_only(store, provider, kind):
 
 def _poisoned(provider, poison_text, mapping):
     """A provider that refuses any request containing `poison_text`."""
-    def embed(texts, model, key, base_url, deadline=None):
+    def embed(texts, model, key, base_url, deadline=None, usage=None):
         provider.calls.append(list(texts))
         if poison_text in texts:
             raise embeddings.EmbeddingsError("bad_response", "input rejected")
@@ -493,7 +495,7 @@ def test_both_embed_calls_share_one_deadline(store, provider):
     seen = []
     configure()
 
-    def record(texts, model, key, base_url, deadline=None):
+    def record(texts, model, key, base_url, deadline=None, usage=None):
         provider.calls.append(list(texts))
         seen.append(deadline)
         if len(texts) > 1:
@@ -562,7 +564,7 @@ def test_a_zero_query_vector_recalls_nothing(store, provider):
 def test_a_provider_that_returns_too_few_vectors_recalls_nothing(store, provider):
     configure()
 
-    def short(texts, model, key, base_url, deadline=None):
+    def short(texts, model, key, base_url, deadline=None, usage=None):
         provider.calls.append(list(texts))
         return [QUERY] * (len(texts) - 1)       # always one short, batch or solo
 
@@ -880,3 +882,76 @@ def test_resolving_the_settings_reads_config_once(store, monkeypatch):
     monkeypatch.setattr(config, "read_config", lambda: (reads.append(1), real())[1])
     assert semantic.settings() is not None
     assert len(reads) == 1
+
+
+# --- the metered operation (slice D) ---------------------------------------
+
+
+def _rows():
+    return list(usage.calls(days=1))
+
+
+def test_a_recall_files_one_semantic_recall_row(store, provider):
+    configure()
+    semantic.recall([entry("Miss")], "scene text")
+    [row] = _rows()
+    assert (row["task"], row["operation"]) == ("semantic-recall", "embed")
+    assert "prompt_tokens" not in row and "completion_tokens" not in row
+    assert "campaign" not in row
+
+
+def test_a_recall_inside_a_campaign_is_charged_to_it(store, provider):
+    configure()
+    semantic.recall_scored([entry("Miss")], "text", campaign="saltmarch")
+    [row] = _rows()
+    assert row["campaign"] == "saltmarch"
+    assert "scene" not in row
+
+
+def test_a_down_provider_degrades_and_files_one_error_row_per_request(store, provider):
+    configure()
+    provider.error = embeddings.EmbeddingsError("network", "down")
+    assert semantic.recall([entry("Miss")], "scene text") == []
+    assert len(provider.calls) == 1          # unavailable, so no retry
+    [row] = _rows()
+    assert row["status"] == "error"
+
+
+def test_a_bad_response_retries_the_query_alone_and_files_two_rows(store, provider):
+    configure()
+
+    def once_bad(texts, model, key, base_url, deadline=None, usage=None):
+        provider.calls.append(list(texts))
+        if len(provider.calls) == 1:
+            raise embeddings.EmbeddingsError("bad_response", "nope")
+        return [QUERY for _ in texts]
+
+    provider.embed = once_bad
+    semantic.recall([entry("Miss")], "scene text")
+    assert len(provider.calls) == 2
+    assert [r["status"] for r in _rows()] == ["error", "ok"]
+
+
+def test_a_retry_does_not_count_the_runs_hits_and_misses_again(store, provider):
+    """The query-only retry is the same run: only the first line carries the
+    run's hits and misses, so a reader summing lines counts them once."""
+    logs.forget_file_sizes()
+    logs.apply_level("debug")
+    try:
+        configure()
+
+        def once_bad(texts, model, key, base_url, deadline=None, usage=None):
+            provider.calls.append(list(texts))
+            if len(provider.calls) == 1:
+                raise embeddings.EmbeddingsError("bad_response", "nope")
+            return [QUERY for _ in texts]
+
+        provider.embed = once_bad
+        semantic.recall([entry("Miss")], "scene text")
+        first, retry = [r for r in reversed(logs.read(level="debug")["rows"])
+                        if r.get("module") == "embed"]
+        assert "cached" in first and "uncached" in first
+        assert "cached" not in retry and "uncached" not in retry
+    finally:
+        logs.forget_file_sizes()
+        logs.apply_level("info")

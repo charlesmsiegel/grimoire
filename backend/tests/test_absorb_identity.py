@@ -363,9 +363,10 @@ def test_a_budget_cut_embed_is_the_budget_not_the_provider(client, scene, monkey
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
 
     def cut(text):
+        # The client's own words for a read the deadline cut mid-flight.
         clock[0] = 1e6
-        raise embeddings.EmbeddingsError("network",
-                                         "embeddings deadline passed before the request")
+        raise embeddings.EmbeddingsError("network", "embeddings response exceeded 30.0s",
+                                         code=embeddings.DEADLINE)
 
     _configure_embeddings(monkeypatch, FakeEmbeddings(vector_for=cut))
     fake = _llm(client, _extraction(plot=[SALTMARCH_TITHE]))
@@ -378,6 +379,11 @@ def test_a_budget_cut_embed_is_the_budget_not_the_provider(client, scene, monkey
         "degraded", True, BUDGET_SEMANTIC)
     assert block["fallback"] == BUDGET_SEMANTIC
     assert _identity_errors(cid) == []
+    # The meter agrees: the absorb's clock is not the provider failing, so
+    # the embed row is `aborted` and nothing at all reaches the error store.
+    assert store.errors.summary(campaign=cid)["rows"] == []
+    embeds = [r for r in store.usage.calls(campaign=cid) if r.get("operation") == "embed"]
+    assert embeds and all(r["status"] == "aborted" for r in embeds)
 
 
 def test_budget_refused_identity_reports_budget_exhausted(client, scene, monkeypatch):
@@ -646,13 +652,17 @@ def test_identity_embedding_deadline_never_exceeds_the_absorb_budget(client, sce
 
     assert double.deadlines
     assert all(d is not None and d <= time.monotonic() + 5 for d in double.deadlines)
-    # Embedding calls stay unmetered (§9.4): the scene's usage rows are exactly
-    # the LLM requests, and none of them is the embeddings call.
+    # The scene's usage rows are the LLM requests plus one embed row per
+    # embeddings request, each charged to the absorb's campaign and scene.
     rows = [r for r in store.usage.calls(campaign=cid) if r.get("scene") == sid]
-    assert len(rows) == len(fake.requests) == 2
-    for row in rows:
-        assert "embed" not in str(row.get("task"))
-        assert row.get("model") != "embed-1"
+    llm_rows = [r for r in rows if r.get("operation") != "embed"]
+    embed_rows = [r for r in rows if r.get("operation") == "embed"]
+    assert len(llm_rows) == len(fake.requests) == 2
+    assert all(r.get("model") != "embed-1" for r in llm_rows)
+    for row in embed_rows:
+        assert (row["task"], row["operation"], row["campaign"], row["scene"]) == (
+            "continuity-similarity", "embed", cid, sid)
+    assert len(embed_rows) == len(double.calls)
 
 
 def test_misrouted_identity_reports_itself_and_leaves_absorb_standing(client, scene):

@@ -473,6 +473,15 @@ def _silenced(silence: Silence | None, glob: dict, campaign: dict) -> tuple[dict
     return drop(glob), campaign
 
 
+def _refuse_embed(task: str, operation: str, role: str) -> None:
+    """ValueError for embed work asked of `resolve` (see there): an embed
+    operation, an embed task, or the Embedding role."""
+    if operation == "embed" or task in routing.EMBED_TASKS or role == "embedding":
+        raise ValueError("embed work resolves through resolve.embedding, "
+                         f"not resolve (task={task!r}, operation={operation!r}, "
+                         f"role={role!r})")
+
+
 def resolve(task: str, cid: str = "", *, operation: str = "generate",
             override: Selection | None = None, role: str = "",
             silence: Silence | None = None) -> ResolvedInference:
@@ -518,7 +527,15 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     Two arguments are for the settings view rather than a call site: `role`
     resolves that ROLE (`cascade.choose_role`) instead of `task`'s route, and
     `silence` leaves one scope's own choice out (`Silence`).
+
+    Embed work is not this function's: an embed operation, an embed task
+    (`routing.EMBED_TASKS`) or the Embedding role raises ValueError before
+    anything is read. Each would otherwise resolve -- an unknown task to the
+    Primary role, the role through `choose_role` -- and embed through a
+    resolution that knows nothing of vector spaces. `embedding` is the
+    Embedding role's one entry point.
     """
+    _refuse_embed(task, operation, role)
     llm_connections.ensure_migrated()
     cfg = config.read_config()
     meta = campaign_meta(cid)
@@ -712,6 +729,59 @@ def _fallback_problem(primary: dict, fallback: dict | None) -> str | None:
     if _same_provider(primary, fallback):
         return SAME_PROVIDER
     return problem(fallback)
+
+
+def embedding(cfg: dict | None = None, *,
+              lookup: translate.Lookup | None = None) -> ResolvedInference:
+    """The Embedding role's resolution: its one attempt, what that attempt is
+    known not to do, and the vector space it embeds in (spec 5.4, slice D).
+
+    The one reader of the role. `config.md` is read only when `cfg` is None;
+    the role is global only (spec 4.4), so no campaign is read -- one space,
+    one vector cache. The selection is `cascade.role_selection("embedding")`
+    over `translate.embedding_view`, which keeps the `embeddings_*` trim rule
+    at both formats. Embedding inherits nothing and has no fallback on any
+    axis (rule 4: a vector is saved only under the space that produced it),
+    so there is exactly one attempt or none (`embed_attempt`).
+
+    Reads, per resolution: the config (when not given), the chosen provider's
+    connection file once (the memoised lookup, which runs the connection
+    migration as every `read_connection_raw` does), that provider's cached
+    catalog row and `facts.json` -- the last two for the capability that says
+    whether this model can embed at all. No other provider is read.
+
+    `lookup` is a fresh `connection_lookup()` unless given: that one reads an
+    unreadable provider (a busy store included) as no provider, which is "off".
+    The settings migration hands its strict lookup instead, so a file a sync
+    client held fails the run rather than clearing the legacy choice for good.
+
+    `space_id` is set only when the role embeds: a model, an endpoint
+    (`embed_endpoint`, which is also the attempt's `base_url`), and no known
+    `no` for `embed` (`missing`). A known `no` turns embedding off exactly as an
+    unset role does -- no request is sent that could only fail (ruling 4). A
+    name-rule guess is never a known `no` (`_missing`).
+
+    Raises what reading `config.md` or a malformed connection record raises;
+    `embed_space.endpoint` is the never-raising door."""
+    cfg = config.read_config() if cfg is None else cfg
+    lookup = connection_lookup() if lookup is None else lookup
+    current = translate.is_current(cfg)
+
+    def exists(conn_id: str) -> bool:
+        return lookup(conn_id) is not None
+
+    selection, _, scope = cascade.role_selection(
+        "embedding", campaign={}, glob=translate.embedding_view(cfg), exists=exists)
+    raw = lookup(selection.provider) if selection is not None else None
+    if selection is None or raw is None:
+        return ResolvedInference(task="", operation="embed", route="", legacy_route="",
+                                 role="", via="", scope="none", attempts=(),
+                                 current=current)
+    got = embed_attempt(selection.provider, selection.model, raw, current=current)
+    return ResolvedInference(
+        task="", operation="embed", route="", legacy_route="",
+        role="embedding", via="role", scope=scope, attempts=(got.attempt,),
+        standing=selection, current=current, missing=got.missing, space_id=got.space_id)
 
 
 def _same_provider(primary: dict, fallback: dict) -> bool:

@@ -157,6 +157,16 @@ LEGACY_ROUTES: tuple[Route, ...] = _legacy_routes()
 #: which would send it to the active connection).
 NON_ROUTE_TASKS: tuple[str, ...] = ("model-test",)
 
+#: The tasks an embed call meters under (slice D). No route claims them, and
+#: none ever may: every one of them embeds through the global Embedding role
+#: (`inference.resolve.embedding`), so a route would carry no choice -- and the
+#: frozen observer enumerates `TASK_ROUTE`, which they would change. Kept apart
+#: from `NON_ROUTE_TASKS` (which never resolve a role at all); `resolve.resolve`
+#: refuses each of them, so embed work can never fall through to Primary as an
+#: unknown task.
+EMBED_TASKS: tuple[str, ...] = ("semantic-recall", "semantic-search", "art-catalog",
+                                "continuity-similarity")
+
 #: task -> route key. Built here rather than written out, so the two cannot drift.
 TASK_ROUTE: dict[str, str] = {task: r.key for r in ROUTES for task in r.tasks}
 

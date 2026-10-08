@@ -1167,7 +1167,7 @@ def test_graph_makes_no_model_call(monkeypatch, tmp_path):
     import grimoire.llm
     cid = _cost_campaign(monkeypatch, tmp_path)
     _RecordingEmbeddings.built = []
-    monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
+    monkeypatch.setattr(store.embed_space, "endpoint", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
     # Every real embedding call goes through a client built at import time
     # (`similarity._CLIENT` and its siblings), which a swapped class never

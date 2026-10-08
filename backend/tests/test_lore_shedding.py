@@ -270,13 +270,30 @@ def test_recalled_lore_still_drops_whole(scene, monkeypatch):
     cid, sid, croot = scene
     entities.create_entity(croot, "lore", "Gull", "Gulls nest on the breakwater. " * 20,
                            keys="unsaid-gull", fields={"keep": "true"})
-    monkeypatch.setattr(semantic, "recall_scored", lambda c, _t: [(e, 0.5) for e in c])
+    monkeypatch.setattr(semantic, "recall_scored", lambda c, _t, **_: [(e, 0.5) for e in c])
     scenes.append_message(cid, sid, "user", "Calm.")
     assert _row(context.context_breakdown(cid, sid), "recalled_lore")["dropped"] is False
     config.write_config(context_budget="1")
     row = _row(context.context_breakdown(cid, sid), "recalled_lore")
     assert row["dropped"] is True
     assert [e["shed"] for e in row["entries"]] == [False]
+
+
+def test_world_info_hands_recall_its_campaign(scene, monkeypatch):
+    """A recall's embed is charged to the campaign it ran for (slice D, I2)."""
+    cid, sid, croot = scene
+    entities.create_entity(croot, "lore", "Gull", "Gulls nest on the breakwater.",
+                           keys="unsaid-gull")
+    seen: list[dict] = []
+
+    def spy(c, t, **kw):
+        seen.append(kw)
+        return []
+
+    monkeypatch.setattr(semantic, "recall_scored", spy)
+    scenes.append_message(cid, sid, "user", "Calm.")
+    context.context_breakdown(cid, sid)
+    assert seen and all(kw == {"campaign": cid} for kw in seen)
 
 
 def _choices(monkeypatch) -> list:
@@ -513,7 +530,7 @@ def _all_reason_types(cid: str, sid: str, croot, monkeypatch) -> None:
     entities.create_entity(croot, "lore", "Gull", "Gulls nest on the breakwater.",
                            keys="unsaid-gull")                                  # recall
     monkeypatch.setattr(semantic, "recall_scored",
-                        lambda c, _t: [(e, 0.52) for e in c if e["id"] == "gull"])
+                        lambda c, _t, **_: [(e, 0.52) for e in c if e["id"] == "gull"])
     pins.set_rule(cid, "lore:oath", pins.PIN, sid=sid)
     for text in ("The bell rings.", "The ferry leaves.", "The ferry again.",
                  "We reach the harbour."):

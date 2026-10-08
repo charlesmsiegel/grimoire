@@ -32,6 +32,7 @@ from grimoire.store import (
     plot,
     revision,
     scenes,
+    usage,
     vectors,
     worlds,
 )
@@ -757,6 +758,20 @@ def test_sweep_embeds_at_most_the_warm_limit(cid, s0, fake, monkeypatch):
     assert len(loads) == 2                      # one read of the cache per sweep
 
 
+def test_a_sweep_files_its_embeds_under_the_campaign(cid, s0, fake):
+    """A sweep's embeds are charged to the campaign it swept, and to no scene:
+    a sweep reads the whole campaign (slice D)."""
+    _configure()
+    _chores(cid, s0)
+    _embedded(cid)
+    assert fake.calls
+    rows = [r for r in usage.calls(days=1) if r.get("task") == "continuity-similarity"]
+    assert len(rows) == len(fake.calls)
+    for row in rows:
+        assert row["campaign"] == cid
+        assert "scene" not in row
+
+
 def test_a_runs_passes_share_one_embedding_budget(cid, s0, monkeypatch):
     """§9.4: the cap and the `embeddings.TIMEOUT` window are the run's. A second
     discovery under the same `EmbedBudget` (a follow-on pass, §11.1) embeds
@@ -951,7 +966,7 @@ class _Refusing(FakeEmbeddings):
         super().__init__()
         self.poison = poison
 
-    def embed(self, texts, model, key, base_url, deadline=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
         self.calls.append(list(texts))
         if self.poison in texts:
             raise embeddings.EmbeddingsError("bad_response", "refused")

@@ -506,8 +506,8 @@ def _warm(proposals: list[_Proposal], pools: _Pools) -> list[str]:
     return sorted(best, key=lambda text: best[text])
 
 
-def _semantic(proposals: list[_Proposal], pools: _Pools,
-              embed_deadline: float | None) -> similarity.Semantic:
+def _semantic(proposals: list[_Proposal], pools: _Pools, embed_deadline: float | None, *,
+              campaign: str = "", scene: str = "") -> similarity.Semantic:
     space = similarity.available()
     if space is None:
         return similarity.Semantic({}, "off")
@@ -518,8 +518,10 @@ def _semantic(proposals: list[_Proposal], pools: _Pools,
     if not comparable:
         return similarity.Semantic({}, "configured")
     cached = [s.text for pool in pools.values() for s in pool]
+    # Charged to the absorb's campaign and scene, as its LLM calls are.
     return similarity.semantic([p.subject.text for p in comparable], _warm(comparable, pools),
-                               deadline=embed_deadline, space=space, cached=cached)
+                               deadline=embed_deadline, space=space, cached=cached,
+                               campaign=campaign, scene=scene)
 
 
 def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
@@ -535,7 +537,7 @@ def examine(cid: str, sid: str, parsed: dict, facts: dict, *,
     kinds = sorted({p.kind for p in proposals})
     pools = {kind: [s for s in similarity.pool(cid, kind) if _offerable(s)]
              for kind in kinds}
-    sem = _semantic(proposals, pools, embed_deadline)
+    sem = _semantic(proposals, pools, embed_deadline, campaign=cid, scene=sid)
     vecs = sem.vectors if sem.mode != "off" else None
     stored = {"thread": ledgers.threads or {}, "commitment": ledgers.commitments or {}}
     rows: list[Examined] = []

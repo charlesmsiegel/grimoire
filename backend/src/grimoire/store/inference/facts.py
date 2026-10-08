@@ -138,12 +138,20 @@ def _clean_results(raw: object) -> dict[str, dict]:
             if c in CAPABILITIES and isinstance(r, dict)}
 
 
-def of(provider_id: str, model: str, rev: str) -> dict:
+def of(provider_id: str, model: str, rev: str, *, strict: bool = False) -> dict:
     """What is known of `model`, in the one shape callers read.
 
     Verified results recorded under another `rev` are dropped; everything the
-    user stated is kept.
+    user stated is kept. `strict` reads as a writer does (`_load_for_write`,
+    not strict): a file that exists and cannot be READ -- held by a sync
+    client, half-synced -- raises `FactsUnreadableError` instead of reading
+    as a model nothing was said of; an absent or mangled file still reads as
+    empty. The facts panel's GET flags that (`unreadable`), and the
+    migration's Embedding check (`migrate._embeds`) fails the run on it
+    rather than deciding anything for good from a file it could not read.
     """
+    if strict and safe_id(provider_id):
+        return _view(_load_for_write(provider_id).get(model, {}), rev)
     return _view(_load(provider_id).get(model, {}), rev)
 
 

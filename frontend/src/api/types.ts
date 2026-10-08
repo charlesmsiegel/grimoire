@@ -391,6 +391,10 @@ export type ModelFacts = {
   verified: Partial<Record<CapabilityName, VerifiedResult>>;
   overrides: Partial<Record<CapabilityName, "yes" | "no">>;
   capabilities: Record<CapabilityName, CapabilityValue>;
+  /** The facts file exists and could not be read (a sync client holding it):
+   *  nothing above is what the user said, and a save is refused (503, try
+   *  again), so none is offered. */
+  unreadable?: boolean;
 };
 /** `PUT /api/llm-connections/{id}/facts`. A field left out is left as it is;
  *  an override of `""` removes that override. */

@@ -451,3 +451,301 @@ def test_close_is_a_no_op_for_an_injected_client():
     client.close()
     client.embed(["a"], "m", "", BASE)  # the caller still owns it, so it still works
     assert handled == [1]
+
+
+# --- what each request spent -------------------------------------------------
+
+
+def _usage_handler(bodies):
+    """Answer successive requests with `bodies[n]` merged into a valid reply."""
+    calls = []
+
+    def handler(request):
+        n = len(calls)
+        calls.append(1)
+        sent = json.loads(request.content)["input"]
+        reply = {"data": [{"index": i, "embedding": [1.0]} for i, _ in enumerate(sent)]}
+        reply.update(bodies[n])
+        return httpx.Response(200, json=reply)
+
+    return handler, calls
+
+
+def test_usage_is_summed_across_batches(monkeypatch):
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 2)
+    handler, _ = _usage_handler([{"usage": {"prompt_tokens": 3, "cost": 0.001}},
+                                 {"usage": {"prompt_tokens": 2, "cost": 0.002}}])
+    holder: dict = {}
+    out = make_client(handler).embed(["a", "b", "c"], "m", "", BASE, usage=holder)
+    assert len(out) == 3
+    assert holder["prompt_tokens"] == 5
+    assert holder["cost_usd"] == pytest.approx(0.003)
+    assert holder["cost_basis"] == "billed"
+    assert "completion_tokens" not in holder        # an embedding generates nothing
+
+
+def test_a_batch_without_usage_leaves_the_count_absent(monkeypatch):
+    # A partial sum is not the call's count, and it stays absent even when a
+    # later batch does report.
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+    handler, _ = _usage_handler([{"usage": {"prompt_tokens": 3}}, {},
+                                 {"usage": {"prompt_tokens": 4}}])
+    holder: dict = {}
+    make_client(handler).embed(["a", "b", "c"], "m", "", BASE, usage=holder)
+    assert "prompt_tokens" not in holder
+
+
+def test_a_batch_without_a_price_leaves_the_price_absent(monkeypatch):
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+    handler, _ = _usage_handler([{"usage": {"prompt_tokens": 3, "cost": 0.001}},
+                                 {"usage": {"prompt_tokens": 2}}])
+    holder: dict = {}
+    make_client(handler).embed(["a", "b"], "m", "", BASE, usage=holder)
+    assert holder["prompt_tokens"] == 5
+    assert "cost_usd" not in holder
+    assert "cost_basis" not in holder
+
+
+def test_usage_is_kept_when_a_body_is_malformed():
+    # Billed but unusable: the money was spent either way.
+    def handler(request):
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 3},
+                                         "data": [{"index": 0, "embedding": [1.0]}]})
+
+    holder: dict = {}
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a", "b"], "m", "", BASE, usage=holder)
+    assert exc.value.kind == "bad_response"
+    assert holder["prompt_tokens"] == 3
+
+
+def test_usage_is_kept_when_a_later_batch_fails(monkeypatch):
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 2:
+            return httpx.Response(503, json={"error": "down"})
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 3},
+                                         "data": [{"index": 0, "embedding": [1.0]}]})
+
+    holder: dict = {}
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a", "b"], "m", "", BASE, usage=holder)
+    assert exc.value.kind == "network"
+    assert holder["prompt_tokens"] == 3
+
+
+def _later_batch(fail):
+    """BATCH=1: the first batch answers with counts, the second calls `fail`."""
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 2:
+            return fail(request)
+        return httpx.Response(200, json={"usage": {"prompt_tokens": 3, "cost": 0.001},
+                                         "data": [{"index": 0, "embedding": [1.0]}]})
+
+    return handler, calls
+
+
+@pytest.mark.parametrize("why", ["too_large", "transport"])
+def test_a_later_batch_lost_after_it_was_sent_drops_the_sum(monkeypatch, why):
+    """The second request went out and may have been billed, but its body (and
+    its usage block) was never read: batch one's count is a floor, not the
+    call's, so it is written as absent (CLAUDE.md, Costs)."""
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+
+    def fail(request):
+        if why == "transport":
+            raise httpx.ReadError("connection reset", request=request)
+        monkeypatch.setattr("grimoire.embeddings.MAX_BYTES", 8)
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    handler, calls = _later_batch(fail)
+    holder: dict = {}
+    with pytest.raises(EmbeddingsError):
+        make_client(handler).embed(["a", "b"], "m", "", BASE, usage=holder)
+    assert len(calls) == 2
+    assert "prompt_tokens" not in holder
+    assert "cost_usd" not in holder
+    assert "cost_basis" not in holder
+
+
+def test_a_later_batch_never_sent_keeps_the_sum(monkeypatch):
+    """A batch the deadline stopped BEFORE its request: everything that was
+    sent was read, so batch one's count is the call's."""
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("grimoire.embeddings.time.monotonic", lambda: clock["now"])
+
+    body = json.dumps({"usage": {"prompt_tokens": 3},
+                       "data": [{"index": 0, "embedding": [1.0]}]}).encode()
+
+    class _ThenLate(httpx.SyncByteStream):
+        """The whole body, and only then the clock passes the deadline."""
+
+        def __iter__(self):
+            yield body
+            clock["now"] += 100.0
+
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(200, stream=_ThenLate())
+
+    holder: dict = {}
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a", "b"], "m", "", BASE, deadline=1050.0, usage=holder)
+    assert len(calls) == 1
+    assert exc.value.code == embeddings.DEADLINE
+    assert holder["prompt_tokens"] == 3
+
+
+def test_a_read_the_deadline_cut_is_marked_deadline(monkeypatch):
+    """Cut mid-body by the call's deadline: `DEADLINE`, so a caller whose own
+    clock that was can tell it from a provider failure."""
+    monkeypatch.setattr("grimoire.embeddings.TIMEOUT", 0.3)
+
+    def handler(request):
+        return httpx.Response(200, stream=_Drip(0.05))
+
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a"], "m", "", BASE)
+    assert exc.value.kind == "network"
+    assert exc.value.code == embeddings.DEADLINE
+
+
+def test_a_usage_block_of_non_numbers_is_absent():
+    handler, _ = _usage_handler([{"usage": {"prompt_tokens": "lots", "cost": True}}])
+    holder: dict = {}
+    make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+    assert "prompt_tokens" not in holder
+    assert "cost_usd" not in holder
+    assert "cost_basis" not in holder
+
+
+@pytest.mark.parametrize("usage", [None, "x", [1], 3])
+def test_a_usage_block_that_is_not_an_object_is_absent(usage):
+    handler, _ = _usage_handler([{"usage": usage}])
+    holder: dict = {}
+    make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+    assert holder == {}
+
+
+def test_the_reported_model_is_kept():
+    handler, _ = _usage_handler([{"model": "vendor/embed-2"}])
+    holder: dict = {}
+    make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+    assert holder["model"] == "vendor/embed-2"
+
+
+def test_an_empty_or_non_string_model_is_not_kept():
+    for model in ("", 7, None):
+        handler, _ = _usage_handler([{"model": model}])
+        holder: dict = {}
+        make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+        assert "model" not in holder
+
+
+def test_without_a_holder_nothing_changes():
+    handler, _ = _usage_handler([{"usage": {"prompt_tokens": 3}}])
+    assert make_client(handler).embed(["a"], "m", "", BASE) == [[1.0]]
+
+
+def test_a_first_request_never_sent_is_marked():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a"], "m", "", BASE, deadline=time.monotonic() - 1)
+    assert exc.value.kind == "network"
+    assert exc.value.code == embeddings.NOT_SENT == "not_sent"
+    assert seen == []
+
+
+def test_a_later_batch_past_the_deadline_is_not_marked(monkeypatch):
+    # Batch one went out and was billed, so "nothing was sent" would be false.
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+    clock = {"now": 1000.0}
+    monkeypatch.setattr("grimoire.embeddings.time.monotonic", lambda: clock["now"])
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        clock["now"] += 100.0                       # past the deadline
+        return httpx.Response(200, json={"data": [{"index": 0, "embedding": [1.0]}]})
+
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a", "b"], "m", "", BASE, deadline=1050.0)
+    assert exc.value.kind == "network"
+    # The deadline's, but not `NOT_SENT`: batch one went out.
+    assert exc.value.code == embeddings.DEADLINE
+    assert len(calls) == 1
+
+
+def test_a_body_that_is_not_an_object_drops_the_count(monkeypatch):
+    # Read and billable, but it reported nothing: the earlier batch's 3 is a
+    # partial sum, not the call's count.
+    monkeypatch.setattr("grimoire.embeddings.BATCH", 1)
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        if len(calls) == 1:
+            return httpx.Response(200, json={"usage": {"prompt_tokens": 3, "cost": 0.001},
+                                             "data": [{"index": 0, "embedding": [1.0]}]})
+        return httpx.Response(200, json=[1, 2])
+
+    holder: dict = {}
+    with pytest.raises(EmbeddingsError) as exc:
+        make_client(handler).embed(["a", "b"], "m", "", BASE, usage=holder)
+    assert exc.value.kind == "bad_response"
+    assert "prompt_tokens" not in holder
+    assert "cost_usd" not in holder
+    assert "cost_basis" not in holder
+
+
+def test_a_prefilled_holder_keeps_nothing_stale():
+    stale = {"prompt_tokens": 99, "cost_usd": 1.0, "cost_basis": "billed", "model": "old"}
+
+    def failing(request):
+        return httpx.Response(503, json={"error": "down"})
+
+    holder = dict(stale)
+    with pytest.raises(EmbeddingsError):
+        make_client(failing).embed(["a"], "m", "", BASE, usage=holder)
+    assert holder == {}
+
+    handler, _ = _usage_handler([{}])                 # a body that says nothing
+    holder = dict(stale)
+    make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+    assert holder == {}
+
+
+def test_a_holder_reused_across_calls_is_overwritten_not_added_to():
+    handler, _ = _usage_handler([{"usage": {"prompt_tokens": 3, "cost": 0.001}, "model": "x/a"},
+                                 {"usage": {"prompt_tokens": 2, "cost": 0.002}}])
+    client = make_client(handler)
+    holder: dict = {}
+    client.embed(["a"], "m", "", BASE, usage=holder)
+    client.embed(["a"], "m", "", BASE, usage=holder)
+    assert holder["prompt_tokens"] == 2
+    assert holder["cost_usd"] == pytest.approx(0.002)
+    assert "model" not in holder                      # the first call's does not survive
+
+
+def test_an_overlong_model_is_not_kept():
+    handler, _ = _usage_handler([{"model": "m" * (embeddings.MAX_MODEL_CHARS + 1)}])
+    holder: dict = {}
+    make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+    assert "model" not in holder
+    handler, _ = _usage_handler([{"model": "m" * embeddings.MAX_MODEL_CHARS}])
+    make_client(handler).embed(["a"], "m", "", BASE, usage=holder)
+    assert len(holder["model"]) == embeddings.MAX_MODEL_CHARS

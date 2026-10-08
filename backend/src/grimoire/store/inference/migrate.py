@@ -29,7 +29,8 @@ write), then
    it, read from their parents) with two enrichments -- an unset Claude model
    is written as `opus` wherever it is a selection's model, and the Embedding
    role is set only when the legacy configuration actually embeds
-   (`embed_space.resolve`, ruling 5) -- plus `inference_format: "2"`.
+   (`embed_space.resolve`'s answer over the run's strict lookup, `_embeds`;
+   ruling 5) -- plus `inference_format: "2"`.
 
    Read late because the app serves at format 1 all through the backup, and a
    legacy edit made meanwhile must not be reverted by a snapshot from before
@@ -119,7 +120,7 @@ from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from . import facts, providers, translate
+from . import facts, providers, resolve, translate
 
 log = logging.getLogger(__name__)
 
@@ -378,13 +379,45 @@ def _persistable(view: dict) -> dict[str, str]:
             if k not in _SHARED_PRESET_KEYS and str(v) != ""}
 
 
+def _embeds(cfg: dict, lookup: translate.Lookup) -> bool:
+    """Whether the legacy Embedding choice embeds (ruling 5): what
+    `embed_space.resolve` answers, but read through the run's strict `lookup`
+    like every other selection. A provider file that cannot be read raises, so
+    the switch fails and the next start retries, rather than reading as "never
+    embedded" and clearing the choice for good. A record that reads but is
+    malformed is off, as `embed_space.resolve` has always said.
+
+    The facts file is held to the same rule. The resolution reads it
+    fail-soft, so a file a sync client holds reads as nothing stated -- and a
+    user's `embed: yes` over a catalog's `no` would vanish into a known `no`.
+    So a known `no` is judged again with the facts read strictly
+    (`facts.of(strict=True)`), and one that cannot be read fails the run."""
+    try:
+        got = resolve.embedding(cfg, lookup=lookup)
+        if got.missing and got.attempts:
+            first = got.attempts[0]
+            raw = lookup(first.provider_id)
+            if raw is None:
+                return False
+            known = facts.of(first.provider_id, facts.model_of(first.conn), first.rev,
+                             strict=True)
+            again = resolve.embed_attempt(first.provider_id, first.model, raw,
+                                          current=got.current, model_facts=known)
+            return again.space_id is not None
+    except (KeyError, TypeError, ValueError) as exc:
+        if isinstance(exc, UnicodeDecodeError):   # unreadable, not malformed
+            raise
+        return False
+    return embed_space.endpoint_of(got) is not None
+
+
 def global_fields(cfg: dict, lookup: translate.Lookup) -> dict[str, str]:
     """The format-2 keys a legacy `config.md` migrates to (steps 5-7): every
     one of `OWNED_GLOBAL_KEYS`, "" where it is unset."""
     view = translate.global_view(cfg, lookup)
     fields = dict.fromkeys(OWNED_GLOBAL_KEYS, "")
     fields.update((k, str(view[k])) for k in OWNED_GLOBAL_KEYS if k in view)
-    if embed_space.resolve(cfg) is None:
+    if not _embeds(cfg, lookup):
         # A legacy choice that never embedded stays off (ruling 5).
         for part in keys.EMBEDDING_PARTS:
             fields[keys.role_key("embedding", part)] = ""

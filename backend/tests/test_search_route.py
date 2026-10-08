@@ -164,7 +164,7 @@ def test_semantic_mode_answers_semantically_once_an_endpoint_is_configured(
     configure_embeddings(client)
 
     class Fake:
-        def embed(self, texts, model, key, base_url, deadline=None):
+        def embed(self, texts, model, key, base_url, deadline=None, usage=None):
             # Everything points the same way, so every passage is a hit: what
             # this asserts is the wiring, not the ranking.
             return [[1.0, 0.0] for _ in texts]

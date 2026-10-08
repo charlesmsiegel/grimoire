@@ -673,7 +673,7 @@ def test_absent_owner_beats_sticky():
 
 
 def test_recall_scores_reach_the_reason(monkeypatch):
-    monkeypatch.setattr(semantic, "recall_scored", lambda c, t: [(c[0], 0.52)])
+    monkeypatch.setattr(semantic, "recall_scored", lambda c, t, **_: [(c[0], 0.52)])
     entries = [_e("lore", "hit", keys=["tide"]), _e("lore", "miss", keys=["blade"])]
     got = _run(entries, ["the tide"], recall=semantic.recall_scored, recall_text="the tide")
     assert _refs(got.keyword) == ["lore:hit"]
@@ -684,7 +684,7 @@ def test_recall_scores_reach_the_reason(monkeypatch):
 
 def test_recall_scored_is_recall_with_scores(monkeypatch):
     a, b = {"name": "A"}, {"name": "B"}
-    monkeypatch.setattr(semantic, "recall_scored", lambda c, t: [(b, 0.9), (a, 0.5)])
+    monkeypatch.setattr(semantic, "recall_scored", lambda c, t, **_: [(b, 0.9), (a, 0.5)])
     assert semantic.recall([a, b], "text") == [b, a]
 
 

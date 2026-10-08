@@ -16,6 +16,8 @@ Invented connection ids and the codebase's placeholder names only.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 import grimoire.store as store
@@ -465,6 +467,44 @@ def test_the_facts_confirm_is_compared_in_the_hold_that_writes(client, monkeypat
     assert got.json()["kind"] == "confirm_embedding"
 
 
+def _facts_held(monkeypatch, pid: str) -> bytes:
+    """`pid`'s facts file held by a sync client: every read of it raises."""
+    path = store.llm_connections.facts_path(pid)
+    before = path.read_bytes()
+    real = Path.read_text
+
+    def held(self, *a, **kw):
+        if self == path:
+            raise OSError("held by a sync client")
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", held)
+    return before
+
+
+def test_unreadable_facts_are_flagged_and_never_written(client, monkeypatch):
+    """A facts file that cannot be read is not one with nothing stated: the
+    GET says so (`unreadable`), and a save is refused as C refuses it (503,
+    try again) with its fixed detail -- never a 500, never the file
+    replaced, never the error's text."""
+    _format("2")
+    pid = _spare(client)
+    facts.set_overrides(pid, "m", {"vision": "yes"})
+    url = f"/api/llm-connections/{pid}/facts"
+    assert client.get(url, params={"model": "m"}).json()["unreadable"] is False
+    before = _facts_held(monkeypatch, pid)
+
+    got = client.get(url, params={"model": "m"})
+    assert got.status_code == 200, got.text
+    assert got.json()["unreadable"] is True
+
+    got = client.put(url, json={"model": "m", "prefill": True})
+    assert got.status_code == 503, got.text
+    assert got.json() == {"detail": routes.config.FACTS_UNREADABLE}
+    assert "sync client" not in got.text
+    assert store.llm_connections.facts_path(pid).read_bytes() == before
+
+
 # ---- health ----
 def test_a_generating_health_check_needs_confirm(client):
     fake = FakeCatalog()
@@ -821,6 +861,20 @@ def test_a_key_that_turns_embedding_on_needs_confirm(client):
     got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-first"})
     assert got.status_code == 400, got.text
     assert got.json()["kind"] == "confirm_embedding"
+
+
+def test_a_key_that_outlives_a_catalogs_no_needs_confirm(client):
+    """The cached catalog says the chosen model makes text only, so the role
+    is off. A new key restamps the rev, which leaves that row stale: once
+    saved the provider embeds, so the edit is a move and asks first."""
+    pid = _embedding_on(client)
+    store.llm_connections.set_cached_models(
+        pid, [{"id": "vendor/embed-small", "outputs": ["text"]}], _raw(pid)["rev"])
+    assert store.embed_space.resolve() is None
+    got = client.put(f"/api/llm-connections/{pid}", json={"api_key": "sk-new"})
+    assert got.status_code == 400, got.text
+    assert got.json()["kind"] == "confirm_embedding"
+    assert _raw(pid)["api_key"] == "sk-spare"
 
 
 def test_the_embedding_confirm_is_compared_in_the_hold_that_writes(client, monkeypatch):

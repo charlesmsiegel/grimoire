@@ -663,6 +663,33 @@ def test_a_provider_known_not_to_embed_turns_the_card_off(client):
                                "so embedding is off — choose another Embedding model.")
 
 
+def _choose_embedding(client, name: str, base_url: str) -> dict:
+    provider = store.llm_connections.create_connection(
+        "openai_compatible", name, base_url=base_url, api_key="sk-fake")
+    body = {"roles": {"embedding": {"selection": {"provider": provider,
+                                                  "model": "vec-small"}}},
+            "confirm_embedding": True}
+    return _ok(client, body)["roles"]["embedding"]
+
+
+def test_the_embedding_card_says_why_a_known_no_turned_it_off(client):
+    """Slice D (ruling 4): a provider whose adapter cannot embed is off, and
+    the card says so from the same `missing` that switched it off."""
+    _fresh(client)
+    card = _choose_embedding(client, "Winifred Zai", "https://api.z.ai/api/paas/v4")
+    assert card["on"] is False
+    assert card["problem"] == ("vec-small on Winifred Zai cannot make embeddings, so "
+                               "embedding is off — choose another Embedding model.")
+    assert _global(client)["roles"]["embedding"]["problem"] == card["problem"]
+
+
+def test_a_working_embedding_card_has_no_problem(client):
+    _fresh(client)
+    card = _choose_embedding(client, "Saltmarch Vectors", "https://vectors.example/v1")
+    assert card["on"] is True
+    assert card["problem"] is None
+
+
 def test_an_unreadable_campaign_still_has_a_view(client):
     cid = _fresh(client)
     path = store.campaigns.paths.campaign_meta_path(cid)

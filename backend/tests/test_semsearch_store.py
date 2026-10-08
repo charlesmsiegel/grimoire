@@ -18,9 +18,11 @@ from grimoire.store import (
     config,
     entities,
     llm_connections,
+    logs,
     scenes,
     search,
     semsearch,
+    usage,
     worlds,
 )
 
@@ -52,7 +54,7 @@ class FakeProvider:
                 return list(vector)
         return list(FAR)
 
-    def embed(self, texts, model, key, base_url, deadline=None):
+    def embed(self, texts, model, key, base_url, deadline=None, usage=None):
         self.calls.append(list(texts))
         if self.error is not None:
             raise self.error
@@ -353,3 +355,70 @@ def test_a_snippet_from_inside_a_record_says_it_is_from_inside(world, provider):
     out = run("brine", rounds=3, scope="campaign")
     hit = next(h for h in out["hits"] if h["kind"] == "scenes")
     assert hit["snippet"].startswith("…")
+
+
+# ---- the metered operation (slice D) ---------------------------------------
+
+def test_a_search_files_one_semantic_search_row(world, provider):
+    """Library search is library-wide: its row carries no campaign."""
+    _wid, root = world
+    configure()
+    entities.create_entity(root, "lore", "Tides", "The tides run twice a day.")
+    run("tides")
+    [row] = list(usage.calls(days=1))
+    assert (row["task"], row["operation"]) == ("semantic-search", "embed")
+    assert "campaign" not in row
+
+
+def _embed_lines() -> list[dict]:
+    """The capture lines, oldest first (`logs.read` lists newest first)."""
+    return [r for r in reversed(logs.read(level="debug")["rows"]) if r.get("module") == "embed"]
+
+
+@pytest.fixture
+def debug_log():
+    logs.forget_file_sizes()
+    logs.apply_level("debug")
+    yield
+    logs.forget_file_sizes()
+    logs.apply_level("info")
+
+
+def test_the_capture_line_counts_the_corpus_hits_and_misses(world, provider, debug_log,
+                                                            monkeypatch):
+    """Search's line carries its cache hits too (spec 9.4), counted over the
+    deduped corpus in pass one: `cached + uncached` is the corpus."""
+    _, root = world
+    configure()
+    monkeypatch.setattr(semsearch, "WARM_LIMIT", 1)
+    for n in range(3):
+        entities.create_entity(root, "lore", f"Entry {n}", body=f"brine number {n}")
+    first = semsearch.search_semantic("brine")
+    second = semsearch.search_semantic("brine")
+    lines = _embed_lines()
+    assert len(lines) == 2
+    assert (lines[0]["cached"], lines[0]["uncached"]) == (0, first["corpus"])
+    assert lines[1]["cached"] == first["indexed"]
+    assert lines[1]["cached"] + lines[1]["uncached"] == second["corpus"]
+
+
+def test_a_retry_does_not_count_the_runs_hits_and_misses_again(world, provider, debug_log):
+    """The query-only retry is the same run: its line carries no counts, so a
+    reader summing lines does not count the run's hits and misses twice."""
+    _, root = world
+    configure()
+    entities.create_entity(root, "lore", "The Salt Pact", body="Debts written in brine.")
+    calls: list[int] = []
+    real = provider.embed
+
+    def broken_then_fine(texts, *a, **kw):
+        calls.append(len(texts))
+        if len(calls) == 1:
+            raise EmbeddingsError("bad_response", "unreadable")
+        return real(texts, *a, **kw)
+
+    provider.embed = broken_then_fine
+    semsearch.search_semantic("brine")
+    first, retry = _embed_lines()
+    assert "uncached" in first and "cached" in first
+    assert "uncached" not in retry and "cached" not in retry

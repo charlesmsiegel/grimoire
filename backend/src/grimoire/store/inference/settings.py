@@ -202,7 +202,10 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str) -> dict:
 
 def _embedding_card(cfg: dict, lookup: translate.Lookup) -> dict:
     provider, model = translate.embedding_role(cfg)
-    on = embed_space.resolve(cfg) is not None
+    # One resolution per card: whether it is on, and why not, are read from
+    # the same answer (spec 12, one decision).
+    got = embed_space.resolution(cfg)
+    on = embed_space.endpoint_of(got) is not None
     # What embeds, or nothing: a provider with no model, or one that cannot
     # embed, resolves to no embedding at all, and the card must not say both.
     raw = lookup(provider) if provider and on else None
@@ -213,31 +216,22 @@ def _embedding_card(cfg: dict, lookup: translate.Lookup) -> dict:
     # refusal to borrow (nothing is refused; recall degrades), so this is the
     # embedding resolver's account of itself rather than `_problem`'s.
     return {"stored": {"provider": provider, "model": model}, "resolves": resolves,
-            "on": on, "problem": None if on else _embedding_problem(cfg, lookup)}
+            "on": on, "problem": None if on else _embedding_problem(cfg, got)}
 
 
-def _embedding_problem(cfg: dict, lookup: translate.Lookup) -> str:
-    """Why the Embedding role is off. `embed_space.problem`'s reasons first --
-    a role that cannot send at all says that before anything else -- then a
-    model its provider is known not to embed with: the same
-    `resolve.embed_attempt` that switched the role off, so the card and the
-    resolution are one decision (spec 12). Never raises."""
-    why = embed_space.problem(cfg)
-    if why != embed_space.OFF:
-        return why or embed_space.OFF
-    provider, model = translate.embedding_role(cfg)
-    raw = lookup(provider) if provider and model else None
-    if raw is None:
+def _embedding_problem(cfg: dict, got: ResolvedInference | None) -> str | None:
+    """Why the Embedding role is off, given its resolution (`got`; None where
+    reading it raised). `embed_space.problem`'s reasons first -- a role that
+    cannot send at all says that before anything else -- then a model its
+    provider is known not to embed with (slice D, ruling 4): the same
+    `missing` that switched the role off, so the card and the resolution are
+    one decision (spec 12). Never raises."""
+    why = embed_space.problem(cfg, embeds=False)
+    if why != embed_space.OFF or got is None or not got.missing or not got.attempts:
         return why
-    try:
-        missing = resolve.embed_attempt(provider, model, raw,
-                                        current=translate.is_current(cfg)).missing
-    except (OSError, KeyError, TypeError, ValueError):
-        return why
-    if not missing:
-        return why
-    name = str(raw.get("name") or provider)
-    return (f"{model} on {name} cannot {capabilities.CANNOT['embed']}, "
+    attempt = got.attempts[0]
+    name = str(attempt.conn.get("name") or attempt.provider_id)
+    return (f"{attempt.model} on {name} cannot {capabilities.CANNOT['embed']}, "
             "so embedding is off — choose another Embedding model.")
 
 

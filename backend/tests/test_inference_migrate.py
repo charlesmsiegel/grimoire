@@ -483,6 +483,24 @@ def test_a_legacy_openrouter_embedding_stays_off(home):
     assert store_pkg.embed_space.resolve() is None
 
 
+def test_a_legacy_zai_embedding_is_off_and_the_migration_clears_it(home):
+    """z.ai serves no embeddings (the preset's hard `no`, inferred from the
+    URL), so a legacy choice of it is off at format 1 -- no request that could
+    only fail -- and the migration writes no Embedding role for it (ruling 4):
+    the choice is cleared, and the role stays off after the switch."""
+    _legacy()
+    llm_connections.create_connection("openai_compatible", "Winifred Zai",
+                                      base_url="https://api.z.ai/api/paas/v4",
+                                      api_key="sk-fake")
+    config.write_config(embeddings_connection_id="winifred-zai", embeddings_model="embed-x")
+    assert store_pkg.inference.resolve.embedding().missing == ("embed",)
+    assert store_pkg.embed_space.resolve() is None
+    assert migrate.ensure().state == "done"
+    cfg = _raw_config(home)
+    assert not cfg.get("role_embedding_provider") and not cfg.get("role_embedding_model")
+    assert store_pkg.embed_space.resolve() is None
+
+
 def test_a_working_legacy_embedding_becomes_the_embedding_role(home):
     _legacy()
     llm_connections.create_connection("openai_compatible", "vectors",
@@ -1168,6 +1186,100 @@ def test_a_connection_file_with_no_record_in_it_fails_the_run(home, placeholder)
     cfg = _raw_config(home)
     assert (cfg["role_primary_fallback_provider"],
             cfg["role_primary_fallback_model"]) == ("spare", "vendor/spare")
+
+
+def test_an_embedding_connection_unreadable_during_the_switch_fails_the_run(home, monkeypatch):
+    """The legacy Embedding choice is read as strictly as every other
+    selection: a file a sync client held is unreadable, not "never embedded",
+    so the run fails and retries instead of clearing the choice for good."""
+    _legacy()
+    llm_connections.create_connection("openai_compatible", "vectors",
+                                      base_url="http://localhost:1234/v1")
+    config.write_config(embeddings_connection_id="vectors", embeddings_model="embed-small")
+    asked = _flaky_read(monkeypatch, "vectors", OSError("held by a sync client"))
+
+    got = migrate.ensure()
+
+    assert "vectors" in asked
+    assert got.state == "failed", got
+    assert not inference_keys.is_current(config.read_config())
+
+    assert migrate.ensure().state == "done"
+    cfg = _raw_config(home)
+    assert (cfg["role_embedding_provider"], cfg["role_embedding_model"]) == (
+        "vectors", "embed-small")
+
+
+@pytest.mark.parametrize("exc", [OSError("held by a sync client"),
+                                 UnicodeDecodeError("utf-8", b"\xff", 0, 1, "half-synced")])
+def test_embedding_facts_unreadable_during_the_switch_fail_the_run(home, monkeypatch, exc):
+    """The legacy choice embeds because the user said `embed: yes` over the
+    catalog's `no`. A facts file a sync client holds during the switch would
+    read as "nothing stated", leaving only the catalog's `no`: the run fails
+    and retries rather than clearing the choice for good."""
+    _legacy()
+    llm_connections.create_connection("openai_compatible", "vectors",
+                                      base_url="http://localhost:1234/v1")
+    rev = llm_connections.read_connection_raw("vectors")["rev"]
+    llm_connections.set_cached_models("vectors", [{"id": "embed-small", "outputs": ["text"]}],
+                                      rev)
+    facts.set_overrides("vectors", "embed-small", {"embed": "yes"})
+    config.write_config(embeddings_connection_id="vectors", embeddings_model="embed-small")
+    assert store_pkg.embed_space.resolve() is not None
+    real = Path.read_text
+    held = [True]
+
+    def flaky(self, *a, **kw):
+        if held[0] and self.name.endswith(".facts.json"):
+            raise exc
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    got = migrate.ensure()
+    assert got.state == "failed", got
+    assert not inference_keys.is_current(config.read_config())
+
+    held[0] = False
+    assert migrate.ensure().state == "done"
+    cfg = _raw_config(home)
+    assert (cfg["role_embedding_provider"], cfg["role_embedding_model"]) == (
+        "vectors", "embed-small")
+
+
+@pytest.mark.parametrize("exc", [OSError("held by a sync client"),
+                                 UnicodeDecodeError("utf-8", b"\xff", 0, 1, "half-synced")])
+def test_a_facts_file_unreadable_during_the_facts_step_is_never_overwritten(
+        home, monkeypatch, exc):
+    """Step 3 writes a legacy connection's stated behaviour into its model's
+    facts. A facts file a sync client holds must not read as empty and be
+    rewritten with only the new fact -- that destroys the user's own word
+    already in it. The run fails, nothing is written, and the next start
+    finishes with both."""
+    _legacy()
+    llm_connections.create_connection("openrouter", "spare", api_key="sk-spare",
+                                      model="vendor/spare", vision="on")
+    facts.set_overrides("spare", "vendor/spare", {"structured_output": "yes"})
+    path = llm_connections.facts_path("spare")
+    before = path.read_bytes()
+    real = Path.read_text
+    held = [True]
+
+    def flaky(self, *a, **kw):
+        if held[0] and self.name.endswith(".facts.json"):
+            raise exc
+        return real(self, *a, **kw)
+
+    monkeypatch.setattr(Path, "read_text", flaky)
+    got = migrate.ensure()
+    assert got.state == "failed", got
+    assert path.read_bytes() == before
+    assert not inference_keys.is_current(config.read_config())
+
+    held[0] = False
+    assert migrate.ensure().state == "done"
+    got_facts = facts.of("spare", "vendor/spare", "")
+    assert got_facts["overrides"] == {"structured_output": "yes"}
+    assert got_facts["vision"] == "on"
 
 
 def test_a_missing_connection_is_still_a_dangling_reference(home):

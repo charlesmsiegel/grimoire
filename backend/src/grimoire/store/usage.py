@@ -219,9 +219,15 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            duration_ms: int = 0, status: str = "ok", error: str = "",
            attempts: int = 1, post: int | None = None,
            ts: str | None = None, round_id: str = "",
-           response_id: str = "", images: int = 0) -> dict | None:
+           response_id: str = "", images: int = 0,
+           operation: str = "") -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
+
+    `operation` is what the call did -- `"embed"` for an embeddings request
+    (slice D, the first to write it; spec 9.3) -- and is omitted when empty,
+    like the other identity fields: a row with none is a generation, which is
+    what every row written before it was.
 
     **Never raises.** This runs on the generating path, inside the SSE
     finalizers, and a bookkeeping row that can fail a turn is a worse bug than
@@ -252,7 +258,8 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # reads as a campaign whose id is the empty string.
         for key, value in (("campaign", campaign), ("scene", scene), ("model", model),
                            ("connection", connection), ("provider", provider),
-                           ("round_id", round_id), ("response_id", response_id)):
+                           ("round_id", round_id), ("response_id", response_id),
+                           ("operation", operation)):
             if value:
                 row[key] = value
         # Absent, not zero, when the provider counted nothing -- the same rule
@@ -501,7 +508,10 @@ class Meter:
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1),
             post=self.post, round_id=self.round_id, response_id=self.response_id,
-            images=self.usage.get("images", 0))
+            images=self.usage.get("images", 0),
+            # Slice E carries this through its SERVED mapping; on merge that
+            # mechanism is kept and this literal kwarg is dropped.
+            operation=self.usage.get("operation", ""))
         return self.row
 
 

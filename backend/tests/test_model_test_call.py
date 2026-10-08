@@ -349,13 +349,15 @@ def test_a_confirmed_test_meters_one_row_per_probe_and_records_the_verdicts(
     rows = _rows()
     assert sorted(r["task"] for r in rows) == ["model-test"] * 3
     assert all(not r.get("campaign") for r in rows)
-    # Ruling 14: the embed probe's row carries no token counts (slice D meters
-    # embeddings); the two chat probes' rows carry what the provider reported.
+    # The embed probe's row carries no token counts (`_vector` reports none)
+    # and says its operation; the two chat probes' rows carry what the
+    # provider reported.
     uncounted = [r for r in rows
                  if r.get("prompt_tokens") is None and r.get("completion_tokens") is None]
     assert len(uncounted) == 1
     assert uncounted[0]["model"] == MODEL
     assert uncounted[0]["provider"] == "openrouter"
+    assert uncounted[0]["operation"] == "embed"
 
     verified = facts.of(conn, MODEL, rev)["verified"]
     assert {c: r["ok"] for c, r in verified.items()} == {
@@ -886,6 +888,48 @@ def test_an_embed_failure_is_one_metered_row_with_no_token_counts(client, monkey
     assert rows[0].get("prompt_tokens") is None
     # A 400 is the endpoint refusing this request: a verdict, recorded.
     assert facts.of(conn, MODEL, _rev(conn))["verified"]["embed"]["ok"] is False
+
+
+def test_an_embed_probe_row_carries_what_the_endpoint_reported(client, monkeypatch):
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    _embedder(monkeypatch, lambda _r: httpx.Response(200, json={
+        "data": [{"index": 0, "embedding": [0.1, 0.2, 0.3]}],
+        "usage": {"prompt_tokens": 4}}))
+
+    run = _run(client, conn, ["embed"])
+
+    assert run["result"]["results"]["embed"]["ok"] is True
+    rows = _rows()
+    assert len(rows) == 1
+    assert rows[0]["task"] == "model-test"
+    assert rows[0]["operation"] == "embed"
+    assert rows[0]["prompt_tokens"] == 4
+    assert "completion_tokens" not in rows[0]
+
+
+def test_an_embed_probe_failure_logs_only_its_kind_and_status(client, monkeypatch, tmp_path):
+    """I1: a redirect's `Location` can carry a key, and the probe's error row
+    is its kind and status only -- while the verdict the user reads still
+    shows the provider's own text."""
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    _embedder(monkeypatch, lambda _r: httpx.Response(
+        307, headers={"Location": "https://gw.example/v1/embeddings/?key=sk-fake-307"}))
+
+    run = _run(client, conn, ["embed"])
+
+    got = run["result"]["results"]["embed"]
+    assert got["ok"] is False
+    assert "sk-fake-307" in got["error"]
+    logged = [r for r in store.logs.read(level="error")["rows"] if r["module"] == "model-test"]
+    assert [r["message"] for r in logged] == ["missing_key"]
+    text = "".join(p.read_text(encoding="utf-8")
+                   for p in sorted((tmp_path / "logs").glob("*.jsonl")))
+    assert "sk-fake-307" not in text
+    rows = _rows()
+    assert len(rows) == 1
+    assert (rows[0]["status"], rows[0]["operation"]) == ("error", "embed")
 
 
 def test_the_gateway_fake_answers_single_like_complete():
