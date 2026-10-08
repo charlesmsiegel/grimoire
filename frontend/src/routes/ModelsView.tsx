@@ -6,6 +6,7 @@ import {
   type RoleCard, type RouteRow, type RouteUse,
 } from "../api/client";
 import { errorText } from "../api/errors";
+import { onConfigChanged } from "../appEvents";
 import { ErrorNote } from "../components/ErrorNote";
 import { ControlsReadout } from "../components/inference/ControlsReadout";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
@@ -72,6 +73,10 @@ function warningOf(answer: ModelCapabilities, model: string, role: string): stri
 function useWarning(provider: string, model: string, need: CapabilityNeed | null,
                     role: string): string | null {
   const [warning, setWarning] = useState<string | null>(null);
+  // Asked again on any model-settings change -- a landed test, a facts edit
+  // (both announce) -- or a warning the test just disproved outlives it.
+  const [asked, setAsked] = useState(0);
+  useEffect(() => onConfigChanged(() => setAsked((n) => n + 1)), []);
   useEffect(() => {
     setWarning(null);
     if (!provider || !model || !need) return;
@@ -81,7 +86,7 @@ function useWarning(provider: string, model: string, need: CapabilityNeed | null
       // A failed read warns of nothing: the role's `problem` is the seam's word.
       .catch(() => {});
     return () => { current = false; };
-  }, [provider, model, need, role]);
+  }, [provider, model, need, role, asked]);
   return warning;
 }
 
@@ -502,7 +507,11 @@ function RoleForm({ role, settings, blocked, onCancel, onSave }:
           With no provider chosen, nothing is embedded and semantic recall is off.
         </p>
       )}
-      <SelectionFields label={label} needs={ROLE_NEEDS[role]} sel={sel} onChange={setSel}
+      {/* A change clears the re-embedding question (as the setup wizard
+          does): "Re-embed and save" sends what is picked when it is pressed,
+          so it may only be answering a question about that. */}
+      <SelectionFields label={label} needs={ROLE_NEEDS[role]} sel={sel}
+                       onChange={(next) => { setSel(next); setAsking(null); }}
                        settings={settings} blocked={blocked} withPreset={role !== "embedding"}
                        presetLabel="Preset" warn={ROLE_NEEDS[role][0]} role={label} />
       {role !== "embedding" && (

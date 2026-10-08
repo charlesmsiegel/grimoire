@@ -120,6 +120,47 @@ describe("individual response controls", () => {
     expect(actions.onReroll).toHaveBeenCalledWith("response-a", "",
       { provider: "saltmarch", model: "qwen3", preset: "warm" });
   });
+  it("never rerolls past a typed model id it has not taken", async () => {
+    // A provider with no models takes a typed id, which is the route's only
+    // once "Use this id" takes it. Rerolling before then sent the provider
+    // alone -- the standing (or its own) model, not the one in the box.
+    vi.mocked(api.getCampaignInference).mockResolvedValue(INFERENCE);
+    vi.mocked(api.readConnectionCapabilities).mockResolvedValue({
+      provider_preset: {} as never, need: "generate", reason: null, hidden: [],
+      groups: { unverified: [], fits: [] } });
+    const onExtend = vi.fn();
+    const actions = show({ onExtend });
+    fireEvent.click(screen.getByText("Model for this reroll"));
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "saltmarch" } });
+    fireEvent.change(await screen.findByLabelText("Model id"), { target: { value: "vendor/typed" } });
+
+    expect(screen.getByRole("button", { name: "Reroll response" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Keep writing ▸" })).toBeDisabled();
+    expect(screen.getByText(/Use this id to reroll on vendor\/typed/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
+    expect(actions.onReroll).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this id" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
+    expect(actions.onReroll).toHaveBeenCalledWith("response-a", "",
+      { provider: "saltmarch", model: "vendor/typed", preset: "" });
+  });
+  it("lets go of a typed id when the route disclosure shuts", async () => {
+    vi.mocked(api.getCampaignInference).mockResolvedValue(INFERENCE);
+    vi.mocked(api.readConnectionCapabilities).mockResolvedValue({
+      provider_preset: {} as never, need: "generate", reason: null, hidden: [],
+      groups: { unverified: [], fits: [] } });
+    show();
+    const disclosure = screen.getByText("Model for this reroll");
+    fireEvent.click(disclosure);
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "saltmarch" } });
+    fireEvent.change(await screen.findByLabelText("Model id"), { target: { value: "vendor/typed" } });
+    expect(screen.getByRole("button", { name: "Reroll response" })).toBeDisabled();
+    const summary = screen.getByText("Response actions");
+    fireEvent.click(summary);
+    fireEvent.click(summary);
+    expect(await screen.findByRole("button", { name: "Reroll response" })).toBeEnabled();
+  });
   it("activates the stable variant id from the selected response", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",
       variants: [{ id: "v1", content: "First", status: "complete" },

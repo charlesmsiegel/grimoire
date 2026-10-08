@@ -21,6 +21,9 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
   const [guidance, setGuidance] = useState("");
   const [route, setRoute] = useState<RerollRoute>(NO_REROLL_ROUTE);
   const [routeOpen, setRouteOpen] = useState(false);
+  // A model id typed into the route picker and not yet taken: both sends
+  // wait for it (`RerollRoutePicker`'s `onPending`).
+  const [pending, setPending] = useState(false);
   const [record, setRecord] = useState<ResponseRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -69,10 +72,10 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
           onChange={(event) => setGuidance(event.target.value)} placeholder="Optional direction for this response" /></label>
         <details onToggle={(event) => setRouteOpen(event.currentTarget.open)}>
           <summary>Model for this reroll</summary>
-          {routeOpen && <fieldset disabled={disabled}><RerollRoutePicker cid={cid} value={route} onChange={setRoute} /></fieldset>}
+          {routeOpen && <fieldset disabled={disabled}><RerollRoutePicker cid={cid} value={route} onChange={setRoute} onPending={setPending} /></fieldset>}
         </details>
-        <button disabled={disabled} onClick={() => onReroll(responseId, guidance.trim(), route)}>Reroll response</button>
-        {onExtend && <button disabled={disabled || extendDisabled}
+        <button disabled={disabled || pending} onClick={() => onReroll(responseId, guidance.trim(), route)}>Reroll response</button>
+        {onExtend && <button disabled={disabled || extendDisabled || pending}
           title="Continue this reply where it stops, as a new version of it"
           onClick={() => onExtend(responseId, guidance.trim(), route)}>Keep writing ▸</button>}
       </> : <>

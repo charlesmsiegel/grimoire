@@ -446,14 +446,26 @@ test("a blocked store holds every write on the page", async () => {
   expect(main().getByRole("button", { name: "Test…" })).toBeDisabled();
 });
 
-test("a store not yet switched to the new format disables editing", async () => {
+test.each([["pending", ""], ["failed", "the safety backup failed: disk full"]])(
+  "a store not yet switched (%s) edits its providers, not their model facts",
+  async (state, reason) => {
+  // The server takes provider writes at format 1 (it refuses only a newer
+  // store): a key revoked while the upgrade keeps failing is fixed here, or
+  // nowhere. A model's facts are the new layout's own and wait for it.
   (api.getInferenceSettings as any).mockResolvedValue(settings({
-    format: "1", migration: { state: "pending", reason: "", skipped: [] } }));
+    format: "1", migration: { state, reason, skipped: [] } }));
   open("/providers/saltmarch");
 
   expect(await main().findByRole("heading", { name: "Saltmarch Router" })).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Edit" })).toBeEnabled();
+  expect(column().getByRole("button", { name: "+ New provider" })).toBeEnabled();
+  expect(main().getByRole("button", { name: "Refresh" })).toBeEnabled();
+  expect(main().getByText("output rules for saltmarch")).toBeInTheDocument();
+
+  fireEvent.click(main().getByRole("link", { name: "vendor/m" }));
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
   expect(main().getByRole("button", { name: "Edit" })).toBeDisabled();
-  expect(column().getByRole("button", { name: "+ New provider" })).toBeDisabled();
+  expect(main().getByRole("button", { name: "Test…" })).toBeEnabled();
 });
 
 test("a pending migration over a switched store leaves editing on", async () => {
@@ -500,10 +512,12 @@ async function withFakeTimers(body: () => Promise<void>) {
 
 test("the page unlocks once the upgrade lands, without leaving it", async () => {
   await withFakeTimers(async () => {
+    // A model's facts are what wait for the new layout (the provider record
+    // does not: the server takes it at format 1).
     (api.getInferenceSettings as any).mockResolvedValue(settings({
       format: "1", migration: { state: "running", reason: "", skipped: [] } }));
-    open("/providers/saltmarch");
-    expect(await main().findByRole("heading", { name: "Saltmarch Router" })).toBeInTheDocument();
+    open("/providers/saltmarch/models/vendor/m");
+    expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
     expect(main().getByRole("button", { name: "Edit" })).toBeDisabled();
     expect(screen.getByText(/Upgrade pending/)).toBeInTheDocument();
 
@@ -511,7 +525,6 @@ test("the page unlocks once the upgrade lands, without leaving it", async () => 
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
 
     expect(await main().findByRole("button", { name: "Edit" })).toBeEnabled();
-    expect(column().getByRole("button", { name: "+ New provider" })).toBeEnabled();
     expect(screen.queryByText(/Upgrade pending/)).not.toBeInTheDocument();
   });
 });

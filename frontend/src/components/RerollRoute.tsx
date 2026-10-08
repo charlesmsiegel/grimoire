@@ -56,13 +56,19 @@ function providerAloneWords(view: InferenceSettings, provider: string,
  *  so the answer is the current one rather than whatever the play view read
  *  when the campaign opened (`getCampaignInference` is uncached).
  */
-export default function RerollRoutePicker({ cid, value, onChange }: {
+export default function RerollRoutePicker({ cid, value, onChange, onPending }: {
   cid: string;
   value: RerollRoute;
   onChange: (route: RerollRoute) => void;
+  /** Whether a model id is typed and not yet taken ("Use this id"). The
+   *  holder's Reroll sends `value`, which does not name it -- so it waits
+   *  until it does, rather than silently running the standing or the
+   *  provider's own model in its place. False again once this goes. */
+  onPending?: (pending: boolean) => void;
 }) {
   const [view, setView] = useState<InferenceSettings | null>(null);
   const [failed, setFailed] = useState<unknown>(null);
+  const [typed, setTyped] = useState("");
 
   useEffect(() => {
     let live = true;
@@ -108,7 +114,13 @@ export default function RerollRoutePicker({ cid, value, onChange }: {
           <ProviderModelPicker
             needs={["generate"]} providers={view.providers}
             value={{ provider: value.provider, model: value.model }}
-            onChange={(pm) => onChange({ ...value, ...pm })} />
+            onChange={(pm) => onChange({ ...value, ...pm })}
+            onDraft={(draft) => { setTyped(draft); onPending?.(!!draft); }} />
+          {typed && (
+            <p className="field-hint" role="status">
+              Use this id to reroll on {typed}, or clear the box.
+            </p>
+          )}
           {/* A provider with no model sends `{provider}` alone. Said here, so
               the reroll says what it will run before it is sent -- and what
               that is depends on the layout (`resolve._overridden`): at format

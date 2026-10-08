@@ -100,17 +100,26 @@ function ask(provider: string, needs: CapabilityNeed[], model?: string) {
  *  The chosen model never goes out of sight: a list that could not be read
  *  still shows it (and still takes a typed id), and a provider that rules the
  *  need out for every model shows it beside that reason. */
-export function ProviderModelPicker({ needs, value, onChange, providers, disabled }:
+export function ProviderModelPicker({ needs, value, onChange, providers, disabled, onDraft }:
   { needs: CapabilityNeed[]; value: ProviderModel;
     onChange: (value: ProviderModel) => void;
     providers: { id: string; name: string; kind?: string; usable?: boolean;
                  problem?: string | null }[];
-    disabled?: boolean }) {
+    disabled?: boolean;
+    /** Told the typed-id box's text (trimmed) whenever it changes, and ""
+     *  when the picker goes: a typed id is not the value until "Use this id"
+     *  takes it, so a holder whose own button sends the value -- a reroll --
+     *  can hold that button until it is. */
+    onDraft?: (draft: string) => void }) {
   const name = useId();
   const [listed, setListed] = useState<ReturnType<typeof combine> | null>(null);
   const [failed, setFailed] = useState<unknown>(null);
   const [typedVerdict, setTypedVerdict] = useState<Placement | null>(null);
   const [draft, setDraft] = useState("");
+  const draftSink = useRef(onDraft);
+  draftSink.current = onDraft;
+  useEffect(() => { draftSink.current?.(draft.trim()); }, [draft]);
+  useEffect(() => () => { draftSink.current?.(""); }, []);
   const [testing, setTesting] = useState<{ model: string; probes: TestableCapability[] } | null>(
     null);
   // Bumped when a test lands: the answers it changed are stale.

@@ -197,13 +197,20 @@ export default function ProvidersView() {
   }, []);
   useEffect(() => { loadPresets(); }, [loadPresets]);
 
-  // Writes wait on the store's FORMAT, not on the migration being done: the
-  // status stays pending after the global switch while any campaign is left
-  // unmarked (busy, synced from an older build, deferred by maintenance), and
-  // the server takes global writes once the format is "2". What is still
-  // left then is the quiet line, information rather than a lock -- worded as
-  // every other model-settings surface words it.
-  const blocked = !!settings && (settings.newer || settings.format !== "2");
+  // Gated as the server gates them. The provider record itself -- create,
+  // edit (name, key, address, billing, samplers), delete, refresh, its rules
+  // and the test call -- is refused only on a store a newer build switched:
+  // at format 1 (an upgrade pending, or one that keeps failing) the server
+  // takes these writes, and this is the one place a revoked key can be
+  // replaced. A model's FACTS are the new layout's own and wait on the store's
+  // FORMAT, not on the migration being done: the status stays pending after
+  // the global switch while any campaign is left unmarked (busy, synced from
+  // an older build, deferred by maintenance), and the server takes them once
+  // the format is "2". What is still left then is the quiet line,
+  // information rather than a lock -- worded as every other model-settings
+  // surface words it.
+  const blocked = !!settings && settings.newer;
+  const factsBlocked = !!settings && (settings.newer || settings.format !== "2");
   const banner = migrationBanner(settings);
   const upgradeNote = migrationLine(settings);
 
@@ -387,6 +394,7 @@ export default function ProvidersView() {
   } else if (model) {
     body = (
       <ModelFactsPanel key={`${id}\n${model}`} provider={shown} model={model} blocked={blocked}
+                       factsBlocked={factsBlocked}
                        onChanged={() => { void loadCatalog(id); }} />
     );
   } else if (mode === "edit") {
@@ -855,8 +863,10 @@ function factsForm(f: ModelFacts): FactsForm {
  *  `embed: yes` over the catalog's no) embeds the library, so the server
  *  refuses it with 400 `confirm_embedding`: that refusal is the question, in
  *  its own words, and the yes resends with `confirm_embedding`. */
-function ModelFactsPanel({ provider, model, blocked, onChanged }: {
-  provider: LLMConnectionDetail; model: string; blocked: boolean; onChanged: () => void;
+function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: {
+  provider: LLMConnectionDetail; model: string;
+  /** The test call (a newer store only); `factsBlocked` the facts themselves. */
+  blocked: boolean; factsBlocked: boolean; onChanged: () => void;
 }) {
   const [facts, setFacts] = useState<ModelFacts | null>(null);
   const [error, setError] = useState<unknown>(null);
@@ -988,7 +998,7 @@ function ModelFactsPanel({ provider, model, blocked, onChanged }: {
             Cancel
           </button>
           <button className="primary" onClick={() => { void save(); }}
-                  disabled={blocked || saving || asking !== null}>
+                  disabled={factsBlocked || saving || asking !== null}>
             Save facts
           </button>
         </div>
@@ -1022,7 +1032,7 @@ function ModelFactsPanel({ provider, model, blocked, onChanged }: {
       </div>
       <aside className="detail-sidebar" aria-label={model}>
         <div className="form-actions">
-          <button className="subtle" disabled={blocked}
+          <button className="subtle" disabled={factsBlocked}
                   onClick={() => { setForm(factsForm(facts)); setMode("edit"); }}>
             Edit
           </button>

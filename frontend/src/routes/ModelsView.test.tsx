@@ -304,6 +304,28 @@ test("an embedding change asks before saving", async () => {
   ]);
 });
 
+test("changing the embedding pick while the question is up takes the question away", async () => {
+  // The question names one provider; "Re-embed and save" sends what is picked
+  // when it is pressed. Once the pick moves, the yes on screen is no longer
+  // a yes to it -- so it is gone, and Save asks again about the new one.
+  open("/models/role/embedding");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  const role = within(await main().findByRole("group", { name: "Embedding" }));
+  fireEvent.change(role.getByRole("combobox", { name: "Provider" }),
+                   { target: { value: "saltmarch" } });
+  fireEvent.click(await role.findByRole("radio", { name: "Vendor Embed" }));
+  fireEvent.click(main().getByRole("button", { name: "Save" }));
+  expect(await main().findByRole("group", { name: "Confirm the re-embedding" }))
+    .toBeInTheDocument();
+
+  fireEvent.change(role.getByRole("combobox", { name: "Provider" }),
+                   { target: { value: "realm" } });
+  expect(main().queryByRole("group", { name: "Confirm the re-embedding" }))
+    .not.toBeInTheDocument();
+  expect(main().queryByRole("button", { name: "Re-embed and save" })).not.toBeInTheDocument();
+  expect(api.putInferenceSettings).not.toHaveBeenCalled();
+});
+
 test("an embedding save the server says needs confirming asks too", async () => {
   // Saved here as-is, so nothing looks changed -- but the server compares
   // against what is on disk now, and another tab moved it.
@@ -471,6 +493,21 @@ test("a warning follows the model being picked in the form", async () => {
   fireEvent.click(role.getByRole("button", { name: "Use this id" }));
   expect(await role.findByText("This model can't generate text, so it can't be Primary."))
     .toBeInTheDocument();
+});
+
+test("a capability warning is asked again once a model test lands", async () => {
+  // The test announces (`configChanged`); a warning the test disproved must
+  // not outlive it on the same page.
+  CAPS["vendor/m"].vision = "unknown";
+  open("/models/route/image");
+  expect(await main().findByText(
+    "This route sends images; the chosen model is unverified for vision.")).toBeInTheDocument();
+
+  CAPS["vendor/m"].vision = "yes";
+  const { configChanged } = await import("../appEvents");
+  act(() => { configChanged(); });
+  await screen.findByRole("heading", { name: "Image descriptions" });
+  expect(main().queryByText(/unverified for vision/)).not.toBeInTheDocument();
 });
 
 test("a role shows the seam's problem", async () => {

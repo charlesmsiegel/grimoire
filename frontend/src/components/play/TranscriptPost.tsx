@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useState } from "react";
 import type { Actor, Message, TrackerEntry, TrackerSummary, UsagePostBucket } from "../../api/client";
 import { PostCost } from "../cost";
 import { Portrait } from "../Portrait";
@@ -510,6 +510,9 @@ function RerollPopover({ cid, pop, rolling, actions }: {
        run: () => actions.setRerollPrompt(null) }],
     { modal: true },
   );
+  // A model id typed into the picker and not yet taken: Reroll waits for it
+  // (`RerollRoutePicker`'s `onPending`), and so does Enter's commit.
+  const [pending, setPending] = useState(false);
   return (
     // Keydown is only Enter's commit, filtered from what its controls send;
     // they are the interactive elements.
@@ -523,12 +526,13 @@ function RerollPopover({ cid, pop, rolling, actions }: {
             // `preventDefault` is what tells the shortcut dispatcher this
             // keystroke is spoken for: ⌘⏎ typed here means "reroll", not
             // "send", and without it both fired (PR #400 review).
-            if (e.key === "Enter") { e.preventDefault(); actions.reroll(); }
+            if (e.key === "Enter") { e.preventDefault(); if (!pending) actions.reroll(); }
           }}>
       {/* Above the guidance, not beside it: this is where the reroll goes,
           and the hint is what it says once it gets there. Untouched, it is
           Default: the campaign's own scene route, with no override. */}
-      <RerollRoutePicker cid={cid} value={pop.route} onChange={actions.setRerollRoute} />
+      <RerollRoutePicker cid={cid} value={pop.route} onChange={actions.setRerollRoute}
+                         onPending={setPending} />
       <span className="reroll-guide">
         <input
           autoFocus
@@ -537,7 +541,9 @@ function RerollPopover({ cid, pop, rolling, actions }: {
           value={pop.prompt}
           onChange={(e) => actions.setRerollPrompt(e.target.value)}
         />
-        <button className="btn-chrome" onClick={actions.reroll} disabled={rolling}>Reroll ▸</button>
+        <button className="btn-chrome" onClick={actions.reroll} disabled={rolling || pending}>
+          Reroll ▸
+        </button>
       </span>
     </span>
   );

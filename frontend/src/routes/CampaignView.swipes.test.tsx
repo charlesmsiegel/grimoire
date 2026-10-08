@@ -406,6 +406,37 @@ describe("the keys", () => {
     await waitFor(() => expect(screen.queryByLabelText("Reroll guidance")).toBeNull());
   });
 
+  // A typed model id is the route's only once "Use this id" takes it.
+  // Rerolling before that sent the provider alone -- the scene route's
+  // standing model, or the provider's own -- while the box showed another.
+  test("Reroll ▸ waits for a typed model id to be taken, and Enter does too", async () => {
+    playing();
+    reads({ active: 2 });
+    (api.readConnectionCapabilities as any).mockImplementation(
+      (_provider: string, need: string) => Promise.resolve({
+        provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
+                           url_locked: true, billing: "metered", reports_price: true,
+                           always: [], possible: [], never: [] },
+        need, reason: null, hidden: [], groups: { unverified: [], fits: [] } }));
+    (api.regenerateResponse as any).mockResolvedValue(undefined);
+    renderCampaign();
+    expect(await screen.findByText("3/3")).toBeInTheDocument();
+    press("ArrowRight");
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "openrouter" } });
+    fireEvent.change(await screen.findByLabelText("Model id"), { target: { value: "vendor/typed" } });
+
+    expect(screen.getByRole("button", { name: "Reroll ▸" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText("Reroll guidance"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
+    expect(api.regenerateResponse).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this id" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
+    await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
+    expect((api.regenerateResponse as any).mock.calls[0][4]).toEqual(
+      expect.objectContaining({ provider: "openrouter", model: "vendor/typed" }));
+  });
+
   // The same picker sits in the reply's own Response actions, which is a
   // disclosure in the page rather than an overlay -- so nothing holds the
   // scene's bindings off there, and the picker keeps its radios' arrows itself.
