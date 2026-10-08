@@ -2025,7 +2025,6 @@ _SEMANTIC_UNAVAILABLE = "semantic matching unavailable — basic matching used"
 _SEMANTIC_BUDGET = ("the absorb time budget ran out during semantic matching — "
                     "basic matching used")
 _IDENTITY_REFUSED = "the absorb time budget ran out before the duplicate check could run"
-_IDENTITY_UNREADABLE = "the duplicate check returned no readable answer"
 _IDENTITY_STAGING_FAILED = ("the duplicate check's staging step failed; "
                             "rows staged without alternatives")
 
@@ -2090,12 +2089,9 @@ async def _resolve_identity(cid: str, sid: str, client: LLMClient, conn: dict | 
             client.complete(continuity_identity.build_prompt(exam.prompt_rows()), conn, m.usage),
             lambda: block.__setitem__("attempted", True),
             on_timeout=_noting(client, conn, m.usage))
-    decisions = continuity_identity.parse_output(reply)
-    if decisions is None:
-        exam.hint_only(_IDENTITY_UNREADABLE)
-        block.update(status="failed", reason=_IDENTITY_UNREADABLE)
+    if not continuity_identity.take(exam, continuity_identity.parse_output(reply)):
+        block.update(status="failed", reason=continuity_identity.UNREADABLE)
         return
-    exam.decide(decisions)
     block["status"], block["reason"] = _identity_status(exam, unavailable)
 
 

@@ -407,6 +407,54 @@ def grade_identity(text: str, expected: dict[str, dict],
          for key, want in expected.items() if key in by_row]
 
 
+def grade_identity_decision(text: str, items: Sequence[decisions.Item],
+                            rows: list[dict], expected: dict[str, dict]) -> list[Check]:
+    """The duplicate check through `decide()`: does the reply decode, answer
+    every row in the contract's words, name only ids it was offered -- and give
+    the right verdict on each scored row?
+
+    Read the app's way after the switch, through `decisions.parse` and
+    `identity.answers_of`, except where that reading would make a check
+    unfailable: the parse turns a word outside the decisions into an unread
+    answer, which `answers_of` hands on as ``""`` (``uncertain``), so the enum
+    check is scored on the parsed answers' `NOT_AN_OPTION` detail rather than
+    on the mapping. `identity.json` is the one check on the raw reply
+    (`decisions.find_object`), and with no object nothing else is reported.
+
+    An item the reply never reached (`NO_ITEM`) fails `identity.covers_rows`
+    alone: its own verdict is left out rather than failed beside it, so "the
+    row was skipped" and "the row was misjudged" stay separable, as
+    `grade_identity` keeps them. `known_ids` fails an ``existing`` whose `id`
+    was not read (an id the row was not offered, or none). `expected` is
+    `grade_identity`'s, keyed by row key."""
+    if decisions.find_object(text) is None:
+        return [Check("identity.json", False, "no JSON object recoverable from the reply")]
+    results = decisions.parse(text, items, explain=True)
+    decided = [r.answers[identity.DECISION_ID] for r in results]
+    skipped = [row["key"] for row, answer in zip(rows, decided, strict=True)
+               if answer.detail == decisions.NO_ITEM]
+    unknown = [row["key"] for row, answer in zip(rows, decided, strict=True)
+               if answer.detail == decisions.NOT_AN_OPTION]
+    unnamed = [row["key"] for row, result in zip(rows, results, strict=True)
+               if result.answers[identity.DECISION_ID].answer == "existing"
+               and not isinstance(_record_answer(result), str)]
+    by_row = {a["row"]: a for a in identity.answers_of(rows, results) or []}
+    return [
+        Check("identity.json", True),
+        Check("identity.covers_rows", not skipped, f"no decision for {skipped}"),
+        Check("identity.enum", not unknown,
+              f"decisions outside {list(IDENTITY_DECISIONS)} for {unknown}"),
+        Check("identity.known_ids", not unnamed,
+              f"existing named no offered id on {unnamed}"),
+    ] + [_identity_verdict(key, by_row[key], want, None)
+         for key, want in expected.items() if key in by_row]
+
+
+def _record_answer(result: decisions.ItemResult) -> object:
+    answer = result.answers.get(identity.RECORD_ID)
+    return answer.answer if answer is not None else None
+
+
 # ------------------------------------------------------------------- reconcile
 
 #: The words whose meaning depends on which record is which, and the status

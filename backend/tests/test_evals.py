@@ -242,3 +242,31 @@ def test_decide_speaker_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
     assert "Rationale" not in ctx["messages"][1]["content"]
     assert case.schema is not None
     assert case.schema(ctx) == decisions.schema([item], explain=False)
+
+
+def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent duplicate-check decide case: its prompt is the structured
+    prompt the switch will send for `build_items`' items over what `examine`
+    finds, a live run sends that batch's schema, and each counterexample
+    carries today's recording's failure mode into the decide shape."""
+    from grimoire import decisions, inference
+    from grimoire.store.continuity import identity
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    assert case.task == "continuity-identity"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("identity.json",),
+        "merged": ("identity.distinct", "identity.continuation"),
+        "unknown-id": ("identity.known_ids", "identity.same_obligation")}
+    ctx = runner.prepare(case)
+    exam = ctx["exam"]
+    items = ctx["items"]
+    assert items == identity.build_items(exam.prompt_rows(), exam.live)
+    assert len(items) == len(exam.rows) == 3
+    assert ctx["messages"] == inference.structured_messages(items, explain=identity.explain())
+    assert set(ctx["expected"]) == {"r1", "r2", "r3"}
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema(items, explain=True)
+    # Today's case still stands beside it until the switch retires it.
+    assert "continuity-identity" in case_mod.BY_ID

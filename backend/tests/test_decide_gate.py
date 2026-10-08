@@ -511,6 +511,74 @@ def test_speaker_near_twin_out_of_the_roster_resolves_to_the_listed_ref():
                for slug in slugs)
 
 
+# --- continuity identity ---------------------------------------------------
+
+def _identity_gate() -> gate.Conversion:
+    return next(c for c in gate.GATES if c.id == "continuity-identity")
+
+
+def test_the_identity_copy_answers_as_production_does():
+    """The frozen `identity_parse_output` reads every legacy case as today's
+    production parser does. Deleted with the production parser (Task 6)."""
+    from grimoire.store.continuity import identity
+
+    conv = _identity_gate()
+    for case in conv.legacy_cases:
+        assert legacy_mod.identity_parse_output(case) == identity.parse_output(case), case
+    assert legacy_mod.IDENTITY_DECISIONS == identity.DECISIONS
+    assert legacy_mod.IDENTITY_REASON_CHARS == identity.REASON_CHARS
+
+
+def test_continuity_identity_is_gated_on_what_the_call_site_stores():
+    """The outcome is whether `take` decided, and each examined row's
+    decision, status, reason and target once `Examination.decide` has run:
+    today through the frozen parse, after the switch through the production
+    `answers_of`. Both sides are settled by the production `take` on a fresh
+    in-memory examination, so the acceptance guard is the same code."""
+    from grimoire.store.continuity import identity
+
+    conv = _identity_gate()
+    assert conv.explain
+    assert _from_legacy(conv.legacy)
+    items = conv.items()
+    assert len(items) == 3
+    assert [[o.id for o in item.questions[1].options] for item in items] == [
+        ["find-the-ledger", "maras-map", "the-burned-chart"],
+        ["find-the-ledger", "winifreds-chart"], ["the-midnight-deadline"]]
+    assert conv.settle(conv.legacy("I think so.")) == [
+        False, [["unchecked", "hint_only", identity.UNREADABLE, None]] * 3]
+    entry = gate.Entry("planted", None, "", "")
+    reply = json.dumps({"0": {"answers": {"decision": "existing", "id": "the-old-map"},
+                              "rationale": "Mara's map is the old map."}})
+    parsed = decisions.parse(reply, items, explain=True)
+    assert conv.settle(conv.decide(parsed, entry)) == [True, [
+        ["existing", "accepted", "Mara's map is the old map.", "maras-map"],
+        ["unchecked", "hint_only", identity.NO_ANSWER, None],
+        ["unchecked", "hint_only", identity.NO_ANSWER, None]]]
+
+
+def test_continuity_identity_decide_reads_every_entry():
+    """Today's parse loses only what the slice settled by ruling: a cased or
+    spaced spelling of an offered id, and a reply in today's format to the
+    decide prompt. The structured parse loses nothing -- an item it never
+    reached stays unchecked, and a repeated key keeps its first value."""
+    conv = _identity_gate()
+    result = gate.judge(conv)
+    assert result.passed, "\n".join(result.regressions)
+    assert result.decide_right == result.entries
+    assert result.legacy_right == result.entries - 2
+    entries = {entry.shape: entry for entry in gate.load(conv)}
+    assert {"one-item-unreadable", "normalised-id", "todays-format", "alias-source",
+            "ref-form", "closed-candidate", "explicit-target", "second-move",
+            "no-id", "sole-candidate", "unoffered-id", "other-kind-ref"} <= set(entries)
+    assert entries["todays-format"].intended[0] is True
+    assert {row[0] for row in entries["todays-format"].intended[1]} == {"unchecked"}
+    assert [row[0] for row in entries["one-item-unreadable"].intended[1]] == [
+        "new", "unchecked", "new"]
+    fenced = next(e for e in entries.values() if e.legacy.startswith("Here you go:"))
+    assert fenced.decide.count('"0":') == 2
+
+
 # --- the legacy side is the frozen copy ------------------------------------
 
 def test_legacy_imports_nothing_from_grimoire():
@@ -523,7 +591,7 @@ def test_legacy_imports_nothing_from_grimoire():
             imported |= {alias.name for alias in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add("." * node.level + (node.module or ""))
-    assert imported <= {"__future__", "json"}, sorted(imported)
+    assert imported <= {"__future__", "json", "re"}, sorted(imported)
 
 
 #: The production modules today's parsers live in. A conversion's `legacy`
@@ -531,7 +599,9 @@ def test_legacy_imports_nothing_from_grimoire():
 #: tasks edit and then delete.
 _PRODUCTION = frozenset({"grimoire.store.scene_break", "grimoire.store.voice_drift",
                          "grimoire.store.response_protocol",
-                         "grimoire.routes.character_turns"})
+                         "grimoire.routes.character_turns",
+                         "grimoire.store.continuity.identity",
+                         "grimoire.store.absorb.parse"})
 
 
 def _names(code: types.CodeType) -> set[str]:
@@ -667,7 +737,9 @@ def test_the_corpora_mark_their_deliberate_changes():
     ruled = {(conv.id, entry.shape) for conv in gate.GATES for entry in gate.load(conv)
              if entry.ruling}
     assert ruled == {("scene-break", "multi-line"), ("scene-break", "quoted-title"),
-                     ("voice-drift", "todays-format"), ("speaker", "case-folded")}
+                     ("voice-drift", "todays-format"), ("speaker", "case-folded"),
+                     ("continuity-identity", "normalised-id"),
+                     ("continuity-identity", "todays-format")}
     printed = gate.report([gate.judge(conv) for conv in gate.GATES])
     assert printed.count("ruling: ") == len(ruled)
     assert "ruling: entry 6 (multi-line), legacy loses: " in printed

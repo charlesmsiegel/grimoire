@@ -48,6 +48,7 @@ from pathlib import Path
 
 from grimoire import decisions
 from grimoire.store import response_protocol, scene_break, voice_drift
+from grimoire.store.continuity import identity, similarity
 
 from . import legacy
 
@@ -429,9 +430,125 @@ SPEAKER = Conversion(
     ),
 )
 
-#: One conversion per prepare task (scene-break, voice drift, speaker), each
-#: appended by the task that writes its corpus.
-GATES: tuple[Conversion, ...] = (SCENE_BREAK, VOICE_DRIFT, SPEAKER)
+# --- continuity identity ----------------------------------------------------
+#
+# The outcome is what `routes/scenes._resolve_identity` leaves on the
+# examination: whether `identity.take` decided (False is today's undecodable
+# reply, every row a hint only), and each examined row's decision, status,
+# reason and target once `Examination.decide` has run its acceptance guard.
+# Today's side is the frozen `identity_parse_output`; the decide side maps the
+# parsed batch through the production `answers_of`; both are settled by the
+# production `take` on a fresh in-memory examination, so the guard that
+# accepts or downgrades an `existing` is the same code on both sides.
+#
+# The fixture holds every case the guard tells apart: r1 is offered two open
+# records and a closed one, one of them the live canonical of an alias source;
+# r2 is offered a record r1 is also offered, and one an explicit row already
+# moves; r3 is a commitment with one candidate, so its `id` question offers a
+# single option beside null.
+
+_IDENTITY_SIGNALS = {"title_equal": False, "slug_equal": False, "tokens": 0.4,
+                     "chars": 0.5, "cosine": None, "actors": [], "scenes": [],
+                     "anchors": [], "via": "lexical"}
+
+#: id -> (kind, the stored record) of each record a row is offered.
+_IDENTITY_RECORDS: dict[str, tuple[similarity.Kind, dict]] = {
+    "find-the-ledger": ("thread", {"title": "Find the ledger", "status": "open",
+                                   "beat": "Winifred learned the harbour ledger exists."}),
+    "maras-map": ("thread", {"title": "Mara's map", "status": "open",
+                             "beat": "Mara's map is torn."}),
+    "the-burned-chart": ("thread", {"title": "The burned chart", "status": "closed",
+                                    "beat": "Seraphine burned the chart."}),
+    "winifreds-chart": ("thread", {"title": "Winifred's chart", "status": "open",
+                                   "beat": "Winifred's chart shows a reef."}),
+    "the-midnight-deadline": ("commitment", {
+        "title": "The midnight deadline", "status": "open", "kind": "threat",
+        "due": "midnight", "beat": "Seraphine gave Winifred until midnight."}),
+}
+
+#: (section, kind, row, candidate ids in rank order) per examined row.
+_IDENTITY_ROWS = (
+    ("plot_movements", "thread",
+     {"title": "Recover the harbour ledger",
+      "beat": "Winifred went looking for the harbour ledger.", "status": "open"},
+     ("find-the-ledger", "maras-map", "the-burned-chart")),
+    ("plot_movements", "thread",
+     {"title": "Recover the harbour ledger again",
+      "beat": "Winifred searched the harbour for the ledger.", "status": "open"},
+     ("find-the-ledger", "winifreds-chart")),
+    ("commitment_movements", "commitment",
+     {"title": "Seraphine's midnight deadline", "kind": "threat", "status": "open",
+      "beat": "Seraphine must pay by midnight.", "due": "midnight"},
+     ("the-midnight-deadline",)),
+)
+
+
+def _identity_exam() -> identity.Examination:
+    """A fresh in-memory examination of the fixture above: no store."""
+    def candidate(rid: str) -> tuple[similarity.Subject, dict]:
+        kind, stored = _IDENTITY_RECORDS[rid]
+        record = {key: value for key, value in stored.items() if key != "beat"}
+        record["beats"] = [{"text": stored["beat"], "scene": "saltmarch-docks"}]
+        return similarity.subject(kind, f"{kind}:{rid}", record), dict(_IDENTITY_SIGNALS)
+
+    rows = [identity.Examined(section, index, f"r{index + 1}", kind, dict(row),
+                              f"proposed-{index + 1}", [candidate(rid) for rid in ids], [])
+            for index, (section, kind, row, ids) in enumerate(_IDENTITY_ROWS)]
+    return identity.Examination(rows, len(rows), "basic", "off", "", 0,
+                                {("thread", "winifreds-chart")},
+                                {"thread:the-old-map": "thread:maras-map"})
+
+
+def _identity_items() -> tuple[decisions.Item, ...]:
+    exam = _identity_exam()
+    return identity.build_items(exam.prompt_rows(), exam.live)
+
+
+def _identity_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return identity.answers_of(_identity_exam().prompt_rows(), results)
+
+
+def _identity_settle(answers: object) -> object:
+    if answers is not None and not isinstance(answers, list):
+        raise TypeError(f"continuity-identity settles decision dicts, not {answers!r}")
+    exam = _identity_exam()
+    taken = identity.take(exam, answers)
+    return [taken, [[e.decision, e.status, e.reason, e.target] for e in exam.rows]]
+
+
+#: Verbatim, every input `test_continuity_identity.py`'s parse tests hand
+#: `parse_output`: the fenced one built by the test's own expression.
+_IDENTITY_FENCED = "Here you go:\n```json\n" + json.dumps({"decisions": [
+    "not a row",
+    {"decision": "new", "id": "", "reason": "no row key"},
+    {"row": "   ", "decision": "new"},
+    {"row": 3, "decision": "new"},
+    {"row": "Row r1", "decision": "EXISTING", "id": " find-the-ledger ",
+     "reason": " Same ledger. "},
+    {"row": "r2", "decision": "maybe", "id": 7, "reason": "x" * 400},
+    {"row": "r1", "decision": "new", "id": "", "reason": "a second answer for r1"},
+    {"row": "r3", "decision": None, "reason": ["not", "text"]},
+]}) + "\n```"
+
+CONTINUITY_IDENTITY = Conversion(
+    id="continuity-identity",
+    items=_identity_items,
+    explain=True,
+    legacy=legacy.identity_parse_output,
+    decide=_identity_decide,
+    corpus=GATE_DIR / "continuity-identity.json",
+    legacy_cases=(
+        "I think so.", "{}", '{"decisions": 3}',
+        *(json.dumps({"decisions": [{"row": label, "decision": "new"}]})
+          for label in ("Row r1", " R1 ", "r1", "ROW R1")),
+        _IDENTITY_FENCED,
+    ),
+    settle=_identity_settle,
+)
+
+#: One conversion per prepare task (scene-break, voice drift, speaker,
+#: continuity identity), each appended by the task that writes its corpus.
+GATES: tuple[Conversion, ...] = (SCENE_BREAK, VOICE_DRIFT, SPEAKER, CONTINUITY_IDENTITY)
 
 
 def report(results: list[GateResult]) -> str:

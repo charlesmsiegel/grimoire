@@ -1,4 +1,4 @@
-"""Today's three decision parsers, frozen: the legacy side of the decide gate.
+"""Today's decision parsers, frozen: the legacy side of the decide gate.
 
 The gate (`evals/gate.py`) scores each conversion's structured parse against
 the parse the call site used before it switched. The switch tasks delete those
@@ -23,11 +23,25 @@ dropped from the `validate_handoff` it calls (the frozen copy below).
 - `store/response_protocol.py`: `validate_handoff`, and the `json.loads` that
   `_select` runs before it (production keeps its own `validate_handoff` for
   handoff fences, so a later edit there must not move this side either).
+
+Slice G's continuity parsers were copied the same way, verbatim at slice G's
+base `567dc10` (`claude/inference-slice-g`, before its Task 5 switch). Names
+the reconcile copy shares, and the module constants that read ambiguously in a
+module holding both, take an `identity_` prefix (`identity_parse_output`,
+`IDENTITY_DECISIONS`, `IDENTITY_REASON_CHARS`), with the bodies changed only
+for those renames and for `parse_output` calling the copied `extract_object`
+by its bare name:
+
+- `store/absorb/parse.py`: `extract_object`, unchanged and unprefixed (the
+  reconcile copy reuses it).
+- `store/continuity/identity.py`: `DECISIONS`, `REASON_CHARS`, `_ROW_WORD`,
+  `_row_key`, `_decision` and `parse_output`.
 """
 
 from __future__ import annotations
 
 import json
+import re
 
 # --- store/scene_break.py ---------------------------------------------------
 
@@ -182,3 +196,82 @@ def selector_parse(answer, eligible):
     return validate_handoff(
         payload, [r["ref"] for r in eligible] + ["grimoire"], []
     )
+
+
+# --- store/absorb/parse.py --------------------------------------------------
+
+
+def extract_object(text: str) -> dict | None:
+    """The JSON object embedded in a reply, tolerating prose or a markdown
+    fence around it. None when there is no decodable object at all.
+
+    None rather than {} — and public rather than private — because "the model
+    returned no JSON" (a format failure: it refused, or wrote prose, or got
+    truncated) and "the model returned an empty object" (an extraction failure:
+    it understood the format and found nothing to say) have different causes
+    and different fixes. parse_output cannot tell them apart on its own; both
+    arrive as a dict of empty defaults. evals/graders.py reports them
+    separately, which is only possible if this function keeps the difference.
+    """
+    start, end = text.find("{"), text.rfind("}")
+    raw = text[start:end + 1] if start != -1 and end > start else ""
+    try:
+        obj = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+# --- store/continuity/identity.py -------------------------------------------
+
+#: What the resolver may answer for a row (spec §10.2).
+IDENTITY_DECISIONS = ("existing", "new", "uncertain")
+
+#: A resolver reason is display text; clipping it keeps a runaway reply out of
+#: the stored review. To be tuned against real prompts later.
+IDENTITY_REASON_CHARS = 280
+
+#: A leading ``row`` word, as the user prompt prints a key (``Row r1``).
+_ROW_WORD = re.compile(r"^row(?![a-z0-9])[\s:#.-]*")
+
+
+def _row_key(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return _ROW_WORD.sub("", value.strip().casefold()).strip()
+
+
+def _decision(item: dict) -> dict:
+    word = item.get("decision")
+    word = word.strip().lower() if isinstance(word, str) else ""
+    rid, reason = item.get("id"), item.get("reason")
+    return {"row": _row_key(item.get("row")),
+            "decision": word if word in IDENTITY_DECISIONS else "uncertain",
+            "id": rid.strip() if isinstance(rid, str) else "",
+            "reason": reason.strip()[:IDENTITY_REASON_CHARS] if isinstance(reason, str) else ""}
+
+
+def identity_parse_output(text: str) -> list[dict] | None:
+    """The resolver's decisions, rebuilt field by field, or None when the reply
+    holds no decodable object at all -- a failed check, which is not the same
+    as a decodable reply with nothing usable in it (``[]``, spec §24).
+
+    Each usable element becomes ``{row, decision, id, reason}``: the row key as
+    the prompt printed it, without its ``Row`` label; an unknown decision word
+    as ``uncertain``; a reason clipped to `REASON_CHARS`. A duplicate row key
+    keeps its first answer. Nothing here raises on bad JSON."""
+    obj = extract_object(text)
+    if obj is None:
+        return None
+    items = obj.get("decisions")
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in items if isinstance(items, list) else ():
+        if not isinstance(item, dict):
+            continue
+        decision = _decision(item)
+        if not decision["row"] or decision["row"] in seen:
+            continue
+        seen.add(decision["row"])
+        out.append(decision)
+    return out

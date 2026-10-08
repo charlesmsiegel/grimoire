@@ -282,6 +282,42 @@ def _source(name: str) -> str:
     return " ".join(re.sub(r"\{#.*?#\}", " ", text, flags=re.DOTALL).split())
 
 
+# Coverage of a legacy one-call prompt while it exists (slice F's, shared since
+# slice G): every sentence of it is either inside one fragment, or is fragments
+# joined by glue -- delete each fragment it contains, then a JSON key
+# (`"verdict":`), and nothing but punctuation and a connective may be left.
+# Containing ONE fragment is not enough: a format fragment can sit beside a
+# criterion in one sentence, so a criterion missing from a table would hide
+# behind its neighbour. With this rule, a carried fragment deleted from the
+# table leaves its words behind and fails. A multi-sentence fragment covers
+# sentence by sentence.
+_GLUE_WORDS = frozenset({"and"})
+_SENTENCE = re.compile(r"(?<=[.?!])\s+")
+
+
+def _sentences(text: str) -> list[str]:
+    return [sentence for paragraph in re.split(r"\n\s*\n", text.strip())
+            for sentence in _SENTENCE.split(" ".join(paragraph.split()))]
+
+
+def _leftover(source: str, fragments: list[str]) -> list[tuple[str, list[str]]]:
+    """Each sentence of `source`, with the words it says beyond `fragments`
+    and glue (none when it is covered)."""
+    out = []
+    by_length = sorted(fragments, key=len, reverse=True)
+    for sentence in _sentences(source):
+        if any(sentence in f for f in fragments):
+            out.append((sentence, []))
+            continue
+        rest = sentence
+        for f in by_length:
+            rest = rest.replace(f, " ")
+        rest = re.sub(r'"\w+"\s*:', " ", rest)
+        out.append((sentence, [w for w in re.findall(r"[A-Za-z]+", rest)
+                               if w.lower() not in _GLUE_WORDS]))
+    return out
+
+
 #: Scene-break's criteria, carried out of the legacy one-call prompt (the
 #: `scene_break/system.j2` slice F deleted) into the decide-era templates word
 #: for word (I8): (fragment, the template it went to). Invent no criterion, and
@@ -801,6 +837,157 @@ for label, rows in IDENTITY_INPUTS.items():
             check(f"continuity identity line ({label}, {cand['id']})", want, cand["line"])
             assert cand["line"] in exp[1]["content"], \
                 f"continuity identity user ({label}) does not show {cand['id']}'s line"
+
+# The continuity identity resolver as decision items (slice G, spec 7.4):
+# `identity.build_items` over the same row sets, against direct renders. Each
+# item's context is `item.j2` over its row; its `decision` choice is
+# `question.j2`'s with each option described by `option.j2`; its `id` choice is
+# `record.j2`'s over the row's candidates, each described by its title. While
+# the legacy `user.j2` exists, a context below its heading is that template's
+# row block byte for byte.
+for label, rows in IDENTITY_INPUTS.items():
+    items = identity.build_items(rows, {})
+    for item, shown in zip(items, identity.template_rows(rows), strict=True):
+        tag = f"{label}, {shown['key']}"
+        check(f"continuity identity item context ({tag})", item.context,
+              render("continuity_identity/item.j2", r=shown))
+        heading, _, body = item.context.partition("\n")
+        legacy_head, _, legacy_body = render("continuity_identity/user.j2",
+                                             rows=[shown]).partition("\n")
+        check(f"continuity identity item body is today's row ({tag})", body, legacy_body)
+        REPORT.require(f"continuity identity item heading ({tag})",
+                       heading == f"Proposed {legacy_head.partition(' — proposed ')[2]}",
+                       f"{heading!r} does not name what {legacy_head!r} does")
+        REPORT.require(f"continuity identity item questions ({tag})",
+                       [q.id for q in item.questions]
+                       == [identity.DECISION_ID, identity.RECORD_ID],
+                       f"asks {[q.id for q in item.questions]}")
+        decision, record = item.questions
+        check(f"continuity identity decision question ({tag})", decision.instructions,
+              render("continuity_identity/question.j2"))
+        for opt in decision.options:
+            check(f"continuity identity option {opt.id} ({tag})", opt.description,
+                  render("continuity_identity/option.j2", decision=opt.id))
+        check(f"continuity identity record question ({tag})", record.instructions,
+              render("continuity_identity/record.j2"))
+        REPORT.require(f"continuity identity record options ({tag})",
+                       [(o.id, o.description) for o in record.options]
+                       == [(c["id"], c["title"] or c["id"]) for c in shown["candidates"]]
+                       and record.allow_none and not decision.allow_none,
+                       f"offers {[(o.id, o.description) for o in record.options]}")
+check("continuity identity explain", identity.explain(),
+      render("continuity_identity/explain.j2"))
+
+#: The duplicate check's criteria, carried out of its legacy one-call prompt
+#: (`continuity_identity/system.j2`, until the switch retires it) into the
+#: decide-era templates word for word (I8): (fragment, the template it went
+#: to). Invent no criterion, and drop none.
+IDENTITY_CARRIED = (
+    ("You are checking whether newly proposed story records already exist.",
+     "continuity_identity/question.j2"),
+    (("A plot thread is an open narrative question; a commitment is an obligation someone "
+      "owes (a promise, a threat or a piece of foreshadowing)."),
+     "continuity_identity/question.j2"),
+    (('A closed or resolved candidate is never "existing": it is listed so you can see that '
+      "business was already settled, and a later development is a new record, not that "
+      'one. A row\'s "distinguished_from" ids and the signals under each candidate are '
+      "hints, not proof: shared words, characters, scenes or dates make two records worth "
+      "comparing, never the same record."), "continuity_identity/question.j2"),
+    ('Give that candidate\'s "id" exactly as it is listed.', "continuity_identity/record.j2"),
+    ("one short sentence", "continuity_identity/explain.j2"),
+)
+#: Each decision's description, carried out of its legacy bullet word for word
+#: after the quoted word, keyed by the decision it describes: `option.j2` must
+#: render exactly this text for exactly this decision. A description moved to
+#: another word would turn the check around, and the gate (parser-only) cannot
+#: see it. The existing bullet's id sentence is `record.j2`'s (above).
+IDENTITY_OPTIONS = {
+    "existing": ("only when a listed candidate is the same narrative question or "
+                 "obligation, so the row's beat simply moves that record forward."),
+    "new": ("when the row is a different question, a continuation, or a related subplot: "
+            "something that grew out of a listed record but is business of its own "
+            "deserves a record of its own."),
+    "uncertain": ("when the transcript cannot tell: the cited evidence and the beats do not "
+                  "settle whether the row and a candidate are the same business."),
+}
+#: Sentences the decide prompt lays out differently, reworded rather than
+#: dropped: (old, new, the template `new` went to, why).
+IDENTITY_REWORDED = (
+    (("A scene was just absorbed, and the extraction proposed opening some NEW plot threads "
+      "or commitments."),
+     ("A scene was just absorbed, and the extraction proposed opening a NEW plot thread or "
+      "commitment."),
+     "continuity_identity/question.j2", "one item asks about one row"),
+    (("Each proposed record is listed below as a row: its title, the beat the scene gave "
+      "it, the transcript evidence the extraction cited, why the extraction called it new, "
+      "and up to three existing records of the same type that look similar, each with its "
+      "id, status, latest beats and the similarity signals that put it on the list."),
+     ("The proposed record is shown above: its title, the beat the scene gave it, the "
+      "transcript evidence the extraction cited, why the extraction called it new, and up "
+      "to three existing records of the same type that look similar, each with its id, "
+      "status, latest beats and the similarity signals that put it on the list."),
+     "continuity_identity/question.j2",
+     "decide/user.j2 renders the item's context above its questions"),
+    ('Leave "id" empty unless the decision is "existing".',
+     'Answer null for "id" unless the decision is "existing".',
+     "continuity_identity/record.j2", "an empty string is not an option; null is"),
+)
+#: The legacy prompt's reply format, which `decide/system.j2` owns now: no
+#: criterion lives in these. The example is cut around its "reason"
+#: placeholder, which is the carried rationale instruction (`explain.j2`), so
+#: that fragment's coverage is its own rather than the example's.
+IDENTITY_FORMAT = (
+    "Give exactly one decision per row:",
+    "Reply with ONLY a JSON object, no prose around it:",
+    ('{"decisions": [{"row": "<row key>", "decision": "existing" | "new" | "uncertain", '
+     '"id": "<candidate id, for existing>", "reason": "<'),
+    '>"}]}',
+    '"row" is the key after "Row" (for "Row r1", write "r1").',
+)
+for fragment, target in IDENTITY_CARRIED:
+    REPORT.require(f"continuity identity carried ({target}: {fragment[:40]}…)",
+                   fragment in _source(target), f"not in {target}")
+for word, text in IDENTITY_OPTIONS.items():
+    check(f"continuity identity option carried ({word})",
+          text, render("continuity_identity/option.j2", decision=word))
+REPORT.require("continuity identity options are the item's",
+               list(IDENTITY_OPTIONS)
+               == [o.id for o in identity.build_items(
+                   IDENTITY_INPUTS["bare"], {})[0].questions[0].options],
+               f"carried descriptions for {list(IDENTITY_OPTIONS)}")
+for _old, new, target, why in IDENTITY_REWORDED:
+    REPORT.require(f"continuity identity reworded ({target}: {new[:40]}…)",
+                   new in _source(target), f"not in {target} ({why})")
+
+#: Each decision's legacy bullet, quoted word and description together: while
+#: the legacy prompt exists, the pairing above must be its pairing.
+IDENTITY_BULLETS = [f'- "{word}" {text}' for word, text in IDENTITY_OPTIONS.items()]
+_LEGACY_IDENTITY = (REPO / "templates" / "continuity_identity" / "system.j2").read_text(
+    encoding="utf-8")
+_IDENTITY_BITES = ([f for f, _ in IDENTITY_CARRIED] + IDENTITY_BULLETS
+                   + [old for old, _, _, _ in IDENTITY_REWORDED])
+for fragment in _IDENTITY_BITES + list(IDENTITY_FORMAT):
+    REPORT.require(f"continuity identity fragment is the old prompt's ({fragment[:40]}…)",
+                   fragment in _source("continuity_identity/system.j2"),
+                   "not in continuity_identity/system.j2")
+
+
+def _identity_fragments(without: str = "") -> list[str]:
+    return [s for f in _IDENTITY_BITES if f != without
+            for s in _sentences(f)] + list(IDENTITY_FORMAT)
+
+
+for sentence, words in _leftover(_LEGACY_IDENTITY, _identity_fragments()):
+    REPORT.require(f"continuity identity coverage ({sentence[:40]}…)", not words,
+                   "continuity_identity/system.j2 says what no fragment carries: "
+                   f"{' '.join(words)!r}")
+# Coverage that bites: with any one carried, option or reworded fragment gone
+# from the tables, some sentence of the legacy prompt is left uncovered.
+for fragment in _IDENTITY_BITES:
+    REPORT.require(f"continuity identity coverage misses ({fragment[:40]}…)",
+                   any(words for _, words in _leftover(_LEGACY_IDENTITY,
+                                                       _identity_fragments(fragment))),
+                   "coverage passes without it, so the tables do not hold it")
 
 # The reconciliation sweep (capstone spec §11.2). Payloads are
 # `reconcile.build_payload`-shaped; three inputs so every optional branch of

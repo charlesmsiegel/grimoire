@@ -1,0 +1,564 @@
+[
+  {
+    "shape": "undecodable",
+    "intended": [
+      false,
+      [
+        [
+          "unchecked",
+          "hint_only",
+          "the duplicate check returned no readable answer",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the duplicate check returned no readable answer",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the duplicate check returned no readable answer",
+          null
+        ]
+      ]
+    ],
+    "legacy": "I think so.",
+    "decide": "I think so."
+  },
+  {
+    "shape": "empty-object",
+    "intended": [
+      true,
+      [
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{}",
+    "decide": "{}"
+  },
+  {
+    "shape": "decisions-not-a-list",
+    "intended": [
+      true,
+      [
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": 3}",
+    "decide": "{\"0\": 3}"
+  },
+  {
+    "shape": "row-label",
+    "intended": [
+      true,
+      [
+        [
+          "new",
+          "accepted",
+          "",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"Row r1\", \"decision\": \"new\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+  },
+  {
+    "shape": "padded-uppercase-key",
+    "intended": [
+      true,
+      [
+        [
+          "new",
+          "accepted",
+          "",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \" R1 \", \"decision\": \"new\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+  },
+  {
+    "shape": "bare-key",
+    "intended": [
+      true,
+      [
+        [
+          "new",
+          "accepted",
+          "",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"new\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+  },
+  {
+    "shape": "uppercase-label",
+    "intended": [
+      true,
+      [
+        [
+          "new",
+          "accepted",
+          "",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"ROW R1\", \"decision\": \"new\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}}}"
+  },
+  {
+    "shape": "fenced-normalised-repeated",
+    "intended": [
+      true,
+      [
+        [
+          "existing",
+          "accepted",
+          "Same ledger.",
+          "find-the-ledger"
+        ],
+        [
+          "uncertain",
+          "accepted",
+          "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          null
+        ],
+        [
+          "uncertain",
+          "accepted",
+          "",
+          null
+        ]
+      ]
+    ],
+    "legacy": "Here you go:\n```json\n{\"decisions\": [\"not a row\", {\"decision\": \"new\", \"id\": \"\", \"reason\": \"no row key\"}, {\"row\": \"   \", \"decision\": \"new\"}, {\"row\": 3, \"decision\": \"new\"}, {\"row\": \"Row r1\", \"decision\": \"EXISTING\", \"id\": \" find-the-ledger \", \"reason\": \" Same ledger. \"}, {\"row\": \"r2\", \"decision\": \"maybe\", \"id\": 7, \"reason\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, {\"row\": \"r1\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"a second answer for r1\"}, {\"row\": \"r3\", \"decision\": null, \"reason\": [\"not\", \"text\"]}]}\n```",
+    "decide": "Here you go:\n```json\n{\"0\": {\"answers\": {\"decision\": \"EXISTING\", \"id\": \" find-the-ledger \"}, \"rationale\": \" Same ledger. \"}, \"1\": {\"answers\": {\"decision\": \"maybe\", \"id\": 7}, \"rationale\": \"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\"}, \"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"a second answer for r1\"}, \"2\": {\"answers\": {\"decision\": null}, \"rationale\": [\"not\", \"text\"]}}\n```"
+  },
+  {
+    "shape": "unoffered-id",
+    "intended": [
+      true,
+      [
+        [
+          "uncertain",
+          "downgraded",
+          "named a record that was not offered",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"nope\", \"reason\": \"Winifred is after the same ledger.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"nope\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+  },
+  {
+    "shape": "other-kind-ref",
+    "intended": [
+      true,
+      [
+        [
+          "uncertain",
+          "downgraded",
+          "named a record that was not offered",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"commitment:find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"commitment:find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+  },
+  {
+    "shape": "closed-candidate",
+    "intended": [
+      true,
+      [
+        [
+          "uncertain",
+          "downgraded",
+          "that record is already closed or resolved",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"the-burned-chart\", \"reason\": \"It is the chart again.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"the-burned-chart\"}, \"rationale\": \"It is the chart again.\"}}"
+  },
+  {
+    "shape": "alias-source",
+    "intended": [
+      true,
+      [
+        [
+          "existing",
+          "accepted",
+          "The old map is Mara's.",
+          "maras-map"
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"the-old-map\", \"reason\": \"The old map is Mara's.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"the-old-map\"}, \"rationale\": \"The old map is Mara's.\"}}"
+  },
+  {
+    "shape": "ref-form",
+    "intended": [
+      true,
+      [
+        [
+          "existing",
+          "accepted",
+          "The old map is Mara's.",
+          "maras-map"
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"thread:maras-map\", \"reason\": \"The old map is Mara's.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"thread:maras-map\"}, \"rationale\": \"The old map is Mara's.\"}}"
+  },
+  {
+    "shape": "second-move",
+    "intended": [
+      true,
+      [
+        [
+          "existing",
+          "accepted",
+          "Winifred is after the same ledger.",
+          "find-the-ledger"
+        ],
+        [
+          "uncertain",
+          "downgraded",
+          "another row in this scene already moves that record",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}, \"1\": {\"answers\": {\"decision\": \"existing\", \"id\": \"find-the-ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+  },
+  {
+    "shape": "explicit-target",
+    "intended": [
+      true,
+      [
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "uncertain",
+          "downgraded",
+          "another row in this scene already moves that record",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r2\", \"decision\": \"existing\", \"id\": \"winifreds-chart\", \"reason\": \"The chart again.\"}]}",
+    "decide": "{\"1\": {\"answers\": {\"decision\": \"existing\", \"id\": \"winifreds-chart\"}, \"rationale\": \"The chart again.\"}}"
+  },
+  {
+    "shape": "no-id",
+    "intended": [
+      true,
+      [
+        [
+          "uncertain",
+          "downgraded",
+          "named a record that was not offered",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"\", \"reason\": \"Winifred is after the same ledger.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": null}, \"rationale\": \"Winifred is after the same ledger.\"}}"
+  },
+  {
+    "shape": "sole-candidate",
+    "intended": [
+      true,
+      [
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "existing",
+          "accepted",
+          "The same deadline.",
+          "the-midnight-deadline"
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r3\", \"decision\": \"existing\", \"id\": \"the-midnight-deadline\", \"reason\": \"The same deadline.\"}]}",
+    "decide": "{\"2\": {\"answers\": {\"decision\": \"existing\", \"id\": \"the-midnight-deadline\"}, \"rationale\": \"The same deadline.\"}}"
+  },
+  {
+    "shape": "one-item-unreadable",
+    "intended": [
+      true,
+      [
+        [
+          "new",
+          "accepted",
+          "A search of its own.",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "new",
+          "accepted",
+          "A second deadline.",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A search of its own.\"}, 5, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"A search of its own.\"}, \"1\": 5, \"2\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"A second deadline.\"}}"
+  },
+  {
+    "shape": "normalised-id",
+    "intended": [
+      true,
+      [
+        [
+          "existing",
+          "accepted",
+          "Winifred is after the same ledger.",
+          "find-the-ledger"
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"Find The Ledger\", \"reason\": \"Winifred is after the same ledger.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"existing\", \"id\": \"Find The Ledger\"}, \"rationale\": \"Winifred is after the same ledger.\"}}",
+    "ruling": "an offered id is read through decisions.normalise, so a cased or spaced spelling of it is that id"
+  },
+  {
+    "shape": "todays-format",
+    "intended": [
+      true,
+      [
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ],
+        [
+          "unchecked",
+          "hint_only",
+          "the check gave no answer for this row",
+          null
+        ]
+      ]
+    ],
+    "legacy": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"Its own search.\"}, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
+    "decide": "{\"decisions\": [{\"row\": \"r1\", \"decision\": \"existing\", \"id\": \"find-the-ledger\", \"reason\": \"Winifred is after the same ledger.\"}, {\"row\": \"r2\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"Its own search.\"}, {\"row\": \"r3\", \"decision\": \"new\", \"id\": \"\", \"reason\": \"A second deadline.\"}]}",
+    "ruling": "a reply ignoring the decide schema is never guessed at"
+  }
+]

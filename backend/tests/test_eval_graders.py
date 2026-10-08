@@ -526,6 +526,107 @@ def test_identity_reads_row_keys_as_the_app_does():
     assert _identity(_identity_json({**_R1, "row": "Row r1"}, _R2, _R3)) == set()
 
 
+# ------------------------------------------------- identity, as decision items
+
+def _identity_decision_rows() -> list[dict]:
+    """The decide-continuity-identity case's three rows, `prompt_rows()`-shaped,
+    each offered the one record its case is about."""
+    signals = {"title_equal": False, "slug_equal": False, "tokens": 0.4, "chars": 0.5,
+               "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical"}
+    rows = []
+    for n, (title, rid) in enumerate((("Recover the harbour ledger", "find-the-ledger"),
+                                      ("Who bribes the harbourmaster",
+                                       "the-saltmarch-smuggling"),
+                                      ("Seraphine's debt to Mara comes due",
+                                       "seraphines-debts")), start=1):
+        rows.append({"key": f"r{n}", "kind": "thread", "title": title, "beat": "b",
+                     "status": "open", "commitment_kind": "", "due": "", "quote": "",
+                     "speaker": "", "certainty": None, "why_new": "",
+                     "distinguished_from": [],
+                     "candidates": [{"id": rid, "title": rid, "status": "open", "kind": "",
+                                     "due": "", "latest_beat": "", "earlier": [],
+                                     "signals": dict(signals)}]})
+    return rows
+
+
+_D1 = {"decision": "existing", "id": "find-the-ledger"}
+_D2 = {"decision": "new", "id": None}
+_D3 = {"decision": "new", "id": None}
+_WHY = ("Same ledger.", "A different question.", "It grew out of the debts.")
+
+
+def _identity_decided(*answers: dict, rationales=_WHY) -> set[str]:
+    from grimoire.store.continuity import identity
+    from tests.llm_fakes import decision_reply
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    return failed(graders.grade_identity_decision(
+        decision_reply(*answers, rationales=rationales), items, rows, IDENTITY_EXPECTED))
+
+
+def test_identity_decision_compliant_passes():
+    from grimoire.store.continuity import identity
+    from tests.llm_fakes import decision_reply
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    checks = graders.grade_identity_decision(decision_reply(_D1, _D2, _D3, rationales=_WHY),
+                                             items, rows, IDENTITY_EXPECTED)
+    assert failed(checks) == set()
+    assert [c.name for c in checks] == [
+        "identity.json", "identity.covers_rows", "identity.enum", "identity.known_ids",
+        "identity.same_obligation", "identity.distinct", "identity.continuation"]
+    # The reason is display-only: a reply with no rationale is still graded clean.
+    assert _identity_decided(_D1, _D2, _D3, rationales=()) == set()
+
+
+def test_identity_decision_undecodable_fails_json_only():
+    from grimoire.store.continuity import identity
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    for text in ("Row r1 looks like the ledger thread.",
+                 '{"0": {"answers": {"decision": "existing", "id": "find-the-le'):
+        checks = graders.grade_identity_decision(text, items, rows, IDENTITY_EXPECTED)
+        assert [(c.name, c.ok) for c in checks] == [("identity.json", False)], text
+
+
+def test_identity_decision_merged_rows_fail_their_own_verdicts():
+    merged = (_D1, {"decision": "existing", "id": "the-saltmarch-smuggling"},
+              {"decision": "existing", "id": "seraphines-debts"})
+    assert _identity_decided(*merged) == {"identity.distinct", "identity.continuation"}
+
+
+def test_identity_decision_unoffered_id_fails_known_ids():
+    # An id offered nowhere is no option: unread, so `existing` names nothing,
+    # and the row it was given on gets the wrong verdict.
+    assert _identity_decided({"decision": "existing", "id": "maras-map"}, _D2, _D3) == {
+        "identity.known_ids", "identity.same_obligation"}
+    assert _identity_decided({"decision": "existing", "id": None}, _D2, _D3) == {
+        "identity.known_ids", "identity.same_obligation"}
+    # The ref form and a cased spelling are the offered id, as the app reads them.
+    for named in ("thread:find-the-ledger", "Find The Ledger"):
+        assert _identity_decided({"decision": "existing", "id": named}, _D2, _D3) == set()
+
+
+def test_identity_decision_unknown_word_fails_enum():
+    assert _identity_decided(_D1, {"decision": "maybe", "id": None}, _D3) == {
+        "identity.enum", "identity.distinct"}
+
+
+def test_identity_decision_missing_item_fails_covers_rows_alone():
+    from grimoire.store.continuity import identity
+    from tests.llm_fakes import decision_reply
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    text = decision_reply(_D1, _D2, rationales=_WHY)   # item 2 never answered
+    checks = graders.grade_identity_decision(text, items, rows, IDENTITY_EXPECTED)
+    assert failed(checks) == {"identity.covers_rows"}
+    assert "identity.continuation" not in {c.name for c in checks}
+
+
 # ---------------------------------------------------------------- reconcile
 
 #: The continuity-reconcile case's seven candidates as the grader is handed

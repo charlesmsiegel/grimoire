@@ -1603,6 +1603,52 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
                                     expected="characters:winifred")]
 
 
+# ------------------------------------- case 13: decide, continuity identity
+#
+# The duplicate check as `decide()` will send it after the switch: the same
+# fixture and the same examination as case 7 (`build_continuity_identity`),
+# one item per examined row through `identity.build_items`. Its recordings
+# carry each of case 7's failure modes into the decide shape.
+
+def _decide_identity_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for what `examine` finds now, built as the
+    switched call site will build it -- stored on `ctx` with the items, the
+    rows, the offers and the verdicts the grader reads, as `_identity_prompt`
+    stores them."""
+    exam = _identity_examine(ctx)
+    rows = exam.prompt_rows()
+    items = identity.build_items(rows, exam.live)
+    ctx.update(exam=exam, rows=rows, items=items, explain=identity.explain(),
+               offered={key: set(ids) for key, ids in _offers(exam).items()},
+               kinds={e.key: e.kind for e in exam.rows},
+               expected={e.key: IDENTITY_VERDICTS[e.index] for e in exam.rows
+                         if e.section == "plot_movements"})
+    return inference.structured_messages(items, explain=ctx["explain"])
+
+
+def _decide_identity_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=True)
+
+
+def grade_decide_continuity_identity(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    user = messages[1]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_decide_identity_schema(ctx))
+    missing = [row["title"] for row in ctx["rows"] if row["title"] not in user]
+    return [*graders.grade_prompt_section(messages, "question",
+                                          "continuity_identity/question.j2"),
+            Check("prompt.schema", schema in messages[0]["content"],
+                  "the reply's JSON Schema is not in the system message"),
+            Check("prompt.context", not missing,
+                  f"examined rows missing from the user message: {missing}"),
+            Check("prompt.explain", f"Rationale, for each item: {ctx['explain']}" in text,
+                  "the rationale instruction did not reach the prompt"),
+            *graders.grade_identity_decision(output, ctx["items"], ctx["rows"],
+                                             ctx["expected"])]
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1832,6 +1878,28 @@ CASES: tuple[Case, ...] = (
              # Drift with a corrective over MAX_NOTE, which the route refuses
              # to put in front of every following turn.
              Recording("long-note", ("decide.rationale",), "json"))),
+    Case(id="decide-continuity-identity",
+         task="continuity-identity",
+         hypothesis="asked through decide() about each examined row, the reply is the "
+                    "schema's object, maps a reworded duplicate to the existing record by "
+                    "an offered id, and keeps a same-topic question and a concrete "
+                    "continuation new",
+         build=build_continuity_identity,
+         prompt=_decide_identity_prompt,
+         grade=grade_decide_continuity_identity,
+         schema=_decide_identity_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-rationale: nothing decodes, so no other output
+             # check is reported rather than failed.
+             Recording("undecodable", ("identity.json",), "json"),
+             # Both ids were offered, so known_ids still passes: what trips is
+             # exactly the two rows that should have stayed new.
+             Recording("merged", ("identity.distinct", "identity.continuation"), "json"),
+             # An id offered nowhere: no option, so `existing` names nothing,
+             # and the row it was given on gets the wrong verdict.
+             Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
+                       "json"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "

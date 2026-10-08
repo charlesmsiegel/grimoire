@@ -67,9 +67,10 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping, Sequence
 from typing import Literal
 
-from ... import prompts
+from ... import decisions, prompts
 from .. import commitments, fieldtext
 from ..absorb import materializer as absorb_materializer
 from ..absorb import parse as absorb_parse
@@ -101,6 +102,18 @@ REASON_CHARS = 280
 #: What the alias reader can raise on a hand-edited continuity.json whose shape
 #: it did not expect; any of them reads as "no aliases", as everywhere else.
 _UNREADABLE = (OSError, ValueError, TypeError, KeyError, AttributeError)
+
+#: The id of each item's first question, a choice over `DECISIONS`.
+DECISION_ID = "decision"
+
+#: The id of each item's second question, a choice over the row's offered
+#: candidates (null allowed): named as today's reply field, so the sentences
+#: carried out of the legacy prompt keep their words.
+RECORD_ID = "id"
+
+#: Why every examined row is a hint only when the check's reply held no
+#: object at all (§24): a failed check, not a decodable reply with nothing in it.
+UNREADABLE = "the duplicate check returned no readable answer"
 
 
 def has_proposals(parsed: dict) -> bool:
@@ -627,6 +640,140 @@ def _decision(item: dict) -> dict:
             "decision": word if word in DECISIONS else "uncertain",
             "id": rid.strip() if isinstance(rid, str) else "",
             "reason": reason.strip()[:REASON_CHARS] if isinstance(reason, str) else ""}
+
+
+# ------------------------------------------------------- as decision items
+#
+# The check as `decide()` items (spec §7.4): one per examined row, asking
+# `decision` and then `id`. Nothing calls these until the switch; `build_prompt`
+# and `parse_output` above are still what absorb sends and reads.
+
+
+def _spelled(seen: set[str], spelling: str) -> bool:
+    """Take `spelling` into `seen` and say True, or say False when the
+    decision contract would refuse it: unofferable, or one normalised
+    spelling already taken."""
+    key = decisions.normalise(spelling)
+    if not decisions.offerable(spelling) or key in seen:
+        return False
+    seen.add(key)
+    return True
+
+
+def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decisions.Option]]:
+    """The row's candidates the `id` question may offer, in rank order, and
+    their options (Review Focus 3, M4).
+
+    Two passes, so no hand-edited ledger yields a request `decisions.validate`
+    refuses. Ids first: a candidate whose bare id is not offerable (an empty
+    id from a ``thread:`` key) or collides once normalised with a
+    higher-ranked one is dropped -- from the options and from the row the
+    context shows. Then aliases, the spellings today's `_existing`
+    canonicalises: the ref form ``<kind>:<id>``, and each live alias source of
+    that ref with its bare id (a source of another kind, which `_existing`
+    would never reach, is not one). An alias that is not offerable, or
+    collides with any kept id or an earlier alias, is dropped alone, so an
+    earlier candidate's alias source never shadows a later candidate's id."""
+    kind = row["kind"]
+    seen: set[str] = set()
+    kept = [c for c in row["candidates"] if _spelled(seen, c["id"])]
+    options = []
+    for c in kept:
+        ref = f"{kind}:{c['id']}"
+        spellings = [ref]
+        for src, to in live.items():
+            if to == ref and src != to and src.startswith(f"{kind}:"):
+                spellings += [src, src.removeprefix(f"{kind}:")]
+        aliases = tuple(s for s in spellings if _spelled(seen, s))
+        options.append(decisions.Option(c["id"], c["title"] or c["id"], aliases))
+    return kept, options
+
+
+def build_items(rows: list[dict], live: Mapping[str, str]) -> tuple[decisions.Item, ...]:
+    """One `decide()` item per `prompt_rows()` row, in order.
+
+    Each item's context is `continuity_identity/item.j2` over the row as
+    `template_rows` shapes it, holding only the candidates it offers (so it
+    stands alone: a native backend sends each item by itself). It asks
+    `decision`, a choice over `DECISIONS`, and then `id`, a choice over the
+    offered candidates by bare id with null allowed (`_offered`); a row left
+    with no offerable candidate asks `decision` alone, which an ``existing``
+    answer then downgrades as not offered. Pure, but it renders: callers run
+    it in the threadpool."""
+    question = prompts.render("continuity_identity/question.j2")
+    record = prompts.render("continuity_identity/record.j2")
+    words = tuple(decisions.Option(word, prompts.render("continuity_identity/option.j2",
+                                                        decision=word))
+                  for word in DECISIONS)
+    items = []
+    for row in rows:
+        kept, options = _offered(row, live)
+        [shown] = template_rows([{**row, "candidates": kept}])
+        asked: list[decisions.Question] = [decisions.Choice(DECISION_ID, question, words)]
+        if options:
+            asked.append(decisions.Choice(RECORD_ID, record, tuple(options),
+                                          allow_none=True))
+        items.append(decisions.Item(prompts.render("continuity_identity/item.j2", r=shown),
+                                    tuple(asked)))
+    return tuple(items)
+
+
+def explain() -> str:
+    """The rationale instruction: each row's display-only reason."""
+    return prompts.render("continuity_identity/explain.j2")
+
+
+def answers_of(rows: list[dict],
+               results: Sequence[decisions.ItemResult]) -> list[dict] | None:
+    """The parsed batch as today's decision dicts, for `Examination.decide`.
+
+    An item counts as answered only when its `decision` answer `was_read`
+    (I1); one that was not -- the reply held no object, or nothing in it
+    reads as that item, or it errored, was refused or abstained -- is left
+    out, so `Examination.decide` leaves its row `unchecked` and the phase is
+    never `ok`. Every read item gives ``{row, decision, id, reason}``: the
+    decision as answered (``""`` when unreadable, which `decide` takes as
+    ``uncertain``), the id when one was read, and the rationale clipped to
+    `REASON_CHARS` (``""`` when none came back: it is display-only, I4).
+
+    A garbled chunk is not a garbled item (N8): "never ``uncertain``" is about
+    an item the reply never reached. An object that reaches an item and
+    answers it badly -- ``{"answers": {}}``, a null decision, ``maybe`` -- was
+    read, and becomes ``uncertain`` as today's unknown word does.
+
+    None only when no item was read and none held an object: today's
+    undecodable reply. An object holding no item (``{}``, today's format) is
+    ``[]``, every row unchecked (§24). A chunk error with nothing read is the
+    call site's to report before it asks this (M12)."""
+    out = []
+    for row, result in zip(rows, results, strict=True):
+        decision = result.answers.get(DECISION_ID)
+        if decision is None or not decisions.was_read(decision):
+            continue
+        rid = result.answers.get(RECORD_ID)
+        out.append({"row": row["key"],
+                    "decision": decision.answer if isinstance(decision.answer, str) else "",
+                    "id": rid.answer if rid is not None and isinstance(rid.answer, str) else "",
+                    "reason": result.rationale.strip()[:REASON_CHARS]})
+    if not out and results and all(_no_object(result) for result in results):
+        return None
+    return out
+
+
+def _no_object(result: decisions.ItemResult) -> bool:
+    answer = result.answers.get(DECISION_ID)
+    return answer is not None and answer.detail == decisions.NO_OBJECT
+
+
+def take(exam: Examination, answers: list[dict] | None) -> bool:
+    """Decide `exam` by `answers` (`parse_output` or `answers_of`), or, for
+    None -- no readable answer at all -- make every row a hint only with
+    `UNREADABLE`. Whether it decided."""
+    if answers is None:
+        exam.hint_only(UNREADABLE)
+        return False
+    exam.decide(answers)
+    return True
 
 
 def parse_output(text: str) -> list[dict] | None:

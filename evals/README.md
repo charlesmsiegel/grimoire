@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is thirteen pass/fail
+This suite closes that. It is not an eval framework; it is fourteen pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -26,6 +26,7 @@ stake in:
 | `scene-suggestions-anchor-on` | with a batch anchor `on` an event in a custom calendar, every parsed date is the anchor's own date in the calendar's notation, whatever the model wrote |
 | `decide-scene-break` | asked through `decide()` whether a scene whose beat has resolved is over, the reply is the schema's object, answers yes, and says why; the prompt carries the question, the transcript, the schema and the rationale instruction |
 | `decide-voice-drift` | asked through `decide()` whether a character with a clipped, contraction-free anchor and a standing correction drifted when she chattered in contractions, the reply is the schema's object, answers `drift`, and gives a corrective no longer than `MAX_NOTE`; the prompt carries the question, every verdict with its description, the transcript and anchor, the correction and the schema |
+| `decide-continuity-identity` | asked through `decide()` about each row the duplicate check examines, the reply is the schema's object, maps a reworded duplicate to the existing record by an offered id, and keeps a same-topic question and a concrete continuation new; the prompt carries the question, every examined row's title, the rationale instruction and the schema (the call site switches later: until then `continuity-identity` is what absorb sends) |
 | `decide-speaker` | asked through `decide()` who opens a round in which the player has just put a question to one of two NPCs by name, the reply is the schema's object and picks that NPC (no rationale is asked for); the prompt carries the question, every eligible ref with its name and `grimoire` with its description, null allowed, the observable transcript (gathered by the store helpers the route calls, so a director note in the scene never reaches it) and the schema |
 
 ## Running it
@@ -132,9 +133,10 @@ and the result is a report, never a gate.
 
 ## The decide gate
 
-`decide()` (spec 7.4) replaces three call sites' hand-written prompts and
-parsers -- the scene-break check, the voice-drift check and the next-speaker
-pick -- with one decision contract answered by structured generation. Each
+`decide()` (spec 7.4) replaces call sites' hand-written prompts and
+parsers -- the scene-break check, the voice-drift check, the next-speaker
+pick and, being prepared, absorb's duplicate check -- with one decision
+contract answered by structured generation. Each
 call site switches only when the structured parse **equals or beats** today's
 on recorded replies, offline: `evals/gate.py`, run by `--gate` and by pytest
 (`backend/tests/test_decide_gate.py`).

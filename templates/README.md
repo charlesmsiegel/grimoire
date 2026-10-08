@@ -243,6 +243,42 @@ captured at Debug level like every other LLM response, under the existing
 Settings disclosure, while its info-level log row carries counts and modes
 only.
 
+**As decision items (slice G, prepared; the call site switches later).**
+`store/continuity/identity.py:build_items` makes one `decide()` item per
+`prompt_rows()` row, in order, and `decide/` renders the prompt around them;
+`system.j2` and `user.j2` above stay until the switch retires them.
+- `item.j2` is the item's context. Var: `r`, one `identity.template_rows` row
+  holding only the candidates the item offers. A heading (`Proposed plot
+  thread: <title>` or `Proposed commitment: <title>`), then `user.j2`'s row
+  block byte for byte, from `Beat:` to the candidates' signals.
+- `question.j2` is the first question's instructions (a choice under the id
+  `decision`, no null): the legacy prompt's criteria, two sentences reworded
+  for one row shown above. No vars.
+- `option.j2` describes each of its three options. Var: `decision`
+  (`existing`, `new` or `uncertain`): each text is that decision's legacy
+  bullet, word for word after its quoted word.
+- `record.j2` is the second question's instructions (a choice under the id
+  `id`, null allowed) over the row's candidates by bare id, each described by
+  its clipped title (or its id when the title is blank). No vars. An option's
+  aliases are the spellings today's acceptance guard canonicalises: the ref
+  form `<kind>:<id>`, and each live alias source of it with its bare id. A
+  candidate whose id is not offerable or collides once normalised with a
+  higher-ranked one is dropped from the options and the context, ids before
+  aliases (`identity._offered`), so a hand-edited ledger never builds a
+  request `decide` refuses; a row left with no offerable candidate asks
+  `decision` alone.
+- `explain.j2` is the rationale instruction (`identity.explain`): the row's
+  display-only reason. No vars.
+
+`identity.answers_of` maps the parsed batch back to the legacy decision dicts
+for the unchanged `Examination.decide`, leaving out an item the reply never
+reached (`decisions.was_read`), so its row stays `unchecked`; `identity.take`
+decides or, for no readable answer at all, makes every row a hint only.
+`scripts/verify_templates.py` holds each criterion of `system.j2` to a
+decide-era template (`IDENTITY_CARRIED`, `IDENTITY_OPTIONS` keyed by decision,
+`IDENTITY_REWORDED` with why), and every sentence of it to those or its reply
+format (`IDENTITY_FORMAT`), which `decide/system.j2` owns now.
+
 ### `continuity_reconcile/` — the reconciliation sweep after End Scene or a refresh
 Mirrors `store/continuity/reconcile.py:build_prompt`. Messages: system, user.
 One call per sweep, over at most `RECONCILE_MAX_CANDIDATES` findings chosen by

@@ -1,0 +1,39 @@
+{#- One examined row as a `decide()` item's context (`identity.build_items`):
+    a heading naming what the row would open, then the row's block from
+    `user.j2` byte for byte (Beat through Candidates). `user.j2` is the
+    legacy one-call prompt's and stays until the switch retires it.
+    Vars: `r`, one `identity.template_rows` row (its keys are `user.j2`'s),
+    with the candidates the item offers and no others: a candidate whose id
+    the builder drops (unofferable, or colliding once normalised) is shown
+    nowhere. Every key is always passed; a blank one renders nothing. -#}
+Proposed {{ "plot thread" if r.kind == "thread" else "commitment" }}: {{ r.title }}
+Beat: {{ r.beat }}
+{%- if r.status %}
+Status: {{ r.status }}
+{%- endif %}
+{%- if r.commitment_kind %}
+Kind: {{ r.commitment_kind }}
+{%- endif %}
+{%- if r.due %}
+Due: {{ r.due }}
+{%- endif %}
+{%- if r.quote or r.speaker or r.certainty is not none %}
+Cited:
+{%- if r.quote %} "{{ r.quote }}"{% endif %}
+{%- if r.speaker %}{% if r.quote %} —{% endif %} {{ r.speaker }}{% endif %}
+{%- if r.certainty is not none %}{% if r.quote or r.speaker %},{% endif %} certainty {{ r.certainty }}{% endif %}
+{%- endif %}
+{%- if r.why_new %}
+Why new: {{ r.why_new }}
+{%- endif %}
+{%- if r.distinguished_from %}
+Distinguished from: {{ r.distinguished_from | join(", ") }}
+{%- endif %}
+Candidates:
+{%- for c in r.candidates %}
+- {{ c.line }}
+{%- for beat in c.earlier %}
+  Earlier: {{ beat }}
+{%- endfor %}
+  signals: {{ c.signal_text }}
+{%- endfor %}

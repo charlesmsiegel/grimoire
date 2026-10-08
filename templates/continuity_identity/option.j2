@@ -1,0 +1,14 @@
+{#- One decision of the duplicate check's `decision` choice, described
+    (`identity.build_items` renders it once per option). Vars: `decision` --
+    "existing", "new" or "uncertain", the option's id, which `decide/user.j2`
+    lists beside this text. Each description is that decision's bullet in
+    the legacy one-call prompt (`system.j2`), word for word after its quoted
+    word (`verify_templates.py`'s IDENTITY_OPTIONS holds each, by decision);
+    the existing bullet's id sentence is `record.j2`'s. -#}
+{%- if decision == "existing" -%}
+only when a listed candidate is the same narrative question or obligation, so the row's beat simply moves that record forward.
+{%- elif decision == "new" -%}
+when the row is a different question, a continuation, or a related subplot: something that grew out of a listed record but is business of its own deserves a record of its own.
+{%- elif decision == "uncertain" -%}
+when the transcript cannot tell: the cited evidence and the beats do not settle whether the row and a candidate are the same business.
+{%- endif -%}
