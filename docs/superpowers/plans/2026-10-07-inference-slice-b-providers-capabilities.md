@@ -169,7 +169,7 @@
 - `LLMClient._provider` passes `effective["effective"]` to the `anthropic` adapter and keeps today's call shapes for the other three (it computes per attempt, so the facade's fallback is covered).
 - `store/inference/controls.preview(preset_id, conn, model) -> dict` — `llm_sampling.effective` over the lowered dict plus `source` per control from capabilities; `Attempt.controls = llm_sampling.effective(attempt.conn)`.
 - `sampler_presets.from_sillytavern` ignores any reasoning field.
-- [ ] **Step 1: Failing tests:** `test_llm_sampling.py` and `test_sampler_presets_*` unmodified and green; `table()` nine rows; `validate` choices; anthropic temperature case (Review Focus 4); reasoning per adapter; GLM legacy unchanged (`test_reasoning_display.py`); OpenAI `max_completion_tokens`; `_preset_refusal` still matches on sent names.
+- [ ] **Step 1: Failing tests:** `test_llm_sampling.py` and `test_sampler_presets_*` unmodified and green; `table()` nine rows; `validate` choices; anthropic temperature case (Review Focus 4); reasoning per adapter; GLM legacy unchanged (`test_reasoning_display.py`); OpenAI `max_completion_tokens`; `_preset_refusal` still matches on sent names, and on every field each sent control put on the wire (`llm_sampling.sent_fields`: top-level keys, dotted nested paths such as `output_config.effort`, and the nested leaf, a `type` discriminator only inside a path).
 - [ ] **Step 2–4:** FAIL → implement → PASS incl. `tests/test_inference_equivalence.py tests/test_llm.py`.
 - [ ] **Step 5: Commit** — `feat(llm): one function decides what each control sends`
 

@@ -480,6 +480,29 @@ class PresetRefusalError(LLMError):
     Every `except LLMError` still catches it, with the same kind and status."""
 
 
+#: Keys that select a variant rather than carry a setting: a refusal naming one
+#: alone (a content block's `type`) is not about the control that sent it, and
+#: one that IS names its parent (`thinking.type`, `thinking`) anyway.
+_DISCRIMINATORS = frozenset({"type"})
+
+
+def _wire_spellings(share: dict, prefix: str = "") -> set[str]:
+    """Every name a provider could echo for the fields in `share`: each key, the
+    dotted path of each nested key (`output_config.effort`) and the nested key
+    itself (`effort`), lowercased -- a discriminator only as part of a path."""
+    names: set[str] = set()
+    for key, value in share.items():
+        if not isinstance(key, str):
+            continue
+        path = f"{prefix}{key}".lower()
+        names.add(path)
+        if prefix and key not in _DISCRIMINATORS:
+            names.add(key.lower())
+        if isinstance(value, dict):
+            names |= _wire_spellings(value, f"{path}.")
+    return names
+
+
 def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     """The error to raise in place of `exc` when it is a preset being refused.
 
@@ -495,20 +518,24 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     """
     if exc.status not in PRESET_REFUSAL_STATUSES:
         return None
-    sent = llm_sampling.sent_names(conn)
+    shares = llm_sampling.sent_fields(conn)
+    sent = list(shares)
     # Only when the provider's message NAMES something that was sent. A 400 is
     # also what a context-length overflow or an unknown model id gets, and with
     # a preset attached those must still reach the fallback and the health
     # verdict exactly as they did before presets existed. Matched on every
-    # spelling a provider might echo back: the canonical name, the wire name
-    # it was sent under (`max_completion_tokens`, `stop_sequences`,
-    # `reasoning`, `thinking`), the wire duplicate (`repeat_penalty`), and the
-    # hyphen/space forms prose uses.
+    # spelling a provider might echo back: the canonical name and its
+    # hyphen/space forms prose uses, and every field the control actually put
+    # on the wire (`_wire_spellings`) -- `max_completion_tokens`,
+    # `stop_sequences`, `repeat_penalty` beside `repetition_penalty`, and the
+    # reasoning control's whole share: adaptive thinking is sent as `thinking`
+    # AND `output_config.effort`, and the Anthropic API's refusal of the effort
+    # names only the second.
     detail = (exc.detail or "").lower()
-    wires = llm_sampling.effective(conn)["controls"] if sent else {}
     spellings = {name: {name, name.replace("_", "-"), name.replace("_", " "),
-                        wires[name]["wire"] or name}
+                        *_wire_spellings(shares[name])}
                  for name in sent}
+    # llama.cpp's spelling, whichever one this endpoint was sent.
     spellings.get("repetition_penalty", set()).add("repeat_penalty")
     if not any(form in detail for forms in spellings.values() for form in forms):
         return None

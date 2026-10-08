@@ -595,6 +595,47 @@ async def test_a_refused_effort_is_a_preset_refusal():
     assert "fallback connection was not tried" in exc.value.detail
 
 
+def _adaptive_refusal(why):
+    provider = RefusingProvider(failing={"claude-opus-4-7"}, status=400, why=why)
+    client = LLMClient(openrouter=provider, claude=provider, openai_compatible=provider,
+                       anthropic=provider, timeout=0, retries=0,
+                       fallback=lambda: {"id": "b", "kind": "openrouter", "model": "backup",
+                                         "api_key": "k"})
+    conn = _claude_api({"reasoning_effort": "high"}, CURRENT, id="a", api_key="k")
+    assert ls.effective(conn)["effective"]["output_config"] == {"effort": "high"}
+    return provider, client, conn
+
+
+@pytest.mark.parametrize("why", [
+    "output_config.effort 'high' is not supported by this model",
+    "Unsupported field: output_config",
+    "effort is not supported here"])
+async def test_an_adaptive_effort_refused_by_its_effort_field_is_a_preset_refusal(why):
+    """Adaptive effort is sent as `thinking` AND `output_config.effort`; a
+    refusal naming only the second is still this preset's control refused."""
+    provider, client, conn = _adaptive_refusal(why)
+    with pytest.raises(LLMError) as exc:
+        [c async for c in client.stream([], conn)]
+    assert "fallback connection was not tried" in exc.value.detail
+    assert [m for m, _ in provider.calls] == ["claude-opus-4-7"]
+
+
+async def test_an_unrelated_400_beside_an_adaptive_effort_still_falls_back():
+    provider, client, conn = _adaptive_refusal("prompt is too long: 300000 tokens")
+    chunks = [c async for c in client.stream([], conn)]
+    assert "from backup" in "".join(chunks)
+    assert [m for m, _ in provider.calls] == ["claude-opus-4-7", "backup"]
+
+
+def test_a_thinking_type_is_not_a_spelling_of_its_own():
+    """`thinking.type` is a discriminator, not a setting: a 400 about some
+    other `type` (a content block's) must not read as the preset refused."""
+    exc = LLMError("bad_response", "messages.0.content.0.type: Input should be 'text'",
+                   status=400)
+    from grimoire.llm import _preset_refusal
+    assert _preset_refusal(exc, _claude_api({"reasoning_effort": "high"}, CURRENT)) is None
+
+
 # ---- the preset store ----
 @pytest.fixture()
 def home(monkeypatch, tmp_path):

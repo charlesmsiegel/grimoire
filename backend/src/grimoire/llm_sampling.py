@@ -566,6 +566,31 @@ def sent_names(conn: dict) -> list[str]:
     return [name for name in CONTROLS if _sent(eff, name)]
 
 
+def sent_fields(conn: dict) -> dict[str, dict]:
+    """`{canonical name: that control's share of the wire body}` for every
+    control `sent_names` lists, in the same order.
+
+    A sampler's share is its one field (and `repeat_penalty` beside
+    `repetition_penalty` where both are sent); the reasoning control's is every
+    field it wrote -- adaptive thinking is `thinking` AND `output_config`, and a
+    provider refusing it may name either. `llm._preset_refusal` reads the
+    spellings a refusal could echo from here."""
+    eff = effective(conn)
+    shares: dict[str, dict] = {}
+    for name in CONTROLS:
+        if not _sent(eff, name):
+            continue
+        if name == REASONING_PARAM.name:
+            shares[name] = reasoning_wire(eff)
+            continue
+        wire = eff["controls"][name]["wire"]
+        share = {wire: eff["effective"][wire]}
+        if wire == "repetition_penalty" and "repeat_penalty" in eff["effective"]:
+            share["repeat_penalty"] = eff["effective"]["repeat_penalty"]
+        shares[name] = share
+    return shares
+
+
 def report(conn: dict | None) -> dict | None:
     """What a reader is shown about this connection's sampling, or None when
     nothing was resolved for it at all.
