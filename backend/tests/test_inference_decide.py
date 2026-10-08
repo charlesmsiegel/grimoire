@@ -690,6 +690,82 @@ def test_a_chunk_answered_on_its_second_re_send_did_not_fail(client):
     assert got.served == (("spare", "vendor/spare"),)
 
 
+def _clock_after_the_first_call(monkeypatch):
+    """An absorb budget (`routes.scenes._Budget`) whose clock runs out the
+    moment the first call it ran returns: every later call is refused unsent."""
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    budget = routes.scenes._Budget(60)
+
+    async def around(call, holder):
+        try:
+            return await budget.run(call)
+        finally:
+            clock[0] = 1e6
+    return around
+
+
+@pytest.mark.parametrize("second", ["refused", "server"])
+def test_a_re_send_the_clock_stopped_is_the_clocks_however_it_is_composed(
+        client, monkeypatch, second):
+    """Review 2 #1: the primary refused the structured field, and the fallback
+    refused it too (or failed with a 500); the absorb clock then refused each
+    prompt-only re-send. The routes' failures compose into one sentence, which
+    is no longer the clock's sentinel -- but they are kept (`words`), so the
+    absorb still reads its own clock as the cause."""
+    _store(client)
+    _flagged(spare=True)
+    provider = SequencedProvider([
+        _refused_schema(),
+        _refused_schema() if second == "refused" else LLMError("server", "oops", status=500)])
+    with pytest.raises(LLMError) as exc:
+        _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+                around=_clock_after_the_first_call(monkeypatch))
+    assert len(provider.requests) == 2               # the re-sends never left
+    assert routes.scenes.BUDGET_EXHAUSTED in exc.value.detail
+    assert exc.value.detail != routes.scenes.BUDGET_EXHAUSTED
+    assert any(isinstance(w, routes.scenes.BudgetRefused) for w in exc.value.words)
+    assert routes.scenes._budget_overrun(exc.value)
+
+
+def test_a_re_send_cut_off_then_one_refused_is_the_clocks(client):
+    """The reviewer's probe, word for word: both routes refuse the field, the
+    primary's re-send is cut off by the clock as it runs, and the fallback's
+    is refused before it is sent. Before the routes were kept, the absorb read
+    this as a provider failure (`_budget_overrun` False)."""
+    _store(client)
+    _flagged(spare=True)
+    provider = SequencedProvider([_refused_schema(), _refused_schema()])
+    calls: list[object] = []
+
+    async def around(call, holder):
+        calls.append(call)
+        if len(calls) == 1:
+            return await call
+        call.close()
+        if len(calls) == 2:
+            raise LLMError("timeout", routes.scenes.BUDGET_EXHAUSTED)
+        raise routes.scenes.BudgetRefused("timeout", routes.scenes.BUDGET_EXHAUSTED)
+
+    with pytest.raises(LLMError) as exc:
+        _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+                around=around)
+    assert len(calls) == 3
+    assert exc.value.detail == (f"{routes.scenes.BUDGET_EXHAUSTED} — and the fallback "
+                                f"failed too: {routes.scenes.BUDGET_EXHAUSTED}")
+    assert [type(w).__name__ for w in exc.value.words] == ["LLMError", "BudgetRefused"]
+    assert routes.scenes._budget_overrun(exc.value)
+
+
+def test_a_composed_failure_nobodys_clock_stopped_is_not_an_overrun(client):
+    """The routes kept are asked, not assumed: two provider failures composed
+    are not the absorb's clock."""
+    composed = llm.routes_failed([LLMError("network", "connection reset"), _busy()])
+    assert [w.kind for w in composed.words] == ["network", "rate_limit"]
+    assert not routes.scenes._budget_overrun(composed)
+    assert llm.routes_failed([_busy()]).words == ()
+
+
 def test_a_batch_whose_every_chunk_answered_carries_no_error(client):
     _store(client)
     got = _decide(FakeLLM([[decision_reply({"over": True})]]), [_item()])

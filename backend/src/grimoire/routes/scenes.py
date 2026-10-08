@@ -1981,8 +1981,17 @@ def _budget_overrun(exc: BaseException) -> bool:
     `_Budget.run` deliberately reports both as the same LLMError kind so callers
     need no extra branch to *handle* them -- but a phase needs to *say* which
     happened, because only one of them is fixed by a larger budget. The detail
-    is the sentinel `_Budget.run` sets, not a substring guess."""
-    return isinstance(exc, LLMError) and exc.detail == BUDGET_EXHAUSTED
+    is the sentinel `_Budget.run` sets, not a substring guess.
+
+    A call whose routes failed composed (`LLMError.words`) is the clock's when
+    the clock stopped any one of them. That happens only to `decide`'s
+    prompt-only re-sends, each run under this budget on its own after the
+    routes refused the structured field: the composed sentence names both
+    routes, so it never equals the sentinel, yet a re-send the clock cut off
+    or never let go out is a route a larger budget would have let answer."""
+    if not isinstance(exc, LLMError):
+        return False
+    return exc.detail == BUDGET_EXHAUSTED or any(_budget_overrun(w) for w in exc.words)
 
 
 def _phase_report(dossiers: dict, voice: dict, mechanics: dict,
@@ -2200,10 +2209,15 @@ async def _identify(cid: str, sid: str, client: LLMClient, resolved: UsableInfer
         # Deliberately covers `EmbeddingsError` (an `LLMError`) too, so it can
         # never reach `_absorb_work`'s fatal `except LLMError`.
         store.errors.record_exception(exc, "continuity-identity", campaign=cid, scene=sid)
-        reason = f"duplicate check failed: {exc}"
+        overrun = _budget_overrun(exc)
+        # The clock's reason, worded as `_resolve_identity` words it for a
+        # batch: a failure composed from routes the clock stopped would
+        # otherwise read as the provider's, the sentinel twice over.
+        reason = ((_IDENTITY_CUT_SHORT if block["attempted"] else _IDENTITY_REFUSED)
+                  if overrun else f"duplicate check failed: {exc}")
         if exam is not None:
             exam.hint_only(reason)
-        block.update(status="failed", budget_exhausted=_budget_overrun(exc), reason=reason)
+        block.update(status="failed", budget_exhausted=overrun, reason=reason)
     try:
         return _identity_outcome(cid, sid, exam, parsed, block), block
     except Exception as exc:  # noqa: BLE001 -- a defect in the rewrite, counts or log row: a failed phase, the rows staged as extracted

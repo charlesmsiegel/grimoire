@@ -784,9 +784,8 @@ class SchemaRefusalError(LLMError):
                  status: int | None = None, code: str | None = None, *,
                  attempts: tuple[dict | None, ...] = (),
                  words: tuple[LLMError, ...] = ()):
-        super().__init__(kind, detail, retry_after, status=status, code=code)
+        super().__init__(kind, detail, retry_after, status=status, code=code, words=words)
         self.attempts = attempts
-        self.words = words
 
 
 def routes_failed(words: Sequence[LLMError]) -> LLMError:
@@ -808,14 +807,18 @@ def routes_failed(words: Sequence[LLMError]) -> LLMError:
     Except when the primary's failure is its structured field refused
     (`SchemaRefusalError`): that is a mode the call can drop, not the
     connection's word, so the fallback's failure -- a rate limit, and the
-    window it named -- is the one that says what actually stopped the call."""
+    window it named -- is the one that says what actually stopped the call.
+
+    Composed, it keeps the routes' own failures as `words`, so a fact the one
+    sentence cannot carry -- a caller's clock having stopped one of them --
+    is still there to be asked."""
     if len(words) == 1:
         return words[0]
     primary, fallback = words[0], words[-1]
     word = (fallback if isinstance(primary, SchemaRefusalError)
             and not isinstance(fallback, SchemaRefusalError) else primary)
     return LLMError(word.kind, f"{primary.detail} — and the fallback failed too: "
-                               f"{fallback.detail}", word.retry_after)
+                               f"{fallback.detail}", word.retry_after, words=tuple(words))
 
 
 def _said(exc: LLMError) -> str:

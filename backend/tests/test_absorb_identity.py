@@ -1301,6 +1301,60 @@ def test_a_chunk_error_is_reported_over_a_retried_schema_refusal(client, scene, 
         ("error", "network"), ("error", "bad_response"), ("ok", None)]
 
 
+class _SpendsOnTheSecondRefusal(SequencedProvider):
+    """Runs the absorb clock out as the fallback's structured call is refused,
+    so the moded chain went out and each prompt-only re-send is refused unsent."""
+
+    def __init__(self, script, clock):
+        super().__init__(script)
+        self.clock = clock
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        if len(self.requests) == 2:     # the extraction, the primary's refusal
+            self.clock[0] = 1e6
+        async for chunk in super().stream(messages, model, *args, **kwargs):
+            yield chunk
+
+
+def test_both_routes_refusing_and_the_clock_stopping_the_re_sends_is_the_clock(
+        client, scene, monkeypatch):
+    """Review 2 #1: both Decision routes refuse the structured field and the
+    absorb clock stops the prompt-only re-sends. Their failures compose into a
+    sentence that is no longer the clock's sentinel; the phase still reports
+    the clock, worded as a check that ran partly -- not a provider failure
+    whose reason names the budget twice."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"},
+        "fallback": {"provider": "spare", "model": "vendor/spare"}}}})
+    for conn_id, model in (("openrouter", "vendor/active"), ("spare", "vendor/spare")):
+        rev = store.llm_connections.read_connection_raw(conn_id)["rev"]
+        store.llm_connections.set_cached_models(
+            conn_id, [{"id": model, "params": ["temperature", "structured_outputs"]}], rev)
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    refused = llm_errors.LLMError(
+        "bad_response", "response_format: json_schema strict mode is not supported", status=400)
+    provider = _SpendsOnTheSecondRefusal(
+        [[EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER], refused, refused,
+         [decision_reply(_row("new"))]], clock)
+    _install(client, LLMClient(openrouter=provider, timeout=0, retries=0))
+
+    body = _absorb(client, cid, sid)
+
+    _extraction_call, *identity_calls = provider.requests
+    assert [(r["model"], "schema" in r["kwargs"]) for r in identity_calls] == [
+        ("vendor/active", True), ("vendor/spare", True)]
+    block = body["identity"]
+    assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
+        "failed", True, True)
+    assert block["reason"] == routes.scenes._IDENTITY_CUT_SHORT
+    assert _checks(body) == [("unchecked", "hint_only")]
+
+
 def test_a_budget_spent_after_a_garbled_chunk_says_the_check_ran_partly(
         client, scene, monkeypatch):
     """M3: a chunk was sent and came back garbled, then the clock refused the
