@@ -23,8 +23,9 @@ _Pending: filled from the measurement campaign still running when this was writt
 | head (B) | `908200e` | Every phase built (A–G), the last commit before the end-review fixes. |
 | final | `9f12de0` and later | B plus the end-review fixes: six self-tests, `faulthandler_timeout`, the CI budget step. Its CI runs are in §3; the evidence runs of §9 used it. |
 
-No commit on the branch changes `backend/src`, so every comparison is between
-two test suites over one production snapshot.
+Both snapshots carry `a219190`'s `backend/src` unchanged, so every comparison
+is between two test suites over one production snapshot. The one production
+edit on the branch comes after both (§11, mypy) and changes no behaviour.
 
 **Local machine.** One container: Linux x86-64, 4 logical CPUs, 15 GiB, running
 as root (§11). Python 3.11.17 (both sides of the 3.11 comparisons), 3.14.6;
@@ -213,8 +214,12 @@ never elapse. None appears among the profile's slow tests.
   skips every path with a `build` component, so a checkout that itself sits
   under a directory named `build` fails it. Found because the first measurement
   worktrees lived under `build/`; they were moved. Pre-existing; not changed.
-- **mypy is red on `main`** since `a219190` (`routes/campaigns.py`, one new
-  `union-attr`), and so on this branch; a patch is proposed on the pull request.
+- **mypy was red on `main`** since `a219190` (`routes/campaigns.py`, one new
+  `union-attr` in `_absorbed_cast_refs`, which read `scene.get("cast")` twice
+  so the type check could not narrow the second read). Fixed on this branch at
+  the user's request by reading it once; the behaviour is unchanged, and
+  `a219190`'s own tests of that function (`test_absorbed_cast_is_legacy_appearance_evidence`,
+  `test_malformed_absorbed_cast_does_not_break_appearances`) pass.
 - **The budget's figures** come from the first parallel CI runs and should be
   revisited after a few more.
 
