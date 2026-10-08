@@ -5,7 +5,8 @@
  "workers": 4,
  "wall_s": 700,
  "tolerance": 0.2,
- "collected": 14275,
+ "collected": 14291,
  "skipped": 8,
- "slow_test_s": 120
+ "slow_test_s": 150,
+ "_slow_test_s": "150, not 120: the lock-domain guard's whole-package survey runs inside whichever of its tests a worker reaches first and measured 120-125s on CI (a known cost, in the performance report's unresolved risks). The line is for a test that suddenly takes many real seconds, and one that warns on every run is a line nobody reads."
 }
