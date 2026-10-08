@@ -240,7 +240,7 @@ def test_an_undecodable_reply_fails_the_run_and_keeps_candidates(client):
     One refresh, one settle. Merged (test-suite acceleration, C2) with
     `test_an_undecodable_reply_says_the_findings_were_saved`. Kept apart from
     the network-failure test on purpose: the two failures leave `_adjudicate`
-    by different branches (`LLMError` vs `parse_output` returning None)."""
+    by different branches (`decide` raising `LLMError` vs `proposals_of` returning None)."""
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
     _key(client)

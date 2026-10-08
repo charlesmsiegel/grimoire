@@ -175,14 +175,17 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisio
     """The structured backend: one metered `complete(schema=)` per chunk
     (`decisions.chunks`), each read back by `decisions.parse`. Each chunk runs
     down the attempt chain on its own, so what answered is collected per chunk
-    (`decisions.Decision.served`), never read off the last one."""
+    (`decisions.Decision.served`), never read off the last one, and so is
+    each failed chunk's own error (`decisions.Decision.errors`): the chunk's
+    final word, after `_ask`'s re-sends, never one of the calls it made on
+    the way there."""
     assert call.resolved.conn is not None   # `decide` refused a None conn
     conn = _with_mode(call.resolved.conn, "structured")
     explain = bool(call.explain)
     results: list[decisions.ItemResult | None] = [None] * len(items)
     rows: list[dict] = []
     failed: list[tuple[int, tuple[decisions.Item, ...]]] = []
-    first_error: LLMError | None = None
+    errors: list[LLMError] = []
     served: list[tuple[str, str]] = []
     for offset, chunk in decisions.chunks(items):
         # Off the loop: the template loader touches the filesystem.
@@ -198,12 +201,11 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisio
                 served.append(by)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the others.
-            first_error = first_error or error
+            errors.append(error)
             failed.append((offset, chunk))
     if not served:
         # No chunk answered: the provider's error is the caller's (ruling 8).
-        assert first_error is not None
-        raise first_error
+        raise errors[0]
     for offset, chunk in failed:
         for index, result in enumerate(decisions.unanswered(chunk, "error")):
             results[offset + index] = result
@@ -212,7 +214,8 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisio
     provider, model = served[0] if len(served) == 1 else ("", "")
     return decisions.Decision(items=tuple(r for r in results if r is not None),
                               backend="structured", provider=provider, model=model,
-                              usage=tuple(rows), served=tuple(served))
+                              usage=tuple(rows), served=tuple(served),
+                              errors=tuple(errors))
 
 
 #: Every backend `decide` can dispatch to, by `ResolvedInference.decision_mode`.

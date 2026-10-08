@@ -1538,35 +1538,7 @@ def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None
     return (None, why) if resolved is None else (resolved.conn, "")
 
 
-def _watching(around, failures: list[LLMError]):
-    """`around` for `inference.decide`, also keeping in `failures` the error of
-    each facade call that failed for good, in the order they failed.
-
-    What a chunk's failure leaves otherwise is an `Answer(None, "error")` per
-    item and a ledger row whose `error` is a bare kind -- and the rows cannot
-    say which chunk filed them: a chunk whose provider refused the structured
-    field files an `error` row and is then sent again without it (spec M-4),
-    so the row before an answered chunk's `ok` may be its own refusal or the
-    chunk before it failing (M1). The exception itself can say: a
-    `llm.SchemaRefusalError` is the one `decide` retries, so it is never a
-    chunk's failure, and every other `LLMError` through here is one --
-    `BudgetRefused` included, which is never sent and files no row. Keeping
-    the exception rather than its kind is what lets a failure report the
-    status and `retry_after` the same error has when it fails the whole call
-    (M2)."""
-    async def watched(call, holder):
-        try:
-            return await around(call, holder)
-        except llm.SchemaRefusalError:
-            raise
-        except LLMError as exc:
-            failures.append(exc)
-            raise
-    return watched
-
-
-def _decide_error(decision: decisions.Decision, qid: str,
-                  failures: list[LLMError]) -> LLMError | None:
+def _decide_error(decision: decisions.Decision, qid: str) -> LLMError | None:
     """The provider error a decided batch must report as its own failure, or
     None when there is none to report (M12).
 
@@ -1574,18 +1546,26 @@ def _decide_error(decision: decisions.Decision, qid: str,
     something, and a chunk that failed beside it leaves only its own items
     unanswered -- or when no item's answer carries reason ``error``, so
     nothing failed and the call site reads the batch as it is. Otherwise every
-    chunk failed or was garbled, and at least one failed: the first failure
-    `_watching` kept (the one `decide` itself raises when no chunk answered),
-    so a chunk error beside a garbled chunk is reported as the error it was,
-    never as an unreadable reply, and never as a later chunk's schema refusal
-    that was retried and answered (M1). With nothing kept -- a call site that
-    did not watch -- it is a bare ``error``."""
+    chunk failed or was garbled, and at least one failed: the first failed
+    chunk's own error (`Decision.errors`, the one `decide` itself raises when
+    no chunk answered), so a chunk error beside a garbled chunk is reported as
+    the error it was, never as an unreadable reply.
+
+    It is read off the decision rather than watched through `around` because
+    only `decide` knows which call was a chunk's last word: a chunk whose
+    routes refused the structured field is re-sent once per refusing route
+    (spec M-4), so a re-send that failed may be followed by one that answered
+    (that chunk did not fail), and a chunk whose re-sends all failed reports
+    every route's failure composed, which no single call raised (M1, M2). An
+    `LLMError` keeps the status and `retry_after` the same error has when it
+    fails the whole call; `BudgetRefused`, never sent, is one too."""
     answers = [result.answers.get(qid) for result in decision.items]
     if any(a is not None and decisions.was_read(a) for a in answers):
         return None
     if not any(a is not None and a.reason == "error" for a in answers):
         return None
-    return failures[0] if failures else LLMError("error")
+    first = decision.errors[0] if decision.errors else None
+    return first if isinstance(first, LLMError) else LLMError("error")
 
 
 def computes_only(fn):

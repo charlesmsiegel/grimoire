@@ -76,7 +76,6 @@ from .common import (
     _llm_http_error,
     _noting,
     _soft_resolved,
-    _watching,
     computes_only,
     get_llm,
     require_inference,
@@ -666,7 +665,6 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     # Both render templates, so both run off the loop (the loader stats files).
     items = await run_in_threadpool(reconcile.build_items, payload)
     explain = await run_in_threadpool(reconcile.explain)
-    failures: list[LLMError] = []
     try:
         # Each chunk runs under the full ceiling, inside its own meter
         # (`around`): an overrun is that meter's `error/timeout` row, noted
@@ -674,8 +672,8 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
         decision = await operations.decide(
             "continuity-reconcile", items, client=client, resolved=resolved, explain=explain,
             campaign=cid,
-            around=_watching(lambda call, holder: _bounded_call(
-                call, on_timeout=_noting(client, resolved.conn, holder)), failures))
+            around=lambda call, holder: _bounded_call(
+                call, on_timeout=_noting(client, resolved.conn, holder)))
     except LLMError as exc:
         result["llm"] = "failed"
         return _failed(result, run_error(_llm_http_error(exc))), {}
@@ -686,7 +684,7 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
         result["llm"] = "failed"
         return _failed(result, {"kind": "invalid_request", "detail": str(exc),
                                 "status": 500}), {}
-    if error := _decide_error(decision, reconcile.DECISION_ID, failures):
+    if error := _decide_error(decision, reconcile.DECISION_ID):
         # A chunk failed and no chunk was read (M12): the run fails with that
         # error, never as an undecodable reply -- and as that error fails a
         # whole call, its status by kind and a rate limit's window kept (M2).

@@ -50,7 +50,6 @@ from .common import (
     _soft_inference,
     _soft_resolved,
     _turn_override,
-    _watching,
     _write_response,
     computes_only,
     draft_completion,
@@ -2105,14 +2104,13 @@ async def _resolve_identity(cid: str, sid: str, client: LLMClient,
     # `_noting` reads the live holder, so a fallback that had taken over is the
     # connection told. The attempt is recorded by `run`, which alone can decide
     # it atomically with the deadline.
-    failures: list[LLMError] = []
     decision = await operations.decide(
         "continuity-identity", items, client=client, resolved=resolved, explain=explain,
         campaign=cid, scene=sid,
-        around=_watching(lambda call, holder: budget.run(
+        around=lambda call, holder: budget.run(
             call, lambda: block.__setitem__("attempted", True),
-            on_timeout=_noting(client, resolved.conn, holder)), failures))
-    if error := _decide_error(decision, continuity_identity.DECISION_ID, failures):
+            on_timeout=_noting(client, resolved.conn, holder)))
+    if error := _decide_error(decision, continuity_identity.DECISION_ID):
         # A chunk failed and no chunk was read: the failure is the phase's
         # (M12), by the failing chunk's own kind -- never the unreadable reply
         # the garbled chunk beside it was.

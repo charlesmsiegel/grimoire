@@ -22,6 +22,7 @@ from grimoire import decisions, inference, llm, llm_usage, prompts, routes
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm import ATTEMPTED, FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
+from grimoire.routes import common
 from grimoire.store.inference import migrate, settings
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import (
@@ -647,6 +648,53 @@ def test_a_refused_fallback_is_retried_without_the_mode(client):
     assert [(r["decision_mode"], r["model"]) for r in rows] == [
         ("structured", "vendor/spare"), ("structured", "vendor/spare")]
     assert seen == [("vendor/active", "network"), ("vendor/spare", None)]
+
+
+def test_a_failed_chunks_error_is_its_composed_last_word(client):
+    """A chunk whose refused primary is re-sent and fails again reports what
+    `decide` would raise for it alone -- every route's failure composed --
+    on `Decision.errors`, never the re-send's bare error; and that is what a
+    batch with nothing read reports (`common._decide_error`)."""
+    _store(client)
+    _flagged()
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([_refused_schema(), _busy(),
+                                  LLMError("network", "connection reset"), ["no json"]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert [r.answers["over"].reason for r in got.items] == ["error"] * 8 + ["unreadable"]
+    (error,) = got.errors
+    assert isinstance(error, LLMError) and not isinstance(error, llm.SchemaRefusalError)
+    assert (error.kind, error.detail) == (
+        "network", "connection reset — and the fallback failed too: slow down")
+    assert common._decide_error(got, "over") is error
+
+
+def test_a_chunk_answered_on_its_second_re_send_did_not_fail(client):
+    """Both routes refused the first chunk: the primary's re-send fails and the
+    fallback's answers (garbled), so that chunk failed nothing. The second
+    chunk fails on both routes. With nothing read, the batch's error is the
+    second chunk's -- not the first chunk's failed re-send on the way to its
+    answer (M1)."""
+    _store(client)
+    _flagged(spare=True)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([_refused_schema(), _refused_schema(),
+                                  LLMError("network", "connection reset"), ["no json"],
+                                  _busy(), _busy()])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert len(provider.requests) == 6
+    assert [r.answers["over"].reason for r in got.items] == ["unreadable"] * 8 + ["error"]
+    (error,) = got.errors
+    assert error.kind == "rate_limit"
+    assert common._decide_error(got, "over") is error
+    assert got.served == (("spare", "vendor/spare"),)
+
+
+def test_a_batch_whose_every_chunk_answered_carries_no_error(client):
+    _store(client)
+    got = _decide(FakeLLM([[decision_reply({"over": True})]]), [_item()])
+    assert got.errors == ()
+    assert common._decide_error(got, "over") is None
 
 
 def test_each_refusing_route_is_retried_once_only(client):

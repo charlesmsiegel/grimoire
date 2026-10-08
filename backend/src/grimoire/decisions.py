@@ -213,6 +213,13 @@ class Decision:
     model: str = ""
     usage: tuple[dict[str, Any], ...] = ()
     served: tuple[tuple[str, str], ...] = ()
+    #: Each failed chunk's error, in chunk order: what `decide` would have
+    #: raised for that chunk alone -- after its schema-refusal re-sends, so a
+    #: refusing route's failure is composed with the others' as the facade
+    #: composes any both-failed call. An `llm_errors.LLMError`; typed loosely
+    #: because this module imports nothing from the package. Empty when every
+    #: chunk answered.
+    errors: tuple[Exception, ...] = ()
 
     def __post_init__(self) -> None:
         if self.backend not in BACKENDS:
