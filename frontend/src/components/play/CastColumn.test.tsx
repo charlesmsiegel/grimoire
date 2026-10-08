@@ -15,12 +15,12 @@ const CAST: Actor[] = [
   { kind: "characters", id: "aud", role: "npc", name: "Sister Aud" },
 ];
 const ROSTER: RosterEntry[] = [
-  { kind: "pcs", id: "wyle", version: "v1", role: "player", scenes: ["s1"] },
-  { kind: "characters", id: "aud", version: "v1", role: "npc", scenes: ["s1"] },
+  { kind: "pcs", id: "wyle", version: "v1", role: "player", scenes: ["s1"], appeared: true },
+  { kind: "characters", id: "aud", version: "v1", role: "npc", scenes: ["s1"], appeared: true },
   // played before, not here now — the grid must not show her
-  { kind: "characters", id: "reeve", version: "v1", role: "npc", scenes: ["s0"] },
+  { kind: "characters", id: "reeve", version: "v1", role: "npc", scenes: ["s0"], appeared: true },
   // named, never played
-  { kind: "characters", id: "unseen", version: "v1", role: "npc", scenes: [] },
+  { kind: "characters", id: "unseen", version: "v1", role: "npc", scenes: [], appeared: false },
 ];
 const BRIEFING: Briefing = {
   focus: ["Ferrant Wyle"],

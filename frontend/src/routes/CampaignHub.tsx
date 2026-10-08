@@ -221,7 +221,8 @@ export default function CampaignHub() {
         if (!live) return;
         // Same `kind:id` spelling `faces` keys on, and the same two kinds the
         // record stores its refs under.
-        const appeared = new Set(roster.map((r) => `${r.kind}:${r.id}`));
+        const appeared = new Set(roster.filter((r) => r.appeared)
+          .map((r) => `${r.kind}:${r.id}`));
         setCast({ chars: chars.filter((c) => appeared.has(`characters:${c.id}`)),
                   pcs: pcs.filter((p) => appeared.has(`pcs:${p.id}`)) });
       })

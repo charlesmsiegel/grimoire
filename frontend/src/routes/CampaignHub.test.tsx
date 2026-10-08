@@ -525,7 +525,7 @@ test("a budget that is set draws its bar", async () => {
 /** One row of the appearance record: this actor has been on stage. */
 function appeared(kind: string, id: string) {
   return { kind, id, version: "v1", role: kind === "pcs" ? "player" : "npc",
-           scenes: ["001--a"] };
+           scenes: ["001--a"], appeared: true };
 }
 
 test("the cast card names faces and marks the PCs", async () => {
@@ -749,7 +749,9 @@ test("the cast card shows only actors who have appeared", async () => {
       has_avatar: false },
   ]);
   (api.listAppearances as any).mockResolvedValue([
-    appeared("characters", "mara"), appeared("pcs", "seraphine"),
+    appeared("characters", "mara"),
+    { ...appeared("characters", "winifred"), scenes: [], appeared: false },
+    appeared("pcs", "seraphine"),
   ]);
   renderHub();
 

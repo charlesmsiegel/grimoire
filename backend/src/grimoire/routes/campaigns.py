@@ -1929,6 +1929,23 @@ def delete_pin(cid: str, ref: str, scope: str = "scene", sid: str = ""):
 
 
 # ---- campaign cast & suggestions ----
+def _absorbed_cast_refs(cid: str) -> set[str]:
+    """Actor refs preserved by absorbed scenes, for pre-presence campaigns."""
+    try:
+        chronicle = store.chronicle.read_chronicle(cid)
+    except Exception:  # noqa: BLE001 — a garbled chronicle loses only legacy evidence
+        return set()
+    if not isinstance(chronicle, dict):
+        return set()
+    return {
+        ref
+        for scene in chronicle.values()
+        if isinstance(scene, dict)
+        for ref in (scene.get("cast") if isinstance(scene.get("cast"), list) else [])
+        if isinstance(ref, str)
+    }
+
+
 @router.get("/campaigns/{cid}/appearances")
 def get_appearances(cid: str):
     """The appearance record, each row with its portrait's `avatar_v`.
@@ -1941,8 +1958,20 @@ def get_appearances(cid: str):
     """
     _campaign_root_or_404(cid)
     v = store.overlay.view(cid)       # one for every row
-    return [{**r, "avatar_v": store.overlay.avatar_v(cid, r["id"], r["version"], r["kind"], v=v)}
-            for r in store.appearances.roster(cid)]
+    records = store.appearances.record(cid)
+    absorbed = _absorbed_cast_refs(cid)
+    out = []
+    for r in store.appearances.roster(cid):
+        ref = f"{r['kind']}/{r['id']}"
+        record = records.get(ref, {})
+        appeared = bool(r["scenes"] or record.get("presence") or ref in absorbed)
+        out.append({
+            **r,
+            "appeared": appeared,
+            "avatar_v": store.overlay.avatar_v(
+                cid, r["id"], r["version"], r["kind"], v=v),
+        })
+    return out
 
 
 @router.get("/campaigns/{cid}/pcs")

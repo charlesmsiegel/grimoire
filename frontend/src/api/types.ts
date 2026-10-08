@@ -1180,6 +1180,8 @@ export type CastChanges = {
 export type Suggestion = { character: string; name: string; mentioned_by: string[] };
 export type RosterEntry = {
   kind: string; id: string; version: string; role: string; scenes: string[];
+  /** Whether this version lock has scene evidence and belongs in campaign cast. */
+  appeared: boolean;
   /** The token of the avatar `version` resolves to, spent as `?v=` so the
    *  portrait is cached immutable; null when there is no avatar. */
   avatar_v?: string | null;

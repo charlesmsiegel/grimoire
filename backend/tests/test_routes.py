@@ -845,6 +845,56 @@ def test_a_purged_character_version_cannot_be_given_campaign_art(client):
                       ).status_code == 200
 
 
+def test_appearances_distinguish_a_version_lock_from_cast_membership(client):
+    wid, cid = _campaign(client)
+    aid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    assert client.post(f"/api/campaigns/{cid}/characters/{aid}/pick-version",
+                       json={"version": "default"}).status_code == 200
+
+    row = client.get(f"/api/campaigns/{cid}/appearances").json()[0]
+    assert row["appeared"] is False
+
+    sid = client.post(f"/api/campaigns/{cid}/scenes", json={"title": "S"}).json()["id"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"kind": "characters", "id": aid}).status_code == 200
+    row = client.get(f"/api/campaigns/{cid}/appearances").json()[0]
+    assert row["appeared"] is True
+
+    assert client.delete(
+        f"/api/campaigns/{cid}/scenes/{sid}/cast/characters/{aid}").status_code == 200
+    row = client.get(f"/api/campaigns/{cid}/appearances").json()[0]
+    assert row["appeared"] is True
+
+
+def test_absorbed_cast_is_legacy_appearance_evidence(client):
+    wid, cid = _campaign(client)
+    aid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    assert client.post(f"/api/campaigns/{cid}/characters/{aid}/pick-version",
+                       json={"version": "default"}).status_code == 200
+    store.chronicle.absorb(cid, {
+        "id": "001--legacy", "one_line": "", "summary": "", "keywords": [],
+        "cast": [f"characters/{aid}"], "location": "", "date": "",
+    })
+
+    row = client.get(f"/api/campaigns/{cid}/appearances").json()[0]
+    assert row["appeared"] is True
+
+
+def test_malformed_absorbed_cast_does_not_break_appearances(client):
+    wid, cid = _campaign(client)
+    aid = client.post(f"/api/worlds/{wid}/characters", json={"name": "Mara"}).json()["character"]
+    assert client.post(f"/api/campaigns/{cid}/characters/{aid}/pick-version",
+                       json={"version": "default"}).status_code == 200
+    store.chronicle.absorb(cid, {
+        "id": "001--legacy", "one_line": "", "summary": "", "keywords": [],
+        "cast": None, "location": "", "date": "",
+    })
+
+    response = client.get(f"/api/campaigns/{cid}/appearances")
+    assert response.status_code == 200
+    assert response.json()[0]["appeared"] is False
+
+
 def test_copy_image_from_greeting_refuses_a_character_that_is_not_there(client):
     """The copy writes through `assets.put_image` like every other write on this
     surface, so it takes the same gate in both scopes: a typo'd destination
