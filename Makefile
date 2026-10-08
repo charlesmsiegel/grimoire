@@ -80,7 +80,7 @@ ADB = $(call fixpath,$(SDK_DIR)/platform-tools/adb)
         check check-py check-web check-lint check-mypy check-eslint \
         check-templates check-pydantic1 check-apk web-dist frontend-deps \
         baseline sync-phone sync-phone-apply \
-        test-py-fast test-py-failed test-py-profile test-py-parallel
+        test-py-fast test-py-failed test-py-profile
 
 apk:
 	$(GRADLEW) :app:assembleDebug $(if $(BUILD_PYTHON),-Pgrimoire.buildPython="$(BUILD_PYTHON)",)
@@ -134,15 +134,25 @@ check: check-lint check-mypy check-templates check-eslint check-web check-py che
 # with byte-identical settings.
 COV_ARGS = --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:skip-covered --cov-report=xml:backend/coverage.xml --cov-fail-under=$(COV_FLOOR)
 
-check-py:
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(COV_ARGS)
-
-# Parallel workers for the backend suite (pytest-xdist). WORKERS=0 is the
-# serial run, with no -n at all -- the one-variable rollback. DIST is xdist's
-# scheduler (load, loadfile, loadscope, loadgroup, worksteal).
-WORKERS ?= 0
+#
+# The suite runs across WORKERS pytest-xdist processes (both full backend runs
+# here, this one and check-pydantic1). Four is what a GitHub-hosted Linux
+# runner has, and a conservative number on a desktop with more: each worker is
+# a whole Python process holding the app, so more is not free. pytest-cov
+# combines the workers' data before the floor is checked, so the floor and the
+# XML are the whole suite's, exactly as serially -- test_parallel_harness.py
+# holds that, and that a red worker cannot be outvoted.
+#
+# WORKERS=0 is the serial run, with no -n at all: the one-variable rollback,
+# and the reference a parallel result is compared against. DIST is xdist's
+# scheduler; `load` was measured against `worksteal` and `loadfile` on this
+# suite (docs/superpowers/validation/2026-10-08-test-performance-report.md).
+WORKERS ?= 4
 DIST ?= load
 XDIST = $(if $(filter-out 0,$(WORKERS)),-n $(WORKERS) --dist=$(DIST),)
+
+check-py:
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(XDIST) $(COV_ARGS)
 
 # ---- development commands. NOT gates: none is named check-*, none is in
 # `check:` above, and each says so before it runs, so a green one cannot be
@@ -153,7 +163,6 @@ XDIST = $(if $(filter-out 0,$(WORKERS)),-n $(WORKERS) --dist=$(DIST),)
 #   make test-py-fast TESTS=backend ARGS="-k reroll"
 #   make test-py-failed                       what failed last time, only
 #   make test-py-profile [TESTS=...] [COV=1]  per-node phase profile + summary
-#   make test-py-parallel WORKERS=4 [DIST=load]  the gate's run, in parallel
 #
 # TESTS is relative to the repo root; ARGS goes to pytest as it is.
 TESTS ?= backend
@@ -171,15 +180,9 @@ test-py-failed:
 	@echo NOT A GATE: re-runs only what failed last time, without coverage. Exit 5 means nothing failed last time.
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend --lf --lfnf=none --tb=short $(ARGS)
 
-# The whole suite, with the gate's exact coverage arguments, across WORKERS
-# processes -- the opt-in parallel run measured against `check-py`'s serial one.
-test-py-parallel:
-	@echo NOT A GATE: the full suite across $(WORKERS) workers, scheduler $(DIST). make check-py is the gate.
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(XDIST) $(COV_ARGS) $(ARGS)
-
 test-py-profile:
 	@echo NOT A GATE: a diagnostic profile, written to $(PROFILE).
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q $(XDIST) --phase-profile=$(PROFILE) $(if $(COV),$(COV_ARGS),) $(ARGS)
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_ARGS),) $(ARGS)
 	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE)
 
 # `test:coverage`, not `test`: same suite, same pass/fail, plus it drops
@@ -250,7 +253,7 @@ check-pydantic1:
 	"$(call fixpath,$(VENV_PY))" -m pip install -q -e "./backend[dev]" "pydantic==1.10.*" "fastapi>=0.110,<0.116"
 	"$(call fixpath,$(VENV_PY))" -m pip check
 	"$(call fixpath,$(VENV_PY))" -c "import pydantic; assert pydantic.VERSION.startswith('1.10.'), pydantic.VERSION"
-	"$(call fixpath,$(VENV_PY))" -m pytest backend -q
+	"$(call fixpath,$(VENV_PY))" -m pytest backend -q $(XDIST)
 
 # A recipe action rather than a prerequisite list: as prerequisites, parallel
 # make could start gradle before the frontend bundle it packages exists.

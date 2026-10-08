@@ -76,12 +76,19 @@ locally with the same one-line command.
 |---|---|---|
 | `make check-lint` | ruff, against `lint-baselines/ruff.json` | lint |
 | `make check-mypy` | mypy, against `lint-baselines/mypy.json` | mypy |
-| `make check-py` | `pytest backend -q` under coverage, floored at `COV_FLOOR` | backend (py3.11, py3.14) |
+| `make check-py` | `pytest backend -q` under coverage, floored at `COV_FLOOR`, across `WORKERS` processes | backend (py3.11, py3.14) |
 | `make check-web` | `npm run typecheck && npm run test:coverage` in `frontend/` | frontend |
 | `make check-eslint` | eslint, against `lint-baselines/eslint.json` | eslint |
 | `make check-templates` | `scripts/verify_templates.py` — builders and templates agree byte-for-byte | templates |
-| `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships | pydantic1 |
+| `make check-pydantic1` | the same suite again, in a throwaway venv resolved to what the APK ships, across `WORKERS` processes | pydantic1 |
 | `make check-apk` | builds `frontend/dist` and then the debug APK | apk |
+
+The two backend runs, `check-py` and `check-pydantic1`, spread the suite over
+`WORKERS` pytest-xdist processes, four unless told otherwise; coverage is
+combined across them before the floor is checked. `make check-py WORKERS=0`
+runs it serially, which is the comparison to make when a failure appears only
+in parallel — and a failure that does is a test-isolation bug to fix, never a
+reason to pin the suite back to one process.
 
 Both frontend targets take `frontend-deps` — the `npm ci` — as a prerequisite
 rather than running it themselves, so `make check` installs the frontend once
@@ -167,7 +174,7 @@ cd frontend && npx vitest run src/components/GreetingEditor.test.tsx
 
 ### Faster loops, which are not the gate
 
-Four `make` targets shorten the edit-and-retry loop on the backend. None of
+Three `make` targets shorten the edit-and-retry loop on the backend. None of
 them is a `check-*` target or part of `make check`, each prints `NOT A GATE`
 before it starts, and none measures coverage unless asked — so a green one
 means "these tests pass", never "the suite passes". Like the gate, each puts
@@ -179,7 +186,6 @@ tests the worktree (pass `PY` as above).
 | `make test-py-fast TESTS=backend/tests/test_scenes.py` | the paths or node IDs in `TESTS` (default: the whole suite), stopping at the first failure; `ARGS="-k reroll"` is handed to pytest |
 | `make test-py-failed` | only what failed last time; with nothing on record it selects nothing and pytest exits 5 |
 | `make test-py-profile TESTS=… [COV=1]` | the selection with a per-node phase profile written to `build/perf/profile.json`, then a summary of where the time went; `COV=1` adds the exact coverage arguments `check-py` uses |
-| `make test-py-parallel WORKERS=4 [DIST=load]` | the whole suite with `check-py`'s coverage arguments, across `WORKERS` pytest-xdist processes; `WORKERS=0` is the serial run |
 
 The profile behind the last one is the `--phase-profile` option in
 `backend/tests/phase_profile.py`; `scripts/profile_report.py` summarizes and
