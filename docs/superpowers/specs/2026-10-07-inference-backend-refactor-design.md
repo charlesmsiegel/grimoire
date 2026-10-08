@@ -431,8 +431,9 @@ its own Fast role. In that campaign, summaries run on the campaign's Fast
 model. In every other campaign they run on the pin.
 
 **On the decide routes that is no longer so for Fast.** Step 3 reads the
-campaign's slot of the role the route *uses*, and since slice F the three
-decide routes (`speaker`, `scene_break`, `voice_drift`) use Decision, which
+campaign's slot of the role the route *uses*, and since slice F the
+decide routes (`speaker`, `scene_break`, `voice_drift`, and, once slice G
+flips it, `continuity`: four) use Decision, which
 inherits Fast. A campaign that overrides Fast and not Decision reaches them
 only at step 5, by that inheritance, after a global pin at step 4. So with
 scene-break checks pinned globally and a campaign Fast override, the checks
@@ -442,7 +443,7 @@ Decision role. This is deliberate (the route uses Decision, and step 3 is
 about that role, inheriting or not), and the migration-equivalence check
 cannot see it, because a migrated store has no campaign role slots: the case
 exists only once someone sets one in the new layout. Slice G's `continuity`
-route joins the three when it flips.
+route is the fourth, and the same case applies to it.
 
 A reference to a provider that no longer exists, or a preset id that names no
 preset, is "no opinion" and the walk continues (today's rule, for today's
@@ -999,8 +1000,20 @@ selection that answered, and usage. Missing distributions stay missing.
 An explicit `null` on a choice with `allow_none` is `answer: None, reason:
 abstained`; a `null` on a choice without it is `unreadable`. `unreadable` may
 carry a `detail` sub-reason (`not_an_option`: an answer present and not null
-that matches no option), which is not a new reason and keeps the closed
-vocabulary closed.
+that matches no option; `no_object`: the reply held no object; `no_item`: it
+held nothing readable as this item), which is not a new reason and keeps the
+closed vocabulary closed. `no_object` and `no_item` carry "undecodable is not
+an empty answer" per item.
+A `choice` with `allow_none` may offer a single option: null is its second
+answer.
+`was_read(answer)`: an answer was read when it is not `None`, or is
+`unreadable` with detail `""` or `not_an_option`. `no_object`, `no_item`,
+`error`, `refused` and `abstained` are not read. A mapping that must not store
+a guess for an item the model never answered asks this.
+`offerable(spelling)`: the one test `validate` applies to an option id or
+alias, so a builder can drop what would be refused. A new reserved option id is
+refused inside `offerable`, so every builder drops it and `validate` never
+sees it (slice H's `NONE_KEY` is the first).
 **There is no synthetic confidence value**, and callers must not compute one
 across backends; task-specific escalation uses what a backend actually
 reports. `explain` is the rationale *instruction*, a string: scene-break's is one
@@ -1055,7 +1068,9 @@ Templates live under `templates/decide/` and go through
   predicate is a JSON boolean only (the string `"true"` is unreadable), a
   score an integer inside its levels (a boolean is not), and a choice an option
   id or alias. Valid JSON in any other shape is `None` with `unreadable`, never
-  a default.
+  a default. A repeated key in a reply keeps its first value, at every level,
+  the rule both continuity parsers have today; the scene-break, voice-drift and
+  speaker call sites inherit it, and none of F's gate corpora repeats a key.
 
 **Native backends** (slice H), one request per item, bounded concurrency:
 
@@ -1075,8 +1090,10 @@ Templates live under `templates/decide/` and go through
 | scene-break | `predicate` "is this scene over?" | the verdict commits first; only when a YES landed, a second guarded write follows a separate `generate` (`scene-break-title`, route `summary`, so the `summary` route's model, not the Decision role's) that drafts the title, read from the reply's first non-empty line (an explanation below it is not part of the title), cleaned (a quotation mark that opens and closes it stripped as a pair, so an apostrophe of the title's own survives, and trailing punctuation stripped) and capped, since a title is one frontmatter line shown in a chip. A YES therefore costs two calls and two copies of the transcript, and a title that fails leaves the verdict with an empty title. Verdict first means a read between the two writes sees a YES with no title: the inspector may show the proposal untitled until its next refresh. The reason becomes the optional rationale |
 | voice-drift | `choice` drift / in_voice / not_enough | the note becomes the optional rationale (`explain` carries the corrective instruction); a native backend gives none and the verdict is shown without a note; today's `unknown` becomes `answer: None` and still counts as a failed check |
 | speaker | `choice` over eligible refs, `allow_none` | none; the speaker keeps today's two issue strings, and control still returns to the player when nothing is readable. A roster `decide` refuses before sending is today's invalid handoff too: two refs that collide once normalised, or more than 254 refs (with `grimoire`, past the 255 options a choice may offer) |
-| continuity-identity | one item per row: `choice` existing / new / uncertain | the candidate id travels in the item's context; `None` is today's "undecodable" |
-| continuity-reconcile | one item per candidate: `choice` over that candidate kind's vocabulary | per-kind vocabularies become per-item option lists |
+| continuity-identity | one item per row, two questions: `decision` (a `choice` existing / new / uncertain) and `id` (a `choice` over that row's offered candidate ids, `allow_none`, a single candidate allowed) | the candidates are shown in the item's context and the one meant is answered as `id`; keeping today's two fields keeps today's two outcomes apart (an unknown word is `uncertain` and accepted, an unoffered id is `uncertain` and downgraded). Each item's context is self-contained (native backends send one request per item), and rows are chunked at 8 in one `decide()`, so a sweep is up to 3 metered calls under the absorb budget. A failed or garbled chunk beside answered ones leaves its rows `unchecked` (phase `degraded`, never `ok`), never `uncertain`; a row not `was_read` is unanswered, and a chunk error with nothing read is reported as that error. The trust rules are today's: answers become today's decision dicts for the unchanged `Examination.decide`, and the reason is display-only, stored `""` when none came back. `None` for every item is today's "undecodable"; an object holding no item (`{}`, today's format) is an empty answer. An offered id is read through the generic normalisation (a normalised-id widening toward a merge, a printed gate entry). Neither resolution is refused at request time: the identity phase reports `failed` and persist 1's findings stand, and the review shows the refusal's own sentence for `incapable` |
+| continuity-reconcile | one item per candidate: `choice` over that candidate kind's vocabulary, plus `from` / `to` (`choice` A / B, `allow_none`) on the pair vocabularies only, and up to three nullable evidence choices (`evidence_scene`, `evidence_scene_2`, `evidence_scene_3`, `EVIDENCE_SCENES = 3`) over the scenes that item shows, each asked only when it shows at least that many | per-kind vocabularies become per-item option lists, labelled by their own word with the criteria carried whole in the question; temporal keeps today's fixed commitment-to-event direction. Evidence maps to a deduped, ordered list as today; only a reply citing four or more scenes is narrowed (the first three are stored). Each item's context is self-contained (the reconcile date, the item's own chronicle lines, the recent window and the question instructions repeat per item, so repeated input grows linearly with the candidates, which chunking bounds per call and not in total); option descriptions do not repeat the context. One `decide()` chunked at 8: a sweep of up to 24 candidates is up to 3 metered calls (as is a schema-refusal retry), each under the full reconcile ceiling, so a sweep can hold the campaign's background run up to 3x (6x) as long as today, during which `PUT /config/data-dir` is refused and End Scene adopts rather than starts. A failed or garbled chunk beside answered ones leaves its candidates without a proposal (the sweep lands with `llm: "ok"` and `unanswered`, and the review shows a one-line partial-sweep note); nothing is stored `uncertain`, and a cached candidate is asked again by the next sweep, while a model-only nomination in a failed chunk is not stored (as with today's whole-call failure). A chunk error with nothing read is reported as that error. The trust rules are today's: answers become today's reply elements for the unchanged `_decide`. Neither resolution is refused at request time: the sweep lands with `llm: "off"`, and a model that cannot serve continuity shows the `incapable` sentence rather than "No model connection" |
+
+Beside "callers must work without it", the reconcile half: a status word stands on an answered evidence scene alone, on either backend, and stores `reason: ""` when no rationale came back. Nothing is invented in its place; the review shows the verdict and its evidence with no note. Identity's reason is display-only and stores `""` likewise.
 
 **Eval gate.** Each conversion lands with recorded cases under `evals/` and
 switches its call site only when the structured backend equals or beats
@@ -1093,6 +1110,13 @@ today's parse on them, offline. Native backends are measured with
   entry.
 - The permanent `decide-*` eval cases hold the prompt contract, and
   `verify_templates.py` holds that no criterion of the old prompt was dropped.
+- **The gate's `judge` scores a whole batch that fits one call:**
+  `Conversion.decide` takes every `ItemResult`, and a corpus entry's per-entry
+  items are rejected. Slice G's reconcile legacy cases are adapted
+  mechanically (candidate keys and runtime scene ids mapped to the fixture's),
+  because today's tests build them at runtime; identity's are verbatim. Where
+  an adapted case's intended outcome differs from legacy, the entry carries a
+  `ruling`, which the report prints.
 - `--live` resolves the Decision role and sends the schema, so it measures what
   production sends; replay measures the parser.
 
@@ -1294,7 +1318,8 @@ absent, never as the earlier batches' partial sum.
   stored; `rationale` is a requested output, not reasoning text. The capture
   is split by slice. F owns the speaker's request capture (the decide prompt,
   with its contexts and questions). Scene-break and voice drift never had a
-  capture and gain none: per-check entries would compete in the prompt log's
+  capture and gain none, and neither do slice G's two continuity decisions
+  (identity and reconcile; neither captured before): per-check entries would compete in the prompt log's
   Turn-history rail with the turns the reader inspects, and `taskLabel` has no
   label for them. H owns mode, normalised answers and distributions (in F the
   mode is always `structured`, which the ledger already records, and
@@ -1631,8 +1656,8 @@ against this spec) and lands green under `make check`. Order is chosen so that
 | **D — Embedding operation** (settled) | `embed` / `embed_sync` in `store/inference/embed.py`, embed tasks (`routing.EMBED_TASKS`), metering (the confirmation on an Embedding-role change already landed in C and stays), and one reader of the Embedding role, `resolve.embedding` (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag (D's embed rows included: E stamps their account fields and estimates an unreported prompt, §9.1), the Housekeeping chore | Yes |
 | **F — `decide()`** (settled) | The contract (`decisions.py`), `generate(schema=)`, the structured backend, the decide skip of §5.3, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
-| **G — Continuity decisions** | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision` | — |
-| **H — Native decisions** | OpenRouter and OpenAI decision adapters, the native → structured → fallback chain (the native backend stamps `"native"`, replaces F's skip and widens `OPERATION_CAPABILITY["decide"]`), §9.4's mode, normalised answers and distributions capture, voice drift's native "verdict without a note" branch, `--live` evals; reconciles the Decision role card's `incapable` sentence with a decide route row's `skip_text` (§5.3), and bounds strict mode's schema limits beyond the 1,000-value enum budget (§7.4) unless I's adapter registry does | Opt-in |
+| **G — Continuity decisions** (settled) | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision`. Both conversions switch in one change, because they share the `continuity` route and the safety rule flips a route only where its call sites decide; neither is refused at request time (both resolutions stay soft) | the Decision role serves the duplicate check and the continuity sweep; a partial sweep says so |
+| **H — Native decisions** (lands after G; its native chain serves G's continuity items) | OpenRouter and OpenAI decision adapters, the native → structured → fallback chain (the native backend stamps `"native"`, replaces F's skip and widens `OPERATION_CAPABILITY["decide"]`), §9.4's mode, normalised answers and distributions capture, voice drift's native "verdict without a note" branch, `--live` evals; reconciles the Decision role card's `incapable` sentence with a decide route row's `skip_text` (§5.3), and bounds strict mode's schema limits beyond the 1,000-value enum budget (§7.4) unless I's adapter registry does | Opt-in |
 | **I — Retirement** | §11.4, including the derived reasoning presets of §11.2 step 4 (`openai_compatible` GLM connections only, representable values only) as the legacy GLM `reasoning_effort` stops being read; the adapter registry, with `inference.generate`; deletion of the connection-dict lowering, with `FALLBACK_KEY` and `STRUCTURED_KEY` | No |
 
 **Safety rule across slices**: a route's `default_role` stays `fast` until
