@@ -690,6 +690,22 @@ def test_a_chunk_answered_on_its_second_re_send_did_not_fail(client):
     assert got.served == (("spare", "vendor/spare"),)
 
 
+def test_the_first_failed_chunks_error_is_the_batchs(client):
+    """Review 2 #5: three chunks -- a rate limit, a garbled reply, a network
+    failure. `errors` holds the two failures in chunk order, and with nothing
+    read the batch reports the FIRST, which is what `decide` itself raises
+    when no chunk answers -- never the last one, nor the garbled chunk."""
+    _store(client, fallback=False)
+    items = [_item(f"Mara counts to {n}.") for n in range(2 * decisions.MAX_ITEMS_PER_CALL + 1)]
+    provider = SequencedProvider([_busy(), ["no json"], LLMError("network", "connection reset")])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert len(provider.requests) == 3
+    assert [e.kind for e in got.errors] == ["rate_limit", "network"]
+    error = common._decide_error(got, "over")
+    assert error is got.errors[0]
+    assert (error.kind, error.retry_after) == ("rate_limit", 30.0)
+
+
 def _clock_after_the_first_call(monkeypatch):
     """An absorb budget (`routes.scenes._Budget`) whose clock runs out the
     moment the first call it ran returns: every later call is refused unsent."""
