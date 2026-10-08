@@ -756,9 +756,12 @@ def native_gap(item: Item) -> str:
 
 
 def _probability(value: object) -> float | None:
-    """`value` as a probability: a finite number (never a bool) in [0, 1]."""
+    """`value` as a probability: a finite number (never a bool) in [0, 1].
+    The range is checked before anything converts it, so an int too large for
+    a float (`10**400`) is out of range rather than an `OverflowError`; NaN
+    fails both comparisons."""
     if (isinstance(value, (int, float)) and not isinstance(value, bool)
-            and math.isfinite(value) and 0 <= value <= 1):
+            and 0 <= value <= 1 and math.isfinite(value)):
         return float(value)
     return None
 

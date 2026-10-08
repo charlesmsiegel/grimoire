@@ -725,7 +725,7 @@ def test_native_gap_names_a_nullable_choice_past_the_option_limit():
 def test_validate_refuses_an_enum_past_the_string_budget():
     assert decisions.MAX_ENUM_STRING_CHARS == 15_000
     assert decisions.ENUM_STRING_CHARS_ABOVE == 250
-    with pytest.raises(DecideRequestError):
+    with pytest.raises(DecideRequestError, match=r"whose ids total 15060 characters"):
         decisions.validate([_choice_item(_long_ids(251, 60))])
     decisions.validate([_choice_item(_long_ids(251, 50))])  # 12,550 characters
     decisions.validate([_choice_item(_long_ids(250, 70))])  # 250 values: no per-enum rule
@@ -734,14 +734,14 @@ def test_validate_refuses_an_enum_past_the_string_budget():
 def test_validate_refuses_an_item_past_the_schema_string_budget():
     assert decisions.MAX_SCHEMA_STRING_CHARS == 120_000
     decisions.validate([_predicates(470, 250)])  # 117,500 + the item's own keys
-    with pytest.raises(DecideRequestError):
+    with pytest.raises(DecideRequestError, match=r"schema holds 125017 characters"):
         decisions.validate([_predicates(500, 250)])  # 125,000
     # Enum strings count too: four choices of 250 values (1,000, inside the
     # enum budget, and none above 250) of 125 characters each.
     wide = Item("ctx", tuple(Choice(f"c{n}", "i", _long_ids(250, 125, f"c{n}-"))
                              for n in range(4)))
     assert decisions.enum_values(wide) == decisions.MAX_ENUM_VALUES
-    with pytest.raises(DecideRequestError):
+    with pytest.raises(DecideRequestError, match=r"schema holds 125025 characters"):
         decisions.validate([wide])
 
 
@@ -750,7 +750,7 @@ def test_validate_refuses_an_item_past_the_schema_property_budget():
     # Its own index, `answers`, `rationale`, and one property per question.
     assert decisions.schema_properties([_predicates(4997)]) == 5000
     decisions.validate([_predicates(4997)])
-    with pytest.raises(DecideRequestError):
+    with pytest.raises(DecideRequestError, match=r"schema holds 5001 properties"):
         decisions.validate([_predicates(4998)])
 
 
@@ -808,8 +808,11 @@ def test_native_answer_predicate():
     assert _native(PRED, probability=0.3) == Answer(False, probability=0.3)
     assert _native(PRED, probability=1) == Answer(True, probability=1.0)
     assert _native(PRED, probability=0.5) == Answer(None, "abstained", probability=0.5)
-    for bad in (1.5, -0.1, float("nan"), float("inf"), True, "0.7", None):
+    for bad in (1.5, -0.1, float("nan"), float("inf"), True, "0.7", None, 10**400,
+                -(10**400)):
         assert _native(PRED, probability=bad) == Answer(None, "unreadable"), bad
+    # An int too large for a float is out of range, never an OverflowError.
+    assert _native(PRED, chosen=True, probability=10**400) == Answer(True)
     assert _native(PRED) == Answer(None, "unreadable")
     # A non-bool `chosen` is not a predicate's answer; the probability decides.
     assert _native(PRED, chosen="yes", probability=0.8) == Answer(True, probability=0.8)
@@ -849,8 +852,13 @@ def test_native_answer_choice():
     # The reserved none is a legal key only where none is allowed.
     assert _native(STRICT_WHO, distribution=on_none) == Answer(None, "unreadable")
     for bad in ({"grimoire": 1.2}, {"grimoire": float("nan")}, {"grimoire": True},
-                {"grimoire": "0.4"}, [("grimoire", 0.4)], {0: 0.4}):
+                {"grimoire": "0.4"}, [("grimoire", 0.4)], {0: 0.4},
+                {"grimoire": 10**400}, {"characters:mara": 0.6, "grimoire": -(10**400)}):
         assert _native(WHO, distribution=bad) == Answer(None, "unreadable"), bad
+    # The overflowing report is dropped whole; an explicit answer still stands.
+    assert _native(WHO, chosen="grimoire", distribution={"grimoire": 10**400}) == (
+        Answer("grimoire"))
+    assert _native(TONE, distribution={"0": 0.1, "2": 10**400}) == Answer(None, "unreadable")
     # The explicit answer wins over its distribution, which rides along.
     assert _native(WHO, chosen="grimoire", distribution=dist) == Answer(
         "grimoire", distribution=dist)
