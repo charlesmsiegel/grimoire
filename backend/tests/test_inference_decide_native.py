@@ -711,6 +711,54 @@ def test_an_item_failure_of_its_own_stops_nothing(client):
     assert fake.sent == 10 and len(got.errors) == 1
 
 
+def _chunks(count: int = 3) -> list[Item]:
+    """Enough items for `count` structured chunks."""
+    return _items((count - 1) * decisions.MAX_ITEMS_PER_CALL + 1)
+
+
+def test_a_connection_wide_failure_sends_no_further_structured_chunk(client):
+    """The same stop on a structured stage: three chunks, the first meets a
+    401, and only that one request is made. The two held back are never
+    sent, file no row, and carry the 401; with nothing answered it is raised."""
+    _structured_store(client, fallback=False)
+    resolved = _resolved()
+    unauthorised = LLMError("auth", "invalid key", status=401)
+    fake = FakeLLM([[decision_reply({"over": True})]], error=unauthorised)
+    with pytest.raises(LLMError) as exc:
+        _decide(fake, _chunks(3), resolved=resolved)
+    assert exc.value is unauthorised
+    assert fake.calls == 1 and len(_rows()) == 1
+
+
+def test_structured_chunks_held_back_move_to_the_next_stage(client):
+    resolved = _structured_resolution(client, fallback_mode=NATIVE)
+    items = _chunks(3)
+    fake = FakeLLM([[decision_reply({"over": True})]],
+                   error=LLMError("auth", "invalid key", status=401), decisions=[_yes()])
+    got = _decide(fake, items, resolved=resolved)
+    assert fake.calls == 1 and len(fake.native_requests) == len(items)
+    assert all(r.backend == NATIVE for r in got.items) and got.errors == ()
+
+
+@pytest.mark.parametrize(("then", "requests"), [
+    (LLMError("auth", "invalid key", status=401), 2),
+    (LLMError("network", "connection reset"), 6),
+], ids=["both-routes-refused", "the-fallback-failed-its-own-way"])
+def test_a_chunk_sent_with_a_fallback_stops_only_when_both_routes_would(client, then,
+                                                                        requests):
+    """A structured chunk whose primary meets a 401 and whose fallback (riding
+    the facade) fails too stops the stage only when the fallback's failure is
+    connection-wide as well: a fallback that failed for a reason of its own
+    may serve the next chunk."""
+    _structured_store(client)
+    resolved = _resolved()
+    assert FALLBACK_KEY in resolved.conn
+    provider = _Wire(streams=[LLMError("auth", "invalid key", status=401), then])
+    with pytest.raises(LLMError):
+        _decide(_real(provider, retries=0), _chunks(3), resolved=resolved)
+    assert len(provider.streamed) == requests
+
+
 def test_a_budget_refused_native_stage_is_still_the_clocks_through_a_failed_fallback(client):
     """Ruling 3: the absorb's clock refused the native stage, and the fallback
     stage then failed for its own reason. The two compose into one error,

@@ -280,15 +280,23 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
     own, so what answered is collected per chunk, never read off the last
     one, and so is each failed chunk's own error: the chunk's final word,
     after `_ask`'s re-sends, never one of the calls it made on the way
-    there."""
+    there. After a chunk fails with what every later chunk would meet
+    (`_stops_chunks`), no later chunk is sent: each stays pending, carrying
+    that failure, for the next stage or for `error`."""
     conn = _with_mode(call.conn, STRUCTURED)
     explain = bool(call.explain)
     results: list[decisions.ItemResult | None] = [None] * len(items)
     rows: list[dict] = []
     failed: list[tuple[tuple[int, ...], LLMError]] = []
     served: list[tuple[str, str]] = []
+    stopped: LLMError | None = None
     for offset, chunk in decisions.chunks(items):
         unit = tuple(range(offset, offset + len(chunk)))
+        if stopped is not None:
+            # A failure every later chunk would meet: never sent, no row, and
+            # pending for the next stage with the failure that held it back.
+            failed.append((unit, stopped))
+            continue
         # Off the loop: the template loader touches the filesystem.
         messages = await asyncio.to_thread(structured_messages, chunk, explain=call.explain)
         if call.capture is not None:
@@ -303,6 +311,8 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
             failed.append((unit, error))
+            if _stops_chunks(error, conn):
+                stopped = error
     return _Answered(tuple(results), tuple(failed), tuple(rows), tuple(served))
 
 
@@ -314,10 +324,39 @@ def _connection_wide(exc: LLMError) -> bool:
     provider's window is past `llm.RETRY_AFTER_CAP`), the account refused for
     money (`llm_errors.account_limit`), or a call the caller's own clock
     refused unsent (absorb's `BudgetRefused`, which declares itself no
-    failure: `store.usage.NOT_A_FAILURE`)."""
+    failure: `store.usage.NOT_A_FAILURE`).
+
+    A failure composed from several routes' (`LLMError.words`: a primary and
+    the fallback the facade sent, or a structured chunk's prompt-only
+    re-sends) is connection-wide only when every route's own failure is: one
+    route that failed for a reason of its own may serve the next call."""
+    if exc.words:
+        return all(_connection_wide(word) for word in exc.words)
     return (exc.kind in ("auth", "missing_key", "rate_limit")
             or llm_errors.account_limit(exc)
-            or getattr(exc, store.usage.NOT_A_FAILURE, True) is False)
+            or _refused_unsent(exc))
+
+
+def _refused_unsent(exc: LLMError) -> bool:
+    """Whether `exc` is a call the caller's own clock refused before it was
+    sent (absorb's `BudgetRefused`: `store.usage.NOT_A_FAILURE` is False)."""
+    return getattr(exc, store.usage.NOT_A_FAILURE, True) is False
+
+
+def _stops_chunks(error: LLMError, conn: dict) -> bool:
+    """Whether a structured chunk's `error` means no later chunk on the stage
+    is sent (`_connection_wide`). A chunk sent with a fallback behind it
+    (`llm.FALLBACK_KEY`) stops the stage only when its error names both
+    routes (`words`): a bare error from such a call is one the facade did not
+    fall back on -- the fallback dropped as the primary's own route, or a
+    double that serves one attempt -- so nothing says the fallback would
+    fail the next chunk. The caller's clock refusing a call unsent stops the
+    stage whatever stood behind it."""
+    if _refused_unsent(error):
+        return True
+    if llm.FALLBACK_KEY in conn and not error.words:
+        return False
+    return _connection_wide(error)
 
 
 async def _native(items: tuple[decisions.Item, ...], call: _Call) -> _Answered:

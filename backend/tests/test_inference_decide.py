@@ -691,19 +691,26 @@ def test_a_chunk_answered_on_its_second_re_send_did_not_fail(client):
 
 
 def test_the_first_failed_chunks_error_is_the_batchs(client):
-    """Review 2 #5: three chunks -- a rate limit, a garbled reply, a network
-    failure. `errors` holds the two failures in chunk order, and with nothing
+    """Review 2 #5: three chunks -- a network failure, a garbled reply, a rate
+    limit. `errors` holds the two failures in chunk order, and with nothing
     read the batch reports the FIRST, which is what `decide` itself raises
-    when no chunk answers -- never the last one, nor the garbled chunk."""
+    when no chunk answers -- never the last one, nor the garbled chunk.
+
+    Network first, not the rate limit: since slice H a rate limit the facade
+    gave up on stops the stage's later chunks (they would meet it too), so a
+    rate limit first would leave nothing after it to be reported over."""
     _store(client, fallback=False)
     items = [_item(f"Mara counts to {n}.") for n in range(2 * decisions.MAX_ITEMS_PER_CALL + 1)]
-    provider = SequencedProvider([_busy(), ["no json"], LLMError("network", "connection reset")])
+    provider = SequencedProvider([LLMError("network", "connection reset"), ["no json"],
+                                  _busy()])
     got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
     assert len(provider.requests) == 3
-    assert [e.kind for e in got.errors] == ["rate_limit", "network"]
+    assert [e.kind for e in got.errors] == ["network", "rate_limit"]
     error = common._decide_error(got, "over")
     assert error is got.errors[0]
-    assert (error.kind, error.retry_after) == ("rate_limit", 30.0)
+    assert (error.kind, error.retry_after) == ("network", None)
+    # The rate limit is still the chunk's own, window and all.
+    assert (got.errors[1].kind, got.errors[1].retry_after) == ("rate_limit", 30.0)
 
 
 def _clock_after_the_first_call(monkeypatch):
