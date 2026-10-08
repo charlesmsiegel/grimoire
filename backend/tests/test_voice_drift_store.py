@@ -410,7 +410,10 @@ def _route_source():
 
     from grimoire.routes import scenes
 
-    return ast.parse(textwrap.dedent(inspect.getsource(scenes._stage_voice_drift)))
+    # With `_voice_item`, the helper the route hands to a worker thread so the
+    # item renders off the loop: what it calls, the route calls.
+    return ast.parse("\n".join(textwrap.dedent(inspect.getsource(fn))
+                               for fn in (scenes._stage_voice_drift, scenes._voice_item)))
 
 
 def _route_reasons() -> set[str]:
