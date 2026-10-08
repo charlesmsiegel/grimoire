@@ -11,8 +11,11 @@ disappeared or changed outcome. Standard library only.
     python scripts/profile_report.py manifest PROFILE.json
     python scripts/profile_report.py compare BEFORE.json AFTER.json
 
-`compare` exits 1 when a node in BEFORE is missing from AFTER: a run that
-quietly collected less is the failure every other number here would hide.
+`compare` exits 1 when a node in BEFORE is missing from AFTER, when a node's
+outcome changed (per phase, so a teardown error cannot mask a call that began
+failing), or when AFTER collected a node it never reported on: a run that
+quietly ran less is the failure every other number here would hide. Nodes
+AFTER added are listed and do not fail it.
 """
 
 from __future__ import annotations
@@ -114,20 +117,43 @@ def manifest(doc: dict) -> list[str]:
 
 
 def compare(before: dict, after: dict) -> dict:
-    """Node-level differences between two profiles."""
+    """Node-level differences between two profiles.
+
+    Outcomes are compared per phase as well as in summary, so a call that went
+    from passed to failed is seen even where a teardown error makes both runs'
+    one-word outcome the same. `unreported` is what AFTER collected and never
+    reported on -- a crash, `-x`, an interrupt -- which a report-only manifest
+    could not tell from a node that was never collected.
+    """
     b, a = before["tests"], after["tests"]
-    missing = sorted(set(b) - set(a))
-    added = sorted(set(a) - set(b))
+    b_ids = set(before.get("collected") or b)
+    a_ids = set(after.get("collected") or a)
+    missing = sorted(b_ids - a_ids)
+    added = sorted(a_ids - b_ids)
     changed = sorted(
-        (nid, b[nid].get("outcome"), a[nid].get("outcome"))
-        for nid in set(b) & set(a) if b[nid].get("outcome") != a[nid].get("outcome"))
+        (nid, _outcome_key(b[nid]), _outcome_key(a[nid]))
+        for nid in set(b) & set(a) if _outcome_key(b[nid]) != _outcome_key(a[nid]))
+    unreported = sorted(set(after.get("collected") or ()) - set(a))
     return {
         "missing": missing,
         "added": added,
         "outcome_changed": changed,
+        "unreported": unreported,
         "node_seconds": (sum(map(total, b.values())), sum(map(total, a.values()))),
         "wall_s": (before.get("wall_s"), after.get("wall_s")),
     }
+
+
+def _outcome_key(rec: dict) -> str:
+    phases = rec.get("phases")
+    detail = ",".join(f"{k}={v}" for k, v in sorted(phases.items())) if phases else ""
+    return f"{rec.get('outcome')}" + (f" ({detail})" if detail else "")
+
+
+def failed(diff: dict) -> bool:
+    """Whether `compare`'s result is a failure: anything that went missing,
+    changed outcome, or was collected and never reported."""
+    return bool(diff["missing"] or diff["outcome_changed"] or diff["unreported"])
 
 
 def _print_summary(s: dict, top: int) -> None:
@@ -186,10 +212,12 @@ def main(argv: list[str] | None = None) -> int:
     for nid in diff["added"]:
         print(f"added    {nid}")
     for nid, was, now in diff["outcome_changed"]:
-        print(f"outcome  {nid}: {was} -> {now}")
+        print(f"OUTCOME  {nid}: {was} -> {now}")
+    for nid in diff["unreported"]:
+        print(f"UNREPORTED {nid}")
     (bs, as_), (bw, aw) = diff["node_seconds"], diff["wall_s"]
     print(f"node-seconds {bs:.1f} -> {as_:.1f}; wall {bw} -> {aw}")
-    return 1 if diff["missing"] else 0
+    return 1 if failed(diff) else 0
 
 
 if __name__ == "__main__":

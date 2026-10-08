@@ -10,6 +10,7 @@ compared as sets. That is what this writes and compares
     python scripts/coverage_arcs.py dump .coverage OUT.json
     python scripts/coverage_arcs.py stable OUT.json RUN1.json RUN2.json RUN3.json
     python scripts/coverage_arcs.py diff BEFORE.json AFTER.json
+    python scripts/coverage_arcs.py contexts .coverage OUT.json --match tests/test_x.py::
 
 **dump** reads a coverage data file through coverage.py's `CoverageData` API,
 keys every file by its path under `backend/src` (so two checkouts' dumps
@@ -28,6 +29,12 @@ run's set is not a reference anything can be held to; the intersection is.
 **diff** exits 1 when AFTER is missing a file, line or arc BEFORE had. It
 prints what was gained too, but only a loss fails.
 
+**contexts** reads a run measured with `--cov-context=test` and writes, for
+each test context whose name contains `--match`, the arcs it executed. That is
+the per-test half of a consolidation's evidence: which arcs only the tests
+being merged reached. Narrow it with `--match`; every context of a whole
+suite is a large file and a slow read.
+
 Never compare a dump from one interpreter against another's: coverage.py's
 arcs for the same source differ between Python versions.
 """
@@ -38,6 +45,7 @@ import argparse
 import hashlib
 import json
 import pathlib
+import re
 import sys
 
 from coverage import CoverageData
@@ -78,6 +86,27 @@ def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
             f"{data_file}: {len(foreign)} measured file(s) outside {src} -- the run "
             f"imported another checkout's sources, e.g. {foreign[0]}")
     return {"schema_version": SCHEMA_VERSION, "files": files}
+
+
+def contexts(data_file: str | pathlib.Path, match: str, src: pathlib.Path = SRC) -> dict:
+    """{context: {file: arcs}} for every test context containing `match`."""
+    data = CoverageData(basename=str(data_file))
+    data.read()
+    root = src.resolve()
+    files = {}
+    for measured in data.measured_files():
+        try:
+            files[measured] = _key(pathlib.Path(measured).resolve(), root)
+        except ValueError:
+            raise SystemExit(f"{data_file}: {measured} is outside {src}") from None
+    out: dict[str, dict] = {}
+    for ctx in sorted(c for c in data.measured_contexts() if match in c):
+        data.set_query_contexts([f"^{re.escape(ctx)}$"])
+        arcs = {key: sorted(list(a) for a in data.arcs(measured) or [])
+                for measured, key in sorted(files.items(), key=lambda kv: kv[1])}
+        out[ctx] = {k: v for k, v in arcs.items() if v}
+    data.set_query_contexts(None)
+    return out
 
 
 def fingerprint(doc: dict) -> dict:
@@ -159,6 +188,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("diff")
     p.add_argument("before")
     p.add_argument("after")
+    p = sub.add_parser("contexts")
+    p.add_argument("data_file")
+    p.add_argument("out")
+    p.add_argument("--match", required=True)
     args = parser.parse_args(argv)
 
     if args.cmd == "dump":
@@ -175,6 +208,11 @@ def main(argv: list[str] | None = None) -> int:
                           "variable_lines": sum(len(v["lines"]) for v in varied.values()),
                           "variable_arcs": sum(len(v["arcs"]) for v in varied.values())},
                          sort_keys=True))
+        return 0
+    if args.cmd == "contexts":
+        found = contexts(args.data_file, args.match)
+        _write(args.out, found)
+        print(f"{len(found)} context(s) matching {args.match!r}")
         return 0
     result = diff(_load(args.before), _load(args.after))
     for key in result["lost_files"]:

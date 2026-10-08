@@ -8,17 +8,19 @@
 
 **Delivery shape (user decision, 2026-10-08):** one branch, `claude/jolly-rubin-verkak`, carrying **one PR at a time**. Each PR is opened, driven to green and merged before the branch is restarted from `main` for the next. So this plan details **PR A** fully and gives every later PR its scope, its exit evidence and the measurements it consumes; each later PR gets a short addendum to this file (its task list, written against the tree as it then stands) and its own plan gate before it is implemented, because `main` moves under this program and a task list written today for PR F would be stale by then.
 
-**Gate record:** the Codex CLI is not installed in this container and the user chose not to install it (2026-10-08). Every Codex checkpoint in `CLAUDE.md` is therefore stood in for by an independent Claude adversarial review, and each PR body says so in plain words rather than claiming a Codex review ran. The spec → plan stand-in review ran against the spec at `a219190`; its findings are folded in under *Spec review findings* below.
+**Gate record:** the Codex CLI is not installed in this container and the user chose not to install it (2026-10-08). Every Codex checkpoint in `CLAUDE.md` is therefore stood in for by an independent Claude adversarial review, and each PR body says so in plain words rather than claiming a Codex review ran. The spec → plan stand-in review ran against the spec at `a219190`; its findings are folded in under *Spec review findings* below. The plan → implementation stand-in review (no blocking findings, nine should-fix) is folded in under *Plan review findings*.
 
 ## Global constraints (every PR)
 
 - **No production semantics change** (§0.4). A testability change to `backend/src/` needs its own behavioural argument in the PR body.
 - **Never weaken a gate** (§0.5, §0.7, §15): no `COV_FLOOR` change, no coverage-config change, no dropped Python version, Pydantic 1 run, APK, lint ratchet, template check, Istanbul/`all: true` or DOM-settling rule; no timeout raised, no retry, `skip`, `xfail` or deletion to make something faster or greener.
 - **Privacy** (`CLAUDE.md`): synthetic stores under `tmp_path` only; no real `~/.grimoire`; the profile JSON carries node IDs and seconds, never paths outside the repo, response bodies, prompts or fixture contents. No real LLM call. `frozen_campaign/home/` and `fixtures/inference_baseline.json` are never regenerated.
-- **Measured, not asserted.** Every speed claim cites runs from the same machine, same SHA family, same flags; reported as distributions (n, median, min, max) with the machine named. A lower collected count is never evidence of speed.
+- **Measured, not asserted.** Every speed claim cites runs from the same machine and the same flags, reported as distributions (n, median, min, max) with the machine named. A lower collected count is never evidence of speed.
+- **Each PR re-measures its own "before"** on its own base SHA with the same procedure (three serial coverage runs for the stable arc set, n ≥ 3 timing runs), because `main` moves between PRs and PR A's numbers describe `a219190`'s production source only. PR A's numbers rank hotspots and anchor the final report; they are never the "before" of a later diff.
+- **Timing runs have the machine to themselves**: no other test process runs beside a timing run, so a serial figure and a later parallel figure are comparable.
 - **Three columns** in every PR's results (§3): *reduced work*, *parallelism*, *selection*.
 - **Worktree-safe imports**: every new command puts the active checkout's `backend/src` first on `PYTHONPATH` (the `WITH_SRC` idiom in the `Makefile`), on both the Unix and the cmd.exe branch.
-- **Doc guards** (finding S4): a `.venv/bin/python` written in CLAUDE.md, README.md, `evals/README.md` or the frozen-campaign README needs its `.venv/Scripts/python` twin within four lines (`test_install_scripts.py`); Makefile recipes stay one line (cmd.exe); every new `check-*` target is named in `CONTRIBUTING.md`; no new document may share a >16-word run with another maintained document (`test_docs_guard.py::MAX_SHARED_RUN`); a new file named `test_*guard*.py` would have to join CONTRIBUTING's guard table, so the harness self-tests are **not** named that way.
+- **Doc guards** (spec finding S4): a `.venv/bin/python` written in CLAUDE.md, README.md, `evals/README.md` or the frozen-campaign README needs its `.venv/Scripts/python` twin within four lines (`test_install_scripts.py`); Makefile recipes stay one line (cmd.exe); every new `check-*` target is named in `CONTRIBUTING.md`; no new document may share a >16-word run with another maintained document (`test_docs_guard.py::MAX_SHARED_RUN`); a new file named `test_*guard*.py` would have to join CONTRIBUTING's guard table, so the harness self-tests are **not** named that way.
 - **Linear history**, fast-forward merges, no merge commits.
 
 ## Baseline facts this plan rests on
@@ -30,7 +32,7 @@ Recorded at `a219190` before any change. The full numbers, the machine and the c
 
 ## Decisions the user owns (asked, never assumed)
 
-1. **Which interpreter measures the authoritative coverage.** Today: 3.11 (the `ci.yml` comment: the floor version's reachable set is the smaller one). Option: measure on 3.14 and run 3.11 without coverage. Only raised with PR A's measurements in hand, and only adopted if the 3.11 and 3.14 arc sets are shown to be compared honestly (never conflated, §4.4).
+1. **Which interpreter measures the authoritative coverage.** Today: 3.11 (the `ci.yml` comment: the floor version's reachable set is the smaller one). Option: measure on 3.14 and run 3.11 without coverage. This is an **exception to the spec's non-goal** of changing the coverage denominator (version-conditional branches move it), so it is put to the user as one, with PR A's measurements and both interpreters' arc sets in hand, never conflated (§4.4).
 2. **Required-check names**, if a CI rollout (PR G/H) would rename or split a job that branch protection names.
 3. **Any serial island** (§8.4), each one named.
 
@@ -56,6 +58,23 @@ The stand-in review (a Claude reviewer reading the spec against `a219190`, no ed
 | N5 | Every xdist worker re-imports every test module (`test_routes.py` is 835 KB) and `store` is reloaded in many places. | Adopted: PR C records collection time and RSS per worker. |
 | N6 | The session privacy floor uses `tmp_path_factory`, which is per worker. | Confirmed; PR C's self-test still proves it per worker. |
 
+## Plan review findings folded in
+
+The plan → implementation stand-in review read the plan, the spec and the prototype plugin against the installed pytest 9.1.1 / pluggy 1.6.0 / pytest-cov 7.1.0 / pytest-asyncio 1.4.0 sources, and confirmed: historic `pytest_configure` replay for the late registration, report extras crossing xdist via `_report_to_json`, `exitstatus` reflecting a coverage failure, no code binding `importlib.reload` by value, no guard tripping on the new files.
+
+| # | Finding | Disposition |
+|---|---|---|
+| S1 | "Exclusive" fixture time double-counted fixtures set up from inside another (`getfixturevalue`, pytest-asyncio fetching its runner), and lost call-phase fixtures. | Fixed: a timing stack subtracts child time; every phase's report carries its own fixtures. Self-tests for a nested, a lazy and an async fixture. |
+| S2 | A teardown error hid a failed call (`error` either way). | Fixed: outcomes recorded per phase; the summary is `failed` when the call failed; `compare` reads the per-phase record. |
+| S3 | xdist's crash report (`when="???"`) was dropped, so a crashed node could read as passed. | Fixed: it records the node `crashed`. The self-test lands with xdist in PR C. |
+| S4 | The manifest came from reports, not collection; `compare` ignored outcome changes. | Fixed: `collected` is recorded from collection (and from each xdist worker, with `collection_agrees`); `compare` fails on a missing node, any outcome change, and a collected-but-unreported node. |
+| S5 | "Terminal output identical without the plugin" is unsatisfiable (the duration line). | Replaced by: no profile line and no file without the flag. |
+| S6 | §4.1's environment was missing. | Fixed: package versions, usable CPUs, memory, `COVERAGE_CORE`, the masked command line, CPU time and peak RSS (self and children), `git_dirty`, and `grimoire_from_this_checkout`. `wall_s` excludes interpreter start-up, so each baseline run is also wrapped in an outer timer. |
+| S7 | The baseline would not be "at a219190" once the branch holds PR A; `check-pydantic1` cannot pass `--phase-profile`. | Adopted: the baseline runs `--ignore` PR A's two self-test files, so the collected set is `a219190`'s; the docs say "production source and tests of `a219190`, harness of PR A". Pydantic 1: the make target is timed for venv + run, then its venv runs the profiled suite. |
+| S8 | §4.4's `--cov-context=test` audit and the displayed percentage/XML were dropped. | `coverage_arcs.py contexts` lands in A (tested), the percentage and XML are in the baseline doc; the full-suite context audit run is deferred to PR D, which needs it on its own base SHA (S9) and only for its candidates' modules. |
+| S9 | "Before" undefined once `main` moves. | Adopted as a global constraint above. |
+| N1–N6 | Plan text lagged the prototype (ops are per phase); exit evidence omitted `check-pydantic1` and the two remaining gates; `test_profile.py` would be collected by a root `pytest`; file copies and replays are not counted; the xdist path is unproven until PR C; moving coverage to 3.14 is an exception to the spec's no-denominator-change rule. | All adopted: text corrected, `scripts/profile_report.py` renamed, limits stated in the plugin docstring, Decision 1 reworded as an exception. |
+
 Recorded beside these, from the first profile (one file, `test_continuity_reconcile_routes.py`): the `client` fixture's own setup (reload + `create_app()` + lifespan) is 5–8 ms, and the slow tests spend their time in the call -- the absorb run they wait on. App startup is not the hotspot the spec feared; PR A's whole-suite profile decides what is.
 
 ---
@@ -70,8 +89,8 @@ Recorded beside these, from the first profile (one file, `test_continuity_reconc
 |---|---|
 | `backend/tests/phase_profile.py` (new) | The opt-in pytest plugin: per-node, per-phase seconds; exclusive fixture-setup seconds; counts of expensive operations; xdist-safe (controller writes, workers only annotate reports). Standard library only. |
 | `backend/tests/conftest.py` (modify) | `--phase-profile=PATH` option; registers the plugin only when given. Nothing else changes. |
-| `scripts/test_profile.py` (new) | Stdlib CLI over the profile JSON: `summary` (top-N per phase, slowest modules, fixture totals, op counts, concentration), `manifest` (sorted node IDs), `compare A B` (manifest diff + outcome changes + timing delta). |
-| `scripts/coverage_arcs.py` (new) | Reads a coverage data file through `coverage.CoverageData`, writes the executed **arc and line sets** per production file (repo-relative, every `.py` under `backend/src/grimoire` present, zero-covered ones included); `stable A B C…` writes the intersection and lists the variable remainder (finding B1); `diff BEFORE AFTER` exits non-zero when AFTER lost an arc, line or file BEFORE had. |
+| `scripts/profile_report.py` (new) | Stdlib CLI over the profile JSON: `summary` (top-N per phase, slowest modules, fixture totals, op counts, concentration), `manifest` (sorted node IDs), `compare A B` (manifest diff + outcome changes + timing delta). |
+| `scripts/coverage_arcs.py` (new) | `contexts DATA OUT --match …` writes the arcs each matching test context executed (for PR D's `--cov-context=test` audit; finding S8). Reads a coverage data file through `coverage.CoverageData`, writes the executed **arc and line sets** per production file (repo-relative, every `.py` under `backend/src/grimoire` present, zero-covered ones included); `stable A B C…` writes the intersection and lists the variable remainder (finding B1); `diff BEFORE AFTER` exits non-zero when AFTER lost an arc, line or file BEFORE had. |
 | `.gitignore` (modify) | `.coverage.*` beside `.coverage` (finding S6). |
 | `backend/tests/test_phase_profile.py` (new) | Self-tests of the plugin against a tiny synthetic suite written into `tmp_path` and run as a **subprocess** with coverage's environment stripped (serial now; `-n 2` once PR C adds xdist): one record per node, three phases, outcome, deterministic serialization, nothing written without the flag, no stdout without the flag, no absolute paths in the output. |
 | `backend/tests/test_profile_scripts.py` (new) | Self-tests of the two scripts on synthetic inputs: ranking, concentration arithmetic, manifest diff, arc diff detects a lost arc and a lost zero-coverage file. |
@@ -84,10 +103,10 @@ No `Makefile`, `ci.yml` or `pyproject.toml` change in PR A — PR B owns the `Ma
 
 ### Task A1 — the profiler plugin, test first
 
-- [ ] Write `backend/tests/test_phase_profile.py` against a subprocess-run synthetic suite (files written into `tmp_path`, so the gate never collects them; `COV_*`/`COVERAGE_*` stripped from the child's environment; a `conftest.py` there registers the plugin through the same two functions `backend/tests/conftest.py` calls) of four synthetic tests (pass, fail, skip, a test with a function-scoped fixture that sleeps a known minimum) and assert on the JSON: `schema_version == 1`; keys `git_sha`, `python`, `coverage`, `workers`, `distribution`, `wall_s`, `collect_s`, `tests`; one entry per node ID with `setup_s`, `call_s`, `teardown_s`, `outcome`; the sleeping fixture's exclusive setup time is attributed to its name and is ≥ the sleep; the skipped test has `outcome == "skipped"` and no `call_s`; serialization is byte-identical across two writes of the same data (sorted keys, fixed rounding); without `--phase-profile` nothing is written and the terminal output is identical to a run without the plugin loaded; no value in the file is an absolute path.
+- [ ] Write `backend/tests/test_phase_profile.py` against a subprocess-run synthetic suite (files written into `tmp_path`, so the gate never collects them; `COV_*`/`COVERAGE_*` stripped from the child's environment; a `conftest.py` there registers the plugin through the same two functions `backend/tests/conftest.py` calls) of four synthetic tests (pass, fail, skip, a test with a function-scoped fixture that sleeps a known minimum) and assert on the JSON: `schema_version == 1`; keys `git_sha`, `python`, `coverage`, `workers`, `distribution`, `wall_s`, `collect_s`, `tests`; one entry per node ID with `setup_s`, `call_s`, `teardown_s`, `outcome`; the sleeping fixture's exclusive setup time is attributed to its name and is ≥ the sleep; the skipped test has `outcome == "skipped"` and no `call_s`; a failed call followed by a teardown error is `failed` with both phases recorded; a nested, a lazily fetched and an async fixture each own only their own seconds; `collected` lists every collected node even under `-x`; the environment fields are present; serialization is byte-identical across two writes of the same data (sorted keys, fixed rounding); without `--phase-profile` no file is written and no profile line is printed; no value in the file is an absolute path.
 - [ ] Run it, watch it fail (no plugin).
 - [ ] Implement `phase_profile.py`: a class with `pytest_runtest_logreport` (controller side: accumulate `report.duration` by `report.when`; record `outcome` from call, or from setup when setup failed/skipped), a `pytest_fixture_setup` hookwrapper timing the fixture function exclusively and stashing `{argname: seconds}` on the requesting item, a `pytest_runtest_makereport` hookwrapper copying that dict onto the **setup** report as a plain attribute (pytest's `_report_to_json` copies `report.__dict__`, so it crosses the xdist wire), op counters, `pytest_sessionfinish` writing the file **only where `config` has no `workerinput`**.
-- [ ] Op counters (§4.3): counted by wrapping class-level entry points so a name imported by value elsewhere is still seen — `fastapi.FastAPI.__init__` (an app built: `create_app` and every ad-hoc `FastAPI()`), `starlette.testclient.TestClient.__enter__` (a lifespan entered), `importlib.reload` (the module attribute every caller reaches), `uvicorn.Server.startup`, `subprocess.Popen.__init__`. Installed in `pytest_configure` only when profiling, restored in `pytest_unconfigure`; per-test deltas attached to the call report. Documented as approximate: a test that builds a `FastAPI()` for a sub-app counts as an app.
+- [ ] Op counters (§4.3): counted by wrapping class-level entry points so a name imported by value elsewhere is still seen — `fastapi.FastAPI.__init__` (an app built: `create_app` and every ad-hoc `FastAPI()`), `starlette.testclient.TestClient.__enter__` (a lifespan entered), `importlib.reload` (the module attribute every caller reaches), `uvicorn.Server.startup`, `subprocess.Popen.__init__`. Installed in `pytest_configure` only when profiling, restored in `pytest_unconfigure`; per-phase deltas attached to each report. Documented as approximate (a sub-app's `FastAPI()` counts as an app), and file copies and replay evaluations are named as not counted.
 - [ ] Register in `conftest.py` through two functions the module exports, `add_option(parser)` and `register(config)`, so the gate's conftest and the self-test's synthetic conftest wire it identically: `--phase-profile` (default `None`), registered only when set. Re-run the self-tests until green.
 - [ ] Commit: `test(perf): an opt-in per-phase profile of the backend suite`.
 
@@ -99,12 +118,12 @@ No `Makefile`, `ci.yml` or `pyproject.toml` change in PR A — PR B owns the `Ma
 
 ### Task A3 — the baseline runs
 
-All on this container (Linux, 4 logical CPUs, 15 GiB; recorded with `platform`, `os.cpu_count()`, package versions). Each run's raw output stays in `build/perf/` (git-ignored). Commands (repo root, `PYTHONPATH=$PWD/backend/src`):
+All on this container (Linux, 4 logical CPUs, 15 GiB), sequentially, nothing else running; each run wrapped in an outer timer (wall, CPU, peak RSS of the child). Each run's raw output stays in `build/perf/` (git-ignored). The environment is CI's: a py3.11 venv with `backend[dev]` only (no `desktop` extra). Every run passes `--ignore=backend/tests/test_phase_profile.py --ignore=backend/tests/test_profile_scripts.py`, so the collected set is `a219190`'s own. Commands (repo root, `PYTHONPATH=$PWD/backend/src`):
 
 - [ ] **serial, py3.11, no coverage** ×3: `python -m pytest backend -q --phase-profile=build/perf/<label>.json`
 - [ ] **serial, py3.11, coverage exactly as `check-py`** ×3 (the `make check-py` command line plus `--phase-profile`), each run's `.coverage` dumped → `coverage_arcs.py stable` over the three: the stable set is the reference, the variable set is published (finding B1).
 - [ ] **serial, py3.14, coverage** ×1 (uv-provisioned 3.14; its arc set dumped separately and never merged with 3.11's).
-- [ ] **Pydantic 1.10, no coverage** ×1, through `make check-pydantic1 PY=…` so the environment is the gate's own; venv build time and test time recorded apart.
+- [ ] **Pydantic 1.10, no coverage** ×1: `make check-pydantic1 PY=…` timed whole (venv build + run, the gate as CI runs it), then `build/venv-pydantic1/bin/python -m pytest backend -q --phase-profile=…` for the per-node profile (finding S7).
 - [ ] **frontend** `make check-web` ×1 and `npx vitest run` (no coverage) ×1, from `frontend/`.
 - [ ] **APK**: not buildable here without `make android-bootstrap` (an SDK download); the CI distribution above stands for it and the doc says so.
 - [ ] **coverage overhead split**: on py3.11 with coverage, one extra run with `COVERAGE_CORE=sysmon` is *not* possible (3.11 has no `sys.monitoring`); on py3.14 one run with `COVERAGE_CORE=ctrace` vs the default, to attribute the 3.11/3.14 gap to the tracer rather than the interpreter.
@@ -114,14 +133,14 @@ Pre-existing failures on `main` in this environment are recorded with their node
 
 ### Task A4 — the baseline document
 
-- [ ] `…-test-performance-baseline.md`: environment; commands; the CI distribution table; local distributions; coverage overhead; top-100 call/setup/teardown/total (as a link-free table in the doc only for the top 30, the rest in the JSON); slowest 30 modules; fixture totals; op counts; concentration; the arc-set fingerprint (SHA-256 of the canonical arc dump, plus line/arc/file counts) for py3.11 and py3.14 separately; the hotspot list ranked for PRs D–F; pre-existing failures.
+- [ ] `…-test-performance-baseline.md`: environment; commands; the CI distribution table; local distributions (profile `wall_s` and the outer timer side by side); coverage overhead; the displayed coverage percentage and where the XML is; top-100 call/setup/teardown/total (as a link-free table in the doc only for the top 30, the rest in the JSON); slowest 30 modules; fixture totals; op counts; concentration; the arc-set fingerprint (SHA-256 of the canonical arc dump, plus line/arc/file counts) for py3.11 and py3.14 separately; the hotspot list ranked for PRs D–F; pre-existing failures.
 - [ ] `…-test-performance-baseline.json`: the same summary, machine-readable, schema-versioned.
 - [ ] Privacy read of both files before commit: no absolute paths outside the repo, no store contents, no names but the placeholder set.
-- [ ] Commit: `docs(perf): the serial baseline at a219190`.
+- [ ] Commit: `docs(perf): the serial baseline of a219190`.
 
 ### PR A exit evidence
 
-`make check` targets that PR A touches pass locally (`check-py`, `check-lint`, `check-mypy`, `check-templates`); full CI green on the PR head; the self-tests prove the plugin's contract; the baseline doc names its SHA, machine and n per configuration.
+Locally: `check-py`, `check-pydantic1` (it runs the new subprocess self-tests too) and `check-lint` (ruff lints `scripts/` and `backend/tests/`; mypy only `backend/src`, which PR A does not touch). Full CI green on the PR head. The self-tests prove the plugin's contract; its xdist path is marked unproven until PR C. The baseline doc names its SHA, machine, environment and n per configuration. The two remaining `CLAUDE.md` gates — implementation → done (`/codex:review`) and the final spec-conformance adversarial review — run as Claude stand-ins on the finished diff, and their findings are resolved or answered before the PR is called done.
 
 ---
 
