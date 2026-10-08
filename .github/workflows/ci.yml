@@ -26,6 +26,12 @@ jobs:
   backend:
     name: backend (py${{ matrix.python }})
     runs-on: ubuntu-24.04
+    # A hung xdist worker or a child that never exits would otherwise hold the
+    # job for GitHub's six-hour default before anything said so. Well above the
+    # parallel run's measured time (docs/superpowers/validation/
+    # 2026-10-08-test-performance-report.md) and below the serial one's worst,
+    # so `WORKERS=0` here would need it raised -- deliberately, in this file.
+    timeout-minutes: 45
     strategy:
       # Without this a 3.11 failure would hide a 3.14 one, and 3.11 has never
       # been exercised at all -- it is only a floor pyproject.toml declares.
@@ -140,6 +146,8 @@ jobs:
   pydantic1:
     name: pydantic 1.10 (the Android dependency set)
     runs-on: ubuntu-24.04
+    # Same reason as the backend job's.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5

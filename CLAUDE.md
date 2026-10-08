@@ -491,7 +491,8 @@ would answer neither question.
   floors to `requires-python` and `engines.node`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
   runs, so a CI failure reproduces locally with one command. Individually:
-  `make check-py` (pytest under coverage), `check-web` (npm ci + typecheck +
+  `make check-py` (pytest under coverage, across four pytest-xdist workers;
+  `WORKERS=0` is the serial run), `check-web` (npm ci + typecheck +
   vitest under coverage),
   `check-lint` (ruff), `check-mypy` (mypy), `check-eslint` (eslint),
   `check-templates` (`verify_templates.py`),
@@ -566,6 +567,15 @@ would answer neither question.
   `cd backend; $env:PYTHONPATH="src"; .venv\Scripts\python.exe -m
   tests.fixtures.frozen_campaign.sweep`), committed with the change that moved
   it. See that directory's README.
+- **Every route test builds a fresh app, and FastAPI's analysis of its routes
+  is memoised per test process** (`backend/tests/route_memo.py`, installed by
+  `conftest.py`). Building that analysis for every app was most of what a
+  route test cost; the memo reuses it, and nothing else -- the app, its
+  lifespan, its run registry and its dependency overrides stay per test. It
+  leans on one private FastAPI function and switches itself off when that
+  function is absent or its signature moves, so a FastAPI upgrade can make the
+  suite slower without making it wrong; `test_route_memo.py` says which.
+  `GRIMOIRE_TEST_ROUTE_MEMO=0` runs without it.
 - **Faking the LLM**: use `backend/tests/llm_fakes.py`, injected at
   `app.dependency_overrides[routes.get_llm]` — never write another inline fake.
   Scripted turns (`FakeOpenRouter`, `FakeOpenRouterComplete`, …) answer by call
