@@ -135,8 +135,11 @@ def configure_embeddings(client, kind="openai_compatible"):
                        json={"kind": kind, "name": "Vectors", "model": "",
                              "base_url": "https://vectors.example/v1",
                              "api_key": "sk-x", "post_process": "none"}).json()
-    client.put("/api/config", json={"embeddings_connection_id": conn["id"],
-                                    "embeddings_model": "embed-1"})
+    # Moving the Embedding role's space asks first, at either format.
+    got = client.put("/api/config", json={"embeddings_connection_id": conn["id"],
+                                          "embeddings_model": "embed-1",
+                                          "confirm_embedding": True})
+    assert got.status_code == 200, got.text
     return conn["id"]
 
 
