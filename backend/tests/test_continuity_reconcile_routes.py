@@ -1528,6 +1528,55 @@ def test_a_follow_on_pass_keeps_what_the_first_pass_answered(client, monkeypatch
     assert records[PAIR]["proposal"] is None
 
 
+@pytest.mark.parametrize("follow_on", ["off", "skipped"])
+def test_a_follow_on_with_no_model_check_does_not_unsay_the_first(
+        client, monkeypatch, follow_on):
+    """Review 1 #4: the first pass answers one finding; between the passes the
+    Decision role stops resolving (or the follow-on has nothing to ask). The
+    run's `llm` describes the run, as its `adjudicated` does: never ``off``
+    beside a stored suggestion. An ``off`` follow-on's findings, which it
+    could not ask, are the run's `unanswered`, so the review reads "only
+    some" rather than "no model connection"."""
+    cid, temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    fake = _install(client, from_entries([
+        {"when": {**WHEN, "user_contains": TEMPORAL_ITEM},
+         "reply": _reply({"decision": "before"})},
+        _entry("{}")]))
+    real_resolved = continuity_routes._soft_resolved
+    resolutions: list[int] = []
+
+    def changed_between_passes(thunk):
+        resolutions.append(1)
+        if len(resolutions) == 1 or follow_on == "skipped":
+            return real_resolved(thunk)
+        return None, "The Decision role cannot generate.", "incapable"
+    monkeypatch.setattr(continuity_routes, "_soft_resolved", changed_between_passes)
+    if follow_on == "skipped":
+        real_select = continuity_routes.reconcile.select
+        selections: list[int] = []
+
+        def nothing_the_second_time(*args, **kwargs):
+            selections.append(1)
+            return real_select(*args, **kwargs) if len(selections) == 1 else []
+        monkeypatch.setattr(continuity_routes.reconcile, "select", nothing_the_second_time)
+    _follow_on_refresh(client, cid)
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    result = run["result"]
+    assert result["follow_on"] is True
+    assert len(_reconcile_requests(fake)) == 2           # the first pass's two chunks
+    assert (result["llm"], result["reason"], result["reason_kind"]) == ("ok", "", "")
+    assert result["adjudicated"] == 1
+    # The off follow-on could not ask what it selected: the pair the first
+    # pass left, and the finding the follow-on touched. Nothing to ask is none.
+    assert result["unanswered"] == (2 if follow_on == "off" else 0)
+    assert _records(cid)[temporal]["proposal"]["decision"] == "before"
+
+
 @pytest.mark.parametrize(("kind", "status", "retry_after"), [
     ("rate_limit", 429, "13"), ("timeout", 504, None)])
 def test_a_chunk_error_keeps_the_status_a_whole_failure_has(

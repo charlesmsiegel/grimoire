@@ -650,13 +650,15 @@ async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
     counted `unanswered`: it gets no proposal, never ``uncertain``, and the
     next sweep asks it again (I1). Once the reply is read, `tally` holds the
     ids it ``asked`` and the ids it ``answered``, for `_passes` to count a run
-    of two passes by (M4)."""
+    of two passes by (M4); with no resolution it holds ``unasked``, how many
+    findings the pass would have asked."""
     resolved, why, kind = await run_in_threadpool(
         _soft_resolved,
         lambda: require_inference("continuity-reconcile", cid, operation="decide"))
     selected = await run_in_threadpool(reconcile.select, cid, sweep)
     if resolved is None:
         result.update(llm="off", reason=why, reason_kind=kind)
+        tally["unasked"] = len(selected)
         return {"state": "landed", "result": result}, {}
     if not selected:
         result["llm"] = "skipped"
@@ -779,7 +781,14 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
     alone, a follow-on that answered nothing would have the review say the
     model gave no suggestions to a run that stored some. `unanswered` stays
     the follow-on's, since it asks again every finding still without a
-    proposal (`reconcile.select`). A failure from then on sets
+    proposal (`reconcile.select`). `llm` describes the run as that count
+    does: a follow-on with no resolution (the Decision role changed under
+    the run) or nothing to ask, after a first pass that stored answers, is
+    an ``ok`` run -- never ``off`` beside a non-zero `adjudicated`, which
+    would have the review say no model ran over findings carrying its
+    suggestions -- and the findings an ``off`` follow-on could not ask are
+    its `unanswered`, so the review says the check answered only some. A
+    failure from then on sets
     ``progress["follow_on"]``: the first pass's findings stand whatever it
     was, so the failure is the follow-on pass's alone. Both passes draw on one
     `reconcile.EmbedBudget`: `RECONCILE_WARM_LIMIT` and the embedding window
@@ -802,10 +811,13 @@ async def _passes(app, run, cid: str, client: LLMClient, *, full: bool,
                                malformed=_MALFORMED_FOLLOW_ON)
     out = {**follow, "result": {**(follow.get("result") or {}), "sweep": first,
                                 "follow_on": True}}
-    if follow["state"] == "landed" and first_tally:
+    if follow["state"] == "landed" and "answered" in first_tally:
         answered = ((first_tally["answered"] - follow_tally.get("asked", set()))
                     | follow_tally.get("answered", set()))
         out["result"]["adjudicated"] = len(answered)
+        if answered and out["result"]["llm"] != "ok":
+            out["result"].update(llm="ok", reason="", reason_kind="",
+                                 unanswered=follow_tally.get("unasked", 0))
     if follow.get("error"):
         out["error"] = {**follow["error"], "sweep": first}
     return out
