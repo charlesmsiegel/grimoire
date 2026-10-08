@@ -241,12 +241,12 @@ def test_unset_fast_and_decision_inherit(client):
 def test_a_route_row_names_the_role_it_walks(client):
     """CODE-M3: `uses` is the role a route walks (spec 5.1) -- what the
     Decision card lists -- where `role` is the one that SUPPLIED the
-    selection. With Decision unset the three decide routes still use it,
-    while Fast (and, unset too, Primary) supplies them; a pin uses none."""
+    selection. With Decision unset the decide routes still use it, while
+    Fast (and, unset too, Primary) supplies them; a pin uses none."""
     cid = _fresh(client)
     got = _global(client)
     deciding = {r.key for r in routing.ROUTES if r.default_role == "decision"}
-    assert deciding == {"speaker", "scene_break", "voice_drift"}
+    assert deciding == {"speaker", "scene_break", "voice_drift", "continuity"}
     assert {r["key"] for r in got["routes"] if r["uses"] == "decision"} == deciding
     assert {_row(got, k)["role"] for k in deciding} == {"primary"}
     assert _row(got, "absorb")["uses"] == "fast"

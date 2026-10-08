@@ -18,13 +18,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import embeddings
+from grimoire import decisions, embeddings, prompts
 from grimoire.main import create_app
 from grimoire.store import absorb, config, embed_space, llm_connections, vectors
 from grimoire.store.absorb import materializer
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import identity, review, similarity
-from tests.llm_fakes import FakeEmbeddings
+from tests.llm_fakes import FakeEmbeddings, decision_reply
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 
 NO_FACTS = {"cast": [], "location": "", "date": ""}
@@ -505,49 +505,22 @@ def test_proposed_subject_carries_the_scene_cast(cid, s0, sid):
     assert signals["via"] == "structural"
 
 
-# ------------------------------------------------------------ resolver parse
+# ------------------------------------------------------------ the vocabularies
 
 
-def test_parse_undecodable_is_none():
-    assert identity.parse_output("I think so.") is None
-
-
-def test_parse_decodable_empty_is_empty_list():
-    assert identity.parse_output("{}") == []
-    assert identity.parse_output('{"decisions": 3}') == []
-
-
-def test_parse_accepts_row_labels_as_printed():
-    for label in ("Row r1", " R1 ", "r1", "ROW R1"):
-        [decision] = identity.parse_output(json.dumps(
-            {"decisions": [{"row": label, "decision": "new"}]}))
-        assert decision["row"] == "r1", label
-
-
-def test_parse_normalizes_and_never_raises():
-    reply = "Here you go:\n```json\n" + json.dumps({"decisions": [
-        "not a row",
-        {"decision": "new", "id": "", "reason": "no row key"},
-        {"row": "   ", "decision": "new"},
-        {"row": 3, "decision": "new"},
-        {"row": "Row r1", "decision": "EXISTING", "id": " find-the-ledger ",
-         "reason": " Same ledger. "},
-        {"row": "r2", "decision": "maybe", "id": 7, "reason": "x" * 400},
-        {"row": "r1", "decision": "new", "id": "", "reason": "a second answer for r1"},
-        {"row": "r3", "decision": None, "reason": ["not", "text"]},
-    ]}) + "\n```"
-    assert identity.parse_output(reply) == [
-        {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "Same ledger."},
-        {"row": "r2", "decision": "uncertain", "id": "", "reason": "x" * identity.REASON_CHARS},
-        {"row": "r3", "decision": "uncertain", "id": "", "reason": ""},
-    ]
-    assert len(identity.parse_output(reply)[1]["reason"]) == identity.REASON_CHARS
+def test_the_decision_vocabularies():
     assert identity.DECISIONS == ("existing", "new", "uncertain")
     assert identity.CHECK_DECISIONS == ("existing", "new", "uncertain", "unchecked")
     assert identity.STATUSES == ("accepted", "downgraded", "hint_only")
 
 
-# ------------------------------------------------------------ resolver prompt
+# ------------------------------------------------------------ the item context
+
+
+def _context(row, live=None):
+    """The `decide()` item context `build_items` makes of one `prompt_rows()` row."""
+    [item] = identity.build_items([row], live or {})
+    return item.context
 
 #: A proposed thread re-opening `LEDGER_THREAD` under its exact title, after the
 #: stored one was closed -- so it is proposed, and titled the same.
@@ -604,17 +577,14 @@ def test_prompt_rows_carry_the_row_and_its_neighbours(cid, s0, sid):
         "the-midnight-deadline", "threat", "midnight", [])
 
 
-def test_build_prompt_shows_rows_candidates_and_signals(cid, s0, sid):
+def test_build_items_show_rows_candidates_and_signals(cid, s0, sid):
     _seed_prompt_fixture(cid, s0)
     exam = _examine(cid, sid, plot=[REOPENED_LEDGER], owed=[SERAPHINES_DEADLINE])
-    system, user = identity.build_prompt(exam.prompt_rows())
-    assert (system["role"], user["role"]) == ("system", "user")
-    assert system["content"].startswith("You are checking whether newly proposed story records")
-    for word in ('"existing"', '"new"', '"uncertain"'):
-        assert word in system["content"]
-    text = user["content"]
-    assert "Row r1 — proposed plot thread: Find the ledger" in text
-    assert "Row r2 — proposed commitment: Seraphine's midnight deadline" in text
+    items = identity.build_items(exam.prompt_rows(), exam.live)
+    assert len(items) == 2
+    text = "\n".join(item.context for item in items)
+    assert items[0].context.startswith("Proposed plot thread: Find the ledger\n")
+    assert items[1].context.startswith("Proposed commitment: Seraphine's midnight deadline\n")
     assert "find-the-ledger: Find the ledger (closed) — Winifred burned the ledger." in text
     assert ("the-midnight-deadline: The midnight deadline (threat, open), due midnight"
             " — Seraphine must pay by midnight.") in text
@@ -644,7 +614,7 @@ def test_template_rows_signal_text_order():
     assert "line" not in row["candidates"][0]   # the input is not mutated
 
 
-def test_build_prompt_with_no_optional_fields_renders():
+def test_build_items_with_no_optional_fields_render():
     signals = {"title_equal": False, "slug_equal": False, "tokens": 0.3, "chars": 0.0,
                "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical"}
     row = {"key": "r1", "kind": "commitment", "title": "The Saltmarch tithe",
@@ -654,9 +624,8 @@ def test_build_prompt_with_no_optional_fields_renders():
            "candidates": [{"id": "salt-owed", "title": "Salt owed", "status": "open",
                            "kind": "", "due": "", "latest_beat": "", "earlier": [],
                            "signals": signals}]}
-    _, user = identity.build_prompt([row])
-    text = user["content"]
-    assert "Row r1 — proposed commitment: The Saltmarch tithe" in text
+    text = _context(row)
+    assert text.startswith("Proposed commitment: The Saltmarch tithe\n")
     # A blank commitment kind is shown as the default it means.
     assert "salt-owed: Salt owed (promise, open)" in text
     assert "signals: word overlap 0.30" in text
@@ -672,10 +641,10 @@ def _candidate_text_bytes(cand):
     return sum(len(f.encode("utf-8")) for f in fields)
 
 
-def test_a_long_stored_beat_is_clipped_in_the_resolver_prompt(cid, s0, sid):
+def test_a_long_stored_beat_is_clipped_in_the_item_context(cid, s0, sid):
     # Ledger routes take a beat of any length, and a closed record is in the
     # pool though not in the extraction snapshot: its title can select it while
-    # its beats would blow the resolver's context. The candidate's stored text
+    # its beats would blow the item's context. The candidate's stored text
     # is shown within the identity-text bound, as its embedding input was.
     pid, title, _ = LEDGER_THREAD
     first = "Winifred found the first page. " + "ш" * 20000
@@ -690,18 +659,18 @@ def test_a_long_stored_beat_is_clipped_in_the_resolver_prompt(cid, s0, sid):
     assert cand["title"] == "Find the ledger"
     assert cand["latest_beat"].startswith("Winifred burned the ledger. 灰")
     assert latest.startswith(cand["latest_beat"])
-    _, user = identity.build_prompt([row])
-    # The same prompt with one-byte beats: the labels and separators, the fixed overhead.
-    _, short = identity.build_prompt([{**row, "candidates": [
-        {**cand, "latest_beat": "-", "earlier": ["-"] * len(cand["earlier"])}]}])
-    assert len(user["content"].encode("utf-8")) <= len(short["content"].encode("utf-8")) + bound
-    assert "Winifred burned the ledger. 灰灰灰" in user["content"]
+    context = _context(row, exam.live)
+    # The same context with one-byte beats: the labels and separators, the fixed overhead.
+    short = _context({**row, "candidates": [
+        {**cand, "latest_beat": "-", "earlier": ["-"] * len(cand["earlier"])}]}, exam.live)
+    assert len(context.encode("utf-8")) <= len(short.encode("utf-8")) + bound
+    assert "Winifred burned the ledger. 灰灰灰" in context
 
 
 def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, sid):
     bound = similarity.CONTINUITY_IDENTITY_BYTES
     # The kind is what a ledger route stores (one of `commitments.KINDS`); the
-    # id is the resolver's handle: both are shown whole, the rest shares what is left.
+    # id is the model's handle: both are shown whole, the rest shares what is left.
     record = {"title": "The Saltmarch tithe " + "t" * bound, "kind": "threat",
               "due": "midsummer " + "d" * bound, "status": "open",
               "beats": [{"text": "Mara swore it. " + "e" * bound, "scene": s0},
@@ -723,7 +692,7 @@ def test_every_stored_candidate_field_shares_the_identity_text_bound(cid, s0, si
 
 def test_a_record_whose_id_overruns_the_bound_is_never_a_candidate(cid, s0, sid):
     # A ledger route slugifies a title of any length into the record's id, and
-    # the resolver has to name a candidate back by that id, so it cannot be
+    # the model has to name a candidate back by that id, so it cannot be
     # clipped: a record whose id alone overruns the identity-text bound is not
     # offered, and the prompt does not grow with it.
     bound = similarity.CONTINUITY_IDENTITY_BYTES
@@ -735,8 +704,7 @@ def test_a_record_whose_id_overruns_the_bound_is_never_a_candidate(cid, s0, sid)
     [row] = exam.prompt_rows()
     assert [c["id"] for c in row["candidates"]] == ["find-the-ledger"]
     assert [s.ref for s, _ in exam.rows[0].candidates] == ["thread:find-the-ledger"]
-    _, user = identity.build_prompt([row])
-    assert len(user["content"].encode("utf-8")) <= 2 * bound
+    assert len(_context(row, exam.live).encode("utf-8")) <= 2 * bound
 
 
 def test_a_title_filling_the_bound_does_not_relabel_a_commitment_kind(s0):
@@ -752,9 +720,9 @@ def test_a_title_filling_the_bound_does_not_relabel_a_commitment_kind(s0):
     [cand] = row["candidates"]
     assert cand["kind"] == "threat"
     assert _candidate_text_bytes(cand) <= bound
-    _, user = identity.build_prompt([row])
-    assert "(threat, open)" in user["content"]
-    assert "promise" not in user["content"]
+    context = _context(row)
+    assert "(threat, open)" in context
+    assert "promise" not in context
 
 
 # ------------------------------------------------------------ deciding rows
@@ -769,15 +737,15 @@ SERAPHINES_THREAT = {"title": "Seraphine's midnight deadline",
                      "beat": "Seraphine must pay the midnight deadline.",
                      "kind": "threat", "status": "open"}
 
-#: A citation, as `parse_output` carries one.
+#: A citation, as the extraction carries one.
 CITED = {"quote": "I want that ledger back.", "speaker": "Winifred", "certainty": 0.8}
 
 
 def _say(*answers):
-    """A resolver reply, through `parse_output` as the route reads one."""
-    return identity.parse_output(json.dumps({"decisions": [
-        {"row": row, "decision": word, "id": rid, "reason": f"because {row}"}
-        for row, word, rid in answers]}))
+    """Today's decision dicts, as `answers_of` hands them to
+    `Examination.decide`: one per `(row, word, id)`."""
+    return [{"row": row, "decision": word, "id": rid, "reason": f"because {row}"}
+            for row, word, rid in answers]
 
 
 def _assert_ledger_candidate(cid, sid, row):
@@ -1180,5 +1148,251 @@ def test_a_hand_edited_long_status_shares_the_identity_text_bound(cid, s0, sid):
     [cand] = row["candidates"]
     assert _candidate_text_bytes(cand) <= bound
     assert cand["status"].startswith("closed")
-    _, user = identity.build_prompt([row])
-    assert len(user["content"].encode("utf-8")) <= 2 * bound
+    assert len(_context(row).encode("utf-8")) <= 2 * bound
+
+
+# ------------------------------------------------- the check as decision items
+#
+# Slice G prepares the duplicate check for `decide()` without moving the call
+# site: one item per examined row, asking `decision` and then `id`, and a
+# mapping from the parsed batch back to today's decision dicts, for the
+# unchanged `Examination.decide`.
+
+def _decision_row(key, kind, title, ids, **over):
+    """A `prompt_rows()`-shaped row offering a candidate per id, in rank order."""
+    signals = {"title_equal": False, "slug_equal": False, "tokens": 0.4, "chars": 0.5,
+               "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical"}
+    return {"key": key, "kind": kind, "title": title, "beat": "Winifred went looking.",
+            "status": "open", "commitment_kind": "", "due": "", "quote": "", "speaker": "",
+            "certainty": None, "why_new": "", "distinguished_from": [],
+            "candidates": [{"id": rid, "title": rid.replace("-", " ").capitalize(),
+                            "status": "open", "kind": "", "due": "",
+                            "latest_beat": f"{rid} moved.", "earlier": [],
+                            "signals": dict(signals)} for rid in ids],
+            **over}
+
+
+def _memory_exam(*rows):
+    """An in-memory `Examination` over `(kind, title, [candidate ids])` rows,
+    with no store: each candidate an open record of the row's kind."""
+    examined = []
+    for n, (kind, title, ids) in enumerate(rows):
+        cands = [(similarity.subject(kind, f"{kind}:{rid}",
+                                     {"title": rid, "status": "open",
+                                      "beats": [{"text": f"{rid} moved.", "scene": "s0"}]}),
+                  {"via": "lexical"}) for rid in ids]
+        section = "plot_movements" if kind == "thread" else "commitment_movements"
+        examined.append(identity.Examined(section, n, f"r{n + 1}", kind,
+                                          {"title": title, "beat": "Winifred looks."},
+                                          f"proposed-{n}", cands, []))
+    return identity.Examination(examined, len(examined), "basic", "off", "", 0, set(), {})
+
+
+def _options(choice):
+    return [(o.id, o.description, o.aliases) for o in choice.options]
+
+
+def _candidate_lines(context):
+    return [line for line in context.split("Candidates:", 1)[1].splitlines()
+            if line.startswith("- ")]
+
+
+def test_build_items_one_per_row_asking_decision_then_id():
+    rows = [_decision_row("r1", "thread", "Recover the harbour ledger",
+                          ["find-the-ledger", "maras-map"], quote="I want it back.",
+                          speaker="Winifred", why_new="A second search."),
+            _decision_row("r2", "commitment", "Seraphine's midnight deadline",
+                          ["the-midnight-deadline"], commitment_kind="threat",
+                          due="midnight")]
+    items = identity.build_items(rows, {})
+    decisions.validate(items)
+    assert len(items) == len(rows)
+    for item, row, shown in zip(items, rows, identity.template_rows(rows), strict=True):
+        assert [q.id for q in item.questions] == [identity.DECISION_ID, identity.RECORD_ID]
+        decision, record = item.questions
+        assert isinstance(decision, decisions.Choice) and not decision.allow_none
+        assert [o.id for o in decision.options] == list(identity.DECISIONS)
+        assert decision.instructions == prompts.render("continuity_identity/question.j2")
+        assert [o.description for o in decision.options] == [
+            prompts.render("continuity_identity/option.j2", decision=w)
+            for w in identity.DECISIONS]
+        assert isinstance(record, decisions.Choice) and record.allow_none
+        assert record.instructions == prompts.render("continuity_identity/record.j2")
+        assert [o.id for o in record.options] == [c["id"] for c in row["candidates"]]
+        assert item.context == prompts.render("continuity_identity/item.j2", r=shown)
+        for cand in shown["candidates"]:
+            assert cand["line"] in item.context
+    assert items[0].context.startswith(
+        "Proposed plot thread: Recover the harbour ledger\nBeat: Winifred went looking.")
+    assert items[1].context.startswith("Proposed commitment: Seraphine's midnight deadline\n")
+    assert "Row r1" not in items[0].context
+    # A candidate is described by its clipped title, and spelled by its ref form.
+    assert _options(items[0].questions[1])[0] == (
+        "find-the-ledger", "Find the ledger", ("thread:find-the-ledger",))
+    assert identity.explain() == prompts.render("continuity_identity/explain.j2")
+    assert identity.RECORD_ID == "id"
+    assert identity.UNREADABLE == "the duplicate check returned no readable answer"
+
+
+def test_a_single_candidate_row_offers_one_id_and_null():
+    rows = [_decision_row("r1", "commitment", "Seraphine's midnight deadline",
+                          ["the-midnight-deadline"])]
+    items = identity.build_items(rows, {})
+    decisions.validate(items)
+    record = items[0].questions[1]
+    assert [o.id for o in record.options] == ["the-midnight-deadline"] and record.allow_none
+    named = decision_reply({"decision": "existing", "id": "the-midnight-deadline"})
+    blank = decision_reply({"decision": "new", "id": None})
+    [answered] = decisions.parse(named, items, explain=True)
+    [abstained] = decisions.parse(blank, items, explain=True)
+    assert answered.answers[identity.RECORD_ID].answer == "the-midnight-deadline"
+    assert abstained.answers[identity.RECORD_ID].reason == "abstained"
+
+
+def test_a_candidate_titled_blank_is_described_by_its_id():
+    row = _decision_row("r1", "thread", "Recover the ledger", ["find-the-ledger"])
+    row["candidates"][0]["title"] = ""
+    [item] = identity.build_items([row], {})
+    assert [o.description for o in item.questions[1].options] == ["find-the-ledger"]
+
+
+def test_the_id_question_reads_alias_sources_and_ref_forms():
+    live = {"thread:a": "thread:b", "thread:c": "thread:other", "thread:b": "thread:b"}
+    rows = [_decision_row("r1", "thread", "Mara's map", ["b"])]
+    items = identity.build_items(rows, live)
+    decisions.validate(items)
+    assert _options(items[0].questions[1]) == [("b", "B", ("thread:b", "thread:a", "a"))]
+    for named in ("a", "thread:b", "thread:a", "b", " B "):
+        [result] = decisions.parse(
+            decision_reply({"decision": "existing", "id": named}), items, explain=True)
+        assert result.answers[identity.RECORD_ID].answer == "b", named
+        assert identity.answers_of(rows, (result,))[0]["id"] == "b"
+
+
+def test_build_items_drops_a_candidate_whose_id_collides_once_normalised():
+    rows = [_decision_row("r1", "thread", "The map", ["the-map", "the map"])]
+    items = identity.build_items(rows, {})
+    decisions.validate(items)
+    assert [o.id for o in items[0].questions[1].options] == ["the-map"]
+    assert len(_candidate_lines(items[0].context)) == 1
+    assert "the-map: The map" in items[0].context
+
+
+def test_build_items_never_builds_a_request_validate_refuses():
+    # A hand-edited ledger: a `thread:` key with no id, two ids that read as
+    # one once normalised, and an earlier candidate whose alias source spells
+    # a later candidate's id. Every id is taken before any alias.
+    live = {"thread:maras-map": "thread:find-the-ledger"}
+    rows = [_decision_row("r1", "thread", "The ledger",
+                          ["", "find-the-ledger", "Find The Ledger", "maras-map"])]
+    items = identity.build_items(rows, live)
+    decisions.validate(items)
+    record = items[0].questions[1]
+    assert _options(record) == [
+        ("find-the-ledger", "Find the ledger",
+         ("thread:find-the-ledger", "thread:maras-map")),
+        ("maras-map", "Maras map", ())]
+    assert len(_candidate_lines(items[0].context)) == 2
+    [result] = decisions.parse(decision_reply({"decision": "existing", "id": "maras-map"}),
+                               items, explain=True)
+    assert result.answers[identity.RECORD_ID].answer == "maras-map"
+    # A row left with no offerable candidate still asks its decision, and
+    # never a choice of nothing: an `existing` answer is then not offered.
+    bare = [_decision_row("r1", "thread", "The ledger", [""])]
+    [item] = identity.build_items(bare, {})
+    decisions.validate((item,))
+    assert [q.id for q in item.questions] == [identity.DECISION_ID]
+    assert _candidate_lines(item.context) == []
+    [result] = decisions.parse(decision_reply({"decision": "existing", "id": ""}), (item,),
+                               explain=True)
+    assert identity.answers_of(bare, (result,)) == [
+        {"row": "r1", "decision": "existing", "id": "", "reason": ""}]
+
+
+def _result(decision, rid=None, rationale=""):
+    answer = (decision if isinstance(decision, decisions.Answer)
+              else decisions.Answer(decision))
+    record = rid if isinstance(rid, decisions.Answer) else (
+        decisions.Answer(rid) if rid is not None else decisions.Answer(None, "abstained"))
+    return decisions.ItemResult({identity.DECISION_ID: answer, identity.RECORD_ID: record},
+                                rationale)
+
+
+_ROWS3 = [{"key": "r1"}, {"key": "r2"}, {"key": "r3"}]
+
+
+def test_answers_of_maps_each_answer_to_todays_decision_shape():
+    results = (_result("existing", "find-the-ledger", " Same ledger. "),
+               _result("new", None, "x" * 400),
+               _result("uncertain", decisions.Answer(None, "unreadable",
+                                                     detail=decisions.NOT_AN_OPTION)))
+    assert identity.answers_of(_ROWS3, results) == [
+        {"row": "r1", "decision": "existing", "id": "find-the-ledger",
+         "reason": "Same ledger."},
+        {"row": "r2", "decision": "new", "id": "", "reason": "x" * identity.REASON_CHARS},
+        {"row": "r3", "decision": "uncertain", "id": "", "reason": ""}]
+
+
+_NOT_READ = (decisions.Answer(None, "unreadable", detail=decisions.NO_OBJECT),
+             decisions.Answer(None, "unreadable", detail=decisions.NO_ITEM),
+             decisions.Answer(None, "error"), decisions.Answer(None, "refused"),
+             decisions.Answer(None, "abstained"))
+
+
+def test_answers_of_leaves_out_every_item_the_reply_never_reached():
+    exam = _memory_exam(("thread", "Recover the ledger", ["find-the-ledger"]),
+                        ("thread", "Recover the ledger again", ["find-the-ledger"]),
+                        ("thread", "Mara's map", ["maras-map"]))
+    rows = exam.prompt_rows()
+    for missing in _NOT_READ:
+        results = (_result("new", None, "Its own business."), _result(missing, missing),
+                   _result("new"))
+        answers = identity.answers_of(rows, results)
+        assert [a["row"] for a in answers] == ["r1", "r3"], missing
+        exam.decide(answers)
+        assert [(e.decision, e.status) for e in exam.rows] == [
+            ("new", "accepted"), ("unchecked", "hint_only"), ("new", "accepted")], missing
+        assert exam.rows[1].reason == identity.NO_ANSWER
+    # An item the reply reached and answered badly is read: `uncertain`.
+    for garbled in (decisions.Answer(None, "unreadable"),
+                    decisions.Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION)):
+        answers = identity.answers_of(rows, (_result("new"), _result(garbled), _result("new")))
+        assert [a["row"] for a in answers] == ["r1", "r2", "r3"]
+        assert answers[1] == {"row": "r2", "decision": "", "id": "", "reason": ""}
+        exam.decide(answers)
+        assert (exam.rows[1].decision, exam.rows[1].status) == ("uncertain", "accepted")
+
+
+def test_answers_of_is_none_only_when_no_item_held_an_object():
+    no_object, no_item = _NOT_READ[0], _NOT_READ[1]
+    assert identity.answers_of(_ROWS3, tuple(_result(no_object, no_object)
+                                             for _ in _ROWS3)) is None
+    assert identity.answers_of(_ROWS3, tuple(_result(no_item, no_item)
+                                             for _ in _ROWS3)) == []
+    assert identity.answers_of(_ROWS3, (_result(no_object, no_object),
+                                        _result(no_item, no_item),
+                                        _result(no_object, no_object))) == []
+    # The reply's own shapes, through the parser: no object, and an object
+    # with no item (`{}`, or today's format).
+    items = identity.build_items(_memory_exam(
+        ("thread", "Recover the ledger", ["find-the-ledger"]),
+        ("thread", "Mara's map", ["maras-map"])).prompt_rows(), {})
+    rows = [{"key": "r1"}, {"key": "r2"}]
+    for text, want in (("I think so.", None), ("{}", []),
+                       ('{"decisions": [{"row": "r1", "decision": "new"}]}', [])):
+        assert identity.answers_of(rows, decisions.parse(text, items, explain=True)) == want
+
+
+def test_take_hint_onlys_an_unreadable_reply():
+    exam = _memory_exam(("thread", "Recover the ledger", ["find-the-ledger"]),
+                        ("thread", "Mara's map", ["maras-map"]))
+    assert identity.take(exam, [{"row": "r1", "decision": "new", "id": "",
+                                 "reason": "Its own."}]) is True
+    assert [(e.decision, e.status) for e in exam.rows] == [
+        ("new", "accepted"), ("unchecked", "hint_only")]
+    assert identity.take(exam, None) is False
+    assert [(e.decision, e.status, e.reason) for e in exam.rows] == [
+        ("unchecked", "hint_only", identity.UNREADABLE)] * 2
+    assert identity.take(exam, []) is True
+    assert [(e.decision, e.status, e.reason) for e in exam.rows] == [
+        ("unchecked", "hint_only", identity.NO_ANSWER)] * 2

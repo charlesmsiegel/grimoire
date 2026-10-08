@@ -1,0 +1,744 @@
+[
+  {
+    "shape": "undecodable",
+    "intended": null,
+    "legacy": "I think so.",
+    "decide": "I think so."
+  },
+  {
+    "shape": "empty-reply",
+    "intended": null,
+    "legacy": "",
+    "decide": ""
+  },
+  {
+    "shape": "empty-object",
+    "intended": {},
+    "legacy": "{}",
+    "decide": "{}"
+  },
+  {
+    "shape": "decisions-not-a-list",
+    "intended": {},
+    "legacy": "{\"decisions\": 4}",
+    "decide": "{\"0\": 4}"
+  },
+  {
+    "shape": "non-object-elements",
+    "intended": {},
+    "legacy": "{\"decisions\": [3, \"x\", null]}",
+    "decide": "{\"0\": 3, \"1\": \"x\", \"2\": null}"
+  },
+  {
+    "shape": "cross-type-duplicate",
+    "intended": {
+      "possible_relation-5dd6010d229177a5": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Same business.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c3\", \"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Same business.\"}]}",
+    "decide": "{\"2\": {\"answers\": {\"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\"}, \"rationale\": \"Same business.\"}}"
+  },
+  {
+    "shape": "pays-off-from-the-commitment",
+    "intended": {
+      "possible_relation-5dd6010d229177a5": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c3\", \"decision\": \"pays_off\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"2\": {\"answers\": {\"decision\": \"pays_off\", \"from\": \"A\", \"to\": \"B\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "pays-off-from-the-thread",
+    "intended": {
+      "possible_relation-5dd6010d229177a5": {
+        "decision": "pays_off",
+        "from": "thread:maras-map",
+        "to": "commitment:maras-oath",
+        "relation": "pays_off",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c3\", \"decision\": \"pays_off\", \"from\": \"B\", \"to\": \"A\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"2\": {\"answers\": {\"decision\": \"pays_off\", \"from\": \"B\", \"to\": \"A\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "commitment-subthread",
+    "intended": {
+      "possible_duplicate-578e87b2c7948070": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c2\", \"decision\": \"subthread\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"1\": {\"answers\": {\"decision\": \"subthread\", \"from\": \"A\", \"to\": \"B\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "commitment-continuation",
+    "intended": {
+      "possible_duplicate-578e87b2c7948070": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c2\", \"decision\": \"continuation\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"1\": {\"answers\": {\"decision\": \"continuation\", \"from\": \"A\", \"to\": \"B\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "duplicate-one-record",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"A\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"A\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "duplicate-empty-letters",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"duplicate\", \"from\": \"\", \"to\": \"\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"duplicate\", \"from\": null, \"to\": null}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "continuation-unknown-letter",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"continuation\", \"from\": \"A\", \"to\": \"C\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"continuation\", \"from\": \"A\", \"to\": \"C\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "duplicate-b-to-a",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "duplicate",
+        "from": "thread:winifreds-chart",
+        "to": "thread:maras-map",
+        "relation": "",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"duplicate\", \"from\": \"B\", \"to\": \"A\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"duplicate\", \"from\": \"B\", \"to\": \"A\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "subthread-lowercase-letters",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "subthread",
+        "from": "thread:maras-map",
+        "to": "thread:winifreds-chart",
+        "relation": "subthread_of",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"subthread\", \"from\": \"a\", \"to\": \"b\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"subthread\", \"from\": \"a\", \"to\": \"b\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "continuation-b-to-a",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "continuation",
+        "from": "thread:winifreds-chart",
+        "to": "thread:maras-map",
+        "relation": "continues",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"continuation\", \"from\": \"B\", \"to\": \"A\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"continuation\", \"from\": \"B\", \"to\": \"A\"}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "commitments-related-empty-letters",
+    "intended": {
+      "possible_duplicate-578e87b2c7948070": {
+        "decision": "related",
+        "from": "commitment:maras-oath",
+        "to": "commitment:winifreds-debt",
+        "relation": "related_to",
+        "status": "",
+        "reason": "Because.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c2\", \"decision\": \"related\", \"from\": \"\", \"to\": \"\", \"reason\": \"Because.\"}]}",
+    "decide": "{\"1\": {\"answers\": {\"decision\": \"related\", \"from\": null, \"to\": null}, \"rationale\": \"Because.\"}}"
+  },
+  {
+    "shape": "temporal-before",
+    "intended": {
+      "possible_relation-a14c63fef4b88be5": {
+        "decision": "before",
+        "from": "commitment:maras-oath",
+        "to": "event:the-coronation",
+        "relation": "before",
+        "status": "",
+        "reason": "The oath falls before the crowning.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c4\", \"decision\": \"before\", \"from\": \"B\", \"to\": \"A\", \"reason\": \"The oath falls before the crowning.\"}]}",
+    "decide": "{\"3\": {\"answers\": {\"decision\": \"before\"}, \"rationale\": \"The oath falls before the crowning.\"}}"
+  },
+  {
+    "shape": "temporal-unrelated",
+    "intended": {
+      "possible_relation-a14c63fef4b88be5": {
+        "decision": "unrelated",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c4\", \"decision\": \"unrelated\"}]}",
+    "decide": "{\"3\": {\"answers\": {\"decision\": \"unrelated\"}}}"
+  },
+  {
+    "shape": "closure-unknown-scene",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "The map was burned.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"The map was burned.\", \"evidence_scenes\": [\"999--nowhere\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"999--nowhere\"}, \"rationale\": \"The map was burned.\"}}"
+  },
+  {
+    "shape": "closure-without-rationale",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"\"}}",
+    "ruling": "a status verdict stands on its evidence scene without a rationale (§7.4, I4)"
+  },
+  {
+    "shape": "closure-without-rationale-spaces",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"   \", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"   \"}}",
+    "ruling": "a status verdict stands on its evidence scene without a rationale (§7.4, I4)"
+  },
+  {
+    "shape": "closure-scene-not-a-list",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "The map was burned.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"The map was burned.\", \"evidence_scenes\": \"0001--saltmarch-docks\"}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": [\"0001--saltmarch-docks\"]}, \"rationale\": \"The map was burned.\"}}"
+  },
+  {
+    "shape": "closure-repeated-and-unknown-scenes",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "The map was burned.",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"The map was burned.\", \"evidence_scenes\": [\"999--nowhere\", \"0001--saltmarch-docks\", \"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"999--nowhere\", \"evidence_scene_2\": \"0001--saltmarch-docks\", \"evidence_scene_3\": \"0001--saltmarch-docks\"}, \"rationale\": \"The map was burned.\"}}"
+  },
+  {
+    "shape": "keep-open-without-rationale",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "keep_open",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"keep_open\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"\"}}"
+  },
+  {
+    "shape": "fulfilled-with-scene",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "fulfilled",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "fulfilled",
+        "reason": "So it went.",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"fulfilled\", \"reason\": \"So it went.\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"fulfilled\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"So it went.\"}}"
+  },
+  {
+    "shape": "fulfilled-without-scene",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "So it went.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"fulfilled\", \"reason\": \"So it went.\"}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"fulfilled\"}, \"rationale\": \"So it went.\"}}"
+  },
+  {
+    "shape": "broken-with-scene",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "broken",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "broken",
+        "reason": "So it went.",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"broken\", \"reason\": \"So it went.\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"broken\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"So it went.\"}}"
+  },
+  {
+    "shape": "broken-without-scene",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "So it went.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"broken\", \"reason\": \"So it went.\"}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"broken\"}, \"rationale\": \"So it went.\"}}"
+  },
+  {
+    "shape": "expired-with-scene",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "expired",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "expired",
+        "reason": "So it went.",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"expired\", \"reason\": \"So it went.\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"expired\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"So it went.\"}}"
+  },
+  {
+    "shape": "expired-without-scene",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "So it went.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"expired\", \"reason\": \"So it went.\"}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"expired\"}, \"rationale\": \"So it went.\"}}"
+  },
+  {
+    "shape": "close-on-a-commitment",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "x",
+        "evidence_scenes": [
+          "0001--saltmarch-docks"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"close\", \"reason\": \"x\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"x\"}}"
+  },
+  {
+    "shape": "unknown-keys-and-repeated-candidate",
+    "intended": {},
+    "legacy": "{\"decisions\": [{\"candidate\": \"c9\", \"decision\": \"close\", \"reason\": \"x\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}, {\"candidate\": 1, \"decision\": \"close\"}, \"not an object\", {\"candidate\": \"  Candidate C5 \", \"decision\": \"Merge it\", \"reason\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"second answer\"}]}",
+    "decide": "{\"6\": {\"answers\": {\"decision\": \"close\"}}, \"7\": {\"answers\": {\"decision\": \"close\"}}, \"8\": \"not an object\", \"4\": {\"answers\": {\"decision\": \"Merge it\"}, \"rationale\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\"}, \"rationale\": \"second answer\"}}",
+    "ruling": "accepted recall loss: a reply naming a candidate the batch did not send answers none of its items (slice F's index rule: a key past the batch may be the model's numbering, so none of its keys is read as an item's). Today's parse, which reads candidate names rather than indices, kept c5's verdict (stored uncertain); decide keeps nothing, and every candidate in the chunk is asked again by the next sweep. Entry 46 prints the same trade with real verdicts"
+  },
+  {
+    "shape": "repeated-candidate",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"Merge it\", \"reason\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"second answer\"}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"Merge it\"}, \"rationale\": \"rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\"}, \"rationale\": \"second answer\"}}"
+  },
+  {
+    "shape": "non-string-decision",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": 3}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": 3}}}"
+  },
+  {
+    "shape": "candidate-label-and-cased-word",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "keep_open",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"candidate:c5\", \"decision\": \"KEEP_OPEN\"}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"KEEP_OPEN\"}}}"
+  },
+  {
+    "shape": "closure-citing-a-line-scene",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "Answered.",
+        "evidence_scenes": [
+          "0004--saltmarch-quay"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"Answered.\", \"evidence_scenes\": [\"0004--saltmarch-quay\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0004--saltmarch-quay\"}, \"rationale\": \"Answered.\"}}"
+  },
+  {
+    "shape": "closure-citing-a-beat-scene",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "The map was found.",
+        "evidence_scenes": [
+          "0002--realm-road"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"The map was found.\", \"evidence_scenes\": [\"0002--realm-road\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0002--realm-road\"}, \"rationale\": \"The map was found.\"}}"
+  },
+  {
+    "shape": "long-record-duplicate",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "duplicate",
+        "from": "thread:maras-map",
+        "to": "thread:winifreds-chart",
+        "relation": "",
+        "status": "",
+        "reason": "Same ledger.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Same ledger.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\"}, \"rationale\": \"Same ledger.\"}}"
+  },
+  {
+    "shape": "todays-format",
+    "intended": {},
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"distinct\", \"from\": \"\", \"to\": \"\", \"reason\": \"A map and a chart are separate business.\", \"evidence_scenes\": []}, {\"candidate\": \"c2\", \"decision\": \"related\", \"from\": \"\", \"to\": \"\", \"reason\": \"The oath and the debt bear on each other.\", \"evidence_scenes\": []}, {\"candidate\": \"c3\", \"decision\": \"pays_off\", \"from\": \"B\", \"to\": \"A\", \"reason\": \"Finding the map keeps the oath.\", \"evidence_scenes\": []}, {\"candidate\": \"c4\", \"decision\": \"before\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"The bells stop before the coronation.\", \"evidence_scenes\": []}, {\"candidate\": \"c5\", \"decision\": \"close\", \"from\": \"\", \"to\": \"\", \"reason\": \"Mara matched the torn corner.\", \"evidence_scenes\": [\"0003--winifreds-house\"]}, {\"candidate\": \"c6\", \"decision\": \"keep_open\", \"from\": \"\", \"to\": \"\", \"reason\": \"The ring is not back yet.\", \"evidence_scenes\": []}]}",
+    "decide": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"distinct\", \"from\": \"\", \"to\": \"\", \"reason\": \"A map and a chart are separate business.\", \"evidence_scenes\": []}, {\"candidate\": \"c2\", \"decision\": \"related\", \"from\": \"\", \"to\": \"\", \"reason\": \"The oath and the debt bear on each other.\", \"evidence_scenes\": []}, {\"candidate\": \"c3\", \"decision\": \"pays_off\", \"from\": \"B\", \"to\": \"A\", \"reason\": \"Finding the map keeps the oath.\", \"evidence_scenes\": []}, {\"candidate\": \"c4\", \"decision\": \"before\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"The bells stop before the coronation.\", \"evidence_scenes\": []}, {\"candidate\": \"c5\", \"decision\": \"close\", \"from\": \"\", \"to\": \"\", \"reason\": \"Mara matched the torn corner.\", \"evidence_scenes\": [\"0003--winifreds-house\"]}, {\"candidate\": \"c6\", \"decision\": \"keep_open\", \"from\": \"\", \"to\": \"\", \"reason\": \"The ring is not back yet.\", \"evidence_scenes\": []}]}",
+    "ruling": "a reply ignoring the decide schema is never guessed at"
+  },
+  {
+    "shape": "two-scenes-cited",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "Mara matched the torn corner at Winifred's house.",
+        "evidence_scenes": [
+          "0002--realm-road",
+          "0003--winifreds-house"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"Mara matched the torn corner at Winifred's house.\", \"evidence_scenes\": [\"0002--realm-road\", \"0003--winifreds-house\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0002--realm-road\", \"evidence_scene_2\": \"0003--winifreds-house\", \"evidence_scene_3\": null}, \"rationale\": \"Mara matched the torn corner at Winifred's house.\"}}"
+  },
+  {
+    "shape": "four-scenes-cited",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "close",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "closed",
+        "reason": "Mara matched the torn corner at Winifred's house.",
+        "evidence_scenes": [
+          "0001--saltmarch-docks",
+          "0002--realm-road",
+          "0003--winifreds-house"
+        ]
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"Mara matched the torn corner at Winifred's house.\", \"evidence_scenes\": [\"0001--saltmarch-docks\", \"0002--realm-road\", \"0003--winifreds-house\", \"0004--saltmarch-quay\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0001--saltmarch-docks\", \"evidence_scene_2\": \"0002--realm-road\", \"evidence_scene_3\": \"0003--winifreds-house\"}, \"rationale\": \"Mara matched the torn corner at Winifred's house.\"}}",
+    "ruling": "at most EVIDENCE_SCENES (3) evidence scenes are asked for; a fourth cited is not stored"
+  },
+  {
+    "shape": "evidence-from-another-candidate",
+    "intended": {
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Mara gave the ring back on the Realm road.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c6\", \"decision\": \"fulfilled\", \"reason\": \"Mara gave the ring back on the Realm road.\", \"evidence_scenes\": [\"0002--realm-road\"]}]}",
+    "decide": "{\"5\": {\"answers\": {\"decision\": \"fulfilled\", \"evidence_scene\": \"0002--realm-road\", \"evidence_scene_2\": null}, \"rationale\": \"Mara gave the ring back on the Realm road.\"}}",
+    "ruling": "accepted recall loss: today's one-call prompt showed every candidate's scenes in one chronicle, so a closure citing a scene shown beside another candidate cited a line the model was really shown, and today's parse rightly kept it as fulfilled; a decide item is self-contained (ruling 7) and offers only its own scenes, so that citation is no longer an option and the verdict is stored uncertain"
+  },
+  {
+    "shape": "one-item-unreadable",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "distinct",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Separate business.",
+        "evidence_scenes": []
+      },
+      "possible_relation-5dd6010d229177a5": {
+        "decision": "related",
+        "from": "commitment:maras-oath",
+        "to": "thread:maras-map",
+        "relation": "related_to",
+        "status": "",
+        "reason": "They bear on each other.",
+        "evidence_scenes": []
+      },
+      "possible_relation-a14c63fef4b88be5": {
+        "decision": "unrelated",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Nothing ties them.",
+        "evidence_scenes": []
+      },
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "keep_open",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Still open.",
+        "evidence_scenes": []
+      },
+      "possible_commitment_resolution-08cf109726aec508": {
+        "decision": "keep_open",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Still owed.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"distinct\", \"reason\": \"Separate business.\"}, 5, {\"candidate\": \"c3\", \"decision\": \"related\", \"reason\": \"They bear on each other.\"}, {\"candidate\": \"c4\", \"decision\": \"unrelated\", \"reason\": \"Nothing ties them.\"}, {\"candidate\": \"c5\", \"decision\": \"keep_open\", \"reason\": \"Still open.\"}, {\"candidate\": \"c6\", \"decision\": \"keep_open\", \"reason\": \"Still owed.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"distinct\", \"from\": null, \"to\": null, \"evidence_scene\": null, \"evidence_scene_2\": null, \"evidence_scene_3\": null}, \"rationale\": \"Separate business.\"}, \"1\": 5, \"2\": {\"answers\": {\"decision\": \"related\", \"from\": null, \"to\": null, \"evidence_scene\": null, \"evidence_scene_2\": null, \"evidence_scene_3\": null}, \"rationale\": \"They bear on each other.\"}, \"3\": {\"answers\": {\"decision\": \"unrelated\", \"evidence_scene\": null, \"evidence_scene_2\": null}, \"rationale\": \"Nothing ties them.\"}, \"4\": {\"answers\": {\"decision\": \"keep_open\", \"evidence_scene\": null, \"evidence_scene_2\": null, \"evidence_scene_3\": null}, \"rationale\": \"Still open.\"}, \"5\": {\"answers\": {\"decision\": \"keep_open\", \"evidence_scene\": null, \"evidence_scene_2\": null}, \"rationale\": \"Still owed.\"}}"
+  },
+  {
+    "shape": "null-decision",
+    "intended": {
+      "possible_thread_closure-08a055422eba9c1b": {
+        "decision": "uncertain",
+        "from": "",
+        "to": "",
+        "relation": "",
+        "status": "",
+        "reason": "Hard to say.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": null, \"reason\": \"Hard to say.\"}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": null, \"evidence_scene\": null, \"evidence_scene_2\": null, \"evidence_scene_3\": null}, \"rationale\": \"Hard to say.\"}}"
+  },
+  {
+    "shape": "related-without-letters",
+    "intended": {
+      "possible_duplicate-ad8d41c9e20c7455": {
+        "decision": "related",
+        "from": "thread:maras-map",
+        "to": "thread:winifreds-chart",
+        "relation": "related_to",
+        "status": "",
+        "reason": "Both lead to the reef.",
+        "evidence_scenes": []
+      }
+    },
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"related\", \"reason\": \"Both lead to the reef.\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"related\", \"from\": null, \"to\": null, \"evidence_scene\": null, \"evidence_scene_2\": null, \"evidence_scene_3\": null}, \"rationale\": \"Both lead to the reef.\"}}"
+  },
+  {
+    "shape": "stray-index-beside-real-answers",
+    "intended": {},
+    "legacy": "{\"decisions\": [{\"candidate\": \"c1\", \"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\", \"reason\": \"Both name the chart Mara lost.\", \"evidence_scenes\": [\"0001--saltmarch-docks\"]}, {\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"The chart burned on the Saltmarch quay.\", \"evidence_scenes\": [\"0004--saltmarch-quay\"]}, {\"candidate\": \"c9\", \"decision\": \"close\"}]}",
+    "decide": "{\"0\": {\"answers\": {\"decision\": \"duplicate\", \"from\": \"A\", \"to\": \"B\", \"evidence_scene\": \"0001--saltmarch-docks\"}, \"rationale\": \"Both name the chart Mara lost.\"}, \"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0004--saltmarch-quay\"}, \"rationale\": \"The chart burned on the Saltmarch quay.\"}, \"6\": {\"answers\": {\"decision\": \"close\"}}}",
+    "ruling": "accepted recall loss, entry 32's rule with real verdicts beside the stray key: today's parse kept c1's duplicate and c5's closure, each on a scene the item shows; decide keeps neither, because one key past the batch leaves every answer in the chunk unread (asked again by the next sweep) -- the cost of never misattributing an answer to a candidate the model did not mean"
+  }
+]

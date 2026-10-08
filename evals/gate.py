@@ -6,9 +6,10 @@ What it compares is *parsers*, on recorded reply shapes, scored by what the
 call site would do with each:
 
 - **A conversion** (`Conversion`) is one call site moving to `decide()`. It
-  names the items its production builder makes (from fixed fixture inputs),
-  today's parse (`legacy`, a frozen copy in `evals/legacy.py`), the production
-  mapping from a parsed `ItemResult` to what the call site stores or raises
+  names the items its production builder makes (from fixed fixture inputs,
+  at most one call's worth), today's parse (`legacy`, a frozen copy in
+  `evals/legacy.py`), the production mapping from the parsed batch (one
+  `ItemResult` per item) to what the call site stores or raises
   (`decide`), and its corpus.
 - **A corpus** (`evals/gate/<id>.json`) is a list of entries. Each pairs a
   reply to today's prompt with a reply *of the same shape* to the decide
@@ -47,6 +48,7 @@ from pathlib import Path
 
 from grimoire import decisions
 from grimoire.store import response_protocol, scene_break, voice_drift
+from grimoire.store.continuity import canon, identity, reconcile, similarity
 
 from . import legacy
 
@@ -85,8 +87,9 @@ class Conversion:
     explain: bool
     #: Today's reply -> today's outcome, through the frozen parser.
     legacy: Callable[[str], object]
-    #: The parsed item -> the outcome, through the production mapping.
-    decide: Callable[[decisions.ItemResult, Entry], object]
+    #: The parsed batch (one `ItemResult` per item, in order) -> the outcome,
+    #: through the production mapping.
+    decide: Callable[[tuple[decisions.ItemResult, ...], Entry], object]
     #: `GATE_DIR / f"{id}.json"`.
     corpus: Path
     #: The input strings of today's parse tests, copied verbatim.
@@ -233,9 +236,10 @@ def judge(conv: Conversion) -> GateResult:
     _check_settle(conv)
     items = conv.items()
     decisions.validate(items)
-    if len(items) != 1:
-        raise ValueError(f"{conv.id}: the gate scores conversions of one item "
-                         f"(no caller sends more); this one builds {len(items)}")
+    calls = len(decisions.chunks(items))
+    if calls != 1:
+        raise ValueError(f"{conv.id}: the gate scores one call's batch; "
+                         f"this one needs {calls} calls")
     legacy_right = decide_right = 0
     regressions: list[str] = []
     rulings: list[str] = []
@@ -243,7 +247,7 @@ def judge(conv: Conversion) -> GateResult:
     entries = load(conv)
     for index, entry in enumerate(entries):
         legacy = conv.settle(conv.legacy(entry.legacy))
-        (parsed,) = decisions.parse(entry.decide, items, explain=conv.explain)
+        parsed = decisions.parse(entry.decide, items, explain=conv.explain)
         decided = conv.settle(conv.decide(parsed, entry))
         seen |= {_key(legacy), _key(decided)}
         legacy_ok, decide_ok = _same(legacy, entry.intended), _same(decided, entry.intended)
@@ -292,8 +296,8 @@ def _break_legacy(text: str) -> object:
     return [answer["break"], answer["reason"], answer["title"] if answer["break"] else ""]
 
 
-def _break_decide(result: decisions.ItemResult, entry: Entry) -> object:
-    verdict = scene_break.verdict_of(result)
+def _break_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    verdict = scene_break.verdict_of(results[0])
     title = scene_break.parse_title(entry.aux.get("title", "")) if verdict["break"] else ""
     return [verdict["break"], verdict["reason"], title]
 
@@ -334,8 +338,8 @@ def _drift_items() -> tuple[decisions.Item, ...]:
     return (voice_drift.build_item("Seraphine Vale", _DRIFT_ANCHOR, _DRIFT_TRANSCRIPT),)
 
 
-def _drift_decide(result: decisions.ItemResult, entry: Entry) -> object:
-    return voice_drift.finding_of(result)
+def _drift_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return voice_drift.finding_of(results[0])
 
 
 def _drift_settle(finding: object) -> object:
@@ -406,8 +410,8 @@ def _speaker_items() -> tuple[decisions.Item, ...]:
     return (response_protocol.selector_item(_SPEAKER_ROSTER, _SPEAKER_CONVERSATION),)
 
 
-def _speaker_decide(result: decisions.ItemResult, entry: Entry) -> object:
-    return response_protocol.selection_of(result)
+def _speaker_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return response_protocol.selection_of(results[0])
 
 
 SPEAKER = Conversion(
@@ -426,9 +430,417 @@ SPEAKER = Conversion(
     ),
 )
 
-#: One conversion per prepare task (scene-break, voice drift, speaker), each
-#: appended by the task that writes its corpus.
-GATES: tuple[Conversion, ...] = (SCENE_BREAK, VOICE_DRIFT, SPEAKER)
+# --- continuity identity ----------------------------------------------------
+#
+# The outcome is what `routes/scenes._resolve_identity` leaves on the
+# examination: whether `identity.take` decided (False is today's undecodable
+# reply, every row a hint only), and each examined row's decision, status,
+# reason and target once `Examination.decide` has run its acceptance guard.
+# Today's side is the frozen `identity_parse_output`; the decide side maps the
+# parsed batch through the production `answers_of`; both are settled by the
+# production `take` on a fresh in-memory examination, so the guard that
+# accepts or downgrades an `existing` is the same code on both sides.
+#
+# The fixture holds every case the guard tells apart: r1 is offered two open
+# records and a closed one, one of them the live canonical of an alias source;
+# r2 is offered a record r1 is also offered, and one an explicit row already
+# moves; r3 is a commitment with one candidate, so its `id` question offers a
+# single option beside null.
+
+_IDENTITY_SIGNALS = {"title_equal": False, "slug_equal": False, "tokens": 0.4,
+                     "chars": 0.5, "cosine": None, "actors": [], "scenes": [],
+                     "anchors": [], "via": "lexical"}
+
+#: id -> (kind, the stored record) of each record a row is offered.
+_IDENTITY_RECORDS: dict[str, tuple[similarity.Kind, dict]] = {
+    "find-the-ledger": ("thread", {"title": "Find the ledger", "status": "open",
+                                   "beat": "Winifred learned the harbour ledger exists."}),
+    "maras-map": ("thread", {"title": "Mara's map", "status": "open",
+                             "beat": "Mara's map is torn."}),
+    "the-burned-chart": ("thread", {"title": "The burned chart", "status": "closed",
+                                    "beat": "Seraphine burned the chart."}),
+    "winifreds-chart": ("thread", {"title": "Winifred's chart", "status": "open",
+                                   "beat": "Winifred's chart shows a reef."}),
+    "the-midnight-deadline": ("commitment", {
+        "title": "The midnight deadline", "status": "open", "kind": "threat",
+        "due": "midnight", "beat": "Seraphine gave Winifred until midnight."}),
+}
+
+#: (section, kind, row, candidate ids in rank order) per examined row.
+_IDENTITY_ROWS = (
+    ("plot_movements", "thread",
+     {"title": "Recover the harbour ledger",
+      "beat": "Winifred went looking for the harbour ledger.", "status": "open"},
+     ("find-the-ledger", "maras-map", "the-burned-chart")),
+    ("plot_movements", "thread",
+     {"title": "Recover the harbour ledger again",
+      "beat": "Winifred searched the harbour for the ledger.", "status": "open"},
+     ("find-the-ledger", "winifreds-chart")),
+    ("commitment_movements", "commitment",
+     {"title": "Seraphine's midnight deadline", "kind": "threat", "status": "open",
+      "beat": "Seraphine must pay by midnight.", "due": "midnight"},
+     ("the-midnight-deadline",)),
+)
+
+
+def _identity_exam() -> identity.Examination:
+    """A fresh in-memory examination of the fixture above: no store."""
+    def candidate(rid: str) -> tuple[similarity.Subject, dict]:
+        kind, stored = _IDENTITY_RECORDS[rid]
+        record = {key: value for key, value in stored.items() if key != "beat"}
+        record["beats"] = [{"text": stored["beat"], "scene": "saltmarch-docks"}]
+        return similarity.subject(kind, f"{kind}:{rid}", record), dict(_IDENTITY_SIGNALS)
+
+    rows = [identity.Examined(section, index, f"r{index + 1}", kind, dict(row),
+                              f"proposed-{index + 1}", [candidate(rid) for rid in ids], [])
+            for index, (section, kind, row, ids) in enumerate(_IDENTITY_ROWS)]
+    return identity.Examination(rows, len(rows), "basic", "off", "", 0,
+                                {("thread", "winifreds-chart")},
+                                {"thread:the-old-map": "thread:maras-map"})
+
+
+def _identity_items() -> tuple[decisions.Item, ...]:
+    exam = _identity_exam()
+    return identity.build_items(exam.prompt_rows(), exam.live)
+
+
+def _identity_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return identity.answers_of(_identity_exam().prompt_rows(), results)
+
+
+def _identity_settle(answers: object) -> object:
+    if answers is not None and not isinstance(answers, list):
+        raise TypeError(f"continuity-identity settles decision dicts, not {answers!r}")
+    exam = _identity_exam()
+    taken = identity.take(exam, answers)
+    return [taken, [[e.decision, e.status, e.reason, e.target] for e in exam.rows]]
+
+
+#: Verbatim, every input the retired `test_continuity_identity.py` parse tests
+#: handed `parse_output`: the fenced one built by the test's own expression.
+_IDENTITY_FENCED = "Here you go:\n```json\n" + json.dumps({"decisions": [
+    "not a row",
+    {"decision": "new", "id": "", "reason": "no row key"},
+    {"row": "   ", "decision": "new"},
+    {"row": 3, "decision": "new"},
+    {"row": "Row r1", "decision": "EXISTING", "id": " find-the-ledger ",
+     "reason": " Same ledger. "},
+    {"row": "r2", "decision": "maybe", "id": 7, "reason": "x" * 400},
+    {"row": "r1", "decision": "new", "id": "", "reason": "a second answer for r1"},
+    {"row": "r3", "decision": None, "reason": ["not", "text"]},
+]}) + "\n```"
+
+CONTINUITY_IDENTITY = Conversion(
+    id="continuity-identity",
+    items=_identity_items,
+    explain=True,
+    legacy=legacy.identity_parse_output,
+    decide=_identity_decide,
+    corpus=GATE_DIR / "continuity-identity.json",
+    legacy_cases=(
+        "I think so.", "{}", '{"decisions": 3}',
+        *(json.dumps({"decisions": [{"row": label, "decision": "new"}]})
+          for label in ("Row r1", " R1 ", "r1", "ROW R1")),
+        _IDENTITY_FENCED,
+    ),
+    settle=_identity_settle,
+)
+
+# --- continuity reconcile ---------------------------------------------------
+#
+# The outcome is what the sweep hands persist 2: the proposals dict, keyed by
+# candidate id, or None for a failed run (no decodable object at all). Today's
+# side is the frozen `reconcile_parse_output` over the fixture payload; the
+# decide side maps the parsed batch through the production `proposals_of`.
+# Nothing settles either: the proposals are the outcome (`settle` is the
+# identity).
+#
+# The fixture is a `build_payload`-shaped literal with no store: one candidate
+# per vocabulary, c1 to c6: the three pairs, the temporal pair, then the two
+# lifecycle findings. Mara's map has beats in three scenes and the
+# fourth is the recent window's, so its closure (c5) shows all four scenes --
+# one item asking three evidence questions with a fourth scene to leave out
+# -- while Mara's oath, with one beat, shows two (c6), so a scene shown only
+# beside the map is not evidence for the oath.
+
+_RECONCILE_SCENES = ("0001--saltmarch-docks", "0002--realm-road", "0003--winifreds-house",
+                     "0004--saltmarch-quay")
+_D1, _D2, _D3, _D4 = _RECONCILE_SCENES
+
+#: ref -> (the line's fields, [(scene, beat)]) of each record a candidate names.
+_RECONCILE_RECORDS: dict[str, tuple[dict, list[tuple[str, str]]]] = {
+    "thread:maras-map": (
+        {"title": "Mara's map", "status": "open", "kind": "", "due": ""},
+        [(_D1, "Mara's map is torn, and nobody knows where it leads."),
+         (_D2, "Mara followed the map along the Realm road."),
+         (_D3, "Mara matched the torn corner at Winifred's house.")]),
+    "thread:winifreds-chart": (
+        {"title": "Winifred's chart", "status": "open", "kind": "", "due": ""},
+        [(_D2, "Winifred's chart shows a reef nobody has sailed past.")]),
+    "commitment:maras-oath": (
+        {"title": "Mara's oath", "status": "open", "kind": "promise",
+         "due": "before the bells stop"},
+        [(_D1, "Mara swore to return Winifred's ring before the bells stop.")]),
+    "commitment:winifreds-debt": (
+        {"title": "Winifred's debt", "status": "open", "kind": "debt", "due": ""},
+        [(_D1, "Winifred owes Seraphine for the salt.")]),
+    "event:the-coronation": ({"title": "The coronation", "status": "", "kind": "",
+                              "due": "2026-05-13"}, []),
+}
+
+
+def _reconcile_record(letter: str, ref: str) -> dict:
+    fields, beats = _RECONCILE_RECORDS[ref]
+    prefix = ref.partition(":")[0]
+    return {"letter": letter, "ref": ref,
+            "type": {"thread": "plot thread", "commitment": "commitment"}.get(prefix, ""),
+            "line": reconcile.snippet_line(ref, fields),
+            "beats": [{"scene": sid, "text": text} for sid, text in beats],
+            "pressure": "", "links": [], "actors": []}
+
+
+#: (kind, refs, vocabulary, signal text) per candidate, c1 to c6.
+_RECONCILE_CANDIDATES = (
+    ("possible_duplicate", ("thread:maras-map", "thread:winifreds-chart"), "same_thread",
+     "word overlap 0.30"),
+    ("possible_duplicate", ("commitment:maras-oath", "commitment:winifreds-debt"),
+     "same_commitment", "word overlap 0.30"),
+    ("possible_relation", ("commitment:maras-oath", "thread:maras-map"), "cross",
+     "word overlap 0.30"),
+    ("possible_relation", ("commitment:maras-oath", "event:the-coronation"), "temporal",
+     "the commitment's due could not be placed on the calendar; the event is in 3 days"),
+    ("possible_thread_closure", ("thread:maras-map",), "thread", "no new beat in 75 days"),
+    ("possible_commitment_resolution", ("commitment:maras-oath",), "commitment",
+     "moved in the latest scene"),
+)
+
+_RECONCILE_PAYLOAD: dict = {
+    "now": "the twelfth of May",
+    "chronicle": [{"id": _D1, "one_line": "Seraphine and Mara met on the Saltmarch docks."},
+                  {"id": _D2, "one_line": "Mara caught Winifred up on the Realm road."},
+                  {"id": _D3, "one_line": "Winifred opened her door to Mara."},
+                  {"id": _D4, "one_line": "Mara came ashore at the Saltmarch quay."}],
+    "candidates": [{"key": f"c{n}", "id": canon.candidate_id(kind, refs),
+                    "vocabulary": vocab,
+                    "records": [_reconcile_record(letter, ref)
+                                for letter, ref in zip("AB", refs, strict=False)],
+                    "signal_text": signal}
+                   for n, (kind, refs, vocab, signal) in enumerate(_RECONCILE_CANDIDATES, 1)],
+    "known_scenes": sorted(_RECONCILE_SCENES),
+    "recent": [_D4],
+}
+
+
+def _reconcile_items() -> tuple[decisions.Item, ...]:
+    return reconcile.build_items(_RECONCILE_PAYLOAD)
+
+
+def _reconcile_decide(results: tuple[decisions.ItemResult, ...], entry: Entry) -> object:
+    return reconcile.proposals_of(_RECONCILE_PAYLOAD, results)
+
+
+#: Every `_reply(...)` the retired parse tests handed `parse_output`, as
+#: `(source test, elements, keys, scenes)`. Those tests went with the switch
+#: (the production parser is gone), so these copies are what is left of them:
+#: the source name is the retired test's, kept for provenance, and nothing
+#: reads the parse tests any more -- `legacy_cases` below draws from this list,
+#: and `test_decide_gate.py` holds each entry to a corpus pair. The
+#: elements are copied verbatim as literals; where a test builds them from
+#: runtime values -- `keys[key]`, a computed candidate key, `s0`, `gone` -- the
+#: copy keeps the runtime value's name as a placeholder, and where a test
+#: builds them in a helper, the copy is that helper's dict over the helper's
+#: calls, argument for argument. `keys` and `scenes` are that test's own maps
+#: (N7): each runtime candidate key to the fixture candidate of its
+#: vocabulary, and each runtime scene to a fixture scene. A key or scene in
+#: neither (`"c9"`, `1`, `"999--nowhere"`) passes through, as a letter does.
+RECONCILE_SOURCES: list[tuple[str, list, dict[str, str], dict[str, str]]] = [
+    ("test_cross_type_duplicate_is_uncertain",
+     [{"candidate": "c1", "decision": "duplicate", "from": "A", "to": "B",
+       "reason": "Same business."}],
+     {"c1": "c3"}, {}),
+    *(("test_disallowed_direction_is_uncertain",
+       [{"candidate": key, "decision": decision, "from": frm, "to": to,
+         "reason": "Because."}],
+       {"cross_key": "c3", "owed_key": "c2", "plot_key": "c1"}, {})
+      for key, decision, frm, to in (
+          ("cross_key", "pays_off", "A", "B"),
+          ("cross_key", "pays_off", "B", "A"),
+          ("owed_key", "subthread", "A", "B"),
+          ("owed_key", "continuation", "A", "B"),
+          ("plot_key", "duplicate", "A", "A"),
+          ("plot_key", "duplicate", "", ""),
+          ("plot_key", "continuation", "A", "C"),
+          ("plot_key", "duplicate", "B", "A"),
+          ("plot_key", "subthread", "a", "b"),
+          ("plot_key", "continuation", "B", "A"),
+          ("owed_key", "related", "", ""))),
+    ("test_temporal_words_name_the_commitment_and_the_event",
+     [{"candidate": "cand_key", "decision": "before", "from": "B", "to": "A",
+       "reason": "The oath falls before the crowning."}],
+     {"cand_key": "c4"}, {}),
+    ("test_temporal_words_name_the_commitment_and_the_event",
+     [{"candidate": "cand_key", "decision": "unrelated"}],
+     {"cand_key": "c4"}, {}),
+    *(("test_closure_without_known_evidence_is_uncertain",
+       [{"candidate": "c1", "decision": "close", "reason": "The map was burned.",
+         "evidence_scenes": ["s0"], **over}],
+       {"c1": "c5"}, {"s0": _D1})
+      for over in ({"evidence_scenes": ["999--nowhere"]},
+                   {"reason": ""},
+                   {"reason": "   "},
+                   {"evidence_scenes": "s0"},
+                   {"evidence_scenes": ["999--nowhere", "s0", "s0"]},
+                   {"decision": "keep_open", "reason": ""})),
+    *(("test_resolutions_need_evidence_too_and_carry_their_status", elements,
+       {"c1": "c6"}, {"s0": _D1})
+      for word in ("fulfilled", "broken", "expired")
+      for elements in ([{"candidate": "c1", "decision": word, "reason": "So it went.",
+                         "evidence_scenes": ["s0"]}],
+                       [{"candidate": "c1", "decision": word, "reason": "So it went."}])),
+    ("test_resolutions_need_evidence_too_and_carry_their_status",
+     [{"candidate": "c1", "decision": "close", "reason": "x", "evidence_scenes": ["s0"]}],
+     {"c1": "c6"}, {"s0": _D1}),
+    ("test_unknown_candidate_keys_and_enums_are_dropped_or_uncertain",
+     [{"candidate": "c9", "decision": "close", "reason": "x", "evidence_scenes": ["s0"]},
+      {"candidate": 1, "decision": "close"},
+      "not an object",
+      {"candidate": "  Candidate C1 ", "decision": "Merge it", "reason": "r" * 400},
+      {"candidate": "c1", "decision": "keep_open", "reason": "second answer"}],
+     {"c1": "c5"}, {"s0": _D1}),
+    ("test_unknown_candidate_keys_and_enums_are_dropped_or_uncertain",
+     [{"candidate": "c1", "decision": 3}],
+     {"c1": "c5"}, {}),
+    ("test_unknown_candidate_keys_and_enums_are_dropped_or_uncertain",
+     [{"candidate": "candidate:c1", "decision": "KEEP_OPEN"}],
+     {"c1": "c5"}, {}),
+    ("test_known_scenes_are_the_shown_beats_and_chronicle_lines",
+     [{"candidate": "c1", "decision": "close", "reason": "Answered.",
+       "evidence_scenes": ["s2"]}],
+     {"c1": "c5"}, {"s1": _D1, "s2": _D4, "s3": _D3}),
+    ("test_a_deleted_scene_is_not_known_evidence",
+     [{"candidate": "c1", "decision": "close", "reason": "The map was found.",
+       "evidence_scenes": ["gone"]}],
+     {"c1": "c5"}, {"gone": _D2}),
+    ("test_a_pathologically_long_record_cannot_unbound_the_prompt",
+     [{"candidate": "c1", "decision": "duplicate", "from": "A", "to": "B",
+       "reason": "Same ledger."}],
+     {"c1": "c1"}, {}),
+]
+
+
+def _respell(value: object, keys: Mapping[str, str]) -> object:
+    """A candidate key through `keys`, kept in its spelling: a ``Candidate``
+    label, padding and case stay where the source put them."""
+    if not isinstance(value, str):
+        return value
+    key = legacy._candidate_key(value)
+    if key not in keys:
+        return value
+    at = value.casefold().rfind(key)
+    spelled = value[at:at + len(key)]
+    mapped = keys[key].upper() if spelled.isupper() else keys[key]
+    return value[:at] + mapped + value[at + len(key):]
+
+
+def _mapped(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -> list:
+    """A source's elements on the fixture: candidate keys through `keys`, cited
+    scenes through `scenes`. Refuses a map that would read two of the source's
+    candidates, or two of its scenes, as one -- at import of this module."""
+    for table, what in ((keys, "candidate"), (scenes, "scene")):
+        if len(set(table.values())) != len(table):
+            raise ValueError(f"two runtime {what}s map to the same fixture {what}: {table}")
+    out: list = []
+    for element in elements:
+        if not isinstance(element, dict):
+            out.append(element)
+            continue
+        mapped = dict(element)
+        if "candidate" in mapped:
+            mapped["candidate"] = _respell(mapped["candidate"], keys)
+        cited = mapped.get("evidence_scenes")
+        if isinstance(cited, list):
+            mapped["evidence_scenes"] = [scenes.get(s, s) if isinstance(s, str) else s
+                                         for s in cited]
+        elif isinstance(cited, str):
+            mapped["evidence_scenes"] = scenes.get(cited, cited)
+        out.append(mapped)
+    return out
+
+
+def _adapt(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -> str:
+    """The legacy reply for a source, built as its test's `_reply` builds it."""
+    return json.dumps({"decisions": _mapped(elements, keys, scenes)})
+
+
+def _twin(elements: list, keys: Mapping[str, str], scenes: Mapping[str, str]) -> str:
+    """The decide twin of a source: the same adapted elements in the decide
+    shape. A candidate key becomes its item index, and one the fixture does
+    not hold (or an element with none) an index past the batch -- which, since
+    slice F's rule that an index we did not send makes the reply's keys not
+    ours (`decisions._foreign_index`), leaves every item of that reply unread;
+    a repeated candidate becomes a repeated index key, which the parse
+    reads first-wins as today's `seen` does (I3). A letter stays a letter
+    (an empty one is null, the decide spelling of none), on a pair item only.
+    A list of cited scenes is spread over `reconcile.EVIDENCE_IDS` in order,
+    dropping a slot the item does not ask; a cited value that is not a list
+    becomes a list-valued first slot, which no option reads. `reason` becomes
+    `rationale`."""
+    cands = _RECONCILE_PAYLOAD["candidates"]
+    index_of = {c["key"]: n for n, c in enumerate(cands)}
+    past = len(cands)
+    pairs: list[tuple[str, object]] = []
+    for element in _mapped(elements, keys, scenes):
+        key = legacy._candidate_key(element.get("candidate")) if isinstance(element, dict) \
+            else ""
+        if key not in index_of:
+            pairs.append((str(past), element if not isinstance(element, dict) else {
+                "answers": {k: v for k, v in element.items() if k == "decision"}}))
+            past += 1
+            continue
+        cand = cands[index_of[key]]
+        answers: dict[str, object] = {}
+        if "decision" in element:
+            answers[reconcile.DECISION_ID] = element["decision"]
+        if cand["vocabulary"] in reconcile.PAIR_VOCABULARIES:
+            for field in (reconcile.FROM_ID, reconcile.TO_ID):
+                if field in element:
+                    answers[field] = element[field] or None
+        asked = reconcile.EVIDENCE_IDS[:min(len(reconcile.item_scenes(_RECONCILE_PAYLOAD,
+                                                                       cand)),
+                                            reconcile.EVIDENCE_SCENES)]
+        cited = element.get("evidence_scenes")
+        if isinstance(cited, list):
+            answers.update(zip(asked, cited, strict=False))
+        elif "evidence_scenes" in element and asked:
+            answers[asked[0]] = [cited]
+        entry: dict[str, object] = {"answers": answers}
+        if "reason" in element:
+            entry["rationale"] = element["reason"]
+        pairs.append((str(index_of[key]), entry))
+    return "{" + ", ".join(f"{json.dumps(k)}: {json.dumps(v)}" for k, v in pairs) + "}"
+
+
+CONTINUITY_RECONCILE = Conversion(
+    id="continuity-reconcile",
+    items=_reconcile_items,
+    explain=True,
+    legacy=functools.partial(legacy.reconcile_parse_output, payload=_RECONCILE_PAYLOAD),
+    decide=_reconcile_decide,
+    corpus=GATE_DIR / "continuity-reconcile.json",
+    # Verbatim, the retired parse tests' literal inputs, then every
+    # `RECONCILE_SOURCES` reply, adapted through its test's own maps
+    # (ruling 11, M11).
+    legacy_cases=(
+        "I think so.", "", "{}", '{"decisions": 4}', '{"decisions": [3, "x", null]}',
+        *(_adapt(elements, keys, scenes) for _, elements, keys, scenes in RECONCILE_SOURCES),
+    ),
+)
+
+#: One conversion per prepare task (scene-break, voice drift, speaker,
+#: continuity identity, continuity reconcile), each appended by the task that
+#: writes its corpus.
+GATES: tuple[Conversion, ...] = (SCENE_BREAK, VOICE_DRIFT, SPEAKER, CONTINUITY_IDENTITY,
+                                 CONTINUITY_RECONCILE)
 
 
 def report(results: list[GateResult]) -> str:

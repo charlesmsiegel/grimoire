@@ -1,9 +1,0 @@
-{"decisions": [
-  {"candidate": "c1", "decision": "duplicate", "from": "B", "to": "A", "reason": "Both threads ask who is behind the Saltmarch smuggling.", "evidence_scenes": []},
-  {"candidate": "c2", "decision": "duplicate", "from": "B", "to": "A", "reason": "Both threads are about Seraphine's debts.", "evidence_scenes": []},
-  {"candidate": "c3", "decision": "pays_off", "from": "B", "to": "A", "reason": "Finding the ledger is what earns Mara her pay.", "evidence_scenes": []},
-  {"candidate": "c4", "decision": "close", "from": "", "to": "", "reason": "Mara followed the map to the cove it marks and found it.", "evidence_scenes": ["003--the-pier-at-dusk"]},
-  {"candidate": "c5", "decision": "keep_open", "from": "", "to": "", "reason": "Nothing shown says what lies past the reef on Winifred's chart.", "evidence_scenes": []},
-  {"candidate": "c6", "decision": "fulfilled", "from": "", "to": "", "reason": "Mara put the ring back in Winifred's hand, as she swore.", "evidence_scenes": ["002--realm-road"]},
-  {"candidate": "c7", "decision": "uncertain", "from": "", "to": "", "reason": "Nothing shown says whether Winifred got her berth.", "evidence_scenes": []}
-]}

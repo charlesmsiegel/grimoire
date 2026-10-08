@@ -241,9 +241,41 @@ def _generate_prompts() -> list[str]:
         prompts.render("scene/sections/response_format.j2", player_names=[],
                        response_actor={"ref": "grimoire", "name": "Grimoire"}),
         prompts.render("tracker/update_system.j2"),
-        prompts.render("continuity_identity/system.j2"),
-        prompts.render("continuity_reconcile/system.j2"),
     ]
+
+
+#: One examined row as `Examination.prompt_rows` shapes it, offering one
+#: stored thread: the duplicate check's smallest item.
+_IDENTITY_ROW = {"key": "r1", "kind": "thread", "title": "Recover the harbour ledger",
+                 "beat": "Winifred went looking for the harbour ledger.", "status": "open",
+                 "commitment_kind": "", "due": "", "quote": "", "speaker": "",
+                 "certainty": None, "why_new": "", "distinguished_from": [],
+                 "candidates": [{"id": "find-the-ledger", "title": "Find the ledger",
+                                 "status": "open", "kind": "", "due": "",
+                                 "latest_beat": "Winifred learned the harbour ledger exists.",
+                                 "earlier": [],
+                                 "signals": {"tokens": 0.4, "chars": 0.5, "via": "lexical"}}]}
+
+
+def _reconcile_record(letter: str, ref: str) -> dict:
+    """One record as `reconcile._record_view` shapes it, with one beat."""
+    rid = ref.partition(":")[2]
+    return {"letter": letter, "ref": ref, "type": "plot thread",
+            "line": reconcile.snippet_line(ref, {"title": rid.replace("-", " ").capitalize(),
+                                                 "status": "open", "kind": "", "due": ""}),
+            "beats": [{"scene": "s1", "text": "Winifred asked about the ledger."}],
+            "pressure": "", "links": [], "actors": []}
+
+
+#: A `build_payload`-shaped payload holding one possible duplicate: the
+#: sweep's smallest item.
+_RECONCILE_PAYLOAD = {
+    "now": "", "chronicle": [{"id": "s1", "one_line": "Winifred came ashore."}],
+    "recent": ["s1"], "known_scenes": ["s1"],
+    "candidates": [{"key": "c1", "id": "candidate-1", "vocabulary": "same_thread",
+                    "records": [_reconcile_record("A", "thread:find-the-ledger"),
+                                _reconcile_record("B", "thread:recover-the-ledger")],
+                    "signal_text": "word overlap 0.40"}]}
 
 
 def _decide_prompts() -> dict[str, tuple[str, str]]:
@@ -252,8 +284,14 @@ def _decide_prompts() -> dict[str, tuple[str, str]]:
     `inference.structured_messages` exactly as it builds it."""
     item = voice_drift.build_item("Seraphine", "Clipped. Never uses contractions.",
                                   "Seraphine: Salt first.")
-    system, user = inference.structured_messages([item], explain=voice_drift.explain())
-    return {"voice-drift": (system["content"], user["content"])}
+    pairs = {"voice-drift": inference.structured_messages([item],
+                                                          explain=voice_drift.explain()),
+             "continuity-identity": inference.structured_messages(
+                 identity.build_items([_IDENTITY_ROW], {}), explain=identity.explain()),
+             "continuity-reconcile": inference.structured_messages(
+                 reconcile.build_items(_RECONCILE_PAYLOAD), explain=reconcile.explain())}
+    return {task: (system["content"], user["content"])
+            for task, (system, user) in pairs.items()}
 
 
 #: The decide conversions `campaign_flow` never drives, each with the reason.
@@ -412,14 +450,14 @@ def test_the_absorb_body_is_the_shape_the_parser_expects():
 
 
 def test_the_identity_body_is_the_shape_the_parser_expects():
-    """The duplicate check's canned reply must decode to decisions, or every
-    absorb test that reaches the resolver would see a `failed` phase."""
-    fake = from_cassette("campaign_flow")
-    reply = fake.cassette.reply([{"role": "system",
-                                  "content": "You are checking whether newly proposed story records"}])
-    decisions = identity.parse_output("".join(reply))
-    assert decisions is not None
-    [decision] = decisions
+    """The duplicate check's canned reply must decode to a decision, or every
+    absorb test that reaches the check would see a `failed` phase."""
+    items = identity.build_items([_IDENTITY_ROW], {})
+    reply = _shipped().reply(_as_messages(_decide_prompts()["continuity-identity"]))
+    results = decisions.parse("".join(reply), items, explain=True)
+    answers = identity.answers_of([_IDENTITY_ROW], results)
+    assert answers is not None
+    [decision] = answers
     assert (decision["row"], decision["decision"]) == ("r1", "new")
 
 
@@ -427,9 +465,31 @@ def test_the_reconcile_body_is_the_shape_the_parser_expects():
     """The reconciliation sweep's canned reply must decode, or every test that
     reaches the sweep's model call would see a failed run; it proposes
     nothing, so no test is handed a decision it did not script."""
-    fake = from_cassette("campaign_flow")
-    reply = fake.cassette.reply([{"role": "system", "content":
-                                  "You are reviewing a campaign's story ledger for records "
-                                  "that may overlap or be finished"}])
-    payload = {"now": "", "chronicle": [], "candidates": [], "known_scenes": []}
-    assert reconcile.parse_output("".join(reply), payload) == {}
+    items = reconcile.build_items(_RECONCILE_PAYLOAD)
+    reply = _shipped().reply(_as_messages(_decide_prompts()["continuity-reconcile"]))
+    results = decisions.parse("".join(reply), items, explain=True)
+    assert reconcile.proposals_of(_RECONCILE_PAYLOAD, results) == {}
+
+
+def test_each_continuity_entry_answers_only_its_own_decision():
+    """Both continuity entries share the decide system phrase, so each keys on
+    its own item's heading: the identity entry never answers the sweep, nor
+    the sweep's the identity check."""
+    identity_reply = _shipped().reply(
+        _as_messages(_decide_prompts()["continuity-identity"]))
+    reconcile_reply = _shipped().reply(
+        _as_messages(_decide_prompts()["continuity-reconcile"]))
+    assert "".join(reconcile_reply) == "{}"
+    assert '"decision": "new"' in "".join(identity_reply)
+
+
+def test_decision_reply_omits_a_none_index():
+    """A `None` answer leaves its index out, so the item it stands for is one
+    the reply never reached: unread (`NO_ITEM`), never answered."""
+    body = json.loads(llm_fakes.decision_reply(None, {"decision": "new"},
+                                               rationales=("", "a second search")))
+    assert body == {"1": {"answers": {"decision": "new"}, "rationale": "a second search"}}
+    items = identity.build_items([_IDENTITY_ROW, {**_IDENTITY_ROW, "key": "r2"}], {})
+    first, second = decisions.parse(json.dumps(body), items, explain=True)
+    assert first.answers[identity.DECISION_ID].detail == decisions.NO_ITEM
+    assert second.answers[identity.DECISION_ID].answer == "new"

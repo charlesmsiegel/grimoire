@@ -6,7 +6,7 @@ so a check that silently stopped working would hide behind its neighbours.
 These tests pin each check separately, on the smallest input that isolates it.
 
 No store, no GRIMOIRE_HOME: the graders are pure. The one exception builds the
-continuity-reconcile case in a throwaway store, to tie this file's constants
+decide-continuity-reconcile case in a throwaway store, to tie this file's constants
 to it.
 """
 
@@ -419,116 +419,119 @@ def test_absorb_records_a_parser_crash_as_a_check_rather_than_raising(monkeypatc
 
 # ----------------------------------------------------------------- identity
 
-#: The continuity-identity case's three rows, as the grader is handed them:
+#: The decide-continuity-identity case's three rows, as the grader is handed them:
 #: what each row should be decided as, and which check carries that verdict.
 IDENTITY_EXPECTED = {
     "r1": {"decision": "existing", "id": "find-the-ledger", "check": "same_obligation"},
     "r2": {"decision": "new", "id": "", "check": "distinct"},
     "r3": {"decision": "new", "id": "", "check": "continuation"},
 }
-IDENTITY_OFFERED = {"r1": {"find-the-ledger"}, "r2": {"the-saltmarch-smuggling"},
-                    "r3": {"seraphines-debts"}}
-#: The kind each row was examined as: all three are plot movements.
-IDENTITY_KINDS = {"r1": "thread", "r2": "thread", "r3": "thread"}
 
 
-def _identity_json(*decisions: dict) -> str:
-    return json.dumps({"decisions": list(decisions)})
+# ------------------------------------------------- identity, as decision items
+
+def _identity_decision_rows() -> list[dict]:
+    """The decide-continuity-identity case's three rows, `prompt_rows()`-shaped,
+    each offered the one record its case is about."""
+    signals = {"title_equal": False, "slug_equal": False, "tokens": 0.4, "chars": 0.5,
+               "cosine": None, "actors": [], "scenes": [], "anchors": [], "via": "lexical"}
+    rows = []
+    for n, (title, rid) in enumerate((("Recover the harbour ledger", "find-the-ledger"),
+                                      ("Who bribes the harbourmaster",
+                                       "the-saltmarch-smuggling"),
+                                      ("Seraphine's debt to Mara comes due",
+                                       "seraphines-debts")), start=1):
+        rows.append({"key": f"r{n}", "kind": "thread", "title": title, "beat": "b",
+                     "status": "open", "commitment_kind": "", "due": "", "quote": "",
+                     "speaker": "", "certainty": None, "why_new": "",
+                     "distinguished_from": [],
+                     "candidates": [{"id": rid, "title": rid, "status": "open", "kind": "",
+                                     "due": "", "latest_beat": "", "earlier": [],
+                                     "signals": dict(signals)}]})
+    return rows
 
 
-_R1 = {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "Same ledger."}
-_R2 = {"row": "r2", "decision": "new", "id": "", "reason": "A different question."}
-_R3 = {"row": "r3", "decision": "new", "id": "", "reason": "It grew out of the debts."}
+_D1 = {"decision": "existing", "id": "find-the-ledger"}
+_D2 = {"decision": "new", "id": None}
+_D3 = {"decision": "new", "id": None}
+_WHY = ("Same ledger.", "A different question.", "It grew out of the debts.")
 
 
-def _identity(text: str) -> set[str]:
-    return failed(graders.grade_identity(text, IDENTITY_EXPECTED, IDENTITY_OFFERED,
-                                          IDENTITY_KINDS))
+def _identity_decided(*answers: dict, rationales=_WHY) -> set[str]:
+    from grimoire.store.continuity import identity
+    from tests.llm_fakes import decision_reply
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    return failed(graders.grade_identity_decision(
+        decision_reply(*answers, rationales=rationales), items, rows, IDENTITY_EXPECTED))
 
 
-def test_identity_compliant_passes():
-    checks = graders.grade_identity(_identity_json(_R1, _R2, _R3),
-                                    IDENTITY_EXPECTED, IDENTITY_OFFERED,
-                                    IDENTITY_KINDS)
+def test_identity_decision_compliant_passes():
+    from grimoire.store.continuity import identity
+    from tests.llm_fakes import decision_reply
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    checks = graders.grade_identity_decision(decision_reply(_D1, _D2, _D3, rationales=_WHY),
+                                             items, rows, IDENTITY_EXPECTED)
     assert failed(checks) == set()
-    assert {c.name for c in checks} == {
-        "identity.json", "identity.shape", "identity.enum", "identity.known_ids",
-        "identity.covers_rows", "identity.same_obligation", "identity.distinct",
-        "identity.continuation"}
+    assert [c.name for c in checks] == [
+        "identity.json", "identity.covers_rows", "identity.enum", "identity.known_ids",
+        "identity.same_obligation", "identity.distinct", "identity.continuation"]
+    # The reason is display-only: a reply with no rationale is still graded clean.
+    assert _identity_decided(_D1, _D2, _D3, rationales=()) == set()
 
 
-def test_identity_prose_fails_json_only():
-    """No object at all short-circuits: nothing else is reported."""
-    checks = graders.grade_identity("They look like the same ledger to me.",
-                                    IDENTITY_EXPECTED, IDENTITY_OFFERED,
-                                    IDENTITY_KINDS)
-    assert [(c.name, c.ok) for c in checks] == [("identity.json", False)]
+def test_identity_decision_undecodable_fails_json_only():
+    from grimoire.store.continuity import identity
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    for text in ("Row r1 looks like the ledger thread.",
+                 '{"0": {"answers": {"decision": "existing", "id": "find-the-le'):
+        checks = graders.grade_identity_decision(text, items, rows, IDENTITY_EXPECTED)
+        assert [(c.name, c.ok) for c in checks] == [("identity.json", False)], text
 
 
-def test_identity_unknown_enum_fails_enum():
-    """Scored on the raw word: `parse_output` launders "maybe" into "uncertain",
-    which would make this check unfailable. An extra, unexpected row carries
-    it, so no per-row verdict trips beside it."""
-    extra = {"row": "r4", "decision": "maybe", "id": "", "reason": "Hard to say."}
-    assert _identity(_identity_json(_R1, _R2, _R3, extra)) == {"identity.enum"}
-    assert _identity(_identity_json(_R1, _R2, _R3, {**extra, "decision": None})) == {
-        "identity.enum"}
+def test_identity_decision_merged_rows_fail_their_own_verdicts():
+    merged = (_D1, {"decision": "existing", "id": "the-saltmarch-smuggling"},
+              {"decision": "existing", "id": "seraphines-debts"})
+    assert _identity_decided(*merged) == {"identity.distinct", "identity.continuation"}
 
 
-def test_identity_unoffered_id_fails_known_ids():
-    extra = {"row": "r4", "decision": "existing", "id": "maras-map", "reason": "Same map."}
-    assert _identity(_identity_json(_R1, _R2, _R3, extra)) == {"identity.known_ids"}
-    # On a scored row it is also the wrong verdict for that row.
-    assert _identity(_identity_json({**_R1, "id": "maras-map"}, _R2, _R3)) == {
+def test_identity_decision_unoffered_id_fails_known_ids():
+    # An id offered nowhere is no option: unread, so `existing` names nothing,
+    # and the row it was given on gets the wrong verdict.
+    assert _identity_decided({"decision": "existing", "id": "maras-map"}, _D2, _D3) == {
         "identity.known_ids", "identity.same_obligation"}
-
-
-def test_identity_strips_only_the_rows_own_kind_prefix():
-    """`Examination.decide` removes a ``<kind>:`` prefix only for the row's own
-    kind, so a thread row answered with ``commitment:find-the-ledger`` is
-    downgraded as not offered. The grader has to refuse it the same way, or a
-    live run certifies a reply the app turns down. The row's own prefix is
-    still accepted."""
-    wrong = {**_R1, "id": "commitment:find-the-ledger"}
-    assert _identity(_identity_json(wrong, _R2, _R3)) == {
+    assert _identity_decided({"decision": "existing", "id": None}, _D2, _D3) == {
         "identity.known_ids", "identity.same_obligation"}
-    assert _identity(_identity_json({**_R1, "id": "thread:find-the-ledger"}, _R2, _R3)) == set()
+    # The ref form and a cased spelling are the offered id, as the app reads them.
+    for named in ("thread:find-the-ledger", "Find The Ledger"):
+        assert _identity_decided({"decision": "existing", "id": named}, _D2, _D3) == set()
 
 
-def test_identity_missing_row_fails_covers_rows():
-    """A row with no decision is reported once, by covers_rows: its own verdict
-    check is not reported beside it, so the two failures stay separable."""
-    checks = graders.grade_identity(_identity_json(_R1, _R2),
-                                    IDENTITY_EXPECTED, IDENTITY_OFFERED,
-                                    IDENTITY_KINDS)
+def test_identity_decision_unknown_word_fails_enum():
+    assert _identity_decided(_D1, {"decision": "maybe", "id": None}, _D3) == {
+        "identity.enum", "identity.distinct"}
+
+
+def test_identity_decision_missing_item_fails_covers_rows_alone():
+    from grimoire.store.continuity import identity
+    from tests.llm_fakes import decision_reply
+
+    rows = _identity_decision_rows()
+    items = identity.build_items(rows, {})
+    text = decision_reply(_D1, _D2, rationales=_WHY)   # item 2 never answered
+    checks = graders.grade_identity_decision(text, items, rows, IDENTITY_EXPECTED)
     assert failed(checks) == {"identity.covers_rows"}
     assert "identity.continuation" not in {c.name for c in checks}
 
 
-def test_identity_bad_shape_fails_shape():
-    assert "identity.shape" in _identity('{"decisions": {"r1": "existing"}}')
-    assert _identity(_identity_json(_R1, _R2, _R3, {"row": 4, "decision": "new"})) == {
-        "identity.shape"}
-
-
-def test_identity_merged_rows_fail_their_own_verdicts():
-    """The `merged` recording's shape: both ids are offered, so only the two
-    verdict checks trip."""
-    merged = _identity_json(_R1, {**_R2, "decision": "existing",
-                                  "id": "the-saltmarch-smuggling"},
-                            {**_R3, "decision": "existing", "id": "seraphines-debts"})
-    assert _identity(merged) == {"identity.distinct", "identity.continuation"}
-
-
-def test_identity_reads_row_keys_as_the_app_does():
-    """The app strips a "Row" label off a key (`identity.parse_output`), so
-    the grader must not fail a reply the app would have read."""
-    assert _identity(_identity_json({**_R1, "row": "Row r1"}, _R2, _R3)) == set()
-
-
 # ---------------------------------------------------------------- reconcile
 
-#: The continuity-reconcile case's seven candidates as the grader is handed
+#: The decide-continuity-reconcile case's seven candidates as the grader is handed
 #: them. `build_payload` keys candidates c1... in the order they are sent, so
 #: §28.10 case N is sent as ``c<N-1>``: c1 and c2 are thread pairs, c3 a cross
 #: pair (A the commitment, B the thread, as refs sort), c4 and c5 thread
@@ -553,167 +556,26 @@ RECONCILE_EXPECTED = {
     "c7": {"check": "unproven", "decisions": ("keep_open", "uncertain")},
 }
 
-_C = {
-    "c1": {"candidate": "c1", "decision": "distinct", "from": "", "to": "",
-           "reason": "Who bribes the harbourmaster is its own question.", "evidence_scenes": []},
-    "c2": {"candidate": "c2", "decision": "continuation", "from": "B", "to": "A",
-           "reason": "The debt to Mara grew out of Seraphine's debts.", "evidence_scenes": []},
-    "c3": {"candidate": "c3", "decision": "pays_off", "from": "B", "to": "A",
-           "reason": "Finding the ledger is what earns Mara her pay.", "evidence_scenes": []},
-    "c4": {"candidate": "c4", "decision": "close", "from": "", "to": "",
-           "reason": "The map led Mara to the cove.",
-           "evidence_scenes": ["003--the-pier-at-dusk"]},
-    "c5": {"candidate": "c5", "decision": "keep_open", "from": "", "to": "",
-           "reason": "Nothing shown answers the chart.", "evidence_scenes": []},
-    "c6": {"candidate": "c6", "decision": "fulfilled", "from": "", "to": "",
-           "reason": "Mara returned the ring as she swore.",
-           "evidence_scenes": ["002--realm-road"]},
-    "c7": {"candidate": "c7", "decision": "uncertain", "from": "", "to": "",
-           "reason": "Nothing shows whether the berth was given.", "evidence_scenes": []},
-}
-
-
-def _reconcile_json(*decisions: dict) -> str:
-    return json.dumps({"decisions": list(decisions)})
-
-
-def _reconcile(text: str) -> set[str]:
-    return failed(graders.grade_reconcile(text, RECONCILE_EXPECTED, RECONCILE_VOCAB,
-                                          RECONCILE_KNOWN))
-
-
-def _all(**over: dict) -> str:
-    return _reconcile_json(*({**_C[k], **over.get(k, {})} for k in _C))
-
-
-def test_reconcile_compliant_passes():
-    checks = graders.grade_reconcile(_all(), RECONCILE_EXPECTED, RECONCILE_VOCAB,
-                                     RECONCILE_KNOWN)
-    assert failed(checks) == set()
-    assert {c.name for c in checks} == {
-        "reconcile.json", "reconcile.shape", "reconcile.enum", "reconcile.covers",
-        "reconcile.evidence", "reconcile.distinct", "reconcile.continuation",
-        "reconcile.cross_type", "reconcile.close", "reconcile.keep_open",
-        "reconcile.fulfilled", "reconcile.unproven"}
-
-
-def test_reconcile_prose_fails_json_only():
-    """No object at all short-circuits: nothing else is reported."""
-    checks = graders.grade_reconcile("Mara's map looks finished to me.", RECONCILE_EXPECTED,
-                                     RECONCILE_VOCAB, RECONCILE_KNOWN)
-    assert [(c.name, c.ok) for c in checks] == [("reconcile.json", False)]
-
-
-def test_reconcile_cross_type_duplicate_fails_enum():
-    """Scored on the raw word: `parse_output` launders a cross-type
-    "duplicate" into "uncertain", which would make this check unfailable. It
-    is also the wrong verdict for the cross pair."""
-    assert _reconcile(_all(c3={"decision": "duplicate", "from": "A", "to": "B"})) == {
-        "reconcile.enum", "reconcile.cross_type"}
-    # A word no vocabulary holds, on an extra candidate nobody was sent.
-    extra = {"candidate": "c9", "decision": "merge", "reason": "Same business."}
-    assert _reconcile(_reconcile_json(*_C.values(), extra)) == {"reconcile.enum"}
-    assert _reconcile(_all(c7={"decision": None})) == {"reconcile.enum", "reconcile.unproven"}
-
-
-def test_reconcile_closure_without_evidence_fails_evidence():
-    """A status word needs a reason and a scene the prompt showed; the
-    verdict check reads the word alone, so the two failures stay separable."""
-    assert _reconcile(_all(c4={"evidence_scenes": []})) == {"reconcile.evidence"}
-    assert _reconcile(_all(c4={"evidence_scenes": ["999--nowhere"]})) == {
-        "reconcile.evidence"}
-    assert _reconcile(_all(c6={"reason": "  "})) == {"reconcile.evidence"}
-    assert _reconcile(_all(c6={"evidence_scenes": "002--realm-road"})) == {
-        "reconcile.evidence"}
-    # Any status word is held to it, on any candidate.
-    assert _reconcile(_all(c7={"decision": "broken", "evidence_scenes": []})) == {
-        "reconcile.evidence", "reconcile.unproven"}
-
-
-def test_reconcile_missing_candidate_fails_covers():
-    """A candidate with no decision is reported once, by covers: its own
-    verdict check is not reported beside it."""
-    checks = graders.grade_reconcile(
-        _reconcile_json(*(v for k, v in _C.items() if k != "c5")),
-        RECONCILE_EXPECTED, RECONCILE_VOCAB, RECONCILE_KNOWN)
-    assert failed(checks) == {"reconcile.covers"}
-    assert "reconcile.keep_open" not in {c.name for c in checks}
-
-
-def test_reconcile_bad_shape_fails_shape():
-    assert "reconcile.shape" in _reconcile('{"decisions": {"c1": "distinct"}}')
-    assert _reconcile(_reconcile_json(*_C.values(), {"candidate": 4, "decision": "x"})) == {
-        "reconcile.shape"}
-    # A directed word needs two different letters, A and B. The verdict
-    # reads ``from`` alone, so a right ``from`` with no ``to`` trips shape only.
-    assert _reconcile(_all(c2={"from": "B", "to": "B"})) == {"reconcile.shape"}
-    assert _reconcile(_all(c2={"from": "b", "to": " a "})) == set()
-    assert _reconcile(_all(c3={"from": "", "to": ""})) == {
-        "reconcile.shape", "reconcile.cross_type"}
-
-
-def test_reconcile_merged_pairs_fail_their_own_verdicts():
-    """The `merged` recording's shape: both duplicates carry valid letters,
-    so only the two verdict checks trip."""
-    merged = _all(c1={"decision": "duplicate", "from": "B", "to": "A"},
-                  c2={"decision": "duplicate", "from": "B", "to": "A"})
-    assert _reconcile(merged) == {"reconcile.distinct", "reconcile.continuation"}
-
-
-def test_reconcile_continuation_must_run_from_the_concrete_record():
-    assert _reconcile(_all(c2={"from": "A", "to": "B"})) == {"reconcile.continuation"}
-    # pays_off runs from the thread; "related" carries no direction.
-    assert _reconcile(_all(c3={"from": "A", "to": "B"})) == {"reconcile.cross_type"}
-    assert _reconcile(_all(c3={"decision": "related", "from": "", "to": ""})) == set()
-
-
-def test_reconcile_scores_every_unmerged_answer_the_prompt_allows(tmp_path, monkeypatch):
-    """The shipped prompt makes a narrower question "continuation" or
-    "subthread" with no rule between them, and "related" whenever two records
-    bear on each other -- the case-2 beats share the night cargo. §28.10's
-    point for cases 2 and 3 is that neither pair is merged, so the case's own
-    verdicts take every such answer, and the concrete record still has to be
-    the ``from`` of either directed word."""
-    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    ctx = runner.prepare(cases.BY_ID["continuity-reconcile"])
-
-    def grade(text: str) -> set[str]:
-        return failed(graders.grade_reconcile(text, ctx["expected"], ctx["vocab"],
-                                              ctx["known"]))
-
-    assert grade(_all(c1={"decision": "related"})) == set()
-    assert grade(_all(c2={"decision": "subthread", "from": "B", "to": "A"})) == set()
-    assert grade(_all(c2={"decision": "subthread", "from": "A", "to": "B"})) == {
+def test_reconcile_decision_scores_every_unmerged_answer_the_prompt_allows():
+    """§28.10's point for cases 2 and 3 is that neither pair is merged, so the
+    case's own verdicts take every such answer ("related" whenever two records
+    bear on each other, "continuation" or "subthread" with no rule between
+    them), and the concrete record still has to be the ``from`` of either
+    directed word."""
+    assert _reconcile_decided(c1={"decision": "related"}) == set()
+    assert _reconcile_decided(c2={"decision": "subthread", "from": "B", "to": "A"}) == set()
+    assert _reconcile_decided(c2={"decision": "subthread", "from": "A", "to": "B"}) == {
         "reconcile.continuation"}
-    assert grade(_all(c1={"decision": "duplicate", "from": "B", "to": "A"},
-                      c2={"decision": "duplicate", "from": "B", "to": "A"})) == {
-        "reconcile.distinct", "reconcile.continuation"}
 
 
-def test_reconcile_eager_lifecycle_fails_keep_open_and_unproven():
-    """The `eager` recording's shape: a closure and a resolution with
-    evidence, on the two candidates nothing settles."""
-    eager = _all(c5={"decision": "close", "evidence_scenes": ["001--saltmarch-docks"]},
-                 c7={"decision": "fulfilled", "evidence_scenes": ["001--saltmarch-docks"]})
-    assert _reconcile(eager) == {"reconcile.keep_open", "reconcile.unproven"}
-    assert _reconcile(_all(c7={"decision": "keep_open"})) == set()
-
-
-def test_reconcile_reads_candidate_keys_as_the_app_does():
-    """The app strips a "Candidate" label and case off a key
-    (`reconcile.parse_output`), and keeps the first answer a key gets."""
-    assert _reconcile(_all(c1={"candidate": "Candidate C1"}, c5={"candidate": " c5 "})) == set()
-    later = {**_C["c5"], "decision": "close", "evidence_scenes": ["001--saltmarch-docks"]}
-    assert _reconcile(_reconcile_json(*_C.values(), later)) == set()
-
-
-def test_reconcile_case_is_what_these_tests_grade_and_the_app_keeps(tmp_path, monkeypatch):
+def test_reconcile_decision_case_is_what_these_tests_grade_and_the_app_keeps(
+        tmp_path, monkeypatch):
     """The constants above are the case's own, and a reply the grader passes
-    is one the app keeps word for word: the compliant recording, parsed by
-    `reconcile.parse_output` against the payload the case built, downgrades
+    is one the app keeps word for word: the compliant recording, read by
+    `reconcile.proposals_of` against the payload the case built, downgrades
     nothing to ``uncertain`` that it did not already say."""
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
-    case = cases.BY_ID["continuity-reconcile"]
+    case = cases.BY_ID["decide-continuity-reconcile"]
     ctx = runner.prepare(case)
     assert ctx["vocab"] == RECONCILE_VOCAB
     assert ctx["known"] == RECONCILE_KNOWN
@@ -721,11 +583,143 @@ def test_reconcile_case_is_what_these_tests_grade_and_the_app_keeps(tmp_path, mo
                                for k, v in RECONCILE_EXPECTED.items()}
 
     text = case.baseline.path(case.id).read_text(encoding="utf-8")
-    sent = json.loads(text)["decisions"]
-    kept = reconcile.parse_output(text, ctx["payload"])
-    by_key = {c["key"]: c["id"] for c in ctx["payload"]["candidates"]}
-    assert {d["candidate"]: kept[by_key[d["candidate"]]]["decision"] for d in sent} == {
-        d["candidate"]: d["decision"] for d in sent}
+    results = decisions.parse(text, ctx["items"], explain=True)
+    kept = reconcile.proposals_of(ctx["payload"], results)
+    said = {c["id"]: result.answers[reconcile.DECISION_ID].answer
+            for c, result in zip(ctx["payload"]["candidates"], results, strict=True)}
+    assert {key: kept[key]["decision"] for key in kept} == said
+
+
+# ------------------------------------------------ reconcile, as decision items
+
+#: The case's seven candidates, `build_payload`-shaped with no store: every
+#: scene is a recent chronicle line, as in the case, so every item shows all
+#: three and asks three evidence questions.
+_RECONCILE_REFS = {
+    "c1": ("same_thread", ("thread:the-saltmarch-smuggling",
+                           "thread:who-bribes-the-saltmarch-harbourmaster")),
+    "c2": ("same_thread", ("thread:seraphines-debts",
+                           "thread:what-seraphines-debt-to-mara-costs-her")),
+    "c3": ("cross", ("commitment:pay-mara-for-finding-the-ledger", "thread:find-the-ledger")),
+    "c4": ("thread", ("thread:maras-map",)),
+    "c5": ("thread", ("thread:winifreds-chart",)),
+    "c6": ("commitment", ("commitment:maras-oath",)),
+    "c7": ("commitment", ("commitment:seraphines-berth",)),
+}
+
+
+def _reconcile_decision_payload() -> dict:
+    known = sorted(RECONCILE_KNOWN)
+    cands = []
+    for key, (vocab, refs) in _RECONCILE_REFS.items():
+        records = [{"letter": letter, "ref": ref, "type": "", "line": ref, "beats": [],
+                    "pressure": "", "links": [], "actors": []}
+                   for letter, ref in zip("AB", refs, strict=False)]
+        cands.append({"key": key, "id": f"candidate-{key}", "vocabulary": vocab,
+                      "records": records, "signal_text": ""})
+    return {"now": "", "chronicle": [{"id": sid, "one_line": sid} for sid in known],
+            "recent": known, "candidates": cands, "known_scenes": known}
+
+
+_RD = {
+    "c1": {"decision": "distinct"},
+    "c2": {"decision": "continuation", "from": "B", "to": "A"},
+    "c3": {"decision": "pays_off", "from": "B", "to": "A"},
+    "c4": {"decision": "close", "evidence_scene": "003--the-pier-at-dusk"},
+    "c5": {"decision": "keep_open"},
+    "c6": {"decision": "fulfilled", "evidence_scene": "002--realm-road"},
+    "c7": {"decision": "uncertain"},
+}
+
+
+def _reconcile_decided(*, skip: str = "", **over: dict) -> set[str]:
+    from tests.llm_fakes import decision_reply
+
+    payload = _reconcile_decision_payload()
+    items = reconcile.build_items(payload)
+    answers = []
+    for item, cand in zip(items, payload["candidates"], strict=True):
+        if cand["key"] == skip:
+            break
+        answer = {q.id: None for q in item.questions}
+        answers.append({**answer, **_RD[cand["key"]], **over.get(cand["key"], {})})
+    return failed(graders.grade_reconcile_decision(decision_reply(*answers), items, payload,
+                                                   RECONCILE_EXPECTED))
+
+
+def test_reconcile_decision_compliant_passes():
+    from tests.llm_fakes import decision_reply
+
+    payload = _reconcile_decision_payload()
+    items = reconcile.build_items(payload)
+    assert all(len([q for q in item.questions if q.id in reconcile.EVIDENCE_IDS]) == 3
+               for item in items)
+    answers = [{**{q.id: None for q in item.questions}, **_RD[c["key"]]}
+               for item, c in zip(items, payload["candidates"], strict=True)]
+    checks = graders.grade_reconcile_decision(decision_reply(*answers), items, payload,
+                                              RECONCILE_EXPECTED)
+    assert failed(checks) == set()
+    assert [c.name for c in checks] == [
+        "reconcile.json", "reconcile.covers", "reconcile.enum", "reconcile.evidence",
+        "reconcile.distinct", "reconcile.continuation", "reconcile.cross_type",
+        "reconcile.close", "reconcile.keep_open", "reconcile.fulfilled",
+        "reconcile.unproven"]
+    # No rationale is required of a status word (I4): none was given above.
+    assert '"rationale"' not in decision_reply(*answers)
+
+
+def test_reconcile_decision_undecodable_fails_json_only():
+    payload = _reconcile_decision_payload()
+    items = reconcile.build_items(payload)
+    for text in ("Mara's map looks finished to me.",
+                 '{"0": {"answers": {"decision": "distinct", "from": null, "to": nu'):
+        checks = graders.grade_reconcile_decision(text, items, payload, RECONCILE_EXPECTED)
+        assert [(c.name, c.ok) for c in checks] == [("reconcile.json", False)], text
+
+
+def test_reconcile_decision_merged_pairs_fail_their_own_verdicts():
+    merged = {"decision": "duplicate", "from": "B", "to": "A"}
+    assert _reconcile_decided(c1=merged, c2=merged) == {"reconcile.distinct",
+                                                        "reconcile.continuation"}
+    # The concrete record must still be the `from` of a continuation.
+    assert _reconcile_decided(c2={"from": "A", "to": "B"}) == {"reconcile.continuation"}
+
+
+def test_reconcile_decision_eager_lifecycle_fails_keep_open_and_unproven():
+    cited = {"evidence_scene": "001--saltmarch-docks"}
+    assert _reconcile_decided(c5={"decision": "close", **cited},
+                              c7={"decision": "fulfilled", **cited}) == {
+        "reconcile.keep_open", "reconcile.unproven"}
+
+
+def test_reconcile_decision_unfounded_closure_fails_evidence_alone():
+    """The verdict reads the raw word, so an unfounded closure trips the
+    evidence check alone; a scene in any slot founds it, and a scene the item
+    does not offer is no scene."""
+    assert _reconcile_decided(c4={"evidence_scene": None}) == {"reconcile.evidence"}
+    assert _reconcile_decided(c4={"evidence_scene": "999--nowhere"}) == {
+        "reconcile.evidence"}
+    assert _reconcile_decided(c4={"evidence_scene": None,
+                                  "evidence_scene_3": "003--the-pier-at-dusk"}) == set()
+    assert _reconcile_decided(c7={"decision": "broken"}) == {"reconcile.evidence",
+                                                            "reconcile.unproven"}
+
+
+def test_reconcile_decision_timid_fails_the_three_verdicts_nothing_else_reaches():
+    assert _reconcile_decided(c3={"decision": "distinct", "from": None, "to": None},
+                              c4={"decision": "keep_open", "evidence_scene": None},
+                              c6={"decision": "keep_open", "evidence_scene": None}) == {
+        "reconcile.cross_type", "reconcile.close", "reconcile.fulfilled"}
+
+
+def test_reconcile_decision_unknown_word_fails_enum():
+    assert _reconcile_decided(c3={"decision": "duplicate"}) == {"reconcile.enum",
+                                                               "reconcile.cross_type"}
+
+
+def test_reconcile_decision_missing_item_fails_covers_alone():
+    checks = _reconcile_decided(skip="c7")
+    assert checks == {"reconcile.covers"}
 
 
 # --------------------------------------------------------- scene suggestions

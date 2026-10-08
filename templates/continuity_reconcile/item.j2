@@ -1,0 +1,40 @@
+{#- One candidate as a `decide()` item's context (`reconcile.build_items`):
+    a preamble limited to this item -- the campaign date and the chronicle
+    lines it shows -- then a heading naming what is asked, then the
+    candidate's record and signal block. Vars: now (the campaign date,
+    friendly form, or blank), chronicle [{id, one_line}] (only the lines of
+    the scenes this item shows, `reconcile.item_scenes`: its own beat scenes
+    and the recent window, a scene whose id collides once normalised left
+    out), c {label (what is being asked, `reconcile.LABELS`), records
+    (`reconcile.build_payload`'s), signal_text}. Every key is always passed; a
+    blank one renders nothing. -#}
+{% if now -%}
+Campaign date: {{ now }}
+{% endif -%}
+{% if chronicle -%}
+Recent scenes:
+{% for s in chronicle -%}
+- {{ s.id }} — {{ s.one_line }}
+{% endfor -%}
+{% endif -%}
+{% if now or chronicle %}
+{% endif -%}
+Candidate — {{ c.label }}
+{%- for r in c.records %}
+{{ r.letter }}{% if r.type %} ({{ r.type }}){% endif %}: {{ r.line }}
+{%- for b in r.beats %}
+  {% if b.scene %}[{{ b.scene }}] {% endif %}{{ b.text }}
+{%- endfor %}
+{%- if r.pressure %}
+  pressure: {{ r.pressure }}
+{%- endif %}
+{%- if r.links %}
+  links: {{ r.links | join("; ") }}
+{%- endif %}
+{%- if r.actors %}
+  people: {{ r.actors | join(", ") }}
+{%- endif %}
+{%- endfor %}
+{%- if c.signal_text %}
+signals: {{ c.signal_text }}
+{%- endif %}

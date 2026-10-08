@@ -72,18 +72,33 @@ filtered by verdict here, against the same `pending.Current` discovery read, so
 a pair the reader dismissed or linked, or a re-check under a Keep open that
 still holds, is never re-asked.
 
-**Adjudication** (§11.2-§11.4, Decision 13) is one model call per sweep, never
-one per finding. `select` chooses what it asks -- overdue resolutions, then
+**Adjudication** (§11.2-§11.4, Decision 13) is one `decide()` per sweep, never
+one per finding: one item per finding, chunked (at most
+`decisions.MAX_ITEMS_PER_CALL` items to a metered call), so a sweep is a few
+calls and each is bounded where one prompt over every finding grew with the
+sweep. `select` chooses what it asks -- overdue resolutions, then
 duplicates strongest first, then the rest, capped at `RECONCILE_MAX_CANDIDATES`
 -- from the findings with no proposal, re-checking each model-only nomination
 so nothing the reader dismissed or linked is sent. `build_payload` sends the
 records those findings name and nothing else of the ledger: each record's line,
 its last beats with their scenes, its pressure, links and people, and the
 chronicle lines around them -- never a transcript. The scenes it shows are the
-only evidence `parse_output` accepts. The parser trusts no field of the reply:
+only evidence `proposals_of` accepts. It trusts no field of the reply:
 a word outside the candidate's vocabulary, a direction the link rules refuse,
-or a closure without a reason and a known evidence scene is ``uncertain``, and
-a reply with no decodable object is None -- a failed run, not "no proposals".
+or a closure whose evidence is not a scene its item showed is ``uncertain``,
+and a reply with no decodable object is None -- a failed run, not "no
+proposals". A status word stands on its known evidence scene alone, with no
+rationale (I4): the rationale is display text, and nothing is invented in its
+place.
+
+**A partial sweep lands.** A candidate no chunk reached (a chunk that failed,
+was refused or came back with no object beside one that answered) gets no
+proposal, never ``uncertain``: the sweep counts it `unanswered`, its cached
+record keeps no proposal and the next sweep's `select` asks it again (I1). The
+exception is a model-only nomination, which is cached only with its proposal,
+so one the reply never reached is not stored at all and is nominated afresh
+next time (M7). A candidate the reply reached and answered badly was read, and
+is ``uncertain`` (N8).
 
 **Two persists** (§11.1 steps 2 and 4, Decisions 7 and 8) share one campaign
 lock hold. Persist 1 writes what the sweep found plus every cached record it
@@ -110,10 +125,11 @@ from __future__ import annotations
 import hashlib
 import re
 import time
-from collections.abc import Callable, Iterable
+from collections import Counter
+from collections.abc import Callable, Iterable, Sequence
 from typing import Any, Literal, TypeVar
 
-from ... import embeddings, prompts
+from ... import decisions, embeddings, prompts
 from .. import (
     aging,
     calendars,
@@ -129,7 +145,6 @@ from .. import (
     scene_ids,
     vectors,
 )
-from ..absorb import parse as absorb_parse
 from ..campaigns import paths as campaigns_paths
 from ..scenes import read as scenes_read
 from . import candidates, canon, effective, involvement, pending, pressure, similarity
@@ -157,9 +172,10 @@ RECONCILE_MAX_PAIRS = 20_000
 #: prompts later.
 RECONCILE_TOP_K = similarity.IDENTITY_TOP_K
 
-#: Findings one adjudication call carries. Each renders two short records, a
-#: few beats and a signal line, so this keeps the one prompt in the few-thousand
-#: token range absorb's runs in. To be tuned against real prompts later.
+#: Findings one sweep sends. Each renders two short records, a few beats and a
+#: signal line, and the question and evidence wording repeats once per item, so
+#: the overhead grows linearly with the count; `decide()` chunks them, which
+#: bounds each call. To be tuned against real prompts later.
 RECONCILE_MAX_CANDIDATES = 24
 
 #: Beats sent per record: the identity text's latest plus two earlier ones
@@ -183,9 +199,9 @@ RECONCILE_ACTORS = 4
 #: Bytes of stored text one record shows -- its id, kind, status, title, due,
 #: beats, link titles and actor names together. The counts above bound how
 #: many of each are sent, not how long they are, and a ledger route takes a
-#: title or beat of any length; this is the bound the identity resolver puts on
+#: title or beat of any length; this is the bound the identity decision puts on
 #: the same records (`similarity.CONTINUITY_IDENTITY_BYTES`), so a pasted note
-#: can neither push the one call past the model's context nor, by failing it
+#: can neither push a chunk's call past the model's context nor, by failing it
 #: on every pass, keep the other candidates in it from ever being decided. To
 #: be tuned against real prompts later.
 RECONCILE_RECORD_BYTES = similarity.CONTINUITY_IDENTITY_BYTES
@@ -196,7 +212,7 @@ RECONCILE_RECORD_BYTES = similarity.CONTINUITY_IDENTITY_BYTES
 #: later.
 RECONCILE_SCENE_LINE_BYTES = 500
 
-#: A proposal's reason, clipped -- the bound identity's resolver uses
+#: A proposal's reason, clipped -- the bound identity's decision uses
 #: (`identity.REASON_CHARS`), one short sentence.
 RECONCILE_REASON_CHARS = 280
 
@@ -959,8 +975,6 @@ _LETTERS = ("A", "B")
 #: as the other record (a cross pair stores the commitment first). An event's
 #: line already begins ``event:``.
 _TYPE_OF = {"thread": "plot thread", "commitment": "commitment"}
-#: A leading ``candidate`` word, as the user prompt prints a key (``Candidate c1``).
-_CANDIDATE_WORD = re.compile(r"^candidate(?![a-z0-9])[\s:#.-]*")
 
 
 def vocabulary(record: dict) -> str:
@@ -1013,7 +1027,7 @@ def _item(key: str, record: dict) -> dict:
 
 
 def select(cid: str, sweep: Sweep) -> list[dict]:
-    """What the one model call is asked (§11.1 step 3, Decision 13), at most
+    """What the sweep's `decide()` is asked (§11.1 step 3, Decision 13), at most
     `RECONCILE_MAX_CANDIDATES`, by priority.
 
     Read from the cache as persist 1 left it: every record with no proposal
@@ -1148,7 +1162,7 @@ def _record_view(ctx: _Context, letter: str, ref: str) -> dict:
     due its line is made of, then its beats newest first, then its links and
     actor names. A beat, link or name the budget no longer reaches is left out
     rather than shown blank. The reply names a record by its letter, never its
-    id, so a cut id loses nothing `parse_output` reads."""
+    id, so a cut id loses nothing `proposals_of` reads."""
     prefix, _, rid = ref.partition(":")
     view: dict[str, Any] = {"letter": letter, "ref": ref, "type": _TYPE_OF.get(prefix, ""),
                             "line": similarity.clip_fields([ref], RECONCILE_RECORD_BYTES)[0],
@@ -1240,6 +1254,12 @@ def _campaign_date(cid: str) -> str:
     return built["friendly"] or built["now"] or ""
 
 
+def _recent(live: list[str]) -> list[str]:
+    """The last `RECONCILE_RECENT_SCENES` live scenes, in play order (none
+    when the window is zero: ``live[-0:]`` would be every scene)."""
+    return live[-RECONCILE_RECENT_SCENES:] if RECONCILE_RECENT_SCENES > 0 else []
+
+
 def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]:
     """Chronicle one-lines for every beat scene shown and the last
     `RECONCILE_RECENT_SCENES` live scenes, in play order, each cut to
@@ -1248,7 +1268,7 @@ def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]
     scene with no line is not."""
     read: Any = _soft(chronicle.read_chronicle, {}, cid)
     chron: dict = read if isinstance(read, dict) else {}
-    recent = set(live[-RECONCILE_RECENT_SCENES:]) if RECONCILE_RECENT_SCENES > 0 else set()
+    recent = set(_recent(live))
     out: list[dict] = []
     for sid in live:
         if sid not in beat_scenes and sid not in recent:
@@ -1262,15 +1282,17 @@ def _scene_lines(cid: str, beat_scenes: set[str], live: list[str]) -> list[dict]
 
 
 def build_payload(cid: str, selected: list[dict]) -> dict:
-    """The one call's bounded input (§11.2, Decision 13) for `select`'s items,
+    """The sweep's bounded input (§11.2, Decision 13) for `select`'s items,
     keyed ``c1``... in selection order. Only the records the candidates name
     are sent, with their last beats and the chronicle lines around them --
     never a transcript -- and every stored text is cut to a byte bound
     (`_record_view`, `_scene_lines`; a signal line to `RECONCILE_RECORD_BYTES`),
     so the counts that bound the selection bound the prompt too. `known_scenes` (beat scenes and chronicle lines shown)
-    is the only evidence `parse_output` accepts (§11.4). Both come from the
+    is the only evidence `proposals_of` accepts (§11.4). Both come from the
     scenes that exist: a beat in a deleted scene is shown without its scene,
-    so the parser never accepts evidence persist 1 would void."""
+    so the sweep never accepts evidence persist 1 would void. `recent` is the
+    recent window itself (`_recent`, in play order), which `item_scenes` reads
+    to give each item the chronicle lines it shows."""
     live = _live_scenes(cid)
     ctx = _Context(cid, sorted({ref for item in selected for ref in item["refs"]}), live)
     out: list[dict] = []
@@ -1283,33 +1305,8 @@ def build_payload(cid: str, selected: list[dict]) -> dict:
     beat_scenes = {b["scene"] for c in out for r in c["records"] for b in r["beats"]} - {""}
     lines = _scene_lines(cid, beat_scenes, live)
     return {"now": _campaign_date(cid), "chronicle": lines, "candidates": out,
-            "known_scenes": sorted(beat_scenes | {line["id"] for line in lines})}
-
-
-def template_vars(payload: dict) -> dict:
-    """`build_payload` output as `continuity_reconcile/user.j2` reads it: each
-    candidate gains its heading `label` and its vocabulary's `words`."""
-    return {"now": payload["now"], "chronicle": payload["chronicle"],
-            "candidates": [{"key": c["key"], "label": LABELS[c["vocabulary"]],
-                            "words": list(DECISIONS[c["vocabulary"]]),
-                            "records": c["records"], "signal_text": c["signal_text"]}
-                           for c in payload["candidates"]]}
-
-
-def build_prompt(payload: dict) -> list[dict]:
-    """The sweep's messages: one call for every selected candidate (§25.1)."""
-    return [{"role": "system", "content": prompts.render("continuity_reconcile/system.j2")},
-            {"role": "user", "content": prompts.render("continuity_reconcile/user.j2",
-                                                       **template_vars(payload))}]
-
-
-# ------------------------------------------------------------------ parsing
-
-
-def _candidate_key(value) -> str:
-    if not isinstance(value, str):
-        return ""
-    return _CANDIDATE_WORD.sub("", value.strip().casefold()).strip()
+            "known_scenes": sorted(beat_scenes | {line["id"] for line in lines}),
+            "recent": _recent(live)}
 
 
 def _ref_of(value, refs: dict[str, str]) -> str:
@@ -1364,9 +1361,11 @@ def _pair(word: str, item: dict, refs: dict[str, str], base: dict) -> dict:
 
 
 def _lifecycle_word(word: str, base: dict) -> dict:
-    """A status word stands only with a reason and a known evidence scene (§11.4)."""
+    """A status word stands only with a known evidence scene (§11.4), and on
+    that scene alone (§7.4, I4): its rationale may be empty, and on a native
+    backend there is none."""
     if word in _STATUS_OF:
-        if not base["reason"] or not base["evidence_scenes"]:
+        if not base["evidence_scenes"]:
             return base
         return {**base, "decision": word, "status": _STATUS_OF[word]}
     return {**base, "decision": word}
@@ -1390,33 +1389,163 @@ def _decide(item: dict, cand: dict, known: set[str]) -> dict:
     return _pair(word, item, refs, base)
 
 
-def parse_output(text: str, payload: dict) -> dict[str, dict] | None:
-    """The reply's proposals, ``{candidate id: proposal}``, or None when it
-    holds no decodable object at all -- a failed run, whose deterministic
-    findings stand, which is not the same as a decodable reply with nothing
-    usable in it (``{}``, spec §24).
+# ------------------------------------------------------- as decision items
+#
+# The adjudication as `decide()` items (spec §7.4): one per candidate, its
+# context self-contained, asking the decision, a direction for a pair, and the
+# evidence scenes it shows. These are what the sweep sends and reads
+# (`routes.continuity._adjudicate`).
 
-    A key is matched without its ``Candidate`` label; an unknown one is
-    dropped, and a repeated one keeps its first answer. A word outside the
-    candidate's vocabulary, a direction §5.3 does not allow, or a status word
-    without a reason and a known evidence scene is ``uncertain``. Unknown
-    scene ids are dropped, and the reason is clipped. Nothing here raises on
-    bad JSON."""
-    obj = absorb_parse.extract_object(text)
-    if obj is None:
-        return None
-    items = obj.get("decisions")
-    by_key = {c["key"]: c for c in payload["candidates"]}
-    known = set(payload["known_scenes"])
+#: The id of each item's first question, a choice over its vocabulary's words.
+DECISION_ID = "decision"
+
+#: The ids of a pair's direction questions, each a choice over the item's
+#: record letters (null allowed): named as today's reply fields, so the
+#: sentences carried out of the legacy prompt keep their words.
+FROM_ID, TO_ID = "from", "to"
+
+#: Evidence scenes one item may cite (I2). Today stores a list and the detail
+#: view shows every cited scene as a chip, so one is too few; three nullable
+#: choices over one item's shown scenes keep a call's enum values at most
+#: 3 x options x `decisions.MAX_ITEMS_PER_CALL`, well inside
+#: `decisions.MAX_ENUM_VALUES` (and `decisions.chunks` closes a call early if
+#: not). Argued from that structure alone; to be tuned against real prompts
+#: later.
+EVIDENCE_SCENES = 3
+
+#: The evidence questions' ids, slot by slot.
+EVIDENCE_IDS = ("evidence_scene", "evidence_scene_2", "evidence_scene_3")
+
+#: The vocabularies whose words need a direction (`_DIRECTED`): the pairs.
+PAIR_VOCABULARIES = ("same_thread", "same_commitment", "cross")
+
+
+def item_scenes(payload: dict, cand: dict) -> list[str]:
+    """The scene ids one candidate's item shows: its records' beat scenes, and
+    the chronicle lines it shows -- those of its own beat scenes and of the
+    recent window (`payload["recent"]`) -- in `payload["known_scenes"]`
+    order. An id `decisions.offerable` refuses is dropped, and so is EVERY id
+    of a group that collides once normalised (Review Focus 3, M4, M8) -- from
+    the item's evidence options and its chronicle lines; a beat keeps its
+    marker, as the record block is today's byte for byte -- so a hand-edited
+    ledger or chronicle never builds a request `decisions.validate` refuses.
+    Keeping one of a colliding group would be worse than keeping none: the
+    others' ids still show in the beat markers, and a citation of one of them
+    normalises onto the one kept, storing a scene the model did not cite.
+    Dropped, every id of the group is a scene the item did not show, so a
+    status word standing on one alone is ``uncertain`` by `_decide`'s rule.
+    With no id dropped, the union over a payload's candidates is today's
+    `known_scenes`: each item may cite only what it shows."""
+    beats = {b["scene"] for r in cand["records"] for b in r["beats"]} - {""}
+    recent = set(payload["recent"])
+    lines = {line["id"] for line in payload["chronicle"]
+             if line["id"] in beats or line["id"] in recent}
+    shown = beats | lines
+    offered = [sid for sid in payload["known_scenes"]
+               if sid in shown and decisions.offerable(sid)]
+    keys = Counter(decisions.normalise(sid) for sid in offered)
+    return [sid for sid in offered if keys[decisions.normalise(sid)] == 1]
+
+
+def _decision_item(payload: dict, cand: dict) -> decisions.Item:
+    vocab = cand["vocabulary"]
+    shown = item_scenes(payload, cand)
+    kept = set(shown)
+    context = prompts.render(
+        "continuity_reconcile/item.j2", now=payload["now"],
+        chronicle=[line for line in payload["chronicle"] if line["id"] in kept],
+        c={"label": LABELS[vocab], "records": cand["records"],
+           "signal_text": cand["signal_text"]})
+    asked: list[decisions.Question] = [decisions.Choice(
+        DECISION_ID, prompts.render("continuity_reconcile/question.j2", vocabulary=vocab),
+        tuple(decisions.Option(word, word.replace("_", " ")) for word in DECISIONS[vocab]))]
+    if vocab in PAIR_VOCABULARIES:
+        letters = tuple(decisions.Option(r["letter"], prompts.render(
+            "continuity_reconcile/record_option.j2", letter=r["letter"]))
+            for r in cand["records"])
+        asked += [decisions.Choice(FROM_ID, prompts.render("continuity_reconcile/direction.j2"),
+                                   letters, allow_none=True),
+                  decisions.Choice(TO_ID, prompts.render("continuity_reconcile/direction_to.j2"),
+                                   letters, allow_none=True)]
+    scenes = tuple(decisions.Option(sid, prompts.render("continuity_reconcile/scene_option.j2",
+                                                        sid=sid))
+                   for sid in shown)
+    for slot in range(min(len(shown), EVIDENCE_SCENES)):
+        template = "evidence.j2" if slot == 0 else "evidence_more.j2"
+        asked.append(decisions.Choice(EVIDENCE_IDS[slot],
+                                      prompts.render(f"continuity_reconcile/{template}"),
+                                      scenes, allow_none=True))
+    return decisions.Item(context, tuple(asked))
+
+
+def build_items(payload: dict) -> tuple[decisions.Item, ...]:
+    """One `decide()` item per payload candidate, in order.
+
+    Each item's context is `continuity_reconcile/item.j2`: today's preamble
+    (the campaign date, and the chronicle lines this item shows), a heading
+    naming what it asks, and today's record and signal block byte for byte --
+    so it stands alone, as a native backend sends each item by itself. It asks
+    `decision`, a choice over its vocabulary's words, each labelled by its own
+    word (the criteria stay whole in the question, ruling 6); for a pair, a
+    direction, `from` and `to`, each a choice over its record letters with
+    null allowed; and one nullable evidence choice per scene it shows
+    (`item_scenes`), up to `EVIDENCE_SCENES`, each over every scene it shows.
+    Pure, but it renders: callers run it in the threadpool."""
+    return tuple(_decision_item(payload, cand) for cand in payload["candidates"])
+
+
+def explain() -> str:
+    """The rationale instruction: each candidate's display-only reason."""
+    return prompts.render("continuity_reconcile/explain.j2")
+
+
+def _answered(answer: decisions.Answer | None) -> str:
+    return answer.answer if answer is not None and isinstance(answer.answer, str) else ""
+
+
+def proposals_of(payload: dict,
+                 results: Sequence[decisions.ItemResult]) -> dict[str, dict] | None:
+    """The parsed batch as today's proposals, ``{candidate id: proposal}``.
+
+    A candidate counts as answered only when its `decision` answer `was_read`
+    (I1). One that was not -- the reply held no object, or nothing in it reads
+    as that item, or it errored, was refused or abstained -- gets no entry: no
+    proposal, so persist 2 leaves its cached record's `proposal` None and the
+    next sweep's `select` asks it again. It is never stored as ``uncertain``.
+
+    Every read item is rebuilt as today's reply element -- the decision (``""``
+    when unreadable), the `from` and `to` letters, the rationale as `reason`
+    (``""`` when none came back), and the answered evidence slots in order --
+    and run through `_decide` with the scenes the item showed as the known
+    ones, so a word outside the vocabulary, a direction the link rules refuse
+    and a status word without a shown scene are ``uncertain`` by today's code.
+    A status word with a shown scene stands without a rationale, storing
+    ``reason: ""`` (I4): nothing is invented in its place.
+
+    A garbled chunk is not a garbled item (N8): "never ``uncertain``" is about
+    a candidate the reply never reached. An object that reaches an item and
+    answers it badly -- ``{"answers": {}}``, a null decision, ``maybe`` -- was
+    read, and becomes ``uncertain`` as today's unknown word does.
+
+    None only when no item was read and every item held no object: today's
+    undecodable reply, a failed run. An object holding no item (``{}``,
+    today's format) is ``{}``: the sweep lands with nothing adjudicated
+    (§24). A chunk error with nothing read is the call site's to report before
+    it asks this (M12)."""
     out: dict[str, dict] = {}
-    seen: set[str] = set()
-    for item in items if isinstance(items, list) else ():
-        if not isinstance(item, dict):
+    read = False
+    for cand, result in zip(payload["candidates"], results, strict=True):
+        decision = result.answers.get(DECISION_ID)
+        if decision is None or not decisions.was_read(decision):
             continue
-        key = _candidate_key(item.get("candidate"))
-        cand = by_key.get(key)
-        if cand is None or key in seen:
-            continue
-        seen.add(key)
-        out[cand["id"]] = _decide(item, cand, known)
+        read = True
+        answers = result.answers
+        element = {"decision": _answered(decision), "from": _answered(answers.get(FROM_ID)),
+                   "to": _answered(answers.get(TO_ID)), "reason": result.rationale,
+                   "evidence_scenes": [_answered(answers.get(slot)) for slot in EVIDENCE_IDS
+                                       if _answered(answers.get(slot))]}
+        out[cand["id"]] = _decide(element, cand, set(item_scenes(payload, cand)))
+    if not read and results and all(decisions.held_no_object(result.answers.get(DECISION_ID))
+                                    for result in results):
+        return None
     return out

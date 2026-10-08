@@ -2,11 +2,12 @@
 
 Absorb chains one identity step onto its extraction: the proposed-new plot
 threads and commitments are examined against the stored same-type records, and
-when any of them has a plausible neighbour ONE batched resolver call decides
-which are the same business. These drive the real endpoint -- the fifth
-`phases` row, the `identity` block, what is staged and what a save writes --
-with `llm_fakes.from_entries` answering by which prompt is asking and
-`llm_fakes.FakeEmbeddings` standing in for the embeddings provider.
+when any of them has a plausible neighbour one `decide()` over the examined
+rows, chunked, decides which are the same business. These drive the real
+endpoint -- the fifth `phases` row, the `identity` block, what is staged and
+what a save writes -- with `llm_fakes.from_entries` answering by which prompt
+is asking and `llm_fakes.FakeEmbeddings` standing in for the embeddings
+provider.
 
 Stored records are seeded in a scene of their own (`s0`, created before the
 absorbed scene), never the one being absorbed.
@@ -15,6 +16,7 @@ absorbed scene), never the one being absorbed.
 from __future__ import annotations
 
 import asyncio
+import functools
 import importlib
 import json
 import time
@@ -23,14 +25,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import embeddings, llm_errors, routes
+from grimoire import decisions, embeddings, llm_errors, routes
+from grimoire.llm import LLMClient
 from grimoire.main import create_app
 from grimoire.store import config, llm_connections
 from grimoire.store.absorb import materializer
 from grimoire.store.continuity import identity, similarity
 
-from . import review_runs
-from .llm_fakes import FakeEmbeddings, from_entries
+from . import inference_fixtures, review_runs
+from .llm_fakes import FakeEmbeddings, FakeLLM, SequencedProvider, decision_reply, from_entries
 from .review_runs import (
     EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
     LEDGER_THREAD,
@@ -40,7 +43,8 @@ from .review_runs import (
 )
 
 WHEN_EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
-WHEN_IDENTITY = {"system_contains": "You are checking whether newly proposed story records"}
+WHEN_IDENTITY = dict(zip(("system_contains", "user_contains"), review_runs.IDENTITY_MATCH,
+                         strict=True))
 
 #: A second proposed thread rewording `LEDGER_THREAD`.
 FIND_THE_HARBOUR_LEDGER = {"title": "Find the harbour ledger",
@@ -103,8 +107,10 @@ def _extraction(plot=(), owed=()):
                        "commitment_movements": [dict(r) for r in owed]})
 
 
-def _decisions(*items):
-    return json.dumps({"decisions": [dict(i) for i in items]})
+def _row(decision, rid=None):
+    """One examined row's answers, as the decide schema shapes them: its
+    `decision` word and the `id` of the record it names (null for none)."""
+    return {"decision": decision, "id": rid}
 
 
 def _llm(client, extraction, resolver=None, *, error=None):
@@ -265,7 +271,7 @@ def test_identity_fields_never_reach_the_ledgers(client, scene):
                 "distinguished_from": ["find-the-ledger"]}
     _assert_lexical_candidate(cid, sid, "thread", RECOVER_THE_LEDGER, "thread:find-the-ledger")
     _llm(client, _extraction(plot=[unexamined, examined]),
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
 
     body = _absorb(client, cid, sid)
 
@@ -289,7 +295,7 @@ def test_a_failing_identity_staging_pass_fails_only_the_phase(client, scene, mon
 
     monkeypatch.setattr(materializer, "_attach_alternatives", broken)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
 
     body = _absorb(client, cid, sid)
 
@@ -313,7 +319,7 @@ def test_a_defect_in_the_rewrite_fails_only_the_phase(client, scene, monkeypatch
 
     monkeypatch.setattr(identity.Examination, "rewritten", broken)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger"}))
+         decision_reply(_row("existing", "find-the-ledger")))
 
     body = _absorb(client, cid, sid)
 
@@ -338,7 +344,7 @@ def test_an_examination_error_fails_only_the_phase(client, scene, monkeypatch):
 
     monkeypatch.setattr(identity, "examine", broken)
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger"}))
+                decision_reply(_row("existing", "find-the-ledger")))
 
     body = _absorb(client, cid, sid)
 
@@ -396,7 +402,7 @@ def test_budget_refused_identity_reports_budget_exhausted(client, scene, monkeyp
     monkeypatch.setattr(identity, "examine",
                         lambda *a, **k: (clock.__setitem__(0, 1e6), real(*a, **k))[1])
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                _decisions({"row": "r1", "decision": "new"}))
+                decision_reply(_row("new")))
 
     body = _absorb(client, cid, sid)
 
@@ -417,8 +423,7 @@ def test_close_candidate_mapped_to_existing_rewrites_the_row(client, scene):
     _seed_ledger(cid, s0)
     _assert_lexical_candidate(cid, sid, "thread", RECOVER_THE_LEDGER, "thread:find-the-ledger")
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger",
-                     "reason": "the same search"}))
+         decision_reply(_row("existing", "find-the-ledger"), rationales=("the same search",)))
 
     body = _absorb(client, cid, sid)
 
@@ -440,13 +445,13 @@ def test_one_batched_call_for_several_ambiguous_rows(client, scene):
     _assert_lexical_candidate(cid, sid, "commitment", SERAPHINES_DEADLINE,
                               "commitment:the-midnight-deadline")
     fake = _llm(client, _extraction(plot=[RECOVER_THE_LEDGER], owed=[SERAPHINES_DEADLINE]),
-                _decisions({"row": "r1", "decision": "new"}, {"row": "r2", "decision": "new"}))
+                decision_reply(_row("new"), _row("new")))
 
     body = _absorb(client, cid, sid)
 
     [request] = identity_requests(fake)
     user = "\n".join(m["content"] for m in request["messages"] if m["role"] == "user")
-    assert "Row r1" in user and "Row r2" in user
+    assert "Item 0" in user and "Item 1" in user
     assert body["identity"]["status"] == "ok"
     assert body["identity"]["counts"]["examined"] == 2
 
@@ -455,7 +460,7 @@ def test_resolver_naming_an_unknown_id_marks_the_row_uncertain_and_low(client, s
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "existing", "id": "no-such-thread"}))
+         decision_reply(_row("existing", "no-such-thread")))
 
     body = _absorb(client, cid, sid)
 
@@ -470,7 +475,7 @@ def test_resolver_naming_a_closed_thread_never_reopens_it(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0, status="closed")
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger"}))
+         decision_reply(_row("existing", "find-the-ledger")))
 
     body = _absorb(client, cid, sid)
 
@@ -489,8 +494,7 @@ def test_two_rows_mapped_to_one_record_downgrade_the_second(client, scene):
     _assert_lexical_candidate(cid, sid, "thread", FIND_THE_HARBOUR_LEDGER,
                               "thread:find-the-ledger")
     _llm(client, _extraction(plot=[RECOVER_THE_LEDGER, FIND_THE_HARBOUR_LEDGER]),
-         _decisions({"row": "r1", "decision": "existing", "id": "find-the-ledger"},
-                    {"row": "r2", "decision": "existing", "id": "find-the-ledger"}))
+         decision_reply(_row("existing", "find-the-ledger"), _row("existing", "find-the-ledger")))
 
     body = _absorb(client, cid, sid)
 
@@ -541,7 +545,7 @@ def test_partially_answered_batch_is_degraded(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, _extraction(plot=[RECOVER_THE_LEDGER, FIND_THE_HARBOUR_LEDGER]),
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
 
     body = _absorb(client, cid, sid)
 
@@ -558,7 +562,7 @@ def test_decodable_reply_answering_no_row_is_degraded(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, _extraction(plot=[RECOVER_THE_LEDGER, FIND_THE_HARBOUR_LEDGER]),
-         '{"decisions": []}')
+         "{}")
 
     body = _absorb(client, cid, sid)
 
@@ -576,7 +580,7 @@ def test_embedding_failure_degrades_the_phase_and_keeps_lexical_candidates(
     _configure_embeddings(monkeypatch, FakeEmbeddings(
         error=embeddings.EmbeddingsError("network", "connection refused")))
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+                decision_reply(_row("new"), rationales=("a second search",)))
 
     body = _absorb(client, cid, sid)
 
@@ -602,7 +606,7 @@ def test_an_embedding_failure_survives_a_partial_resolver_answer(client, scene, 
     _configure_embeddings(monkeypatch, FakeEmbeddings(
         error=embeddings.EmbeddingsError("network", "connection refused")))
     _llm(client, _extraction(plot=[RECOVER_THE_LEDGER, FIND_THE_HARBOUR_LEDGER]),
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
 
     block = _absorb(client, cid, sid)["identity"]
 
@@ -633,7 +637,7 @@ def test_semantic_matching_that_stood_reports_no_fallback(client, scene, monkeyp
     _seed_ledger(cid, s0)
     _configure_embeddings(monkeypatch, FakeEmbeddings())
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new"}))
+         decision_reply(_row("new")))
 
     block = _absorb(client, cid, sid)["identity"]
 
@@ -646,7 +650,7 @@ def test_identity_embedding_deadline_never_exceeds_the_absorb_budget(client, sce
     client.put("/api/config", json={"absorb_budget": "5"})
     double = _configure_embeddings(monkeypatch, FakeEmbeddings())
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                _decisions({"row": "r1", "decision": "new"}))
+                decision_reply(_row("new")))
 
     _absorb(client, cid, sid)
 
@@ -672,7 +676,7 @@ def test_misrouted_identity_reports_itself_and_leaves_absorb_standing(client, sc
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
     store.write_config(route_continuity=keyless)
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                _decisions({"row": "r1", "decision": "new"}))
+                decision_reply(_row("new")))
 
     body = _absorb(client, cid, sid)
 
@@ -714,7 +718,7 @@ def test_alternatives_pass_check_conflicts_at_save(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
     body = _absorb(client, cid, sid)
     edits = [{k: v for k, v in e.items() if k != "identity_check"} for e in body["edits"]]
     index = next(i for i, e in enumerate(body["edits"]) if e.get("identity_check"))
@@ -739,7 +743,7 @@ def test_an_accepted_retarget_with_a_blank_due_keeps_the_stored_deadline(client,
     _assert_lexical_candidate(cid, sid, "commitment", SERAPHINES_BLANK_DUE,
                               "commitment:the-midnight-deadline")
     _llm(client, _extraction(owed=[SERAPHINES_BLANK_DUE]),
-         _decisions({"row": "r1", "decision": "existing", "id": "the-midnight-deadline"}))
+         decision_reply(_row("existing", "the-midnight-deadline")))
     body = _absorb(client, cid, sid)
 
     edit = _edit(body, "commitment:the-midnight-deadline")
@@ -755,7 +759,7 @@ def test_a_swapped_in_alternative_with_a_blank_due_keeps_the_stored_deadline(cli
     cid, s0, sid = scene
     _seed_deadline(cid, s0)
     _llm(client, _extraction(owed=[SERAPHINES_BLANK_DUE]),
-         _decisions({"row": "r1", "decision": "new", "reason": "a second deadline"}))
+         decision_reply(_row("new"), rationales=("a second deadline",)))
     body = _absorb(client, cid, sid)
     edits = [{k: v for k, v in e.items() if k != "identity_check"} for e in body["edits"]]
     index = next(i for i, e in enumerate(body["edits"]) if e.get("identity_check"))
@@ -775,7 +779,7 @@ def test_a_save_body_still_carrying_alternatives_is_accepted(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
     body = _absorb(client, cid, sid)
     assert any(e.get("identity_check", {}).get("alternatives") for e in body["edits"])
 
@@ -793,7 +797,7 @@ def test_identity_log_row_carries_counts_only(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+         decision_reply(_row("new"), rationales=("a second search",)))
 
     _absorb(client, cid, sid)
 
@@ -884,7 +888,7 @@ def test_identity_log_row_is_counts_and_closed_modes_only(client, scene, monkeyp
              "examination raised": lambda: _examination_raised(monkeypatch)}
     setup.get(case, lambda: None)()
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                _decisions({"row": "r1", "decision": "new", "reason": "a second search"}))
+                decision_reply(_row("new"), rationales=("a second search",)))
 
     body = _absorb(client, cid, sid)
 
@@ -924,7 +928,7 @@ def test_identity_meter_files_under_its_own_task(client, scene):
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new"}))
+         decision_reply(_row("new")))
 
     _absorb(client, cid, sid)
 
@@ -939,7 +943,7 @@ def test_the_identity_examination_runs_off_the_event_loop(client, scene, monkeyp
     _seed_ledger(cid, s0)
     _assert_lexical_candidate(cid, sid, "thread", RECOVER_THE_LEDGER, "thread:find-the-ledger")
     _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-         _decisions({"row": "r1", "decision": "new"}))
+         decision_reply(_row("new")))
     seen: list[bool] = []
     real = identity.examine
 
@@ -958,3 +962,425 @@ def test_the_identity_examination_runs_off_the_event_loop(client, scene, monkeyp
 
     assert body["identity"]["counts"]["examined"] == 1
     assert seen == [True]
+
+
+# ------------------------------------------- through decide() (slice G)
+#
+# The check is one `inference.decide()` item per examined row, chunked at
+# `decisions.MAX_ITEMS_PER_CALL` with one metered call per chunk, on the
+# continuity route's Decision role.
+
+ROW_0 = "Proposed plot thread: " + RECOVER_THE_LEDGER["title"]
+ROW_1 = "Proposed plot thread: " + FIND_THE_HARBOUR_LEDGER["title"]
+
+
+def _two_rows():
+    """Two examined plot rows, each rewording the stored ledger thread."""
+    return _extraction(plot=[RECOVER_THE_LEDGER, FIND_THE_HARBOUR_LEDGER])
+
+
+def _one_per_chunk(monkeypatch):
+    """`decide()` chunks one item per call, so two rows are two calls."""
+    monkeypatch.setattr(decisions, "chunks", functools.partial(decisions.chunks, size=1))
+
+
+def _identity_rows(cid):
+    return [r for r in store.usage.calls(campaign=cid) if r.get("task") == "continuity-identity"]
+
+
+def _install(client, fake):
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    return fake
+
+
+def _checks(body):
+    return [(e["identity_check"]["decision"], e["identity_check"]["status"])
+            for e in _plot_edits(body)]
+
+
+def test_identity_runs_on_decide_one_item_per_row(client, scene):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _seed_deadline(cid, s0)
+    fake = _llm(client, _extraction(plot=[RECOVER_THE_LEDGER], owed=[SERAPHINES_DEADLINE]),
+                decision_reply(_row("existing", "find-the-ledger"), _row("new"),
+                               rationales=("the same search", "a second deadline")))
+
+    body = _absorb(client, cid, sid)
+
+    [request] = identity_requests(fake)
+    system, user = request["messages"]
+    assert system["content"].startswith("You answer closed questions about material")
+    assert "Item 0\n\nProposed plot thread: " + RECOVER_THE_LEDGER["title"] in user["content"]
+    assert ("Item 1\n\nProposed commitment: " + SERAPHINES_DEADLINE["title"]
+            in user["content"])
+    assert identity.explain() in user["content"]
+    schema = fake.schemas[fake.requests.index(request)]
+    assert set(schema["properties"]) == {"0", "1"}
+    assert schema["properties"]["0"]["properties"]["answers"]["required"] == [
+        identity.DECISION_ID, identity.RECORD_ID]
+    [plot] = _plot_edits(body)
+    assert plot["target"] == {"kind": "plot", "id": "find-the-ledger"}
+    assert plot["identity_check"]["reason"] == "the same search"
+    [owed] = [e for e in body["edits"] if e["kind"] == "commitment"]
+    assert (owed["identity_check"]["decision"], owed["identity_check"]["reason"]) == (
+        "new", "a second deadline")
+    assert body["identity"]["status"] == "ok"
+
+
+def test_identity_meters_one_row_per_chunk(client, scene, monkeypatch):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    fake = _llm(client, _two_rows(), decision_reply(_row("new")))
+
+    body = _absorb(client, cid, sid)
+
+    assert len(identity_requests(fake)) == 2
+    assert [r["status"] for r in _identity_rows(cid)] == ["ok", "ok"]
+    assert _checks(body) == [("new", "accepted"), ("new", "accepted")]
+    assert body["identity"]["status"] == "ok"
+
+
+def test_a_failed_second_chunk_leaves_the_first_chunks_rows_decided(
+        client, scene, monkeypatch):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    _install(client, from_entries([
+        {"when": WHEN_EXTRACTION, "reply": _two_rows()},
+        {"when": {**WHEN_IDENTITY, "user_contains": ROW_1},
+         "error": {"kind": "network", "message": "connection reset"}},
+        {"when": WHEN_IDENTITY, "reply": decision_reply(_row("new"))}]))
+
+    body = _absorb(client, cid, sid)
+
+    assert _checks(body) == [("new", "accepted"), ("unchecked", "hint_only")]
+    block = body["identity"]
+    assert (block["status"], block["reason"], block["budget_exhausted"]) == (
+        "degraded", "the duplicate check left some rows unanswered", False)
+    assert sorted(r["status"] for r in _identity_rows(cid)) == ["error", "ok"]
+
+
+def test_the_budget_running_out_between_chunks_leaves_the_rest_unchecked(
+        client, scene, monkeypatch):
+    """The budget is checked per chunk: a chunk it refuses was never sent, so
+    its rows are unchecked and the phase says the clock is why."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    parse = decisions.parse
+
+    def parse_then_spend(*args, **kwargs):
+        clock[0] = 1e6                      # the first chunk answered; the clock ran out
+        return parse(*args, **kwargs)
+
+    monkeypatch.setattr(decisions, "parse", parse_then_spend)
+    fake = _llm(client, _two_rows(), decision_reply(_row("new")))
+
+    body = _absorb(client, cid, sid)
+
+    assert len(identity_requests(fake)) == 1
+    assert _checks(body) == [("new", "accepted"), ("unchecked", "hint_only")]
+    block = body["identity"]
+    assert (block["status"], block["reason"], block["budget_exhausted"], block["attempted"]) \
+        == ("degraded", "the duplicate check left some rows unanswered", True, True)
+    assert [r["status"] for r in _identity_rows(cid)] == ["ok"]
+
+
+def test_a_reply_in_todays_format_answers_no_row(client, scene):
+    """The legacy one-call reply holds an object but no item: every row is
+    unchecked (never `uncertain`), and the absorb lands."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _llm(client, _two_rows(), json.dumps({"decisions": [
+        {"row": "r1", "decision": "existing", "id": "find-the-ledger", "reason": "same"},
+        {"row": "r2", "decision": "new", "id": "", "reason": "another"}]}))
+
+    body = _absorb(client, cid, sid)
+
+    assert (body["identity"]["status"], body["identity"]["reason"]) == (
+        "degraded", "the duplicate check answered none of the rows")
+    assert _checks(body) == [("unchecked", "hint_only")] * 2
+    assert body["one_line"] == "o"
+
+
+@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
+                         ids=["spare", "same-provider"])
+def test_identity_on_a_decide_only_model_answers_on_the_fallback(client, scene, on):
+    """Until native decisions arrive, a Decision model that cannot generate is
+    skipped for a role fallback that can, on another provider or its own: the
+    check is asked of the fallback, and nothing is sent to `vendor/decider`."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True, on=on)
+    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                decision_reply(_row("new")))
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["status"] == "ok"
+    [sent] = identity_requests(fake)
+    assert (sent["conn"]["id"], sent["conn"]["model"]) == on
+    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+
+
+def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(client, scene):
+    """With no generating fallback the seam refuses (`incapable`), and the
+    phase reports that refusal as its own failure: the review still lands, the
+    rows stage with their hints, and nothing is sent for the check."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=False)
+    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                decision_reply(_row("new")))
+
+    r = review_runs.absorb(client, cid, sid)
+
+    assert r.status_code == 200, r.json()
+    body = r.json()
+    assert body["one_line"] == "o"
+    block = body["identity"]
+    assert (block["status"], block["attempted"]) == ("failed", False)
+    assert block["reason"].startswith("The Continuity checks route runs on the Decision "
+                                      "role (vendor/decider on OpenRouter)"), block["reason"]
+    assert identity_requests(fake) == [] and _identity_rows(cid) == []
+    assert all(q["conn"].get("model") != "vendor/decider" for q in fake.requests)
+    [edit] = _plot_edits(body)
+    assert edit["identity_check"]["status"] == "hint_only"
+
+
+def test_the_decision_role_now_serves_the_identity_check(client, scene):
+    """The continuity route's default flipped from Fast to Decision: a Decision
+    role set on its own is what the check runs on, and the extraction stays
+    where it was."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "spare", "model": "vendor/spare"}}}})
+    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                decision_reply(_row("new")))
+
+    assert _absorb(client, cid, sid)["identity"]["status"] == "ok"
+
+    [sent] = identity_requests(fake)
+    assert (sent["conn"]["id"], sent["conn"]["model"]) == ("spare", "vendor/spare")
+    assert {r["conn"]["id"] for r in fake.requests if r is not sent} == {"openrouter"}
+
+
+def test_identity_rows_file_decide_and_structured(client, scene, monkeypatch):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    _llm(client, _two_rows(), decision_reply(_row("new")))
+
+    _absorb(client, cid, sid)
+
+    rows = _identity_rows(cid)
+    assert len(rows) == 2
+    assert {(r["operation"], r["decision_mode"]) for r in rows} == {("decide", "structured")}
+
+
+def test_a_refused_schema_still_decides_the_rows(client, scene):
+    """A provider refusing the structured field, with no attempt to fall to, is
+    sent the same attempt once more without the mode (slice F): the schema is
+    in the prompt, so the row is still decided."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"},
+        "fallback": {"provider": ""}}}})
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active",
+                        "params": ["temperature", "structured_outputs"]}], rev)
+    refused = llm_errors.LLMError(
+        "bad_response", "response_format: json_schema strict mode is not supported", status=400)
+    provider = SequencedProvider([[EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER], refused,
+                                  [decision_reply(_row("new"), rationales=("a second search",))]])
+    _install(client, LLMClient(openrouter=provider, timeout=0, retries=0))
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["status"] == "ok"
+    assert _checks(body) == [("new", "accepted")]
+    _extraction_call, first, second = provider.requests
+    assert "schema" in first["kwargs"] and "schema" not in second["kwargs"]
+    assert first["messages"] == second["messages"]
+    assert [r["status"] for r in _identity_rows(cid)] == ["error", "ok"]
+
+
+def test_a_garbled_chunk_beside_an_answered_one_leaves_its_rows_unchecked(
+        client, scene, monkeypatch):
+    """I1: a chunk whose reply held no object never reached its rows, so they
+    are unchecked with their hints -- never `uncertain` -- and the phase is
+    degraded, never `ok`."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    _install(client, from_entries([
+        {"when": WHEN_EXTRACTION, "reply": _two_rows()},
+        {"when": {**WHEN_IDENTITY, "user_contains": ROW_0}, "reply": "no json"},
+        {"when": WHEN_IDENTITY, "reply": decision_reply(_row("new"))}]))
+
+    body = _absorb(client, cid, sid)
+
+    first, second = _plot_edits(body)
+    assert (first["identity_check"]["decision"], first["identity_check"]["status"]) == (
+        "unchecked", "hint_only")
+    assert first["identity_check"]["candidates"]
+    assert (second["identity_check"]["decision"], second["identity_check"]["status"]) == (
+        "new", "accepted")
+    assert (body["identity"]["status"], body["identity"]["reason"]) == (
+        "degraded", "the duplicate check left some rows unanswered")
+
+
+@pytest.mark.parametrize("order", ["garbled-then-error", "error-then-garbled"])
+def test_an_errored_chunk_beside_a_garbled_one_reports_the_error(
+        client, scene, monkeypatch, order):
+    """M12: with nothing read, a chunk's provider error is what the phase
+    reports -- by its kind, which is all a chunk's failure leaves (the ledger
+    row's `error`) -- never `UNREADABLE`, whichever chunk failed first."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    if order == "garbled-then-error":
+        # The extraction, then the first chunk garbled, then the second raises.
+        _install(client, FakeLLM([[_two_rows()], ["no json"]],
+                                 error=llm_errors.LLMError("network", "connection reset"),
+                                 fail_after=2))
+    else:
+        _install(client, from_entries([
+            {"when": WHEN_EXTRACTION, "reply": _two_rows()},
+            {"when": {"user_contains": ROW_0},
+             "error": {"kind": "network", "message": "connection reset"}},
+            {"when": {}, "reply": "no json"}]))
+
+    body = _absorb(client, cid, sid)
+
+    block = body["identity"]
+    assert (block["status"], block["reason"]) == ("failed", "duplicate check failed: network")
+    assert _checks(body) == [("unchecked", "hint_only")] * 2
+    assert sorted(r["status"] for r in _identity_rows(cid)) == ["error", "ok"]
+
+
+def test_a_chunk_error_is_reported_over_a_retried_schema_refusal(client, scene, monkeypatch):
+    """M1: the error a failed chunk reports is that chunk's own. A later chunk
+    whose provider refused the structured field, and whose retry without it
+    answered (garbled), files an `error` row too -- but it answered, so its
+    refusal is not the failure the phase names."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"},
+        "fallback": {"provider": ""}}}})
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active",
+                        "params": ["temperature", "structured_outputs"]}], rev)
+    refused = llm_errors.LLMError(
+        "bad_response", "response_format: json_schema strict mode is not supported", status=400)
+    provider = SequencedProvider([[_two_rows()],
+                                  llm_errors.LLMError("network", "connection reset"),
+                                  refused, ["no json"]])
+    _install(client, LLMClient(openrouter=provider, timeout=0, retries=0))
+
+    body = _absorb(client, cid, sid)
+
+    block = body["identity"]
+    assert (block["status"], block["reason"]) == ("failed", "duplicate check failed: network")
+    assert _checks(body) == [("unchecked", "hint_only")] * 2
+    assert [(r["status"], r.get("error")) for r in _identity_rows(cid)] == [
+        ("error", "network"), ("error", "bad_response"), ("ok", None)]
+
+
+class _SpendsOnTheSecondRefusal(SequencedProvider):
+    """Runs the absorb clock out as the fallback's structured call is refused,
+    so the moded chain went out and each prompt-only re-send is refused unsent."""
+
+    def __init__(self, script, clock):
+        super().__init__(script)
+        self.clock = clock
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        if len(self.requests) == 2:     # the extraction, the primary's refusal
+            self.clock[0] = 1e6
+        async for chunk in super().stream(messages, model, *args, **kwargs):
+            yield chunk
+
+
+def test_both_routes_refusing_and_the_clock_stopping_the_re_sends_is_the_clock(
+        client, scene, monkeypatch):
+    """Review 2 #1: both Decision routes refuse the structured field and the
+    absorb clock stops the prompt-only re-sends. Their failures compose into a
+    sentence that is no longer the clock's sentinel; the phase still reports
+    the clock, worded as a check that ran partly -- not a provider failure
+    whose reason names the budget twice."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"},
+        "fallback": {"provider": "spare", "model": "vendor/spare"}}}})
+    for conn_id, model in (("openrouter", "vendor/active"), ("spare", "vendor/spare")):
+        rev = store.llm_connections.read_connection_raw(conn_id)["rev"]
+        store.llm_connections.set_cached_models(
+            conn_id, [{"id": model, "params": ["temperature", "structured_outputs"]}], rev)
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    refused = llm_errors.LLMError(
+        "bad_response", "response_format: json_schema strict mode is not supported", status=400)
+    provider = _SpendsOnTheSecondRefusal(
+        [[EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER], refused, refused,
+         [decision_reply(_row("new"))]], clock)
+    _install(client, LLMClient(openrouter=provider, timeout=0, retries=0))
+
+    body = _absorb(client, cid, sid)
+
+    _extraction_call, *identity_calls = provider.requests
+    assert [(r["model"], "schema" in r["kwargs"]) for r in identity_calls] == [
+        ("vendor/active", True), ("vendor/spare", True)]
+    block = body["identity"]
+    assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
+        "failed", True, True)
+    assert block["reason"] == routes.scenes._IDENTITY_CUT_SHORT
+    assert _checks(body) == [("unchecked", "hint_only")]
+
+
+def test_a_budget_spent_after_a_garbled_chunk_says_the_check_ran_partly(
+        client, scene, monkeypatch):
+    """M3: a chunk was sent and came back garbled, then the clock refused the
+    next one. Nothing was read, so the phase fails on the clock -- but the
+    check DID run, so its reason must not say it never could."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    _one_per_chunk(monkeypatch)
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    parse = decisions.parse
+
+    def parse_then_spend(*args, **kwargs):
+        clock[0] = 1e6                      # the first chunk came back; the clock ran out
+        return parse(*args, **kwargs)
+
+    monkeypatch.setattr(decisions, "parse", parse_then_spend)
+    fake = _llm(client, _two_rows(), "no json")
+
+    body = _absorb(client, cid, sid)
+
+    assert len(identity_requests(fake)) == 1
+    assert _checks(body) == [("unchecked", "hint_only")] * 2
+    block = body["identity"]
+    assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
+        "failed", True, True)
+    assert block["reason"] == routes.scenes._IDENTITY_CUT_SHORT
+    assert "could run" not in block["reason"]

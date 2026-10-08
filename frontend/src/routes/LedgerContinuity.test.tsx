@@ -11,6 +11,7 @@ import type {
 } from "../api/client";
 import LedgerView from "./LedgerView";
 import { DECISION_LABELS, STALE_SENTENCES } from "../components/continuity/labels";
+import { NONE_NOTE, NO_MODEL_NOTE, PARTIAL_NOTE } from "../components/continuity/useContinuityReview";
 import {
   EMPTY_CANDIDATES, EMPTY_CONTINUITY, EMPTY_LEDGER, Here, installLedgerMocks, renderLedger,
 } from "../testkit/ledgerHarness";
@@ -100,7 +101,7 @@ const REVIEWED: ContinuityState = {
 
 const RESULT = {
   sweep: "full", matching: "basic", embedding: "off", llm: "ok", reason: "",
-  candidates: 0, adjudicated: 0, pairs_capped: false, superseded: false,
+  reason_kind: "", candidates: 0, adjudicated: 0, unanswered: 0, pairs_capped: false, superseded: false,
   continuity: "ok", follow_on: false,
 };
 
@@ -321,6 +322,60 @@ test("refresh is enabled with no connection, and says what it did", async () => 
     .toBeInTheDocument();
 });
 
+test("a model that cannot serve the sweep says why, not 'No model connection'", async () => {
+  const why = "The Continuity checks route runs on the Decision role (vendor/decider on "
+    + "OpenRouter), which cannot generate. Set a model that can.";
+  (api.reconcileContinuity as any).mockResolvedValue(
+    { ...RESULT, llm: "off", reason: why, reason_kind: "incapable" });
+  renderLedger();
+  fireEvent.click(await column().findByRole("button", { name: "Refresh continuity review" }));
+  const shown = await column().findByText(
+    (text) => text.startsWith("The Continuity checks route"), { selector: "p.field-hint" });
+  expect(shown.textContent).toBe(`${why} Findings are listed without a suggested decision.`);
+  expect(column().queryByText(/No model connection/)).toBeNull();
+});
+
+describe("a partial sweep says some findings have no suggestion yet", () => {
+  async function landed(extra: object) {
+    (api.reconcileContinuity as any).mockResolvedValue({ ...RESULT, ...extra });
+    renderLedger();
+    fireEvent.click(await column().findByRole("button",
+      { name: "Refresh continuity review" }));
+    await waitFor(() => expect(api.continuityCandidates).toHaveBeenCalledTimes(2));
+  }
+
+  test("some answered", async () => {
+    await landed({ llm: "ok", candidates: 4, adjudicated: 2, unanswered: 2 });
+    expect(await column().findByText(PARTIAL_NOTE)).toBeInTheDocument();
+    expect(column().queryByText(NONE_NOTE)).toBeNull();
+  });
+
+  test("none answered says so, not 'only some' (N4)", async () => {
+    await landed({ llm: "ok", candidates: 3, adjudicated: 0, unanswered: 3 });
+    expect(await column().findByText(NONE_NOTE)).toBeInTheDocument();
+    expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+  });
+
+  test.each(["failed", "skipped", "off"])(
+    "a %s sweep never claims a partial answer, whatever unanswered says", async (llm) => {
+      await landed({ llm, candidates: 3, adjudicated: 1, unanswered: 2 });
+      expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+      expect(column().queryByText(NONE_NOTE)).toBeNull();
+    });
+
+  test("an incapable kind with no reason falls through to the no-model note", async () => {
+    await landed({ llm: "off", reason: "", reason_kind: "incapable" });
+    expect(await column().findByText(NO_MODEL_NOTE)).toBeInTheDocument();
+  });
+
+  test("all answered shows no note", async () => {
+    await landed({ llm: "ok", candidates: 3, adjudicated: 3, unanswered: 0 });
+    expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+    expect(column().queryByText(NONE_NOTE)).toBeNull();
+    expect(column().queryByText(/model/i, { selector: "p.field-hint" })).toBeNull();
+  });
+});
+
 test("a sweep running on load is followed and its findings appear", async () => {
   const followed = deferred<unknown>();
   (api.continuityCandidates as any)
@@ -344,6 +399,55 @@ test("a sweep running on load is followed and its findings appear", async () => 
   expect(column().queryByText("A continuity sweep is running.")).toBeNull();
   // Following is not refreshing: nothing was started.
   expect(api.reconcileContinuity).not.toHaveBeenCalled();
+});
+
+describe("a followed sweep says what its model check did, as a Refresh does", () => {
+  async function followedTo(result: object | null) {
+    const followed = deferred<unknown>();
+    (api.continuityCandidates as any)
+      .mockResolvedValueOnce({
+        ...EMPTY_CANDIDATES,
+        run: { id: "r1", attempt_id: null, state: "running", next_index: 0 },
+      })
+      .mockResolvedValue(FINDINGS);
+    (api.awaitCampaignRun as any).mockReturnValue(followed.promise);
+    renderLedger("/campaigns/run/ledger/continuity/overlaps");
+    expect(await column().findByText("A continuity sweep is running.")).toBeInTheDocument();
+    await act(async () => {
+      followed.resolve({ id: "r1", attempt_id: null, state: "landed", next_index: 0, result });
+    });
+    expect(await main().findByRole("button", { name: /mara's map/i })).toBeInTheDocument();
+    expect(api.reconcileContinuity).not.toHaveBeenCalled();
+  }
+
+  test("a partial sweep", async () => {
+    await followedTo({ ...RESULT, llm: "ok", candidates: 3, adjudicated: 1, unanswered: 2 });
+    expect(await column().findByText(PARTIAL_NOTE)).toBeInTheDocument();
+  });
+
+  test("a sweep the model answered none of", async () => {
+    await followedTo({ ...RESULT, llm: "ok", candidates: 3, adjudicated: 0, unanswered: 3 });
+    expect(await column().findByText(NONE_NOTE)).toBeInTheDocument();
+  });
+
+  test("a model that cannot serve the sweep says why (M8)", async () => {
+    const why = "The Continuity checks route runs on the Decision role, which cannot generate.";
+    await followedTo({ ...RESULT, llm: "off", reason: why, reason_kind: "incapable" });
+    const shown = await column().findByText(
+      (text) => text.startsWith("The Continuity checks route"), { selector: "p.field-hint" });
+    expect(shown.textContent).toBe(`${why} Findings are listed without a suggested decision.`);
+  });
+
+  test("a whole answer, or a result that is not a sweep's, says nothing", async () => {
+    await followedTo({ ...RESULT, llm: "ok", candidates: 3, adjudicated: 3, unanswered: 0 });
+    expect(column().queryByText(/model/i, { selector: "p.field-hint" })).toBeNull();
+  });
+
+  test("a result missing its counts says nothing rather than guess", async () => {
+    await followedTo({ llm: "ok" });
+    expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+    expect(column().queryByText(NONE_NOTE)).toBeNull();
+  });
 });
 
 test("a followed sweep that fails still re-reads", async () => {
@@ -1713,6 +1817,22 @@ describe("the finding detail", () => {
     expect(main().getByRole("link", { name: "Untitled scene" }))
       .toHaveAttribute("href", `/campaigns/run/scenes/${untitled}`);
   });
+  test("a proposal with no reason shows its verdict without a note", async () => {
+    const bare = finding("possible_thread_closure-8888888888888888",
+                         "possible_thread_closure", "closures", [CORONATION], {
+      proposal: { decision: "close", from: "", to: "", relation: "", status: "",
+                  reason: "", evidence_scenes: ["001--realm-road"] },
+    });
+    (api.continuityCandidates as any).mockResolvedValue({
+      ...DETAIL, candidates: [...DETAIL.candidates, bare] });
+    renderLedger(at(bare));
+    await sidebar();
+    const proposal = within(document.querySelector(".continuity-proposal") as HTMLElement);
+    expect(proposal.getByText(DECISION_LABELS.close)).toBeInTheDocument();
+    expect(proposal.getByRole("link", { name: "Realm road" })).toBeInTheDocument();
+    expect(document.querySelector(".continuity-proposal p.field-hint")).toBeNull();
+  });
+
   // ---- a refreshed finding opens its action form fresh ---------------------
 
   /** Pressing `press`, answered by an evidence 409 (the finding goes stale and

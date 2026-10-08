@@ -101,7 +101,8 @@ ROUTES: tuple[Route, ...] = (
     Route("continuity", "Continuity checks",
           "The duplicate check beside absorb and the reconciliation sweep after "
           "End Scene or a refresh.",
-          ("continuity-identity", "continuity-reconcile"), True, default_role="fast"),
+          ("continuity-identity", "continuity-reconcile"), True, operation="decide",
+          default_role="decision"),
     Route("summary", "Summaries & scene titles",
           "The live rolling summary, and the title a proposed scene break suggests.",
           ("rolling-summary", "scene-break-title"), True, default_role="fast"),

@@ -912,9 +912,10 @@ def test_bindings_resolve_the_embed_module():
 DECIDE_MODULE = "grimoire.inference"
 DECIDE = "decide"
 
-#: At least this many operation calls exist (vacuity insurance): scene-break
-#: (Task 6), voice drift (Task 8) and the speaker pick (Task 10).
-MIN_DECIDE_CALLS = 3
+#: At least this many operation calls exist (vacuity insurance): scene-break,
+#: voice drift and the speaker pick (slice F), and the duplicate check and the
+#: reconciliation sweep (slice G).
+MIN_DECIDE_CALLS = 5
 
 
 def _decide_refs(tree: ast.AST, modname: str, is_pkg: bool) -> Iterator[tuple[ast.AST, bool]]:

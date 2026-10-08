@@ -1,17 +1,12 @@
-{#- The duplicate check's user message: every examined row and its neighbours.
-    Mirrors store/continuity/identity.py:build_prompt.
-    Vars: rows (identity.template_rows) -- each {key, kind ("thread" |
-    "commitment"), title, beat, status, commitment_kind, due, quote, speaker,
-    certainty (a number or none), why_new, distinguished_from [ids],
-    candidates [{line (snippets/plot_thread_line/absorb.j2 or
-    snippets/commitment_line/absorb.j2, rendered by Python), earlier [beat
-    texts, newest first], signal_text, ...}]}. Every key is always passed;
-    a blank one renders nothing. -#}
-{% for r in rows -%}
-{% if not loop.first %}
-
-{% endif -%}
-Row {{ r.key }} — proposed {{ "plot thread" if r.kind == "thread" else "commitment" }}: {{ r.title }}
+{#- One examined row as a `decide()` item's context (`identity.build_items`):
+    a heading naming what the row would open, then the row's block (Beat
+    through Candidates).
+    Vars: `r`, one `identity.template_rows` row (`Examination.prompt_rows`'s
+    keys, plus each candidate's `line` and `signal_text`),
+    with the candidates the item offers and no others: a candidate whose id
+    the builder drops (unofferable, or colliding once normalised) is shown
+    nowhere. Every key is always passed; a blank one renders nothing. -#}
+Proposed {{ "plot thread" if r.kind == "thread" else "commitment" }}: {{ r.title }}
 Beat: {{ r.beat }}
 {%- if r.status %}
 Status: {{ r.status }}
@@ -41,5 +36,4 @@ Candidates:
   Earlier: {{ beat }}
 {%- endfor %}
   signals: {{ c.signal_text }}
-{%- endfor %}
 {%- endfor %}

@@ -1,9 +1,0 @@
-{"decisions": [
-  {"candidate": "c1", "decision": "distinct", "from": "", "to": "", "reason": "Who bribes the harbourmaster is a separate question from who runs the smuggling.", "evidence_scenes": []},
-  {"candidate": "c2", "decision": "continuation", "from": "B", "to": "A", "reason": "What the debt to Mara costs Seraphine is a concrete question that grew out of her debts.", "evidence_scenes": []},
-  {"candidate": "c3", "decision": "distinct", "from": "", "to": "", "reason": "Finding the ledger and Mara's pay are separate matters.", "evidence_scenes": []},
-  {"candidate": "c4", "decision": "keep_open", "from": "", "to": "", "reason": "Mara reached the cove, but the map may lead further.", "evidence_scenes": []},
-  {"candidate": "c5", "decision": "keep_open", "from": "", "to": "", "reason": "Nothing shown says what lies past the reef on Winifred's chart.", "evidence_scenes": []},
-  {"candidate": "c6", "decision": "keep_open", "from": "", "to": "", "reason": "The ring is back with Winifred, but the oath may ask more of Mara.", "evidence_scenes": []},
-  {"candidate": "c7", "decision": "uncertain", "from": "", "to": "", "reason": "Nothing shown says whether Winifred got her berth.", "evidence_scenes": []}
-]}

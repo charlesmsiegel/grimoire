@@ -157,11 +157,11 @@ def test_legacy_surfaces_still_see_twelve_routes():
 
 
 def test_every_route_declares_operation_and_default_role():
-    """Slice F flips a route to `decide` and the Decision role only in the
-    task whose call site decides (spec 14): scene-break, voice drift and the
-    speaker pick."""
+    """A route flips to `decide` and the Decision role only in the task whose
+    call sites decide (spec 14): scene-break, voice drift and the speaker pick
+    (slice F), and both continuity checks (slice G)."""
     primary = {"scene", "opener", "suggestions", "voice"}
-    decide = {"scene_break", "voice_drift", "speaker"}
+    decide = {"scene_break", "voice_drift", "speaker", "continuity"}
     for r in routing.ROUTES:
         assert r.operation in routing.OPERATIONS
         assert r.default_role in routing.DEFAULT_ROLES

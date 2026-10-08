@@ -1,0 +1,9 @@
+{
+  "0": {"answers": {"decision": "distinct", "from": null, "to": null, "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Who bribes the harbourmaster is a separate question from who runs the smuggling."},
+  "1": {"answers": {"decision": "continuation", "from": "B", "to": "A", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "What the debt to Mara costs Seraphine is a concrete question that grew out of her debts."},
+  "2": {"answers": {"decision": "distinct", "from": null, "to": null, "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Finding the ledger and Mara's pay are separate matters."},
+  "3": {"answers": {"decision": "keep_open", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Mara reached the cove, but the map may lead further."},
+  "4": {"answers": {"decision": "keep_open", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Nothing shown says what lies past the reef on Winifred's chart."},
+  "5": {"answers": {"decision": "keep_open", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "The ring is back with Winifred, but the oath may ask more of Mara."},
+  "6": {"answers": {"decision": "uncertain", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Nothing shown says whether Winifred got her berth."}
+}

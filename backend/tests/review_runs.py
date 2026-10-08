@@ -55,16 +55,22 @@ EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER = json.dumps(
     {"one_line": "o", "summary": "s", "keywords": [], "timeline_events": [],
      "plot_movements": [RECOVER_THE_LEDGER]})
 
-#: The system-prompt phrase that marks a request as the identity resolver's.
-IDENTITY_SYSTEM = "You are checking whether newly proposed story records"
+#: What marks a request as the duplicate check's: the decide system phrase
+#: every decision carries, and the heading only an identity item's context
+#: holds (`continuity_identity/item.j2`), as `(system, user)` needles.
+IDENTITY_MATCH = ("You answer closed questions about material you are given.",
+                  "\nCandidates:\n")
 
 
 def identity_requests(fake):
-    """The requests `fake` received from the identity resolver: those whose
-    system message carries `IDENTITY_SYSTEM`."""
+    """The requests `fake` received from the duplicate check: those whose
+    system message and user message carry `IDENTITY_MATCH`'s two needles."""
+    system, user = IDENTITY_MATCH
     return [r for r in fake.requests
-            if any(m.get("role") == "system" and IDENTITY_SYSTEM in (m.get("content") or "")
-                   for m in r["messages"])]
+            if any(m.get("role") == "system" and system in (m.get("content") or "")
+                   for m in r["messages"])
+            and any(m.get("role") == "user" and user in (m.get("content") or "")
+                    for m in r["messages"])]
 
 
 class Answer:

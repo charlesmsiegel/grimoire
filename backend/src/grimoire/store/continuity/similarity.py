@@ -19,7 +19,7 @@ two unrelated same-cast commitments through the structural clause.
 
 **The constants** below are candidate-generation parameters, not truth
 thresholds. Each is justified by the identity-text layout and by the cost
-model -- a false positive costs a share of one batched resolver call, a false
+model -- a false positive costs a share of one `decide()` chunk, a false
 negative costs a duplicate record -- and every one is to be tuned against real
 prompts later.
 

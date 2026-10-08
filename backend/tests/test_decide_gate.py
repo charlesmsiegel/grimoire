@@ -48,8 +48,9 @@ def _legacy(text: str) -> object:
     return [word.strip() == "yes", reason.strip()]
 
 
-def _decide(result: decisions.ItemResult, entry: gate.Entry) -> object:
+def _decide(results: tuple[decisions.ItemResult, ...], entry: gate.Entry) -> object:
     """A stand-in for a call site's mapping: the stored break and reason."""
+    (result,) = results
     return [result.answers["break"].answer is True, result.rationale]
 
 
@@ -110,7 +111,7 @@ def test_outcomes_compare_as_json_values(tmp_path):
     as_tuples = gate.Conversion(
         id=conv.id, items=conv.items, explain=conv.explain,
         legacy=lambda text: tuple(_legacy(text)),  # type: ignore[arg-type]
-        decide=lambda result, entry: tuple(_decide(result, entry)),  # type: ignore[arg-type]
+        decide=lambda results, entry: tuple(_decide(results, entry)),  # type: ignore[arg-type]
         corpus=conv.corpus, legacy_cases=())
     assert gate.judge(as_tuples).decide_right == 1
 
@@ -120,8 +121,8 @@ def test_a_boolean_is_not_its_integer(tmp_path):
     conv = _planted(tmp_path, [BOTH_RIGHT])
     as_ints = gate.Conversion(
         id=conv.id, items=conv.items, explain=conv.explain, legacy=conv.legacy,
-        decide=lambda result, entry: [int(result.answers["break"].answer is True),
-                                      result.rationale],
+        decide=lambda results, entry: [int(results[0].answers["break"].answer is True),
+                                       results[0].rationale],
         corpus=conv.corpus, legacy_cases=())
     assert gate.judge(as_ints).regressions
 
@@ -134,7 +135,7 @@ def test_the_decide_side_reads_aux_through_its_entry(tmp_path):
     conv = _planted(tmp_path, [entry])
     conv = gate.Conversion(
         id=conv.id, items=conv.items, explain=conv.explain, legacy=conv.legacy,
-        decide=lambda result, e: seen.append(dict(e.aux)) or _decide(result, e),
+        decide=lambda results, e: seen.append(dict(e.aux)) or _decide(results, e),
         corpus=conv.corpus, legacy_cases=())
     assert gate.judge(conv).passed
     assert seen == [{"title": "The Long Night"}]
@@ -160,13 +161,49 @@ def test_load_refuses_a_malformed_corpus(tmp_path, bad):
         gate.load(conv)
 
 
-def test_judge_refuses_a_conversion_of_several_items(tmp_path):
+def _three_items() -> tuple[decisions.Item, ...]:
+    return tuple(decisions.Item(f"Scene {n}.", (_BREAK,)) for n in range(3))
+
+
+def _batch_decide(results: tuple[decisions.ItemResult, ...], entry: gate.Entry) -> object:
+    return [r.answers[q].answer for r in results for q in r.answers]
+
+
+def _batch_legacy(text: str) -> object:
+    return [word.strip() == "yes" for word in text.split(",")]
+
+
+def _batch(answers: list[bool]) -> str:
+    return json.dumps({str(i): {"answers": {"break": a}} for i, a in enumerate(answers)})
+
+
+def test_judge_scores_a_batch_of_several_items(tmp_path):
+    """A conversion of three items is scored whole on both sides, and a
+    regression on item 2 alone is reported."""
+    ok = {"shape": "all-three", "intended": [True, False, True],
+          "legacy": "yes, no, yes", "decide": _batch([True, False, True])}
+    loses = {"shape": "second-item", "intended": [False, True, False],
+             "legacy": "no, yes, no", "decide": _batch([False, False, False])}
+    corpus = tmp_path / "batch.json"
+    corpus.write_text(json.dumps([ok, loses]), encoding="utf-8")
+    conv = gate.Conversion(id="batch", items=_three_items, explain=False,
+                           legacy=_batch_legacy, decide=_batch_decide, corpus=corpus,
+                           legacy_cases=())
+    result = gate.judge(conv)
+    assert (result.entries, result.legacy_right, result.decide_right) == (2, 2, 1)
+    assert len(result.regressions) == 1
+    assert "second-item" in result.regressions[0]
+    assert not result.passed
+
+
+def test_judge_refuses_a_batch_that_would_not_fit_one_call(tmp_path):
     conv = _planted(tmp_path, [BOTH_RIGHT])
-    two = gate.Conversion(id=conv.id, items=lambda: _items() * 2, explain=True,
-                          legacy=_legacy, decide=_decide, corpus=conv.corpus,
-                          legacy_cases=())
-    with pytest.raises(ValueError, match="one item"):
-        gate.judge(two)
+    nine = gate.Conversion(
+        id=conv.id, explain=True, legacy=_legacy, decide=_decide, corpus=conv.corpus,
+        items=lambda: tuple(decisions.Item(f"Scene {n}.", (_BREAK,)) for n in range(9)),
+        legacy_cases=())
+    with pytest.raises(ValueError, match=r"planted: .*needs 2 calls"):
+        gate.judge(nine)
 
 
 # --- the real conversions ---------------------------------------------------
@@ -209,11 +246,11 @@ def test_scene_break_is_gated_on_what_the_call_site_stores():
     (item,) = conv.items()
     yes = '{"0": {"answers": {"over": true}, "rationale": "The ledger changed hands."}}'
     entry = gate.Entry("planted", None, "", yes, {"title": '"The Long Walk Back."'})
-    (parsed,) = decisions.parse(yes, (item,), explain=True)
+    parsed = decisions.parse(yes, (item,), explain=True)
     assert conv.decide(parsed, entry) == [True, "The ledger changed hands.",
                                           "The Long Walk Back"]
     no = '{"0": {"answers": {"over": false}, "rationale": "Not yet."}}'
-    (parsed,) = decisions.parse(no, (item,), explain=True)
+    parsed = decisions.parse(no, (item,), explain=True)
     assert conv.decide(parsed, entry) == [False, "Not yet.", ""]
 
 
@@ -337,9 +374,9 @@ def test_voice_drift_is_gated_on_what_the_call_site_stores():
     (item,) = conv.items()
     entry = gate.Entry("planted", None, "", "")
     drift = '{"0": {"answers": {"verdict": "drift"}, "rationale": "She used contractions."}}'
-    (parsed,) = decisions.parse(drift, (item,), explain=True)
+    parsed = decisions.parse(drift, (item,), explain=True)
     assert conv.settle(conv.decide(parsed, entry)) == ["drift", "She used contractions."]
-    (parsed,) = decisions.parse('{"0": {"answers": {"verdict": "drift"}}}', (item,),
+    parsed = decisions.parse('{"0": {"answers": {"verdict": "drift"}}}', (item,),
                                 explain=True)
     assert conv.settle(conv.decide(parsed, entry)) == [
         "failed", "drift reported with no corrective"]
@@ -421,7 +458,7 @@ def test_speaker_is_gated_on_what_the_call_site_stores():
                         ('{"0": {"answers": {"next": null}}}', (None, None)),
                         ('{"0": {"answers": {"next": "absent"}}}', (None, rp.INELIGIBLE)),
                         ("not json", (None, rp.INVALID_HANDOFF))):
-        (parsed,) = decisions.parse(reply, (item,), explain=False)
+        parsed = decisions.parse(reply, (item,), explain=False)
         assert conv.decide(parsed, entry) == want, reply
 
 
@@ -474,6 +511,158 @@ def test_speaker_near_twin_out_of_the_roster_resolves_to_the_listed_ref():
                for slug in slugs)
 
 
+# --- continuity identity ---------------------------------------------------
+
+def _identity_gate() -> gate.Conversion:
+    return next(c for c in gate.GATES if c.id == "continuity-identity")
+
+
+def test_continuity_identity_is_gated_on_what_the_call_site_stores():
+    """The outcome is whether `take` decided, and each examined row's
+    decision, status, reason and target once `Examination.decide` has run:
+    today through the frozen parse, after the switch through the production
+    `answers_of`. Both sides are settled by the production `take` on a fresh
+    in-memory examination, so the acceptance guard is the same code."""
+    from grimoire.store.continuity import identity
+
+    conv = _identity_gate()
+    assert conv.explain
+    assert _from_legacy(conv.legacy)
+    items = conv.items()
+    assert len(items) == 3
+    assert [[o.id for o in item.questions[1].options] for item in items] == [
+        ["find-the-ledger", "maras-map", "the-burned-chart"],
+        ["find-the-ledger", "winifreds-chart"], ["the-midnight-deadline"]]
+    assert conv.settle(conv.legacy("I think so.")) == [
+        False, [["unchecked", "hint_only", identity.UNREADABLE, None]] * 3]
+    entry = gate.Entry("planted", None, "", "")
+    reply = json.dumps({"0": {"answers": {"decision": "existing", "id": "the-old-map"},
+                              "rationale": "Mara's map is the old map."}})
+    parsed = decisions.parse(reply, items, explain=True)
+    assert conv.settle(conv.decide(parsed, entry)) == [True, [
+        ["existing", "accepted", "Mara's map is the old map.", "maras-map"],
+        ["unchecked", "hint_only", identity.NO_ANSWER, None],
+        ["unchecked", "hint_only", identity.NO_ANSWER, None]]]
+
+
+def test_continuity_identity_decide_reads_every_entry():
+    """Today's parse loses only what the slice settled by ruling: a cased or
+    spaced spelling of an offered id, and a reply in today's format to the
+    decide prompt. The structured parse loses nothing -- an item it never
+    reached stays unchecked, and a repeated key keeps its first value."""
+    conv = _identity_gate()
+    result = gate.judge(conv)
+    assert result.passed, "\n".join(result.regressions)
+    assert result.decide_right == result.entries
+    assert result.legacy_right == result.entries - 2
+    entries = {entry.shape: entry for entry in gate.load(conv)}
+    assert {"one-item-unreadable", "normalised-id", "todays-format", "alias-source",
+            "ref-form", "closed-candidate", "explicit-target", "second-move",
+            "no-id", "sole-candidate", "unoffered-id", "other-kind-ref"} <= set(entries)
+    assert entries["todays-format"].intended[0] is True
+    assert {row[0] for row in entries["todays-format"].intended[1]} == {"unchecked"}
+    assert [row[0] for row in entries["one-item-unreadable"].intended[1]] == [
+        "new", "unchecked", "new"]
+    fenced = next(e for e in entries.values() if e.legacy.startswith("Here you go:"))
+    assert fenced.decide.count('"0":') == 2
+
+
+# --- continuity reconcile --------------------------------------------------
+
+def _reconcile_gate() -> gate.Conversion:
+    return next(c for c in gate.GATES if c.id == "continuity-reconcile")
+
+
+def test_continuity_reconcile_is_gated_on_the_proposals_the_sweep_stores():
+    """The outcome is the proposals dict persist 2 is handed, or None for a
+    failed run: today through the frozen parse, after the switch through the
+    production `proposals_of`. The fixture holds one candidate per
+    vocabulary, and the thread closure shows all four scenes, so one item
+    asks three evidence questions and has a fourth scene to leave out."""
+    from grimoire.store.continuity import reconcile
+
+    conv = _reconcile_gate()
+    assert conv.explain
+    assert _from_legacy(conv.legacy)
+    payload = gate._RECONCILE_PAYLOAD
+    items = conv.items()
+    assert [c["vocabulary"] for c in payload["candidates"]] == [
+        "same_thread", "same_commitment", "cross", "temporal", "thread", "commitment"]
+    assert len(items) == 6
+    closure = items[4]
+    assert len(reconcile.item_scenes(payload, payload["candidates"][4])) == 4
+    assert [q.id for q in closure.questions if q.id in reconcile.EVIDENCE_IDS] == list(
+        reconcile.EVIDENCE_IDS)
+    assert conv.settle(conv.legacy("I think so.")) is None
+    entry = gate.Entry("planted", None, "", "")
+    parsed = decisions.parse(json.dumps({"4": {"answers": {
+        "decision": "close", "evidence_scene": "0001--saltmarch-docks"}}}), items,
+        explain=True)
+    assert conv.settle(conv.decide(parsed, entry)) == {payload["candidates"][4]["id"]: {
+        "decision": "close", "from": "", "to": "", "relation": "", "status": "closed",
+        "reason": "", "evidence_scenes": ["0001--saltmarch-docks"]}}
+
+
+def test_continuity_reconcile_decide_reads_every_entry():
+    """Today's parse loses only what the slice settled by ruling: a status
+    verdict without a rationale, a fourth cited scene, a scene the item does
+    not show, a reply in today's format to the decide prompt, and a reply
+    naming a candidate we did not send -- whose decide twin carries an index
+    past the batch, which leaves the whole reply unread (slice F), real
+    verdicts beside it included. The structured parse loses nothing -- a
+    candidate it never reached gets no proposal, and a repeated key keeps its
+    first value."""
+    conv = _reconcile_gate()
+    result = gate.judge(conv)
+    assert result.passed, "\n".join(result.regressions)
+    assert result.decide_right == result.entries
+    ruled = [e for e in gate.load(conv) if e.ruling]
+    assert result.legacy_right == result.entries - len(ruled) == result.entries - 7
+    entries = {entry.shape: entry for entry in gate.load(conv)}
+    assert {"todays-format", "two-scenes-cited", "four-scenes-cited",
+            "evidence-from-another-candidate", "one-item-unreadable", "null-decision",
+            "related-without-letters", "closure-without-rationale",
+            "unknown-keys-and-repeated-candidate", "repeated-candidate",
+            "stray-index-beside-real-answers"} <= set(entries)
+    assert entries["todays-format"].intended == {}
+    assert entries["unknown-keys-and-repeated-candidate"].intended == {}
+    # The stray index's price, printed with something to lose: today's parse
+    # keeps two real verdicts, decide neither.
+    stray = entries["stray-index-beside-real-answers"]
+    assert stray.intended == {}
+    assert sorted(p["decision"] for p in conv.settle(conv.legacy(stray.legacy)).values()) == [
+        "close", "duplicate"]
+    # The repeated key, apart from the foreign indices: its first value stands.
+    assert [p["decision"] for p in entries["repeated-candidate"].intended.values()] == [
+        "uncertain"]
+    assert len(entries["four-scenes-cited"].intended[
+        gate._RECONCILE_PAYLOAD["candidates"][4]["id"]]["evidence_scenes"]) == 3
+    unread = entries["one-item-unreadable"].intended
+    assert gate._RECONCILE_PAYLOAD["candidates"][1]["id"] not in unread and len(unread) == 5
+
+
+def test_the_reconcile_sources_are_gate_entries_with_their_twins():
+    """Each deleted parse test's reply, adapted through its own maps, is the
+    legacy side of an entry whose decide side is its twin: the checkable form
+    of "every deleted parse input is a gate entry" (ruling 11, M11)."""
+    conv = _reconcile_gate()
+    pairs = {(entry.legacy, entry.decide) for entry in gate.load(conv)}
+    assert len(gate.RECONCILE_SOURCES) >= 30
+    for source, elements, keys, scenes in gate.RECONCILE_SOURCES:
+        adapted = gate._adapt(elements, keys, scenes)
+        assert adapted in conv.legacy_cases, source
+        assert (adapted, gate._twin(elements, keys, scenes)) in pairs, source
+
+
+def test_reconcile_adapt_refuses_a_map_that_merges_two_candidates():
+    element = {"candidate": "c1", "decision": "close"}
+    with pytest.raises(ValueError, match="same fixture"):
+        gate._adapt([element], {"c1": "c5", "c2": "c5"}, {})
+    with pytest.raises(ValueError, match="same fixture"):
+        gate._adapt([element], {"c1": "c5"}, {"s0": "0001--saltmarch-docks",
+                                              "s1": "0001--saltmarch-docks"})
+
+
 # --- the legacy side is the frozen copy ------------------------------------
 
 def test_legacy_imports_nothing_from_grimoire():
@@ -486,7 +675,7 @@ def test_legacy_imports_nothing_from_grimoire():
             imported |= {alias.name for alias in node.names}
         elif isinstance(node, ast.ImportFrom):
             imported.add("." * node.level + (node.module or ""))
-    assert imported <= {"__future__", "json"}, sorted(imported)
+    assert imported <= {"__future__", "json", "re"}, sorted(imported)
 
 
 #: The production modules today's parsers live in. A conversion's `legacy`
@@ -494,7 +683,10 @@ def test_legacy_imports_nothing_from_grimoire():
 #: tasks edit and then delete.
 _PRODUCTION = frozenset({"grimoire.store.scene_break", "grimoire.store.voice_drift",
                          "grimoire.store.response_protocol",
-                         "grimoire.routes.character_turns"})
+                         "grimoire.routes.character_turns",
+                         "grimoire.store.continuity.identity",
+                         "grimoire.store.continuity.reconcile",
+                         "grimoire.store.absorb.parse"})
 
 
 def _names(code: types.CodeType) -> set[str]:
@@ -630,7 +822,16 @@ def test_the_corpora_mark_their_deliberate_changes():
     ruled = {(conv.id, entry.shape) for conv in gate.GATES for entry in gate.load(conv)
              if entry.ruling}
     assert ruled == {("scene-break", "multi-line"), ("scene-break", "quoted-title"),
-                     ("voice-drift", "todays-format"), ("speaker", "case-folded")}
+                     ("voice-drift", "todays-format"), ("speaker", "case-folded"),
+                     ("continuity-identity", "normalised-id"),
+                     ("continuity-identity", "todays-format"),
+                     ("continuity-reconcile", "closure-without-rationale"),
+                     ("continuity-reconcile", "closure-without-rationale-spaces"),
+                     ("continuity-reconcile", "four-scenes-cited"),
+                     ("continuity-reconcile", "evidence-from-another-candidate"),
+                     ("continuity-reconcile", "todays-format"),
+                     ("continuity-reconcile", "unknown-keys-and-repeated-candidate"),
+                     ("continuity-reconcile", "stray-index-beside-real-answers")}
     printed = gate.report([gate.judge(conv) for conv in gate.GATES])
     assert printed.count("ruling: ") == len(ruled)
     assert "ruling: entry 6 (multi-line), legacy loses: " in printed

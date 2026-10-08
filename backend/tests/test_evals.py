@@ -242,3 +242,61 @@ def test_decide_speaker_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
     assert "Rationale" not in ctx["messages"][1]["content"]
     assert case.schema is not None
     assert case.schema(ctx) == decisions.schema([item], explain=False)
+
+
+def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent duplicate-check decide case: its prompt is the structured
+    prompt absorb sends for `build_items`' items over what `examine` finds, a
+    live run sends that batch's schema, and each counterexample carries a
+    failure mode of the duplicate check into the decide shape."""
+    from grimoire import decisions, inference
+    from grimoire.store.continuity import identity
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-continuity-identity"]
+    assert case.task == "continuity-identity"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("identity.json",),
+        "merged": ("identity.distinct", "identity.continuation"),
+        "unknown-id": ("identity.known_ids", "identity.same_obligation")}
+    ctx = runner.prepare(case)
+    exam = ctx["exam"]
+    items = ctx["items"]
+    assert items == identity.build_items(exam.prompt_rows(), exam.live)
+    assert len(items) == len(exam.rows) == 3
+    assert ctx["messages"] == inference.structured_messages(items, explain=identity.explain())
+    assert set(ctx["expected"]) == {"r1", "r2", "r3"}
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema(items, explain=True)
+    # The one-call case is retired: the decide case is the only one left.
+    assert "continuity-identity" not in case_mod.BY_ID
+
+
+def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent reconciliation decide case: its prompt is the structured
+    prompt the sweep sends for `build_items`' items over the payload the case
+    builds, a live run sends that batch's schema, and each counterexample
+    carries a failure mode of the sweep into the decide shape."""
+    from grimoire import decisions, inference
+    from grimoire.store.continuity import reconcile
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-continuity-reconcile"]
+    assert case.task == "continuity-reconcile"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("reconcile.json",),
+        "merged": ("reconcile.distinct", "reconcile.continuation"),
+        "eager": ("reconcile.keep_open", "reconcile.unproven"),
+        "unfounded": ("reconcile.evidence",),
+        "timid": ("reconcile.cross_type", "reconcile.close", "reconcile.fulfilled")}
+    ctx = runner.prepare(case)
+    payload = ctx["payload"]
+    items = ctx["items"]
+    assert items == reconcile.build_items(payload)
+    assert len(items) == len(payload["candidates"]) == 7
+    assert ctx["messages"] == inference.structured_messages(items, explain=reconcile.explain())
+    assert set(ctx["expected"]) == {f"c{n}" for n in range(1, 8)}
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema(items, explain=True)
+    # The one-call case is retired: the decide case is the only one left.
+    assert "continuity-reconcile" not in case_mod.BY_ID

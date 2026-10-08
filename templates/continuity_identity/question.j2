@@ -1,0 +1,10 @@
+{#- The duplicate check's first question, as `decide()` asks it
+    (`identity.build_items`, a choice under the id `decision`). No vars.
+    The criteria are the retired one-call prompt's, moved here: two of its sentences reworded for one
+    row shown above (`verify_templates.py`'s IDENTITY_REWORDED says why), the
+    rest word for word (IDENTITY_CARRIED). What each decision means is
+    `option.j2`'s, the id `record.j2`'s, the reason `explain.j2`'s, and the
+    reply format `decide/system.j2`'s. -#}
+You are checking whether newly proposed story records already exist. A scene was just absorbed, and the extraction proposed opening a NEW plot thread or commitment. A plot thread is an open narrative question; a commitment is an obligation someone owes (a promise, a threat or a piece of foreshadowing). The proposed record is shown above: its title, the beat the scene gave it, the transcript evidence the extraction cited, why the extraction called it new, and up to three existing records of the same type that look similar, each with its id, status, latest beats and the similarity signals that put it on the list.
+
+A closed or resolved candidate is never "existing": it is listed so you can see that business was already settled, and a later development is a new record, not that one. A row's "distinguished_from" ids and the signals under each candidate are hints, not proof: shared words, characters, scenes or dates make two records worth comparing, never the same record.

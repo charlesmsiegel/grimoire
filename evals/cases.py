@@ -948,45 +948,6 @@ def build_continuity_identity() -> dict:
     return ctx
 
 
-def _identity_prompt(ctx: dict) -> list[dict]:
-    """The resolver prompt, through the production builder, for what `examine`
-    finds now -- stored on `ctx` with the offers and verdicts the grader reads."""
-    exam = _identity_examine(ctx)
-    ctx["exam"] = exam
-    ctx["offered"] = {key: set(ids) for key, ids in _offers(exam).items()}
-    ctx["kinds"] = {e.key: e.kind for e in exam.rows}
-    ctx["expected"] = {e.key: IDENTITY_VERDICTS[e.index] for e in exam.rows
-                       if e.section == "plot_movements"}
-    return identity.build_prompt(exam.prompt_rows())
-
-
-def grade_continuity_identity(ctx: dict, output: str) -> list[Check]:
-    # The quoted enum words alone also appear in the reply-shape line, so they
-    # would survive deleting every rule; each decision instruction gets the
-    # unique phrase that states it.
-    prompt = graders.grade_prompt(
-        ctx["messages"],
-        {f"asks_{d}": f'"{d}"' for d in identity.DECISIONS}
-        | {"asks_existing_rule": "only when a listed candidate is the same narrative "
-                                 "question or obligation",
-           "asks_closed_is_not_existing": 'A closed or resolved candidate is never "existing"',
-           "asks_continuation_is_new": "a continuation, or a related subplot",
-           "asks_uncertain_rule": "when the transcript cannot tell",
-           "asks_signals_are_hints": "are hints, not proof"})
-    # §28.10 case 4's identity half: a row is only ever compared with its own type, so
-    # a commitment is never offered a thread however close the words are. Graded
-    # over the examination rather than the prompt text, because it must hold
-    # even if a floor change makes the commitment row examined.
-    exam = ctx["exam"]
-    mixed = sorted(f"{row.key}: {s.ref}" for row in exam.rows
-                   for s, _ in row.candidates if s.kind != row.kind)
-    same_type = Check("prompt.same_type_only", not mixed,
-                      f"rows offered a candidate of another type: {mixed}")
-    return [*prompt, same_type,
-            *graders.grade_identity(output, ctx["expected"], ctx["offered"],
-                                    ctx["kinds"])]
-
-
 # ----------------------------------------------- case 8: continuity reconcile
 
 # §28.10 cases 2-8, the reconciliation half. Each candidate is specified by
@@ -1125,10 +1086,10 @@ def build_continuity_reconcile() -> dict:
     return {"cid": cid, "sids": sids, "candidates": picked}
 
 
-def _reconcile_prompt(ctx: dict) -> list[dict]:
-    """The sweep's prompt, through the production `build_payload` /
-    `build_prompt`, for the candidates `build` specified -- stored on `ctx`
-    with the vocabularies, known scenes and verdicts the grader reads."""
+def _reconcile_payload(ctx: dict) -> dict:
+    """The sweep's payload, through the production `build_payload`, for the
+    candidates `build` specified -- asserted, and stored on `ctx` with the
+    vocabularies, known scenes and verdicts the graders read."""
     payload = reconcile.build_payload(ctx["cid"], ctx["candidates"])
     sent = payload["candidates"]
     # Every case is sent, in order, under the vocabulary it needs, with each
@@ -1147,34 +1108,7 @@ def _reconcile_prompt(ctx: dict) -> list[dict]:
         ctx["expected"][cand["key"]] = {
             "check": check, "decisions": words,
             "from": {word: letters[ref] for word, ref in froms.items()}}
-    return reconcile.build_prompt(payload)
-
-
-#: The system prompt's opener and its one phrase per decision rule (Task 5's
-#: needles): the quoted words alone also appear in the vocabulary lines, so
-#: they would survive deleting every rule.
-RECONCILE_RULES = {
-    "asks_reconcile": "You are reviewing a campaign's story ledger for records that "
-                      "may overlap or be finished",
-    "asks_duplicate_rule": '"duplicate" only when both records are the same question '
-                           "or obligation",
-    "asks_continuation_is_not_duplicate": 'a narrower or later question is "continuation" '
-                                          'or "subthread", not "duplicate"',
-    "asks_cross_never_duplicate": 'A thread and a commitment are never "duplicate"',
-    "asks_age_is_not_evidence": "Age alone is never evidence that a thread is finished",
-    "asks_deadline_is_not_evidence": "A passed deadline alone is never evidence that a "
-                                     "promise was kept or broken",
-    "asks_evidence_scene": "name at least one evidence scene id from the lines shown",
-    "asks_no_invented_date": "Do not invent a date",
-}
-
-
-def grade_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
-    words = sorted({w for vocab in reconcile.DECISIONS.values() for w in vocab})
-    prompt = graders.grade_prompt(
-        ctx["messages"], {f"asks_{w}": f'"{w}"' for w in words} | RECONCILE_RULES)
-    return [*prompt, *graders.grade_reconcile(output, ctx["expected"], ctx["vocab"],
-                                              ctx["known"])]
+    return payload
 
 
 # ------------------------------------------- case 9: scene-suggestion control
@@ -1603,6 +1537,101 @@ def grade_decide_speaker(ctx: dict, output: str) -> list[Check]:
                                     expected="characters:winifred")]
 
 
+# ------------------------------------- case 13: decide, continuity identity
+#
+# The duplicate check as `decide()` will send it after the switch: the same
+# fixture and the same examination as case 7 (`build_continuity_identity`),
+# one item per examined row through `identity.build_items`. Its recordings
+# carry each of case 7's failure modes into the decide shape.
+
+def _decide_identity_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for what `examine` finds now, built as the
+    switched call site will build it -- stored on `ctx` with the items, the
+    rows, the offers and the verdicts the grader reads, as the grader reads them."""
+    exam = _identity_examine(ctx)
+    rows = exam.prompt_rows()
+    items = identity.build_items(rows, exam.live)
+    ctx.update(exam=exam, rows=rows, items=items, explain=identity.explain(),
+               offered={key: set(ids) for key, ids in _offers(exam).items()},
+               kinds={e.key: e.kind for e in exam.rows},
+               expected={e.key: IDENTITY_VERDICTS[e.index] for e in exam.rows
+                         if e.section == "plot_movements"})
+    return inference.structured_messages(items, explain=ctx["explain"])
+
+
+def _decide_identity_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=True)
+
+
+def grade_decide_continuity_identity(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    user = messages[1]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_decide_identity_schema(ctx))
+    missing = [row["title"] for row in ctx["rows"] if row["title"] not in user]
+    return [*graders.grade_prompt_section(messages, "question",
+                                          "continuity_identity/question.j2"),
+            Check("prompt.schema", schema in messages[0]["content"],
+                  "the reply's JSON Schema is not in the system message"),
+            Check("prompt.context", not missing,
+                  f"examined rows missing from the user message: {missing}"),
+            Check("prompt.explain", f"Rationale, for each item: {ctx['explain']}" in text,
+                  "the rationale instruction did not reach the prompt"),
+            *graders.grade_identity_decision(output, ctx["items"], ctx["rows"],
+                                             ctx["expected"])]
+
+
+# ------------------------------------ case 14: decide, continuity reconcile
+#
+# The reconciliation sweep as `decide()` will send it after the switch: the
+# same fixture and the same payload as case 8 (`build_continuity_reconcile`),
+# one item per candidate through `reconcile.build_items`. Its recordings carry
+# each of case 8's failure modes into the decide shape. Every scene is in the
+# recent window, so every item shows all three and asks three evidence
+# questions.
+
+def _decide_reconcile_prompt(ctx: dict) -> list[dict]:
+    """The structured prompt for the case's payload, built as the switched
+    call site will build it -- stored on `ctx` with the items and the
+    rationale instruction, beside what `_reconcile_payload` stores."""
+    payload = _reconcile_payload(ctx)
+    items = reconcile.build_items(payload)
+    ctx.update(items=items, explain=reconcile.explain())
+    return inference.structured_messages(items, explain=ctx["explain"])
+
+
+def _decide_reconcile_schema(ctx: dict) -> dict:
+    return decisions.schema(ctx["items"], explain=True)
+
+
+def grade_decide_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
+    messages = ctx["messages"]
+    text = graders.prompt_text(messages)
+    user = messages[1]["content"]
+    schema = _SCHEMA_ENV.from_string("{{ schema | tojson(indent=2) }}").render(
+        schema=_decide_reconcile_schema(ctx))
+    vocabularies = sorted({c["vocabulary"] for c in ctx["payload"]["candidates"]})
+    missing = [r["ref"] for c in ctx["payload"]["candidates"] for r in c["records"]
+               if r["line"] not in user]
+    return [*(check for vocab in vocabularies
+              for check in graders.grade_prompt_section(
+                  messages, f"question.{vocab}", "continuity_reconcile/question.j2",
+                  vocabulary=vocab)),
+            *graders.grade_prompt_section(messages, "direction",
+                                          "continuity_reconcile/direction.j2"),
+            *graders.grade_prompt_section(messages, "evidence",
+                                          "continuity_reconcile/evidence.j2"),
+            Check("prompt.schema", schema in messages[0]["content"],
+                  "the reply's JSON Schema is not in the system message"),
+            Check("prompt.context", not missing,
+                  f"candidate records missing from the user message: {missing}"),
+            Check("prompt.explain", f"Rationale, for each item: {ctx['explain']}" in text,
+                  "the rationale instruction did not reach the prompt"),
+            *graders.grade_reconcile_decision(output, ctx["items"], ctx["payload"],
+                                              ctx["expected"])]
+
+
 # ------------------------------------------------------------------- the suite
 
 def _scene_prompt(ctx: dict) -> list[dict]:
@@ -1713,49 +1742,32 @@ CASES: tuple[Case, ...] = (
              # A collapsed generation. Proves the vacuous-pass gate gates:
              # without slop.measurable this recording would score all green.
              Recording("terse", ("slop.measurable",)))),
-    Case(id="continuity-identity",
-         task="continuity-identity",
-         hypothesis="the identity resolver maps a reworded duplicate to the existing "
-                    "record and keeps a same-topic question and a concrete continuation new",
-         build=build_continuity_identity,
-         prompt=_identity_prompt,
-         grade=grade_continuity_identity,
-         recordings=(
-             Recording(BASELINE, ext="json"),
-             Recording("undecodable", ("identity.json",), "json"),
-             # Both ids were offered, so known_ids still passes: what trips is
-             # exactly the two rows that should have stayed new.
-             Recording("merged", ("identity.distinct", "identity.continuation"), "json"),
-             # An id offered nowhere: rejected as unknown, and the wrong
-             # verdict for the row it was given on.
-             Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
-                       "json"))),
-    Case(id="continuity-reconcile",
+    Case(id="decide-continuity-reconcile",
          task="continuity-reconcile",
-         hypothesis="the reconciliation sweep keeps a same-topic question distinct, "
+         hypothesis="asked through decide() about each candidate the sweep sends, the "
+                    "reply is the schema's object, keeps a same-topic question distinct, "
                     "reads a concrete question as a continuation, never merges a thread "
-                    "with a commitment, closes or resolves only on a shown beat, and "
+                    "with a commitment, closes or resolves only on a shown scene, and "
                     "keeps an old or overdue record open when nothing settles it",
          build=build_continuity_reconcile,
-         prompt=_reconcile_prompt,
-         grade=grade_continuity_reconcile,
+         prompt=_decide_reconcile_prompt,
+         grade=grade_decide_continuity_reconcile,
+         schema=_decide_reconcile_schema,
          recordings=(
              Recording(BASELINE, ext="json"),
+             # Cut off mid-reply: nothing decodes, so no other output check
+             # is reported rather than failed.
              Recording("undecodable", ("reconcile.json",), "json"),
-             # Both pairs merged, each with valid letters, so shape and enum
-             # still pass: what trips is exactly the two pair verdicts.
+             # Both pairs merged, each with valid letters: what trips is
+             # exactly the two pair verdicts.
              Recording("merged", ("reconcile.distinct", "reconcile.continuation"), "json"),
              # A closure and a resolution on the two candidates nothing
              # settles, each citing a shown scene, so evidence still passes.
              Recording("eager", ("reconcile.keep_open", "reconcile.unproven"), "json"),
-             # The right word on the answered thread, with no scene cited.
+             # The right word on the answered thread, with every evidence
+             # slot null.
              Recording("unfounded", ("reconcile.evidence",), "json"),
-             # §28.10 cases 4, 5 and 7 held back: the thread and commitment
-             # kept apart as `distinct`, the answered thread and the kept
-             # promise each `keep_open` with no scene cited. Every word is in
-             # its candidate's vocabulary and none claims an outcome, so enum
-             # and evidence still pass: what trips is exactly the three
-             # verdicts no other counterexample reaches.
+             # §28.10 cases 4, 5 and 7 held back, as case 8's `timid`.
              Recording("timid", ("reconcile.cross_type", "reconcile.close",
                                  "reconcile.fulfilled"), "json"))),
     Case(id="scene-suggestions",
@@ -1832,6 +1844,28 @@ CASES: tuple[Case, ...] = (
              # Drift with a corrective over MAX_NOTE, which the route refuses
              # to put in front of every following turn.
              Recording("long-note", ("decide.rationale",), "json"))),
+    Case(id="decide-continuity-identity",
+         task="continuity-identity",
+         hypothesis="asked through decide() about each examined row, the reply is the "
+                    "schema's object, maps a reworded duplicate to the existing record by "
+                    "an offered id, and keeps a same-topic question and a concrete "
+                    "continuation new",
+         build=build_continuity_identity,
+         prompt=_decide_identity_prompt,
+         grade=grade_decide_continuity_identity,
+         schema=_decide_identity_schema,
+         recordings=(
+             Recording(BASELINE, ext="json"),
+             # Cut off mid-rationale: nothing decodes, so no other output
+             # check is reported rather than failed.
+             Recording("undecodable", ("identity.json",), "json"),
+             # Both ids were offered, so known_ids still passes: what trips is
+             # exactly the two rows that should have stayed new.
+             Recording("merged", ("identity.distinct", "identity.continuation"), "json"),
+             # An id offered nowhere: no option, so `existing` names nothing,
+             # and the row it was given on gets the wrong verdict.
+             Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
+                       "json"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "

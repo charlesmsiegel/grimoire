@@ -24,7 +24,8 @@ KINDS = frozenset({
 
 class LLMError(Exception):
     def __init__(self, kind: str, detail: str = "", retry_after: float | None = None,
-                 status: int | None = None, code: str | None = None):
+                 status: int | None = None, code: str | None = None, *,
+                 words: tuple[LLMError, ...] = ()):
         super().__init__(detail or kind)
         #: One of `KINDS` -- unvalidated on purpose. This constructor runs on
         #: the failure path, where raising over a typo would replace the error
@@ -57,6 +58,16 @@ class LLMError(Exception):
         #: a 429 that is a spend cap and one that is a rate limit differ only
         #: there.
         self.code = code
+        #: When this error is several routes' failures composed into one
+        #: (`llm.routes_failed`), each route's own -- the primary first --
+        #: else empty. The composition's one kind and detail are written for
+        #: a reader; a caller that needs a fact only one route's failure
+        #: carried asks the routes. The one today is a caller's own clock: an
+        #: absorb whose deadline stopped a prompt-only re-send (`inference`
+        #: re-sends each route that refused the structured field) still has
+        #: to say the clock is why (`routes.scenes._budget_overrun`), and the
+        #: composed sentence no longer equals the clock's.
+        self.words = words
 
 
 #: How the Anthropic API opens the message of a 400 that is a spend limit the

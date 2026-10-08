@@ -173,15 +173,20 @@ async def _ask(call: _Call, conn: dict, messages: list[dict], schema: dict,
 
 async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisions.Decision:
     """The structured backend: one metered `complete(schema=)` per chunk
-    (`decisions.chunks`), each read back by `decisions.parse`."""
+    (`decisions.chunks`), each read back by `decisions.parse`. Each chunk runs
+    down the attempt chain on its own, so what answered is collected per chunk
+    (`decisions.Decision.served`), never read off the last one, and so is
+    each failed chunk's own error (`decisions.Decision.errors`): the chunk's
+    final word, after `_ask`'s re-sends, never one of the calls it made on
+    the way there."""
     assert call.resolved.conn is not None   # `decide` refused a None conn
     conn = _with_mode(call.resolved.conn, "structured")
     explain = bool(call.explain)
     results: list[decisions.ItemResult | None] = [None] * len(items)
     rows: list[dict] = []
     failed: list[tuple[int, tuple[decisions.Item, ...]]] = []
-    first_error: LLMError | None = None
-    answered: dict | None = None
+    errors: list[LLMError] = []
+    served: list[tuple[str, str]] = []
     for offset, chunk in decisions.chunks(items):
         # Off the loop: the template loader touches the filesystem.
         messages = await asyncio.to_thread(structured_messages, chunk, explain=call.explain)
@@ -192,26 +197,33 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisio
         if holder is not None:
             for index, result in enumerate(decisions.parse(text, chunk, explain=explain)):
                 results[offset + index] = result
-            answered = holder
+            if (by := _served_by(holder)) not in served:
+                served.append(by)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the others.
-            first_error = first_error or error
+            errors.append(error)
             failed.append((offset, chunk))
-    if answered is None:
+    if not served:
         # No chunk answered: the provider's error is the caller's (ruling 8).
-        assert first_error is not None
-        raise first_error
+        raise errors[0]
     for offset, chunk in failed:
         for index, result in enumerate(decisions.unanswered(chunk, "error")):
             results[offset + index] = result
-    provider, model = _served_by(answered)
+    # One selection answered every chunk that answered: it is the decision's.
+    # Several (a fallback took one chunk, the primary another): none is.
+    provider, model = served[0] if len(served) == 1 else ("", "")
     return decisions.Decision(items=tuple(r for r in results if r is not None),
                               backend="structured", provider=provider, model=model,
-                              usage=tuple(rows))
+                              usage=tuple(rows), served=tuple(served),
+                              errors=tuple(errors))
 
 
 #: Every backend `decide` can dispatch to, by `ResolvedInference.decision_mode`.
-#: Slice H adds "native" (and spec 5.5's chain) here.
+#: Slice H adds "native" (and spec 5.5's chain) here. A backend fills
+#: `Decision.errors` with each failed chunk's final error, in chunk order, for
+#: every chunk whose items it marks `error`: `routes.common._decide_error`
+#: reports a batch's failure from the first, so an empty one would lose a rate
+#: limit's kind and window (spec 7.4, "Result").
 _BACKENDS: dict[str, Backend] = {"structured": _structured}
 
 

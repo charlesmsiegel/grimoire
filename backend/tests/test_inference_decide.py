@@ -22,6 +22,7 @@ from grimoire import decisions, inference, llm, llm_usage, prompts, routes
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm import ATTEMPTED, FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
+from grimoire.routes import common
 from grimoire.store.inference import migrate, settings
 from grimoire.store.inference import resolve as inf
 from tests.llm_fakes import (
@@ -177,6 +178,41 @@ def test_each_chunk_is_its_own_metered_row(client):
     assert len(rows) == 2 and len(got.usage) == 2
     assert fake.schemas == [decisions.schema(items[:8], explain=False),
                             decisions.schema(items[8:], explain=False)]
+    # Both chunks answered by the primary: it is the decision's selection.
+    assert got.served == (("openrouter", "vendor/active"),)
+    assert (got.provider, got.model) == ("openrouter", "vendor/active")
+
+
+def test_chunks_answered_by_different_routes_name_every_one(client):
+    """A batch's chunks each run down the attempt chain on their own: the
+    primary answers the first chunk, fails on the second, and its fallback
+    answers that one. `served` names both, in the order they first answered,
+    and `provider`/`model` name neither -- the last chunk's route did not
+    answer the first chunk's items."""
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([[decision_reply(*[{"over": False}] * 8)],
+                                  LLMError("network", "connection reset"),
+                                  [decision_reply({"over": True})]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert [r.answers["over"].answer for r in got.items] == [False] * 8 + [True]
+    assert [r["model"] for r in provider.requests] == [
+        "vendor/active", "vendor/active", "vendor/spare"]
+    assert got.served == (("openrouter", "vendor/active"), ("spare", "vendor/spare"))
+    assert (got.provider, got.model) == ("", "")
+    assert len(got.usage) == 2
+
+
+def test_a_failed_chunk_names_nothing_in_served(client):
+    """A chunk that failed answered nothing: beside an answered one, the
+    decision names only the selection that answered, and that one is its."""
+    _store(client)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    fake = FakeLLM([[decision_reply(*[{"over": True}] * 8)]],
+                   error=LLMError("network", "connection reset"), fail_after=1)
+    got = _decide(fake, items)
+    assert got.served == (("openrouter", "vendor/active"),)
+    assert (got.provider, got.model) == ("openrouter", "vendor/active")
 
 
 def test_no_chunk_exceeds_the_enum_value_budget(client):
@@ -612,6 +648,145 @@ def test_a_refused_fallback_is_retried_without_the_mode(client):
     assert [(r["decision_mode"], r["model"]) for r in rows] == [
         ("structured", "vendor/spare"), ("structured", "vendor/spare")]
     assert seen == [("vendor/active", "network"), ("vendor/spare", None)]
+
+
+def test_a_failed_chunks_error_is_its_composed_last_word(client):
+    """A chunk whose refused primary is re-sent and fails again reports what
+    `decide` would raise for it alone -- every route's failure composed --
+    on `Decision.errors`, never the re-send's bare error; and that is what a
+    batch with nothing read reports (`common._decide_error`)."""
+    _store(client)
+    _flagged()
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([_refused_schema(), _busy(),
+                                  LLMError("network", "connection reset"), ["no json"]])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert [r.answers["over"].reason for r in got.items] == ["error"] * 8 + ["unreadable"]
+    (error,) = got.errors
+    assert isinstance(error, LLMError) and not isinstance(error, llm.SchemaRefusalError)
+    assert (error.kind, error.detail) == (
+        "network", "connection reset — and the fallback failed too: slow down")
+    assert common._decide_error(got, "over") is error
+
+
+def test_a_chunk_answered_on_its_second_re_send_did_not_fail(client):
+    """Both routes refused the first chunk: the primary's re-send fails and the
+    fallback's answers (garbled), so that chunk failed nothing. The second
+    chunk fails on both routes. With nothing read, the batch's error is the
+    second chunk's -- not the first chunk's failed re-send on the way to its
+    answer (M1)."""
+    _store(client)
+    _flagged(spare=True)
+    items = [_item(f"Mara counts to {n}.") for n in range(9)]
+    provider = SequencedProvider([_refused_schema(), _refused_schema(),
+                                  LLMError("network", "connection reset"), ["no json"],
+                                  _busy(), _busy()])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert len(provider.requests) == 6
+    assert [r.answers["over"].reason for r in got.items] == ["unreadable"] * 8 + ["error"]
+    (error,) = got.errors
+    assert error.kind == "rate_limit"
+    assert common._decide_error(got, "over") is error
+    assert got.served == (("spare", "vendor/spare"),)
+
+
+def test_the_first_failed_chunks_error_is_the_batchs(client):
+    """Review 2 #5: three chunks -- a rate limit, a garbled reply, a network
+    failure. `errors` holds the two failures in chunk order, and with nothing
+    read the batch reports the FIRST, which is what `decide` itself raises
+    when no chunk answers -- never the last one, nor the garbled chunk."""
+    _store(client, fallback=False)
+    items = [_item(f"Mara counts to {n}.") for n in range(2 * decisions.MAX_ITEMS_PER_CALL + 1)]
+    provider = SequencedProvider([_busy(), ["no json"], LLMError("network", "connection reset")])
+    got = _decide(LLMClient(openrouter=provider, timeout=0, retries=0), items)
+    assert len(provider.requests) == 3
+    assert [e.kind for e in got.errors] == ["rate_limit", "network"]
+    error = common._decide_error(got, "over")
+    assert error is got.errors[0]
+    assert (error.kind, error.retry_after) == ("rate_limit", 30.0)
+
+
+def _clock_after_the_first_call(monkeypatch):
+    """An absorb budget (`routes.scenes._Budget`) whose clock runs out the
+    moment the first call it ran returns: every later call is refused unsent."""
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    budget = routes.scenes._Budget(60)
+
+    async def around(call, holder):
+        try:
+            return await budget.run(call)
+        finally:
+            clock[0] = 1e6
+    return around
+
+
+@pytest.mark.parametrize("second", ["refused", "server"])
+def test_a_re_send_the_clock_stopped_is_the_clocks_however_it_is_composed(
+        client, monkeypatch, second):
+    """Review 2 #1: the primary refused the structured field, and the fallback
+    refused it too (or failed with a 500); the absorb clock then refused each
+    prompt-only re-send. The routes' failures compose into one sentence, which
+    is no longer the clock's sentinel -- but they are kept (`words`), so the
+    absorb still reads its own clock as the cause."""
+    _store(client)
+    _flagged(spare=True)
+    provider = SequencedProvider([
+        _refused_schema(),
+        _refused_schema() if second == "refused" else LLMError("server", "oops", status=500)])
+    with pytest.raises(LLMError) as exc:
+        _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+                around=_clock_after_the_first_call(monkeypatch))
+    assert len(provider.requests) == 2               # the re-sends never left
+    assert routes.scenes.BUDGET_EXHAUSTED in exc.value.detail
+    assert exc.value.detail != routes.scenes.BUDGET_EXHAUSTED
+    assert any(isinstance(w, routes.scenes.BudgetRefused) for w in exc.value.words)
+    assert routes.scenes._budget_overrun(exc.value)
+
+
+def test_a_re_send_cut_off_then_one_refused_is_the_clocks(client):
+    """The reviewer's probe, word for word: both routes refuse the field, the
+    primary's re-send is cut off by the clock as it runs, and the fallback's
+    is refused before it is sent. Before the routes were kept, the absorb read
+    this as a provider failure (`_budget_overrun` False)."""
+    _store(client)
+    _flagged(spare=True)
+    provider = SequencedProvider([_refused_schema(), _refused_schema()])
+    calls: list[object] = []
+
+    async def around(call, holder):
+        calls.append(call)
+        if len(calls) == 1:
+            return await call
+        call.close()
+        if len(calls) == 2:
+            raise LLMError("timeout", routes.scenes.BUDGET_EXHAUSTED)
+        raise routes.scenes.BudgetRefused("timeout", routes.scenes.BUDGET_EXHAUSTED)
+
+    with pytest.raises(LLMError) as exc:
+        _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+                around=around)
+    assert len(calls) == 3
+    assert exc.value.detail == (f"{routes.scenes.BUDGET_EXHAUSTED} — and the fallback "
+                                f"failed too: {routes.scenes.BUDGET_EXHAUSTED}")
+    assert [type(w).__name__ for w in exc.value.words] == ["LLMError", "BudgetRefused"]
+    assert routes.scenes._budget_overrun(exc.value)
+
+
+def test_a_composed_failure_nobodys_clock_stopped_is_not_an_overrun(client):
+    """The routes kept are asked, not assumed: two provider failures composed
+    are not the absorb's clock."""
+    composed = llm.routes_failed([LLMError("network", "connection reset"), _busy()])
+    assert [w.kind for w in composed.words] == ["network", "rate_limit"]
+    assert not routes.scenes._budget_overrun(composed)
+    assert llm.routes_failed([_busy()]).words == ()
+
+
+def test_a_batch_whose_every_chunk_answered_carries_no_error(client):
+    _store(client)
+    got = _decide(FakeLLM([[decision_reply({"over": True})]]), [_item()])
+    assert got.errors == ()
+    assert common._decide_error(got, "over") is None
 
 
 def test_each_refusing_route_is_retried_once_only(client):

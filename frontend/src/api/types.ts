@@ -2646,7 +2646,14 @@ export type ReconcileResult = {
   embedding: "off" | "configured" | "failure";
   llm: "off" | "ok" | "failed" | "skipped";
   reason: string;
+  /** The refusal's fixed kind (`incapable`, `missing_key`, ...) when `llm` is
+   *  "off"; "" otherwise. */
+  reason_kind: string;
   candidates: number; adjudicated: number;
+  /** Candidates the model's chunks did not read (a failed or garbled chunk
+   *  beside an answered one). Counted only on an `ok` sweep: a failed run
+   *  throws, so no result carries it. */
+  unanswered: number;
   pairs_capped: boolean; superseded: boolean;
   continuity: "ok" | "malformed";
   follow_on: boolean;
