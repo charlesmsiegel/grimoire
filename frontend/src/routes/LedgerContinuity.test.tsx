@@ -401,6 +401,55 @@ test("a sweep running on load is followed and its findings appear", async () => 
   expect(api.reconcileContinuity).not.toHaveBeenCalled();
 });
 
+describe("a followed sweep says what its model check did, as a Refresh does", () => {
+  async function followedTo(result: object | null) {
+    const followed = deferred<unknown>();
+    (api.continuityCandidates as any)
+      .mockResolvedValueOnce({
+        ...EMPTY_CANDIDATES,
+        run: { id: "r1", attempt_id: null, state: "running", next_index: 0 },
+      })
+      .mockResolvedValue(FINDINGS);
+    (api.awaitCampaignRun as any).mockReturnValue(followed.promise);
+    renderLedger("/campaigns/run/ledger/continuity/overlaps");
+    expect(await column().findByText("A continuity sweep is running.")).toBeInTheDocument();
+    await act(async () => {
+      followed.resolve({ id: "r1", attempt_id: null, state: "landed", next_index: 0, result });
+    });
+    expect(await main().findByRole("button", { name: /mara's map/i })).toBeInTheDocument();
+    expect(api.reconcileContinuity).not.toHaveBeenCalled();
+  }
+
+  test("a partial sweep", async () => {
+    await followedTo({ ...RESULT, llm: "ok", candidates: 3, adjudicated: 1, unanswered: 2 });
+    expect(await column().findByText(PARTIAL_NOTE)).toBeInTheDocument();
+  });
+
+  test("a sweep the model answered none of", async () => {
+    await followedTo({ ...RESULT, llm: "ok", candidates: 3, adjudicated: 0, unanswered: 3 });
+    expect(await column().findByText(NONE_NOTE)).toBeInTheDocument();
+  });
+
+  test("a model that cannot serve the sweep says why (M8)", async () => {
+    const why = "The Continuity checks route runs on the Decision role, which cannot generate.";
+    await followedTo({ ...RESULT, llm: "off", reason: why, reason_kind: "incapable" });
+    const shown = await column().findByText(
+      (text) => text.startsWith("The Continuity checks route"), { selector: "p.field-hint" });
+    expect(shown.textContent).toBe(`${why} Findings are listed without a suggested decision.`);
+  });
+
+  test("a whole answer, or a result that is not a sweep's, says nothing", async () => {
+    await followedTo({ ...RESULT, llm: "ok", candidates: 3, adjudicated: 3, unanswered: 0 });
+    expect(column().queryByText(/model/i, { selector: "p.field-hint" })).toBeNull();
+  });
+
+  test("a result missing its counts says nothing rather than guess", async () => {
+    await followedTo({ llm: "ok" });
+    expect(column().queryByText(PARTIAL_NOTE)).toBeNull();
+    expect(column().queryByText(NONE_NOTE)).toBeNull();
+  });
+});
+
 test("a followed sweep that fails still re-reads", async () => {
   (api.continuityCandidates as any)
     .mockResolvedValueOnce({

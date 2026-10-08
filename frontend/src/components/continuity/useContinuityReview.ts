@@ -63,6 +63,22 @@ export function landedNote(result: Pick<
   return null;
 }
 
+/** `landedNote` for a run read back by its handle -- a sweep this client
+ *  followed rather than started -- or null when there is nothing to say. A
+ *  handle's `result` is untyped JSON, so its fields are checked rather than
+ *  cast: a result missing one says nothing rather than a wrong sentence. */
+export function followedNote(result: Record<string, unknown> | null | undefined): string | null {
+  if (!result) return null;
+  const { llm, reason, reason_kind, adjudicated, unanswered } = result;
+  if (llm !== "off" && llm !== "ok" && llm !== "failed" && llm !== "skipped") return null;
+  if (typeof adjudicated !== "number" || typeof unanswered !== "number") return null;
+  return landedNote({
+    llm, adjudicated, unanswered,
+    reason: typeof reason === "string" ? reason : "",
+    reason_kind: typeof reason_kind === "string" ? reason_kind : "",
+  });
+}
+
 /** What a failed sweep still did: persist 1 landed before the model call. */
 export const FAILED_NOTE = "The model check did not finish — basic findings are listed.";
 /** A sweep that saved nothing: the start was refused, or persist 1 was. */
@@ -190,20 +206,25 @@ export function useContinuityReview(cid: string, epoch: number,
 
   /** Wait on a sweep this client did not start, then re-read, whatever it
    *  ended as: a sweep that failed after persist 1 still landed its
-   *  deterministic findings. */
+   *  deterministic findings. One that landed says what its model check did,
+   *  the same note a Refresh shows: End Scene's sweep is the one a reader is
+   *  most likely to be watching, so a partial or refused model check must not
+   *  be quieter here than on the button (§14 row G). */
   const follow = useCallback((handle: RunHandle) => {
     const signal = control.current?.signal;
     if (!signal || signal.aborted || latch.current) return;
     setSweep("follow");
     latch.current = (async () => {
+      let landed: RunHandle | null = null;
       try {
-        await api.awaitCampaignRun(cid, handle, signal);
+        landed = await api.awaitCampaignRun(cid, handle, signal);
       } catch {
         // Ended badly or could not be followed: either way, read what is there.
       }
       if (signal.aborted) return;
       latch.current = null;
       setSweep(null);
+      if (landed?.state === "landed") setRefreshNote(followedNote(landed.result));
       reread();
     })();
   }, [cid, reread]);
