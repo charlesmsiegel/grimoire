@@ -1440,9 +1440,9 @@ def parse_output(text: str, payload: dict) -> dict[str, dict] | None:
 #
 # The adjudication as `decide()` items (spec §7.4): one per candidate, its
 # context self-contained, asking the decision, a direction for a pair, and the
-# evidence scenes it shows. Nothing calls these until the switch;
-# `build_prompt` and `parse_output` above are still what the sweep sends and
-# reads.
+# evidence scenes it shows. These are what the sweep sends and reads
+# (`routes.continuity._adjudicate`); `build_prompt` and `parse_output` above
+# are the legacy one-call prompt's, which nothing sends any more.
 
 #: The id of each item's first question, a choice over its vocabulary's words.
 DECISION_ID = "decision"

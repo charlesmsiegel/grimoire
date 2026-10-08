@@ -774,10 +774,10 @@ CITED = {"quote": "I want that ledger back.", "speaker": "Winifred", "certainty"
 
 
 def _say(*answers):
-    """A resolver reply, through `parse_output` as the route reads one."""
-    return identity.parse_output(json.dumps({"decisions": [
-        {"row": row, "decision": word, "id": rid, "reason": f"because {row}"}
-        for row, word, rid in answers]}))
+    """Today's decision dicts, as `answers_of` hands them to
+    `Examination.decide`: one per `(row, word, id)`."""
+    return [{"row": row, "decision": word, "id": rid, "reason": f"because {row}"}
+            for row, word, rid in answers]
 
 
 def _assert_ledger_candidate(cid, sid, row):

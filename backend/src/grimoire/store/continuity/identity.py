@@ -645,8 +645,9 @@ def _decision(item: dict) -> dict:
 # ------------------------------------------------------- as decision items
 #
 # The check as `decide()` items (spec §7.4): one per examined row, asking
-# `decision` and then `id`. Nothing calls these until the switch; `build_prompt`
-# and `parse_output` above are still what absorb sends and reads.
+# `decision` and then `id`. These are what absorb sends and reads
+# (`routes.scenes._resolve_identity`); `build_prompt` and `parse_output` above
+# are the legacy one-call prompt's, which nothing sends any more.
 
 
 def _spelled(seen: set[str], spelling: str) -> bool:

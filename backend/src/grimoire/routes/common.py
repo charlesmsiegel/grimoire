@@ -26,7 +26,7 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import llm, llm_sampling, model_guidance, store
+from .. import decisions, llm, llm_sampling, model_guidance, store
 from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
@@ -1536,6 +1536,32 @@ def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None
     """
     resolved, why, _kind = _soft_resolved(resolve)
     return (None, why) if resolved is None else (resolved.conn, "")
+
+
+def _decide_error_kind(decision: decisions.Decision, qid: str) -> str:
+    """The provider error a decided batch must report as its own failure, or
+    "" when there is none to report (M12).
+
+    "" when some item's `qid` answer `was_read` -- the batch answered
+    something, and a chunk that failed beside it leaves only its own items
+    unanswered -- or when no item's answer carries reason ``error``, so
+    nothing failed and the call site reads the batch as it is. Otherwise every
+    chunk failed or was garbled, and at least one failed: the error kind of
+    the last ledger row `decide` filed with status ``error``, or ``"error"``
+    when the failed chunk filed none (nothing was sent, as with a budget that
+    refused the call). A chunk error beside a garbled chunk is then reported
+    as the error it was, never as an unreadable reply: a chunk's failure
+    survives only as that row's `error` and as `Answer(None, "error")`, not
+    as an exception."""
+    answers = [result.answers.get(qid) for result in decision.items]
+    if any(a is not None and decisions.was_read(a) for a in answers):
+        return ""
+    if not any(a is not None and a.reason == "error" for a in answers):
+        return ""
+    for row in reversed(decision.usage):
+        if row.get("status") == "error":
+            return str(row.get("error") or "error")
+    return "error"
 
 
 def computes_only(fn):

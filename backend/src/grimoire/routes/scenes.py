@@ -38,6 +38,7 @@ from . import tracker as tracker_routes
 from .common import (
     UsableInference,
     _campaign_root_or_404,
+    _decide_error_kind,
     _dump,
     _llm_http_error,
     _noting,
@@ -2068,31 +2069,63 @@ def _identity_status(exam: continuity_identity.Examination,
     return "ok", None
 
 
-async def _resolve_identity(cid: str, sid: str, client: LLMClient, conn: dict | None,
-                            why: str, exam: continuity_identity.Examination,
+async def _resolve_identity(cid: str, sid: str, client: LLMClient,
+                            resolved: UsableInference | None, why: str,
+                            exam: continuity_identity.Examination,
                             budget: _Budget, block: dict) -> None:
     """Decide `exam`'s rows, recording the outcome in `block`: no rows, no
-    connection, or the one batched resolver call. Raises what that call
-    raises; `_identify` turns it into the phase's status."""
+    resolution, or `decide()` over one item per examined row (spec 7.4),
+    chunked at `decisions.MAX_ITEMS_PER_CALL` with one metered call per
+    chunk. Raises what `decide` raises when no chunk answered (an `LLMError`,
+    `BudgetRefused` among them) or the request is refused before anything is
+    sent (`decisions.DecideRequestError`); `_identify` turns either into the
+    phase's status."""
     unavailable = _embedding_reason(cid, sid, exam, budget, block)
     if not exam.rows:
         block.update(status="degraded" if unavailable else "skipped",
                      reason=unavailable or "no close existing records")
         return
-    if conn is None:
+    if resolved is None:
         reason = why or "no connection"
         exam.hint_only(reason)
         block.update(status="failed", reason=reason)
         return
-    with store.usage.meter("continuity-identity", campaign=cid, scene=sid) as m:
-        reply = await budget.run(
-            client.complete(continuity_identity.build_prompt(exam.prompt_rows()), conn, m.usage),
-            lambda: block.__setitem__("attempted", True),
-            on_timeout=_noting(client, conn, m.usage))
-    if not continuity_identity.take(exam, continuity_identity.parse_output(reply)):
+    rows = exam.prompt_rows()
+    # Both render templates, so both run off the loop (the loader stats files).
+    items = await run_in_threadpool(continuity_identity.build_items, rows, exam.live)
+    explain = await run_in_threadpool(continuity_identity.explain)
+    # The absorb budget runs INSIDE each chunk's meter (`around`), as it ran
+    # inside this phase's own meter before: an overrun is that meter's
+    # `error/timeout` row, a chunk the spent budget refuses is never sent, and
+    # `_noting` reads the live holder, so a fallback that had taken over is the
+    # connection told. The attempt is recorded by `run`, which alone can decide
+    # it atomically with the deadline.
+    decision = await operations.decide(
+        "continuity-identity", items, client=client, resolved=resolved, explain=explain,
+        campaign=cid, scene=sid,
+        around=lambda call, holder: budget.run(
+            call, lambda: block.__setitem__("attempted", True),
+            on_timeout=_noting(client, resolved.conn, holder)))
+    if kind := _decide_error_kind(decision, continuity_identity.DECISION_ID):
+        # A chunk failed and no chunk was read: the failure is the phase's
+        # (M12), by its kind -- a chunk's error survives only as its ledger
+        # row's -- never the unreadable reply the garbled chunk beside it was.
+        if budget.spent():
+            exam.hint_only(_IDENTITY_REFUSED)
+            block.update(status="failed", budget_exhausted=True, reason=_IDENTITY_REFUSED)
+        else:
+            reason = f"duplicate check failed: {kind}"
+            exam.hint_only(reason)
+            block.update(status="failed", reason=reason)
+        return
+    if not continuity_identity.take(exam, continuity_identity.answers_of(rows, decision.items)):
         block.update(status="failed", reason=continuity_identity.UNREADABLE)
         return
     block["status"], block["reason"] = _identity_status(exam, unavailable)
+    # A row a refused or failed chunk never reached is `unchecked`; when the
+    # clock is why, the phase says so.
+    block["budget_exhausted"] = block["budget_exhausted"] or (
+        budget.spent() and exam.counts()["unchecked"] > 0)
 
 
 def _identity_outcome(cid: str, sid: str, exam: continuity_identity.Examination | None,
@@ -2110,13 +2143,15 @@ def _identity_outcome(cid: str, sid: str, exam: continuity_identity.Examination 
     return result
 
 
-async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, why: str,
-                    parsed: dict, prepared: _Prepared, budget: _Budget) -> tuple[dict, dict]:
+async def _identify(cid: str, sid: str, client: LLMClient, resolved: UsableInference | None,
+                    why: str, parsed: dict, prepared: _Prepared,
+                    budget: _Budget) -> tuple[dict, dict]:
     """The identity phase (spec §10.4): `(parsed_for_materialize, block)`.
 
     Examines the extraction's proposed-new threads and commitments against
     the stored same-type records and, when any has a plausible neighbour,
-    asks ONE batched resolver call which are the same business. Never raises
+    asks `decide()` which are the same business: one item per examined row,
+    one metered call per chunk of them (`_resolve_identity`). Never raises
     but for `Abandoned` and cancellation: every failure -- the examination,
     the embeddings provider, the routed call, its reply, the rewrite -- is
     this phase's status, and the extraction's rows still stage. `matching`
@@ -2130,11 +2165,11 @@ async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, wh
     if not continuity_identity.has_proposals(parsed):
         return parsed, block
     exam: continuity_identity.Examination | None = None
-    # With no connection the resolver can never run, so the step is
+    # With no resolution the check can never run, so the step is
     # deterministic neighbours only (§10.4): no deadline embeds nothing, and
     # vectors already cached still score. Embedding would send campaign prose
     # to the provider, on the extraction's critical path, for no decision.
-    embed_deadline = (None if conn is None
+    embed_deadline = (None if resolved is None
                       else continuity_similarity.deadline(budget.remaining()))
     try:
         exam = await run_in_threadpool(
@@ -2146,7 +2181,7 @@ async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, wh
             # proposed-new (§10.2), so this is the empty extraction's skip --
             # nothing embedded, nothing to rewrite, and (§29) no log row.
             return parsed, block
-        await _resolve_identity(cid, sid, client, conn, why, exam, budget, block)
+        await _resolve_identity(cid, sid, client, resolved, why, exam, budget, block)
     except Abandoned:
         raise
     except BudgetRefused:
@@ -2172,7 +2207,8 @@ async def _identify(cid: str, sid: str, client: LLMClient, conn: dict | None, wh
 
 async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClient,
                                 prepared: _Prepared, budget: _Budget,
-                                ident_conn: dict | None, ident_why: str) -> tuple[dict, dict]:
+                                ident_resolved: UsableInference | None,
+                                ident_why: str) -> tuple[dict, dict]:
     """The extraction, then the identity phase chained onto it.
 
     `extraction` is the already-built extraction awaitable: its
@@ -2180,7 +2216,7 @@ async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClien
     meter, so the usage guard sees it metered. Its failure stays fatal; the
     identity phase never raises for absorb."""
     text = await extraction
-    return await _identify(cid, sid, client, ident_conn, ident_why,
+    return await _identify(cid, sid, client, ident_resolved, ident_why,
                            store.absorb.parse_output(text), prepared, budget)
 
 
@@ -3044,16 +3080,17 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # report instead of raising: these four promise never to fail an
         # absorb, so a route pointing one of them at a keyless connection has
         # to come back as that phase's status rather than as a 409 that
-        # discards the extraction's result too. Voice drift keeps the whole
-        # resolution, since `decide()` takes one (spec 7.4).
+        # discards the extraction's result too. Voice drift and the identity
+        # check keep the whole resolution, since `decide()` takes one (spec
+        # 7.4).
         dossier_conn, dossier_why = _soft_inference(
             lambda: require_inference("dossier", cid))
         voice_resolved, voice_why, _voice_kind = _soft_resolved(
             lambda: require_inference("voice-drift", cid, operation="decide"))
         audit_conn, audit_why = _soft_inference(
             lambda: require_inference("audit", cid))
-        ident_conn, ident_why = _soft_inference(
-            lambda: require_inference("continuity-identity", cid))
+        ident_resolved, ident_why, _ident_kind = _soft_resolved(
+            lambda: require_inference("continuity-identity", cid, operation="decide"))
         with store.usage.meter("absorb", campaign=cid, scene=sid) as m:
             # ONE race, around the whole fan-out, rather than a predicate
             # threaded into each phase. Two reasons, and the second is the one
@@ -3074,7 +3111,7 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
                 _extract_and_identify(
                     budget.run(client.complete(prepared.messages, conn, m.usage),
                                on_timeout=_noting(client, conn, m.usage)),
-                    cid, sid, client, prepared, budget, ident_conn, ident_why),
+                    cid, sid, client, prepared, budget, ident_resolved, ident_why),
                 _stage_dossiers(cid, sid, prepared.transcript, client, dossier_conn,
                                 budget, unroutable=dossier_why),
                 _stage_voice_drift(cid, sid, prepared.transcript, client, voice_resolved,

@@ -193,8 +193,8 @@ def _drive_continuity(client, wid, cid, sid):
     # plausible stored neighbour, so one is seeded -- in the absorbed scene
     # itself, so the structural clause applies too, though the proposed title
     # clears the lexical floors on its own. Every call answers with the
-    # extraction: the resolver reads it as a decodable reply with no decisions
-    # (the phase is `degraded`), and the assertion is only about which
+    # extraction: the check reads it as an object holding no item (the phase
+    # is `degraded`), and the assertion is only about which
     # connection the check used, so the extraction's request is forgotten.
     pid, title, beat = review_runs.LEDGER_THREAD
     store.plot.set_movement(cid, pid, title, "open", beat, sid)
@@ -339,7 +339,9 @@ def test_the_reconcile_sweep_runs_on_the_continuity_route(client):
     assert r.status_code == 200, r.json()
     assert r.json()["llm"] == "ok"
     sweeps = [req for req in fake.requests
-              if "You are reviewing a campaign's story ledger" in req["messages"][0]["content"]]
+              if "You answer closed questions about material you are given."
+              in req["messages"][0]["content"]
+              and "Candidate — " in req["messages"][1]["content"]]
     assert sweeps, "the sweep made no reconcile call"
     assert {req["conn"]["id"] for req in sweeps} == {routed}
 

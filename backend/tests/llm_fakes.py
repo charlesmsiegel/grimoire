@@ -348,16 +348,22 @@ class FakeLLM:
         return self.turns[min(index, len(self.turns) - 1)]
 
 
-def decision_reply(*answers: dict, rationales: Sequence[str] = ()) -> str:
+def decision_reply(*answers: dict | None, rationales: Sequence[str] = ()) -> str:
     """A structured decision's reply, as `decisions.schema` shapes it (slice
     F): `answers[i]` is item `i`'s `{question_id: value}`, and `rationales[i]`
     (when given) its rationale. Returns the JSON string
     `{"<i>": {"answers": ..., "rationale"?: ...}}`.
 
+    A `None` answer omits index `i` from the reply altogether, so a test can
+    answer item 1 alone and leave item 0 unread (`decisions.NO_ITEM`) -- what a
+    reply that never reached an item looks like.
+
     The one way a test writes a decide reply, so a change to the reply's
     shape is made here once rather than in every hand-written string."""
     body: dict[str, dict] = {}
     for index, answer in enumerate(answers):
+        if answer is None:
+            continue
         entry: dict = {"answers": dict(answer)}
         if index < len(rationales):
             entry["rationale"] = rationales[index]

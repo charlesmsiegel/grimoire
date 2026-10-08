@@ -14,29 +14,45 @@ sleep.
 from __future__ import annotations
 
 import asyncio
+import functools
 import json
 import logging
+import re
 
 import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import routes
+from grimoire import decisions, routes
+from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import continuity as continuity_routes
 from grimoire.routes import runs
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import candidates, canon, doc, reconcile, similarity
 
-from . import draft_runs, review_runs
-from .llm_fakes import Cassette, FakeEmbeddings, HeldCassette, from_cassette, from_entries
+from . import draft_runs, inference_fixtures, review_runs
+from .llm_fakes import (
+    Cassette,
+    FakeEmbeddings,
+    FakeLLM,
+    HeldCassette,
+    decision_reply,
+    from_cassette,
+    from_entries,
+)
 from .review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER
 from .test_absorb_identity import MODES as SHARED_MODES
 from .test_absorb_identity import ROW_ENVELOPE, _dumped, _leaked, _row_texts
 from .test_continuity_reconcile import _chores as chores
 from .test_continuity_reconcile import _configure as configure_embeddings
 
-SYSTEM = "You are reviewing a campaign's story ledger"
+#: What marks a request as the sweep's: the decide system phrase every
+#: decision carries, and the heading only a reconcile item's context holds
+#: (`continuity_reconcile/item.j2`).
+SYSTEM = "You answer closed questions about material you are given."
+ITEM = "Candidate — "
+WHEN = {"system_contains": SYSTEM, "user_contains": ITEM}
 LEDGER = f"thread:{LEDGER_THREAD[0]}"
 RECOVER = "thread:recover-the-harbour-ledger"
 OATH = "commitment:mara-s-oath"
@@ -74,21 +90,24 @@ def _install(client, fake):
     return fake
 
 
-def _reply(*decisions) -> str:
-    return json.dumps({"decisions": list(decisions)})
+def _reply(*answers: dict | None, rationales: tuple[str, ...] = ()) -> str:
+    """A decide reply: one answer per selected candidate, in selection order
+    (a None leaves that index out), each with `REASON` as its rationale unless
+    `rationales` says otherwise."""
+    return decision_reply(*answers, rationales=rationales or (REASON,) * len(answers))
 
 
 def _entry(reply: str) -> dict:
-    return {"when": {"system_contains": SYSTEM}, "reply": reply}
+    return {"when": WHEN, "reply": reply}
 
 
-def _held(reply: str = '{"decisions": []}') -> HeldCassette:
-    return HeldCassette([_entry(reply)], hold={"system_contains": SYSTEM})
+def _held(reply: str = "{}") -> HeldCassette:
+    return HeldCassette([_entry(reply)], hold=WHEN)
 
 
-def _duplicate(key: str = "c1") -> dict:
-    return {"candidate": key, "decision": "duplicate", "from": "B", "to": "A",
-            "reason": REASON}
+def _duplicate() -> dict:
+    """A possible duplicate's answers: B duplicates A."""
+    return {"decision": "duplicate", "from": "B", "to": "A"}
 
 
 def _refresh(client, cid: str, attempt: str | None = None):
@@ -105,7 +124,9 @@ def _settled(client, cid: str, resp) -> dict:
 def _reconcile_requests(fake) -> list[dict]:
     return [r for r in fake.requests
             if any(m.get("role") == "system" and SYSTEM in m.get("content", "")
-                   for m in r["messages"])]
+                   for m in r["messages"])
+            and any(m.get("role") == "user" and ITEM in m.get("content", "")
+                    for m in r["messages"])]
 
 
 def _records(cid: str) -> dict:
@@ -176,7 +197,7 @@ def test_an_llm_failure_keeps_deterministic_candidates(client):
     _wid, cid, sid = _campaign(client)
     _threads(cid, sid)
     _key(client)
-    _install(client, from_entries([{"when": {"system_contains": SYSTEM},
+    _install(client, from_entries([{"when": WHEN,
                                      "error": {"kind": "network",
                                                "message": "connection reset"}}]))
 
@@ -355,9 +376,8 @@ def test_a_duplicate_proposal_mutates_nothing_until_apply(client):
     assert before[5] is not None and before[6] is not None
     _key(client)
     _install(client, from_entries([_entry(_reply(
-        _duplicate("c1"),
-        {"candidate": "c2", "decision": "before", "from": "A", "to": "B",
-         "reason": "The oath falls before the crowning."}))]))
+        _duplicate(), {"decision": "before"},
+        rationales=(REASON, "The oath falls before the crowning.")))]))
 
     run = _settled(client, cid, _refresh(client, cid))
 
@@ -403,7 +423,7 @@ def test_a_deleted_campaign_run_writes_nothing(client):
     temporal = _temporal(client, cid)
     _key(client)
     held = _install(client, _held(_reply(
-        {"candidate": "c1", "decision": "before", "reason": "The oath falls first."})))
+        {"decision": "before"}, rationales=("The oath falls first.",))))
     resp = _refresh(client, cid, attempt="a-delete")
     assert resp.status_code == 202, resp.text
     run = client.app.state.runs.for_attempt(runs.campaign_subject(cid), "a-delete")
@@ -489,8 +509,8 @@ def test_reconcile_log_row_carries_counts_only(client):
 #: decision word.
 RECONCILE_ROW_KEYS = ({"kind", "campaign", "sweep", "matching", "embedding",
                        "embedding_error", "llm", "continuity", "candidates",
-                       "deterministic", "semantic", "adjudicated", "pairs_capped",
-                       "superseded"} | set(continuity_routes._WORDS))
+                       "deterministic", "semantic", "adjudicated", "unanswered",
+                       "pairs_capped", "superseded"} | set(continuity_routes._WORDS))
 #: field -> the values it may take: the three shared with the identity row,
 #: then the sweep's own.
 MODES = {**{k: SHARED_MODES[k] for k in ("matching", "embedding", "embedding_error")},
@@ -860,7 +880,11 @@ def test_a_follow_on_pass_embeds_within_what_the_run_has_left(client, monkeypatc
 
     assert run["state"] == "landed", run
     assert run["result"]["follow_on"] is True
-    assert len(_reconcile_requests(fake)) == 2           # two passes ran
+    # Two passes ran, each asking every finding it selected (one call per
+    # chunk of them, so the request count is not the pass count).
+    assert len([r for r in store.logs.scan(level="info", campaign=cid)
+                if r.get("message") == "continuity reconcile"]) == 2
+    assert _reconcile_requests(fake)
     sent = [text for call in double.calls for text in call]
     assert set(sent) <= set(texts.values())
     assert len(sent) <= 4, sent
@@ -1279,10 +1303,13 @@ def test_a_burst_of_adopters_coalesces_into_one_follow_on(client):
 
 
 def _touched_ids(request: dict) -> list[str]:
-    """The record id of every touched re-check block in one reconcile prompt."""
-    blocks = _touched_in(request).split("\n\nCandidate ")
-    return [b.split("(plot thread): ", 1)[1].split(":", 1)[0]
-            for b in blocks if b.rstrip().endswith(TOUCHED)]
+    """The record id of every touched re-check item in one reconcile request:
+    each item's context (between its `Item <n>` heading and its questions)
+    whose signal line ends with `TOUCHED`."""
+    items = re.split(r"(?:\A|\n\n)Item \d+\n\n", _touched_in(request))[1:]
+    contexts = [item.split("\n\nQuestions:", 1)[0] for item in items]
+    return [c.split("(plot thread): ", 1)[1].split(":", 1)[0]
+            for c in contexts if c.rstrip().endswith(TOUCHED)]
 
 
 def test_a_capped_sweep_says_so_in_its_run_and_log_row(client, monkeypatch):
@@ -1333,3 +1360,227 @@ def test_sweep_work_runs_off_the_event_loop(client, monkeypatch):
     for name, record in seen.items():
         assert record, f"{name} never ran"
         assert all(record), f"{name} ran on the event loop"
+
+
+# ------------------------------------------- through decide() (slice G)
+#
+# The sweep is one `inference.decide()` item per selected candidate, chunked
+# at `decisions.MAX_ITEMS_PER_CALL` with one metered call per chunk, on the
+# continuity route's Decision role.
+
+#: Each candidate item's heading, by what it asks (`reconcile.LABELS`).
+PAIR_ITEM = ITEM + reconcile.LABELS["same_thread"]
+TEMPORAL_ITEM = ITEM + reconcile.LABELS["temporal"]
+
+
+def _two_candidates(client) -> tuple[str, str]:
+    """`(cid, temporal)`: the possible duplicate `PAIR`, selected first, and a
+    model-only temporal nomination, selected second -- and nothing else."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    store.clock.advance(cid, to="2026-05-10")
+    store.commitments.set_movement(cid, "mara-s-oath", "Mara's oath", "promise", "open",
+                                   "before the bells stop", "Mara swore it.", sid)
+    event = "event:" + store.events.create(cid, "The coronation", "2026-05-13")
+    return cid, canon.candidate_id("possible_relation", [OATH, event])
+
+
+def _one_per_chunk(monkeypatch):
+    """`decide()` chunks one item per call, so two candidates are two calls."""
+    monkeypatch.setattr(decisions, "chunks", functools.partial(decisions.chunks, size=1))
+
+
+def _sweep_rows(cid: str) -> list[dict]:
+    return [r for r in store.usage.calls(campaign=cid)
+            if r.get("task") == "continuity-reconcile"]
+
+
+def _user(request: dict) -> str:
+    return next(m["content"] for m in request["messages"] if m["role"] == "user")
+
+
+def test_the_sweep_asks_decide_one_item_per_candidate(client):
+    cid, temporal = _two_candidates(client)
+    _key(client)
+    fake = _install(client, from_entries([_entry(_reply(
+        _duplicate(), {"decision": "before"},
+        rationales=(REASON, "The oath falls before the crowning.")))]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert (run["result"]["llm"], run["result"]["adjudicated"],
+            run["result"]["unanswered"]) == ("ok", 2, 0)
+    [request] = _reconcile_requests(fake)
+    user = _user(request)
+    assert "Item 0\n\n" in user and "Item 1\n\n" in user
+    assert user.index(PAIR_ITEM) < user.index(TEMPORAL_ITEM)
+    assert reconcile.explain() in user
+    schema = fake.schemas[fake.requests.index(request)]
+    assert set(schema["properties"]) == {"0", "1"}
+    records = _records(cid)
+    assert (records[PAIR]["proposal"]["decision"], records[PAIR]["proposal"]["reason"]) == (
+        "duplicate", REASON)
+    assert records[temporal]["proposal"]["decision"] == "before"
+
+
+def test_a_failed_chunk_keeps_the_other_chunks_proposals(client, monkeypatch):
+    cid, temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    _install(client, from_entries([
+        {"when": {**WHEN, "user_contains": TEMPORAL_ITEM},
+         "error": {"kind": "network", "message": "connection reset"}},
+        _entry(_reply(_duplicate()))]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    result = run["result"]
+    assert (result["llm"], result["adjudicated"], result["unanswered"]) == ("ok", 1, 1)
+    records = _records(cid)
+    assert records[PAIR]["proposal"]["decision"] == "duplicate"
+    # A model-only nomination is written by persist 2 alone, so one with no
+    # proposal is not in the cache at all.
+    assert (records.get(temporal) or {}).get("proposal") is None
+    assert sorted(r["status"] for r in _sweep_rows(cid)) == ["error", "ok"]
+
+
+def test_a_garbled_chunk_beside_an_answered_one_gets_no_proposal(client, monkeypatch):
+    """I1: a candidate the reply never reached is unanswered -- no proposal,
+    never `uncertain` -- and the next sweep asks it again."""
+    cid, temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    _install(client, FakeLLM([["no json"], [_reply({"decision": "before"})]]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    result = run["result"]
+    assert (result["llm"], result["adjudicated"], result["unanswered"]) == ("ok", 1, 1)
+    records = _records(cid)
+    assert records[PAIR]["proposal"] is None
+    assert records[temporal]["proposal"]["decision"] == "before"
+    again = _install(client, from_entries([_entry("{}")]))
+    assert _settled(client, cid, _refresh(client, cid))["state"] == "landed"
+    [asked] = _reconcile_requests(again)
+    assert PAIR_ITEM in _user(asked)
+
+
+@pytest.mark.parametrize("order", ["garbled-then-error", "error-then-garbled"])
+def test_an_errored_chunk_beside_a_garbled_one_reports_the_error(client, monkeypatch, order):
+    """M12: with nothing read, a chunk's provider error is what the run reports,
+    by its kind -- never `undecodable` -- and persist 1's findings stand."""
+    cid, _temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    if order == "garbled-then-error":
+        _install(client, FakeLLM([["no json"]], error=LLMError("network", "connection reset"),
+                                 fail_after=1))
+    else:
+        _install(client, from_entries([
+            {"when": {"user_contains": PAIR_ITEM},
+             "error": {"kind": "network", "message": "connection reset"}},
+            {"when": {}, "reply": "no json"}]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "failed", run
+    assert (run["error"]["kind"], run["error"]["status"]) == ("network", 502)
+    assert run["error"]["saved"] is True
+    assert run["result"]["llm"] == "failed"
+    assert PAIR in _records(cid)
+    assert _records(cid)[PAIR]["proposal"] is None
+
+
+def test_a_closure_without_a_rationale_is_stored_with_an_empty_reason(client):
+    """I4: a status verdict stands on the evidence scene it cites; with no
+    rationale it is stored with `reason: ""`, nothing invented in its place."""
+    _wid, cid, _sid = _campaign(client)
+    dated = store.scenes.set_datetime(
+        cid, store.scenes.create_scene(cid, "Saltmarch quay"), "2026-05-01")["id"]
+    store.plot.set_movement(cid, "mara-s-map", "Mara's map", "open",
+                            "The map turned up in Saltmarch.", dated)
+    store.clock.advance(cid, to="2026-07-15")
+    closure = canon.candidate_id("possible_thread_closure", ["thread:mara-s-map"])
+    _key(client)
+    _install(client, from_entries([_entry(decision_reply(
+        {"decision": "close", "evidence_scene": dated}))]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    proposal = _records(cid)[closure]["proposal"]
+    assert (proposal["decision"], proposal["status"], proposal["reason"]) == (
+        "close", "closed", "")
+    assert proposal["evidence_scenes"] == [dated]
+
+
+@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
+                         ids=["spare", "same-provider"])
+def test_the_sweep_on_a_decide_only_model_answers_on_the_fallback(client, on):
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.decide_only(client, fallback=True, on=on)
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "ok"
+    [sent] = _reconcile_requests(fake)
+    assert (sent["conn"]["id"], sent["conn"]["model"]) == on
+    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+
+
+def test_the_sweep_without_a_generating_fallback_lands_with_llm_off(client):
+    """With no generating fallback the seam refuses (`incapable`): the sweep
+    lands with `llm: "off"` and the refusal's sentence, and persist 1's
+    findings stand."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.decide_only(client, fallback=False)
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+
+    resp = _refresh(client, cid)
+    run = _settled(client, cid, resp)
+
+    assert resp.status_code == 202
+    assert run["state"] == "landed", run
+    assert run["result"]["llm"] == "off"
+    assert run["result"]["reason"].startswith(
+        "The Continuity checks route runs on the Decision role (vendor/decider on "
+        "OpenRouter)"), run["result"]["reason"]
+    assert PAIR in _records(cid)
+    assert fake.requests == []
+
+
+def test_the_decision_role_now_serves_the_sweep(client):
+    """The continuity route's default flipped from Fast to Decision: a Decision
+    role set on its own is what the sweep runs on."""
+    _wid, cid, sid = _campaign(client)
+    _threads(cid, sid)
+    inference_fixtures.format2(client)
+    inference_fixtures.put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "spare", "model": "vendor/spare"}}}})
+    fake = _install(client, from_entries([_entry(_reply(_duplicate()))]))
+
+    run = _settled(client, cid, _refresh(client, cid))
+
+    assert run["state"] == "landed", run
+    [sent] = _reconcile_requests(fake)
+    assert (sent["conn"]["id"], sent["conn"]["model"]) == ("spare", "vendor/spare")
+
+
+def test_sweep_rows_file_decide_and_structured(client, monkeypatch):
+    cid, _temporal = _two_candidates(client)
+    _key(client)
+    _one_per_chunk(monkeypatch)
+    _install(client, from_entries([_entry(_reply(_duplicate()))]))
+
+    assert _settled(client, cid, _refresh(client, cid))["state"] == "landed"
+
+    rows = _sweep_rows(cid)
+    assert len(rows) == 2
+    assert {(r["operation"], r["decision_mode"]) for r in rows} == {("decide", "structured")}

@@ -25,12 +25,13 @@ the play view's Changes panel. A refusal is a `review.RefusedError`, answered as
 campaign subject, kind ``continuity-reconcile``, at most one live per campaign:
 `POST .../continuity/reconcile` starts a full sweep (202 and the run to poll),
 and End Scene an incremental one through `schedule_reconcile`. The run
-discovers, persists what it found, asks the ``continuity-reconcile``
-connection about the findings with no proposal -- one call, when a connection
-resolves -- and persists the proposals. Discovery and both persists live in
-`store.continuity.reconcile`; the routed call, its meter and the run's work
-live here, because `test_routing_guard` and `test_usage_guard` read only
-`routes/`. Nothing the run does writes a ledger (§11.5).
+discovers, persists what it found, asks ``continuity-reconcile`` about the
+findings with no proposal -- `decide()`, one item per finding and one metered
+call per chunk of them, when the route resolves -- and persists the proposals.
+Discovery, the items and both persists live in `store.continuity.reconcile`;
+the routed resolution, the `decide` call and the run's work live here, because
+`test_routing_guard` reads only `routes/`. Nothing the run does writes a
+ledger (§11.5).
 """
 
 from __future__ import annotations
@@ -45,7 +46,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
-from .. import store
+from .. import decisions, store
+from .. import inference as operations
 from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.continuity import (
@@ -62,9 +64,10 @@ from . import ledger as ledger_routes
 from . import runs
 from .common import (
     _bounded_call,
+    _decide_error_kind,
     _llm_http_error,
     _noting,
-    _soft_inference,
+    _soft_resolved,
     computes_only,
     get_llm,
     require_inference,
@@ -92,6 +95,10 @@ _KIND = "continuity-reconcile"
 #: A ledger edit's kind -> the ref prefix of the record it moves.
 _TOUCHED_PREFIX = {"plot": "thread", "commitment": "commitment"}
 _UNDECODABLE = "the reconciliation check returned no readable answer"
+#: A chunk failed and no chunk was read (M12): the run fails with that error's
+#: kind, and says the findings it did answer came back unreadable.
+_CHUNKS_FAILED = ("the model check failed, and returned nothing readable for the findings "
+                  "it did answer")
 _MALFORMED = "continuity.json is malformed; nothing this sweep found was saved"
 #: The same refusal at persist 2, when persist 1's findings already stand.
 _MALFORMED_PROPOSALS = "continuity.json is malformed; the model's suggestions were not saved"
@@ -585,8 +592,8 @@ async def _persist(run, call: Callable[[], dict]) -> dict:
 def _blank_result(full: bool, sweep: reconcile.Sweep) -> dict:
     return {"sweep": "full" if full else "incremental", "matching": sweep.matching,
             "embedding": sweep.embedding, "llm": "off", "reason": "", "candidates": 0,
-            "adjudicated": 0, "pairs_capped": sweep.pairs_capped, "superseded": False,
-            "continuity": sweep.continuity, "follow_on": False}
+            "adjudicated": 0, "unanswered": 0, "pairs_capped": sweep.pairs_capped,
+            "superseded": False, "continuity": sweep.continuity, "follow_on": False}
 
 
 def _failed(result: dict, error: dict) -> dict:
@@ -623,34 +630,60 @@ def _stopped(persisted: dict, result: dict, malformed: str = _MALFORMED) -> dict
 
 async def _adjudicate(run, cid: str, client: LLMClient, sweep: reconcile.Sweep,
                       result: dict, stillborn: Callable[[], bool]) -> tuple[dict, dict]:
-    """Steps 4-6: the one routed call over `select`'s findings, and persist 2.
-    ``(outcome, proposals)``. No connection is ``llm: "off"`` with the reason;
-    nothing to ask is ``"skipped"``. A provider failure or an undecodable
-    reply fails the run, and persist 1's findings stand (§26)."""
-    conn, why = await run_in_threadpool(
-        _soft_inference, lambda: require_inference("continuity-reconcile", cid))
+    """Steps 4-6: `decide()` over `select`'s findings, one item per finding
+    and one metered call per chunk of them, and persist 2.
+    ``(outcome, proposals)``. No resolution is ``llm: "off"`` with the reason;
+    nothing to ask is ``"skipped"``. A provider failure with no chunk
+    answered, a chunk error with nothing read, or no chunk holding an object
+    fails the run, and persist 1's findings stand (§26). A finding the reply
+    never reached (a failed or garbled chunk beside an answered one) is
+    counted `unanswered`: it gets no proposal, never ``uncertain``, and the
+    next sweep asks it again (I1)."""
+    resolved, why, _kind = await run_in_threadpool(
+        _soft_resolved,
+        lambda: require_inference("continuity-reconcile", cid, operation="decide"))
     selected = await run_in_threadpool(reconcile.select, cid, sweep)
-    if conn is None:
+    if resolved is None:
         result.update(llm="off", reason=why)
         return {"state": "landed", "result": result}, {}
     if not selected:
         result["llm"] = "skipped"
         return {"state": "landed", "result": result}, {}
     payload = await run_in_threadpool(reconcile.build_payload, cid, selected)
+    # Both render templates, so both run off the loop (the loader stats files).
+    items = await run_in_threadpool(reconcile.build_items, payload)
+    explain = await run_in_threadpool(reconcile.explain)
     try:
-        with store.usage.meter("continuity-reconcile", campaign=cid) as m:
-            text = await _bounded_call(
-                client.complete(reconcile.build_prompt(payload), conn, m.usage),
-                on_timeout=_noting(client, conn, m.usage))
+        # Each chunk runs under the full ceiling, inside its own meter
+        # (`around`): an overrun is that meter's `error/timeout` row, noted
+        # against the connection the live holder says was answering.
+        decision = await operations.decide(
+            "continuity-reconcile", items, client=client, resolved=resolved, explain=explain,
+            campaign=cid,
+            around=lambda call, holder: _bounded_call(
+                call, on_timeout=_noting(client, resolved.conn, holder)))
     except LLMError as exc:
         result["llm"] = "failed"
         return _failed(result, run_error(_llm_http_error(exc))), {}
-    proposals = reconcile.parse_output(text, payload)
+    except decisions.DecideRequestError as exc:
+        # The builder makes this unreachable, but a defect must fail the run,
+        # never the task group around it.
+        store.errors.record_exception(exc, "continuity-reconcile", campaign=cid)
+        result["llm"] = "failed"
+        return _failed(result, {"kind": "invalid_request", "detail": str(exc),
+                                "status": 500}), {}
+    if kind := _decide_error_kind(decision, reconcile.DECISION_ID):
+        # A chunk failed and no chunk was read (M12): the run fails with that
+        # error, never as an undecodable reply.
+        result["llm"] = "failed"
+        return _failed(result, {"kind": kind, "detail": _CHUNKS_FAILED, "status": 502}), {}
+    proposals = reconcile.proposals_of(payload, decision.items)
     if proposals is None:
         result["llm"] = "failed"
         return _failed(result, {"kind": "undecodable", "detail": _UNDECODABLE,
                                 "status": 502}), {}
-    result.update(llm="ok", adjudicated=len(proposals))
+    result.update(llm="ok", adjudicated=len(proposals),
+                  unanswered=len(selected) - len(proposals))
     second = await _persist(run, lambda: reconcile.persist_proposals(
         cid, sweep, proposals, stillborn=stillborn))
     return (_stopped(second, result, _MALFORMED_PROPOSALS)
@@ -671,7 +704,8 @@ def _log_pass(cid: str, sweep: reconcile.Sweep, result: dict, proposals: dict) -
         llm=result["llm"], continuity=result["continuity"], candidates=result["candidates"],
         deterministic=sum(via != "semantic" for via in vias),
         semantic=sum(via == "semantic" for via in vias),
-        adjudicated=result["adjudicated"], pairs_capped=result["pairs_capped"],
+        adjudicated=result["adjudicated"], unanswered=result["unanswered"],
+        pairs_capped=result["pairs_capped"],
         superseded=result["superseded"], **decided)
 
 
