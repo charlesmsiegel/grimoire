@@ -554,7 +554,6 @@ def grade_reconcile(text: str, expected: dict[str, dict],
          for key, want in expected.items() if key in by_key]
 
 
-
 def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload: dict,
                              expected: dict[str, dict]) -> list[Check]:
     """The reconciliation sweep through `decide()`: does the reply decode,
@@ -608,6 +607,7 @@ def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload
 def _answer_of(result: decisions.ItemResult, question: str) -> object:
     answer = result.answers.get(question)
     return answer.answer if answer is not None else None
+
 
 # ----------------------------------------------------------- scene suggestions
 

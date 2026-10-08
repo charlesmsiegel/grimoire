@@ -1050,6 +1050,21 @@ RECONCILE_INPUTS = {
                               {"title": "The coronation", "status": "", "kind": "",
                                "due": "2026-05-13"})],
             "the commitment's due could not be placed on the calendar; the event is in 3 days")]},
+    # A closure showing four scenes (three beats and the recent window's
+    # line), so an item asks the most evidence questions and leaves one out.
+    "four-scenes": {
+        "now": "", "recent": ["004--saltmarch-quay"],
+        "known_scenes": ["001--saltmarch-docks", "002--realm-road", "003--winifreds-house",
+                         "004--saltmarch-quay"],
+        "chronicle": [{"id": sid, "one_line": f"Mara passed through {sid}."}
+                      for sid in ("001--saltmarch-docks", "002--realm-road",
+                                  "003--winifreds-house", "004--saltmarch-quay")],
+        "candidates": [_reconcile_candidate("c1", "thread", [
+            _reconcile_record("A", "thread:mara-s-map", _reconcile_fields("Mara's map"),
+                              beats=[{"scene": sid, "text": f"The map turned up in {sid}."}
+                                     for sid in ("001--saltmarch-docks", "002--realm-road",
+                                                 "003--winifreds-house")])],
+            "no new beat in 75 days")]},
 }
 for label, payload in RECONCILE_INPUTS.items():
     exp = reconcile.build_prompt(payload)
@@ -1160,10 +1175,11 @@ check("continuity reconcile explain", reconcile.explain(),
       render("continuity_reconcile/explain.j2"))
 REPORT.require("continuity reconcile fixtures ask every kind of question",
                {len(reconcile.item_scenes(p, c)) for p in RECONCILE_INPUTS.values()
-                for c in p["candidates"]} >= {0, 1, 2}
+                for c in p["candidates"]} >= {0, 1, 2, 4}
                and {c["vocabulary"] for p in RECONCILE_INPUTS.values()
                     for c in p["candidates"]} & set(reconcile.PAIR_VOCABULARIES) != set(),
-               "no fixture shows two scenes, or none asks a direction")
+               "no fixture shows two scenes, or more than EVIDENCE_SCENES, or none asks "
+               "a direction")
 
 #: The sweep's criteria, carried out of its legacy one-call prompt
 #: (`continuity_reconcile/system.j2`, until the switch retires it) into the

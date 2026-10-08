@@ -538,12 +538,12 @@
         "status": "closed",
         "reason": "Answered.",
         "evidence_scenes": [
-          "0002--realm-road"
+          "0004--saltmarch-quay"
         ]
       }
     },
-    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"Answered.\", \"evidence_scenes\": [\"0002--realm-road\"]}]}",
-    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0002--realm-road\"}, \"rationale\": \"Answered.\"}}"
+    "legacy": "{\"decisions\": [{\"candidate\": \"c5\", \"decision\": \"close\", \"reason\": \"Answered.\", \"evidence_scenes\": [\"0004--saltmarch-quay\"]}]}",
+    "decide": "{\"4\": {\"answers\": {\"decision\": \"close\", \"evidence_scene\": \"0004--saltmarch-quay\"}, \"rationale\": \"Answered.\"}}"
   },
   {
     "shape": "closure-citing-a-beat-scene",

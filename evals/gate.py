@@ -712,7 +712,7 @@ RECONCILE_SOURCES: list[tuple[str, list, dict[str, str], dict[str, str]]] = [
     ("test_known_scenes_are_the_shown_beats_and_chronicle_lines",
      [{"candidate": "c1", "decision": "close", "reason": "Answered.",
        "evidence_scenes": ["s2"]}],
-     {"c1": "c5"}, {"s1": _D1, "s2": _D2, "s3": _D3}),
+     {"c1": "c5"}, {"s1": _D1, "s2": _D4, "s3": _D3}),
     ("test_a_deleted_scene_is_not_known_evidence",
      [{"candidate": "c1", "decision": "close", "reason": "The map was found.",
        "evidence_scenes": ["gone"]}],

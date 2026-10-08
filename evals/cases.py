@@ -1655,7 +1655,6 @@ def grade_decide_continuity_identity(ctx: dict, output: str) -> list[Check]:
                                              ctx["expected"])]
 
 
-
 # ------------------------------------ case 14: decide, continuity reconcile
 #
 # The reconciliation sweep as `decide()` will send it after the switch: the
@@ -1704,6 +1703,7 @@ def grade_decide_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
                   "the rationale instruction did not reach the prompt"),
             *graders.grade_reconcile_decision(output, ctx["items"], ctx["payload"],
                                               ctx["expected"])]
+
 
 # ------------------------------------------------------------------- the suite
 
