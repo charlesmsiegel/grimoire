@@ -173,9 +173,9 @@ def test_a_malformed_catalog_list_costs_its_entries_not_the_split():
 
 
 def test_anthropic_takes_temperature_or_top_p_not_both():
-    """Models that take sampling at all (budgeted-thinking era) refuse the pair
+    """Models that take sampling at all (Claude before 4.7) refuse the pair
     with a 400; temperature wins, and top_p says why it was not sent."""
-    conn = {"kind": "anthropic", "model": "claude-test-1",
+    conn = {"kind": "anthropic", "model": "claude-sonnet-4-5",
             "model_features": {"enabled_thinking": True, "adaptive_thinking": False},
             "sampling": {"preset_id": "p", "preset_name": "Warm", "scope": "connection",
                          "params": {"temperature": 0.8, "top_p": 0.9, "top_k": 40}}}

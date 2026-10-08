@@ -24,6 +24,7 @@ sent and why (spec 8); `split`, `sent_names` and `report` are views over it.
 from __future__ import annotations
 
 import math
+import re
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
@@ -119,8 +120,7 @@ WHY_UNVERIFIED = ("OpenRouter's catalog for this model is not cached, so whether
 WHY_COMPLETION_TOKENS = "the OpenAI API spells it max_completion_tokens"
 WHY_STOP_SEQUENCES = "the Anthropic API spells it stop_sequences"
 WHY_ANTHROPIC_NONE = "the Anthropic API has no such parameter"
-WHY_ANTHROPIC_SAMPLING = ("current Claude models refuse sampling parameters; only a "
-                          "model whose catalog lists budgeted thinking takes them")
+WHY_ANTHROPIC_SAMPLING = "Claude 4.7 and later refuse sampling parameters"
 WHY_ANTHROPIC_THINKING = "the Anthropic API refuses sampling parameters while thinking is on"
 WHY_ANTHROPIC_TOP_P = "Claude takes temperature or top_p, not both; temperature was sent"
 WHY_REASONING_OFF = ("off sends no reasoning setting, so the model's own default "
@@ -250,6 +250,8 @@ class _Conn(NamedTuple):
     """What `effective` reads of a connection, read defensively once."""
 
     kind: object
+    #: The connection's model id, or "" when it names none.
+    model: str
     extended: bool
     #: The catalog's supported parameters (OpenRouter), or None: not known.
     listed: set | None
@@ -266,7 +268,9 @@ def _context(conn: dict) -> _Conn:
     listed = {x for x in listed if isinstance(x, str)} if isinstance(listed, list) else None
     features = conn.get("model_features")
     kind = conn.get("kind", "openrouter")
-    return _Conn(kind, conn.get("sampler_support") == "extended", listed,
+    model = conn.get("model")
+    return _Conn(kind, model if isinstance(model, str) else "",
+                 conn.get("sampler_support") == "extended", listed,
                  features if isinstance(features, dict) else {},
                  kind == "openai_compatible" and _openai_api(conn.get("base_url")))
 
@@ -291,22 +295,61 @@ def _sampler(c: _Conn, name: str, value: object) -> _Control:
     return _Control(SUPPORTED, name, "", "catalog")
 
 
+#: The first Claude version that refuses sampling parameters: the API answers
+#: a non-default temperature, top_p or top_k with a 400 from Claude 4.7 on
+#: (and on Claude Mythos Preview). Its catalog row is no help -- Claude Opus 5
+#: lists budgeted thinking and still refuses them -- so the model id decides.
+ANTHROPIC_SAMPLING_UNTIL = (4, 7)
+#: An 8-digit snapshot date ends the version (`claude-opus-4-20250514` is 4.0).
+_DATE = re.compile(r"\d{8}")
+_SMALL = re.compile(r"\d{1,2}")
+
+
+def _claude_version(model: object) -> tuple[int, int] | None:
+    """The Claude version a model id names, as `(major, minor)`, or None when
+    it names none: the first run of small numbers after `claude-`, read in
+    order and stopped by a snapshot date (`claude-3-7-sonnet-20250219` is 3.7,
+    `claude-opus-4-6` is 4.6, `claude-opus-5` is 5.0). `claude-mythos-preview`
+    names no version."""
+    if not isinstance(model, str):
+        return None
+    lowered = model.lower()
+    at = lowered.find("claude-")
+    if at < 0:
+        return None
+    run: list[int] = []
+    for token in re.split(r"[^a-z0-9]+", lowered[at + len("claude-"):]):
+        if _DATE.fullmatch(token):
+            break
+        if _SMALL.fullmatch(token):
+            run.append(int(token))
+            if len(run) == 2:
+                break
+        elif run:
+            break
+    if not run:
+        return None
+    return run[0], run[1] if len(run) > 1 else 0
+
+
 def _anthropic_sampler(c: _Conn, name: str, thinking: bool, temperature: bool) -> _Control:
     """A sampler parameter on the Anthropic Messages API (spec 8). `temperature`:
-    whether a temperature is being sent -- `CONTROLS` decides it before `top_p`."""
+    whether a temperature is being sent -- `CONTROLS` decides it before `top_p`.
+    Whether the model takes sampling at all is its id's version, never the
+    thinking its catalog row lists (`ANTHROPIC_SAMPLING_UNTIL`)."""
     if name in ("temperature", "top_p", "top_k"):
-        enabled = c.features.get("enabled_thinking")
-        if enabled is not True:
-            # The catalog's False is its word; a row that says nothing is
-            # nobody's, and not the adapter's either.
+        version = _claude_version(c.model)
+        if version is None or version >= ANTHROPIC_SAMPLING_UNTIL:
+            # A version the API refuses is the adapter's knowledge; an id that
+            # names none is nobody's answer, and nothing is sent on a guess.
             return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_SAMPLING,
-                            "catalog" if isinstance(enabled, bool) else "unknown")
+                            "unknown" if version is None else "adapter")
         if thinking:
             return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_THINKING, "adapter")
         if name == "top_p" and temperature:
             # The models that take sampling at all refuse the pair with a 400.
             return _Control(UNSUPPORTED, None, WHY_ANTHROPIC_TOP_P, "adapter")
-        return _Control(SUPPORTED, name, "", "catalog")
+        return _Control(SUPPORTED, name, "", "name")
     if name == "stop":
         return _Control(TRANSLATED, "stop_sequences", WHY_STOP_SEQUENCES, "adapter")
     if name == "max_tokens":

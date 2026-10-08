@@ -27,7 +27,8 @@ ALL = {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "min_p": 0.05,
 #: Claude 4.7+-style: adaptive thinking only, sampling parameters refused.
 CURRENT = {"adaptive_thinking": True, "enabled_thinking": False,
            "effort": ["low", "medium", "high", "xhigh", "max"], "max_tokens": 64000}
-#: An older Claude: budgeted thinking, sampling parameters taken.
+#: An older Claude's row: budgeted thinking. Whether it takes sampling
+#: parameters is its model id's question, not this row's.
 OLDER = {"adaptive_thinking": False, "enabled_thinking": True, "max_tokens": 64000}
 
 
@@ -39,8 +40,14 @@ def _conn(kind, params=None, **fields):
     return conn
 
 
-def _claude_api(params=None, features=None, **fields):
-    conn = _conn("anthropic", params, model="claude-test-1", **fields)
+#: Model ids on either side of the sampling line: Claude 4.7 and later refuse
+#: sampling parameters, whatever thinking their catalog row lists.
+CURRENT_ID = "claude-opus-4-7"
+OLDER_ID = "claude-sonnet-4-5-20250929"
+
+
+def _claude_api(params=None, features=None, model=CURRENT_ID, **fields):
+    conn = _conn("anthropic", params, model=model, **fields)
     if features is not None:
         conn["model_features"] = features
     return conn
@@ -253,39 +260,70 @@ def test_review_focus_4_a_current_claude_model_is_sent_no_temperature():
     assert ls.sent_names(conn) == []
 
 
-@pytest.mark.parametrize("features", [None, {}, {"adaptive_thinking": True}])
-def test_sampling_is_unsupported_unless_the_catalog_says_enabled_thinking(features):
-    eff = ls.effective(_claude_api({"temperature": 0.7, "top_p": 0.9, "top_k": 5}, features))
+@pytest.mark.parametrize(("model", "version"), [
+    ("claude-opus-4-6", (4, 6)), ("claude-sonnet-4-5-20250929", (4, 5)),
+    ("claude-opus-4-20250514", (4, 0)), ("claude-3-7-sonnet-20250219", (3, 7)),
+    ("claude-haiku-4-5", (4, 5)), ("claude-opus-4-7", (4, 7)), ("claude-opus-5", (5, 0)),
+    ("claude-fable-5-1", (5, 1)), ("claude-opus-4-7[1m]", (4, 7)),
+    ("claude-mythos-preview", None), ("claude-", None), ("gpt-4", None), ("", None),
+    (None, None)])
+def test_the_claude_version_is_read_from_the_model_id(model, version):
+    assert ls._claude_version(model) == version
+
+
+@pytest.mark.parametrize(("model", "source"), [
+    ("claude-opus-4-7", "adapter"), ("claude-opus-5", "adapter"),
+    ("claude-fable-5-1", "adapter"), ("claude-mythos-preview", "unknown"),
+    ("anthropic-unnamed", "unknown")])
+@pytest.mark.parametrize("features", [None, {}, OLDER, CURRENT])
+def test_claude_4_7_and_later_are_sent_no_sampling_whatever_the_catalog_says(
+        model, source, features):
+    """The model id decides, not the thinking the catalog lists: a 4.7+ id is
+    refused by the API (the adapter's knowledge), and an id with no version
+    is nobody's answer."""
+    eff = ls.effective(_claude_api({"temperature": 0.7, "top_p": 0.9, "top_k": 5},
+                                   features, model=model))
     for name in ("temperature", "top_p", "top_k"):
         assert eff["controls"][name]["state"] == "unsupported"
+        assert eff["controls"][name]["source"] == source
+        assert eff["controls"][name]["why"] == ls.WHY_ANTHROPIC_SAMPLING
         assert name not in eff["effective"]
 
 
-@pytest.mark.parametrize(("features", "source"), [
-    (None, "unknown"), ({}, "unknown"), ({"adaptive_thinking": True}, "unknown"),
-    ({"enabled_thinking": False}, "catalog"), (CURRENT, "catalog")])
-def test_refused_sampling_names_who_said_so(features, source):
-    """The catalog's False is the catalog's answer; a row that says nothing
-    about budgeted thinking is nobody's, not the adapter's."""
-    eff = ls.effective(_claude_api({"temperature": 0.7}, features))
+def test_an_opus_5_shaped_row_listing_budgeted_thinking_is_sent_no_temperature():
+    """The Models API reports `enabled` thinking for Claude Opus 5, which still
+    answers a non-default temperature with a 400: budgeted-thinking support is
+    no proof a sampler is accepted."""
+    features = {"adaptive_thinking": True, "enabled_thinking": True,
+                "effort": ["low", "medium", "high"], "max_tokens": 128000}
+    eff = ls.effective(_claude_api({"temperature": 0.7}, features, model="claude-opus-5"))
+    assert "temperature" not in eff["effective"]
     assert eff["controls"]["temperature"]["state"] == "unsupported"
-    assert eff["controls"]["temperature"]["source"] == source
+    assert ls.sent_names(_claude_api({"temperature": 0.7}, features,
+                                     model="claude-opus-5")) == []
 
 
-def test_an_older_claude_model_takes_sampling_parameters():
-    eff = ls.effective(_claude_api({"temperature": 0.7, "top_k": 5}, OLDER))
-    assert eff["effective"] == {"temperature": 0.7, "top_k": 5, "max_tokens": 16000}
+@pytest.mark.parametrize("features", [None, {}, OLDER, CURRENT])
+def test_an_older_claude_model_takes_sampling_parameters(features):
+    """Below 4.7 the id is the answer, whatever (or nothing) the row says --
+    as long as no thinking is sent."""
+    eff = ls.effective(_claude_api({"temperature": 0.7, "top_k": 5}, features, model=OLDER_ID))
+    assert eff["effective"] == {"temperature": 0.7, "top_k": 5,
+                                "max_tokens": 16000}
     assert {eff["controls"][n]["state"] for n in ("temperature", "top_k")} == {"supported"}
-    alone = ls.effective(_claude_api({"top_p": 0.9}, OLDER))
+    assert {eff["controls"][n]["source"] for n in ("temperature", "top_k")} == {"name"}
+    alone = ls.effective(_claude_api({"top_p": 0.9}, features, model=OLDER_ID))
     assert alone["effective"] == {"top_p": 0.9, "max_tokens": 16000}
     # The pair is refused by the models that take sampling at all: temperature wins.
-    both = ls.effective(_claude_api({"temperature": 0.7, "top_p": 0.9}, OLDER))
+    both = ls.effective(_claude_api({"temperature": 0.7, "top_p": 0.9}, features,
+                                    model=OLDER_ID))
     assert both["effective"] == {"temperature": 0.7, "max_tokens": 16000}
     assert both["controls"]["top_p"]["state"] == "unsupported"
 
 
 def test_sampling_is_unsupported_whenever_thinking_is_sent():
-    eff = ls.effective(_claude_api({"temperature": 0.7, "reasoning_effort": "low"}, OLDER))
+    eff = ls.effective(_claude_api({"temperature": 0.7, "reasoning_effort": "low"}, OLDER,
+                                   model=OLDER_ID))
     assert "thinking" in eff["effective"]
     assert "temperature" not in eff["effective"]
     assert eff["controls"]["temperature"]["state"] == "unsupported"
