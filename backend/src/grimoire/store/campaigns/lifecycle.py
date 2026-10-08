@@ -4,6 +4,7 @@ one-time migration of a full-copy campaign to the overlay layout."""
 from __future__ import annotations
 
 import filecmp
+from collections.abc import Callable
 from pathlib import Path
 
 from .. import (
@@ -13,10 +14,12 @@ from .. import (
     campaign_climate,
     characters,
     climates,
+    config,
     entities,
     greetings,
     image_refs,
     image_scopes,
+    inference_keys,
     locks,
     modules,
     overlay,
@@ -104,14 +107,17 @@ def create_campaign(name: str, world_id: str, region: str | None = None,
     #
     # Everything inside is bounded: file writes this package owns. No plugin
     # code, no provider import — see the calendar block above.
+    # Read before the lock: `config.md` unreadable mid-sync must fail before the
+    # directory exists, not leave the orphan the comment above guards against.
+    # The marker the campaign is born with is read AGAIN at its birth write.
+    _inference_marker()
     with locks.campaign_lock(cid):
         root.mkdir(parents=True)
         (root / "scenes").mkdir()
         now = now_iso()
-        atomic.write_text(paths.campaign_meta_path(cid), dump_frontmatter(
-            {"name": name, "world": world_id, "created": now, "updated": now,
-             "world_copy": "overlay",
-             **({"module": module} if module else {})}, ""))
+        publish_birth(cid, {"name": name, "world": world_id, "created": now,
+                             "updated": now, "world_copy": "overlay",
+                             **({"module": module} if module else {})})
         # copy-on-write: nothing is copied up front; records materialize on divergence
         # (store/overlay.py) and sync.md tracks bases for materialized records only
         paths.write_manifest(cid, {})
@@ -496,7 +502,15 @@ def set_campaign_response(cid: str, fields: dict) -> None:
 
 
 def set_campaign_routing(cid: str, fields: dict) -> None:
-    """Which connection each route runs on for THIS campaign (#142).
+    """Which connection each route runs on for THIS campaign (#142), in the
+    legacy layout.
+
+    No route writes through it since inference slice C retired
+    `/campaigns/{cid}/routing` -- a campaign's choices are written by
+    `set_campaign_inference` now. It stays as the one writer of a legacy
+    (format-1) campaign's `route_*`/`preset_*` keys, which is how the frozen
+    inference baselines and the migration's tests build the state an older
+    build left behind; at format 2 it refuses, as the endpoint did.
 
     `set_campaign_response`'s twin, including the `updated` stamp: this rewrites
     campaign.md, so the field that says when the metadata last changed has to
@@ -521,11 +535,21 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
     # here is skipped below -- a PUT that answered 200 and stored nothing.
     allowed = {key for r in routing.routes_for("campaign")
                for key in (routing.config_key(r.key), routing.preset_key(r.key))}
+    legacy = sorted(k for k in fields if k in allowed and k in routing.CONFIG_KEYS)
     with locks.campaign_lock(cid):
         mp = paths.campaign_meta_path(cid)
         if not mp.exists():
             raise paths.CampaignNotFound(cid)
         meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        # A `route_*` key is legacy (spec 11.3): refused once the campaign is
+        # marked -- checked in this hold, which the migration's
+        # `migrate.campaign` needs too, so a marker cannot land between the
+        # check and the write -- or once the store is. A switch of the store
+        # landing after this read leaves an UNMARKED campaign, which still
+        # resolves through the translation and is migrated, key and all. A
+        # marked campaign on a store still at format 1 is refused as
+        # `unmigrated` rather than as moved: the migration stopped part-way.
+        config.refuse_legacy_campaign(meta, config.read_config(), legacy)
         before = dict(meta)
         for key, value in fields.items():
             if key not in allowed:
@@ -544,6 +568,103 @@ def set_campaign_routing(cid: str, fields: dict) -> None:
             return
         meta["updated"] = now_iso()
         atomic.write_text(mp, dump_frontmatter(meta, body))
+
+
+#: `inference.migrate.campaign_fields` with its connection lookup bound: a
+#: copied campaign's legacy route keys as the format-2 keys they migrate to.
+#: Handed in by the caller that copies (`fork`), because this package sits
+#: below `inference` in the import graph.
+Translate = Callable[[dict[str, str]], dict[str, str]]
+
+
+def publish_birth(cid: str, meta: dict[str, str], body: str = "",
+                  translate: Translate | None = None) -> None:
+    """Write a new campaign's first `campaign.md` -- created (`create_campaign`)
+    or copied (`fork._copy`): `meta` plus every marker the store's format says
+    a campaign is born with. The birth-stamp seam, and the one place a new
+    marker is added; the caller holds `campaign_lock(cid)`.
+
+    The format is read and the file written in one `config_lock` hold, taken
+    inside that campaign lock (config_lock innermost, as everywhere). The
+    migration's switch writes `config.md`'s marker in that same cross-process
+    lock, so it cannot land between this read and this write: a campaign born
+    at format 1 is there before the switch (and the migration lists the
+    campaigns to move after it), and one born after is born marked.
+
+    A copy can carry its source's legacy route keys -- a fork of a campaign
+    the migration has not reached -- and passes `translate`. Born into a store
+    already at format 2 it is translated as the migration would translate it
+    before it is marked: a marker over untranslated keys would switch those
+    overrides off. One whose connections cannot be read just now is born
+    unmarked, and the next migration run finishes it. A copy of a campaign a
+    newer build marked keeps that mark."""
+    born = dict(meta)
+    with locks.config_lock():
+        if not (inference_keys.is_current(born) or inference_keys.is_newer(born)):
+            marker = _inference_marker()
+            if marker and translate is not None:
+                try:
+                    born.update(translate(born))
+                except OSError:
+                    marker = {}
+            born.update(marker)
+        atomic.write_text(paths.campaign_meta_path(cid), dump_frontmatter(born, body))
+
+
+def _inference_marker() -> dict[str, str]:
+    """The campaign's own format marker, when the store's global layout is
+    current; nothing otherwise (spec 11.1). A campaign marker beside a legacy
+    `config.md` would be ignored anyway, and one written there would claim a
+    layout the store does not have."""
+    if inference_keys.is_current(config.read_config()):
+        return {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
+    return {}
+
+
+def set_campaign_inference(cid: str, fields: dict) -> bool:
+    """This campaign's own role and route choices (spec 4.4, 4.5); returns
+    whether `campaign.md` changed.
+
+    Callers must first migrate an unmarked campaign that still holds legacy
+    `route_*`/`preset_*` keys (`store.inference.migrate.campaign`, in the same
+    lock hold): stamping the marker over them would switch those overrides off.
+
+    `set_campaign_routing`'s shape, with three differences. Every key must be
+    one of `inference_keys.CAMPAIGN_KEYS`, and anything else raises
+    `ValueError` before the lock is taken: this is the new layout's only door,
+    so a misspelled key is a caller's bug, not a field to skip in silence. The
+    write stamps the campaign's `inference_format` marker when the store's
+    global layout is current, in the same hold -- without it the resolver
+    would read this campaign through the legacy translation and ignore every
+    key written here (spec 11.1). And it bumps the campaign's write token
+    inside the hold when it wrote anything, because the token has to have
+    moved by the time another holder can see the write.
+
+    A blank value REMOVES the key. A write that changes no key touches
+    nothing -- not the file, not `updated`, not the marker, not the token.
+    """
+    refused = sorted(k for k in fields if k not in inference_keys.CAMPAIGN_KEYS)
+    if refused:
+        raise ValueError(f"not a campaign inference setting: {', '.join(refused)}")
+    with locks.campaign_lock(cid):
+        mp = paths.campaign_meta_path(cid)
+        if not mp.exists():
+            raise paths.CampaignNotFound(cid)
+        meta, body = parse_frontmatter(mp.read_text(encoding="utf-8"))
+        before = dict(meta)
+        for key, value in fields.items():
+            text = str(value or "").strip()
+            if text:
+                meta[key] = text
+            else:
+                meta.pop(key, None)
+        if meta == before:
+            return False
+        meta.update(_inference_marker())
+        meta["updated"] = now_iso()
+        atomic.write_text(mp, dump_frontmatter(meta, body))
+        revision.bump(cid)
+    return True
 
 
 def set_campaign_tracker(cid: str, value: str) -> None:

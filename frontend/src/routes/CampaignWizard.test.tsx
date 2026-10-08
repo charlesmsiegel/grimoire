@@ -284,7 +284,7 @@ test("a first-run opener the model could not be reached for offers the recovery"
   fireEvent.change(screen.getByLabelText(/opener prompt/i), { target: { value: "A foggy harbor" } });
   fireEvent.click(screen.getByRole("button", { name: /^generate$/i }));
   await screen.findByText(/Couldn.t reach the model provider/);
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
 });
 
 // ---- the world's calendar is the default this wizard opens on (#223) ----

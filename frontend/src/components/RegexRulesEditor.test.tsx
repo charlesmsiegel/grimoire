@@ -224,6 +224,21 @@ test("an inherited rule opens read-only with no Edit", async () => {
   expect(screen.getByText(/Change it there/)).toBeInTheDocument();
 });
 
+test("a read-only level can be read but not written", async () => {
+  serve({ rules: [STRIP, QUOTES], off: [] }, inherited());
+  render(<RegexRulesEditor scope={WORLD} readOnly />);
+  fireEvent.click(await screen.findByRole("button", { name: /^Strip asides/ }));
+  expect(await screen.findByRole("heading", { name: "Strip asides" })).toBeInTheDocument();
+
+  for (const name of ["Edit", "Delete", "+ New rule", "Import…", "Move Curly quotes up",
+                      "Move Strip asides down"]) {
+    expect(screen.getByRole("button", { name })).toBeDisabled();
+  }
+  expect(screen.getByLabelText("Enable Strip asides")).toBeDisabled();
+  expect(screen.getByLabelText("Use Drop think tags here")).toBeDisabled();
+  expect(api.putRegex).not.toHaveBeenCalled();
+});
+
 test("↑ reorders and saves", async () => {
   serve({ rules: [STRIP, QUOTES], off: [] });
   render(<RegexRulesEditor scope={GLOBAL} />);

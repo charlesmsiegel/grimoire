@@ -69,7 +69,7 @@ export function ResponseControls({ cid, sid, responseId, canReroll, status, cont
           onChange={(event) => setGuidance(event.target.value)} placeholder="Optional direction for this response" /></label>
         <details onToggle={(event) => setRouteOpen(event.currentTarget.open)}>
           <summary>Model for this reroll</summary>
-          {routeOpen && <fieldset disabled={disabled}><RerollRoutePicker value={route} onChange={setRoute} /></fieldset>}
+          {routeOpen && <fieldset disabled={disabled}><RerollRoutePicker cid={cid} value={route} onChange={setRoute} /></fieldset>}
         </details>
         <button disabled={disabled} onClick={() => onReroll(responseId, guidance.trim(), route)}>Reroll response</button>
         {onExtend && <button disabled={disabled || extendDisabled}

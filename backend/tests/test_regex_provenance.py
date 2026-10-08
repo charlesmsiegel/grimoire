@@ -101,8 +101,7 @@ def with_fallback(client, monkeypatch):
     provider = FlakyProvider(LLMError("rate_limit", "upstream is busy"), chunks=("Mara answers.",))
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider,
-        timeout=120, retries=store.config.llm_retries,
-        fallback=routes.common._fallback_connection)
+        timeout=120, retries=store.config.llm_retries)  # each call carries its fallback
     return backup, provider
 
 

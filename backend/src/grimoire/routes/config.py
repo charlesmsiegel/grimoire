@@ -6,6 +6,8 @@ from."""
 from __future__ import annotations
 
 import asyncio
+import logging
+import unicodedata
 import uuid
 from datetime import datetime
 from typing import Literal, NamedTuple
@@ -16,19 +18,23 @@ from pydantic import BaseModel
 from .. import catalog, embeddings, health, llm, llm_errors, llm_sampling, store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
-from ..store.inference import capabilities, controls
+from ..store.inference import capabilities, controls, facts, providers
+from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
+from ..store.inference import settings as inference_settings
 from . import runs
 from .common import (
+    NEWER_FORMAT,
     _bounded_call,
     _dump,
     _llm_http_error,
     _response_body,
-    _routing_body,
-    _routing_fields,
     _write_response,
     get_health,
     get_llm,
+    legacy_refused,
+    refuse_newer,
+    refuse_unmigrated,
     run_error,
 )
 from .models import (
@@ -37,11 +43,12 @@ from .models import (
     ConnectionCreate,
     ConnectionUpdate,
     DataDirUpdate,
+    FactsUpdate,
+    HealthCheck,
     ModelTestPreview,
     ModelTestRun,
     PromptLayoutUpdate,
     ResponseSettings,
-    RoutingUpdate,
     SamplerImportBody,
     SamplerPresetBody,
     StyleCreate,
@@ -49,6 +56,7 @@ from .models import (
 )
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 #: How long a health check may take, whatever `llm_call_budget` says (#146).
 #: Generous enough for the Claude path, which spawns a CLI and generates a
@@ -59,14 +67,45 @@ HEALTH_CHECK_CEILING = 45.0
 
 
 # ---- config ----
-def _send_images_reach() -> str:
-    """Whether post images would reach the model (#377), for the connection
-    the GLOBAL chat route resolves to -- what a turn in a campaign with no route
-    of its own runs on. Answers "unknown" rather than failing the config read:
-    this is a hint beside a checkbox, not something worth a 500."""
+class _Chat(NamedTuple):
+    """What chat would run on with no campaign in front of it, for the header:
+    the primary attempt's connection (None when nothing resolves), whether
+    the resolution could be made at all, and whether the seam would serve it
+    (`inference.refusal`, the one decision -- the header's `ready`)."""
+
+    conn: dict | None
+    resolved: bool
+    ready: bool = False
+
+
+def _chat() -> _Chat:
+    """The GLOBAL chat route's resolution -- what a turn in a campaign with no
+    choice of its own runs on, and so what the header names (its connection,
+    readiness and health) and what `send_images_reach` asks about.
+
+    One resolve per config read, and a display: it must never refuse, and a
+    failure is not worth a 500 on a read every navigation makes -- it reports
+    no connection, and `send_images_reach` says "unknown"."""
     try:
-        # routing-ok: a display hint about where chat would run; it must never refuse
-        return store.post_images.reach(inference.resolve("chat").conn)
+        # routing-ok: a display of where chat would run; it must never refuse
+        resolved = inference.resolve("chat")
+        return _Chat(resolved.conn, True, inference.refusal(resolved) is None)
+    except Exception:    # a display read; see the docstring
+        # Logged at error: the resolver refuses nothing by design, so reaching
+        # here is a bug or a broken store, and the header alone would only
+        # show "not ready".
+        log.exception("could not resolve where chat runs for the header")
+        return _Chat(None, False)
+
+
+def _send_images_reach(chat: _Chat) -> str:
+    """Whether post images would reach the model (#377) chat runs on (`_chat`).
+    Answers "unknown" rather than failing the config read: this is a hint
+    beside a checkbox, not something worth a 500."""
+    if not chat.resolved:
+        return "unknown"
+    try:
+        return store.post_images.reach(chat.conn)
     except Exception:  # noqa: BLE001 - a display hint; see the docstring
         return "unknown"
 
@@ -82,8 +121,14 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
     takes effect, and redisplays its default forever (#410). Two tests in
     `test_routes.py` hold this dict to `ConfigUpdate`: one that every writable
     key is named here, one that each is answered from what was stored.
+
+    The header's connection (`active_connection`, `ready`, `health`) is what
+    chat would run on (`_chat`): the resolver's answer, not the legacy
+    `active_connection_id`. `inference` summarises the roles without resolving
+    anything (`settings.summary`).
     """
-    active = store.llm_connections.get_active()  # routing-ok: display only, generates nothing
+    chat = _chat()
+    active = chat.conn
     setup_done, first_run = _setup_state(cfg)
     return {"theme": cfg["theme"], "system_prompt": cfg.get("system_prompt", ""),
             "quote_color": cfg.get("quote_color", "off"),
@@ -137,7 +182,7 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             "send_images": cfg.get("send_images", store.config.DEFAULT_SEND_IMAGES),
             "send_images_limit": cfg.get("send_images_limit",
                                          store.config.DEFAULT_SEND_IMAGES_LIMIT),
-            "send_images_reach": _send_images_reach(),
+            "send_images_reach": _send_images_reach(chat),
             "backup_enabled": cfg.get("backup_enabled", store.config.DEFAULT_BACKUP_ENABLED),
             "backup_interval_hours": cfg.get("backup_interval_hours",
                                              store.config.DEFAULT_BACKUP_INTERVAL_HOURS),
@@ -160,19 +205,27 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # default by `logs.level_name`, and `GET /logs/level` is what
             # reports what is actually being recorded.
             "log_level": cfg.get("log_level", store.config.DEFAULT_LOG_LEVEL),
+            # The connection chat runs on (`_chat`), not the stored legacy key:
+            # at format 2 that key is frozen for older builds and names
+            # nothing that plays. Before the migration the two agree unless a
+            # legacy `route_scene` moves chat -- and then this says where it
+            # went (the legacy picker that writes the key goes with Task 13).
             "active_connection_id": active["id"] if active else "",
             # `model` rides along because the global status bar names the model
-            # every scene will use, and that is only ever this connection's --
-            # there is no per-campaign override. Reading it here keeps the bar
-            # off /llm-connections/{id}, whose payload carries key_set and the
-            # base URL it has no business fetching to print one string. It is
-            # the *effective* model: a Claude connection with none configured
+            # a scene with no campaign choice of its own will use (a campaign's
+            # own is the scene header's business). Reading it here keeps the
+            # bar off /llm-connections/{id}, whose payload carries key_set and
+            # the base URL it has no business fetching to print one string. It
+            # is the *effective* model: a Claude connection with none configured
             # still generates, on the dispatcher's fallback, so reporting the
             # bare "" would show a dash for a connection that is about to run.
             "active_connection": ({"id": active["id"], "kind": active["kind"], "name": active["name"],
                                    "model": llm.effective_model(active)}
                                    if active else None),
-            "ready": _connection_ready(active),
+            # The seam's own decision (`inference.refusal`): a key or an
+            # address missing, or a model known unable to generate -- never a
+            # third copy of the credential rule that misses the second half.
+            "ready": chat.ready,
             # What the active provider last actually did (#146), so the status
             # dot can stop meaning "a key string is present" and start meaning
             # "this worked, or here is how it failed". Read from the registry
@@ -181,6 +234,9 @@ def _public_config(cfg: dict[str, str], registry: health.ProviderHealth) -> dict
             # asked for. `unknown` until something -- a real turn, or the
             # reader pressing Test connection -- has an answer.
             "health": registry.status(active["id"], active["rev"]) if active else None,
+            # The roles, named, for the header and the Models link -- the
+            # cascade alone, so it adds no resolve to this read.
+            "inference": inference_settings.summary(),
             "setup_done": setup_done,
             "first_run": first_run,
             # Which store this config describes. `first_run` is a statement
@@ -228,16 +284,6 @@ def _setup_state(cfg: dict[str, str]) -> tuple[str, bool]:
     return recorded, True
 
 
-def _connection_ready(conn: dict | None) -> bool:
-    if conn is None:
-        return False
-    if conn["kind"] in ("openrouter", "anthropic"):
-        return bool(conn["api_key"])
-    if conn["kind"] == "openai_compatible":
-        return bool(conn["base_url"])
-    return True  # claude never needs a key
-
-
 @router.get("/config")
 def get_config(registry: health.ProviderHealth = Depends(get_health)):
     return _public_config(store.read_config(), registry)
@@ -261,6 +307,10 @@ _ON_OFF_KEYS = ("tracker", "perception_rider", "send_images")
 @router.put("/config")
 def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
+    # The legacy inference keys are model settings: a newer store refuses
+    # them, and one at format 2 refuses them in the hold that writes (below).
+    if any(k in store.inference_keys.LEGACY_GLOBAL_KEYS for k in fields):
+        refuse_newer()
     # The two tracker switches are a choice, not a string: the Settings
     # checkbox and `store.config` both read anything but "off" as on, so a
     # stored "maybe" would be a setting nobody chose. Refused as the campaign's
@@ -275,7 +325,10 @@ def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(g
     if not _recursion_depth_ok(fields.get("lore_recursion_depth")):
         raise HTTPException(status_code=400,
                             detail=f"lore_recursion_depth must be 0-{store.config.LORE_RECURSION_MAX}")
-    saved = store.write_config(**fields)
+    try:
+        saved = store.config.write_config_refusing_legacy(**fields)
+    except store.config.LegacyKeysRefusedError as exc:
+        raise legacy_refused(exc) from exc
     # `store.logs` holds the threshold in module state rather than reading the
     # config per row -- `record` is on the path of everything the app does --
     # so the write is what has to push it. Unconditional rather than guarded on
@@ -327,7 +380,16 @@ def put_data_dir(update: DataDirUpdate, request: Request):
     # resolves against the new one. What remains outside any lock here is
     # another *process* sharing the store, which `store/locks.py` already places
     # outside what this can promise.
-    with runs.store_held_still(request.app):
+    #
+    # The inference-settings migration is not a run, so the registry cannot
+    # see it; its own lock is held across the move instead, TRIED rather than
+    # waited on -- a migration begins with a backup of the whole library.
+    with runs.store_held_still(request.app), inference_migrate.held_still() as free:
+        if not free:
+            raise HTTPException(status_code=409, detail={
+                "kind": "busy",
+                "detail": "the model settings are being upgraded; try again when "
+                          "that has finished"})
         try:
             store.set_data_dir(update.data_dir)
         except (OSError, ValueError) as exc:
@@ -346,6 +408,9 @@ def put_data_dir(update: DataDirUpdate, request: Request):
     # (reading the new tree) reported the new one -- two endpoints disagreeing
     # about one setting, with rows going to disk under the wrong one.
     store.logs.apply_level()
+    # The new root may be a legacy store: migrate it, in the background, as
+    # startup would have (spec 11.2). After the move, outside every hold above.
+    request.app.state.start_inference_migration()
     return store.data_dir_info()
 
 
@@ -483,9 +548,27 @@ def get_connections(registry: health.ProviderHealth = Depends(get_health)):
             for conn in store.llm_connections.list_connections()]
 
 
+#: The provider fields written as text into the connection's frontmatter.
+_TEXT_FIELDS = ("name", "base_url", "api_key", "model", "sampler_preset", "preset", "billing")
+
+
+def _check_one_line(fields: dict) -> None:
+    """400 for a provider text field holding a line boundary the frontmatter
+    parser splits on (`frontmatter.breaks_line`, U+2028 included) or another
+    control character: written, the rest of the line would be read back as a
+    key of its own -- `kind`, `api_key`, anything."""
+    for key in _TEXT_FIELDS:
+        value = fields.get(key)
+        if isinstance(value, str) and (
+                store.frontmatter.breaks_line(value)
+                or any(unicodedata.category(ch) == "Cc" for ch in value)):
+            raise HTTPException(status_code=400, detail=(
+                f"{key} must be one line of text, without control characters"))
+
+
 def _check_preset_field(fields: dict, stored: str = "") -> None:
     """A connection's `sampler_preset` names a preset, or is blank -- refused on
-    write and tolerated on read, the routing PUT's rule. Here rather than in
+    write and tolerated on read, as the Models settings write treats one. Here rather than in
     `llm_connections`, which `sampler_presets` imports: checking from the store
     side would close a cycle.
 
@@ -502,7 +585,7 @@ def _connection_sampling(conn_id: str) -> dict | None:
     """What this connection's OWN preset sends on it, for the editor's sidebar.
 
     Task-less, so a route's preset never shows here: the connection editor
-    describes the connection, and the routing picker beside each route says
+    describes the connection, and each route row on the Models screen says
     what that route sends. None for an unreadable connection."""
     try:
         conn = store.llm_connections.read_connection_raw(conn_id)
@@ -511,13 +594,123 @@ def _connection_sampling(conn_id: str) -> dict | None:
     return llm_sampling.report(inference.own_sampling(conn))
 
 
+#: The 400 for a legacy model field written to a provider at format 2.
+MODEL_FIELD_MOVED = "set this on the model, not the provider"
+#: The 400 for a base URL that differs from a locked preset's.
+ADDRESS_FIXED = "this provider's address is fixed"
+
+
+def _model_fields_refused(exc: store.llm_connections.ModelFieldsRefusedError) -> HTTPException:
+    if exc.newer:
+        return HTTPException(status_code=409, detail=NEWER_FORMAT)
+    return HTTPException(status_code=400, detail=MODEL_FIELD_MOVED)
+
+
+def _check_billing(value: str | None) -> None:
+    if value and value not in providers.BILLINGS:
+        raise HTTPException(status_code=400, detail=(
+            f"billing must be one of {', '.join(providers.BILLINGS)}, not {value!r}"))
+
+
+def _named_preset(pid: str, kind: str) -> providers.Preset:
+    """The provider preset `pid`, on adapter `kind`, or a 400."""
+    preset = providers.PRESETS.get(pid)
+    if preset is None:
+        raise HTTPException(status_code=400, detail=f"no such provider preset: {pid!r}")
+    if preset.kind != kind:
+        raise HTTPException(status_code=400, detail=(
+            f"the {preset.label} preset is a {preset.kind} provider, not {kind}"))
+    return preset
+
+
+def _same_url(a: str, b: str) -> bool:
+    return a.strip().rstrip("/") == b.strip().rstrip("/")
+
+
+def _apply_preset(fields: dict) -> None:
+    """A create body with its named preset applied, in place (spec 4.1, 6.1):
+    the adapter must be the preset's; a locked preset's address is the one it
+    has (a different one is a 400), and an editable one's pre-fills a blank
+    one; billing defaults to the preset's.
+
+    A body naming no preset is stamped with the one `providers.infer` reads it
+    as, and that preset's billing unless the body names one. Its address is
+    kept as given: what changes is that the preset is written at birth, so a
+    locked one fixes the address from now on, and a later edit naming the same
+    preset is judged against it rather than against a blank."""
+    fields["preset"] = (fields.get("preset") or "").strip()
+    fields["billing"] = (fields.get("billing") or "").strip()
+    _check_billing(fields["billing"])
+    if not fields["preset"]:
+        inferred = providers.infer(fields)
+        fields["preset"] = inferred.id
+        fields["billing"] = fields["billing"] or inferred.billing
+        return
+    preset = _named_preset(fields["preset"], fields["kind"])
+    url = (fields.get("base_url") or "").strip()
+    if preset.url_locked and url and not _same_url(url, preset.base_url):
+        raise HTTPException(status_code=400, detail=ADDRESS_FIXED)
+    if preset.url_locked or not url:
+        fields["base_url"] = preset.base_url
+    fields["billing"] = fields["billing"] or preset.billing
+
+
+def _apply_preset_update(fields: dict, stored: dict) -> bool:
+    """An update body checked against the provider preset, in place; returns
+    whether it repoints the connection at a newly named locked preset.
+
+    A named preset must be on the connection's own adapter, and moving to a
+    locked one points the connection at that preset's address. Under a locked
+    preset (named here, or stored) a different address is a 400, and a blank
+    one, the preset's own or the one already stored is no change -- so a
+    connection stored with no address (an older OpenRouter one) is not
+    "repointed", which would drop its key (`llm_connections._update`), and one
+    whose stored address its preset's never matched (stamped by inference,
+    at its create or by the migration) still saves when the editor resends it.
+
+    A move is judged against the preset the stored connection is ON
+    (`providers.infer`), never the string stored: a connection no build has
+    stamped stores none, and naming the preset it is already on is a stamp,
+    not a move."""
+    _check_billing(fields.get("billing"))
+    if "preset" in fields:
+        fields["preset"] = (fields["preset"] or "").strip()
+        if fields["preset"]:
+            _named_preset(fields["preset"], stored["kind"])
+    pid = fields.get("preset", stored.get("preset") or "")
+    preset = providers.PRESETS.get(pid) if pid else None
+    if preset is None or not preset.url_locked:
+        return False
+    url = fields.pop("base_url", None)
+    if (url is not None and url.strip() and not _same_url(url, preset.base_url)
+            and not _same_url(url, stored.get("base_url") or "")):
+        raise HTTPException(status_code=400, detail=ADDRESS_FIXED)
+    moved = bool(fields.get("preset")) and fields["preset"] != providers.infer(stored).id
+    if moved and not _same_url(stored.get("base_url") or "", preset.base_url):
+        fields["base_url"] = preset.base_url
+        return True
+    return False
+
+
 @router.post("/llm-connections")
 def post_connection(body: ConnectionCreate):
+    refuse_newer()
     fields = _dump(body)
-    _check_preset_field(fields)
-    kind = fields.pop("kind")
-    name = fields.pop("name")
-    return {"id": store.llm_connections.create_connection(kind, name, **fields)}
+    _check_one_line(fields)
+    try:
+        # The preset check and the create in one model-settings hold
+        # (`llm_connections.LOCK`, cross-process): a preset another server
+        # deletes after the check cannot be named by the record it writes.
+        with store.llm_connections.LOCK:
+            _check_preset_field(fields)
+            _apply_preset(fields)
+            kind = fields.pop("kind")
+            name = fields.pop("name")
+            conn_id = store.llm_connections.create_connection(
+                kind, name, refuse_model_fields=True, **fields)
+    except store.llm_connections.ModelFieldsRefusedError as exc:
+        raise _model_fields_refused(exc) from exc
+    return {"id": conn_id}
 
 
 @router.get("/llm-connections/{id}")
@@ -530,20 +723,73 @@ def get_connection(id: str, registry: health.ProviderHealth = Depends(get_health
     # a reader can act on it. Riding on the detail read rather than a route of
     # its own because it is never wanted without the rest: the panel that would
     # ask for it has already asked for this.
+    # `used_by` reads every campaign's settings, so it is on the detail only.
     return {**conn, "health": registry.status(id, conn["rev"]),
-            "sampling": _connection_sampling(id)}
+            "sampling": _connection_sampling(id),
+            "used_by": inference_settings.used_by(id)}
+
+
+def _refuse_unconfirmed_reembed(before: dict, after: dict) -> None:
+    """`put_connection`'s guard: 400 `confirm_embedding` for an edit that moves
+    the Embedding role's vector space. Runs in the hold that writes, under
+    `config_lock`, so the role it reads is the one the write lands beside."""
+    if store.embed_space.moved_by(store.read_config(), before, after):
+        raise HTTPException(status_code=400, detail={
+            "kind": "confirm_embedding",
+            "detail": inference_settings.EMBEDDING_MOVE_CONFIRM.format(
+                provider=before.get("name") or before.get("id", ""))})
+
+
+def _refuse_unconfirmed_facts(conn: dict, model: str) -> facts.Guard:
+    """`put_connection_facts`' guard: 400 `confirm_embedding` for a facts
+    write that turns the Embedding role on. Runs in the hold that writes,
+    under `config_lock`, so the role it reads is the one the write lands
+    beside."""
+    def guard(before: dict, after: dict) -> None:
+        if store.embed_space.facts_moved(store.read_config(), conn["id"], model,
+                                         before, after):
+            raise HTTPException(status_code=400, detail={
+                "kind": "confirm_embedding",
+                "detail": inference_settings.EMBEDDING_FACTS_CONFIRM.format(
+                    provider=conn.get("name") or conn["id"])})
+    return guard
 
 
 @router.put("/llm-connections/{id}")
 def put_connection(id: str, body: ConnectionUpdate,
                    registry: health.ProviderHealth = Depends(get_health)):
+    """Edit a provider. An edit that moves the Embedding role's vector space --
+    a new key or address on the provider that role embeds through, which
+    restamps its `rev` -- re-embeds the library, so it is refused with 400
+    `confirm_embedding` unless the body says `confirm_embedding: true`
+    (CLAUDE.md, "a settings surface never spends unasked"). Compared in the
+    hold that writes (`update_connection`'s `guard`)."""
+    refuse_newer()
     fields = {k: v for k, v in _dump(body).items() if v is not None}
+    confirmed = fields.pop("confirm_embedding", None) is True
+    _check_one_line(fields)
     try:
-        stored = store.llm_connections.read_connection_raw(id)
-        _check_preset_field(fields, stored.get("sampler_preset", ""))
-        before = stored["rev"]
-        prefill_before = bool(stored.get("prefill"))
-        store.llm_connections.update_connection(id, **fields)
+        # The read the checks are made against, the checks and the write in
+        # one model-settings hold (`llm_connections.LOCK`, cross-process): the
+        # preset decisions below are about the record as stored, and another
+        # server's edit landing after this read would otherwise be judged as
+        # the record it replaced.
+        with store.llm_connections.LOCK:
+            stored = store.llm_connections.read_connection_raw(id)
+            _check_preset_field(fields, stored.get("sampler_preset", ""))
+            repointed = _apply_preset_update(fields, stored)
+            before = stored["rev"]
+            prefill_before = bool(stored.get("prefill"))
+            try:
+                # A preset move between two addresses on one host (z.ai's two
+                # plans) stays on the account its key is for: the key is kept
+                # unless the body gives another. Any other repoint drops it.
+                store.llm_connections.update_connection(
+                    id, refuse_model_fields=True, keep_key_on_same_host=repointed,
+                    guard=None if confirmed else _refuse_unconfirmed_reembed, **fields)
+            except store.llm_connections.ModelFieldsRefusedError as exc:
+                raise _model_fields_refused(exc) from exc
+            after = store.llm_connections.read_connection_raw(id)
         # An edit invalidates the verdict as surely as a delete does: the
         # failure on record was this connection's *previous* key, base URL or
         # model, and keeping it would report the setting the reader just
@@ -561,7 +807,6 @@ def put_connection(id: str, body: ConnectionUpdate,
         # the switch itself. It stays rev-neutral so the catalog survives the
         # toggle, and clears the verdict here instead -- otherwise unticking it
         # leaves the dot red until some later call happens to succeed.
-        after = store.llm_connections.read_connection_raw(id)
         if after["rev"] != before or bool(after.get("prefill")) != prefill_before:
             registry.forget(id)
         # Inside the `try`, where it has always been: a connection deleted
@@ -575,6 +820,7 @@ def put_connection(id: str, body: ConnectionUpdate,
 
 @router.delete("/llm-connections/{id}")
 def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(get_health)):
+    refuse_newer()
     try:
         store.llm_connections.delete_connection(id)
     except store.llm_connections.ConnectionNotFound:
@@ -608,7 +854,13 @@ def post_connection_models_refresh(
     The cache write happens in the RUN, after the fetch, which is what makes
     backgrounding this survivable: the point of the refresh is the sidecar it
     leaves behind, so a client that never comes back still gets it.
+
+    The cache is model settings -- capability resolution reads it -- so a
+    newer store is refused here (409 `newer_format`), and again in the hold
+    the run writes in (`set_cached_models`), where a switch landing after
+    this check is answered as the same refusal on the run.
     """
+    refuse_newer()
     try:
         conn = store.llm_connections.read_connection_raw(id)
     except store.llm_connections.ConnectionNotFound:
@@ -632,7 +884,13 @@ def post_connection_models_refresh(
         # question: a client whose run was reaped asks the store whether ITS
         # refresh landed. "Newer than it was" cannot answer that -- a second tab
         # refreshing the same connection moves the timestamp too.
-        store.llm_connections.set_cached_models(id, models, rev, attempt=attempt)
+        try:
+            # Off the loop: the write waits on the cross-process hold.
+            await asyncio.to_thread(store.llm_connections.set_cached_models,
+                                    id, models, rev, attempt=attempt)
+        except store.config.NewerFormatError:
+            return {"state": "failed",
+                    "error": run_error(HTTPException(status_code=409, detail=NEWER_FORMAT))}
         return {"state": "landed",
                 "result": {"models": catalog.listable(models), "fetched_at": fetched_at, "rev": rev}}
 
@@ -664,9 +922,27 @@ async def post_model_catalog(body: CatalogProbe, client: LLMClient = Depends(get
         raise _llm_http_error(exc) from exc
 
 
-@router.post("/llm-connections/{cid}/health")
+#: The adapters whose health check GENERATES (one short message, which a
+#: subscription counts): sent only on `confirm: true` (spec 6.5, rule 1).
+GENERATING_CHECK_KINDS: frozenset[str] = frozenset({"claude"})
+
+#: The 400 an unconfirmed generating check gets, before anything is sent.
+HEALTH_UNCONFIRMED = ("This check sends one short message and may use your "
+                      "subscription — confirm to run it.")
+
+
+@router.get("/providers/presets")
+def get_provider_presets():
+    """The provider presets a new provider is made from (spec 6.1), in table
+    order, each with whether its health check generates (and so needs
+    `confirm`)."""
+    return [{**capabilities.preset_body(p), "generating_check": p.kind in GENERATING_CHECK_KINDS}
+            for p in providers.PRESETS.values()]
+
+
+@router.post("/llm-connections/{conn_id}/health")
 async def post_connection_health(
-    cid: str, client: LLMClient = Depends(get_llm),
+    conn_id: str, body: HealthCheck | None = None, client: LLMClient = Depends(get_llm),
     registry: health.ProviderHealth = Depends(get_health),
 ):
     """Ask this connection's provider whether it can serve, right now (#146).
@@ -687,11 +963,20 @@ async def post_connection_health(
 
     The verdict is filed in the registry either way, so the status bar reflects
     the check for as long as it is the freshest thing known.
+
+    A check that generates (`GENERATING_CHECK_KINDS`: the Claude subscription)
+    is **refused unless `confirm` is JSON `true`** (`HEALTH_UNCONFIRMED`), and
+    nothing is sent or recorded -- no client can spend on it unasked. The free
+    checks take no confirmation.
+
+    `conn_id`, never `cid`: the activity middleware reads `cid` as a campaign.
     """
     try:
-        conn = store.llm_connections.read_connection_raw(cid)
+        conn = store.llm_connections.read_connection_raw(conn_id)
     except store.llm_connections.ConnectionNotFound as exc:
         raise HTTPException(status_code=404, detail="connection not found") from exc
+    if conn.get("kind") in GENERATING_CHECK_KINDS and (body is None or body.confirm is not True):
+        raise HTTPException(status_code=400, detail=HEALTH_UNCONFIRMED)
     problem = inference.problem(conn)
     if problem is not None:
         return _health_body(registry.record(conn, LLMError("missing_key", problem)))
@@ -975,6 +1260,7 @@ def post_connection_test(
     terminal step under the `rev` captured here, unless it moved meanwhile
     (`_record_verdicts`).
     """
+    refuse_newer()
     raw, model, caps = _test_plan(conn_id, body)
     if body.confirm is not True:
         raise HTTPException(status_code=400, detail=TEST_UNCONFIRMED)
@@ -1060,23 +1346,6 @@ def put_global_response(body: ResponseSettings):
     return {"ok": True}
 
 
-# ---- per-task routing (#142) ----
-@router.get("/routing")
-def get_global_routing():
-    return _routing_body("global", {})
-
-
-@router.put("/routing")
-def put_global_routing(body: RoutingUpdate):
-    fields = _routing_fields("global", body)
-    # An empty map is a read: `write_config` rewrites the whole file, and a
-    # request that names no route has nothing to publish. The campaign side
-    # skips its write on the same reasoning (`set_campaign_routing`).
-    if fields:
-        store.write_config(**fields)
-    return _routing_body("global", {})
-
-
 # ---- sampler presets ----
 def _preset_or_404(pid: str) -> dict:
     got = store.sampler_presets.read_preset(pid)
@@ -1094,6 +1363,7 @@ def get_sampler_presets():
 
 @router.post("/sampler-presets")
 def post_sampler_preset(body: SamplerPresetBody):
+    refuse_newer()
     fields = _dump(body)
     try:
         pid = store.sampler_presets.create_preset(fields["name"], fields.get("params"),
@@ -1110,6 +1380,7 @@ def post_sampler_preset_import(body: SamplerImportBody):
     Saved even when nothing mapped: an empty preset is a valid one, and the
     report says that is what happened rather than refusing a file that is
     exactly what SillyTavern wrote."""
+    refuse_newer()
     fields = _dump(body)
     try:
         params, report = store.sampler_presets.from_sillytavern(
@@ -1132,6 +1403,7 @@ def get_sampler_preset(pid: str):
 
 @router.put("/sampler-presets/{pid}")
 def put_sampler_preset(pid: str, body: SamplerPresetBody):
+    refuse_newer()
     fields = _dump(body)
     try:
         store.sampler_presets.update_preset(pid, fields["name"], fields.get("params"),
@@ -1145,6 +1417,7 @@ def put_sampler_preset(pid: str, body: SamplerPresetBody):
 
 @router.delete("/sampler-presets/{pid}")
 def delete_sampler_preset(pid: str):
+    refuse_newer()
     try:
         store.sampler_presets.delete_preset(pid)
     except store.sampler_presets.PresetNotFoundError:
@@ -1179,6 +1452,72 @@ def get_connection_capabilities(
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
     return capabilities.grouped(conn, need, model or None)
+
+
+def _facts_conn(conn_id: str) -> dict:
+    try:
+        return store.llm_connections.read_connection_raw(conn_id)
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+
+
+def _facts_body(conn: dict, model: str) -> dict:
+    """One model's facts on a provider (`facts.of`: verified results only for
+    its current rev) and every capability as it resolves with them."""
+    caps = capabilities.caps_for(conn, model)
+    return {"provider": conn["id"], "model": model,
+            **facts.of(conn["id"], model, conn["rev"]),
+            "capabilities": {n: capabilities.cap_body(c) for n, c in caps.items()}}
+
+
+@router.get("/llm-connections/{conn_id}/facts")
+def get_connection_facts(conn_id: str, model: str = ""):
+    """What is known of `model` on this provider (spec 4.2): the user's
+    statements, the test results for the provider's current rev, and what
+    each capability resolves to. `model` blank is the provider's own."""
+    conn = _facts_conn(conn_id)
+    return _facts_body(conn, model.strip() or facts.model_of(conn))
+
+
+@router.put("/llm-connections/{conn_id}/facts")
+def put_connection_facts(conn_id: str, body: FactsUpdate):
+    """State `vision`, `prefill`, `post_process` and capability `overrides`
+    (`{cap: "" | "yes" | "no"}`, "" removing one) for one model; a field left
+    out (or null) is left as it is. 400 for a value the store refuses, before
+    anything is written; 404 for a provider that does not exist -- or stopped
+    existing before the write, which `facts.state` checks under the connection
+    lock. Rates are slice E's.
+
+    A model-settings write like any other (spec 11.2, 12): 409 `not_migrated`
+    until the store is at format 2, where the lowering reads facts rather than
+    the connection's legacy fields -- a write before then would answer 200 and
+    change nothing, and the migration would merge the legacy values over it --
+    and 409 `newer_format` on a store a newer build wrote.
+
+    A write that turns the Embedding role on -- the user's `embed: yes` over a
+    known `no` for the model that role embeds with -- embeds the library from
+    scratch, so it is refused with 400 `confirm_embedding` unless the body says
+    `confirm_embedding: true` (CLAUDE.md, "a settings surface never spends
+    unasked"), compared in the hold that writes (`facts.state`'s `guard`)."""
+    refuse_unmigrated()
+    conn = _facts_conn(conn_id)
+    fields = _dump(body)
+    confirmed = fields.pop("confirm_embedding", None) is True
+    model = (fields.get("model") or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="name a model")
+    if len(model) > store.alternates.MAX_MODEL_CHARS:
+        raise HTTPException(status_code=400, detail="model id is too long")
+    try:
+        facts.state(conn_id, model, vision=fields.get("vision"),
+                    prefill=fields.get("prefill"), post_process=fields.get("post_process"),
+                    overrides=fields.get("overrides"),
+                    guard=None if confirmed else _refuse_unconfirmed_facts(conn, model))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except store.llm_connections.ConnectionNotFound:
+        raise HTTPException(status_code=404, detail="connection not found") from None
+    return _facts_body(_facts_conn(conn_id), model)
 
 
 @router.post("/inference/controls")

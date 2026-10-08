@@ -6,7 +6,8 @@ Two ways to obtain output:
   replay (default)  read the checked-in recordings. Offline, deterministic, no
                     API key — this is the mode pytest runs, and the one that
                     guards prompt-template edits.
-  live              call the active LLM connection once per case. Costs money
+  live              call the model the app routes each case's task to, once per
+                    case. Costs money
                     and is never deterministic, so it is opt-in and its result
                     is a report, not a gate.
 
@@ -104,24 +105,37 @@ def replay_all(cases: tuple[Case, ...], isolate) -> list[Result]:
 
 # -------------------------------------------------------------------- live
 
-def resolve_connection() -> dict:
-    """The user's ACTIVE LLM connection, read from the real store.
+def resolve_connections(cases: tuple[Case, ...]) -> dict[str, dict]:
+    """task -> the connection dict the app would send that task's generation
+    to, read from the real store -- one resolution per distinct `Case.task`.
 
     Must be called BEFORE GRIMOIRE_HOME is repointed at a fixture — that is the
-    whole reason it is a separate function. Reads credentials only; no campaign,
-    world or character content is touched. get_active() can write once, running
-    the same llm_connections migration the app runs at startup on a library that
+    whole reason it is a separate function. Resolves through the app's own seam
+    (`routes.common.require_inference`): the role or route the Models page
+    chose, its fallback, the model's facts and the route's preset -- never the
+    legacy `active_connection_id`, frozen for older builds once the store is at
+    format 2. Reads settings and credentials only; no campaign, world or
+    character content is touched. The resolution can write once, running the
+    same `llm_connections` seeding the app runs at startup on a library that
     predates connections; nothing else here writes to the real store.
-    """
-    from grimoire.store import llm_connections
 
-    conn = llm_connections.get_active()
-    if conn is None:
-        raise RuntimeError(
-            "no active LLM connection: pick one on the Configuration page first")
-    if conn["kind"] != "claude" and not conn["api_key"]:
-        raise RuntimeError(f"connection {conn['id']!r} has no API key set")
-    return conn
+    A task the seam refuses (no key, a model known unable to do the job)
+    raises RuntimeError with the seam's own reason.
+    """
+    from fastapi import HTTPException
+
+    from grimoire.routes.common import require_inference
+
+    out: dict[str, dict] = {}
+    for task in dict.fromkeys(case.task for case in cases):
+        try:
+            out[task] = require_inference(task).conn
+        except HTTPException as exc:
+            detail = exc.detail
+            if isinstance(detail, dict):
+                detail = detail.get("detail") or detail.get("kind") or ""
+            raise RuntimeError(f"{task}: {detail} (choose a model on the Models page)") from exc
+    return out
 
 
 def live(case: Case, conn: dict, record: bool = False) -> Result:
@@ -152,11 +166,14 @@ def live(case: Case, conn: dict, record: bool = False) -> Result:
     return result
 
 
-def live_all(cases: tuple[Case, ...], conn: dict, isolate, record: bool = False) -> list[Result]:
+def live_all(cases: tuple[Case, ...], conns: dict[str, dict], isolate,
+             record: bool = False) -> list[Result]:
+    """Each case live, on the connection its task resolved to
+    (`resolve_connections`)."""
     out = []
     for case in cases:
         with isolate():
-            out.append(live(case, conn, record=record))
+            out.append(live(case, conns[case.task], record=record))
     return out
 
 

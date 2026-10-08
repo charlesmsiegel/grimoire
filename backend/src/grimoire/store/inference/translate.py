@@ -23,22 +23,24 @@ Both views take `only`, the route keys to translate (None for every route), so
 a resolver answering one task looks up only that route's pins. Roles and the
 fallback are always translated: every task can reach them.
 
-Emitted key names come from `keys` only.
+Emitted key names come from `store.inference_keys` only.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Collection
 
+from .. import inference_keys as keys
 from .. import routing
-from . import keys
 
-#: A raw connection by id, or None. A lookup must never raise.
+#: A raw connection by id, or None. The resolver's lookup never raises; the
+#: migration's raises on a file it cannot read (`migrate._lookup`), and this
+#: module lets that through untouched.
 Lookup = Callable[[str], dict | None]
 
 
 def is_current(meta: dict) -> bool:
-    return str(meta.get(keys.FORMAT_KEY, "")).strip() == keys.CURRENT_FORMAT
+    return keys.is_current(meta)
 
 
 def _selection(conn_id: str, conn: Lookup) -> dict[str, str]:

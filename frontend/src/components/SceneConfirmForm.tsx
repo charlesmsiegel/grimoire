@@ -4,6 +4,7 @@ import { api, splitNativeDate, type CharacterSummary, type EntitySummary, type P
 import { CalendarDatePicker } from "./CalendarDatePicker";
 import { errorText } from "../api/errors";
 import type { DraftCast, SceneDraft } from "./sceneDraft";
+import { NeedsModel } from "./inference/NeedsModel";
 
 /** Where the scene's opening post comes from (issue #90).
  *  - `greeting` — the greeting body, verbatim, seeded by `start_from_greeting`
@@ -441,7 +442,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
       {/* Says why the adapted option is greyed out -- except under the premise
           option, whose own hint already says there is nothing to generate with. */}
       {draft.source === "greeting" && !ready && firstPost !== "premise" && (
-        <div className="field-hint">Set up an LLM connection in Config to adapt the greeting.</div>
+        <NeedsModel action="adapt the greeting" />
       )}
 
       {usesGreeting ? (
@@ -491,7 +492,7 @@ export function SceneConfirmForm({ cid, draft, notice, ready, onBack, onCancel, 
                   worth filling for a reader who sets a connection up after
                   creating the scene, and CastPanel takes the same line --
                   prompt input enabled, hint shown, only Generate disabled. */}
-              {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+              {!ready && <NeedsModel />}
             </>
           )}
         </>

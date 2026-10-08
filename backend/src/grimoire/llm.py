@@ -102,6 +102,29 @@ PRESET_REFUSAL_STATUSES = frozenset({400, 422})
 #: whichever connection serves it, the fallback included (`LLMClient._routes`).
 ROUTE_SCOPES = frozenset({"campaign", "global"})
 
+#: The key under which a call's connection dict carries the fallback that call
+#: may fail over to (spec 5.5): the resolver's own fallback attempt, lowered,
+#: attached to the primary's dict by `store.inference.resolve` -- absent when
+#: there is none, or when it is known unable to do the job (spec 5.3).
+#:
+#: The facade's to read, and nobody else's. `LLMClient` takes it off at the
+#: boundary (`_without_fallback`), before any adapter, capture, health record,
+#: `ATTEMPTED` stamp or preset refusal sees the dict: each of those is about
+#: ONE attempt, and a dict carrying the next one would describe a chain.
+#: Every `LLMClient` entry point that takes a conn must strip it the same way
+#: (today `_routes`, `single` and `note_outcome`); a new one that forgets
+#: sends the chain to an adapter.
+FALLBACK_KEY = "_fallback"
+
+
+def _without_fallback(conn: dict) -> dict:
+    """`conn` as one attempt: without the fallback it carries (`FALLBACK_KEY`).
+    The same dict when it carries none, so identity survives for a caller that
+    never had one; a copy otherwise, so the caller's dict is left as it was."""
+    if FALLBACK_KEY not in conn:
+        return conn
+    return {k: v for k, v in conn.items() if k != FALLBACK_KEY}
+
 
 def _backoff_delay(attempt: int) -> float:
     """Seconds to wait before retry `attempt` (0-based).
@@ -144,9 +167,9 @@ TEXT_ONLY_KINDS = frozenset({"claude"})
 #:
 #: `claude` is absent, and not as an oversight: that path's models are aliases
 #: the SDK resolves at request time, with no endpoint to enumerate them, which
-#: is why `ConnectionForm` offers it a fixed list rather than a live one. The
-#: route reads this to refuse a catalog request the provider cannot serve
-#: *before* making one, so the reader gets "this kind has no catalog" instead
+#: is why a Claude provider's model is typed (or picked from a fixed list)
+#: rather than read off a live catalog. The route reads this to refuse a
+#: catalog request the provider cannot serve *before* making one, so the reader gets "this kind has no catalog" instead
 #: of a transport error from a URL that was never going to exist.
 LISTABLE_KINDS = frozenset({"openrouter", "openai_compatible", "anthropic"})
 
@@ -764,7 +787,10 @@ class LLMClient:
         # *connection record* to fall back to (#144). A store lookup behind a
         # callable is what keeps this module free of the store — and it is
         # re-resolved per generation, so repointing the fallback on the
-        # Configuration page takes effect on the next send.
+        # Configuration page takes effect on the next send. The shipped client
+        # passes none any more: each call carries the resolver's own fallback
+        # (`FALLBACK_KEY`), which `_routes` prefers. This one is for a client
+        # built by hand, and for a dict that carries no key.
         self._retries = retries
         self._fallback = fallback
         #: Called with `(conn, error_or_None)` as each attempt settles, so the
@@ -803,26 +829,37 @@ class LLMClient:
     def _routes(self, conn: dict) -> list[tuple[dict, int]]:
         """The connections one generation may be attempted on, in order.
 
-        The active connection with its retry budget, then the configured
-        fallback with a single attempt. The fallback is dropped when it
-        resolves to the connection that is already primary — see `_same_route`
-        — and a resolver that raises is treated as "no fallback": a broken
-        fallback must not be able to fail a generation the primary would have
-        served.
+        The primary with its retry budget, then the fallback with a single
+        attempt. The fallback is the one the CALL carries (`FALLBACK_KEY`, the
+        resolver's own per-call choice) when it carries the key at all, and
+        otherwise the constructor's `fallback` -- which the shipped client no
+        longer sets (`routes.common.build_llm`), and which a client built by
+        hand still may. The primary is taken off the key here, so nothing
+        downstream of this list sees it.
+
+        The fallback is dropped when it resolves to the connection that is
+        already primary — see `_same_route` — and a resolver that raises is
+        treated as "no fallback": a broken fallback must not be able to fail a
+        generation the primary would have served.
         """
-        routes = [(conn, self._retry_count())]
-        try:
-            fallback = self._fallback() if callable(self._fallback) else self._fallback
-        except Exception as exc:  # noqa: BLE001 - see the docstring; best-effort
-            # Logged rather than swallowed in silence: the symptom of a broken
-            # resolver is a fallback that is configured and simply never fires,
-            # which is invisible from the outside and indistinguishable from
-            # "the primary kept working". One line here is the difference
-            # between a diagnosable bug and a haunted setting.
-            log.warning("could not resolve the fallback connection: %s", exc)
-            fallback = None
-        if fallback and not _same_route(conn, fallback):
-            routes.append((fallback_sampling(conn, fallback), 0))
+        primary = _without_fallback(conn)
+        routes = [(primary, self._retry_count())]
+        if FALLBACK_KEY in conn:
+            fallback = conn[FALLBACK_KEY]
+        else:
+            try:
+                fallback = self._fallback() if callable(self._fallback) else self._fallback
+            except Exception as exc:  # noqa: BLE001 - see the docstring; best-effort
+                # Logged rather than swallowed in silence: the symptom of a
+                # broken resolver is a fallback that is configured and simply
+                # never fires, which is invisible from the outside and
+                # indistinguishable from "the primary kept working". One line
+                # here is the difference between a diagnosable bug and a
+                # haunted setting.
+                log.warning("could not resolve the fallback connection: %s", exc)
+                fallback = None
+        if fallback and not _same_route(primary, fallback):
+            routes.append((fallback_sampling(primary, _without_fallback(fallback)), 0))
         return routes
 
     def _usable_routes(self, messages: list[dict], conn: dict) -> list[tuple[dict, int]]:
@@ -1012,13 +1049,17 @@ class LLMClient:
         model (this one reads no images), not about whether the connection
         serves, and a status dot turned red by a vision probe would send the
         reader to fix a connection that works.
+
+        A fallback the dict carries (`FALLBACK_KEY`) is never read: it is
+        taken off with the rest of the boundary's strip, and nothing else.
         """
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop the call
             sink = None
         agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
-                          [(conn, 0)], self._timeout_seconds(), usage=usage, capture=sink)
+                          [(_without_fallback(conn), 0)], self._timeout_seconds(), usage=usage,
+                          capture=sink)
         return "".join([chunk async for chunk in agen])
 
     def note_outcome(self, conn: dict, error: LLMError | None) -> None:
@@ -1037,8 +1078,11 @@ class LLMClient:
         disconnecting) unwinds identically and is nobody's fault. Only the
         holder of the ceiling knows which of the two just happened, so only it
         can say.
+
+        Filed for the attempt alone: a caller falling back on the dict it
+        resolved hands one that carries its fallback (`FALLBACK_KEY`).
         """
-        _observe(self._observer, conn, error)
+        _observe(self._observer, _without_fallback(conn), error)
 
     async def list_models(self, conn: dict) -> list[dict]:
         """The catalog `conn`'s provider offers, normalized (#149).

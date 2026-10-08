@@ -84,16 +84,25 @@ threads, and character state — so the next scene starts from an up-to-date wor
 - **Lorebooks / world info** — parse and import character-book / world-info
   entries into a world's lore.
 - **LLM-generated taglines** and **image localization** for characters.
-- **Model routing** — scene prose, absorb, dossier refreshes, summaries and the
-  one-shot utilities can each run on a connection of their own, set under
-  Settings → Model routing and overridable per campaign from the scene
-  inspector. Anything left on inherit uses the active connection, so an install
-  that never opens the page keeps the single model it always had.
+- **Model roles and routes** — four roles say which provider, model and preset
+  does which kind of work: **Primary** writes scene prose; **Fast** takes
+  absorb, dossier refreshes, summaries and the other background work (and is
+  Primary until set); **Decision** runs the routes you send to it (and is Fast
+  until set); **Embedding** serves recall, the art catalogue, search by meaning
+  and the continuity checks. Primary, Fast and Decision can each name a
+  fallback. Under **Advanced**, any single route can be sent to another role or
+  a specific model of its own; a route left to inherit runs on its role. All of
+  it is set on the
+  **Models** page (linked from Settings → Models), the providers it names on
+  **Library → Providers**, and a campaign overrides Primary, Fast, Decision and
+  its routes from the scene inspector's Models section. An upgraded install has
+  its old connections and routing moved into these once, so it keeps the models
+  it had.
 - **Continuity review and the Story Graph** — after each wrap-up Grimoire looks
   over the campaign's plot threads and commitments for ones that may be the
   same business, belong together, or be finished, and lists what it finds in
   the Ledger to merge, link, close or set aside; nothing changes until you
-  choose. It works with no embeddings connection and catches more with one.
+  choose. It works without the Embedding role and catches more with it.
   The Story Graph draws the scenes played so far beside what is still owed and
   what is coming up.
 - **EPUB export** — turn a finished campaign into a readable book.
@@ -244,9 +253,9 @@ Grimoire opens on your campaigns — one row each, newest play first, with
 
 ## Local and OpenAI-compatible backends
 
-Besides OpenRouter and Claude, a connection can be **OpenAI-compatible**: a base
-URL, an optional API key and a model name, spoken to in the OpenAI
-chat-completions format. That covers local servers — Ollama, the llama.cpp
+Besides OpenRouter and Claude, a provider can be **OpenAI-compatible**: a base
+URL and an optional API key, spoken to in the OpenAI chat-completions format,
+with the model it runs chosen per role on the **Models** page. That covers local servers — Ollama, the llama.cpp
 server, LM Studio, vLLM, KoboldCpp, text-generation-webui — and most hosted
 providers that offer an OpenAI-style endpoint.
 
@@ -262,24 +271,30 @@ providers that offer an OpenAI-style endpoint.
    | KoboldCpp | `http://localhost:5001/v1` |
    | text-generation-webui (`--api`) | `http://localhost:5000/v1` |
 
-2. Open **Library → Connections**, add a connection, and set its kind to
-   **OpenAI-compatible**. The presets under the Base URL field fill in
-   the addresses above; change the port if yours differs. Leave the API key
-   blank unless the server asks for one.
-3. Press **Fetch models** (**Refresh models** on a saved connection). Grimoire asks the endpoint's `/models` list and
-   offers what it returns; a server that does not serve one (or is not running
-   yet) leaves the field as free text, so type the model name the server uses.
-   **Test connection** asks the same endpoint, so it costs no generation —
-   which also means a server with no `/models` fails the test even when
+2. Open **Library → Providers** and press **+ New provider**. Pick
+   **Ollama** or **LM Studio** if that is what you run — the address comes
+   filled in — or **Custom (OpenAI-compatible)** for any of the others, and
+   type the address above (change the port if yours differs). Leave the API
+   key blank unless the server asks for one.
+3. Press **Refresh** in the provider's sidebar. Grimoire asks the endpoint's
+   `/models` list and shows what it returns under **Models on this provider**;
+   a server that does not serve one (or is not running yet) lists nothing, so
+   open a model by the id the server uses from the column instead. The
+   provider's **Check** asks the same endpoint, so it costs no generation —
+   which also means a server with no `/models` fails the check even when
    generation works. Send a turn to be sure.
 4. Some endpoints reject a system message part-way through a conversation. If
-   yours does, set **Prompt post-processing** to *Strict*.
+   yours does, open the model on the provider's page (**Providers** ▸ the
+   provider ▸ the model, or *Open a model by id*), press **Edit**, and set
+   **Prompt post-processing** to *Strict*.
 
-Connections plug into **Model routing**, so a local model does not have to do
-everything: point *Absorb & mechanics audit* and *Summaries & scene-break
-checks* at the local connection under Settings → Model routing, and leave scene
-prose on a hosted one (or the other way round). Routes left on *inherit* use the
-active connection.
+A local model does not have to do everything. On the **Models** page, point the
+Fast role — which absorb, summaries and the other background work run on by
+default — at the local provider and leave Primary, which writes scene prose, on a
+hosted one (or the other way round). For finer control, open **Advanced** and
+send a single route such as *Absorb & mechanics audit* or *Summaries &
+scene-break checks* to another role or to a specific model; routes left to
+inherit run on their role.
 
 Two things behave differently from a hosted model:
 

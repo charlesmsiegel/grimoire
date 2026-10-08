@@ -64,8 +64,6 @@ export default function AppPaletteSource() {
                meta: "library section", to: "/library" });
     out.push({ id: "section:/search", group: "ELSEWHERE", label: "Search",
                meta: "content and facts", to: "/search" });
-    out.push({ id: "section:/connections", group: "ELSEWHERE", label: "Connections",
-               meta: "library section", to: "/connections" });
     out.push({ id: "action:new-campaign", group: "ELSEWHERE", label: "New campaign",
                meta: "start one", action: true, to: "/campaigns/new" });
     out.push({ id: "section:/config", group: "ELSEWHERE", label: "Settings",
@@ -75,6 +73,11 @@ export default function AppPaletteSource() {
     // no way in but the URL bar.
     out.push({ id: "section:/stats", group: "ELSEWHERE", label: "Instrumentation",
                meta: "latency, errors, the debug log", to: "/stats" });
+    // Which model each role runs on. Its providers are a library section, but
+    // this page is neither that nor a rail row: Settings links to it, and
+    // this is the way in that does not need Settings open first.
+    out.push({ id: "section:/models", group: "ELSEWHERE", label: "Models",
+               meta: "roles and routes", to: "/models" });
     // Typeable as well as clickable, for the same reason every route is: the
     // header button is the only other way in, and it is one of the things this
     // hides. Offered in both directions so the palette never describes a state

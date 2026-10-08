@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import importlib
 import io
-import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,6 +25,7 @@ from PIL import Image
 import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
 
 from . import draft_runs as drafts
 from . import review_runs
@@ -57,6 +57,20 @@ def _connection(client, name, model="vendor/x") -> str:
     return client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": name, "model": model,
         "api_key": "sk-" + name}).json()["id"]
+
+
+def _route(**routes: str) -> None:
+    """Legacy global route choices, written as a store from before the roles
+    format holds them -- the `/routing` endpoints that wrote them were retired
+    in inference slice C, and the resolver still reads them through its
+    translation until the store is migrated."""
+    store.write_config(**{store.routing.config_key(k): v for k, v in routes.items()})
+
+
+def _campaign_route(cid: str, **routes: str) -> None:
+    """A campaign's legacy route choices (`_route`'s campaign half)."""
+    store.campaigns.set_campaign_routing(
+        cid, {store.routing.config_key(k): v for k, v in routes.items()})
 
 
 def _seed(client):
@@ -214,6 +228,17 @@ CAMPAIGN_ROUTES = [r.key for r in store.routing.LEGACY_ROUTES if r.campaign_scop
 GLOBAL_ONLY = [r.key for r in store.routing.LEGACY_ROUTES if not r.campaign_scoped]
 
 
+def test_the_routing_endpoints_are_gone(client):
+    """The legacy routing surface is retired (slice C, Task 8): roles and
+    routes are read and written at `/api/inference/settings` and
+    `/api/campaigns/{cid}/inference`."""
+    _wid, cid, _sid = _seed(client)
+    for path in ("/api/routing", f"/api/campaigns/{cid}/routing"):
+        assert client.get(path).status_code in (404, 405), path
+        assert client.put(path, json={"routes": {}}).status_code in (404, 405), path
+    assert not any(getattr(r, "path", "").endswith("/routing") for r in client.app.routes)
+
+
 def test_every_route_has_a_driver():
     assert set(DRIVERS) == {r.key for r in store.routing.LEGACY_ROUTES}
 
@@ -222,7 +247,7 @@ def test_every_route_has_a_driver():
 def test_a_global_route_sends_that_job_to_its_own_connection(client, route):
     wid, cid, sid = _seed(client)
     routed = _connection(client, f"for-{route}")
-    client.put("/api/routing", json={"routes": {route: routed}})
+    _route(**{route: routed})
     fake = _fake(client)
 
     DRIVERS[route](client, wid, cid, sid)
@@ -249,9 +274,8 @@ def test_a_campaign_override_beats_the_global_route(client, route):
     wid, cid, sid = _seed(client)
     globally = _connection(client, f"global-{route}")
     locally = _connection(client, f"local-{route}")
-    client.put("/api/routing", json={"routes": {route: globally}})
-    r = client.put(f"/api/campaigns/{cid}/routing", json={"routes": {route: locally}})
-    assert r.status_code == 200
+    _route(**{route: globally})
+    _campaign_route(cid, **{route: locally})
     fake = _fake(client)
 
     DRIVERS[route](client, wid, cid, sid)
@@ -264,11 +288,17 @@ def test_a_world_scoped_route_takes_no_campaign_override(client, route):
     """`routes/characters.py` calls a CHARACTER id `cid`. A route that read it
     as a campaign would apply another record's settings, and the spelling is
     what would hide it."""
-    _wid, cid, _sid = _seed(client)
-    r = client.put(f"/api/campaigns/{cid}/routing",
-                   json={"routes": {route: _connection(client, "nope")}})
-    assert r.status_code == 400
-    assert route in r.json()["detail"]
+    wid, cid, sid = _seed(client)
+    # Written by hand: no writer stores a world-scoped key in a campaign.
+    path = store.campaigns.campaign_meta_path(cid)
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta[store.routing.config_key(route)] = _connection(client, "nope")
+    path.write_text(dump_frontmatter(meta, body), encoding="utf-8")
+    fake = _fake(client)
+
+    DRIVERS[route](client, wid, cid, sid)
+
+    assert {req["conn"]["id"] for req in fake.requests} == {"openrouter"}
 
 
 def test_absorbs_phases_each_follow_their_own_route(client):
@@ -281,7 +311,7 @@ def test_absorbs_phases_each_follow_their_own_route(client):
                 json={"kind": "characters", "id": "mara"})
     extraction = _connection(client, "extraction")
     dossiers = _connection(client, "dossiers")
-    client.put("/api/routing", json={"routes": {"absorb": extraction, "dossier": dossiers}})
+    _route(absorb=extraction, dossier=dossiers)
     fake = _fake(client)
 
     review_runs.absorb(client, cid, sid)
@@ -296,7 +326,7 @@ def test_the_reconcile_sweep_runs_on_the_continuity_route(client):
     pointing the route at a connection moves the sweep's one call there too."""
     _wid, cid, sid = _seed(client)
     routed = _connection(client, "for-continuity")
-    client.put("/api/routing", json={"routes": {"continuity": routed}})
+    _route(continuity=routed)
     fake = _fake(client)
     pid, title, beat = review_runs.LEDGER_THREAD
     store.plot.set_movement(cid, pid, title, "open", beat, sid)
@@ -326,7 +356,7 @@ def test_a_misrouted_secondary_phase_reports_itself_and_leaves_absorb_standing(c
                 json={"kind": "characters", "id": "mara"})
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    client.put("/api/routing", json={"routes": {"dossier": keyless}})
+    _route(dossier=keyless)
     _fake(client)
 
     r = review_runs.absorb(client, cid, sid)
@@ -347,7 +377,7 @@ def test_a_misrouted_extraction_still_refuses_the_whole_absorb(client):
     _wid, cid, sid = _seed(client)
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    client.put("/api/routing", json={"routes": {"absorb": keyless}})
+    _route(absorb=keyless)
     _fake(client)
 
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/absorb")
@@ -362,7 +392,7 @@ def test_a_scene_turn_and_its_retry_share_the_one_route(client):
     # /retry is reserved for an unfinished one.
     _wid, cid, sid = _seed(client)
     routed = _connection(client, "prose")
-    client.put("/api/routing", json={"routes": {"scene": routed}})
+    _route(scene=routed)
     fake = _fake(client)
 
     with client.stream("POST", f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -384,7 +414,7 @@ def test_a_route_naming_a_deleted_connection_falls_back_rather_than_failing(clie
     frontmatter. So a stale campaign override degrades to the next scope."""
     _wid, cid, _sid = _seed(client)
     doomed = _connection(client, "doomed")
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"suggestions": doomed}})
+    _campaign_route(cid, suggestions=doomed)
     assert client.delete(f"/api/llm-connections/{doomed}").status_code == 200
     fake = _fake(client)
 
@@ -396,10 +426,10 @@ def test_a_route_naming_a_deleted_connection_falls_back_rather_than_failing(clie
 def test_deleting_a_connection_clears_it_from_the_global_routes(client):
     _seed(client)
     doomed = _connection(client, "doomed")
-    client.put("/api/routing", json={"routes": {"summary": doomed}})
-    assert client.get("/api/routing").json()["routes"]["summary"] == doomed
+    _route(summary=doomed)
+    assert store.read_config()["route_summary"] == doomed
     client.delete(f"/api/llm-connections/{doomed}")
-    assert client.get("/api/routing").json()["routes"]["summary"] == ""
+    assert store.read_config()["route_summary"] == ""
 
 
 def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(client):
@@ -409,7 +439,7 @@ def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(
     _wid, cid, _sid = _seed(client)
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    client.put("/api/routing", json={"routes": {"suggestions": keyless}})
+    _route(suggestions=keyless)
     _fake(client)
 
     r = drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
@@ -420,34 +450,6 @@ def test_a_routed_connection_that_cannot_send_is_reported_not_silently_replaced(
     body = r.json()
     assert body["kind"] == "missing_key"
     assert "Keyless" in body["detail"] and "scene suggestions" in body["detail"].lower()
-
-
-def test_a_route_naming_no_connection_is_refused_at_the_door(client):
-    """Tolerated on read, refused on write -- see `_routing_fields`. A typo
-    stored as a setting would sit on the page routing nothing."""
-    _wid, _cid, _sid = _seed(client)
-    r = client.put("/api/routing", json={"routes": {"scene": "no-such-connection"}})
-    assert r.status_code == 400 and "no-such-connection" in r.json()["detail"]
-    assert client.get("/api/routing").json()["routes"]["scene"] == ""
-
-
-def test_clearing_a_global_route_is_not_mistaken_for_a_bad_connection(client):
-    _seed(client)
-    routed = _connection(client, "temporary")
-    client.put("/api/routing", json={"routes": {"summary": routed}})
-    assert client.put("/api/routing", json={"routes": {"summary": ""}}).status_code == 200
-    assert client.get("/api/routing").json()["routes"]["summary"] == ""
-
-
-def test_an_unroutable_scope_is_refused_before_anything_is_written(client):
-    _wid, cid, _sid = _seed(client)
-    before = client.get(f"/api/campaigns/{cid}/routing").json()["routes"]
-    r = client.put(f"/api/campaigns/{cid}/routing",
-                   json={"routes": {"scene": _connection(client, "a"),
-                                    "tagline": _connection(client, "b")}})
-    assert r.status_code == 400
-    assert "tagline" in r.json()["detail"]
-    assert client.get(f"/api/campaigns/{cid}/routing").json()["routes"] == before
 
 
 def test_the_ledger_records_the_connection_a_routed_call_actually_used(client):
@@ -462,7 +464,7 @@ def test_the_ledger_records_the_connection_a_routed_call_actually_used(client):
     """
     _wid, cid, _sid = _seed(client)
     routed = _connection(client, "thrifty", model="vendor/haiku")
-    client.put("/api/routing", json={"routes": {"suggestions": routed}})
+    _route(suggestions=routed)
     _fake(client)
 
     drafts.post(client, f"/api/campaigns/{cid}/scene-suggestions")
@@ -473,113 +475,3 @@ def test_the_ledger_records_the_connection_a_routed_call_actually_used(client):
     assert [m["key"] for m in by_model] == ["vendor/haiku"]
 
 
-def test_the_bundle_says_where_each_effective_value_came_from(client):
-    _wid, cid, _sid = _seed(client)
-    globally = _connection(client, "wide")
-    locally = _connection(client, "narrow")
-    client.put("/api/routing", json={"routes": {"scene": globally, "absorb": globally}})
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": locally}})
-
-    body = client.get(f"/api/campaigns/{cid}/routing").json()
-    assert body["routes"]["scene"] == locally            # what this scope says
-    assert body["routes"]["absorb"] == ""                # the global key is not its own
-    assert body["effective"]["scene"] == locally
-    assert body["effective"]["absorb"] == globally
-    assert body["effective"]["summary"] == ""            # inherits the active connection
-    assert body["provenance"] == {**body["provenance"],
-                                  "scene": {"scope": "campaign"},
-                                  "absorb": {"scope": "global"},
-                                  "summary": {"scope": "active"}}
-    assert body["active_connection_id"] == "openrouter"
-    assert {c["id"] for c in body["connections"]} >= {globally, locally}
-
-
-def test_clearing_a_campaign_route_removes_the_key_rather_than_emptying_it(client):
-    """Ten empty keys in every campaign that ever opened the picker is noise in
-    a file people read by hand -- and the resolver cannot tell them from absent."""
-    _wid, cid, _sid = _seed(client)
-    routed = _connection(client, "temporary")
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": routed}})
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": ""}})
-    meta = store.campaigns.read_campaign(cid)["meta"]
-    assert "route_scene" not in meta
-
-
-def test_setting_a_route_to_what_it_already_says_writes_nothing(client):
-    """The store may live in a synced folder, where a no-op write is upload
-    traffic on one machine and a modification to reconcile on the other."""
-    _wid, cid, _sid = _seed(client)
-    routed = _connection(client, "steady")
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": routed}})
-    meta_path = store.campaigns.campaign_meta_path(cid)
-    before = (meta_path.read_bytes(), meta_path.stat().st_mtime_ns)
-
-    r = client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": routed}})
-
-    assert r.status_code == 200
-    assert (meta_path.read_bytes(), meta_path.stat().st_mtime_ns) == before
-    # And clearing something that was never set is equally nothing.
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"summary": ""}})
-    assert (meta_path.read_bytes(), meta_path.stat().st_mtime_ns) == before
-
-
-def test_a_campaign_routing_write_does_not_disturb_the_rest_of_the_frontmatter(client):
-    _wid, cid, _sid = _seed(client)
-    before = store.campaigns.read_campaign(cid)["meta"]
-    client.put(f"/api/campaigns/{cid}/routing",
-               json={"routes": {"scene": _connection(client, "x")}})
-    after = store.campaigns.read_campaign(cid)["meta"]
-    assert after["name"] == before["name"] and after["world"] == before["world"]
-    assert after["created"] == before["created"]
-    assert after["updated"] >= before["updated"]
-
-
-def test_a_campaign_route_is_never_written_into_the_world(client):
-    """#142's invariant, stated in the issue and worth a test rather than a
-    promise: a world is shared between campaigns, so a routing choice made in
-    one of them must not reach it."""
-    wid, cid, _sid = _seed(client)
-    world_root = store.worlds.world_root(wid)
-    before = {p: p.read_bytes() for p in sorted(world_root.rglob("*")) if p.is_file()}
-
-    client.put(f"/api/campaigns/{cid}/routing",
-               json={"routes": {"scene": _connection(client, "elsewhere")}})
-
-    after = {p: p.read_bytes() for p in sorted(world_root.rglob("*")) if p.is_file()}
-    assert after == before
-    assert "route_scene" in store.campaigns.read_campaign(cid)["meta"]
-
-
-def test_the_bundle_carries_no_key_material(client):
-    """The picker needs names and models to render its options; it does not need
-    credentials, and a settings payload that carries them is a leak waiting for
-    a screenshot in a bug report."""
-    _wid, cid, _sid = _seed(client)
-    client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Secretive", "api_key": "sk-do-not-leak-me"})
-
-    for path in ("/api/routing", f"/api/campaigns/{cid}/routing"):
-        body = client.get(path).json()
-        assert "sk-do-not-leak-me" not in json.dumps(body), path
-        # `usable` is a verdict, not a credential: it says whether the
-        # connection can send, which is the fact the picker needs and the one
-        # `key_set` already exposes on every connection listing.
-        assert all(set(c) == {"id", "name", "kind", "model", "usable"}
-                   for c in body["connections"]), path
-
-
-def test_routing_a_campaign_that_does_not_exist_is_a_404(client):
-    assert client.get("/api/campaigns/nope/routing").status_code == 404
-    assert client.put("/api/campaigns/nope/routing", json={"routes": {}}).status_code == 404
-    # Even when the body is also wrong: "you may not set that route here" is an
-    # answer about a campaign, and this one does not exist.
-    assert client.put("/api/campaigns/nope/routing",
-                      json={"routes": {"tagline": "x"}}).status_code == 404
-
-
-def test_the_global_bundle_offers_every_route_and_the_campaign_one_does_not(client):
-    _seed(client)
-    assert {c["key"] for c in client.get("/api/routing").json()["catalog"]} == set(DRIVERS)
-    _wid, cid, _sid = _seed(client)
-    keys = {c["key"] for c in client.get(f"/api/campaigns/{cid}/routing").json()["catalog"]}
-    assert keys == set(CAMPAIGN_ROUTES)

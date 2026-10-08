@@ -15,8 +15,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import NamedTuple
 
+from .. import inference_keys as keys
 from .. import routing, sampler_presets
-from . import keys
 
 
 class Selection(NamedTuple):
@@ -150,6 +150,19 @@ def choose(route: routing.Route | None, *, campaign: dict, glob: dict,
     if got is None:
         return Choice(None, "", "", "none", fallback_of(used))
     return Choice(got, supplier, "role", scope, fallback_of(used))
+
+
+def choose_role(role: str, *, campaign: dict, glob: dict,
+                exists: Callable[[str], bool]) -> Choice:
+    """A ROLE's own answer, with no route in front of it: what a role card
+    says it runs on (`settings.view`). `role_selection` and `role_fallback`
+    over both scopes; Embedding has no fallback."""
+    fallback = (role_fallback(role, campaign=campaign, glob=glob, exists=exists)
+                if role in keys.GENERATIVE_ROLES else None)
+    got, supplier, scope = role_selection(role, campaign=campaign, glob=glob, exists=exists)
+    if got is None:
+        return Choice(None, "", "", "none", fallback)
+    return Choice(got, supplier, "role", scope, fallback)
 
 
 def _preset_opinion(view: dict, key: str, known: Callable[[str], bool]) -> str:

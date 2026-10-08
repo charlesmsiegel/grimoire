@@ -17,6 +17,13 @@ export type { Model };
 
 /** The catalog of the connection generation will actually run on.
  *
+ *  `GET /config`'s `active_connection` is the resolver's answer for chat --
+ *  the provider the library's Primary resolves to, unless a route sends chat
+ *  elsewhere -- not a stored "active" id, so this follows the Models page
+ *  with no rule of its own. It is the library's answer: a campaign that
+ *  overrides Primary with another provider's model finds no entry for it
+ *  here, and its label goes without a context size rather than a wrong one.
+ *
  *  Two requests rather than one, and deliberately: `getConfig` is itself cached
  *  and shared with the rest of the app, so the common case is one. There is no
  *  "the active connection's models" endpoint because nothing else wants one —

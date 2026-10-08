@@ -3,9 +3,19 @@ import { describe, expect, it, vi } from "vitest";
 import { ResponseControls } from "./ResponseControls";
 import { api } from "../api/client";
 
-vi.mock("../api/client", () => ({
-  api: { getResponse: vi.fn(), listConnections: vi.fn(), getConfig: vi.fn() },
+vi.mock("../api/client", async () => ({
+  ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
+  api: { getResponse: vi.fn(), getCampaignInference: vi.fn(), readConnectionCapabilities: vi.fn() },
 }));
+
+/** The campaign's inference view, as the route picker reads it. */
+const INFERENCE = {
+  format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
+  roles: {} as never, routes: [], preset_clear: "\u2063none",
+  providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
+                usable: true }],
+  presets: [{ id: "warm", name: "Warm" }],
+} as Awaited<ReturnType<typeof api.getCampaignInference>>;
 
 function show(extra = {}, { open = true } = {}) {
   const actions = { onDelete: vi.fn(), onReroll: vi.fn(), onActivate: vi.fn(), onReplay: vi.fn() };
@@ -23,7 +33,8 @@ describe("individual response controls", () => {
     expect(actions.onDelete).toHaveBeenCalledWith("response-a");
     fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "More restrained" } });
     fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
-    expect(actions.onReroll).toHaveBeenCalledWith("response-a", "More restrained", { connection_id: "", model: "" });
+    expect(actions.onReroll).toHaveBeenCalledWith("response-a", "More restrained",
+      { provider: "", model: "", preset: "" });
   });
   it("shows retained incomplete and changed-context states, disables all writes while busy", () => {
     show({ disabled: true, status: "incomplete", contextChanged: true });
@@ -38,7 +49,7 @@ describe("individual response controls", () => {
     const actions = show({ onExtend });
     fireEvent.change(screen.getByLabelText("Response steer"), { target: { value: "Colder" } });
     fireEvent.click(screen.getByRole("button", { name: "Keep writing ▸" }));
-    expect(onExtend).toHaveBeenCalledWith("response-a", "Colder", { connection_id: "", model: "" });
+    expect(onExtend).toHaveBeenCalledWith("response-a", "Colder", { provider: "", model: "", preset: "" });
     expect(actions.onReroll).not.toHaveBeenCalled();
   });
   it("offers no Keep writing without a handler", () => {
@@ -79,22 +90,35 @@ describe("individual response controls", () => {
     expect(screen.getByLabelText("Response steer")).toHaveValue("Quieter");
   });
   it("shuts the route disclosure with the body, so a reopen reads nothing it does not show", async () => {
-    // The route picker reads the connections and the config as it mounts. The
+    // The route picker reads the campaign's inference view as it mounts. The
     // body is rebuilt on every reopen, and its route disclosure with it, shut:
-    // a picker still mounted inside that shut disclosure would read both again
+    // a picker still mounted inside that shut disclosure would read it again
     // for a control nobody can see.
-    vi.mocked(api.listConnections).mockResolvedValue([]);
-    vi.mocked(api.getConfig).mockResolvedValue({ active_connection: null } as never);
+    vi.mocked(api.getCampaignInference).mockResolvedValue(INFERENCE);
     show();
     fireEvent.click(screen.getByText("Model for this reroll"));
-    await waitFor(() => expect(api.listConnections).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.getCampaignInference).toHaveBeenCalledWith("realm"));
     const summary = screen.getByText("Response actions");
     fireEvent.click(summary);
     fireEvent.click(summary);
     await screen.findByText("Model for this reroll");
     expect(screen.getByText("Model for this reroll").closest("details")).not.toHaveAttribute("open");
-    expect(api.listConnections).toHaveBeenCalledTimes(1);
-    expect(api.getConfig).toHaveBeenCalledTimes(1);
+    expect(api.getCampaignInference).toHaveBeenCalledTimes(1);
+  });
+  it("rerolls on the provider, model and preset chosen for it", async () => {
+    vi.mocked(api.getCampaignInference).mockResolvedValue(INFERENCE);
+    vi.mocked(api.readConnectionCapabilities).mockResolvedValue({
+      provider_preset: {} as never, need: "generate", reason: null, hidden: [],
+      groups: { unverified: [], fits: [{ id: "qwen3", name: "Qwen 3", context: null, prompt: null,
+        completion: null, reason: "", capabilities: {} as never }] } });
+    const actions = show();
+    fireEvent.click(screen.getByText("Model for this reroll"));
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "saltmarch" } });
+    fireEvent.click(await screen.findByRole("radio", { name: "Qwen 3" }));
+    fireEvent.change(screen.getByLabelText("Reroll preset"), { target: { value: "warm" } });
+    fireEvent.click(screen.getByRole("button", { name: "Reroll response" }));
+    expect(actions.onReroll).toHaveBeenCalledWith("response-a", "",
+      { provider: "saltmarch", model: "qwen3", preset: "warm" });
   });
   it("activates the stable variant id from the selected response", async () => {
     vi.mocked(api.getResponse).mockResolvedValue({ id: "response-a", active_variant: "v1",

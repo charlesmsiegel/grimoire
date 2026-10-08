@@ -7,7 +7,6 @@ from . import (
     cascade,
     controls,
     facts,
-    keys,
     probes,
     providers,
     resolve,
@@ -15,5 +14,5 @@ from . import (
     translate,
 )
 
-__all__ = ["capabilities", "cascade", "controls", "facts", "keys", "probes", "providers",
+__all__ = ["capabilities", "cascade", "controls", "facts", "probes", "providers",
            "resolve", "resolved", "translate"]

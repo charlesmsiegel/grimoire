@@ -660,7 +660,7 @@ def test_misrouted_identity_reports_itself_and_leaves_absorb_standing(client, sc
     _seed_ledger(cid, s0)
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    client.put("/api/routing", json={"routes": {"continuity": keyless}})
+    store.write_config(route_continuity=keyless)
     fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
                 _decisions({"row": "r1", "decision": "new"}))
 
@@ -846,7 +846,7 @@ def _leaked(text: str, dumped: str) -> bool:
 def _keyless(client):
     keyless = client.post("/api/llm-connections",
                           json={"kind": "openrouter", "name": "Keyless"}).json()["id"]
-    client.put("/api/routing", json={"routes": {"continuity": keyless}})
+    store.write_config(route_continuity=keyless)
 
 
 def _embedding_failure(monkeypatch):

@@ -571,6 +571,77 @@ test("creating a connection also invalidates the config cache", async () => {
   invalidateConfigCache();
 });
 
+test("a model-facts write invalidates the config cache and announces", async () => {
+  // A capability override on Primary's model can move `ready`, which the
+  // header reads off the cached config -- so the write has to drop it.
+  invalidateConfigCache();
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+  globalThis.fetch = fetchMock;
+  await api.getConfig();
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+
+  const seen: string[] = [];
+  const off = onConfigChanged(() => seen.push("config"));
+  fetchMock.mockResolvedValue(jsonOk({ model: "m", user: {}, tests: {}, resolved: {} }));
+  await api.putModelFacts("openrouter", { model: "m" });
+  off();
+  expect(seen).toEqual(["config"]);
+
+  fetchMock.mockResolvedValue(jsonOk({ ...CFG, ready: false }));
+  const got = await api.getConfig();  // must hit the network again
+  expect(fetchMock).toHaveBeenCalledTimes(3);
+  expect(got.ready).toBe(false);
+  invalidateConfigCache();
+});
+
+test("every mutator of what a model view reads drops the cached config and announces",
+     async () => {
+  // Sampler presets (named by GET /config's roles and listed by the Models
+  // views), a landed model test (a verified capability can move `ready`) and a
+  // catalog refresh. Each must drop the cached config and announce, or a view
+  // keeps showing what the write replaced.
+  const preset = { id: "warm", name: "Warm", params: {}, notes: "", source: "" };
+  const run = (kind: string, result: unknown) => jsonOk({ run: {
+    id: "r1", attempt_id: "a1", state: "landed", next_index: 0, cls: "draft", kind, result } });
+  const mutators: [string, () => Promise<unknown>, unknown][] = [
+    ["createSamplerPreset", () => api.createSamplerPreset({ name: "Warm", params: {}, notes: "" }),
+     preset],
+    ["updateSamplerPreset",
+     () => api.updateSamplerPreset("warm", { name: "Brisk", params: {}, notes: "" }), preset],
+    ["deleteSamplerPreset", () => api.deleteSamplerPreset("warm"), { ok: true }],
+    ["importSamplerPreset", () => api.importSamplerPreset(
+      { name: "Warm", data: {}, include_max_tokens: false }), { preset, report: {} }],
+    ["runModelTest", () => api.runModelTest(
+      "saltmarch", { model: "vendor/m", capabilities: ["generate"], confirm: true }),
+     null],
+    ["refreshConnectionModels", () => api.refreshConnectionModels("saltmarch"), null],
+  ];
+  for (const [name, call, body] of mutators) {
+    invalidateConfigCache();
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(CFG));
+    globalThis.fetch = fetchMock;
+    await api.getConfig();
+
+    const seen: string[] = [];
+    const off = onConfigChanged(() => seen.push(name));
+    fetchMock.mockResolvedValue(
+      name === "runModelTest" ? run("model-test", { provider: "saltmarch", model: "vendor/m",
+                                                     rev: "r", results: {}, recorded: true })
+      : name === "refreshConnectionModels" ? run("models-refresh",
+                                                 { models: [], fetched_at: "t", rev: "r" })
+      : jsonOk(body));
+    await call();
+    off();
+    expect(seen, name).toEqual([name]);
+
+    const calls = fetchMock.mock.calls.length;
+    fetchMock.mockResolvedValue(jsonOk({ ...CFG, ready: false }));
+    expect((await api.getConfig()).ready, name).toBe(false);  // read again
+    expect(fetchMock.mock.calls.length, name).toBe(calls + 1);
+  }
+  invalidateConfigCache();
+});
+
 test("addCastBatch POSTs every ref to the batch endpoint", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonOk({ ok: true, added: 2, skipped: [] }));
   globalThis.fetch = fetchMock as unknown as typeof fetch;
@@ -1178,10 +1249,10 @@ test("extendResponse posts its overrides to the response's extend route", async 
   const fetchMock = vi.fn().mockResolvedValue(sseResponse(['data: {"done":true}\n\n']));
   globalThis.fetch = fetchMock;
   await api.extendResponse("c1", "s1", "r1", () => {},
-                           { guidance: "Colder", connection_id: "", model: "" });
+                           { guidance: "Colder", provider: "realm", model: "qwen3", preset: "cold" });
   expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/c1/scenes/s1/responses/r1/extend");
   expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(
-    { guidance: "Colder", connection_id: "", model: "" });
+    { guidance: "Colder", provider: "realm", model: "qwen3", preset: "cold" });
 });
 
 test.each(TURN_PRODUCERS)(
@@ -2776,4 +2847,76 @@ test("a failed reconcile run's body has a type", () => {
   // Type-level: only tsc can fail this line, since vitest erases types.
   const e: Partial<ReconcileRunError> = { saved: true, follow_on: false };
   expect(e.follow_on).toBe(false);
+});
+
+// ---- inference settings (slice C) ----
+test("an Embedding change carries its confirmation only when the reader gave it", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({}));
+  globalThis.fetch = fetchMock;
+  const body = { roles: { embedding: { selection: { provider: "saltmarch", model: "e" } } } };
+
+  await api.putInferenceSettings(body);
+  await api.putInferenceSettings(body, { confirmEmbedding: true });
+
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/inference/settings");
+  expect(JSON.parse(fetchMock.mock.calls[0][1].body as string)).toEqual(body);
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body as string))
+    .toEqual({ ...body, confirm_embedding: true });
+});
+
+test("a campaign's roles and routes are read and written under the campaign", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(jsonOk({}));
+  globalThis.fetch = fetchMock;
+  await api.getCampaignInference("run");
+  await api.putCampaignInference("run", { routes: { scene: { use: "fast" } } });
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/campaigns/run/inference");
+  expect(fetchMock.mock.calls[1]).toEqual(["/api/campaigns/run/inference",
+    expect.objectContaining({ method: "PUT",
+                              body: JSON.stringify({ routes: { scene: { use: "fast" } } }) })]);
+});
+
+test("a health check sends confirm only when asked to", async () => {
+  const fetchMock = vi.fn().mockResolvedValue(
+    jsonOk({ ok: true, kind: "", detail: "", checked_at: "" }));
+  globalThis.fetch = fetchMock;
+  await api.checkConnection("claude");
+  await api.checkConnection("claude", { confirm: true });
+  expect(fetchMock.mock.calls[0][1].body).toBeUndefined();
+  expect(fetchMock.mock.calls[1][1].body).toBe(JSON.stringify({ confirm: true }));
+});
+
+test("model facts address the model in the query, and the test runs as a global draft",
+     async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonOk({}))
+    .mockResolvedValueOnce(draftRunResponse("landed", { kind: "model-test",
+      result: { provider: "saltmarch", model: "vendor/m", rev: "r", results: {},
+                recorded: false } }));
+  globalThis.fetch = fetchMock;
+
+  await api.readModelFacts("saltmarch", "vendor/m");
+  const result = await api.runModelTest(
+    "saltmarch", { model: "vendor/m", capabilities: ["generate"], confirm: true });
+
+  expect(fetchMock.mock.calls[0][0]).toBe("/api/llm-connections/saltmarch/facts?model=vendor%2Fm");
+  expect(fetchMock.mock.calls[1][0]).toBe("/api/llm-connections/saltmarch/test");
+  expect(JSON.parse(fetchMock.mock.calls[1][1].body as string)).toEqual(
+    { model: "vendor/m", capabilities: ["generate"], confirm: true });
+  expect(result.model).toBe("vendor/m");
+});
+
+test("a model test sent under a caller's attempt id names that id", async () => {
+  const fetchMock = vi.fn().mockResolvedValueOnce(draftRunResponse("landed", {
+    kind: "model-test",
+    result: { provider: "saltmarch", model: "vendor/m", rev: "r", results: {}, recorded: false },
+  }));
+  globalThis.fetch = fetchMock;
+
+  await api.runModelTest(
+    "saltmarch", { model: "vendor/m", capabilities: ["generate"], confirm: true },
+    { attempt: "held-attempt" });
+
+  // The same id a second ask would send, which the server answers with the
+  // run it already started rather than a new one.
+  expect(fetchMock.mock.calls[0][1].headers["X-Grimoire-Attempt"]).toBe("held-attempt");
 });

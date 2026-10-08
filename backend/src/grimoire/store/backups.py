@@ -75,6 +75,18 @@ _IMAGE_PREFIX = "grimoire-images-"
 #: deleted "the oldest file" would eventually delete one of those.
 _NAME_RE = re.compile(r"^grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
 _IMAGE_NAME_RE = re.compile(r"^grimoire-images-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
+#: The prefix of the safety backup the inference-settings migration takes
+#: before its first write (`store.inference.migrate`, spec 11.2 step 1). A full
+#: archive like any other, listed as a restore point -- but **retention never
+#: prunes it**: "the user can go back" depends on it existing, and a sweep
+#: keeping the newest N would have deleted it N backups after the upgrade.
+#: `sweep` lists `_NAME_RE` alone, which this never matches.
+SAFETY_PREFIX = "pre-inference-"
+_SAFETY_NAME_RE = re.compile(r"^pre-inference-grimoire-(\d{8}T\d{6}Z)(?:-(\d+))?\.zip$")
+#: The prefixes `create_backup` takes. Closed, because an archive under any
+#: other prefix would be one nothing lists, nothing sweeps and a walk of a
+#: backup directory at the store root does not recognize as its own.
+_PREFIXES = ("", SAFETY_PREFIX)
 
 # Images can also be attached directly to a store folder, so select by file
 # type throughout the tree rather than assuming an assets/ layout.
@@ -237,8 +249,10 @@ def _is_backup_artifact(name: str) -> bool:
     half-written temp into itself. The cost is a user's own
     `grimoire-<stamp>.zip` parked at the store root, which nobody will notice.
     """
-    return bool(_NAME_RE.match(name) or _IMAGE_NAME_RE.match(name)) or (
-        name.startswith((f".{_PREFIX}", f".{_IMAGE_PREFIX}")) and name.endswith(".tmp"))
+    return bool(_NAME_RE.match(name) or _IMAGE_NAME_RE.match(name)
+                or _SAFETY_NAME_RE.match(name)) or (
+        name.startswith((f".{_PREFIX}", f".{_IMAGE_PREFIX}", f".{SAFETY_PREFIX}"))
+        and name.endswith(".tmp"))
 
 
 def _is_abandoned_temp(path: Path, cutoff: float) -> bool:
@@ -253,7 +267,8 @@ def _is_abandoned_temp(path: Path, cutoff: float) -> bool:
     name = path.name
     archive_name = name[1:].rsplit(".", 2)[0]
     if not (atomic.is_write_temp(path) and
-            (_NAME_RE.match(archive_name) or _IMAGE_NAME_RE.match(archive_name))):
+            (_NAME_RE.match(archive_name) or _IMAGE_NAME_RE.match(archive_name)
+             or _SAFETY_NAME_RE.match(archive_name))):
         return False
     try:
         return path.stat().st_mtime < cutoff
@@ -406,12 +421,18 @@ def _allocate(directory: Path, when: datetime, prefix: str = _PREFIX) -> Path:
         n += 1
 
 
-def create_backup(when: datetime | None = None) -> Path:
+def create_backup(when: datetime | None = None, prefix: str = "") -> Path:
     """Zip the whole store into a new archive and return its path.
+
+    `prefix` names the series: "" for the ordinary one, `SAFETY_PREFIX` for the
+    inference migration's safety backup (`pre-inference-grimoire-<stamp>.zip`),
+    which `sweep` never prunes. Any other prefix is a `ValueError`.
 
     Raises whatever the filesystem raises; on any failure the target name is
     still free and the listing is unchanged.
     """
+    if prefix not in _PREFIXES:
+        raise ValueError(f"not a backup series: {prefix!r}")
     with locks.backup_lock():
         # Under the lock, not before it: `home()` resolves live, so reading it
         # outside could zip one store into another's backup directory if the
@@ -425,7 +446,7 @@ def create_backup(when: datetime | None = None) -> Path:
         # Before allocating, under the lock: no backup this machine runs can be
         # mid-build while it is held, and the age test covers another's.
         _sweep_abandoned_temps(directory)
-        target = _allocate(directory, _utc(when))
+        target = _allocate(directory, _utc(when), prefix + _PREFIX)
         target.parent.mkdir(parents=True, exist_ok=True)
         with atomic.streaming_write(target) as fh:
             _archive_into(fh, root, _skips(root, directory), directory)
@@ -479,14 +500,21 @@ def _parsed(name: str, pattern: re.Pattern[str] = _NAME_RE) -> tuple[datetime, i
 
 
 def list_backups() -> list[dict]:
-    """Every archive this module wrote, newest first.
+    """Every full archive this module wrote, newest first -- the ordinary
+    series and the migration's safety backups (`SAFETY_PREFIX`) together, since
+    each is a whole store to restore from.
 
     A missing backup directory is an empty list, not an error: a store that has
     never been backed up has nothing to report, and asking must not create the
     directory. Anything that is not one of our archives is ignored — see
     `_parsed`, which is what "one of ours" means.
     """
-    return _list_in(backup_dir())
+    directory = backup_dir()
+    rows = _list_in(directory) + _list_in(directory, _SAFETY_NAME_RE)
+    # Newest first across both series: `created` is the stamp each name
+    # carries, to the second, in a format that sorts as text.
+    rows.sort(key=lambda row: row["created"], reverse=True)
+    return rows
 
 
 def list_image_backups() -> list[dict]:
@@ -526,6 +554,10 @@ def sweep(keep: int | None = None) -> list[str]:
     Oldest first, so a sweep that fails part way through has still freed the
     least useful archives. An archive another process removed first is not an
     error — the outcome asked for is the outcome reached.
+
+    Only the ordinary series is counted and pruned: a safety backup
+    (`SAFETY_PREFIX`) is never this function's to delete, and does not take
+    one of the `keep` places either.
     """
     if keep is None:
         keep = config.backup_keep()
@@ -547,8 +579,9 @@ def sweep(keep: int | None = None) -> list[str]:
 
 def _taken_at(name: str) -> datetime:
     """When the archive `name` was taken. Only ever called on names a listing
-    returned, which `_parsed` has already vouched for."""
-    parsed = _parsed(name)
+    returned, which `_parsed` has already vouched for -- under one of the two
+    full-archive series `list_backups` reads."""
+    parsed = _parsed(name) or _parsed(name, _SAFETY_NAME_RE)
     assert parsed is not None
     return parsed[0]
 

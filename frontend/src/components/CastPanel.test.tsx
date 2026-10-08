@@ -316,7 +316,7 @@ test("an opener the model could not be reached for offers the local-model recove
   fireEvent.change(screen.getByLabelText("Opener prompt"), { target: { value: "A foggy harbor" } });
   fireEvent.click(screen.getByRole("button", { name: /generate/i }));
   await screen.findByText(/Couldn.t reach the model provider/);
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
   expect(screen.getByText(/connection refused/)).toBeInTheDocument();
 });
 

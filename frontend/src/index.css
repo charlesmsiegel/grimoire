@@ -722,6 +722,21 @@ select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
   margin: 0; padding: 0 16px 10px; color: var(--muted);
   font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55;
 }
+/* A column section's own controls: its + New button, or a small form (the
+   Providers page's "open a model by id") laid out on the rows' 16px gutter. */
+.column-actions { display: flex; align-items: center; gap: 8px; }
+form.column-actions { padding: 10px 16px 0; }
+.column-actions input[type="text"] { flex: 1; min-width: 0; }
+
+/* A provider's catalog in main: one model per line, its badges after its id,
+   wrapping under it when the line runs out. */
+.provider-catalog { list-style: none; margin: 8px 0 0; padding: 0; }
+.provider-catalog li {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px;
+  padding: 8px 0; border-top: 1px solid var(--line);
+  font-family: var(--fb); font-size: 14px; line-height: 1.4; overflow-wrap: anywhere;
+}
+.provider-catalog li:first-child { border-top: 0; }
 .brief-row { padding: 8px 16px; border-top: 1px solid var(--line); }
 .brief-title {
   font-family: var(--fb); font-weight: 300; font-size: 13px; line-height: 1.55; color: var(--ink);
@@ -1131,23 +1146,6 @@ a.primary { display: inline-block; text-decoration: none; text-align: center; }
 .config input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
 .save-flash { color: var(--accent); font-family: var(--fm); font-size: 10.5px; letter-spacing: 0.08em; text-transform: uppercase; }
 .config-msg.err { color: var(--banner-ink); font-family: var(--fm); font-size: 10.5px; }
-.combobox { position: relative; }
-.combobox input[type="text"] { width: 100%; background: var(--surface); color: var(--ink); border: 1px solid var(--rule); padding: 10px 12px; font-family: var(--fm); font-size: 13px; }
-.combobox-note { margin-top: 4px; font-family: var(--fm); font-size: 10.5px; color: var(--muted); }
-.combobox-list {
-  position: absolute; z-index: 10; left: 0; right: 0; margin: -2px 0 0; padding: 0;
-  list-style: none; max-height: 264px; overflow-y: auto;
-  background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-pop);
-}
-.combobox-row { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid var(--rule-soft); }
-.combobox-row:last-child { border-bottom: none; }
-.combobox-row:hover { background: var(--panel2); }
-.combobox-row-top { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.combobox-row-bottom { display: flex; justify-content: space-between; gap: 12px; }
-.combobox-name { color: var(--ink); font-family: var(--fd); font-weight: 700; font-size: 17px; }
-.combobox-price { color: var(--accent); font-family: var(--fm); font-size: 10px; white-space: nowrap; }
-.combobox-id { color: var(--muted); font-family: var(--fm); font-size: 10px; }
-.combobox-ctx { color: var(--muted); font-family: var(--fm); font-size: 10px; white-space: nowrap; }
 /* Light / Dark / System, and every other pick-one-of-n strip (the composer's
    TERSE / MEASURED / FULL uses the same two classes). One border around the
    group, hairlines between the segments, so it reads as one control. */
@@ -1912,6 +1910,11 @@ a.shelf-promote { text-decoration: none; text-align: center; }
 /* two buttons on the footer's right-hand side (skip beside the primary) */
 .wizard-actions { display: inline-flex; align-items: center; gap: 8px; }
 
+/* one role on the setup wizard's Models step */
+.wizard-role { margin: 0 0 18px; }
+.wizard-role h4 { margin: 0 0 2px; }
+.wizard-role > .field-hint { margin: 0 0 8px; }
+
 /* the setup wizard's standing escape hatch, below the footer rule */
 .wizard-skip {
   margin-top: 18px; text-align: center;
@@ -1924,30 +1927,35 @@ a.shelf-promote { text-decoration: none; text-align: center; }
    Two rows: where this reroll goes (#77), then what it is told once it gets
    there. The route row is on top because it is the coarser choice, and because
    the guidance input keeps the autofocus it has always had. */
+/* Capped to the viewport less the page's 16px gutters, so a phone never scrolls
+   sideways for it; the two fixed widths inside yield to the cap. */
 .reroll-pop { position: absolute; left: 100%; bottom: 0; margin-left: 10px; z-index: 5;
+  max-width: calc(100vw - 32px);
   display: flex; flex-direction: column; background: var(--surface); border: 1px solid var(--rule); box-shadow: var(--shadow-glow); }
 .reroll-guide { display: flex; }
 .reroll-guide input {
-  width: 260px; background: transparent; color: var(--ink); border: none; outline: none;
+  width: 260px; min-width: 0; flex: 1 1 auto;
+  background: transparent; color: var(--ink); border: none; outline: none;
   padding: 7px 10px; font-family: var(--fm); font-size: 12px;
 }
 .reroll-pop .btn-chrome { border: none; border-left: 1px solid var(--rule); padding: 7px 12px; box-shadow: none; font-size: 11px; white-space: nowrap; }
-.reroll-route { display: flex; border-bottom: 1px solid var(--rule); }
-.reroll-route select {
-  flex: 0 0 auto; max-width: 152px; background: transparent; color: var(--ink);
-  border: none; border-right: 1px solid var(--rule); outline: none;
-  padding: 7px 10px; font-family: var(--fm); font-size: 12px;
+/* The route row is the shared provider/model picker, which is sized for a
+   settings form: in a gutter overlay it is capped and scrolls on its own, so a
+   long catalog never pushes the guidance input off the screen. */
+.reroll-route {
+  display: flex; flex-direction: column; gap: 8px; width: 340px; max-width: 100%; max-height: 360px;
+  overflow-y: auto; padding: 8px 10px; border-bottom: 1px solid var(--rule);
+  font-family: var(--fm); font-size: 12px;
 }
-/* The combobox is sized for a settings form; in a gutter overlay it has to
-   match the guidance input beneath it rather than tower over it. */
-.reroll-route .combobox { flex: 1 1 auto; min-width: 0; }
-.reroll-route .combobox input[type="text"] {
-  background: transparent; border: none; padding: 7px 10px; font-size: 12px;
+.reroll-route .reroll-default { display: flex; align-items: baseline; gap: 8px; }
+.reroll-route .reroll-default button[aria-pressed="true"] { color: var(--accent); }
+.reroll-route .reroll-preset { display: flex; flex-direction: column; gap: 4px; }
+/* A phone has no room beside the 26px gutter for a 340px box: opened from
+   there it ran off the right edge. It opens over the post instead, from the
+   gutter's own left edge, which sits inside the page's gutter. */
+@media (max-width: 720px) {
+  .reroll-pop { left: 0; margin-left: 0; }
 }
-/* Wider than its input: the rows carry a name, a price, an id and a context
-   size, and the box it hangs off is one of three controls in a gutter
-   overlay. `right: auto` is what lets it grow past that width. */
-.reroll-route .combobox-list { max-height: 220px; min-width: 300px; right: auto; }
 
 /* ---- manual dice roll popover (anchored to the input bar) ---- */
 .roll-pop { position: absolute; bottom: 100%; left: 0; margin-bottom: 8px; z-index: 5;
@@ -3187,6 +3195,27 @@ a.column-back { text-decoration: none; }
   margin: 9px 0 0; font-family: var(--fb); font-size: 13px; line-height: 1.45;
   color: var(--muted);
 }
+.config-caption a { color: var(--accent); }
+/* Settings' Models card: the four roles at a glance, read-only. A two-column
+   list rather than the field grid, because nothing in it is an input. */
+.models-summary {
+  max-width: 62ch; margin: 0 0 22px; padding: 16px 18px;
+  border: 1px solid var(--line-strong); border-radius: 3px; background: var(--surface);
+}
+.models-summary-title {
+  margin: 0 0 12px; font-family: var(--fm); font-size: 10px; font-weight: normal;
+  letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted);
+}
+.models-summary dl {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 16px; margin: 0;
+}
+.models-summary dt { font-family: var(--fb); font-size: 14px; color: var(--muted); }
+.models-summary dd {
+  margin: 0; min-width: 0; overflow-wrap: anywhere;
+  font-family: var(--fb); font-size: 14px; color: var(--ink);
+}
+.models-summary .field-hint { margin: 12px 0 0; }
 .config-textarea {
   display: block; width: 100%; max-width: 62ch; padding: 12px 14px;
   background: var(--surface); color: var(--ink);
@@ -3380,10 +3409,11 @@ a.column-back { text-decoration: none; }
   margin: 12px 0 0; max-width: 42ch; color: var(--subtle);
   font-family: var(--fb); font-weight: 300; font-size: 15px; line-height: 1.6;
 }
-/* Four numbered pips joined by a rule, not four bordered cells: the cells read
-   as four things to fill in, and the point of the line is that it is short. */
+/* Numbered pips joined by a rule, not bordered cells: the cells read as things
+   to fill in, and the point of the line is that it is short. Five of them wrap
+   rather than push a phone-width page sideways. */
 .first-run .wizard-steps {
-  display: flex; align-items: center; gap: 0; list-style: none;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; list-style: none;
   margin: 34px 0 26px; padding: 0; border: 0; background: none;
 }
 .first-run .wizard-step {
@@ -5203,3 +5233,41 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
   display: flex; flex-direction: column; align-items: flex-start; gap: 2px;
   text-align: left; white-space: normal;
 }
+
+/* ---- components/inference: the shared model pickers and readouts ---- */
+.provider-model-picker { display: flex; flex-direction: column; gap: 10px; }
+.provider-model-picker > label,
+.provider-model-picker .model-typed label { display: flex; flex-direction: column; gap: 4px; }
+.provider-model-picker .field-label,
+.reroll-route .field-label {
+  font-family: var(--fm); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.provider-model-picker .model-group { border: 1px solid var(--rule); padding: 8px 12px; margin: 0; }
+.provider-model-picker .model-group ul { list-style: none; margin: 0; padding: 0; }
+.provider-model-picker .model-group li { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 3px 0; }
+.provider-model-picker .model-pick { display: inline-flex; align-items: center; gap: 6px; }
+.provider-model-picker .model-typed { display: flex; align-items: flex-end; gap: 8px; }
+.cap-badge { cursor: help; }
+.cap-badge.yes { background: var(--accent); color: var(--on-accent); }
+.cap-badge.no { color: var(--alert); border-color: var(--alert); }
+.cap-badge.unknown { border-style: dashed; color: var(--muted); }
+.controls-readout { margin: 6px 0; padding-left: 18px; font-size: 13px; }
+/* The Inspector's Models section: rows stacked name-over-resolution, since
+   the column is too narrow for both on one line, and the opened record below. */
+.campaign-models { display: flex; flex-direction: column; gap: 8px; }
+.campaign-models-list { display: flex; flex-direction: column; }
+.inspector .campaign-models-row { flex-direction: column; align-items: flex-start; gap: 2px; }
+.inspector .campaign-models-row.active .inspector-name { color: var(--accent); }
+.campaign-models > .subtle { align-self: flex-start; }
+.campaign-models-detail { border-top: 1px solid var(--rule-soft); padding-top: 8px; }
+.campaign-models-detail h5 { margin: 0 0 6px; }
+.campaign-models-meta { margin: 8px 0; }
+.campaign-models-meta h6 {
+  margin: 0 0 4px; font-family: var(--fm); font-size: 10px; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+}
+.campaign-models .model-selection { border: none; padding: 0; margin: 0;
+                                    display: flex; flex-direction: column; gap: 8px; }
+.campaign-models .field { display: flex; flex-direction: column; gap: 4px; }
+.campaign-models .field select { max-width: 100%; }

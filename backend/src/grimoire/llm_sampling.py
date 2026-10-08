@@ -59,8 +59,8 @@ PARAMS: tuple[Param, ...] = (
 )
 NAMES: tuple[str, ...] = tuple(p.name for p in PARAMS)
 
-#: A preset's provider-neutral reasoning effort (spec 4.3). Not in `PARAMS`: the
-#: editor's table gains it in slice C, and `split` stays about samplers.
+#: A preset's provider-neutral reasoning effort (spec 4.3). Not in `PARAMS`, so
+#: `split` stays about samplers; the editor's `table` lists it after them.
 REASONING: tuple[str, ...] = ("off", "low", "medium", "high")
 REASONING_PARAM = Param("reasoning_effort", "Reasoning effort", "choice", 0, 0, REASONING)
 
@@ -700,8 +700,12 @@ def report(conn: dict | None) -> dict | None:
 
 
 def table() -> list[dict]:
-    """The parameter table, for a client that renders a form from it."""
-    return [{"name": p.name, "label": p.label, "kind": p.kind,
+    """The parameter table, for a client that renders a form from it: the
+    samplers, then the reasoning effort as a choice of `REASONING`."""
+    rows = [{"name": p.name, "label": p.label, "kind": p.kind,
              **({"min": p.low, "max": p.high} if p.kind != "stop"
                 else {"max_entries": STOP_MAX, "max_chars": STOP_CHARS})}
             for p in PARAMS]
+    rows.append({"name": REASONING_PARAM.name, "label": REASONING_PARAM.label,
+                 "kind": REASONING_PARAM.kind, "choices": list(REASONING_PARAM.choices)})
+    return rows

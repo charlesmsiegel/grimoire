@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from grimoire.store import inference_keys as keys
 from grimoire.store import routing, sampler_presets
-from grimoire.store.inference import cascade, keys
+from grimoire.store.inference import cascade
 from grimoire.store.inference.cascade import Selection
 
 CLEAR = sampler_presets.PRESET_CLEAR

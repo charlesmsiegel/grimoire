@@ -6,15 +6,16 @@ and `response_presets`' before it). See
 docs/superpowers/specs/2026-10-05-sampler-presets-design.md for the design and
 for what its review changed.
 
-Three things live here, and only one of them touches the disk:
+Two things live here:
 
 - the store (`list_presets`, `read_preset`, `create_preset`, `update_preset`,
   `delete_preset`);
-- `resolve`, the PURE cascade -- campaign route, global route, the serving
-  connection's own preset, none -- whose impure inputs (`campaign.md`,
-  `config.md`, the connection) the caller hands over, the split
-  `routing.resolve` and `response_presets.resolve` already use;
 - `from_sillytavern`, the import mapping.
+
+Which preset a call runs with is the inference cascade's answer
+(`store.inference.cascade.preset_for`: campaign route, global route, the
+selection's own preset, none); the legacy cascade that lived here was retired
+in inference slice C.
 
 Global, like `llm_connections/`: nothing here is campaign-scoped, so nothing
 here takes a campaign lock.
@@ -23,11 +24,10 @@ here takes a campaign lock.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
 from pathlib import Path
 
 from .. import llm_sampling
-from . import atomic, config, routing
+from . import atomic, config, inference_keys, routing
 from .paths import home, natural_key, safe_id, slugify, uniquify
 
 #: "No preset at this scope -- stop looking." Distinct from "" (no opinion,
@@ -38,8 +38,9 @@ PRESET_CLEAR = "⁣none"
 
 #: Where a resolved answer came from. `campaign` and `global` are about the
 #: ROUTE and follow it onto whichever connection serves it (`llm.ROUTE_SCOPES`);
-#: `connection` stays with its connection; `none` is provider defaults.
-SCOPES = ("campaign", "global", "connection", "none")
+#: `connection` stays with its connection; `override` is a reroll's own preset
+#: and stays with the primary it was named for; `none` is provider defaults.
+SCOPES = ("campaign", "global", "connection", "override", "none")
 
 NAME_MAX = 120
 NOTES_MAX = 4000
@@ -123,23 +124,28 @@ def create_preset(name: str, params: dict | None = None, notes: str = "",
                   source: str = "") -> str:
     """Store a new preset and return its id. ValueError for a bad field."""
     name, params, notes = _clean(name, params, notes)
-    pid = uniquify(slugify(name), lambda c: _path(c).exists())
-    _write(pid, name, params, notes, source)
+    # In `config.format_hold`: a preset is a model setting, refused on a store
+    # a newer build switched (`config.NewerFormatError`).
+    with config.format_hold():
+        pid = uniquify(slugify(name), lambda c: _path(c).exists())
+        _write(pid, name, params, notes, source)
     return pid
 
 
 def update_preset(pid: str, name: str, params: dict | None, notes: str = "") -> None:
     """Replace a preset's name, parameters and notes. `source` is kept: it says
     where the preset came FROM, which an edit does not change."""
-    current = read_preset(pid)
-    if current is None:
-        raise PresetNotFoundError(pid)
     name, params, notes = _clean(name, params, notes)
-    _write(pid, name, params, notes, current["source"])
+    with config.format_hold():
+        current = read_preset(pid)
+        if current is None:
+            raise PresetNotFoundError(pid)
+        _write(pid, name, params, notes, current["source"])
 
 
 def delete_preset(pid: str) -> None:
-    """Remove a preset, clearing the global route keys that named it first.
+    """Remove a preset, clearing the global keys that named it first: route
+    presets, and the preset part of a role, a fallback or a pin.
 
     Deliberately NOT swept: campaign keys (every campaign.md, under every
     campaign's lock, for a reference resolution already walks past) and
@@ -155,82 +161,44 @@ def delete_preset(pid: str) -> None:
     """
     if not safe_id(pid):
         raise PresetNotFoundError(pid)
-    try:
-        # Inside a try for `read_preset`'s reason: an id longer than the
-        # filesystem's NAME_MAX raises ENAMETOOLONG from the stat itself, and
-        # a name the filesystem cannot hold is a preset that does not exist.
-        present = _path(pid).exists()
-    except OSError:
-        present = False
-    if not present:
-        raise PresetNotFoundError(pid)
-    cfg = config.read_config()
-    dangling = {key: "" for key in routing.PRESET_CONFIG_KEYS if cfg.get(key) == pid}
-    if dangling:
-        config.write_config(**dangling)
-    _path(pid).unlink()
+    # Checked, read, cleared AND unlinked in one hold (cross-process): a role
+    # written meanwhile is not merged over by a sweep computed before it, a
+    # settings write that checks the preset still exists in this lock's hold
+    # (`inference.settings._still_there`) cannot see it between the sweep and
+    # the unlink and name it again, and another server's delete landing after
+    # the existence check cannot make the unlink fail.
+    with config.format_hold():
+        try:
+            # Inside a try for `read_preset`'s reason: an id longer than the
+            # filesystem's NAME_MAX raises ENAMETOOLONG from the stat itself,
+            # and a name the filesystem cannot hold is a preset that does not
+            # exist.
+            present = _path(pid).exists()
+        except OSError:
+            present = False
+        if not present:
+            raise PresetNotFoundError(pid)
+        dangling = _dangling(config.read_config(), pid)
+        if dangling:
+            config.write_config(**dangling)
+        _path(pid).unlink()
 
 
-# ---- resolution (pure) ----
-
-def _opinion(meta: dict, key: str, known: Callable[[str], bool]) -> str:
-    """What a scope says: a preset id, `PRESET_CLEAR`, or "" for no opinion --
-    which an absent key, a blank one and a dangling id all are."""
-    value = str(meta.get(key, "") or "").strip()
-    if value == PRESET_CLEAR:
-        return PRESET_CLEAR
-    return value if value and known(value) else ""
-
-
-def resolve(task: str, *, campaign_meta: dict, cfg: dict, conn: dict | None,
-            known: Callable[[str], bool]) -> dict:
-    """Which preset `task` runs with on `conn`: `{preset_id, scope}`.
-
-    `preset_id` is "" for none -- provider defaults, whether because a scope
-    cleared it (scope names that scope) or because nothing anywhere set one
-    (scope `none`). A task no route claims skips straight to the connection.
-    """
-    got = routing.route(task)
-    if got is not None:
-        key = routing.preset_key(routing.legacy_key(got))
-        scopes = ([("campaign", campaign_meta)] if got.campaign_scoped else []) \
-            + [("global", cfg)]
-        for scope, meta in scopes:
-            chosen = _opinion(meta, key, known)
-            if chosen == PRESET_CLEAR:
-                return {"preset_id": "", "scope": scope}
-            if chosen:
-                return {"preset_id": chosen, "scope": scope}
-    own = str((conn or {}).get("sampler_preset", "") or "").strip()
-    if own and known(own):
-        return {"preset_id": own, "scope": "connection"}
-    return {"preset_id": "", "scope": "none"}
-
-
-def scope_values(scope: str, *, campaign_meta: dict, cfg: dict) -> dict[str, str]:
-    """What THIS scope says per route, raw -- the picker's selected values."""
-    own = campaign_meta if scope == "campaign" else cfg
-    return {r.key: str(own.get(routing.preset_key(r.key), "") or "")
-            for r in routing.routes_for(scope)}
-
-
-def inherited(scope: str, route_key: str, *, campaign_meta: dict, cfg: dict,
-              conn: dict | None, known: Callable[[str], bool]) -> dict:
-    """What `route_key` would resolve to if THIS scope said nothing -- the only
-    honest label for an "inherit" option (`routing.bundle`'s reasoning)."""
-    key = routing.preset_key(route_key)
-    task = routing.route_by_key(route_key).tasks[0]
-    if scope == "campaign":
-        campaign_meta = {k: v for k, v in campaign_meta.items() if k != key}
-    else:
-        cfg = {k: v for k, v in cfg.items() if k != key}
-    return resolve(task, campaign_meta=campaign_meta, cfg=cfg, conn=conn, known=known)
-
-
-def refused(scope: str, fields) -> list[str]:
-    """The `preset_*` keys in `fields` this scope may not set."""
-    allowed = {routing.preset_key(r.key) for r in routing.routes_for(scope)}
-    return [f for f in fields if f not in allowed]
+def _dangling(cfg: dict, pid: str) -> dict[str, str]:
+    """Every global key naming preset `pid`, cleared: `{key: ""}`. The route
+    presets (the legacy routes' and every new route's -- one spelling in both
+    layouts), and the preset part of each generative role, each role's
+    fallback and each route's pin (spec 11.3) -- the part alone: the provider
+    and model it rode with are still a selection, and with no preset it
+    samples as its provider's own."""
+    named = {*routing.PRESET_CONFIG_KEYS,
+             *(inference_keys.preset_key(r.key) for r in routing.ROUTES)}
+    named.update(inference_keys.role_key(r, "preset") for r in inference_keys.GENERATIVE_ROLES)
+    named.update(inference_keys.fallback_key(r, "preset")
+                 for r in inference_keys.GENERATIVE_ROLES)
+    named.update(inference_keys.pin_key(r.key, "preset") for r in routing.ROUTES)
+    return {key: "" for key in sorted(named)
+            if str(cfg.get(key, "") or "").strip() == pid}
 
 
 # ---- SillyTavern import ----

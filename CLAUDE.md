@@ -291,8 +291,8 @@ subscriber. **Thirty-two handlers** start detached runs, in five classes:
   `runs.reserve_draft`, which it wraps), `common.draft_completion` for the call
   (the catalog refresh and the model test excepted, which list or probe rather
   than complete, and are the two whose run writes beside the connection), and
-  `api.draftRun` in the client (the model test has no client caller until
-  slice C). `post_opener` is the exception on the
+  `api.draftRun` in the client (`api.runModelTest` included, which the test
+  call dialog reaches only after its preview). `post_opener` is the exception on the
   client side only, where `api.streamDraft` re-attaches by attempt id instead
   of polling.
 
@@ -488,7 +488,26 @@ would answer neither question.
   `GRIMOIRE_HOME` or the bootstrap pointer already names somewhere else).
   `scripts/unix/install.sh` and `scripts/windows/install.ps1` also check the
   Python and Node floors up front, and `test_install_scripts.py` holds those
-  floors to `requires-python` and `engines.node`.
+  floors to `requires-python` and `engines.node`. A store this build creates
+  is **born at the current model-settings format**: the first write of a
+  missing `config.md` stamps the format marker (`inference_keys.born_current`),
+  so a fresh install is never migrated and no safety archive is taken of an
+  empty library. `GRIMOIRE_INFERENCE_AUTOMIGRATE=0`, which `tests/conftest.py`
+  sets, turns off that birth stamp and the background migration together; a
+  test that wants either stamps the marker or calls `migrate.ensure` itself.
+  So the older play suites run at format 1, and `test_format2_play.py` is the
+  turn path (a chat turn and a reroll) at the format a fresh install ships.
+- **Model settings moved to a new layout, once, in the background**
+  (`store/inference/migrate.py`, started by `main.start` at startup and after a
+  data-dir move). Its first write is a full archive named
+  `pre-inference-grimoire-<stamp>.zip` (`backups.SAFETY_PREFIX`), and it is the
+  one archive retention leaves alone: `GET /backups` lists it beside the
+  ordinary series, but `backups.sweep` counts and deletes only the ordinary
+  series, so it stays until a person removes it. Until the switch lands the
+  new Models settings answer 409 `not_migrated` (play carries on through the
+  legacy translation); a store a newer build switched refuses every
+  model-settings write with 409 `newer_format`. Backup, marker, resume, busy
+  campaigns and older builds are all in `docs/store-guarantees.md`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
   runs, so a CI failure reproduces locally with one command. Individually:
   `make check-py` (pytest under coverage, across four pytest-xdist workers;
@@ -713,9 +732,20 @@ would answer neither question.
   `store/routing.py` maps the task to a route (each one declares its
   `operation`, its `default_role` and what it `requires`), and
   `store/inference/` resolves the route to a role (Primary, Fast, Decision,
-  Embedding) or a pinned model -- today's settings are read through a legacy
-  translation, so the surfaces that already exist still show their twelve
-  routes. A reroll's connection override goes through `override_inference`, and
+  Embedding) or a pinned model. Which settings it reads is decided once per
+  resolution by `config.md`'s format marker. A store at format 2 reads the
+  roles and their fallbacks, each route's choice, pin and preset, a campaign's
+  own overrides of both, and the facts of the chosen model -- `vision`,
+  `prefill` and `post_process`, which the lowering lays over the connection
+  dict in place of the connection's legacy fields. A store the migration has
+  not reached is read through `translate`, the legacy keys seen as that same
+  layout, so a call site never asks which one it is on. The fallback rides on
+  the resolved conn: the primary's dict carries the fallback attempt, lowered
+  (wearing the route's preset when the route has one), under `FALLBACK_KEY`,
+  and the facade sends that one. A fallback *known* unable to do what the route needs is reported
+  (`fallback_missing`) and never attached, so the facade never sends it -- nor
+  one that names the primary's own connection, nor one that cannot carry the
+  call's images. A reroll's connection override goes through `override_inference`, and
   absorb's secondary phases hand `_soft_inference` a thunk, so a phase that
   cannot resolve reports itself failed with a reason instead of losing the
   review.
@@ -732,7 +762,34 @@ would answer neither question.
   it (a `no`, never an `unknown`) with 409 `incapable`; an image route whose
   adapter says `no` keeps the old `UNSUPPORTED` body instead. A failed test
   call is `unknown` with its error, never `no`, and the name rule's `no` is a
-  guess that hides a model in a picker but never refuses one.
+  guess that hides a model in a picker but never refuses one. The Embedding
+  role has no seam to refuse at, so the same known `no` for `embed` turns
+  embedding off instead: `embed_space.resolve` names no space, no request is
+  sent that could only fail, and the Embedding card says why.
+- **A settings surface never spends unasked, and the server is what holds
+  that.** Play is not gated -- sending a turn *is* the request -- but a call a
+  settings page starts that may cost money says what it will send and waits
+  for a yes, and its route refuses the request without that yes before
+  anything is built or sent. Three do today: the model test
+  (`post_connection_test`, 400 without `confirm: true`; its `/test/preview`
+  sends nothing and is what the dialog shows), a health check that generates
+  (`GENERATING_CHECK_KINDS`, the Claude subscription, 400 without `confirm:
+  true`; the free checks take none), and a change that moves the Embedding
+  role's vector space -- the role changed to a selection that embeds (`PUT
+  /inference/settings`), a new key or address on the provider it embeds
+  through, which restamps that provider's `rev` (`PUT /llm-connections/{id}`,
+  judged by `embed_space.moved_by`), or a model-facts write that turns the
+  role on, such as the user's `embed: yes` over a known `no` (`PUT
+  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`) -- each
+  400 `confirm_embedding` without `confirm_embedding: true`, compared inside
+  the hold that writes, because re-embedding a library may cost money. Two
+  things can still lift a known `no` without that question, because neither
+  is a settings write the user makes to the Embedding role: a test call that
+  PASSES (itself confirmed before it is sent; a failed test is `unknown` and
+  lifts nothing) and a catalog refresh that starts listing the model's
+  embeddings. A confirmation
+  that lives only in a client dialog is not the rule: a new settings action
+  that can spend adds its refusal at the route.
 - **Adding a module that mutates campaign-scoped state?** Classify it in
   `store/locks.py`, or `test_lock_domain_guard.py` fails naming your module. The
   campaign lock domain used to be a docstring list, which is how two mutators

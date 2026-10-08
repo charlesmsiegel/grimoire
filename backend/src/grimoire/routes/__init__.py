@@ -8,6 +8,8 @@ One ``APIRouter`` per domain, composed here into the single ``router`` that
   ``streaming``   SSE framing, persisted-turn strategies, proposal machinery
   ``config``      /config, /llm-connections, /styles, /response,
                   /entity-kinds, /calendars, /climates
+  ``inference``   /inference/settings and /campaigns/{cid}/inference, the
+                  roles and route choices
   ``modules``     /modules
   ``worlds``      /worlds
   ``characters``  /worlds/{wid}/characters
@@ -75,6 +77,7 @@ from . import (
     entities,
     greetings,
     images,
+    inference,
     ledger,
     maintenance,
     mechanics,
@@ -178,7 +181,7 @@ def _compose(domain: APIRouter) -> None:
 # `world_images` AFTER `characters`: `/worlds/{wid}/images/{name}` generalizes
 # `/worlds/{wid}/images/undescribed`, which `characters` owns, so any earlier
 # and the `{name}` route swallows the describe backlog.
-for _domain in (config, modules, worlds, characters, world_images, images, greetings,
+for _domain in (config, inference, modules, worlds, characters, world_images, images, greetings,
                 runs, maintenance, scenes, character_turns, authors_notes, passage_characters, weather, mechanics, usage, observability,
                 campaigns, continuity, ledger, search, shell, todo, tracker, regex_rules, quick_replies):
     _compose(_domain.router)

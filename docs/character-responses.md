@@ -251,11 +251,17 @@ The display applies to the character-response engine, including narrator
 responses and individual rerolls. Background selectors/drafts and the legacy
 combined response engine still use their existing display paths.
 
-For a Custom (OpenAI-compatible) connection using `glm-5.3` or
-`glm-5.3-flash`, **LLM Connections → Edit → Reasoning effort** offers Provider
-default, Low, High, and Max. Existing connections send no setting. The chosen
-value is sent as `reasoning_effort` on calls through that connection; changing
-the connection to another model stops sending the GLM-specific setting.
+For a Custom (OpenAI-compatible) provider serving `glm-5.3` or
+`glm-5.3-flash`, the reasoning effort is a sampler preset's **Reasoning effort**
+(Settings → Presets), attached to the role or route that runs the model on the
+**Models** page. GLM takes Low and High from a preset; Off and Medium are not
+levels it has, and the preset's controls readout says so rather than sending
+them. A preset that sets no effort sends none, unless the provider kept one
+from before the model-settings upgrade: the old per-connection **Reasoning
+effort** (Provider default, Low, High or Max) is no longer editable, but a
+value it stored is still sent until a preset's effort replaces it. The value
+goes out as `reasoning_effort`; a model other than GLM is never sent the
+GLM-specific setting.
 
 [Z.ai's Chat Completion reference](https://docs.z.ai/api-reference/llm/chat-completion)
 documents Max as the default, Low/High/Max as GLM 5.3's supported values, and

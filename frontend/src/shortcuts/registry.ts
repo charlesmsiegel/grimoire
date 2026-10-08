@@ -178,6 +178,14 @@ export function otherModalOpen(ignoring?: Scope): boolean {
   return scopes.some((s) => s !== ignoring && s.modal);
 }
 
+/** Whether `scope` is the overlay on top -- the one Escape reaches. For a
+ *  modal that holds focus inside itself: it must let go while something it
+ *  did not open (the shortcuts sheet) is drawn over it. */
+export function isTopModal(scope: Scope): boolean {
+  const at = topModal(scopes);
+  return at >= 0 && scopes[at] === scope;
+}
+
 /** A binding, and whether pressing it right now would actually do anything. */
 export type HotkeyRow = { key: Hotkey; reachable: boolean };
 

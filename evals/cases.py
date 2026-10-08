@@ -115,6 +115,10 @@ class Case:
     prompt: Callable[[dict], list[dict]]
     grade: Callable[[dict, str], list[Check]]
     recordings: tuple[Recording, ...]
+    #: The task the app meters this generation under (`store/routing.py`): a
+    #: live run resolves it through the app's seam, so the case is graded on
+    #: the model the app would send that prompt to.
+    task: str = "chat"
 
     @property
     def baseline(self) -> Recording:
@@ -1345,6 +1349,7 @@ CASES: tuple[Case, ...] = (
              Recording("unknown-check", ("fence.check_known",)),
              Recording("unclosed", ("fence.closed",)))),
     Case(id="absorb",
+         task="absorb",
          hypothesis="absorb returns JSON with every section the contract names, "
                     "and it materializes into applicable edits",
          build=build_absorb, prompt=_absorb_prompt, grade=grade_absorb,
@@ -1412,6 +1417,7 @@ CASES: tuple[Case, ...] = (
              # without slop.measurable this recording would score all green.
              Recording("terse", ("slop.measurable",)))),
     Case(id="continuity-identity",
+         task="continuity-identity",
          hypothesis="the identity resolver maps a reworded duplicate to the existing "
                     "record and keeps a same-topic question and a concrete continuation new",
          build=build_continuity_identity,
@@ -1428,6 +1434,7 @@ CASES: tuple[Case, ...] = (
              Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
                        "json"))),
     Case(id="continuity-reconcile",
+         task="continuity-reconcile",
          hypothesis="the reconciliation sweep keeps a same-topic question distinct, "
                     "reads a concrete question as a continuation, never merges a thread "
                     "with a commitment, closes or resolves only on a shown beat, and "
@@ -1455,6 +1462,7 @@ CASES: tuple[Case, ...] = (
              Recording("timid", ("reconcile.cross_type", "reconcile.close",
                                  "reconcile.fulfilled"), "json"))),
     Case(id="scene-suggestions",
+         task="suggestions",
          hypothesis="with two focused drivers and a batch anchor in a custom calendar, "
                     "the suggestions spread focus coverage instead of cloning one premise, "
                     "cite only known drivers, and carry dates the anchor rule accepts",
@@ -1477,6 +1485,7 @@ CASES: tuple[Case, ...] = (
              # `claim` drops it, so only the raw reply shows it.
              Recording("unknown-ref", ("suggest.known_refs",), "json"))),
     Case(id="scene-suggestions-anchor-on",
+         task="suggestions",
          hypothesis="with a batch anchor 'on' an event in a custom calendar, every parsed "
                     "date is the anchor's own date in the calendar's notation, whatever the "
                     "model wrote",

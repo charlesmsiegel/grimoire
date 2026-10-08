@@ -7,7 +7,7 @@ import pytest
 from grimoire import content_parts, llm, routes, store
 from grimoire.llm import ATTEMPTED
 from grimoire.llm_errors import LLMError
-from grimoire.routes import character_turns, common
+from grimoire.routes import character_turns
 from grimoire.routes import runs as runs_mod
 from grimoire.store import response_protocol
 from tests.llm_fakes import FakeLLM, ScriptedProvider
@@ -208,8 +208,8 @@ def test_a_prefill_primary_failing_over_to_an_instruction_fallback_strips_its_fe
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(
         "```perception\nShe notes", " the door.\n```\n", "Then she left." + _HANDOFF))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                           fallback=common._fallback_connection)
+    # No `fallback`, as the shipped client: the turn's conn carries its own.
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     client.app.dependency_overrides[routes.get_llm] = lambda: facade
     result = client.post(base + f"/responses/{rid}/extend", json={})
     assert result.status_code == 200 and "error" not in result.text, result.text
@@ -527,9 +527,9 @@ def test_a_fallback_capture_records_the_tail_that_fallback_was_sent(monkeypatch,
     monkeypatch.setattr(store.prompt_log, "capturing", lambda: True)
     monkeypatch.setattr(character_turns, "_record_prompt",
                         lambda cid, sid, task, breakdown, **kw: recorded.append((task, kw)))
-    monkeypatch.setattr(character_turns, "_fallback_connection",
-                        lambda: {"kind": "openai_compatible", "model": "fb", "prefill": False})
-    conn = {"kind": "openrouter", "model": "m", "prefill": True}
+    # The fallback this call carries, as the resolver attaches it.
+    conn = {"kind": "openrouter", "model": "m", "prefill": True,
+            llm.FALLBACK_KEY: {"kind": "openai_compatible", "model": "fb", "prefill": False}}
     tailed = character_turns._extend_messages(_SNAP, conn, "Mara waits", "", None)
     character_turns._capture("c", "s", "extend", tailed, conn)
     assert recorded[-1][1]["messages"][-1] == {"role": "assistant", "content": "Mara waits"}

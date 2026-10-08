@@ -13,7 +13,7 @@ import pytest
 
 from grimoire.embeddings import EmbeddingsClient
 from grimoire.store import config, embed_space, llm_connections
-from grimoire.store.inference import providers, translate
+from grimoire.store.inference import facts, providers, translate
 
 
 @pytest.fixture(autouse=True)
@@ -111,3 +111,88 @@ def test_the_request_goes_to_the_openrouter_embeddings_route():
     assert vectors == [[0.5, 0.25]]
     assert str(seen[0].url) == "https://openrouter.ai/api/v1/embeddings"
     assert seen[0].headers["Authorization"] == "Bearer sk-or-fake"
+
+
+# --- A provider KNOWN not to embed is no space -------------------------------
+# The same rule slice D's `resolve.embedding` keeps: a known `no` for `embed`
+# (adapter, the preset's `never`, the user's override, the catalog -- never
+# the name rule's guess) turns embedding off exactly as an unset role does.
+
+def _zai() -> str:
+    return llm_connections.create_connection(
+        "openai_compatible", "Winifred Zai", base_url="https://api.z.ai/api/paas/v4",
+        api_key="sk-fake", model="", post_process="none")
+
+
+def _role(conn: str, model: str = "m") -> dict:
+    return {"inference_format": "2", "role_embedding_provider": conn,
+            "role_embedding_model": model}
+
+
+def _rev(conn: str) -> str:
+    return llm_connections.read_connection_raw(conn)["rev"]
+
+
+def test_a_provider_whose_preset_never_embeds_is_no_space():
+    conn = _zai()
+    assert embed_space.resolve(_role(conn)) is None
+    config.write_config(**_role(conn))
+    assert embed_space.resolve() is None
+    # The legacy layout reads the same rule.
+    assert embed_space.resolve({"embeddings_connection_id": conn,
+                                "embeddings_model": "m"}) is None
+
+
+def test_a_users_no_and_a_catalogs_no_turn_embedding_off():
+    conn = _local()
+    assert embed_space.resolve(_role(conn)) is not None   # unknown still embeds
+    llm_connections.set_cached_models(conn, [{"id": "m", "outputs": ["text"]}], _rev(conn))
+    assert embed_space.resolve(_role(conn)) is None
+    other = llm_connections.create_connection(
+        "openai_compatible", "Saltmarch Vectors", base_url="https://other.example/v1",
+        api_key="sk-fake", model="", post_process="none")
+    facts.set_overrides(other, "m", {"embed": "no"})
+    assert embed_space.resolve(_role(other)) is None
+
+
+def _edited(conn: str, **fields) -> tuple[dict, dict]:
+    before = llm_connections.read_connection_raw(conn)
+    return before, {**before, **fields, "rev": "next-rev"}
+
+
+def test_a_provider_that_cannot_embed_never_asks_to_confirm_a_move():
+    zai = _zai()
+    assert embed_space.moved_by(_role(zai), *_edited(zai, api_key="sk-fake-2")) is False
+    # Leaving the known `no` for an address that embeds is a move.
+    assert embed_space.moved_by(
+        _role(zai), *_edited(zai, base_url="https://vectors.example/v1")) is True
+
+
+def test_moved_by_judges_the_provider_as_it_reads_after_the_save():
+    """A rev restamp leaves the cached catalog row stale, so its `no` does not
+    survive the save: the edit lands with embedding ON, and asks first."""
+    conn = _local()
+    llm_connections.set_cached_models(conn, [{"id": "m", "outputs": ["text"]}], _rev(conn))
+    config.write_config(**_role(conn))
+    assert embed_space.resolve() is None
+    said: list[bool] = []
+    llm_connections.update_connection(
+        conn, guard=lambda before, after: said.append(
+            embed_space.moved_by(config.read_config(), before, after)), api_key="sk-fake-2")
+    assert embed_space.resolve() is not None
+    assert said == [True]
+
+
+def test_facts_moved_is_off_to_on_only():
+    """A user's `embed: yes` over the catalog's `no` turns the role on (a
+    move, asked first); taking it back turns it off, which re-embeds nothing."""
+    conn = _local()
+    llm_connections.set_cached_models(conn, [{"id": "m", "outputs": ["text"]}], _rev(conn))
+    cfg = _role(conn)
+    before = facts.of(conn, "m", _rev(conn))
+    after = {**before, "overrides": {"embed": "yes"}}
+    assert embed_space.facts_moved(cfg, conn, "m", before, after) is True
+    assert embed_space.facts_moved(cfg, conn, "m", after, before) is False
+    # Another model, or a role naming another provider, moves nothing.
+    assert embed_space.facts_moved(cfg, conn, "m2", before, after) is False
+    assert embed_space.facts_moved(_role(_zai()), conn, "m", before, after) is False

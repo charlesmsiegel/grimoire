@@ -57,13 +57,6 @@
     "jsx-a11y/no-noninteractive-element-interactions": 1,
     "jsx-a11y/no-static-element-interactions": 1
   },
-  "frontend/src/components/ConnectionEditor.test.tsx": {
-    "@typescript-eslint/unbound-method": 1
-  },
-  "frontend/src/components/ConnectionEditor.tsx": {
-    "@typescript-eslint/no-floating-promises": 2,
-    "@typescript-eslint/no-misused-promises": 6
-  },
   "frontend/src/components/CostPanel.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 10
   },
@@ -425,18 +418,12 @@
     "@typescript-eslint/no-misused-promises": 2,
     "jsx-a11y/no-autofocus": 1
   },
-  "frontend/src/routes/ConfigView.test.tsx": {
-    "@typescript-eslint/no-unnecessary-type-assertion": 3
-  },
   "frontend/src/routes/ConfigView.tsx": {
     "@typescript-eslint/no-explicit-any": 2,
     "@typescript-eslint/no-floating-promises": 2,
     "@typescript-eslint/no-misused-promises": 2,
     "@typescript-eslint/no-unsafe-argument": 2,
     "@typescript-eslint/no-unsafe-member-access": 2
-  },
-  "frontend/src/routes/ModelCombobox.tsx": {
-    "jsx-a11y/no-noninteractive-element-interactions": 1
   },
   "frontend/src/routes/ModulesView.test.tsx": {
     "@typescript-eslint/no-unnecessary-type-assertion": 1
@@ -453,11 +440,6 @@
     "react-hooks/exhaustive-deps": 1
   },
   "frontend/src/routes/SetupWizard.tsx": {
-    "@typescript-eslint/no-explicit-any": 4,
-    "@typescript-eslint/no-floating-promises": 1,
-    "@typescript-eslint/no-misused-promises": 7,
-    "@typescript-eslint/no-unsafe-argument": 4,
-    "@typescript-eslint/no-unsafe-member-access": 4,
     "react-hooks/exhaustive-deps": 2
   },
   "frontend/src/routes/TimelineView.tsx": {

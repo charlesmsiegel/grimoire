@@ -18,8 +18,8 @@ function channel() {
  *  The shell's chrome — the sidebar and the status bar — outlives every route,
  *  so it cannot refresh itself off navigation alone: the views that change what
  *  the chrome shows do it without moving the pathname. `CampaignsView` renames
- *  and deletes from `/`; `ConfigView` and `ConnectionsView` change which
- *  connection is active, and its model, from their own routes.
+ *  and deletes from `/`; `ConfigView` changes which connection is active and
+ *  `ProvidersView` what a provider is, both from their own routes.
  *
  *  Emitted from the api client rather than from each view, so a caller cannot
  *  forget: the mutators are the one place every path goes through. */

@@ -300,6 +300,9 @@ test("tasks wait for a connection", async () => {
     </RunRegistryProvider>);
   await screen.findByText("a reply");
   expect(await screen.findByRole("button", { name: "Summarize" })).toBeDisabled();
+  // And the page says where a model is chosen now: Settings only links out.
+  expect(screen.getByText(/No model is ready to generate/)).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Models page" })).toHaveAttribute("href", "/models");
 });
 
 test("a task running from the strip disables the inspector's button", async () => {

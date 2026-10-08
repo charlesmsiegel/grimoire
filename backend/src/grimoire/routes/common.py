@@ -31,10 +31,10 @@ from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
 from ..openai_compatible import OpenAICompatibleClient
-from ..store.inference import capabilities as inference_capabilities
 from ..store.inference import cascade as inference_cascade
-from ..store.inference import providers as inference_providers
+from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
+from ..store.inference import translate as inference_translate
 from ..store.inference.resolved import ResolvedInference
 
 log = logging.getLogger(__name__)
@@ -289,36 +289,6 @@ def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[di
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _fallback_connection() -> dict | None:
-    """The connection a generation falls back to on exhaustion (#144), or None.
-
-    Resolved per generation rather than at import, so repointing it on the
-    Configuration page lands without a restart — the same contract the timeout
-    resolver has.
-
-    Every way of not having a usable one answers None, and none of them raise:
-    an unset key, a fallback pointing at a connection that has since been
-    deleted, an unreadable store, and — the one worth spelling out — a
-    connection missing the credential it needs to send. Surfacing *that* as an
-    error would replace the primary's real failure ("OpenRouter is rate
-    limiting you") with a confusing second one about a connection the user was
-    not using, on exactly the request where they need the first message. So a
-    misconfigured fallback is no fallback, and the primary's error stands.
-    """
-    try:
-        fid = store.read_config().get("fallback_connection_id", "")
-        if not fid:
-            return None
-        conn = store.llm_connections.read_connection_raw(fid)
-    except (store.llm_connections.ConnectionNotFound, store.locks.StoreBusy, OSError):
-        return None
-    # Task-less on purpose: the fallback is standing policy rather than any one
-    # route's, so what it carries here is its OWN preset. When the primary's
-    # preset came from a route scope, the facade puts that one on it instead
-    # (`llm.LLMClient._routes`) -- the route's answer follows the route.
-    return None if inference.problem(conn) else inference.own_sampling(conn)
-
-
 def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     """The gateway client for one app (#215).
 
@@ -330,8 +300,10 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
 
     The idle bound is passed as a resolver, not a number: llm.py must not import
     the store (#239), and reading config.md per call is what lets a
-    Configuration-page change land without a restart (#243). The retry count and
-    the fallback route (#144) ride the same seam for the same two reasons.
+    Configuration-page change land without a restart (#243). The retry count
+    rides the same seam for the same two reasons. The fallback (#144) does not:
+    each call's resolved connection carries its own (`llm.FALLBACK_KEY`, set by
+    `store.inference.resolve`), so the client holds none.
 
     `health` is that app's registry (#146), passed as the observer every attempt
     reports its outcome to. Optional so a caller that only wants to generate —
@@ -340,7 +312,6 @@ def build_llm(health: ProviderHealth | None = None) -> LLMClient:
     """
     return LLMClient(timeout=store.config.llm_timeout,
                      retries=store.config.llm_retries,
-                     fallback=_fallback_connection,
                      observer=health.record if health is not None else None,
                      capture=store.logs.incoming_capture,
                      images=_post_images_for,
@@ -459,10 +430,10 @@ def _record_prompt(cid: str, sid: str, task: str, breakdown: dict | None,
         breakdown = {**breakdown, "sampling": report}
     if isinstance(messages, model_guidance.PreparedMessages):
         def on_variant(selected: str, variant: dict | None) -> None:
-            # The fallback as the facade sends it: re-resolved per generation
-            # exactly as `build_llm`'s resolver is, with the route's preset
-            # carried onto it under the same rule.
-            fallback = _fallback_connection() if conn is not None else None
+            # The fallback as the facade sends it: the one this call carries
+            # (`llm.FALLBACK_KEY`), with the route's preset carried onto it
+            # under the same rule.
+            fallback = conn.get(llm.FALLBACK_KEY) if conn is not None else None
             _record_prompt(cid, sid, task, variant, model=selected,
                            conn=llm.fallback_sampling(conn, fallback)
                            if conn is not None and fallback is not None else None)
@@ -676,171 +647,6 @@ def _response_body(scene_meta: dict, campaign_meta: dict, cfg: dict, own: dict) 
                           "opening": targets["opening"],
                           "continuation": targets["continuation"]},
             "provenance": {**resolved["provenance"], **targets["provenance"]}}
-
-
-# ---- routing bundle (#142) ----
-def _routing_body(scope: str, campaign_meta: dict) -> dict:
-    """What a routing picker renders, at either scope.
-
-    `/response`'s shape and its reason: the picker offers "inherit", so it has
-    to be able to say what inheriting currently gets you -- and for routing that
-    answer can be a connection two scopes away.
-
-    The connection list rides along because every value in the bundle is an
-    opaque id: without it the picker would have to fetch the whole connection
-    list (keys, base URLs and all) to render ten option labels.
-    """
-    conns = store.llm_connections.list_connections()
-    known = {c["id"] for c in conns}
-    cfg = store.read_config()
-    bundle = store.routing.bundle(campaign_meta=campaign_meta, cfg=cfg,
-                                  exists=lambda conn_id: conn_id in known, scope=scope)
-    active = store.llm_connections.get_active()  # routing-ok: names the cascade's base
-    return {**bundle, "scope": scope,
-            **_route_sampling(scope, campaign_meta, cfg, conns, bundle["effective"],
-                              active["id"] if active else ""),
-            "active_connection_id": active["id"] if active else "",
-            "catalog": [{"key": r.key, "label": r.label, "hint": r.hint,
-                         "tasks": list(r.tasks)}
-                        for r in store.routing.routes_for(scope)],
-            "connections": [{"id": c["id"], "name": c["name"], "kind": c["kind"],
-                             "model": c.get("model", ""),
-                             # Whether it can send AT ALL. Routing a job to a
-                             # keyless connection is a 409 on every call of that
-                             # kind, and the picker is where that is cheap to
-                             # notice. `inference.problem` is the same rule
-                             # `require_inference` refuses with, asked of a
-                             # masked record -- which is why `key_set` stands in
-                             # for the key it deliberately does not carry.
-                             "usable": inference.problem(
-                                 {**c, "api_key": "x" if c.get("key_set") else ""}) is None}
-                            for c in conns]}
-
-
-def _route_sampling(scope: str, campaign_meta: dict, cfg: dict, conns: list[dict],
-                    effective: dict[str, str], active_id: str) -> dict:
-    """The routing picker's preset half: what each route would inherit, and
-    what its effective connection will actually be sent from its effective
-    preset.
-
-    The second is the point. Most routes are never captured to the prompt log
-    -- absorb, dossiers, the tracker, every draft -- so this row is the only
-    place a parameter their backend drops is said aloud before the call is
-    made. Computed here from the same `llm_sampling.split` the facade runs, so
-    the row cannot drift from what is sent. Masked connections serve: a split
-    reads the kind, model and sampler fields, never the key.
-    """
-    by_id = {c["id"]: c for c in conns}
-    presets = store.sampler_presets.list_presets()
-    known_ids = {p["id"]: p for p in presets}
-
-    def known(pid: str) -> bool:
-        return pid in known_ids
-
-    inherited: dict[str, str] = {}
-    inherited_from: dict[str, dict] = {}
-    sampling: dict[str, dict | None] = {}
-    for r in store.routing.routes_for(scope):
-        conn = by_id.get(effective.get(r.key) or active_id)
-        without = store.sampler_presets.inherited(
-            scope, r.key, campaign_meta=campaign_meta, cfg=cfg, conn=conn, known=known)
-        inherited[r.key] = without["preset_id"]
-        inherited_from[r.key] = {"scope": without["scope"]}
-        if conn is None:
-            sampling[r.key] = None
-            continue
-        got = store.sampler_presets.resolve(r.tasks[0], campaign_meta=campaign_meta,
-                                            cfg=cfg, conn=conn, known=known)
-        preset = known_ids.get(got["preset_id"])
-        served = {**conn, "sampling": {
-            "preset_id": got["preset_id"], "preset_name": preset["name"] if preset else "",
-            "scope": got["scope"], "params": dict(preset["params"]) if preset else {}}}
-        params = inference.model_params(conn)
-        if params is not None:
-            served["model_params"] = params
-        sampling[r.key] = llm_sampling.report(served)
-    return {"presets": store.sampler_presets.scope_values(
-                scope, campaign_meta=campaign_meta, cfg=cfg),
-            "preset_inherited": inherited, "preset_inherited_from": inherited_from,
-            "preset_catalog": [{"id": p["id"], "name": p["name"]} for p in presets],
-            "preset_clear": store.sampler_presets.PRESET_CLEAR,
-            "sampling": sampling}
-
-
-def _routing_fields(scope: str, body) -> dict:
-    """The `{route: connection_id}` map a PUT means, validated for this scope.
-
-    A route the scope cannot set is a 400 rather than a stored key: written
-    silently it would look applied on the page and route nothing at all, which
-    is the failure mode `store/routing.py`'s `campaign_scoped` flag exists to
-    make impossible.
-    """
-    routes = _dump(body).get("routes") or {}
-    if not isinstance(routes, dict):
-        raise HTTPException(status_code=400, detail="routes must be an object")
-    fields = {store.routing.config_key(str(k)): str(v or "").strip() for k, v in routes.items()}
-    refused = store.routing.refused(scope, fields)
-    if refused:
-        raise HTTPException(
-            status_code=400,
-            detail=f"not routable at this scope: {sorted(k[len('route_'):] for k in refused)}")
-    # A value naming no connection is refused HERE and tolerated on READ, which
-    # looks inconsistent and is the whole point: a write is a decision, made
-    # against the list this same response carries, so a typo has to fail rather
-    # than be stored as a setting that quietly routes nothing. A stored value
-    # that stops naming a connection LATER is a deletion, which cannot reach
-    # into every campaign's frontmatter -- so resolution walks past it instead
-    # of failing a turn (`routing._opinion`).
-    unknown = sorted({v for v in fields.values() if v and not _connection_exists(v)})
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"no such connection: {unknown}")
-    return {**fields, **_preset_fields(scope, body)}
-
-
-def _preset_fields(scope: str, body) -> dict:
-    """The `{route: preset_id}` half of a routing PUT, validated for this scope.
-
-    Kept apart from the connection half because the two are refused on
-    different terms: a preset key is not a connection key (`routing.refused`
-    would 400 every one of them), and its value may be the clear sentinel,
-    which names no preset and is exactly as valid as one that does. Unknown
-    ids are refused on write and tolerated on read, `_routing_fields`' rule.
-    """
-    presets = _dump(body).get("presets") or {}
-    if not isinstance(presets, dict):
-        raise HTTPException(status_code=400, detail="presets must be an object")
-    fields = {store.routing.preset_key(str(k)): str(v or "").strip()
-              for k, v in presets.items()}
-    refused = store.sampler_presets.refused(scope, fields)
-    if refused:
-        raise HTTPException(
-            status_code=400,
-            detail=f"no sampler preset at this scope for: "
-                   f"{sorted(k[len('preset_'):] for k in refused)}")
-    clear = store.sampler_presets.PRESET_CLEAR
-    unknown = sorted({v for v in fields.values()
-                      if v and v != clear and not store.sampler_presets.exists(v)})
-    if unknown:
-        raise HTTPException(status_code=400, detail=f"no such sampler preset: {unknown}")
-    return fields
-
-
-def _connection_exists(conn_id: str) -> bool:
-    """Whether this id names a connection, for the WRITE path only.
-
-    Narrower than the read path's predicate on purpose, and the difference is
-    which failures are allowed to look like a typo. A busy store or an
-    unreadable file is not "no such connection": answering False would report a
-    transient condition as a mistake in what the user typed, and the app already
-    turns `StoreBusy` into a 409 that says what actually happened. Resolution
-    swallows both because degrading to the next scope is better than failing a
-    turn; a settings write has no turn to protect.
-    """
-    try:
-        store.llm_connections.read_connection_raw(conn_id)
-    except store.llm_connections.ConnectionNotFound:
-        return False
-    return True
 
 
 def _write_response(setter, fields: dict, style_key: str = "style_id") -> None:
@@ -1322,129 +1128,91 @@ def _narrowed(resolved: ResolvedInference) -> UsableInference:
     return UsableInference(**{f.name: getattr(resolved, f.name) for f in fields(resolved)})
 
 
+def _raise(refused: inference.Refusal | None) -> None:
+    """Raise a store refusal (`inference.refusal` and its two halves) as the
+    HTTP error it names; nothing when there is none."""
+    if refused is not None:
+        status, detail = refused
+        raise HTTPException(status_code=status, detail=detail)
+
+
 def _usable(resolved: ResolvedInference) -> UsableInference:
     """`resolved`, refused with the seam's 409 if it cannot send, or cannot do
-    what its route needs."""
-    _refuse_unusable(resolved)
-    _refuse_incapable(resolved)
+    what its route needs -- `inference.refusal`, the one decision the settings
+    view reports as well."""
+    _raise(inference.refusal(resolved))
     return _narrowed(resolved)
 
 
-#: The sources of a vision `no` a connection's legacy "Images: on" overrides
-#: (`_refuse_incapable`'s bridge until slice C).
-_IMAGES_ON_OUTRANKS = frozenset({"catalog", "name", "preset"})
+#: The 409 body a model-settings write gets on a store a newer build wrote.
+NEWER_FORMAT = {
+    "kind": "newer_format",
+    "detail": "A newer version of grimoire has changed this library's model "
+              "settings. Update grimoire to change them here."}
+
+#: The 400 a legacy inference key gets once the store is at format 2 (spec
+#: 11.3): it would reach older builds only and change nothing here.
+LEGACY_MOVED = "this setting moved to Models"
+
+
+def refuse_newer() -> None:
+    """409 `newer_format` when a newer build has written this store's model
+    settings (spec 11.3): this build would overwrite settings it does not
+    understand. Every model-settings write asks this first; play is not
+    refused, because the frozen legacy keys still resolve."""
+    if store.inference_keys.is_newer(store.read_config()):
+        raise HTTPException(status_code=409, detail=NEWER_FORMAT)
+
+
+def legacy_refused(exc: store.config.LegacyKeysRefusedError) -> HTTPException:
+    """The answer to a legacy-key write the store refused in the hold that
+    writes: 409 `newer_format` on a newer store, 409 `not_migrated` for a
+    marked campaign on a store the migration has not finished
+    (`refuse_unmigrated`'s answer), else 400 `LEGACY_MOVED`."""
+    if exc.newer:
+        return HTTPException(status_code=409, detail=NEWER_FORMAT)
+    if exc.unmigrated:
+        return _not_migrated()
+    return HTTPException(status_code=400, detail=LEGACY_MOVED)
+
+
+def _not_migrated() -> HTTPException:
+    """The 409 `not_migrated`, carrying `migrate.status()`."""
+    return HTTPException(status_code=409, detail={
+        "kind": "not_migrated",
+        "detail": "Model settings are being moved to the new layout. "
+                  "Try again once that has finished.",
+        "status": inference_migrate.status().as_dict()})
+
+
+def refuse_unmigrated() -> None:
+    """409 `not_migrated`, carrying the migration status, while the store's
+    global layout is not the current one (spec 11.1, 12): a new-layout key
+    written into a format-1 store is ignored by the resolver, so the write
+    would answer 200 and change nothing. A newer store is refused as such
+    first -- it is not waiting for a migration, this build cannot do it.
+
+    The status is `migrate.status()`: `pending`, `running`, or `failed` with
+    the reason (a safety backup that could not be taken)."""
+    refuse_newer()
+    if inference_translate.is_current(store.read_config()):
+        return
+    raise _not_migrated()
 
 
 def _refuse_incapable(resolved: ResolvedInference) -> None:
-    """The 409 for a primary that is KNOWN unable to do what its route needs.
-
-    Only a known `no` (`resolved.missing`); `unknown` is let through, and a
-    fallback's gaps are reported (`fallback_missing`) but never refused on --
-    the facade still sends that fallback until slice C. Checked after
-    `_refuse_unusable`, so a connection with no key says that first: it is
-    the fix the reader has to make before anything else matters.
-
-    A wire protocol that cannot carry an image (an `adapter` `no` on vision)
-    answers with the sentence `image_draft_prompt` always answered with, in
-    the same body, so nothing that reads it sees a change. A connection set
-    to "Images: on" is not refused over a catalog's vision `no` (a bridge,
-    below). Anything else is `incapable` (`_incapable_text`), naming the first
-    missing capability in `capabilities.NAMES` order. A name-rule guess is
-    never missing (`resolve._GUESSES`), and a failed test call is `unknown`,
-    so neither can refuse here.
-    """
-    if not resolved.missing:
-        return
-    primary = resolved.attempts[0]
-    conn = primary.conn
-    missing = resolved.missing
-    vision = primary.capabilities.get("vision")
-    if "vision" in missing and vision is not None and vision.source == "adapter":
-        raise HTTPException(status_code=409, detail=store.image_drafts.UNSUPPORTED)
-    if ("vision" in missing and conn.get("vision") == "on"
-            and vision is not None and vision.source in _IMAGES_ON_OUTRANKS):
-        # BRIDGE until slice C moves the connection's "Images: on" setting into
-        # the model's facts (where it would be a `user` yes and outrank the
-        # catalog): today that setting sends image drafts whatever the catalog
-        # says, and nothing in the app could undo a refusal here. Only the
-        # sources it outranks once migrated are waived -- the wire protocol's
-        # `no` is refused above, and the user's per-model word stands (a
-        # probe's failure is never a `no`).
-        missing = tuple(cap for cap in missing if cap != "vision")
-        if not missing:
-            return
-    raise HTTPException(status_code=409, detail={
-        "detail": _incapable_text(resolved, missing[0]), "kind": "incapable"})
-
-
-def _incapable_text(resolved: ResolvedInference, cap: str) -> str:
-    """The `incapable` sentence (spec 5.3): the route, the role when one
-    supplied the model, the model on its provider, what it cannot do, and
-    what to do about it.
-
-    "The <label> route ..." rather than "<label> runs ...", because half the
-    route labels are plural ("Scene turns", "Image descriptions"). The role
-    is named only when the model IS the role's: a pin names none, and a
-    per-call override moved the call off whatever the role chose. The remedy
-    follows: another model for the role, or a pin, where there is a route to
-    pin; another model for the route where it is already pinned."""
-    primary = resolved.attempts[0]
-    conn = primary.conn
-    preset = inference_providers.PRESETS.get(primary.provider_preset)
-    provider = conn.get("name") or (preset.label if preset is not None else conn.get("id", ""))
-    on = f"{effective_model(conn)} on {provider}"
-    standing = resolved.standing
-    chosen = standing is not None and (standing.provider, standing.model) == (
-        primary.provider_id, primary.model)
-    subject = (f"The {store.routing.label_for(resolved.route)} route" if resolved.route
-               else "This generation")
-    pin = " or pin this route" if resolved.route else ""
-    if chosen and resolved.role:
-        role = resolved.role.capitalize()
-        where = f"runs on the {role} role ({on})"
-        remedy = f"choose another {role} model{pin}"
-    elif chosen and resolved.via == "route":
-        where, remedy = f"is pinned to {on}", "choose another model for this route"
-    else:
-        where, remedy = f"runs on {on}", f"choose another model{pin}"
-    return (f"{subject} {where}, which cannot "
-            f"{inference_capabilities.CANNOT.get(cap, cap)} — {remedy}.")
+    """The 409 for a primary KNOWN unable to do what its route needs
+    (`inference.incapable`). Raised apart from the key check by
+    `override_inference`, whose key refusals differ by what the body named."""
+    _raise(inference.incapable(resolved))
 
 
 def _refuse_unusable(resolved: ResolvedInference) -> None:
-    """The 409 that says why this resolution cannot send, if it cannot.
-
-    Shared by the seam and by `override_inference`, whose `model`-only reroll
-    drives the standing route and must be refused on exactly the same terms --
-    including the routed-connection wording below, which its own inline copy
-    of these checks used to lose.
-    """
-    conn = resolved.conn
-    if conn is None:
-        raise HTTPException(
-            status_code=409, detail={"detail": "No LLM connection selected", "kind": "missing_key"})
-    problem = inference.problem(conn)
-    if problem is not None and resolved.via == "route":
-        # A ROUTED connection that cannot send is reported, not walked past.
-        # The walk skips a route naming a connection that no longer exists --
-        # a delete cannot reach into every campaign's frontmatter, so that
-        # reference is stale rather than meant. This one is meant: the user
-        # pointed this task at this connection and it has no key. Falling back
-        # to the active connection would generate a scene on a model they did
-        # not choose and never say so.
-        raise HTTPException(status_code=409, detail={
-            "detail": f"{problem} ({conn.get('name') or conn['id']}, routed for "
-                      f"{store.routing.label_for(resolved.legacy_route).lower()})",
-            "kind": "missing_key"})
-    if problem is not None:
-        # Deliberately *before* the facade, so a configured fallback does not
-        # rescue this and the 409 still fires. The two look inconsistent — the
-        # facade happily falls back on `auth` — and the distinction is real: a
-        # key the provider rejected is a runtime failure, worth routing around
-        # silently, while no key at all is a setup mistake. Quietly serving it
-        # from the fallback would leave someone playing for weeks on the wrong
-        # connection, wondering why the model they picked never sounds right.
-        raise HTTPException(status_code=409, detail={"detail": problem, "kind": "missing_key"})
+    """The 409 that says why this resolution cannot send, if it cannot
+    (`inference.unusable`). Shared by the seam and by `override_inference`,
+    whose `model`-only reroll drives the standing route and must be refused on
+    exactly the same terms."""
+    _raise(inference.unusable(resolved))
 
 
 def require_inference(task: str = "", cid: str = "", *,
@@ -1454,8 +1222,9 @@ def require_inference(task: str = "", cid: str = "", *,
     The one seam every LLM call site in `routes/` resolves through: the
     resolver (`store.inference.resolve`) answers, and this refuses what cannot
     send -- a missing key or connection first, then a primary known unable to
-    do what the route needs (`_refuse_incapable`). `.conn` is the connection
-    dict the facade reads.
+    do what the route needs (`inference.refusal`, pure, so the settings view
+    reports the same decision). `.conn` is the connection dict the facade
+    reads.
 
     `task` is the same string the call site meters under (`store.usage.meter`),
     and `store/routing.py` maps it to a route; `cid` lets a campaign override
@@ -1494,23 +1263,38 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     stored one. They differ for exactly one kind: a `claude` connection with no
     model configured still runs `llm.CLAUDE_DEFAULT_MODEL`, so naming that
     model — which is what the picker now advertises in its placeholder — is
-    naming the standing route, not leaving it.
+    naming the standing route, not leaving it. When the call names a preset
+    (either layout), the preset the standing route would have run with is
+    compared as well.
 
-    The two fields compose. `connection_id` alone runs the named connection at
-    its own model; `model` alone runs the STANDING connection at that model;
-    both is the named connection driven at the named model. Neither expresses
-    the other's case, which is why there are two: a bare model id cannot reach
-    a different provider (the credentials, base URL and prompt post-processing
-    that makes possible live on a connection), and a bare connection id cannot
-    say "the same provider, its bigger model".
+    The fields compose. `connection_id` (read as `provider`, which wins when
+    both are sent) alone runs the named connection at its own model; `model`
+    alone runs the STANDING connection at that model; both is the named
+    connection driven at the named model. Neither expresses the other's case,
+    which is why there are two: a bare model id cannot reach a different
+    provider (the credentials, base URL and prompt post-processing that makes
+    possible live on a connection), and a bare connection id cannot say "the
+    same provider, its bigger model".
 
-    Five refusals, and which one fires matters to the caller:
+    In the roles format (spec 5.6) a provider alone keeps the STANDING model on
+    the new provider -- a provider has no model of its own to fall back to --
+    so with no standing selection it is a **400** asking for a model; a store
+    still on the legacy keys keeps the meaning above. On either layout
+    `preset` replaces the route's sampler preset for the primary attempt only
+    (`PRESET_CLEAR` is "no preset"), and one that names no preset is a
+    **400** as well: a store whose migration keeps failing stays on the legacy
+    keys, and a preset the reader picked is not one to drop silently there.
+
+    Seven refusals, and which one fires matters to the caller:
 
     - a model id longer than `alternates.MAX_MODEL_CHARS` is a **400**. Bounded
       where it arrives rather than at each place it is recorded: the same body
       string reaches the alternates sidecar, `prompt_log`'s index (read on every
       listing) and the usage ledger, and the latter two cannot be clamped
       downstream without changing what is actually sent.
+    - a `preset` naming no preset is a **400**, checked
+      before the connection's own refusals: the reroll would otherwise run on
+      the route's preset and say nothing of the one the reader picked.
     - an id naming no connection is a **400**, not a 404. The routes that take
       an override are scene routes whose 404 already means "this scene is gone"
       and is acted on as such by the client (it stops the turn and re-reads the
@@ -1518,6 +1302,9 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
       hunting for a scene that is fine. An id that is not a safe path segment
       lands here too — `llm_connections` refuses it rather than joining it onto
       a path (#240), so it simply names no connection.
+    - a provider alone, in the roles format, with no standing model to keep
+      (no standing selection, or one on its provider's default model) is a
+      **400** asking for a model. The body's fault, so it comes before the key.
     - a connection that cannot send is the same **409/missing_key**
       `require_inference` raises, because it is the same setup mistake and the
       frontend already routes that kind to the Connections page. Checked
@@ -1538,15 +1325,19 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     one first would refuse the request that fixes the session. A `model`-only
     override does still require it — that is the connection it is overriding.
 
-    What this does NOT change is the configured fallback (#144). An override
-    picks which connection is *primary*; the fallback is standing policy about
-    what happens when a primary is exhausted, and silently suspending it for
-    one call would make a reroll the one turn a rate limit can simply lose.
-    `llm._same_route` already drops a fallback that resolves to the override
-    itself, so "reroll this on the fallback" does not double up.
+    What this does NOT change is the fallback (#144). An override picks which
+    connection is *primary*; the fallback is the route's policy about what
+    happens when a primary is exhausted, and silently suspending it for one
+    call would make a reroll the one turn a rate limit can simply lose. The
+    resolution carries it (`llm.FALLBACK_KEY`), with the sampling it would have
+    had without the override; a fallback on the override's own provider is
+    dropped there (`llm._same_route`'s rule), so "reroll this on the fallback"
+    does not double up.
     """
-    conn_id = (getattr(body, "connection_id", None) or "").strip() if body else ""
+    conn_id = ((getattr(body, "provider", None) or "").strip()
+               or (getattr(body, "connection_id", None) or "").strip()) if body else ""
     model = (getattr(body, "model", None) or "").strip() if body else ""
+    preset = (getattr(body, "preset", None) or "").strip() if body else ""
     if len(model) > store.alternates.MAX_MODEL_CHARS:
         raise HTTPException(
             status_code=400,
@@ -1558,12 +1349,24 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     # the copy served are different reads: a key cleared between them served a
     # keyless connection with no 409, and a repoint sent "the same provider,
     # its bigger model" to another provider entirely. The resolver reads each
-    # connection once per resolution (`resolve._connection_lookup`), so
+    # connection once per resolution (`resolve.connection_lookup`), so
     # everything here is decided on the dict that is handed to the facade.
-    override = inference_cascade.Selection(conn_id, model, "") if conn_id or model else None
+    override = (inference_cascade.Selection(conn_id, model, preset)
+                if conn_id or model or preset else None)
     resolved = inference.resolve(  # routing-ok: this IS the seam, for a per-call override
         task, cid, override=override)
     conn = resolved.conn
+    if preset and conn is not None \
+            and resolved.attempts[0].conn["sampling"]["scope"] != "override":
+        # The preset was named and the resolver found nothing by that name (it
+        # fell back to the route's), so the reroll would run on a preset the
+        # reader did not pick. A body error, so before the connection's own
+        # refusals below. (A StoreBusy or OSError swallowed by `_sampling` lands
+        # here too, and is reported as a missing preset.)
+        raise HTTPException(
+            status_code=400,
+            detail="That preset no longer exists — pick another, "
+                   "or reroll with the route's.")
     if not conn_id:
         # The seam's refusals, on the copy that serves. A model alone drives
         # the STANDING provider, so this is the standing route's own refusal:
@@ -1580,6 +1383,12 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
+    elif resolved.current and not model and not _has_standing_model(resolved, conn):
+        # A provider alone keeps the standing model, and there is none to keep.
+        # The body's fault, so before the connection's own refusals.
+        raise HTTPException(
+            status_code=400,
+            detail="Name a model for this provider — there is no standing model to keep.")
     else:
         problem = inference.problem(conn)
         if problem is not None:
@@ -1601,7 +1410,22 @@ def override_inference(body, task: str = "", cid: str = "") -> tuple[UsableInfer
     same = (standing is not None and served.conn["id"] == standing.provider
             and effective_model(served.conn)
             == effective_model({**served.conn, "model": standing.model}))
+    if same and preset:
+        # The preset is the third thing a route is: the same provider and model
+        # under another preset is another route. Effective on both sides, so
+        # naming the preset the route already runs (or "none" against a route
+        # that runs none) is no override.
+        same = served.attempts[0].preset_id == (resolved.standing_preset or "")
     return served, not same
+
+
+def _has_standing_model(resolved: ResolvedInference, conn: dict) -> bool:
+    """Whether a provider-only override on a current layout has a model to run:
+    the standing selection's, or the provider IS the standing one (nothing to
+    keep, nothing changed)."""
+    standing = resolved.standing
+    return standing is not None and (conn["id"] == standing.provider
+                                     or bool(standing.model))
 
 
 def _require_scene(cid: str, sid: str) -> dict:

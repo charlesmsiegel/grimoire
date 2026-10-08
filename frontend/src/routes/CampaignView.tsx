@@ -38,7 +38,7 @@ import { SceneInspector, type RewrittenPost } from "../components/SceneInspector
 import { UNPRICED, bucketPrice, money } from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
-import { NO_REROLL_ROUTE, type RerollRoute } from "../components/RerollRoute";
+import { NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "../components/RerollRoute";
 import { initialsOf, Portrait } from "../components/Portrait";
 import { RecordDrawer, type DrawerTarget } from "../components/RecordDrawer";
 import { onConfigChanged } from "../appEvents";
@@ -3794,7 +3794,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (!activeId || busy || rolling || sceneLocked || editing || renamesInFlight || !transcriptIsActive) return;
     const sid = activeId;
     await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.regenerateResponse(cid, sid, id, onEvent, { guidance, ...route }, signal, attempt, onIndex),
+      api.regenerateResponse(cid, sid, id, onEvent, { guidance, ...rerollOverrides(route) }, signal, attempt, onIndex),
       undefined, true, "", true);
     // No swipe refresh here: `runStream`'s finally asks again on every
     // outcome, including a failed generate that kept the previous variant.
@@ -3811,7 +3811,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     if (extendDisabled || swipeTarget?.response_id !== id) return;
     const sid = activeId;
     await runStream(sid, (onEvent, signal, attempt, onIndex) =>
-      api.extendResponse(cid, sid, id, onEvent, { guidance, ...route }, signal, attempt, onIndex),
+      api.extendResponse(cid, sid, id, onEvent, { guidance, ...rerollOverrides(route) }, signal, attempt, onIndex),
       undefined, true, "", true);
   }
 
@@ -3991,7 +3991,7 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // override would have doubled again. The pending one-shot response override
     // rides regenerate here for the reason retry carries it: it is the promise
     // both make.
-    const body = { guidance, response: pendingResponse ?? undefined, ...route };
+    const body = { guidance, response: pendingResponse ?? undefined, ...rerollOverrides(route) };
     const landed = await runStream(activeId, (onEvent, signal, attempt, onIndex) =>
       // `rerolling`: a reroll that fails wants a different recovery offered
       // than a failed send does — see `runStream`.
@@ -4788,35 +4788,40 @@ export default function CampaignView({ ready }: { ready: boolean }) {
              scene: absorb ? `Absorbing ${absorbTitle}`
                     : wrapUp ? `Wrap-up · ${sceneTitle}` : sceneTitle } : null);
 
-  // The model THIS campaign's turns run on, which since #142 is not necessarily
-  // the active connection's: a campaign can route its scene turns elsewhere, and
-  // so can the global routing page. Resolved here because the header has a
-  // pathname and no cid, and answered by the same bundle the picker renders --
-  // one place decides what a route means. A failed read publishes nothing and
-  // the header keeps naming the active connection, which is what it did before.
+  // The model THIS campaign's scene turns run on, which is not necessarily the
+  // library's: a campaign can override Primary, or point its scene route
+  // elsewhere. Read here because the header has a pathname and no cid, and
+  // answered by the resolver -- the campaign inference view's `scene` route,
+  // whose `resolves` is what `require_inference` would serve a turn and whose
+  // `problem` is the seam's own refusal of it, so the dot cannot say "ready"
+  // about a send the server would refuse. A failed read publishes nothing and
+  // the header keeps the library's answer (`GET /config`).
   const [sceneModel, setSceneModel] = useState<string | null>(null);
   const [sceneReady, setSceneReady] = useState<boolean | null>(null);
-  const [routingRev, setRoutingRev] = useState(0);
-  useEffect(() => onConfigChanged(() => setRoutingRev((n) => n + 1)), []);
+  const [modelsRev, setModelsRev] = useState(0);
+  // Any model-settings write announces itself (the Inspector's Models section,
+  // /models, /providers), and each can move what the scene route resolves to.
+  useEffect(() => onConfigChanged(() => setModelsRev((n) => n + 1)), []);
+  // Cleared on a campaign switch only: the previous campaign's model must not
+  // sit in the header for as long as the read takes. A re-read of THIS one
+  // keeps what it shows until the answer lands, rather than dropping to the
+  // library's model for a moment on every config change (a theme included).
   useEffect(() => {
-    let live = true;
-    // Cleared first: switching campaigns must not leave the previous one's
-    // model in the header for as long as this read takes.
     setSceneModel(null);
     setSceneReady(null);
-    api.getCampaignRouting(cid).then((r) => {
+  }, [cid]);
+  useEffect(() => {
+    let live = true;
+    api.getCampaignInference(cid).then((view) => {
       if (!live) return;
-      const id = r.effective.scene || r.active_connection_id;
-      const conn = r.connections.find((c) => c.id === id);
-      setSceneModel(conn?.model || null);
-      // Only when this campaign routes somewhere OTHER than the active
-      // connection. Otherwise the global read behind the header already
-      // describes the same connection, and publishing a second opinion about
-      // it would just be a slower copy that can disagree while it loads.
-      setSceneReady(id && id !== r.active_connection_id ? !!conn?.usable : null);
+      // No scene route in the answer is no answer: the library's, as on a
+      // failed read, rather than the last one this campaign gave.
+      const scene = view.routes.find((r) => r.key === "scene");
+      setSceneModel(scene?.resolves?.model || null);
+      setSceneReady(scene ? scene.problem === null : null);
     }).catch(() => { if (live) { setSceneModel(null); setSceneReady(null); } });
     return () => { live = false; };
-  }, [cid, routingRev]);
+  }, [cid, modelsRev]);
   usePublishSceneModel(sceneModel, sceneReady);
 
   // The scene's own keyboard (#193). Every binding here mirrors a control that
@@ -5203,7 +5208,8 @@ export default function CampaignView({ ready }: { ready: boolean }) {
               campaign's, and a review spends nothing of its own. */}
           {!ready && (
             <div className="banner">
-              No LLM connection ready. <Link to="/config">Set one up in Config</Link>.
+              No model is ready to generate. Choose a provider and a Primary model on
+              the <Link to="/models">Models page</Link>.
             </div>
           )}
           {/* The only one of the three a reader can dismiss: the other two

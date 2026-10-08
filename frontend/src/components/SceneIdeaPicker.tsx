@@ -7,6 +7,7 @@ import { ACTION_LABELS } from "./pressureControls";
 import { customDraft, greetingDraft, savedDraft, suggestionDraft,
          type SceneDraft } from "./sceneDraft";
 import type { SceneSuggestionsState } from "./useSceneSuggestions";
+import { NeedsModel } from "./inference/NeedsModel";
 
 /** How many saved ideas the picker shows before the "show all" toggle — the
  *  same 4-slot budget the greeting and generated groups share between them. */
@@ -379,7 +380,7 @@ export function SceneIdeaPicker({ cid, afterSid, ready, pcless, direction, onDir
       </div>
       {storyPressure}
       {pressureNote && <div className="field-hint">{pressureNote}</div>}
-      {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+      {!ready && <NeedsModel />}
       {ready && held && <div className="field-hint">Reading story pressure…</div>}
       {busy && <div className="field-hint" role="status">Generating scene ideas…</div>}
       {/* Not after a stale refusal: nothing was generated, and the note above

@@ -56,7 +56,7 @@ def test_live_inspector_uses_campaign_route_and_needs_no_credentials(client):
     cid, sid = _scene(client)
     connection = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Mara", "model": "z-ai/glm-5.3"}).json()["id"]
-    client.put(f"/api/campaigns/{cid}/routing", json={"routes": {"scene": connection}})
+    store.campaigns.set_campaign_routing(cid, {"route_scene": connection})
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["model"] == "z-ai/glm-5.3"
     assert len(_profile_rows(live)) == 1

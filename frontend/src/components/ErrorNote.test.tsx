@@ -19,7 +19,7 @@ test("a network failure offers the local-connection recovery, not just the error
   // The provider's own words survive: `network` covers a local endpoint that
   // is not running, and that reader needs the address that was refused.
   expect(screen.getByText(/connection reset/)).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
 });
 
 test("any other failure renders its detail and nothing else", () => {
@@ -56,10 +56,17 @@ test("the note names the recovery, not merely that something broke", () => {
   expect(screen.getByText(/library is on this machine/)).toBeInTheDocument();
 });
 
-test("on Connections itself the note keeps its words and drops the link", () => {
-  // The catalog fetch on that page raises this note too, and a link to the
-  // page you are reading is noise.
-  show(new ApiError(502, "connection refused", "network"), "/connections");
-  expect(screen.getByText(/Couldn’t reach the model provider/)).toBeInTheDocument();
-  expect(screen.queryByRole("link")).toBeNull();
+test("on Providers itself the note keeps its words and drops the link", () => {
+  // The catalog refresh on that page raises this note too, and a link to the
+  // page you are reading is noise -- on a provider or a model as much as on
+  // the list.
+  for (const at of ["/providers", "/providers/saltmarch", "/providers/saltmarch/models/vendor/m"]) {
+    const { unmount } = render(
+      <MemoryRouter initialEntries={[at]}>
+        <ErrorNote err={new ApiError(502, "connection refused", "network")} />
+      </MemoryRouter>);
+    expect(screen.getByText(/Couldn’t reach the model provider/)).toBeInTheDocument();
+    expect(screen.queryByRole("link")).toBeNull();
+    unmount();
+  }
 });

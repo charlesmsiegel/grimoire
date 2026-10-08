@@ -21,9 +21,10 @@ from fastapi import HTTPException
 import grimoire.store as store
 from grimoire import llm, llm_sampling, routes
 from grimoire.llm import effective_model
+from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import capabilities, keys, translate
+from grimoire.store.inference import capabilities, translate
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
@@ -136,8 +137,9 @@ def _fallback(resolved: ResolvedInference) -> dict | None:
 
 def _facade_fallback(conn: dict) -> dict | None:
     """What the facade would send as the fallback for a generation on `conn`:
-    `LLMClient._routes`, on a client built as the app builds one (its fallback
-    resolver is `_fallback_connection`). Building one opens nothing."""
+    `LLMClient._routes`, on a client built as the app builds one -- which holds
+    no fallback, so this is the one `conn` carries (`llm.FALLBACK_KEY`).
+    Building one opens nothing."""
     attempts = routes.common.build_llm()._routes(conn)
     return attempts[1][0] if len(attempts) > 1 else None
 
@@ -147,12 +149,13 @@ def test_the_resolved_fallback_is_what_the_facade_sent(state, at_state):
     """The fallback attempt is the one the facade sends -- not the fallback
     connection as it stands alone (spec 5.2, 5.4, 5.5).
 
-    The baseline recorded each fallback off `LLMClient._routes`, which does two
-    things to `_fallback_connection()`'s answer: it drops a fallback whose id is
-    the primary's own (`llm._same_route`), and it carries a preset the primary
-    took from a ROUTE scope -- campaign or global, a `PRESET_CLEAR` included --
-    onto the fallback (`llm.fallback_sampling`). The resolver does both, so
-    every recorded fallback is matched as recorded: identity and sampling.
+    The baseline recorded each fallback off `LLMClient._routes`, which then did
+    two things to the global fallback connection: it dropped a fallback whose id
+    was the primary's own (`llm._same_route`), and it carried a preset the
+    primary took from a ROUTE scope -- campaign or global, a `PRESET_CLEAR`
+    included -- onto the fallback (`llm.fallback_sampling`). The resolver does
+    both, so every recorded fallback is matched as recorded: identity and
+    sampling. And the facade now sends the resolver's own (`llm.FALLBACK_KEY`).
     A refused resolution has none recorded (the facade was never reached), and
     the resolver then has nothing to fall back from or a primary the seam
     refuses before any fallback could matter."""
@@ -269,7 +272,9 @@ def test_a_route_pin_lowers_to_that_connections_dict(at_state):
     raw = store.llm_connections.read_connection_raw("local")
     conn = resolved.conn
     assert conn["id"] == "local" and conn["base_url"] == "http://localhost:1234/v1"
-    assert {k: v for k, v in conn.items() if k != "sampling"} == raw
+    # The fallback the call carries (`spare`) is the facade's, not the record's.
+    assert conn[llm.FALLBACK_KEY]["id"] == "spare"
+    assert {k: v for k, v in conn.items() if k not in ("sampling", llm.FALLBACK_KEY)} == raw
     assert conn["sampling"] == {"preset_id": "warm", "preset_name": "warm",
                                 "scope": "connection", "params": {"temperature": 0.9}}
     assert "model_params" not in conn          # not an OpenRouter connection
@@ -290,9 +295,9 @@ def test_a_split_route_reports_its_legacy_route(at_state):
 
 def test_a_keyless_fallback_is_no_fallback(at_state):
     at_state("keyless")
-    assert routes.common._fallback_connection() is None
     for task in ("chat", "absorb", ""):
         assert inf.resolve(task).fallback is None
+        assert llm.FALLBACK_KEY not in inf.resolve(task).conn
     # The ROUTED keyless connection is still the primary: the seam reports it.
     absorb = inf.resolve("absorb")
     assert absorb.conn["id"] == "nokey" and inf.problem(absorb.conn) is not None
@@ -571,11 +576,6 @@ def test_a_campaign_marker_alone_never_switches_the_layout(at_state, fields, exp
     assert not translate.is_current(store.config.read_config())
     resolved = inf.resolve("chat", cid)
     assert resolved.conn["id"] == expected
-    # The base code's answer, from the legacy cascade it used.
-    legacy = routing.resolve("chat", campaign_meta=store.campaigns.read_campaign(cid)["meta"],
-                             cfg=store.config.read_config(),
-                             exists=lambda i: inf._connection_lookup()(i) is not None)
-    assert (legacy["connection_id"] or "openrouter") == expected
 
 
 # ---- a resolution reads only what its task can reach ----
@@ -604,32 +604,6 @@ def test_a_resolution_reads_only_the_connections_its_task_can_touch(
     monkeypatch.setattr(store.llm_connections, "read_connection_raw", counting)
     inf.resolve(task, ctx["cid"] if scoped else "")
     assert set(calls) == expected
-
-
-# ---- the two cascades agree (the legacy bundle is what the pickers show) ----
-@pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_the_routing_bundle_reports_what_the_resolver_serves(state, tmp_path):
-    """For every legacy route at both scopes, the routing picker's `effective`
-    connection and its sampling row are what the resolver hands the facade for
-    that route's first task. The bundle still runs the legacy cascade
-    (`routing.bundle`), so this is the check that the two cannot drift."""
-    with baseline.client_at(tmp_path) as client:
-        cid = baseline.STATES[state](client)["cid"]
-        for scope, url, scope_cid in (("global", "/api/routing", ""),
-                                      ("campaign", f"/api/campaigns/{cid}/routing", cid)):
-            body = client.get(url).json()
-            assert sorted(body["effective"]) == sorted(r.key for r in routing.routes_for(scope))
-            for r in routing.routes_for(scope):
-                where = (state, scope, r.key)
-                resolved = inf.resolve(r.tasks[0], scope_cid)
-                if resolved.via == "route":
-                    assert body["effective"][r.key] == resolved.conn["id"], where
-                else:
-                    # "" is the bundle's spelling of "the active connection".
-                    assert body["effective"][r.key] == "", where
-                    assert (resolved.conn or {}).get("id", "") \
-                        == body["active_connection_id"], where
-                assert body["sampling"][r.key] == llm_sampling.report(resolved.conn), where
 
 
 # ---- slice B: what each attempt carries, and what it cannot do ----
@@ -733,8 +707,9 @@ def test_nothing_resolved_is_missing_nothing(at_state):
     assert resolved.missing == () and resolved.fallback_missing == ()
 
 
-def test_an_incapable_fallback_is_reported_and_the_facade_still_sends_it(at_state):
-    """Slice B reports; the facade starts dropping it only in slice C."""
+def test_an_incapable_fallback_is_reported_and_the_facade_does_not_send_it(at_state):
+    """Slice B reported it; from slice C the facade drops it (spec 5.3) -- on a
+    legacy store too. `test_inference_fallback.py` holds the current layout."""
     at_state("routed")
     _catalog("openrouter", [{"id": "vendor/active", "vision": True}])
     _catalog("spare", [{"id": "vendor/spare", "vision": False}])
@@ -742,7 +717,7 @@ def test_an_incapable_fallback_is_reported_and_the_facade_still_sends_it(at_stat
     assert image.conn["id"] == "openrouter" and image.fallback["id"] == "spare"
     assert image.missing == () and image.fallback_missing == ("vision",)
     sent = routes.common.build_llm()._routes(image.conn)
-    assert [conn["id"] for conn, _ in sent] == ["openrouter", "spare"]
+    assert [conn["id"] for conn, _ in sent] == ["openrouter"]
     # And the seam does not refuse over a fallback.
     assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
 
@@ -902,6 +877,31 @@ def test_images_on_outranks_a_catalogs_vision_no_at_the_seam(at_state):
     # Still reported: the bridge is the seam's, not the resolver's.
     assert image.missing == ("vision",)
     assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
+
+
+def test_images_on_outranks_a_catalogs_vision_no_on_the_fallback_too(at_state):
+    """The same bridge, for the fallback: a format-1 fallback set to "Images:
+    on" was sent before slice C whatever its catalog said, and the same
+    connection as primary is served -- so it is attached, not dropped."""
+    at_state("fresh")
+    spare = store.llm_connections.create_connection(
+        "openrouter", "Mara Spare", api_key="sk-spare", model="vendor/spare", vision="on")
+    _catalog(spare, [{"id": "vendor/spare", "vision": False}])
+    _catalog("openrouter", [{"id": "vendor/active", "vision": True}])
+    store.write_config(fallback_connection_id=spare)
+    assert not store.inference_keys.is_current(store.read_config())
+
+    image = inf.resolve("image-description")
+
+    assert image.fallback_missing == ()
+    assert image.attempts[0].conn[llm.FALLBACK_KEY]["id"] == spare
+
+    # The wire protocol's own `no` is never waived, on the fallback either.
+    store.llm_connections.update_connection("claude", vision="on")
+    store.write_config(fallback_connection_id="claude")
+    image = inf.resolve("image-description")
+    assert image.fallback_missing == ("vision",)
+    assert llm.FALLBACK_KEY not in image.attempts[0].conn
 
 
 def test_images_on_does_not_outrank_the_adapter(at_state):

@@ -33,7 +33,6 @@ from ..appearances import paths as appearances_paths
 from ..audit import baselines
 from ..campaigns import paths as campaigns_paths
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from ..llm_connections import get_active as _get_active_connection
 from ..paths import now_iso, safe_id, slugify, uniquify
 from ..tracker import records as tracker_records
 from . import identity, locking, paths, serialize
@@ -93,12 +92,16 @@ def repad(cid: str, width: int) -> None:
 
 
 def create_scene(cid: str, title: str, suggested_date: str | None = None,
-                 pcless: bool = False) -> str:
+                 pcless: bool = False, model: str = "") -> str:
+    """A new scene; returns its id. `model` is what the scene's `model` field
+    records -- the model chat would run on when it was created, which the
+    caller resolves (`routes.scenes._chat_target`): the store does not choose
+    a connection. "" records none."""
     paths._require_campaign(cid)   # before _date_hint: no calendar plugin runs for a
                                    # campaign that doesn't exist. Re-checked under the
                                    # lock, which is where it actually has to hold.
     # The date hint is normalized before the lock, not inside it — see _date_hint.
-    return _create_scene(cid, title, pcless, _date_hint(cid, suggested_date))
+    return _create_scene(cid, title, pcless, _date_hint(cid, suggested_date), model)
 
 
 def _date_hint(cid: str, suggested_date: str | None) -> str:
@@ -150,7 +153,7 @@ def create_would_repad(cid: str) -> bool:
 
 
 @locking._serialized
-def _create_scene(cid: str, title: str, pcless: bool, date_hint: str) -> str:
+def _create_scene(cid: str, title: str, pcless: bool, date_hint: str, model: str) -> str:
     paths._require_campaign(cid)
     d = paths._scenes_dir(cid)
     d.mkdir(parents=True, exist_ok=True)
@@ -161,8 +164,7 @@ def _create_scene(cid: str, title: str, pcless: bool, date_hint: str) -> str:
     now = now_iso()
     base = scene_ids.format_sid(number, width, None, slugify(title))
     sid = uniquify(base, lambda c: paths._sid_taken(cid, c))
-    active = _get_active_connection()
-    meta = {"title": title, "model": active["model"] if active else "",
+    meta = {"title": title, "model": model,
              "created": now, "updated": now,
              # Minted here and never reused. A `sid` is neither stable (a rename
              # moves it) nor unique over time (`_numbering` recycles a deleted

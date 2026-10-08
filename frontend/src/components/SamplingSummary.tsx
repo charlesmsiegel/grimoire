@@ -1,11 +1,12 @@
 import type { SamplingReport } from "../api/client";
 
-/** Where a resolved preset came from, in the routing picker's vocabulary. */
+/** Where a resolved preset came from: the scope the server reports for it. */
 function from(scope: SamplingReport["scope"]): string {
   switch (scope) {
-    case "campaign": return "this campaign's routing";
-    case "global": return "the global routing";
-    case "connection": return "the connection";
+    case "campaign": return "this campaign's Models";
+    case "global": return "the library's Models";
+    case "connection": return "the provider";
+    case "override": return "this reroll's override";
     default: return "";
   }
 }
@@ -14,13 +15,13 @@ function value(v: unknown): string {
   return Array.isArray(v) ? v.map((s) => JSON.stringify(s)).join(", ") : String(v);
 }
 
-/** What one connection is sent from its sampler preset, and what it is not.
+/** What one provider is sent from its sampler preset, and what it is not.
  *
  *  The request this whole feature answers is that a parameter a backend cannot
  *  take is dropped *and said so* — so the dropped list is never collapsed or
- *  hidden behind a toggle, and each entry carries its reason. One component for
- *  the three places that show it (routing picker, connection editor, scene
- *  inspector), so the three cannot describe the same split differently. */
+ *  hidden behind a toggle, and each entry carries its reason. Shown by the scene
+ *  inspector's context breakdown (`ContextBreakdown`), its one caller now that
+ *  the routing picker and the connection editor are gone. */
 export function SamplingSummary({ report }: { report: SamplingReport | null | undefined }) {
   if (!report) return null;
   const applied = Object.entries(report.applied);
@@ -59,9 +60,9 @@ export function SamplingSummary({ report }: { report: SamplingReport | null | un
       )}
       {!report.verified && (
         <div className="field-hint">
-          Unverified: this connection's cached model list does not say which
+          Unverified: this provider's cached model list does not say which
           parameters the model takes, so these are sent unchecked — refresh its
-          models on the Connections page to check.
+          models on the Providers page to check.
         </div>
       )}
     </div>

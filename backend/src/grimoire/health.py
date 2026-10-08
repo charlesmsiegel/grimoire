@@ -71,8 +71,8 @@ class ProviderHealth:
 
         A connection with no id is dropped rather than filed under `""`: the
         facade is handed connection *dicts*, and a caller that builds one by
-        hand (tests, and `_fallback_connection`'s dead ends) would otherwise
-        collide with every other anonymous connection in one shared slot.
+        hand (tests, mostly) would otherwise collide with every other
+        anonymous connection in one shared slot.
 
         What is filed describes the connection **as it was when the call ran**,
         so it is filed under that connection's revision — see `status`, which

@@ -23,24 +23,8 @@ from __future__ import annotations
 import zlib
 
 from . import config, llm_connections
-from .inference import providers, translate
-
-
-def _endpoint(cfg: dict, conn: dict) -> str:
-    """The base URL `conn` serves embeddings from, or "" when it serves none.
-
-    An ``openai_compatible`` connection brings its own URL. OpenRouter serves
-    ``/embeddings`` too, but only for a config already in the current layout: a
-    legacy config naming an OpenRouter connection for embeddings has always
-    meant "off", and turning it on would start sending text to a provider
-    nobody chose it for. The URL is the preset's (an OpenRouter connection's
-    own is locked), and one with no key is not set up.
-    """
-    if conn["kind"] == "openai_compatible":
-        return conn["base_url"] or ""
-    if conn["kind"] == "openrouter" and translate.is_current(cfg) and conn["api_key"]:
-        return providers.PRESETS["openrouter"].base_url
-    return ""
+from .inference import resolve as inference_resolve
+from .inference import translate
 
 
 def resolve(cfg: dict | None = None) -> dict | None:
@@ -48,7 +32,9 @@ def resolve(cfg: dict | None = None) -> dict | None:
 
     None is the answer for every kind of "not set up": no model, no connection
     id, an id naming a connection that was deleted, a connection of a kind that
-    serves no ``/embeddings`` route, or one with no base URL. Callers treat all
+    serves no ``/embeddings`` route, one with no base URL, or a model it is
+    KNOWN not to embed with (`inference_resolve.embed_attempt`: no request is
+    sent that could only fail; a name-rule guess never counts). Callers treat all
     of them the same way — the layer is off — so distinguishing them here would
     buy nothing. The store this reads may be hand-edited or half-synced, so it
     must not raise for any of them either.
@@ -63,36 +49,126 @@ def resolve(cfg: dict | None = None) -> dict | None:
         conn_id, model = translate.embedding_role(cfg)
         if not model or not conn_id:
             return None
-        conn = llm_connections.read_connection_raw(conn_id)
-        base_url = _endpoint(cfg, conn)
-        if not base_url:
-            return None
-        return {"model": model, "base_url": base_url, "key": conn["api_key"],
-                # The cache namespace. Two endpoints can both serve a model
-                # called "embedding" and mean different weights, and vectors
-                # from different spaces are incomparable even at matching
-                # dimensionality -- so keying on the model name alone would
-                # reuse one provider's vectors against another's queries and
-                # rank silently wrongly.
-                #
-                # The connection's `rev` is in here for the case the URL does
-                # not cover: a gateway where the *credential* selects the
-                # tenant or deployment. Two connections to one URL with
-                # different keys are different spaces, and replacing a key can
-                # move an existing one. `rev` is restamped on every write, so
-                # it captures both. It over-invalidates -- renaming a
-                # connection costs a full re-embed -- and that is the right
-                # direction: re-embedding costs money and latency, while a
-                # stale namespace costs silently wrong rankings with nothing
-                # to notice them by. `llm_connections.cached_models` gates its
-                # own sidecar on `rev` for exactly this reason.
-                #
-                # `model` stays explicit because it lives in config.md, not on
-                # the connection, so changing it does not move `rev`.
-                "space": f"{conn['id']}\0{conn['rev']}\0{model}"}
+        return _resolved(cfg, llm_connections.read_connection_raw(conn_id), model)
     except (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
             KeyError, TypeError, ValueError):
         return None
+
+
+def _resolved(cfg: dict, conn: dict, model: str, *, catalog: bool = True) -> dict | None:
+    """`resolve`'s answer for the Embedding role served by `conn` at `model`,
+    or None when it embeds nothing: no endpoint, or a model `conn` is known not
+    to embed with. The rule and the space are `resolve.embed_attempt`'s (its
+    `space_of` says what a space is keyed on, and why); `catalog` False judges
+    it without the cached catalog row (see there, for `moved_by`)."""
+    got = inference_resolve.embed_attempt(str(conn["id"]), model, conn,
+                                          current=translate.is_current(cfg), catalog=catalog)
+    if got.space_id is None:
+        return None
+    return {"model": model, "base_url": got.attempt.base_url, "key": conn["api_key"],
+            "space": got.space_id}
+
+
+#: `problem`'s answer when none of its specific reasons applies.
+OFF = "Embedding is off"
+
+
+def problem(cfg: dict | None = None) -> str | None:
+    """Why the Embedding role embeds nothing, as a short sentence for the
+    Models page's Embedding card; None when it embeds (`resolve` is not None).
+
+    The same conditions `resolve` and `resolve.embed_endpoint` walk, in the
+    order a reader fixes them: a provider, one that exists, of a kind that serves
+    ``/embeddings`` here, with the key or address it needs, then a model;
+    `OFF` when none of them is why. (A model known not to embed is the
+    settings card's own reason, asked after these: `settings._embedding_card`.)
+    Never raises."""
+    try:
+        cfg = config.read_config() if cfg is None else cfg
+        if resolve(cfg) is not None:
+            return None
+        conn_id, model = translate.embedding_role(cfg)
+        if not conn_id:
+            return "No provider chosen"
+        try:
+            conn = llm_connections.read_connection_raw(conn_id)
+        except llm_connections.ConnectionNotFound:
+            return "The chosen provider no longer exists"
+        name = str(conn.get("name") or conn_id)
+        kind = conn.get("kind")
+        if kind == "openai_compatible" and not conn.get("base_url"):
+            return f"{name} has no address set"
+        if kind == "openrouter" and translate.is_current(cfg) and not conn.get("api_key"):
+            return f"{name} has no key set"
+        if kind != "openai_compatible" and not inference_resolve.embed_endpoint(
+                conn, translate.is_current(cfg)):
+            return f"{name} cannot embed"
+        if not model:
+            return "No model chosen"
+        return OFF
+    except (OSError, UnicodeDecodeError, KeyError, TypeError, ValueError):
+        return OFF
+
+
+def moved_by(cfg: dict, before: dict, after: dict) -> bool:
+    """Whether replacing connection `before` with `after` (one id; `after`
+    carrying the rev the write will stamp) starts the Embedding role on a NEW
+    vector space that embeds: the edit that re-embeds the library, so the one
+    a provider edit is confirmed for (spec 7.3, rule 1).
+
+    False when the role does not name this connection, has no model, or embeds
+    nothing afterwards (clearing an address re-embeds nothing). A role that
+    embedded nothing before and does now -- a key on a keyless OpenRouter
+    provider, or an address that leaves a provider known not to embed -- is a
+    move: the library is embedded from scratch. Never raises.
+
+    `after` is judged as `resolve()` will read it once the write lands. A rev
+    restamp leaves the cached catalog row stale (its sidecar is gated on the
+    rev on disk), so a catalog `no` does not speak for `after` then and is
+    not read (`catalog=False`); the adapter's, the preset's and the user's
+    `no` survive the save and still count.
+    """
+    try:
+        conn_id, model = translate.embedding_role(cfg)
+        if not model or not conn_id or conn_id != after.get("id"):
+            return False
+        new = _resolved(cfg, after, model, catalog=after.get("rev") == before.get("rev"))
+        if new is None:
+            return False
+        old = _resolved(cfg, before, model)
+        return old is None or old["space"] != new["space"]
+    except (OSError, KeyError, TypeError, ValueError):
+        return False
+
+
+def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
+                after: dict) -> bool:
+    """Whether replacing `model`'s facts on `provider_id` (`before`, as
+    `facts.of` reads them) with `after` starts the Embedding role embedding:
+    the facts write a user makes that is confirmed first (spec 7.3, rule 1).
+
+    Facts never move the space itself (`space_of` is the provider, its rev
+    and the model), but they decide whether the role embeds at all: the
+    user's `embed: yes` over a catalog's `no` turns it on, and the library
+    is then embedded from scratch -- off to on is a move, as it is for
+    `moved_by`. Turning it off re-embeds nothing. False when the role does
+    not name this provider and model. Never raises."""
+    try:
+        conn_id, role_model = translate.embedding_role(cfg)
+        if not role_model or conn_id != provider_id or role_model != model:
+            return False
+        raw = llm_connections.read_connection_raw(provider_id)
+        current = translate.is_current(cfg)
+        new = inference_resolve.embed_attempt(provider_id, model, raw, current=current,
+                                              model_facts=after).space_id
+        if new is None:
+            return False
+        old = inference_resolve.embed_attempt(provider_id, model, raw, current=current,
+                                              model_facts=before).space_id
+        return old is None or old != new
+    except (llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError,
+            KeyError, TypeError, ValueError):
+        return False
 
 
 def clip(text: str, max_bytes: int, tail: bool = False) -> str:

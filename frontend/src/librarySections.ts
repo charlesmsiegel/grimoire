@@ -46,13 +46,13 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
     blurb: "Weather models that regions and locations draw their seasons from.",
     count: () => api.listClimates().then((r) => r.climates.length),
   },
-  // Connections used to sit outside the library, beside it in the nav rail.
-  // Nothing justified that: an LLM connection is a thing a campaign is built
-  // from in exactly the sense the other five are, and it is edited from the
-  // same kind of list page. It is a library section now.
+  // Providers (once Connections) used to sit outside the library, beside it in
+  // the nav rail. Nothing justified that: a provider is a thing a campaign is
+  // built from in exactly the sense the other five are. It is a library
+  // section, and its page owns the screen as the ledger's does.
   {
-    to: "/connections", label: "Connections", unit: "connection",
-    blurb: "Providers and models the narrator can be run on.",
+    to: "/providers", label: "Providers", unit: "provider",
+    blurb: "Where models are served from, and what each model can do.",
     count: () => api.listConnections().then((r) => r.length),
   },
   // There is no Images section, and the design has one (#437). `ImagesView` is

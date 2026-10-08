@@ -230,7 +230,7 @@ export default function CampaignsView() {
   const footer = (
     <>
       <Link className="column-link" to="/worlds">The Library <span aria-hidden>→</span></Link>
-      <Link className="column-link" to="/connections">Connections <span aria-hidden>→</span></Link>
+      <Link className="column-link" to="/providers">Providers <span aria-hidden>→</span></Link>
     </>
   );
 

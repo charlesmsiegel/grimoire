@@ -93,9 +93,11 @@ pairs, explaining an emotion just shown, decorative metaphor, and the three
 qualifier-dependent phrases — are not gradable by regex and are listed as
 ungraded in the design spec. A green case means the graded subset held.
 
-`--live` reads credentials from your **real** store (the connection you picked
-on the Configuration page) while every case still builds its campaign in a
-throwaway `GRIMOIRE_HOME`. No campaign, world or character content is read or
+`--live` reads model settings and credentials from your **real** store while
+every case still builds its campaign in a throwaway `GRIMOIRE_HOME`. Each case
+names the task the app meters it under (`Case.task`), and a live run sends it
+wherever the app's own seam would — the role or route chosen on the Models
+page, with its fallback, the model's facts and the route's preset. No campaign, world or character content is read or
 written. The one real-store write it can make is the same one-off
 `llm_connections/` migration the app itself runs at startup, on a library old
 enough to predate that feature. Live runs cost API credits, so they are opt-in

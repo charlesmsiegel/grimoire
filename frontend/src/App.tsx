@@ -43,7 +43,8 @@ import ModulesView from "./routes/ModulesView";
 import StyleGuidesView from "./routes/StyleGuidesView";
 import CalendarsView from "./routes/CalendarsView";
 import ClimatesView from "./routes/ClimatesView";
-import ConnectionsView from "./routes/ConnectionsView";
+import ProvidersView from "./routes/ProvidersView";
+import ModelsView from "./routes/ModelsView";
 import ConfigView from "./routes/ConfigView";
 import StatsView from "./routes/StatsView";
 
@@ -368,7 +369,16 @@ const AppRoutes = memo(function AppRoutes(
       <Route path="/styles" element={<StyleGuidesView />} />
       <Route path="/calendars" element={<CalendarsView />} />
       <Route path="/climates" element={<ClimatesView />} />
-      <Route path="/connections" element={<ConnectionsView />} />
+      <Route path="/providers" element={<ProvidersView />} />
+      <Route path="/providers/:id" element={<ProvidersView />} />
+      {/* A splat: a model id carries its own slashes (`vendor/model`). */}
+      <Route path="/providers/:id/models/*" element={<ProvidersView />} />
+      <Route path="/connections" element={<Navigate to="/providers" replace />} />
+      {/* Roles and routes (reached from Settings). A provider's Used by
+          chips land on the last two. */}
+      <Route path="/models" element={<ModelsView />} />
+      <Route path="/models/role/:role" element={<ModelsView />} />
+      <Route path="/models/route/:key" element={<ModelsView />} />
       <Route path="/config" element={<ConfigView />} />
       {/* A room, not a tab inside Configuration (#154 asked for a "tab").
           Config is a page of settings; this is a page of readings, and the
@@ -439,7 +449,7 @@ export default function App() {
   const location = useLocation();
 
   // Navigation is not the only thing that changes what the header should say:
-  // /config switches the active connection and /connections edits its model,
+  // /config switches the active connection and /providers edits a provider,
   // both without moving the pathname. Leaving the header naming the old
   // connection during the connection-management workflow is the worst possible
   // moment for it to be wrong, since that workflow exists to change it.

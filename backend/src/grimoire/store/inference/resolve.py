@@ -16,7 +16,13 @@ Never imports `llm`: the one thing borrowed from it, a connection's effective
 model, differs from the stored one only for `claude`, and `model_params`
 consults the catalog for OpenRouter alone. The two facade rules the fallback
 attempt mirrors (`llm.fallback_sampling`, `llm._same_route`) are restated here,
-with `ROUTE_SCOPES`, and the tests hold them to the facade's own answers.
+with `ROUTE_SCOPES` and `FALLBACK_KEY`, and the tests hold them to the facade's
+own answers.
+
+The fallback the facade sends is the one resolved here (slice C): the
+primary's lowered dict carries the fallback attempt's under `FALLBACK_KEY`,
+unless that fallback is known unable to do what the route needs (spec 5.3) --
+then it is reported (`fallback_missing`) and not attached.
 
 Each attempt also carries what slice B knows of it -- its provider's kind, URL,
 rev, billing and preset, its model's facts, its effective controls
@@ -24,15 +30,32 @@ rev, billing and preset, its model's facts, its effective controls
 with its source (`capabilities.resolve_caps`, fed the catalog row the lowering
 already read, so a sidecar is read once per attempt) -- and the resolution says
 which of the route's needs the primary and the fallback are known not to meet
-(`missing`, `fallback_missing`). Nothing here refuses on them: the seam does.
+(`missing`, `fallback_missing`). `resolve` refuses on none of it; whether the
+seam serves a resolution is `refusal`, a pure function of it, which the seam
+raises from and the settings view reports -- one decision, not two copies.
+
+At format 2 the model's facts drive its behaviour: the lowering overlays the
+facts' `vision`, `prefill` and `post_process` onto the connection dict
+(`with_facts`), replacing the connection's legacy fields, so every consumer of
+that dict answers per model unchanged. At format 1 the legacy fields stand.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Callable
+from typing import NamedTuple
 
 from ... import llm_sampling
-from .. import campaigns, config, llm_connections, locks, routing, sampler_presets
+from .. import (
+    campaigns,
+    config,
+    image_drafts,
+    llm_connections,
+    locks,
+    routing,
+    sampler_presets,
+)
 from . import capabilities, cascade, facts, providers, translate
 from .cascade import Selection
 from .resolved import Attempt, ResolvedInference
@@ -45,6 +68,17 @@ NO_SAMPLING = {"preset_id": "", "preset_name": "", "scope": "none", "params": {}
 #: the fallback. `llm.ROUTE_SCOPES`, restated because this module never imports
 #: `llm`; a test holds the two equal.
 ROUTE_SCOPES = frozenset({"campaign", "global"})
+
+#: Where the primary's connection dict carries the fallback the facade sends
+#: (`llm.FALLBACK_KEY`, restated for the same reason; a test holds them equal).
+FALLBACK_KEY = "_fallback"
+
+#: Why a fallback on the primary's own provider is left out of `attempts`
+#: (`fallback_problem`): a second try on the connection that just failed is not
+#: a fallback (`llm._same_route`). A name of its own, so a route that may come
+#: to reach such a fallback -- a decide-only skip -- can lift this reason where
+#: it lifts the drop, and leave the credential ones (`problem`) alone.
+SAME_PROVIDER = "it is on the primary's own provider"
 
 #: The ways reading one connection can fail, every one of which reads as "no
 #: such connection" -- a dangling reference is walked past, never raised.
@@ -123,8 +157,9 @@ def campaign_meta(cid: str) -> dict:
 
 
 # ---- the per-call caches ----
-def _connection_lookup() -> translate.Lookup:
-    """`read_connection_raw`, memoised for one resolution and never raising.
+def connection_lookup() -> translate.Lookup:
+    """`read_connection_raw`, memoised for one resolution (or one settings
+    view, `settings.view`) and never raising.
 
     One resolution asks about the same few ids several times over (the legacy
     translation looks up the roles and the task's route pins, the cascade
@@ -175,11 +210,12 @@ def _sampling(choose: Callable[[Callable[[str], bool]], tuple[str, str]],
             "params": dict(preset["params"]) if preset else {}}
 
 
-def _lowered(raw: dict, sampling: dict,
-             model: str | None = None) -> tuple[dict, dict | None]:
+def _lowered(raw: dict, sampling: dict, model: str | None = None, *,
+             catalog: bool = True) -> tuple[dict, dict | None]:
     """`raw` as the facade reads it, and the catalog row that was read for it:
     `sampling` attached, `model` set (when given), and `model_params` and
-    `model_features` recomputed for that model.
+    `model_features` recomputed for that model. `catalog` False reads no row
+    (`embed_attempt`: a record whose rev the cached catalog is not for).
 
     A copy, never a mutation: `raw` can be the dict the store handed back. Any
     `model_params` / `model_features` already on it is dropped first -- it may
@@ -189,7 +225,7 @@ def _lowered(raw: dict, sampling: dict,
     if model is not None:
         out["model"] = model
     out["sampling"] = sampling
-    row = _catalog_row(out, str(out.get("model", "") or ""))
+    row = _catalog_row(out, str(out.get("model", "") or "")) if catalog else None
     params = _params_of(out, row)
     if params is not None:
         out["model_params"] = params
@@ -199,11 +235,68 @@ def _lowered(raw: dict, sampling: dict,
     return out, row
 
 
-def lower(raw: dict, sampling: dict, model: str | None = None) -> dict:
+#: What an unstated fact lowers to (spec 4.2): post images on auto, no
+#: prefill, no post-processing -- the defaults a legacy connection carried.
+_UNSTATED = {"vision": "", "prefill": False, "post_process": "none"}
+
+
+def with_facts(conn: dict, model_facts: dict) -> dict:
+    """`conn` with its model's stated behaviour -- `vision`, `prefill` and
+    `post_process` -- taken from `model_facts` (`facts.of`) rather than the
+    connection's legacy fields. A copy.
+
+    The format-2 overlay. Every consumer reads these three off the connection
+    dict -- `llm.prefill_capable`, the strict post-processing, and
+    `post_images.capability` -- so replacing the values here is what makes them
+    per model without touching any of them. An unstated fact is the default
+    (`_UNSTATED`), never the connection's flag: a model nothing was said of
+    runs as one nothing was said of.
+
+    Two legacy fields are deliberately left as they are. `sampler_preset`: the
+    selection's preset already comes from the cascade, never from here. And
+    `reasoning_effort`: the GLM effort keeps riding when the effective preset
+    sets none, until derived reasoning presets replace it (slice I).
+
+    `vision` is the post-image preference and nothing more: `off` stops post
+    images here and is NOT a capability `no` (`capabilities._stated`), so it
+    never refuses an image description."""
+    vision = model_facts.get("vision")
+    prefill = model_facts.get("prefill")
+    post_process = model_facts.get("post_process")
+    return {**conn,
+            "vision": vision if isinstance(vision, str) else _UNSTATED["vision"],
+            "prefill": prefill if isinstance(prefill, bool) else _UNSTATED["prefill"],
+            # Only a value the facts module would write: a hand-edited sidecar
+            # lowers to the default rather than to a string nothing reads.
+            "post_process": (post_process if post_process in facts.POST_PROCESS_VALUES
+                             and post_process else _UNSTATED["post_process"])}
+
+
+def _current_layout() -> bool:
+    """Whether the store's global layout is the current one (format 2). Never
+    raises: a `config.md` that cannot be read leaves the connection's own
+    fields, which a migration keeps in place."""
+    try:
+        return translate.is_current(config.read_config())
+    except (locks.StoreBusy, OSError, UnicodeDecodeError):
+        return False
+
+
+def lower(raw: dict, sampling: dict, model: str | None = None, *,
+          current: bool | None = None) -> dict:
     """`_lowered`'s connection dict alone: `raw` as the facade reads it, with
-    `sampling` attached and `model` (when given) and its catalog facts set.
-    Public for `controls.preview`, which lowers a preset the same way."""
-    return _lowered(raw, sampling, model)[0]
+    `sampling` attached and `model` (when given) and its catalog facts set --
+    and, at format 2, its model's stated behaviour (`with_facts`). `current`
+    is the layout, read from `config.md` when not given.
+
+    Public for `controls.preview` and the model test, which lower a preset the
+    same way, and for `own_sampling` (a connection outside any route): at
+    format 2 each sends the model's own facts, as a resolved attempt does."""
+    conn = _lowered(raw, sampling, model)[0]
+    if not (_current_layout() if current is None else current):
+        return conn
+    return with_facts(conn, _model_facts(str(conn.get("id", "") or ""),
+                                         facts.model_of(conn), _rev(conn)))
 
 
 def preset_sampling(preset_id: str, scope: str = "connection") -> dict:
@@ -223,17 +316,38 @@ def _model_facts(provider_id: str, model: str, rev: str) -> dict:
         return {}
 
 
-def _attempt(provider_id: str, model: str, sampling: dict, raw: dict) -> Attempt:
+def _rev(conn: dict) -> str:
+    rev = conn.get("rev", "")
+    return rev if isinstance(rev, str) else ""
+
+
+def _attempt(provider_id: str, model: str, sampling: dict, raw: dict, *,
+             current: bool, retries: int = 0, catalog: bool = True,
+             model_facts: dict | None = None) -> Attempt:
     """One attempt: the lowered connection, and what is known of it.
 
     Capabilities are resolved from the catalog row the lowering read and the
     model's facts, once -- never by `capabilities.caps_for`, which would read
-    the same sidecar again."""
-    conn, row = _lowered(raw, sampling, model)
+    the same sidecar again. The facts are read under the model the attempt
+    runs (`facts.model_of`: an unset Claude model is `opus`, where the
+    migration wrote them).
+
+    At format 2 (`current`) those same facts are overlaid onto the connection
+    (`with_facts`), so an attempt carries ITS model's prefill, post-processing
+    and post-image preference. A reroll onto another model therefore runs with
+    that model's facts, not the connection's -- per-model facts are the design
+    (spec 4.2). The baseline's override cells observe neither prefill nor
+    vision, so nothing frozen records the difference.
+
+    `model_facts` stands in for the read (`facts.of`'s shape): facts not yet
+    written, which a facts write's guard judges (`embed_attempt`)."""
+    conn, row = _lowered(raw, sampling, model, catalog=catalog)
     preset = providers.infer(conn)
-    rev = conn.get("rev", "")
-    rev = rev if isinstance(rev, str) else ""
-    model_facts = _model_facts(provider_id, model, rev)
+    rev = _rev(conn)
+    if model_facts is None:
+        model_facts = _model_facts(provider_id, facts.model_of(conn), rev)
+    if current:
+        conn = with_facts(conn, model_facts)
     base_url = conn.get("base_url", "")
     return Attempt(
         provider_id, model, sampling["preset_id"], conn,
@@ -243,7 +357,7 @@ def _attempt(provider_id: str, model: str, sampling: dict, raw: dict) -> Attempt
         facts=model_facts,
         capabilities=capabilities.resolve_caps(preset, model, catalog_row=row,
                                                facts=model_facts),
-        controls=llm_sampling.effective(conn))
+        controls=llm_sampling.effective(conn), retries=retries)
 
 
 #: The capability an operation needs of itself. `decide` is not an operation
@@ -282,7 +396,8 @@ def _own_preset(selection: Selection) -> Callable[[Callable[[str], bool]], tuple
 def own_sampling(conn: dict) -> dict:
     """`conn` with its OWN sampler preset (scope `connection`, or `none`) and its
     model's `model_params` attached -- what a connection carries outside any
-    route: the standing fallback, and the connection list's display."""
+    route: the connection editor's display. (A resolved fallback brings its own
+    preset through the cascade instead, `resolve`.)"""
     own = Selection(str(conn.get("id", "") or ""), str(conn.get("model", "") or ""),
                     str(conn.get("sampler_preset", "") or ""))
     return lower(conn, _sampling(_own_preset(own), _preset_lookup()))
@@ -290,33 +405,77 @@ def own_sampling(conn: dict) -> dict:
 
 # ---- the resolver ----
 def _overridden(standing: Selection | None, override: Selection | None,
-                lookup: translate.Lookup) -> Selection | None:
+                lookup: translate.Lookup, *, current: bool = False) -> Selection | None:
     """The selection one call runs on, given a per-call override (#77).
 
-    A provider alone runs that provider at its own model and preset, and needs
-    no standing selection -- rerolling onto a working endpoint is how a broken
-    standing route is fixed. A model alone drives the STANDING provider at that
-    model, so with no standing selection there is nothing to drive. Both is the
-    named provider at the named model. A preset in the override replaces the
-    selection's own; empty keeps it."""
+    A model alone drives the STANDING provider at that model, so with no
+    standing selection there is nothing to drive. Both is the named provider at
+    the named model. A provider alone is the one part that depends on the
+    layout:
+
+    - legacy keys: that provider at its OWN model and preset, needing no
+      standing selection -- rerolling onto a working endpoint is how a broken
+      standing route is fixed.
+    - current layout (spec 5.6): that provider at the STANDING model and
+      preset. A provider no longer has a model of its own, so what is kept is
+      the part of the selection the override did not name. With no standing
+      selection there is nothing to keep, and the model is left empty for the
+      seam to ask the caller for.
+
+    The override's preset is never merged into the selection: it outranks the
+    route's preset, which no selection's own can, so `resolve` applies it on
+    top of the cascade -- and only on a current layout, since a legacy store
+    never took a preset from a request."""
     if override is None or not (override.provider or override.model):
         return standing
     if override.provider:
         raw = lookup(override.provider)
         if raw is None:
             return None
-        base = Selection(override.provider, str(raw.get("model") or ""),
-                         str(raw.get("sampler_preset") or ""))
+        if not current:
+            base = Selection(override.provider, str(raw.get("model") or ""),
+                             str(raw.get("sampler_preset") or ""))
+        elif standing is not None and standing.provider == override.provider:
+            base = standing
+        elif standing is not None:
+            base = Selection(override.provider, standing.model, standing.preset)
+        else:
+            base = Selection(override.provider, "", "")
     elif standing is None:
         return None
     else:
         base = standing
-    return Selection(base.provider, override.model or base.model,
-                     override.preset or base.preset)
+    return Selection(base.provider, override.model or base.model, base.preset)
+
+
+class Silence(NamedTuple):
+    """One scope's own choice left out of a resolution: what that scope's row
+    would run on if it were cleared (`settings.view`'s `inherits`).
+
+    The keys are dropped from that scope's view AFTER the legacy translation,
+    so a legacy `route_<k>` is silenced as the pin it reads as."""
+
+    #: "global" or "campaign".
+    scope: str
+    keys: frozenset[str]
+
+
+def _silenced(silence: Silence | None, glob: dict, campaign: dict) -> tuple[dict, dict]:
+    """`(glob, campaign)` with `silence`'s keys removed from its scope."""
+    if silence is None:
+        return glob, campaign
+
+    def drop(view: dict) -> dict:
+        return {k: v for k, v in view.items() if k not in silence.keys}
+
+    if silence.scope == "campaign":
+        return glob, drop(campaign)
+    return drop(glob), campaign
 
 
 def resolve(task: str, cid: str = "", *, operation: str = "generate",
-            override: Selection | None = None) -> ResolvedInference:
+            override: Selection | None = None, role: str = "",
+            silence: Silence | None = None) -> ResolvedInference:
     """Where `task` runs, for campaign `cid` ("" for none), and what it falls
     back to.
 
@@ -334,59 +493,225 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     the seam reports it (`problem`) rather than walking past it; no selection
     at all is an empty `attempts`.
 
-    The fallback attempt is the one the facade sends (spec 5.2, 5.4, 5.5): it
-    is dropped when it cannot be read or cannot send (so a misconfigured
-    fallback never replaces the primary's real error) and when it names the
-    primary's own connection (`llm._same_route`: a second try on the connection
-    that just failed is not a fallback); and when the primary's preset came
-    from a ROUTE scope -- campaign or global, a `PRESET_CLEAR` included -- the
+    The fallback attempt is the one the facade sends (spec 5.2, 5.4, 5.5),
+    attached to the primary's connection dict under `FALLBACK_KEY`: it is
+    dropped when it cannot be read or cannot send (so a misconfigured fallback
+    never replaces the primary's real error) and when it names the primary's
+    own connection (`llm._same_route`: a second try on the connection that just
+    failed is not a fallback) -- either says why in `fallback_problem`
+    (`problem`'s reason, or `SAME_PROVIDER`), which nothing refuses on; and
+    when the route has a
+    preset -- campaign or global scope, a `PRESET_CLEAR` included -- the
     fallback carries that same sampling rather than its own preset
-    (`llm.fallback_sampling`). Its `model_params` stay its own model's.
+    (`llm.fallback_sampling`). Its
+    `model_params` stay its own model's. A fallback KNOWN unable to do what
+    the route needs is kept in `attempts` and reported (`fallback_missing`) but
+    not attached, so it is never sent (spec 5.3).
+
+    A per-call preset (`override.preset`, scope `override`) is the primary's
+    alone. The fallback gets what it would have had without it: the route's
+    preset when the standing route has one, else the fallback's own.
+
+    The primary attempt states the retry budget (`config.llm_retries`, read
+    from the `config.md` already in hand); the fallback's is 0 (spec 5.4).
+
+    Two arguments are for the settings view rather than a call site: `role`
+    resolves that ROLE (`cascade.choose_role`) instead of `task`'s route, and
+    `silence` leaves one scope's own choice out (`Silence`).
     """
     llm_connections.ensure_migrated()
     cfg = config.read_config()
     meta = campaign_meta(cid)
-    lookup = _connection_lookup()
+    lookup = connection_lookup()
     presets = _preset_lookup()
-    route = routing.route(task)
+    route = None if role else routing.route(task)
     only = (route.key,) if route is not None else ()
     glob = translate.global_view(cfg, lookup, only=only)
-    campaign = translate.campaign_view(meta, lookup, current=translate.is_current(cfg),
+    current = translate.is_current(cfg)
+    campaign = translate.campaign_view(meta, lookup, current=current,
                                        only=only)
-    choice = cascade.choose(route, campaign=campaign, glob=glob,
-                            exists=lambda conn_id: lookup(conn_id) is not None)
+    glob, campaign = _silenced(silence, glob, campaign)
+
+    def exists(conn_id: str) -> bool:
+        return lookup(conn_id) is not None
+
+    choice = (cascade.choose_role(role, campaign=campaign, glob=glob, exists=exists) if role
+              else cascade.choose(route, campaign=campaign, glob=glob, exists=exists))
+
+    # A preset in the override outranks the route's (spec 5.6) -- the most
+    # specific choice there is -- on either layout: the legacy one lowers a
+    # named preset exactly as the new one does, and a store whose migration
+    # keeps failing stays legacy for as long as it fails.
+    preset_override = override.preset.strip() if override is not None else ""
+
+    def cascaded(selection: Selection | None) -> Callable[[Callable[[str], bool]],
+                                                          tuple[str, str]]:
+        return lambda known: cascade.preset_for(route, selection, campaign=campaign,
+                                                glob=glob, known=known)
+
+    def overriding(known: Callable[[str], bool], selection: Selection | None
+                   ) -> tuple[str, str]:
+        if preset_override == sampler_presets.PRESET_CLEAR:
+            return "", "override"
+        if preset_override and known(preset_override):
+            return preset_override, "override"
+        # An override naming no preset is no override of the preset: the seam
+        # tells the two apart by the scope and refuses the body.
+        return cascaded(selection)(known)
 
     attempts: list[Attempt] = []
-    selection = _overridden(choice.selection, override, lookup)
+    fallback_problem: str | None = None
+    selection = _overridden(choice.selection, override, lookup, current=current)
     raw = lookup(selection.provider) if selection is not None else None
+    standing_preset: str | None = None
     if selection is not None and raw is not None:
         primary = selection
-        sampling = _sampling(
-            lambda known: cascade.preset_for(route, primary, campaign=campaign,
-                                             glob=glob, known=known), presets)
-        first = _attempt(primary.provider, primary.model, sampling, raw)
+        # `unforced`: what the cascade answers WITHOUT a per-call preset -- the
+        # sampling the fallback follows when it came from a route scope. Under
+        # an override preset it is the standing route's answer (a route-scoped
+        # preset does not depend on the selection), and the override is the
+        # primary's alone.
+        if preset_override:
+            unforced = _sampling(cascaded(choice.selection), presets)
+            standing_preset = unforced["preset_id"]
+            sampling = _sampling(lambda known: overriding(known, primary), presets)
+        else:
+            sampling = unforced = _sampling(cascaded(primary), presets)
+        first = _attempt(primary.provider, primary.model, sampling, raw,
+                         current=current, retries=config.llm_retries(cfg))
         conn = first.conn
         attempts.append(first)
         fallback = choice.fallback
         fb_raw = lookup(fallback.provider) if fallback is not None else None
-        if (fallback is not None and fb_raw is not None and problem(fb_raw) is None
-                and not _same_provider(conn, fb_raw)):
+        fallback_problem = _fallback_problem(conn, fb_raw)
+        if fallback is not None and fb_raw is not None and fallback_problem is None:
             # A copy, so the two attempts never share a mutable block.
-            fb_sampling = ({**sampling, "params": dict(sampling["params"])}
-                           if sampling["scope"] in ROUTE_SCOPES
+            fb_sampling = ({**unforced, "params": dict(unforced["params"])}
+                           if unforced["scope"] in ROUTE_SCOPES
                            else _sampling(_own_preset(fallback), presets))
             attempts.append(_attempt(fallback.provider, fallback.model, fb_sampling,
-                                     fb_raw))
+                                     fb_raw, current=current))
 
     needs = _needs(route, operation)
+    # The "Images: on" bridge applies to a format-1 fallback as it does to the
+    # primary (`_bridged`): what the legacy layout sent, it still sends.
+    fallback_missing = (_bridged(_missing(attempts[1], needs), attempts[1], current=current)
+                        if len(attempts) > 1 else ())
+    if len(attempts) > 1 and not fallback_missing:
+        # The facade sends what the primary's dict carries (spec 5.3: a
+        # fallback known incapable is dropped from the chain, never sent). The
+        # dict is this resolution's own copy (`_lowered`), so nothing the store
+        # handed back is touched.
+        attempts[0].conn[FALLBACK_KEY] = attempts[1].conn
     return ResolvedInference(
         task=task, operation=operation,
         route=route.key if route is not None else "",
         legacy_route=routing.legacy_key(route) if route is not None else "",
         role=choice.role, via=choice.via, scope=choice.scope,
-        attempts=tuple(attempts), standing=choice.selection,
+        attempts=tuple(attempts), standing=choice.selection, current=current,
+        standing_preset=standing_preset,
         missing=_missing(attempts[0], needs) if attempts else (),
-        fallback_missing=_missing(attempts[1], needs) if len(attempts) > 1 else ())
+        fallback_missing=fallback_missing, fallback_problem=fallback_problem)
+
+
+def embed_endpoint(conn: dict, current: bool) -> str:
+    """The base URL `conn` serves embeddings from, or "" when it serves none.
+
+    An ``openai_compatible`` connection brings its own URL. OpenRouter serves
+    ``/embeddings`` too, but only for a config already in the current layout: a
+    legacy config naming an OpenRouter connection for embeddings has always
+    meant "off", and turning it on would start sending text to a provider
+    nobody chose it for. The URL is the preset's (an OpenRouter connection's
+    own is locked), and one with no key is not set up.
+    """
+    if conn["kind"] == "openai_compatible":
+        return conn["base_url"] or ""
+    if conn["kind"] == "openrouter" and current and conn["api_key"]:
+        return providers.PRESETS["openrouter"].base_url
+    return ""
+
+
+def space_of(conn: dict, model: str) -> str:
+    """The vector space `conn` embeds `model` in: the key a cached vector is
+    read and written under.
+
+    Two endpoints can both serve a model called "embedding" and mean different
+    weights, and vectors from different spaces are incomparable even at
+    matching dimensionality -- so keying on the model name alone would reuse
+    one provider's vectors against another's queries and rank silently wrongly.
+
+    The connection's `rev` is in here for the case the URL does not cover: a
+    gateway where the *credential* selects the tenant or deployment. Two
+    connections to one URL with different keys are different spaces, and
+    replacing a key can move an existing one. `rev` is restamped on every
+    write that is not rev-neutral (`llm_connections.REV_NEUTRAL_FIELDS`: a
+    name, a provider preset, billing and the sampler fields keep it), so it
+    captures both. It over-invalidates -- a new address that serves the same
+    deployment costs a full re-embed -- and that is the right direction:
+    re-embedding costs money and latency, while a stale namespace costs
+    silently wrong rankings with nothing to notice them by. A provider edit
+    that moves it is confirmed first (`embed_space.moved_by`).
+    `llm_connections.cached_models` gates its own sidecar on `rev` for exactly
+    this reason.
+
+    `model` stays explicit because it lives in config.md, not on the
+    connection, so changing it does not move `rev`."""
+    return f"{conn['id']}\0{conn['rev']}\0{model}"
+
+
+#: What the Embedding role's one attempt must be able to do.
+_EMBED_NEEDS = frozenset({OPERATION_CAPABILITY["embed"]})
+
+
+class EmbedAttempt(NamedTuple):
+    """The Embedding role's one attempt on a provider record, and what follows
+    from it (`embed_attempt`)."""
+
+    attempt: Attempt
+    #: `embed`, when the attempt is known (`no`) not to make embeddings.
+    missing: tuple[str, ...]
+    #: The space it embeds in (`space_of`), or None when it embeds nothing.
+    space_id: str | None
+
+
+def embed_attempt(provider_id: str, model: str, raw: dict, *,
+                  current: bool, catalog: bool = True,
+                  model_facts: dict | None = None) -> EmbedAttempt:
+    """The Embedding role's attempt on connection record `raw` at `model`.
+
+    One attempt with no sampling, its `base_url` the embeddings endpoint
+    (`embed_endpoint`, "" when the record serves none), what it is known not
+    to do (`_missing`: a name-rule guess never counts), and its space -- set
+    only when the record embeds: a model, an endpoint, and no known `no`.
+
+    `raw` need not be on disk: `embed_space.moved_by` asks this of the record
+    an edit is about to write. Reads that record's catalog row and its
+    `facts.json` at `raw["rev"]` (`_attempt`). The catalog sidecar is gated on
+    the rev ON DISK, so for a record whose rev the write will restamp the
+    caller passes `catalog=False`: once the write lands that row is stale and
+    says nothing, and judging the record by it would read a `no` the saved
+    provider no longer has (the verdicts need no such flag -- `facts.of` is
+    already read at `raw`'s own rev). `model_facts` judges it with facts not
+    yet written instead of `facts.json`'s (`embed_space.facts_moved`)."""
+    attempt = _attempt(provider_id, model, dict(NO_SAMPLING), raw, current=current,
+                       catalog=catalog, model_facts=model_facts)
+    endpoint = embed_endpoint(raw, current)
+    attempt = dataclasses.replace(attempt, base_url=endpoint)
+    missing = _missing(attempt, _EMBED_NEEDS)
+    space_id = space_of(raw, model) if model and endpoint and not missing else None
+    return EmbedAttempt(attempt, missing, space_id)
+
+
+def _fallback_problem(primary: dict, fallback: dict | None) -> str | None:
+    """Why a fallback that exists is left out of the chain: it is on the
+    primary's own provider (`SAME_PROVIDER`), or it cannot send (`problem`).
+    Said either way -- without a reason the settings view showed a dropped
+    fallback as a working one. None for no fallback, or one that is sent."""
+    if fallback is None:
+        return None
+    if _same_provider(primary, fallback):
+        return SAME_PROVIDER
+    return problem(fallback)
 
 
 def _same_provider(primary: dict, fallback: dict) -> bool:
@@ -395,3 +720,158 @@ def _same_provider(primary: dict, fallback: dict) -> bool:
     object, so the id is what decides)."""
     pid = primary.get("id", "")
     return bool(pid) and pid == fallback.get("id", "")
+
+
+# ---- the refusal ----
+#: A refusal: the HTTP status and the body the seam answers with. The body is
+#: a `{detail, kind}` dict, or -- for an image route on a wire protocol that
+#: cannot carry an image -- the bare `image_drafts.UNSUPPORTED` sentence that
+#: route has always answered with.
+Refusal = tuple[int, dict | str]
+
+#: The sources of a vision `no` a connection's legacy "Images: on" overrides
+#: at format 1 (`incapable`'s bridge). At format 2 that setting lives in the
+#: model's facts, where `vision: on` is already the user's `yes`.
+IMAGES_ON_OUTRANKS = frozenset({"catalog", "name", "preset"})
+
+
+def unusable(resolved: ResolvedInference) -> Refusal | None:
+    """Why this resolution cannot send, if it cannot: the 409 `missing_key`.
+
+    Shared by the seam and by the per-call override, whose `model`-only reroll
+    drives the standing route and must be refused on exactly the same terms --
+    including the routed-connection wording below.
+    """
+    conn = resolved.conn
+    if conn is None:
+        return 409, {"detail": "No LLM connection selected", "kind": "missing_key"}
+    why = problem(conn)
+    name = conn.get("name") or conn["id"]
+    if why is not None and resolved.current:
+        # Spec 12: the provider, and the route or role that chose it --
+        # today's wording, generalised. At format 2 nearly everything comes
+        # through a role, and two providers of one kind would otherwise read
+        # the same sentence. A pin is named by its own route (a split route's
+        # pin is its own now, not its legacy parent's). A legacy store keeps
+        # the sentences below exactly: they are what it always answered.
+        where = (f"routed for {routing.label_for(resolved.route).lower()}"
+                 if resolved.via == "route"
+                 else f"the {resolved.role.capitalize()} role" if resolved.role else "")
+        detail = f"{why} ({name}, {where})" if where else f"{why} ({name})"
+        return 409, {"detail": detail, "kind": "missing_key"}
+    if why is not None and resolved.via == "route":
+        # A ROUTED connection that cannot send is reported, not walked past.
+        # The walk skips a route naming a connection that no longer exists --
+        # a delete cannot reach into every campaign's frontmatter, so that
+        # reference is stale rather than meant. This one is meant: the user
+        # pointed this task at this connection and it has no key. Falling back
+        # to the active connection would generate a scene on a model they did
+        # not choose and never say so.
+        return 409, {
+            "detail": f"{why} ({conn.get('name') or conn['id']}, routed for "
+                      f"{routing.label_for(resolved.legacy_route).lower()})",
+            "kind": "missing_key"}
+    if why is not None:
+        # Refused before the facade, so a configured fallback does not rescue
+        # it. The facade falls back on `auth`, and the distinction is real: a
+        # key the provider rejected is a runtime failure, worth routing around
+        # silently, while no key at all is a setup mistake. Quietly serving it
+        # from the fallback would leave someone playing for weeks on the wrong
+        # connection, wondering why the model they picked never sounds right.
+        return 409, {"detail": why, "kind": "missing_key"}
+    return None
+
+
+def incapable(resolved: ResolvedInference) -> Refusal | None:
+    """The 409 for a primary that is KNOWN unable to do what its route needs.
+
+    Only a known `no` (`resolved.missing`); `unknown` is let through, and a
+    fallback's gaps are reported (`fallback_missing`) but never refused on.
+    Asked after `unusable` (`refusal`), so a connection with no key says that
+    first: it is the fix the reader has to make before anything else matters.
+
+    A wire protocol that cannot carry an image (an `adapter` `no` on vision)
+    answers with the sentence the image-description route always answered
+    with, in the same body, so nothing that reads it sees a change. At format 1
+    a connection set to "Images: on" is not refused over a catalog's vision
+    `no` (the bridge, below); at format 2 that word is the model's facts, a
+    user `yes` the capability resolution already ranks above the catalog.
+    Anything else is `incapable` (`incapable_text`), naming the first missing
+    capability in `capabilities.NAMES` order. A name-rule guess is never
+    missing (`_GUESSES`), and a failed test call is `unknown`, so neither can
+    refuse here.
+    """
+    if not resolved.missing or not resolved.attempts:
+        return None
+    primary = resolved.attempts[0]
+    vision = primary.capabilities.get("vision")
+    if "vision" in resolved.missing and vision is not None and vision.source == "adapter":
+        return 409, image_drafts.UNSUPPORTED
+    missing = _bridged(resolved.missing, primary, current=resolved.current)
+    if not missing:
+        return None
+    return 409, {"detail": incapable_text(resolved, missing[0]), "kind": "incapable"}
+
+
+def _bridged(missing: tuple[str, ...], attempt: Attempt, *,
+             current: bool) -> tuple[str, ...]:
+    """`missing` with the format-1 BRIDGE applied to `attempt`: a legacy
+    store's "Images: on" sends image drafts whatever the catalog says, and
+    nothing in that layout could undo a refusal or a dropped fallback. Only
+    the sources the migrated setting outranks are waived -- the wire
+    protocol's `no` stands, and so does the user's per-model word (a probe's
+    failure is never a `no`). The primary's refusal (`incapable`) and the
+    fallback's drop (`resolve`) both ask this, so the same connection is
+    served the same way in either seat."""
+    vision = attempt.capabilities.get("vision")
+    if ("vision" in missing and not current
+            and attempt.conn.get("vision") == "on"
+            and vision is not None and vision.source in IMAGES_ON_OUTRANKS):
+        return tuple(cap for cap in missing if cap != "vision")
+    return missing
+
+
+def refusal(resolved: ResolvedInference) -> Refusal | None:
+    """The seam's one decision about `resolved`: `(status, body)` when it
+    cannot be served, None when it can. Pure -- it reads nothing.
+
+    `routes.common` raises from it, and the settings view reports it, so what
+    the screen says is wrong with a row is the seam's own answer rather than a
+    copy of it."""
+    return unusable(resolved) or incapable(resolved)
+
+
+def incapable_text(resolved: ResolvedInference, cap: str) -> str:
+    """The `incapable` sentence (spec 5.3): the route, the role when one
+    supplied the model, the model on its provider, what it cannot do, and
+    what to do about it.
+
+    "The <label> route ..." rather than "<label> runs ...", because half the
+    route labels are plural ("Scene turns", "Image descriptions"). The role
+    is named only when the model IS the role's: a pin names none, and a
+    per-call override moved the call off whatever the role chose. The remedy
+    follows: another model for the role, or a pin, where there is a route to
+    pin; another model for the route where it is already pinned. The model is
+    the one the connection runs (`facts.model_of`, `llm.effective_model`'s
+    rule)."""
+    primary = resolved.attempts[0]
+    conn = primary.conn
+    preset = providers.PRESETS.get(primary.provider_preset)
+    provider = conn.get("name") or (preset.label if preset is not None else conn.get("id", ""))
+    on = f"{facts.model_of(conn)} on {provider}"
+    standing = resolved.standing
+    chosen = standing is not None and (standing.provider, standing.model) == (
+        primary.provider_id, primary.model)
+    subject = (f"The {routing.label_for(resolved.route)} route" if resolved.route
+               else "This generation")
+    pin = " or pin this route" if resolved.route else ""
+    if chosen and resolved.role:
+        role = resolved.role.capitalize()
+        where = f"runs on the {role} role ({on})"
+        remedy = f"choose another {role} model{pin}"
+    elif chosen and resolved.via == "route":
+        where, remedy = f"is pinned to {on}", "choose another model for this route"
+    else:
+        where, remedy = f"runs on {on}", f"choose another model{pin}"
+    return (f"{subject} {where}, which cannot "
+            f"{capabilities.CANNOT.get(cap, cap)} — {remedy}.")

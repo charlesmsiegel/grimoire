@@ -1,5 +1,7 @@
+import pytest
+
 from grimoire.store import dump_frontmatter, parse_frontmatter
-from grimoire.store.frontmatter import parse_frontmatter_head
+from grimoire.store.frontmatter import LINE_BREAKS, parse_frontmatter_head
 
 
 def test_roundtrip_plain_values():
@@ -79,3 +81,23 @@ def test_empty_block_still_parses_with_and_without_a_trailing_newline():
     assert parse_frontmatter("---\n---\nbody\n") == ({}, "body\n")
     assert parse_frontmatter("---\n---\n\nbody\n") == ({}, "body\n")
     assert parse_frontmatter("---\n---") == ({}, "")
+
+
+# ---- line boundaries (Codex, slice C round 4) ----
+
+def test_line_breaks_are_every_boundary_splitlines_splits_on():
+    """The parser splits the block with `str.splitlines`, so the writer's
+    notion of a line break has to be exactly that one -- every code point."""
+    splits = {c for c in map(chr, range(0x110000))
+              if len(f"a{c}b".splitlines()) > 1}
+    assert splits == set(LINE_BREAKS)
+
+
+@pytest.mark.parametrize("brk", sorted(LINE_BREAKS), ids=lambda c: f"U+{ord(c):04X}")
+def test_a_value_holding_a_line_break_cannot_add_a_key(brk):
+    """A value is one line whatever it holds: a break inside it is written as
+    a space, so nothing after it is read back as a key of its own."""
+    text = dump_frontmatter({"model": f"vendor/m{brk}inference_format: 3"}, "")
+    meta, body = parse_frontmatter(text)
+    assert meta == {"model": "vendor/m inference_format: 3"}
+    assert body == ""

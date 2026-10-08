@@ -106,43 +106,13 @@ def test_a_sampler_only_edit_keeps_the_health_verdict(client):
     assert client.get("/api/llm-connections/openrouter").json()["rev"] == before
 
 
-# ---- routing ----
-
-def test_the_routing_bundle_carries_presets_and_reports(client):
-    pid = _preset(client, temperature=0.4)
-    client.put("/api/llm-connections/claude", json={"sampler_preset": pid})
-    client.put("/api/config", json={"active_connection_id": "claude"})
-    bundle = client.get("/api/routing").json()
-    assert bundle["preset_catalog"] == [{"id": pid, "name": "Warm"}]
-    assert bundle["presets"]["scene"] == ""
-    assert bundle["preset_inherited"]["scene"] == pid
-    assert bundle["preset_inherited_from"]["scene"] == {"scope": "connection"}
-    report = bundle["sampling"]["absorb"]
-    assert report["applied"] == {} and report["dropped"][0]["param"] == "temperature"
-
-
-def test_a_global_preset_put_lands_and_a_clear_is_accepted(client):
-    pid = _preset(client)
-    r = client.put("/api/routing", json={"presets": {"scene": pid, "absorb": PRESET_CLEAR}})
-    assert r.status_code == 200, r.text
-    assert r.json()["presets"]["scene"] == pid
-    assert store.read_config()["preset_absorb"] == PRESET_CLEAR
-
-
-def test_routing_put_refuses_unknown_presets_and_scopes(client):
-    cid, _ = _scene(client)
-    assert client.put("/api/routing", json={"presets": {"scene": "nope"}}).status_code == 400
-    r = client.put(f"/api/campaigns/{cid}/routing", json={"presets": {"tagline": PRESET_CLEAR}})
-    assert r.status_code == 400 and "tagline" in r.json()["detail"]
-
+# ---- route presets (legacy keys, read through the translation) ----
 
 def test_a_campaign_preset_overrides_the_global_one(client):
     cid, sid = _scene(client)
     glob, mine = _preset(client, "Global", temperature=0.2), _preset(client, "Mine", top_p=0.9)
-    client.put("/api/routing", json={"presets": {"scene": glob}})
-    r = client.put(f"/api/campaigns/{cid}/routing", json={"presets": {"scene": mine}})
-    assert r.json()["presets"]["scene"] == mine
-    assert r.json()["preset_inherited"]["scene"] == glob
+    store.write_config(preset_scene=glob)
+    store.campaigns.set_campaign_routing(cid, {"preset_scene": mine})
     live = client.get(f"/api/campaigns/{cid}/scenes/{sid}/context").json()
     assert live["sampling"]["preset_id"] == mine and live["sampling"]["scope"] == "campaign"
     assert live["sampling"]["applied"] == {"top_p": 0.9}
@@ -153,7 +123,7 @@ def test_a_campaign_preset_overrides_the_global_one(client):
 def test_a_chat_turn_sends_the_applied_params_and_snapshots_the_report(client):
     cid, sid = _scene(client)
     pid = _preset(client, temperature=0.6, min_p=0.05)
-    client.put(f"/api/campaigns/{cid}/routing", json={"presets": {"scene": pid}})
+    store.campaigns.set_campaign_routing(cid, {"preset_scene": pid})
     provider = ScriptedProvider(chunks=("Mara nods.",))
     _real_facade(client, openrouter=provider)
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
@@ -169,7 +139,7 @@ def test_a_cleared_route_sends_nothing(client):
     cid, sid = _scene(client)
     pid = _preset(client, temperature=0.6)
     client.put("/api/llm-connections/openrouter", json={"sampler_preset": pid})
-    client.put(f"/api/campaigns/{cid}/routing", json={"presets": {"scene": PRESET_CLEAR}})
+    store.campaigns.set_campaign_routing(cid, {"preset_scene": PRESET_CLEAR})
     provider = ScriptedProvider(chunks=("Mara nods.",))
     _real_facade(client, openrouter=provider)
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Go?"})
@@ -243,15 +213,15 @@ def test_a_fallback_snapshot_reports_the_fallbacks_own_split(client):
     cid, sid = _scene(client)
     client.put("/api/llm-connections/openrouter", json={"model": "glm-5.3"})
     pid = _preset(client, temperature=0.6, min_p=0.05)
-    client.put("/api/routing", json={"presets": {"scene": pid}})
+    store.write_config(preset_scene=pid)
     backup = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Backup", "base_url": "https://example.test/v1",
         "model": "vendor/unknown"}).json()["id"]
     client.put("/api/config", json={"fallback_connection_id": backup})
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=("Mara nods.",))
-    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0,
-                           fallback=common._fallback_connection)
+    # No `fallback`, as the shipped client: the turn's conn carries its own.
+    facade = llm.LLMClient(openrouter=primary, openai_compatible=fallback, retries=0)
     client.app.dependency_overrides[routes.get_llm] = lambda: facade
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                        json={"content": "Shall we go?"}).status_code == 200

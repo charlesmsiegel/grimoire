@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from grimoire.store import inference_keys as keys
 from grimoire.store import sampler_presets
-from grimoire.store.inference import keys, translate
+from grimoire.store.inference import translate
 
 CONNS = {
     "or": {"model": "vendor/a", "sampler_preset": "warm"},

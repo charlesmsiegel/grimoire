@@ -7,6 +7,7 @@ import type { ChatEvent, OpenerContribution, OpenerSpeaker } from "../api/stream
 import { ErrorNote } from "../components/ErrorNote";
 import { PlainShell } from "../components/PageShell";
 import { byName } from "../sortByName";
+import { NeedsModel } from "../components/inference/NeedsModel";
 
 type LocationDraft = { name: string; body: string; keys: string };
 const blankPersona: Persona = { name: "", pronouns: "", summary: "", description: "" };
@@ -449,7 +450,7 @@ export default function CampaignWizard({ ready }: { ready: boolean }) {
             </div>
             <div className="field">
               <div className="role">Generate an opener</div>
-              {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+              {!ready && <NeedsModel />}
               <div className="picker">
                 <input type="text" aria-label="Opener prompt" placeholder="A storm over the salt marshes…"
                        value={prompt} onChange={(e) => setPrompt(e.target.value)} />

@@ -40,9 +40,9 @@ test("offers every section as a link to the page that already owns it", async ()
   for (const [name, href] of [
     ["Worlds", "/worlds"], ["Modules", "/modules"], ["Styles", "/styles"],
     ["Climates", "/climates"],
-    // Connections used to sit outside the library entirely, beside it in the
+    // Providers (once Connections) sat outside the library entirely, beside it in the
     // nav rail. It is a thing a campaign is built from like the other five.
-    ["Connections", "/connections"],
+    ["Providers", "/providers"],
   ] as const) {
     expect(await screen.findByRole("link", { name: new RegExp(name, "i") }))
       .toHaveAttribute("href", href);
@@ -67,7 +67,7 @@ test("counts each section from the list endpoint that already serves it", async 
   expect(row(/modules/i)).toHaveTextContent("1");
   expect(row(/styles/i)).toHaveTextContent("3");
   expect(row(/climates/i)).toHaveTextContent("2");
-  expect(row(/connections/i)).toHaveTextContent("1");
+  expect(row(/providers/i)).toHaveTextContent("1");
 });
 
 test("retired response presets have no library row", async () => {

@@ -1,5 +1,7 @@
 import importlib
 
+import pytest
+
 import grimoire.store as store
 
 
@@ -157,7 +159,8 @@ def test_rev_changes_on_create_and_update(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     cid = s.llm_connections.create_connection("openai_compatible", "Endpoint", base_url="https://x")
     rev1 = s.llm_connections.read_connection_raw(cid)["rev"]
-    s.llm_connections.update_connection(cid, name="Renamed")
+    # A rename keeps the rev now (spec 4.1); repointing the endpoint does not.
+    s.llm_connections.update_connection(cid, base_url="https://y")
     rev2 = s.llm_connections.read_connection_raw(cid)["rev"]
     assert rev1 != rev2
 
@@ -365,3 +368,24 @@ def test_prefill_round_trips_through_the_routes(client):
     made = client.post("/api/llm-connections", json={
         "kind": "claude", "name": "Saltmarch Claude", "prefill": True}).json()["id"]
     assert client.get(f"/api/llm-connections/{made}").json()["prefill"] is True
+
+
+# ---- the strict read (the migration's) ----
+
+def test_a_strict_read_tells_missing_from_unreadable(monkeypatch, tmp_path):
+    s = reload_with_home(monkeypatch, tmp_path)
+    conns = s.llm_connections
+    assert conns.read_connection_strict("openrouter")["kind"] == "openrouter"
+    # Missing, unsafe, too long for the filesystem: no connection, no error.
+    assert conns.read_connection_strict("nowhere") is None
+    assert conns.read_connection_strict("../config") is None
+    assert conns.read_connection_strict("x" * 4096) is None
+    # There but undecodable: an error naming it, where the lenient read says None.
+    path = tmp_path / "llm_connections" / "claude.md"
+    path.write_bytes(b"\xff\xfe" + path.read_bytes())
+    assert conns._read("claude") is None
+    with pytest.raises(conns.ConnectionUnreadableError, match="claude"):
+        conns.read_connection_strict("claude")
+    with pytest.raises(OSError, match="claude"):
+        conns.list_connections_strict()
+    assert {c["id"] for c in conns.list_connections()} == {"openrouter"}

@@ -26,7 +26,7 @@ import {
   type MonthlyCosts,
   type CardFormat, type CascadeReport, type Casefile, type CastChanges, type CastDetail,
   type ForkGuards, type ForkReport,
-  type CatalogDraft, type CharacterDetail, type ChronicleLineSave,
+  type CharacterDetail, type ChronicleLineSave,
   type Scene, type ResponseRecord, type ResponseSwipe, type PassageCharacterDraft, type PassageCharacterInput, type PassageCharacterSave,
   type CharacterSummary, type CheckResolution, type ChronicleEntry, type ChubImportResult,
   type ChubUnlinkedVersion, type Climate, type ClimateSummary, type Config, type ConfigUpdate,
@@ -38,12 +38,15 @@ import {
   type CandidateRecord, type ContinuityApply, type ContinuityCandidates, type ContinuityState,
   type ContinuityApplied, type ReconcileResult,
   type CapabilityNeed, type ControlsPreview, type ModelCapabilities,
+  type CampaignInferenceWrite, type InferenceSettings, type InferenceWrite,
+  type ModelFacts, type ModelFactsUpdate, type ModelTestPreview, type ModelTestResult,
+  type ProviderPresetOption, type TestableCapability,
   type IncomingItem, type IncomingRef, type JournalEntry, type LLMConnection,
   type LLMConnectionDetail, type LLMConnectionDraft, type Ledger,
   type LibraryDependent, type LibraryKind, type LibraryStatus,
   type LogLevel, type LogLevelInfo, type LogPage, type LogTailEvent,
   type FactRecord, type FactSave,
-  type LoreEntryDraft, type Mechanics, type Message, type Model,
+  type LoreEntryDraft, type Mechanics, type Message,
   type ModelsRefreshResult,
   type ModuleContentEntry,
   type ModuleDetail, type ModuleEditResult, type ModuleRenameKind, type ModuleSummary,
@@ -54,7 +57,7 @@ import {
   type RecordChange, type RegenerateOverrides, type RelationshipChange,
   type RelationshipSave, type ReplayPreview, type ReplaySession, type ReplayStarted, type ResponseBundle, type GroupSettings, type ResponseFields, type ResponseOverride,
   type RollEntry, type ThreadSave, type RollingSummary, type RollingSummaryRefresh,
-  type RetconReport, type RosterEntry, type RoutingBundle, type SamplerImportReport, type SamplerParamSpec,
+  type RetconReport, type RosterEntry, type SamplerImportReport, type SamplerParamSpec,
   type SamplerPreset, type SamplerPresetDraft, type ScenarioImportResult, type ScenarioProposal, type SceneAbsorb,
   type SceneAlternates, type SceneCheckActor, type SceneContext, type SceneDatetime,
   type SceneIdea, type SceneIdeaDraft, type SceneImportDraft, type SceneIntentResult,
@@ -96,6 +99,17 @@ function notifyCampaigns<T>(result: T): T {
 function notifyConfig<T>(result: T): T {
   configChanged();
   return result;
+}
+
+/** `notifyConfig` with the cached config dropped first: for every mutator
+ *  of what a model view reads -- providers, their facts and catalogs, a
+ *  landed model test, sampler presets, roles and routes. `GET /config` names
+ *  each role's provider, model and preset and says whether Primary is
+ *  `ready`, and the Models views re-read on the signal, so a write that moves
+ *  any of it must do both or a view keeps showing what it replaced. */
+function announceModels<T>(result: T): T {
+  invalidateConfigCache();
+  return notifyConfig(result);
 }
 
 /** Same shape again, for the nav rail's counts.
@@ -1803,7 +1817,8 @@ export const api = {
    *  override (#77) would have made it eight.
    *
    *  Empty fields are dropped rather than sent, so an untouched popover posts
-   *  no body at all — `""` and "unset" mean the same thing for all four, and
+   *  no body at all — `""` and "unset" mean the same thing for every field
+   *  (guidance, response, and the route's provider, model and preset), and
    *  the server reads a missing field as the standing configuration. Falsy is
    *  the test because every field here is a string or an object; a field whose
    *  `false` or `0` meant something would need its own rule rather than this
@@ -2658,23 +2673,70 @@ export const api = {
    *  every scene inspector goes on sizing prompts against the list this
    *  request replaced. */
   refreshConnectionModels: (id: string, signal?: AbortSignal) =>
-    refreshModels(id, signal).then(notifyConfig),
-  /** The catalog for a connection that has been described but not saved (#149)
-   *  — the New-connection form and the setup wizard, where there is no id to
-   *  refresh yet. Nothing is cached server-side and nothing is stored. */
-  previewModels: (draft: CatalogDraft) =>
-    request<{ models: Model[] }>("POST", "/api/model-catalog", draft),
+    refreshModels(id, signal).then(announceModels),
   /** Ask this connection's provider whether it can serve, right now (#146).
    *
    *  Resolves for a *failing* connection too: the answer is in `ok`, and the
    *  request only rejects when the question itself could not be asked (an id
    *  that does not exist). Invalidates the cached config because the check's
-   *  verdict is what the status bar reads. */
-  checkConnection: (id: string) =>
-    request<HealthCheckResult>("POST", `/api/llm-connections/${id}/health`).then((r) => {
+   *  verdict is what the status bar reads.
+   *
+   *  A provider whose check GENERATES (`generating_check` on its preset: the
+   *  Claude subscription) is refused with a 400 unless `confirm` is passed,
+   *  and nothing is sent -- so pass it only from the step where the reader
+   *  agreed to send one short message. The free checks ignore it. */
+  checkConnection: (id: string, opts?: { confirm?: boolean }) =>
+    request<HealthCheckResult>("POST", `/api/llm-connections/${encodeSegment(id)}/health`,
+      opts?.confirm ? { confirm: true } : undefined).then((r) => {
       invalidateConfigCache();
       return notifyConfig(r);
     }),
+  /** The provider presets a new provider is made from (OpenRouter, Anthropic,
+   *  z.ai, ...), each saying whether its health check generates. */
+  listProviderPresets: () =>
+    request<ProviderPresetOption[]>("GET", "/api/providers/presets"),
+  /** What is known of `model` on a provider ("" for its own): the user's
+   *  statements, the test results for its current rev, and every capability
+   *  as it resolves with them. `fresh`: a test or an edit just moved them. */
+  readModelFacts: (id: string, model = "") =>
+    request<ModelFacts>(
+      "GET", `/api/llm-connections/${encodeSegment(id)}/facts?model=${encodeURIComponent(model)}`,
+      undefined, { fresh: true }),
+  /** State what the user knows of one model. A field left out is left alone.
+   *  Invalidates the cached config and announces: a capability override on
+   *  the model Primary resolves to can move `ready`, which the header reads. */
+  putModelFacts: (id: string, body: ModelFactsUpdate) =>
+    request<ModelFacts>("PUT", `/api/llm-connections/${encodeSegment(id)}/facts`, body)
+      .then((r) => {
+        invalidateConfigCache();
+        return notifyConfig(r);
+      }),
+  /** What a test call would send and roughly cost. Sends nothing, meters
+   *  nothing, starts no run -- it is what the confirmation shows. */
+  previewModelTest: (id: string, body: { model: string; capabilities: TestableCapability[] }) =>
+    request<ModelTestPreview>(
+      "POST", `/api/llm-connections/${encodeSegment(id)}/test/preview`, body),
+  /** Run a test call: one probe per capability, which may cost money. A draft
+   *  run polled to its result, so a dropped connection does not lose it.
+   *
+   *  `confirm: true` is in the type rather than added here: the server refuses
+   *  a test without it, and a caller has to have shown the preview and been
+   *  answered before it may write it.
+   *
+   *  `attempt` names the run, so a caller that outlives one wait can ask again
+   *  under the same id and be handed the run that id already started (or its
+   *  outcome) rather than a second, paid one. Omitted, each call is new. */
+  runModelTest: (id: string,
+                 body: { model: string; capabilities: TestableCapability[]; confirm: true },
+                 opts?: { signal?: AbortSignal; attempt?: string }) =>
+    draftRun<ModelTestResult>({ at: "global" }, (attempt) =>
+      request<{ run: RunHandle }>(
+        "POST", `/api/llm-connections/${encodeSegment(id)}/test`, body,
+        { attempt, signal: opts?.signal }),
+      { signal: opts?.signal, attempt: opts?.attempt })
+      // A landed test can file a verified capability, which outranks the
+      // catalog: it can move `GET /config`'s `ready` and every model view.
+      .then(announceModels),
 
   listStyles: () => request<Style[]>("GET", "/api/styles"),
   createStyle: (draft: StyleDraft) => request<{ id: string }>("POST", "/api/styles", draft),
@@ -2702,18 +2764,32 @@ export const api = {
   setSceneGroup: (cid: string, sid: string, s: GroupSettings) =>
     request<{ ok: boolean; settings: GroupSettings }>("PUT", `/api/campaigns/${cid}/scenes/${sid}/group`, s),
 
-  // Per-task model routing (#142), both scopes. `fresh` on the reads: the
-  // bundle carries what OTHER scopes resolve to, so a cached copy would show
-  // an inherited value from before the write that prompted the reload.
-  getGlobalRouting: () => request<RoutingBundle>("GET", "/api/routing", undefined, { fresh: true }),
-  // `notifyConfig` on both writes: the status bar names the model the next turn
-  // will run on, and a route is now one of the things that decides it.
-  setGlobalRouting: (routes: Record<string, string>) =>
-    request<RoutingBundle>("PUT", "/api/routing", { routes }).then(notifyConfig),
-  getCampaignRouting: (cid: string) =>
-    request<RoutingBundle>("GET", `/api/campaigns/${cid}/routing`, undefined, { fresh: true }),
-  setCampaignRouting: (cid: string, routes: Record<string, string>) =>
-    request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { routes }).then(notifyConfig),
+  // Roles and routes (the inference settings, spec 10). `fresh` on the reads:
+  // each row carries what OTHER scopes resolve to, so a cached copy would show
+  // an inherited answer from before the write that prompted the reload. Both
+  // writes answer with the fresh view, and are refused 409 `newer_format` or
+  // `not_migrated` while the store is not at this build's layout.
+  getInferenceSettings: () =>
+    request<InferenceSettings>("GET", "/api/inference/settings", undefined, { fresh: true }),
+  /** Write the library's roles and routes. A change of the Embedding role to
+   *  a model re-embeds the library, which may cost money, so the server
+   *  refuses it (400 `confirm_embedding`) unless `confirmEmbedding` says the
+   *  reader agreed. Invalidates the cached config: the status bar names what
+   *  Primary resolves to. */
+  putInferenceSettings: (body: InferenceWrite, opts?: { confirmEmbedding?: boolean }) =>
+    request<InferenceSettings>("PUT", "/api/inference/settings",
+      opts?.confirmEmbedding ? { ...body, confirm_embedding: true } : body).then((r) => {
+      invalidateConfigCache();
+      return notifyConfig(r);
+    }),
+  getCampaignInference: (cid: string) =>
+    request<InferenceSettings>("GET", `/api/campaigns/${encodeSegment(cid)}/inference`,
+      undefined, { fresh: true }),
+  /** One campaign's role and route overrides. Announces: the play header
+   *  names the model a turn will run on. */
+  putCampaignInference: (cid: string, body: CampaignInferenceWrite) =>
+    request<InferenceSettings>("PUT", `/api/campaigns/${encodeSegment(cid)}/inference`, body)
+      .then(notifyConfig),
   // Author's notes (play controls V). `fresh` on the reads: the panel reloads
   // right after a save, and a cached copy would show the note it just replaced.
   getAuthorsNotes: (cid: string) =>
@@ -2728,25 +2804,23 @@ export const api = {
   getAuthorsNotesNext: (cid: string, sid: string) =>
     request<AuthorsNotesNext>("GET", `/api/campaigns/${cid}/scenes/${sid}/authors-notes/next`,
       undefined, { fresh: true }),
-  // The sampler-preset half of the same bundle. Separate calls rather than a
-  // second argument to the two above: one write per choice, like routes, and
-  // a preset does not move which model the status bar names, so no notify.
-  setGlobalRoutingPresets: (presets: Record<string, string>) =>
-    request<RoutingBundle>("PUT", "/api/routing", { presets }),
-  setCampaignRoutingPresets: (cid: string, presets: Record<string, string>) =>
-    request<RoutingBundle>("PUT", `/api/campaigns/${cid}/routing`, { presets }),
-
   // Sampler presets. `fresh` on the list: an editor that saved and then shows
   // the cached pre-save list is the one thing it must not do.
   listSamplerPresets: () =>
     request<{ presets: SamplerPreset[]; params: SamplerParamSpec[] }>(
       "GET", "/api/sampler-presets", undefined, { fresh: true }),
+  // The three writes (and the import below) announce, like every mutator of
+  // what a model view reads (`announceModels`): `GET /config` names each
+  // role's preset, the Models views list them, and a delete clears the roles
+  // and routes that named one.
   createSamplerPreset: (draft: SamplerPresetDraft) =>
-    request<SamplerPreset>("POST", "/api/sampler-presets", draft),
+    request<SamplerPreset>("POST", "/api/sampler-presets", draft).then(announceModels),
   updateSamplerPreset: (pid: string, draft: SamplerPresetDraft) =>
-    request<SamplerPreset>("PUT", `/api/sampler-presets/${encodeURIComponent(pid)}`, draft),
+    request<SamplerPreset>("PUT", `/api/sampler-presets/${encodeURIComponent(pid)}`, draft)
+      .then(announceModels),
   deleteSamplerPreset: (pid: string) =>
-    request<{ ok: boolean }>("DELETE", `/api/sampler-presets/${encodeURIComponent(pid)}`),
+    request<{ ok: boolean }>("DELETE", `/api/sampler-presets/${encodeURIComponent(pid)}`)
+      .then(announceModels),
   /** A connection's catalog grouped by what a role needs of a model (fits,
    *  unverified, hidden), embedding models included. `model` narrows it to one
    *  id. `fresh`: a test call or an override just moved a model between groups. */
@@ -2763,7 +2837,7 @@ export const api = {
   /** A SillyTavern preset file, already parsed by the browser. */
   importSamplerPreset: (body: { name: string; data: unknown; include_max_tokens: boolean }) =>
     request<{ preset: SamplerPreset; report: SamplerImportReport }>(
-      "POST", "/api/sampler-presets/import", body),
+      "POST", "/api/sampler-presets/import", body).then(announceModels),
 
   // Cost (#153). `fresh` on both: a turn that just landed is exactly what makes
   // a reader open the Cost section, and a cached read issued before it would

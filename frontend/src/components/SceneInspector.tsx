@@ -23,7 +23,7 @@ import { ClockPanel } from "./ClockPanel";
 import { ErrorNote } from "./ErrorNote";
 import { EventsPanel } from "./EventsPanel";
 import { WeatherWidget } from "./WeatherWidget";
-import { ModelRoutingPicker } from "./ModelRoutingPicker";
+import { CampaignModels } from "./inference/CampaignModels";
 import { NoticeBanner } from "./NoticeBanner";
 import { ResponseTargetsPicker } from "./ResponseTargetsPicker";
 import { LOCKED_WHILE_GENERATING } from "./sceneLock";
@@ -1628,16 +1628,18 @@ export const SceneInspector = memo(function SceneInspector({
 
       {/* Beside the response preset, and campaign-scoped like the Cost section's
           budget: the two questions a reader asks here are "how long should
-          replies be" and "which model is writing them" (#142). Collapsed by
-          default -- most campaigns never set a route, and the ones that do set
-          it once. */}
-      <SideSection id="routing" title="Model routing" collapsed={collapsed.routing ?? true}
+          replies be" and "which model is writing them" (#142). This campaign's
+          overrides of Primary, Fast and Decision and of its routes (spec 10).
+          Collapsed by default -- most campaigns never override a model, and
+          `SideSection` renders no body while shut, so nothing is read until it
+          is opened. */}
+      <SideSection id="models" title="Models" collapsed={collapsed.models ?? true}
                    onToggle={toggleSection}>
-        <ModelRoutingPicker scope="campaign" cid={cid} />
+        <CampaignModels cid={cid} />
       </SideSection>
 
       {/* Standing instructions placed in the history at a depth (play controls
-          V). Collapsed by default, like routing: set once, then left alone.
+          V). Collapsed by default, like Models: set once, then left alone.
           The count is every note due on the next turn. */}
       <SideSection id="authors_notes" title="Author's notes"
                    collapsed={collapsed.authors_notes ?? true} onToggle={toggleSection}
