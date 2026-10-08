@@ -222,13 +222,15 @@ def recall(candidates: list[dict], recent_text: str) -> list[dict]:
 
 
 def recall_scored(candidates: list[dict], recent_text: str, *,
-                  campaign: str = "") -> list[tuple[dict, float]]:
+                  campaign: str = "", scene: str = "") -> list[tuple[dict, float]]:
     """`recall`, with the cosine each hit scored: `(entry, score)` pairs, most
     similar first. The score is what the inspector shows as the reason an entry
     was recalled; the selection is `recall`'s exactly.
 
-    `campaign` is the campaign whose turn this recall serves, which the embed
-    row is charged to; the vectors themselves are global (one space, one cache).
+    `campaign` and `scene` are the campaign and scene whose turn this recall
+    serves, which the embed row is charged to -- the scene too, so a scene's own
+    totals carry what its turns spent on recall. The vectors themselves are
+    global (one space, one cache).
     """
     if not candidates or not recent_text.strip():
         return []
@@ -257,8 +259,8 @@ def recall_scored(candidates: list[dict], recent_text: str, *,
     # must not be billed twice in one request.
     uncached = list(dict.fromkeys(t for t in wanted if t not in known))
     missing = _warm_window(uncached, query_text)
-    got = _embed(cfg, query_text, missing, campaign=campaign, cached=len(known),
-                 uncached=len(uncached))
+    got = _embed(cfg, query_text, missing, campaign=campaign, scene=scene,
+                 cached=len(known), uncached=len(uncached))
     if got is None:
         # The turn proceeds on keyword activation. Deliberately silent: this
         # runs on every turn, and a provider that is down would otherwise fill
@@ -307,7 +309,7 @@ def recall_scored(candidates: list[dict], recent_text: str, *,
 
 
 def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = "",
-           cached: int | None = None,
+           scene: str = "", cached: int | None = None,
            uncached: int | None = None) -> list[list[float]] | None:
     """Vectors for the query and this turn's warm run, or None if the provider
     could not be reached at all. A `[]` in place of a document's vector means
@@ -332,7 +334,8 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     constant says.
 
     Each request is one `embed_sync` call, so one ledger row: a retry files a
-    second. `campaign` rides along for that row and the capture line, and
+    second. `campaign` and `scene` ride along for that row and the capture
+    line, and
     `cached` and `uncached` for the first call's line only (a retry is the
     same run) -- `cfg` is the endpoint the cache was read under, never
     re-resolved, so the vectors land in the space they are scored in.
@@ -344,7 +347,7 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     try:
         got = embed.embed_sync("semantic-recall", [query_text, *missing], space=cfg,
                                client=_CLIENT, deadline=deadline, campaign=campaign,
-                               cached=cached, uncached=uncached)
+                               scene=scene, cached=cached, uncached=uncached)
         if len(got) == 1 + len(missing):  # defensive: the client promises this
             return got
     except LLMError as exc:
@@ -364,7 +367,7 @@ def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = ""
     try:
         # The same run: its hits and misses were on the first call's line.
         got = embed.embed_sync("semantic-recall", [query_text], space=cfg, client=_CLIENT,
-                               deadline=deadline, campaign=campaign)
+                               deadline=deadline, campaign=campaign, scene=scene)
     except (LLMError, OSError):
         # The turn proceeds on keyword activation. Deliberately silent: this
         # runs on every turn, and a provider that is down would otherwise fill

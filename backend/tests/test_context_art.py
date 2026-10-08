@@ -517,20 +517,43 @@ def test_a_semantic_failure_falls_back_to_the_keyword_ranking(world, sid, monkey
 
 def test_semantic_ranking_files_one_art_catalog_row(world, monkeypatch):
     """The scorer embeds through the metered operation, charged to the
-    campaign whose turn it ranked for (slice D)."""
+    campaign and the scene whose turn it ranked for (slice D)."""
     double = FakeEmbeddings()
     monkeypatch.setattr(art, "_CLIENT", double)
     cfg = {"space": "s", "model": "m", "key": "k", "base_url": "u", "threshold": 0.0}
     got = art._semantic_scores([{"description": "Fishing boats at the quay."}],
-                               "The boats came in.", cfg, campaign="saltmarch")
+                               "The boats came in.", cfg, campaign="saltmarch",
+                               scene="001-quay")
     assert got is not None
     assert len(double.calls) == 1
     [row] = list(usage.calls(days=1))
-    assert (row["task"], row["operation"], row["campaign"]) == (
-        "art-catalog", "embed", "saltmarch")
+    assert (row["task"], row["operation"], row["campaign"], row["scene"]) == (
+        "art-catalog", "embed", "saltmarch", "001-quay")
 
 
-def test_rank_hands_its_campaign_to_the_scorer(world, monkeypatch):
+def test_a_turns_art_embed_is_in_its_scenes_usage(world, sid, monkeypatch):
+    """The art catalogue a turn builds is part of what playing the scene cost,
+    so its embed row names the scene and the scene's own totals carry it."""
+    from grimoire.store import scenes
+    from grimoire.store.context import assemble
+
+    double = FakeEmbeddings()
+    monkeypatch.setattr(art, "_CLIENT", double)
+    monkeypatch.setattr(art.embed_space, "endpoint",
+                        lambda cfg=None: {"space": "s", "model": "m", "key": "k",
+                                          "base_url": "u"})
+    camp, char, vid = world["cid"], world["char"], world["vid"]
+    sid = _cast(camp, char, vid, sid)
+    scenes.append_message(camp, sid, "user", "Seraphine watched the fishing boats.")
+    assemble._assemble(camp, sid)
+
+    rows = [r for r in usage.calls(days=1) if r["task"] == "art-catalog"]
+    assert rows and all((r["campaign"], r.get("scene")) == (camp, sid) for r in rows)
+    by_task = {b["key"]: b for b in usage.scene_usage(camp, sid)["by_task"]}
+    assert by_task["art-catalog"]["calls"] == len(rows)
+
+
+def test_rank_hands_its_campaign_and_scene_to_the_scorer(world, monkeypatch):
     camp, loc = world["cid"], world["loc"]
     cands = art.candidates(camp, [], loc, [])
     monkeypatch.setattr(art.embed_space, "endpoint",
@@ -542,8 +565,8 @@ def test_rank_hands_its_campaign_to_the_scorer(world, monkeypatch):
         seen.append(kw)          # and answers None: the keyword ranking stands
 
     monkeypatch.setattr(art, "_semantic_scores", spy)
-    art.rank(camp, cands, "Fishing boats sat at the quay, lost in fog.")
-    assert [kw.get("campaign") for kw in seen] == [camp]
+    art.rank(camp, cands, "Fishing boats sat at the quay, lost in fog.", scene="001-quay")
+    assert [(kw.get("campaign"), kw.get("scene")) for kw in seen] == [(camp, "001-quay")]
 
 
 def test_a_backticked_handle_still_becomes_an_image(world, sid):

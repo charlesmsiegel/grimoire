@@ -434,7 +434,7 @@ def _assemble(cid: str, sid: str, wi_seed: str = "", full_recap: int = 0,
         excluded_refs=excluded_refs, scan_depth=depth,
         recursion_depth=config.lore_recursion_depth(cfg),
         current_location=current_loc if not loc_excluded else None, recall_text=recent_text,
-        actor_ref=actor_ref if actor_scoped else None)
+        actor_ref=actor_ref if actor_scoped else None, sid=sid)
     # A no-op since `_world_info` filters its candidates for the actor; kept so
     # what reaches an NPC's prompt does not rest on that one call site alone.
     if actor_scoped:
@@ -736,7 +736,8 @@ def _campaign_view(cid: str, sid: str, croot, cast: list[dict], recent_text: str
         # everything, render what survives" costs real money. It also makes the
         # prompt-layout toggle mean what this feature's design says it means:
         # the off switch, not a way to hide output you are still paying for.
-        "available_art": (art.catalogue(cid, cast, art_loc, activated_wi + recalled_wi, recent_text)
+        "available_art": (art.catalogue(cid, cast, art_loc, activated_wi + recalled_wi, recent_text,
+                                        scene=sid)
                           if _section_on("available_art") else []),
         "story_entries": story._story_entries(cid, depth=full_recap or None, full=bool(full_recap)),
         # The archive excludes what the recap already shows, and (via `before`)

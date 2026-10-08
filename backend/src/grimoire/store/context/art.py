@@ -548,7 +548,7 @@ def _keyword_scores(cid: str, cands: list[dict],
 
 
 def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
-                     campaign: str = "") -> list[float] | None:
+                     campaign: str = "", scene: str = "") -> list[float] | None:
     """Cosines against the scan window, or None if the provider could not be
     reached — in which case the caller keeps the keyword ranking.
 
@@ -558,7 +558,7 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
     per turn for a while rather than one enormous stall.
 
     The request is one `embed_sync` call under ``art-catalog``, charged to
-    `campaign` (the one `rank` ranks for), at `cfg` -- the endpoint the cache
+    `campaign` and `scene` (the ones `rank` ranks for), at `cfg` -- the endpoint the cache
     was read under, so the vectors are saved in the space they are scored in.
     """
     texts = [embed_space.clip(c["description"], DOC_BYTES) for c in cands]
@@ -568,8 +568,8 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
     missing = embed_space.warm_window(uncached, query_text, embeddings.BATCH - 1)
     try:
         got = embed.embed_sync("art-catalog", [query_text, *missing], space=cfg,
-                               client=_CLIENT, campaign=campaign, cached=len(known),
-                               uncached=len(uncached))
+                               client=_CLIENT, campaign=campaign, scene=scene,
+                               cached=len(known), uncached=len(uncached))
     except (LLMError, OSError):
         # Deliberately silent, and deliberately not fatal: this runs on every
         # turn, so a provider that is down would otherwise write one identical
@@ -642,7 +642,7 @@ def settings() -> dict:
             "cfg": cfg}
 
 
-def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
+def rank(cid: str, cands: list[dict], recent_text: str, *, scene: str = "") -> list[dict]:
     """The best `depth` candidates for this moment, best first.
 
     Keyword scores are computed first and always: they are the fallback, and
@@ -670,7 +670,7 @@ def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
     if space is not None:
         semantic = _semantic_scores(cands, recent_text,
                                     {**space, "threshold": opts["threshold"]},
-                                    campaign=cid)
+                                    campaign=cid, scene=scene)
         if semantic is not None:
             scores = [s if s > 0.0 else (NAMED_FLOOR if was else 0.0)
                       for s, was in zip(semantic, named, strict=True)]
@@ -679,15 +679,20 @@ def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
 
 
 def catalogue(cid: str, cast: list[dict], current_loc: str | None,
-              wi_entries: list[dict], recent_text: str) -> list[dict]:
+              wi_entries: list[dict], recent_text: str, *, scene: str = "") -> list[dict]:
     """What the ``available_art`` section renders, or ``[]``.
 
     Never raises. A store being synced under us, a half-written sidecar, a
     campaign whose world went away: none of them is worth losing a turn to, and
     the section simply does not render.
+
+    `scene` is the scene whose turn this catalogue is built for; an embed it
+    makes is charged to it as well as to `cid`, so the scene's own totals carry
+    it.
     """
     try:
-        return rank(cid, candidates(cid, cast, current_loc, wi_entries), recent_text)
+        return rank(cid, candidates(cid, cast, current_loc, wi_entries), recent_text,
+                    scene=scene)
     except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError,
             entities.EntityNotFound):
         return []

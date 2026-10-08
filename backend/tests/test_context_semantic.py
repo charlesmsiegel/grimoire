@@ -908,6 +908,19 @@ def test_a_recall_inside_a_campaign_is_charged_to_it(store, provider):
     assert "scene" not in row
 
 
+def test_a_turns_recall_embed_is_in_its_scenes_usage(store, provider):
+    """A turn's recall is part of what playing the scene cost, so its embed row
+    names the scene and the scene's own totals carry it. Charged to the campaign
+    alone, every scene total came up short by its turns' recall spend."""
+    cid, sid = _lore_scene(NEAR, provider)
+    ctx.build_messages(cid, sid)
+    recalls = [r for r in _rows() if r["task"] == "semantic-recall"]
+    assert recalls and all((r["campaign"], r.get("scene")) == (cid, sid) for r in recalls)
+    out = usage.scene_usage(cid, sid)
+    by_task = {b["key"]: b for b in out["by_task"]}
+    assert by_task["semantic-recall"]["calls"] == len(recalls)
+
+
 def test_a_down_provider_degrades_and_files_one_error_row_per_request(store, provider):
     configure()
     provider.error = embeddings.EmbeddingsError("network", "down")

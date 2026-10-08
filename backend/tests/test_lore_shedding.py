@@ -279,8 +279,10 @@ def test_recalled_lore_still_drops_whole(scene, monkeypatch):
     assert [e["shed"] for e in row["entries"]] == [False]
 
 
-def test_world_info_hands_recall_its_campaign(scene, monkeypatch):
-    """A recall's embed is charged to the campaign it ran for (slice D, I2)."""
+def test_world_info_hands_recall_its_campaign_and_scene(scene, monkeypatch):
+    """A recall's embed is charged to the campaign and the scene it ran for
+    (slice D, I2): a scene's own totals are the number that is always right,
+    so they must carry what its turns spent on recall."""
     cid, sid, croot = scene
     entities.create_entity(croot, "lore", "Gull", "Gulls nest on the breakwater.",
                            keys="unsaid-gull")
@@ -293,7 +295,7 @@ def test_world_info_hands_recall_its_campaign(scene, monkeypatch):
     monkeypatch.setattr(semantic, "recall_scored", spy)
     scenes.append_message(cid, sid, "user", "Calm.")
     context.context_breakdown(cid, sid)
-    assert seen and all(kw == {"campaign": cid} for kw in seen)
+    assert seen and all(kw == {"campaign": cid, "scene": sid} for kw in seen)
 
 
 def _choices(monkeypatch) -> list:

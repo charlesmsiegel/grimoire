@@ -811,8 +811,9 @@ Both live in `store/inference/embed.py` (§7.1).
   that could only fail, and the Embedding card says so through its `problem`
   (§10, §12).
 - Every embed call is metered (§9) with `operation: embed`. The row carries
-  the caller's `campaign` where it has one (and `scene`, where absorb's
-  identity check has one); resolution never reads either, because the space is
+  the caller's `campaign` where it has one (and `scene` where it has one: a
+  turn's lore recall and art ranking, and absorb's identity check, so a
+  scene's own totals carry its embeds); resolution never reads either, because the space is
   global (§4.4). A campaign's budget is measured by `cost_usd` per campaign,
   and an OpenRouter embed is real spend.
 - **User-visible cost change.** From D onward every recall, art, search and

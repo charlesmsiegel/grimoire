@@ -780,9 +780,12 @@ would answer neither question.
   embeddings client, and it stays on the provider under test.
   - **Every call that sent a request files one ledger row**, `operation:
     "embed"`, under its embed task, covering all of its batches. It carries the
-    caller's campaign where there is one (lore recall, art and continuity do,
-    and absorb's identity check adds its scene) because spend is measured per
-    campaign; library-wide semantic search has none and is unattributed. A
+    caller's campaign where there is one (lore recall, art and continuity do)
+    because spend is measured per campaign, and the scene where there is one
+    (a turn's lore recall and art, and absorb's identity check), because a
+    scene's own totals are the number that is always right and a turn's
+    embeds are part of what playing it cost; library-wide semantic search has
+    none and is unattributed. A
     call that sends nothing files nothing -- no row, no error, no capture line
     -- whether its input was empty or its deadline lapsed before the first
     request. When the caller's own budget cuts a request that did go out

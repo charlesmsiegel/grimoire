@@ -47,7 +47,7 @@
 
 **Rule 5: absent, never zero.** A token count or price that no provider reported stays out of the row (CLAUDE.md, Costs).
 
-**The Embedding role is global only (§4.4); its rows are not.** No embed *resolution* reads a campaign: one space, one vector cache. A *row* carries the campaign where the caller has one, because spend is measured per campaign (ruling 5). Lore recall, art and continuity pass theirs; absorb's identity check also passes its scene; library search has none.
+**The Embedding role is global only (§4.4); its rows are not.** No embed *resolution* reads a campaign: one space, one vector cache. A *row* carries the campaign where the caller has one, because spend is measured per campaign (ruling 5). Lore recall, art and continuity pass theirs; absorb's identity check also passes its scene; library search has none. *Amended after review:* a turn's lore recall and art ranking pass the turn's scene too, so a scene's own totals carry what its turns spent embedding.
 
 **Observability and privacy (CLAUDE.md; §9.4).**
 
