@@ -13,7 +13,7 @@ import random
 import threading
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from concurrent.futures import Executor, Future
 
 from . import (
@@ -763,15 +763,59 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
 
 
 class SchemaRefusalError(LLMError):
-    """An `LLMError` that is the structured-output field THIS attempt was sent
-    being refused (`_schema_refusal`), raised when no other attempt was left
-    to fall to.
+    """A call that failed on every route, at least one of which failed because
+    the structured-output field THAT attempt was sent was refused
+    (`_schema_refusal`).
 
-    A subclass so `inference.decide` can ask the type: it retries that same
-    attempt once without the mode (spec M-4, ruling 3). The schema always
-    rides the prompt, so the reply still parses -- and the call that worked as
-    a prompt-only call before slice F still works after it. Every `except
-    LLMError` still catches it, with the same kind and status."""
+    A subclass so `inference.decide` can ask the type: it re-sends each
+    refusing attempt once without the mode (spec M-4, ruling 3). The schema
+    always rides the prompt, so the reply still parses -- and the call that
+    worked as a prompt-only call before slice F still works after it, whether
+    the refusal came from the primary or its fallback, and whatever the other
+    route then did. Every `except LLMError` still catches it.
+
+    `words` is what each route the call ran failed with -- the primary, then
+    the fallback when there was one -- and `attempts[i]` is route i's
+    connection dict as it was sent, when its failure was the refusal, else
+    None. The error itself is `routes_failed(words)`: a lone route's own
+    failure (with its kind and status), or the two composed."""
+
+    def __init__(self, kind: str, detail: str = "", retry_after: float | None = None,
+                 status: int | None = None, code: str | None = None, *,
+                 attempts: tuple[dict | None, ...] = (),
+                 words: tuple[LLMError, ...] = ()):
+        super().__init__(kind, detail, retry_after, status=status, code=code)
+        self.attempts = attempts
+        self.words = words
+
+
+def routes_failed(words: Sequence[LLMError]) -> LLMError:
+    """The one error a call raises when every route it ran failed: a lone
+    route's own failure, or -- the primary and its fallback both failed -- the
+    two composed.
+
+    Composed, neither error alone is the whole truth. The kind stays the
+    PRIMARY's, because that is the connection the user chose and the one the
+    frontend branches on -- reporting a refused connection to a local fallback
+    would send someone off to debug an endpoint they were not using while their
+    real problem was a rate limit. But dropping the fallback's failure is just
+    as misleading: it leaves them fixing the primary and still getting nothing.
+    The window comes from the primary for the same reason the kind does. It is
+    what reaches the caller as the `Retry-After` of a 429 (#213), and a
+    fallback's window would say when a connection they are not using will be
+    ready.
+
+    Except when the primary's failure is its structured field refused
+    (`SchemaRefusalError`): that is a mode the call can drop, not the
+    connection's word, so the fallback's failure -- a rate limit, and the
+    window it named -- is the one that says what actually stopped the call."""
+    if len(words) == 1:
+        return words[0]
+    primary, fallback = words[0], words[-1]
+    word = (fallback if isinstance(primary, SchemaRefusalError)
+            and not isinstance(fallback, SchemaRefusalError) else primary)
+    return LLMError(word.kind, f"{primary.detail} — and the fallback failed too: "
+                               f"{fallback.detail}", word.retry_after)
 
 
 def _schema_refusal(exc: LLMError, conn: dict) -> bool:
@@ -853,7 +897,9 @@ async def _resilient(open_stream, routes, timeout: float,
     is a setting with a documented 0.
 
     When both routes fail the caller gets the *primary's* kind, with the
-    fallback's failure appended: see the tail of this function.
+    fallback's failure appended: see `routes_failed`. When a route's failure
+    was its structured field refused, the error is a `SchemaRefusalError`
+    carrying that attempt, which `inference.decide` re-sends without the mode.
 
     `counter` (`str -> int`, or None for no estimate) counts what a provider
     did not report, for an attempt whose stream ended on its own: each prose
@@ -873,6 +919,9 @@ async def _resilient(open_stream, routes, timeout: float,
     tries = 0
     first: LLMError | None = None
     last: LLMError | None = None
+    #: Route (0 the primary, 1 the fallback) -> its attempt as sent, while that
+    #: route's failure is its structured field refused.
+    schema_refused: dict[int, dict] = {}
     fell_back = False
     sent_images = 0
     previous: dict | None = None
@@ -963,20 +1012,31 @@ async def _resilient(open_stream, routes, timeout: float,
                     # the connection answered and refused the mode -- a
                     # catalog that over-advertised it -- and it still serves
                     # every generate call. The next route, sent the same
-                    # prompt, is tried as for any failure.
+                    # prompt, is tried as for any failure; should every route
+                    # fail, the error carries this attempt, for `decide` to
+                    # re-send once without the mode.
                     log.warning("structured output refused by %r: %s", _label(conn),
                                 exc.detail)
                 else:
                     _observe(observer, conn, exc)
                 if sent:
                     raise
+                # Keyed by route (a degrade sibling is its primary's), and
+                # cleared by a later failure that is not one: a route's word is
+                # what it failed with, so only a refusal that IS that word
+                # earns the re-send.
+                if schema:
+                    schema_refused[0 if primary else 1] = {k: v for k, v in conn.items()
+                                                           if k != DEGRADE}
+                else:
+                    schema_refused.pop(0 if primary else 1, None)
                 last = (SchemaRefusalError(exc.kind, exc.detail, exc.retry_after,
                                            status=exc.status, code=exc.code)
                         if schema else exc)
                 sent_images = usage.get("images", 0) if usage is not None else 0
                 # The primary's word is its first failure -- or, when its own
                 # degrade sibling ran, that sibling's (#377).
-                first = exc if first is None or (primary and index == 1) else first
+                first = last if first is None or (primary and index == 1) else first
                 retryable = (exc.kind in RETRYABLE_KINDS and not schema
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
             finally:
@@ -997,30 +1057,22 @@ async def _resilient(open_stream, routes, timeout: float,
                 break  # a repeat cannot fix this one; the next route might
     # Only reachable with every attempt swallowed above, which is the only way
     # out of the loops without a return or a raise -- so both are always set.
-    if not fell_back:
-        # One route, however many attempts it took: the failure it ended on is
-        # the whole story, and its `retry_after` is the freshest window the
-        # provider named. The test used to be `first is last`, which is a
-        # different question and got this wrong -- a RETRIED route raises two
-        # distinct exception objects, so three attempts against a lone
-        # connection reported "and the fallback failed too" to a user who had
-        # configured no fallback at all.
-        raise last
-    # Both routes failed, and neither error alone is the whole truth. The kind
-    # stays the PRIMARY's, because that is the connection the user chose and
-    # the one the frontend branches on -- reporting a refused connection to a
-    # local fallback would send someone off to debug an endpoint they were not
-    # using while their real problem was a rate limit. But dropping the
-    # fallback's failure is just as misleading: it leaves them fixing the
-    # primary and still getting nothing.
-    raise LLMError(first.kind,
-                   f"{first.detail} — and the fallback failed too: {last.detail}",
-                   # The window comes from the primary for the same reason the
-                   # kind does. It is what reaches the caller as the
-                   # `Retry-After` of a 429 (#213), and a fallback's window
-                   # would say when a connection they are not using will be
-                   # ready.
-                   first.retry_after)
+    assert first is not None and last is not None
+    # One route, however many attempts it took: the failure it ended on is the
+    # whole story, and its `retry_after` is the freshest window the provider
+    # named. The test used to be `first is last`, which is a different question
+    # and got this wrong -- a RETRIED route raises two distinct exception
+    # objects, so three attempts against a lone connection reported "and the
+    # fallback failed too" to a user who had configured no fallback at all.
+    # Both routes failed: `routes_failed` composes the two.
+    words = (first, last) if fell_back else (last,)
+    error = routes_failed(words)
+    if not schema_refused:
+        raise error
+    raise SchemaRefusalError(error.kind, error.detail, error.retry_after,
+                             status=error.status, code=error.code,
+                             attempts=tuple(schema_refused.get(pos) for pos in range(len(words))),
+                             words=words)
 
 
 class LLMClient:

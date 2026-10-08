@@ -25,9 +25,10 @@ Four rules this module keeps:
 - **Provider errors propagate.** A chunk's `LLMError` is re-raised when no
   chunk answered; once one has, a failed chunk's items are `None` with reason
   `error`. Cancellation passes through untouched (the meter files `aborted`).
-  One error is not yet the chunk's: a provider refusing the structured field
-  with no attempt left to fall to (`llm.SchemaRefusalError`) is answered by
-  sending that attempt once more without the mode, as its own metered call.
+  One error is not yet the chunk's: a chain that failed on every route, one
+  of them by refusing the structured field (`llm.SchemaRefusalError`), is
+  answered by sending each refusing attempt once more without the mode, as
+  its own metered call.
 - **Prompt text lives in `templates/decide/`**, rendered here -- in a worker
   thread, never on the event loop. Jinja's loader stats (and on first use
   reads) the template files, and `decide` is awaited by a detached turn (the
@@ -105,7 +106,8 @@ def _with_mode(conn: dict, mode: str) -> dict:
 
 def _without_mode(conn: dict) -> dict:
     """`conn` as the same attempt without structured mode, and alone: no
-    fallback behind it (a schema refusal is only raised with none left)."""
+    fallback behind it (the re-send is that one attempt's, and every other
+    route has already had its turn)."""
     return {k: v for k, v in conn.items()
             if k not in (llm.STRUCTURED_KEY, llm.FALLBACK_KEY)}
 
@@ -119,39 +121,54 @@ def _served_by(holder: dict) -> tuple[str, str]:
     return str(conn.get("id", "") or ""), llm.effective_model(conn)
 
 
+async def _once(call: _Call, sending: dict, messages: list[dict], schema: dict,
+                rows: list[dict]) -> tuple[str, dict | None, LLMError | None]:
+    """One metered facade call: `(text, the answering holder, None)`, or `("",
+    None, the error)`. Its ledger row, when the meter filed one, is appended
+    to `rows`."""
+    # Named `client`, the receiver `test_usage_guard.py` recognises.
+    client = call.client
+    m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
+                          post=call.post, round_id=call.round_id)
+    error: LLMError | None = None
+    text = ""
+    try:
+        with m:
+            pending = client.complete(messages, sending, m.usage, schema=schema)
+            text = await (call.around(pending, m.usage) if call.around else pending)
+    except LLMError as exc:
+        error = exc
+    if m.row is not None:
+        rows.append(m.row)
+    return (text, m.usage, None) if error is None else ("", None, error)
+
+
 async def _ask(call: _Call, conn: dict, messages: list[dict], schema: dict,
                rows: list[dict]) -> tuple[str, dict | None, LLMError | None]:
     """One chunk's call: `(text, the answering holder, None)`, or `("", None,
     the error)`. Each call's ledger row is appended to `rows`.
 
-    The attempt, and -- only when its provider refused the structured field
-    with nowhere left to fall (`llm.SchemaRefusalError`) -- that same attempt
-    once more without the mode (spec M-4, ruling 3): the schema is in the
-    prompt, so the reply still parses. Each is its own metered call."""
-    # Named `client`, the receiver `test_usage_guard.py` recognises.
-    client = call.client
-    error: LLMError | None = None
-    for sending in (conn, _without_mode(conn)):
-        m = store.usage.meter(call.task, campaign=call.campaign, scene=call.scene,
-                              post=call.post, round_id=call.round_id)
-        try:
-            with m:
-                pending = client.complete(messages, sending, m.usage, schema=schema)
-                text = await (call.around(pending, m.usage) if call.around else pending)
-        except llm.SchemaRefusalError as exc:
-            error = exc
-            retry = sending is conn
-        except LLMError as exc:
-            error, retry = exc, False
-        else:
-            error, retry = None, False
-        if m.row is not None:
-            rows.append(m.row)
-        if error is None:
-            return text, m.usage, None
-        if not retry:
-            break
-    return "", None, error
+    The attempt chain, and -- only when every route failed and a route's
+    failure was its provider refusing the structured field
+    (`llm.SchemaRefusalError`) -- each such attempt once more, alone and
+    without the mode (spec M-4, ruling 3): the schema is in the prompt, so the
+    reply still parses. A primary that refused is re-sent after its fallback
+    failed too; a fallback that refused, after the primary failed for any
+    reason. Each re-send is its own metered call, and none is re-sent twice.
+    Should those fail too, the error is the routes' failures composed afresh
+    (`llm.routes_failed`), each re-sent route's word now its own failure."""
+    text, holder, error = await _once(call, conn, messages, schema, rows)
+    if not isinstance(error, llm.SchemaRefusalError) or not error.attempts:
+        return text, holder, error
+    words = list(error.words)
+    for index, attempt in enumerate(error.attempts):
+        if attempt is None:
+            continue
+        text, holder, again = await _once(call, _without_mode(attempt), messages, schema, rows)
+        if again is None:
+            return text, holder, None
+        words[index] = again
+    return "", None, llm.routes_failed(words)
 
 
 async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> decisions.Decision:

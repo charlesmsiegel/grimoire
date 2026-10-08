@@ -807,10 +807,13 @@ would answer neither question.
   its provider's structured mode is decided per attempt (`STRUCTURED_KEY`,
   present on decide resolutions only); the schema is in the prompt either
   way, and the mode is filed per call on a copied account block, never by
-  mutating the resolution's. A provider that refuses the structured field
-  with no other attempt to fall to is sent that attempt once more without the
-  mode, as its own metered call (`llm.SchemaRefusalError`), and the refusal is
-  never a health failure. Until slice H, a decide-only Decision model is
+  mutating the resolution's. An attempt whose provider refuses the structured
+  field is sent once more without the mode once every route has failed -- a
+  refusing primary after its fallback failed too, a refusing fallback after
+  the primary failed -- once per attempt, as its own metered call
+  (`llm.SchemaRefusalError` carries the refusing attempts). The refusal is
+  never a health failure, nor the kind a both-failed error reports
+  (`llm.routes_failed`). Until slice H, a decide-only Decision model is
   skipped for a role fallback that can generate -- on its own provider too,
   since the skipped primary is never sent -- and the route row's `problem`
   says so (`resolve.skip_text`); with no such fallback the 409 `incapable`

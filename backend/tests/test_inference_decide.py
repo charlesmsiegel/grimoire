@@ -513,6 +513,130 @@ def test_a_refused_schema_with_a_fallback_falls_and_is_not_retried(client):
     assert len(_rows()) == 1
 
 
+def _flagged(*, spare: bool = False) -> None:
+    """The primary's catalog lists structured outputs; the fallback's too, when
+    `spare`."""
+    rows = [{"id": "vendor/active", "params": ["temperature", "structured_outputs"]}]
+    _catalog("openrouter", rows)
+    if spare:
+        _catalog("spare", [{"id": "vendor/spare",
+                            "params": ["temperature", "structured_outputs"]}])
+
+
+def _busy() -> LLMError:
+    return LLMError("rate_limit", "slow down", retry_after=30.0, status=429)
+
+
+def test_a_refused_primary_whose_fallback_fails_is_retried_without_the_mode(client):
+    """Brutal-1 #1: a refused schema with a failing fallback used to end the
+    decision, and the primary -- which answers prompt-only -- was never asked.
+    It is re-sent once, alone and without the mode, after the fallback fails."""
+    _store(client)
+    _flagged()
+    seen: list[tuple[str, str | None]] = []
+    provider = SequencedProvider([_refused_schema(), _busy(),
+                                  [decision_reply({"over": True})]])
+    fake = LLMClient(openrouter=provider, timeout=0, retries=0,
+                     observer=lambda conn, err: seen.append(
+                         (conn["model"], err.kind if err else None)))
+    got = _decide(fake, [_item()])
+    assert got.items[0].answers["over"] == decisions.Answer(True)
+    assert [(r["model"], "schema" in r["kwargs"]) for r in provider.requests] == [
+        ("vendor/active", True), ("vendor/spare", False), ("vendor/active", False)]
+    assert provider.requests[2]["messages"] == provider.requests[0]["messages"]
+    assert (got.provider, got.model) == ("openrouter", "vendor/active")
+    # The chain is one row, filed with the fallback's rate limit -- the
+    # refused field is a mode, not the primary's word -- and the re-send its own.
+    rows = _rows()
+    assert [(r["status"], r.get("error")) for r in rows] == [("error", "rate_limit"),
+                                                            ("ok", None)]
+    assert [r["decision_mode"] for r in rows] == ["structured", "structured"]
+    assert len(got.usage) == 2
+    # The refusal marks nothing; the fallback's 429 and the answer are observed.
+    assert seen == [("vendor/spare", "rate_limit"), ("vendor/active", None)]
+
+
+def test_a_chain_whose_primary_refused_reports_the_fallbacks_failure(client):
+    """The facade's own error, before `decide` re-sends anything: the
+    fallback's rate limit and the window it named, not the primary's refusal."""
+    _store(client)
+    _flagged()
+    provider = SequencedProvider([_refused_schema(), _busy()])
+    fake = LLMClient(openrouter=provider, timeout=0, retries=0)
+    with pytest.raises(llm.SchemaRefusalError) as exc:
+        asyncio.run(fake.complete([{"role": "user", "content": "x"}], _resolved().conn,
+                                  schema=decisions.schema([_item()], explain=False)))
+    assert (exc.value.kind, exc.value.retry_after) == ("rate_limit", 30.0)
+    assert "json_schema strict mode" in exc.value.detail and "slow down" in exc.value.detail
+    primary, fallback = exc.value.attempts
+    assert primary is not None and primary["model"] == "vendor/active"
+    assert primary[llm.STRUCTURED_KEY] is True and FALLBACK_KEY not in primary
+    assert fallback is None
+    assert [w.kind for w in exc.value.words] == ["bad_response", "rate_limit"]
+
+
+def test_a_refused_primary_whose_retry_fails_too_reports_every_route(client):
+    """Everything fails: the primary's word is now what it said prompt-only,
+    composed with the fallback's failure as any both-failed call is."""
+    _store(client)
+    _flagged()
+    down = LLMError("network", "connection reset")
+    provider = SequencedProvider([_refused_schema(), _busy(), down])
+    with pytest.raises(LLMError) as exc:
+        _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()])
+    assert not isinstance(exc.value, llm.SchemaRefusalError)
+    assert exc.value.kind == "network"
+    assert exc.value.detail == "connection reset — and the fallback failed too: slow down"
+    assert len(provider.requests) == 3
+    assert [(r["status"], r.get("error")) for r in _rows()] == [("error", "rate_limit"),
+                                                               ("error", "network")]
+
+
+def test_a_refused_fallback_is_retried_without_the_mode(client):
+    """Brutal-2 #2: the primary fails on the network, the fallback refuses the
+    structured field. The fallback -- not the primary -- is re-sent once,
+    alone and without the mode, and answers."""
+    _store(client)
+    _flagged(spare=True)
+    resolved = _resolved()
+    assert resolved.conn[FALLBACK_KEY][llm.STRUCTURED_KEY] is True
+    seen: list[tuple[str, str | None]] = []
+    provider = SequencedProvider([LLMError("network", "connection reset"),
+                                  _refused_schema(), [decision_reply({"over": False})]])
+    fake = LLMClient(openrouter=provider, timeout=0, retries=0,
+                     observer=lambda conn, err: seen.append(
+                         (conn["model"], err.kind if err else None)))
+    got = _decide(fake, [_item()], resolved=resolved)
+    assert got.items[0].answers["over"] == decisions.Answer(False)
+    assert [(r["model"], "schema" in r["kwargs"]) for r in provider.requests] == [
+        ("vendor/active", True), ("vendor/spare", True), ("vendor/spare", False)]
+    assert (got.provider, got.model) == ("spare", "vendor/spare")
+    rows = _rows()
+    assert [(r["status"], r.get("error")) for r in rows] == [("error", "network"),
+                                                            ("ok", None)]
+    assert [(r["decision_mode"], r["model"]) for r in rows] == [
+        ("structured", "vendor/spare"), ("structured", "vendor/spare")]
+    assert seen == [("vendor/active", "network"), ("vendor/spare", None)]
+
+
+def test_each_refusing_route_is_retried_once_only(client):
+    """Both routes refused: each is re-sent once, in route order, and the
+    failure composed from their re-sends is the primary's prompt-only word."""
+    _store(client)
+    _flagged(spare=True)
+    provider = SequencedProvider([_refused_schema(), _refused_schema(),
+                                  LLMError("server", "oops", status=500), _busy(),
+                                  [decision_reply({"over": True})]])
+    with pytest.raises(LLMError) as exc:
+        _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()])
+    assert [(r["model"], "schema" in r["kwargs"]) for r in provider.requests] == [
+        ("vendor/active", True), ("vendor/spare", True),
+        ("vendor/active", False), ("vendor/spare", False)]
+    assert (exc.value.kind, exc.value.retry_after) == ("server", None)
+    assert exc.value.detail == "oops — and the fallback failed too: slow down"
+    assert len(_rows()) == 3
+
+
 def test_resolve_skips_a_decide_only_primary_for_a_generating_fallback(client):
     """I5: a Decision model that only decides natively is skipped for a role
     fallback that generates, until slice H can answer it natively."""

@@ -879,11 +879,16 @@ backend uses it.
   facade's sampler-preset refusal subtracts the structured envelope's
   spellings, so a provider refusing the schema leaves the fallback to be tried.
   A schema refusal is not a health failure either: the connection answered,
-  and still serves every generate call. With no other attempt to fall to,
-  `decide` sends that same attempt once more without the mode, as its own
-  metered call (the schema is in the prompt, so the reply still parses, and a
-  call that worked prompt-only before slice F still works). One retry, never
-  more; any other 400 is the attempt's failure as before.
+  and still serves every generate call. Once every route has failed,
+  `decide` sends each attempt that refused the field once more without the
+  mode -- a refusing primary after its fallback failed too, a refusing
+  fallback after the primary failed for any reason -- each as its own metered
+  call (the schema is in the prompt, so the reply still parses, and a call
+  that worked prompt-only before slice F still works). One retry per attempt,
+  never more; any other 400 is the attempt's failure as before. A refused
+  field is a mode the call can drop, not the connection's word, so a
+  both-failed error whose primary refused it reports the fallback's kind and
+  window (`llm.routes_failed`).
 - Anthropic compiles each new schema once and caches it, so the speaker's
   roster-dependent schema pays the compile latency once per roster
   composition. To be tuned against real prompts later, never against a
