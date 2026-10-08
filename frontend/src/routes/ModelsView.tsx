@@ -19,6 +19,7 @@ import {
   routePresetWords, wantsModel,
 } from "../components/inference/selection";
 import { ColumnSection, PageShell } from "../components/PageShell";
+import { providerPath } from "../providerPaths";
 
 const GENERATIVE: GenerativeRole[] = ["primary", "fast", "decision"];
 
@@ -43,7 +44,6 @@ export const WARNINGS = {
 
 const rolePath = (role: InferenceRole) => `/models/role/${role}`;
 const routePath = (key: string) => `/models/route/${encodeURIComponent(key)}`;
-const providerPath = (id: string) => `/providers/${encodeURIComponent(id)}`;
 
 function isRole(value: string): value is InferenceRole {
   return value in ROLE_LABEL;

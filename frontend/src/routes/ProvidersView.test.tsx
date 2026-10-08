@@ -117,8 +117,8 @@ beforeEach(() => {
 
 /** Where the router is, so a chip's navigation can be read off the page. */
 function Where() {
-  const { pathname } = useLocation();
-  return <div data-testid="where">{pathname}</div>;
+  const { pathname, search } = useLocation();
+  return <><div data-testid="where">{pathname}</div><div data-testid="search">{search}</div></>;
 }
 
 function open(at = "/providers") {
@@ -330,6 +330,178 @@ test("a model the adapter rules out of every probe has nothing to test", async (
   open("/providers/saltmarch/models/vendor/m");
   expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
   expect(main().getByRole("button", { name: "Test…" })).toBeDisabled();
+});
+
+const RATED = { prompt_usd_per_1k: 0.001, completion_usd_per_1k: 0.002 };
+const sidebarOf = (model: string) => within(main().getByRole("complementary", { name: model }));
+
+test("a model's rates show in its sidebar", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({
+    rates: { ...RATED, cache_read_usd_per_1k: 0 } }));
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+
+  const sidebar = sidebarOf("vendor/m");
+  expect(sidebar.getByRole("heading", { name: "Rates" })).toBeInTheDocument();
+  expect(sidebar.getByText("Input $0.001 / 1K")).toHaveClass("chip", "on");
+  expect(sidebar.getByText("Output $0.002 / 1K")).toBeInTheDocument();
+  // A stated zero is a price, and an unstated rate draws nothing.
+  expect(sidebar.getByText("Cache read $0 / 1K")).toBeInTheDocument();
+  expect(sidebar.queryByText(/Cache write/)).not.toBeInTheDocument();
+  // Plain attributes: nothing to click.
+  expect(sidebar.queryByRole("button", { name: /Input/ })).not.toBeInTheDocument();
+});
+
+test("a model with no rates says the pricing table is used if it covers the model", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+
+  expect(sidebarOf("vendor/m").getByText(
+    "None stated — your pricing table is used if it covers this model.")).toBeInTheDocument();
+});
+
+test("rates are read-only until Edit, and Save sends them", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  await main().findByRole("heading", { name: "vendor/m" });
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
+
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Input rate for vendor/m"),
+                   { target: { value: "0.001" } });
+  fireEvent.change(main().getByLabelText("Output rate for vendor/m"), { target: { value: "0.002" } });
+  // Zero is a price, kept as one; the box nobody filled is left out, not sent as null.
+  fireEvent.change(main().getByLabelText("Cache read rate for vendor/m"), { target: { value: "0" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", {
+    model: "vendor/m", rates: { ...RATED, cache_read_usd_per_1k: 0 },
+  });
+  expect(sidebarOf("vendor/m").getByText("Cache read $0 / 1K")).toBeInTheDocument();
+});
+
+test.each([
+  ["Input", "prompt_usd_per_1k"],
+  ["Cache write", "cache_write_usd_per_1k"],
+])("a negative %s rate is sent, and the store's refusal shown", async (label, field) => {
+  // One policy for every box: a filled box is sent as typed and the store
+  // names what is wrong with it. "Both needed" is only for a box left empty.
+  (api.putModelFacts as any).mockRejectedValue(
+    new ApiError(400, `${field} must be a non-negative number`));
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Input rate for vendor/m"),
+                   { target: { value: "0.001" } });
+  fireEvent.change(main().getByLabelText("Output rate for vendor/m"), { target: { value: "0.002" } });
+  fireEvent.change(main().getByLabelText(`${label} rate for vendor/m`), { target: { value: "-1" } });
+
+  expect(main().queryByText("Input and output are both needed.")).not.toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+
+  expect(await main().findByText(`${field} must be a non-negative number`)).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", { model: "vendor/m",
+    rates: { ...RATED, [field]: -1 } });
+  expect(main().getByRole("button", { name: "Save facts" })).toBeInTheDocument();
+});
+
+test("clearing every rate sends an empty object", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({ rates: RATED }));
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Input rate for vendor/m"), { target: { value: "" } });
+  fireEvent.change(main().getByLabelText("Output rate for vendor/m"), { target: { value: "" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", { model: "vendor/m", rates: {} });
+});
+
+test("a half-filled rate cannot be saved", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Input rate for vendor/m"),
+                   { target: { value: "0.001" } });
+
+  expect(main().getByText("Input and output are both needed.")).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeDisabled();
+
+  fireEvent.change(main().getByLabelText("Output rate for vendor/m"), { target: { value: "0" } });
+  expect(main().queryByText("Input and output are both needed.")).not.toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeEnabled();
+});
+
+test("cache rates alone cannot be saved", async () => {
+  open("/providers/saltmarch/models/vendor/m");
+  fireEvent.click(await main().findByRole("button", { name: "Edit" }));
+  fireEvent.change(await main().findByLabelText("Cache read rate for vendor/m"),
+                   { target: { value: "0.0001" } });
+
+  expect(main().getByText("Input and output are both needed.")).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeDisabled();
+  expect(api.putModelFacts).not.toHaveBeenCalled();
+});
+
+test("?edit=rates opens the form on the rates", async () => {
+  (api.readModelFacts as any).mockResolvedValue(facts({ rates: RATED }));
+  open("/providers/saltmarch/models/vendor/m?edit=rates");
+
+  const input = await main().findByLabelText("Input rate for vendor/m");
+  expect(input).toHaveValue(0.001);
+  expect(input).toHaveFocus();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeInTheDocument();
+});
+
+test.each([
+  ["a newer-format store", { newer: true, migration: { state: "newer", reason: "", skipped: [] } }],
+  ["a store not yet switched", { format: "1",
+                                 migration: { state: "pending", reason: "", skipped: [] } }],
+])("?edit=rates on %s stays read-only", async (_what, over) => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings(over));
+  open("/providers/saltmarch/models/vendor/m?edit=rates");
+
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Edit" })).toBeDisabled();
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
+  expect(main().queryByRole("button", { name: "Save facts" })).not.toBeInTheDocument();
+});
+
+test("?edit=rates waits for the store's format before opening the form", async () => {
+  let answer: (value: unknown) => void = () => {};
+  (api.getInferenceSettings as any).mockReturnValue(new Promise((done) => { answer = done; }));
+  open("/providers/saltmarch/models/vendor/m?edit=rates");
+
+  // Not known yet is not writable: no form, and no Save to click early.
+  expect(await main().findByRole("heading", { name: "vendor/m" })).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Edit" })).toBeDisabled();
+  expect(main().queryByRole("button", { name: "Save facts" })).not.toBeInTheDocument();
+
+  await act(async () => { answer(settings()); });
+  const input = await main().findByLabelText("Input rate for vendor/m");
+  expect(input).toHaveFocus();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeEnabled();
+});
+
+test("?edit=rates is cleared on Save and on Cancel", async () => {
+  const first = open("/providers/saltmarch/models/vendor/m?edit=rates");
+  fireEvent.change(await main().findByLabelText("Input rate for vendor/m"),
+                   { target: { value: "0.001" } });
+  fireEvent.change(main().getByLabelText("Output rate for vendor/m"), { target: { value: "0.002" } });
+  fireEvent.click(main().getByRole("button", { name: "Save facts" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(api.putModelFacts).toHaveBeenCalledWith("saltmarch", { model: "vendor/m", rates: RATED });
+  expect(screen.getByTestId("where")).toHaveTextContent("/providers/saltmarch/models/vendor/m");
+  expect(screen.getByTestId("search")).toBeEmptyDOMElement();
+  first.unmount();
+
+  open("/providers/saltmarch/models/vendor/m?edit=rates");
+  await main().findByLabelText("Input rate for vendor/m");
+  fireEvent.click(main().getByRole("button", { name: "Cancel" }));
+
+  expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+  expect(screen.getByTestId("search")).toBeEmptyDOMElement();
+  // Cleared, not merely hidden: the view stays the view.
+  expect(main().queryByRole("spinbutton")).not.toBeInTheDocument();
 });
 
 test("a model id with a slash opens its facts", async () => {

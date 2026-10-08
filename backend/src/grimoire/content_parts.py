@@ -74,8 +74,9 @@ def text_of(content: str | list) -> str:
 
 
 def image_refs(content: str | list) -> list[dict]:
-    """The image references in `content`, in order."""
-    if isinstance(content, str):
+    """The image references in `content`, in order. Content that is not a
+    list (a string, or a `None` an OpenAI-shaped message may carry) has none."""
+    if not isinstance(content, list):
         return []
     return [p for p in content if isinstance(p, dict) and p.get("type") == IMAGE_REF]
 

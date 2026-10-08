@@ -103,12 +103,13 @@ def test_a_rev_change_does_not_hide_what_the_user_stated(conn):
     p = llm_connections.facts_path(cid)
     doc = json.loads(p.read_text(encoding="utf-8"))
     doc["m"].update({"vision": "on", "prefill": True, "post_process": "strict",
-                     "rates": {"input": 1.0, "output": 2.0}})
+                     "rates": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0}})
     p.write_text(json.dumps(doc), encoding="utf-8")
     got = facts.of(cid, "m", "a-different-rev")
     assert got["overrides"] == {"vision": "yes"}
     assert (got["vision"], got["prefill"], got["post_process"], got["rates"]) == (
-        "on", True, "strict", {"input": 1.0, "output": 2.0})
+        "on", True, "strict",
+        {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 2.0})
 
 
 def test_set_overrides_replaces_and_empty_clears(conn):

@@ -26,6 +26,7 @@ import grimoire.store as store
 from grimoire.main import create_app
 from grimoire.routes import todo
 from grimoire.routes.common import thumb_query
+from grimoire.store import inference_keys
 from grimoire.store.continuity import candidates, canon, involvement, pending, similarity
 from grimoire.store.continuity import doc as continuity_doc
 from tests.collection_fixtures import format1, format2
@@ -1491,3 +1492,230 @@ def test_unpriced_fix_opens_pricing(client, monkeypatch):
     assert chore["fix"] == "/config?section=pricing"
     assert [i["fix"] for i in _items(client, "unpriced", "")["items"]] == [
         "/config?section=pricing"]
+
+
+def _current() -> None:
+    """Stamp the store at the current model-settings format: a model's own
+    rates can be written only there (`PUT .../facts`)."""
+    store.write_config(**{inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT})
+
+
+def _provider(name: str = "Saltmarch") -> str:
+    return store.llm_connections.create_connection(
+        "openai_compatible", name, base_url="http://localhost:1/v1")
+
+
+def test_an_unpriced_item_opens_the_models_rates(client, monkeypatch):
+    _current()
+    pid = _provider()
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "gpt-4o-2024-08-06", "facts_model": "gpt-4o",
+         "provider_id": pid, "calls": 3}])
+    [item] = _items(client, "unpriced", "")["items"]
+    assert item["id"] == f"{pid}:gpt-4o-2024-08-06:gpt-4o"
+    assert item["label"] == "gpt-4o-2024-08-06 asked for as gpt-4o"
+    # The rates are stated under the model that was ASKED for.
+    assert item["fix"] == f"/providers/{pid}/models/gpt-4o?edit=rates"
+
+
+def test_an_unpriced_item_with_a_slash_in_its_model_id_keeps_its_segments(
+        client, monkeypatch):
+    """Encoded as `ProvidersView.modelPath` encodes it: segment by segment, so
+    the `models/*` splat reads the id back whole."""
+    _current()
+    pid = _provider()
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/model a#1(x)", "facts_model": "vendor/model a#1(x)",
+         "provider_id": pid, "calls": 1}])
+    [item] = _items(client, "unpriced", "")["items"]
+    # `encodeURIComponent` leaves `(` and `)` alone, and so does this.
+    assert item["fix"] == f"/providers/{pid}/models/vendor/model%20a%231(x)?edit=rates"
+
+
+def test_an_unpriced_item_without_a_provider_opens_the_pricing_table(client, monkeypatch):
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/legacy", "facts_model": "vendor/legacy",
+         "provider_id": "", "calls": 2},
+        {"model": "vendor/gone", "facts_model": "vendor/gone",
+         "provider_id": "deleted-provider", "calls": 1}])
+    items = _items(client, "unpriced", "")["items"]
+    assert [i["fix"] for i in items] == ["/config?section=pricing"] * 2
+    assert [i["id"] for i in items] == [":vendor/legacy:vendor/legacy",
+                                        "deleted-provider:vendor/gone:vendor/gone"]
+
+
+def test_one_model_on_two_providers_is_named_once_with_distinct_item_ids(
+        client, monkeypatch):
+    """M6: the chore names each recorded string once; the items stay apart,
+    one per provider, so each opens its own provider's rates."""
+    _current()
+    a, b = _provider("Saltmarch"), _provider("Winifred")
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/model-a", "facts_model": "vendor/model-a",
+         "provider_id": a, "calls": 2},
+        {"model": "vendor/model-a", "facts_model": "vendor/model-a",
+         "provider_id": b, "calls": 1}])
+
+    chore = next(c for c in _todo(client, "")["chores"] if c["id"] == "unpriced")
+    assert chore["n"] == 3
+    assert chore["why"].count("vendor/model-a") == 1
+    assert "more" not in chore["why"]
+    assert "rates" in chore["why"] and "table" in chore["why"]
+
+    items = _items(client, "unpriced", "")["items"]
+    assert [i["id"] for i in items] == [f"{a}:vendor/model-a:vendor/model-a",
+                                        f"{b}:vendor/model-a:vendor/model-a"]
+    assert len({i["id"] for i in items}) == 2
+    assert [i["fix"] for i in items] == [
+        f"/providers/{a}/models/vendor/model-a?edit=rates",
+        f"/providers/{b}/models/vendor/model-a?edit=rates"]
+
+
+def test_two_names_for_one_answer_are_two_items_with_distinct_ids(client, monkeypatch):
+    """One provider asked for two names that both answered as one snapshot is
+    two call shapes, each opening the rates of the model it asked for -- so
+    each needs its own id, and the label says which name it was asked for as."""
+    _current()
+    pid = _provider()
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/model-a-2026-08", "facts_model": "vendor/model-a",
+         "provider_id": pid, "calls": 2},
+        {"model": "vendor/model-a-2026-08", "facts_model": "vendor/model-a-latest",
+         "provider_id": pid, "calls": 1}])
+    items = _items(client, "unpriced", "")["items"]
+    assert len({i["id"] for i in items}) == 2
+    assert [i["label"] for i in items] == [
+        "vendor/model-a-2026-08 asked for as vendor/model-a",
+        "vendor/model-a-2026-08 asked for as vendor/model-a-latest"]
+    assert [i["fix"] for i in items] == [
+        f"/providers/{pid}/models/vendor/model-a?edit=rates",
+        f"/providers/{pid}/models/vendor/model-a-latest?edit=rates"]
+
+
+def test_on_a_store_not_yet_migrated_no_rates_link_leads_to_an_editor_that_cannot_save(
+        client, monkeypatch):
+    """`PUT .../facts` answers 409 `not_migrated` until the store is current, so
+    both chores open the pricing table instead -- which can price any model --
+    and say the model's own rates arrive after the upgrade."""
+    pid = store.llm_connections.create_connection(
+        "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
+        model="vendor/model-a")
+    store.write_config(active_connection_id=pid)
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/model-a", "facts_model": "vendor/model-a",
+         "provider_id": pid, "calls": 2}])
+
+    chore = _chore(client, "", "unpriced-models")
+    assert chore["fix"] == "/config?section=pricing"
+    assert chore["fix_label"] == "Pricing"
+    assert "after the upgrade" in chore["why"]
+    [item] = _items(client, "unpriced-models", "")["items"]
+    assert item["fix"] == "/config?section=pricing"
+
+    ledger = _chore(client, "", "unpriced")
+    assert "after the upgrade" in ledger["why"]
+    [item] = _items(client, "unpriced", "")["items"]
+    assert item["fix"] == "/config?section=pricing"
+
+
+def test_on_a_store_a_newer_build_wrote_no_rates_link_is_offered(client, monkeypatch):
+    """That store is already past the upgrade, and this version will never
+    write its rates, so the copy says a newer version wrote it -- never "after
+    the upgrade"."""
+    pid = store.llm_connections.create_connection(
+        "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
+        model="vendor/model-a")
+    store.write_config(active_connection_id=pid)
+    store.write_config(**{inference_keys.FORMAT_KEY: str(int(inference_keys.CURRENT_FORMAT) + 1)})
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/model-a", "facts_model": "vendor/model-a",
+         "provider_id": pid, "calls": 2}])
+    [item] = _items(client, "unpriced", "")["items"]
+    assert item["fix"] == "/config?section=pricing"
+    ledger = _chore(client, "", "unpriced")
+    assert "newer version" in ledger["why"]
+    assert "after the upgrade" not in ledger["why"]
+    models = _chore(client, "", "unpriced-models")
+    assert models is not None
+    assert models["fix"] == "/config?section=pricing"
+    assert "newer version" in models["why"]
+    assert "after the upgrade" not in models["why"]
+
+
+# ---- models in use with no price (slice E, Task 5) ----
+def _format2_role(role: str, provider: str, model: str) -> None:
+    store.write_config(**{inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT,
+                          inference_keys.role_key(role, "provider"): provider,
+                          inference_keys.role_key(role, "model"): model})
+
+
+MODELS_WHY = ("Their provider reports no price, and neither the model's own rates nor "
+              "your pricing table covers them, so their calls are counted rather than "
+              "costed. A local model is free only once you enter zero rates for it.")
+
+
+def test_the_models_chore_sits_in_housekeeping_and_opens_rates(client):
+    pid = _provider()
+    _format2_role("primary", pid, "vendor/model a")
+    chore = _chore(client, "", "unpriced-models")
+    assert chore == {
+        "id": "unpriced-models", "scope": "library", "group": "Housekeeping",
+        "severity": "note", "n": 1, "what": "1 model in use with no price",
+        "why": MODELS_WHY,
+        "fix": f"/providers/{pid}/models/vendor/model%20a?edit=rates",
+        "fix_label": "Set rates"}
+    assert "unpriced-models" in todo.LIBRARY_IDS and "unpriced-models" in todo.ITEMS
+    order = [i for i, _b in todo.LIBRARY_BUILDERS]
+    assert order.index("unpriced-models") == order.index("unpriced") + 1
+
+
+def test_the_models_chore_lists_each_pair(client, campaign):
+    cid, _ = campaign
+    a, b = _provider("Saltmarch"), _provider("Winifred")
+    _format2_role("primary", a, "vendor/model-a")
+    store.write_config(**{inference_keys.role_key("fast", "provider"): b,
+                          inference_keys.role_key("fast", "model"): "vendor/model-a"})
+    store.campaigns.set_campaign_inference(cid, {
+        inference_keys.role_key("decision", "provider"): a,
+        inference_keys.role_key("decision", "model"): "vendor/model-a"})
+
+    chore = _chore(client, "", "unpriced-models")
+    assert chore["n"] == 2 and chore["what"] == "2 models in use with no price"
+    items = _items(client, "unpriced-models", "")["items"]
+    assert items == [
+        {"id": f"{a}:vendor/model-a", "label": "vendor/model-a on Saltmarch",
+         "detail": "Used by Primary, Decision (A Long Run)",
+         "fix": f"/providers/{a}/models/vendor/model-a?edit=rates"},
+        {"id": f"{b}:vendor/model-a", "label": "vendor/model-a on Winifred",
+         "detail": "Used by Fast",
+         "fix": f"/providers/{b}/models/vendor/model-a?edit=rates"},
+    ]
+
+
+def test_the_models_chore_can_be_ignored(client):
+    pid = _provider()
+    _format2_role("primary", pid, "vendor/model-a")
+    r = client.put("/api/todo/unpriced-models/ignored", json={"ignored": True})
+    assert r.status_code == 200, r.text
+    body = _todo(client, "")
+    assert "unpriced-models" not in {c["id"] for c in body["chores"]}
+    assert "unpriced-models" in {c["id"] for c in body["ignored"]}
+
+
+@pytest.mark.parametrize("error", [
+    UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    store.locks.StoreBusy("config"),
+])
+def test_an_unreadable_config_drops_the_models_chore_not_the_page(client, monkeypatch, error):
+    """M11: one unreadable `config.md` costs this chore, never `/todo`."""
+    pid = _provider()
+    _format2_role("primary", pid, "vendor/model-a")
+    assert _chore(client, "", "unpriced-models") is not None
+
+    def unreadable(*_a, **_k):
+        raise error
+
+    monkeypatch.setattr(store.config, "read_config", unreadable)
+    body = _todo(client, "")
+    assert "unpriced-models" not in {c["id"] for c in body["chores"]}
+    assert _items(client, "unpriced-models", "") == {"items": [], "total": 0, "truncated": False}

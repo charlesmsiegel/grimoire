@@ -4,7 +4,8 @@ Nothing used to be persisted about a generation once its text landed: how many
 tokens it took, what it cost, how long it ran, whether it failed. The local
 tokenizer in ``store.context`` counts what grimoire *composed*, which is an
 estimate of the prompt and says nothing at all about the reply or the bill. This
-module records what the provider itself reported, per call.
+module records what the provider reported, per call -- and, where it reported
+no counts, what this side counted, flagged ``tokens_estimated``.
 
 Layout, home-scoped rather than campaign-scoped::
 
@@ -47,19 +48,43 @@ Pricing has three sources, and the difference between them is the point:
   cost. The field is then **absent**, not zero, which is what lets a re-pricing
   pass over the ledger tell "free" from "unknown".
 
-  ``store.pricing`` (#158) is that pass. Where the user has typed a per-token
-  rate for the model, a rollup prices those rows at it and reports the figure
-  as ``modelled_usd`` — a third column, never added to the other two, because
-  it is arithmetic this side did rather than a number a provider sent.
+  ``store.pricing`` (#158) is that pass, over two rate layers the user
+  states: a model's own rates, kept in its provider's model facts and edited
+  on the provider's page, and the ``pricing.json`` table. A reported price
+  always wins -- no rate touches a row that has one -- and between the two
+  layers ``pricing.rate_for_call`` decides, the one precedence function: the
+  model's own rates, then the table. A rollup prices those rows at what it
+  picks and reports the figure as ``modelled_usd`` — a third column, never
+  added to the other two, because it is arithmetic this side did rather than
+  a number a provider sent. A subscription row nobody priced is modelled the
+  same way and lands there too, counted again in
+  ``modelled_subscription_calls``. A zero rate is a price: a model stated free
+  models to zero rather than reading unpriced.
   ``unpriced_calls`` then counts only what is left: calls with no reported
   price and no rate to model one, which is what makes a total's incompleteness
   visible rather than quietly understated.
 
+  The counts a rate multiplies may be the provider's or this side's (the
+  estimate flag, below); ``estimated_token_calls`` says how many rows in a
+  bucket rest on counts this side made.
+
 The token counts follow the same absent-not-zero rule, so a row never claims a
 call used no tokens when nobody counted them. A bucket's token total is
-therefore a floor whenever ``unpriced_calls`` is non-zero — with these adapters
-a usage block is all-or-nothing, so the calls that report no price are the same
-ones that report no counts.
+therefore a floor whenever ``unmetered_calls`` is non-zero -- calls that
+arrived with neither a price nor the counts a rate would need -- and a total
+that rests on counts this side estimated says so through
+``estimated_token_calls``.
+
+**A count the provider did not report is estimated, and the row says so**
+(spec 9.1). The facade (``llm._resilient``) counts it locally with
+``store.tokens``, on a worker thread, for an attempt whose stream ended on its
+own -- never one the caller broke out of, closed or that failed, since nobody
+knows what such a call billed. It fills only the missing count, and the row
+carries ``tokens_estimated: true``. Reasoning text counts as completion. An
+``embed`` row never gets an estimated completion: an embedding generates
+nothing. Images are not estimated: there is no portable per-image count, and
+the row's ``images`` already says they rode along. ``Meter.done`` counts
+nothing and loads no encoder; it reads what the facade wrote.
 
 **The cache pair is a breakdown, not a component** (#148).
 ``cache_read_tokens`` and ``cache_write_tokens`` are slices of
@@ -119,6 +144,17 @@ EMBED_OPERATION = "embed"
 #: exactly as it treats a cancellation. Absent means True: an ordinary
 #: exception IS a failure, which is the safe default for anything new.
 NOT_A_FAILURE = "llm_call_failed"
+
+#: The facade's private holder keys for a local estimate, restated from
+#: `llm_usage` so the ledger needs no gateway import; a test holds the
+#: spellings equal. `ESTIMATE_KEY` holds the attempt's prompt and
+#: reply text, `ENDED_KEY` marks a stream that ended on its own, and
+#: `ESTIMATED` says a count in the holder was estimated. `Meter.done` pops the
+#: first two once it has filed, so a meter that outlives its call does not
+#: pin a whole prompt.
+ESTIMATE_KEY = "_estimate"
+ENDED_KEY = "_ended"
+ESTIMATED = "tokens_estimated"
 
 #: A row saying one scene id became another (#153). Not a call, and every
 #: rollup skips it -- see `_is_call`. A scene's id is its filename stem, so the
@@ -224,8 +260,10 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
            duration_ms: int = 0, status: str = "ok", error: str = "",
            attempts: int = 1, post: int | None = None,
            ts: str | None = None, round_id: str = "",
-           response_id: str = "", images: int = 0,
-           operation: str = "") -> dict | None:
+           response_id: str = "", images: int = 0, operation: str = "",
+           provider_id: str = "", requested_model: str = "", role: str = "",
+           preset: str = "", billing: str = "", decision_mode: str = "",
+           tokens_estimated: bool = False) -> dict | None:
     """Append one call to the ledger. Returns the row, or None if nothing was
     written.
 
@@ -246,6 +284,18 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
     ``atomic.append_line``), never a read-modify-write, so concurrent callers
     interleave rows instead of losing them — and taking the campaign lock would
     both stall a turn and exclude the calls that have no campaign to lock.
+
+    What served the call (spec 9.1-9.3), each written only when it has a
+    value, so an older build reads the row exactly as it did: ``operation``
+    (``generate``, ``embed``, ...), ``provider_id`` (the provider's store id;
+    ``provider`` stays the adapter kind it has always been), ``requested_model``
+    (the model asked for, only when the answer named another -- a dated
+    snapshot -- because a model's rates are stated under what was asked),
+    ``role`` (the slot that supplied the resolution; none for a pin, or for
+    an override that changed the provider or the model), ``preset`` (the sampler preset sent), ``billing`` (``metered``
+    or ``subscription``: a label, which moves no figure between columns),
+    ``decision_mode``, and ``tokens_estimated`` (true only when a count was
+    estimated locally rather than reported).
     """
     ts = ts or _now()
     # The WHOLE body is inside the guard, the row's construction included. The
@@ -264,9 +314,13 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         for key, value in (("campaign", campaign), ("scene", scene), ("model", model),
                            ("connection", connection), ("provider", provider),
                            ("round_id", round_id), ("response_id", response_id),
-                           ("operation", operation)):
+                           ("operation", operation), ("provider_id", provider_id),
+                           ("requested_model", _differs(requested_model, model)),
+                           ("role", role), ("preset", preset), ("billing", billing),
+                           ("decision_mode", decision_mode)):
             if value:
                 row[key] = value
+        row.update(_estimated(tokens_estimated))
         # Absent, not zero, when the provider counted nothing -- the same rule
         # the price gets below, and for the same reason. A row saying zero
         # tokens is a row saying the call used none, which is a claim no
@@ -334,6 +388,18 @@ def record(*, task: str, kind: str = KIND_LLM, campaign: str = "", scene: str = 
         # is the sort of thing only a test finds. ValueError covers `allow_nan`
         # and every `int()`/`float()` above it.
         return None
+
+
+def _differs(requested_model: str, model: str) -> str:
+    """`requested_model`, or "" when it is the model that answered: the field
+    is only worth a row's bytes when a provider named something else."""
+    return requested_model if requested_model != model else ""
+
+
+def _estimated(flag: bool) -> dict:
+    """`tokens_estimated: true` when a count was estimated, else nothing: an
+    absent flag is every reported count, and every older row."""
+    return {"tokens_estimated": True} if flag is True else {}
 
 
 def _append(row: dict, ts: str) -> dict:
@@ -500,6 +566,7 @@ class Meter:
         if not self.usage:
             return None
         cost = self.usage.get("cost_usd")
+        served = self._served()
         self.row = record(
             task=self.task, kind=self.kind, campaign=self.campaign, scene=self.scene,
             model=self.usage.get("model") or self.model,
@@ -513,11 +580,36 @@ class Meter:
             duration_ms=int((time.monotonic() - self._t0) * 1000),
             status=status, error=error, attempts=self.usage.get("attempts", 1),
             post=self.post, round_id=self.round_id, response_id=self.response_id,
-            images=self.usage.get("images", 0),
-            # Slice E carries this through its SERVED mapping; on merge that
-            # mechanism is kept and this literal kwarg is dropped.
-            operation=self.usage.get("operation", ""))
+            images=self.usage.get("images", 0), **served)
+        try:
+            self.usage.pop(ESTIMATE_KEY, None)
+            self.usage.pop(ENDED_KEY, None)
+        except Exception:  # noqa: BLE001 - housekeeping after the row; never fatal
+            pass
         return self.row
+
+    #: What served the call, as the facade filed it into the holder
+    #: (`llm._stamp`, `llm_usage.account`): each one a `record` field.
+    SERVED = ("operation", "provider_id", "requested_model", "role", "preset",
+              "billing", "decision_mode")
+
+    def _served(self) -> dict:
+        """The `SERVED` fields from the holder, `str` values only, and
+        `tokens_estimated`. Guarded whole: a holder that cannot be read costs
+        these fields, never the row (ruling I3).
+
+        Counts nothing and loads nothing. The flag is the facade's: it is True
+        only when the facade estimated a count (`ESTIMATED`) for an attempt
+        whose stream ended on its own (`ENDED_KEY`)."""
+        try:
+            got = {key: self.usage.get(key) for key in self.SERVED}
+            served: dict = {key: value for key, value in got.items()
+                            if isinstance(value, str)}
+            served["tokens_estimated"] = (self.usage.get(ESTIMATED) is True
+                                          and self.usage.get(ENDED_KEY) is True)
+            return served
+        except Exception:  # noqa: BLE001 - see the docstring
+            return {}
 
 
 def meter(task: str, *, kind: str = KIND_LLM, campaign: str = "", scene: str = "",
@@ -667,63 +759,112 @@ def _is_call(row: dict) -> bool:
 
 
 class Rates:
-    """The user's rate table (#158), resolved once per model instead of per row.
+    """The rates a rollup prices against, resolved once per call shape instead
+    of per row.
+
+    Two sources, read once at construction: the user's `pricing.json` table
+    (#158) and every provider's stated model rates (`pricing.provider_rates`,
+    model facts). `pricing.rate_for_call` decides between them -- the one
+    precedence function (spec 9.1): the provider's rates for the model asked
+    for, then for the model that answered, then the table. A row that names no
+    `provider_id` (every row filed before that field) prices by the table
+    alone, exactly as it did.
 
     A rollup asks "what would this have cost?" for every unpriced row it walks,
     and `pricing.rate_for` scans the wildcard entries each time it is asked. A
     heavy month is tens of thousands of rows across a handful of models, so the
-    answer is memoized per model id and the table is read once, at construction.
+    answer is memoized per (provider, model, requested model).
 
-    Read once also means a rollup is drawn against ONE table: the file could
-    otherwise be saved mid-scan and half a report would be priced at the old
-    rates and half at the new, with nothing saying so.
+    Read once also means a rollup is drawn against ONE set of rates: a file
+    could otherwise be saved mid-scan and half a report would be priced at the
+    old rates and half at the new, with nothing saying so.
+
+    **A provider's rates live with the provider.** Deleting a provider deletes
+    its facts file (`llm_connections.delete_connection`), so every row it
+    served falls back to the table, or to unpriced, on the next rollup: its
+    history is re-priced, as editing a rate re-prices it. The id is a reusable
+    slug, so a provider created later under the same name inherits those rows
+    and prices them at its own rates (`pricing.provider_rates`). Either way
+    only `modelled_usd` moves; spend (`cost_usd`) never does, because no rate
+    ever touches a row a provider priced.
 
     `off()` is the no-estimates table, and it is not the same thing as an empty
     one: a caller that must not model anything (the budget, which measures money
-    actually owed) says so rather than relying on the user's file being empty.
+    actually owed) says so rather than relying on the user's files being empty.
     """
 
-    def __init__(self, table: dict[str, dict] | None):
+    def __init__(self, table: dict[str, dict] | None,
+                 providers: dict[str, dict[str, dict]] | None = None):
         self.table = table or {}
-        self._seen: dict[str, dict | None] = {}
+        self.providers = providers or {}
+        self._seen: dict[tuple[str, str, str], dict | None] = {}
 
     @classmethod
     def current(cls) -> Rates:
-        """The table as it is on disk right now. Never raises — `read_pricing`
-        fail-softs to `{}`, so a broken file costs the estimates and not the
-        report they were going to sit beside."""
-        return cls(pricing.read_pricing())
+        """The rates as they are on disk right now. Never raises -- both readers
+        fail-soft (`read_pricing` to `{}`, `provider_rates` per file), so a
+        broken file costs the estimates and not the report they sit beside."""
+        return cls(pricing.read_pricing(), pricing.provider_rates())
 
     @classmethod
     def off(cls) -> Rates:
-        return cls(None)
+        return cls(None, None)
 
-    def entry(self, model: object) -> dict | None:
-        if not self.table:
+    def entry(self, model: object, *, provider_id: object = "",
+              requested_model: object = "") -> dict | None:
+        if not self.table and not self.providers:
             return None
-        key = model if isinstance(model, str) else ""
+        key = (_text(provider_id), _text(model), _text(requested_model))
         if key not in self._seen:
-            self._seen[key] = pricing.rate_for(self.table, key)
+            self._seen[key] = pricing.rate_for_call(
+                self.table, self.providers, provider_id=key[0], model=key[1],
+                requested_model=key[2])
         return self._seen[key]
 
     def estimate(self, row: dict) -> float | None:
         """What this row would have cost at the user's rates, or None.
 
-        None for a row nothing prices AND for a row nobody counted — see
+        None for a row nothing prices AND for a row nobody counted -- see
         `pricing.estimate`, which is where that second case is decided. The
         counts are read raw rather than through `_int` on purpose: `_int` turns
         an absent count into 0, and 0 is exactly the value that must stay
-        distinguishable from "not counted" here.
+        distinguishable from "not counted" here. The one exception is
+        structural rather than a guess: an embed row's completion (`_counts`).
         """
-        entry = self.entry(row.get("model"))
+        entry = self.entry(row.get("model"), provider_id=row.get("provider_id"),
+                           requested_model=row.get("requested_model"))
         if entry is None:
             return None
+        prompt, completion = _counts(row)
         return pricing.estimate(
-            entry,
-            prompt_tokens=_count(row.get("prompt_tokens")),
-            completion_tokens=_completion_count(row),
+            entry, prompt_tokens=prompt, completion_tokens=completion,
             cache_read_tokens=_count(row.get("cache_read_tokens")),
             cache_write_tokens=_count(row.get("cache_write_tokens")))
+
+
+def _text(value: object) -> str:
+    """A row's string field, or "" for anything else a hand edit left there."""
+    return value if isinstance(value, str) else ""
+
+
+def _counts(row: dict) -> tuple[int | None, int | None]:
+    """The row's (prompt, completion) counts as a rate would price them.
+
+    Each is `_count`'s answer -- None when nobody counted it -- except an
+    `embed` row's absent completion, which is the structural zero
+    `_completion_count` reads (ruling 8): an embedding generates nothing. That
+    is a fact about the operation rather than a guess, and it is the only one:
+    every other operation still needs both counts, no estimate ever fills an
+    embed row's completion, and an embed row whose prompt nobody counted is
+    still unmetered (`_metered`).
+    """
+    return _count(row.get("prompt_tokens")), _completion_count(row)
+
+
+def _metered(row: dict) -> bool:
+    """True when a rate could price this row: both counts are known (`_counts`)."""
+    prompt, completion = _counts(row)
+    return prompt is not None and completion is not None
 
 
 def _count(value: object) -> int | None:
@@ -794,34 +935,53 @@ def _add(bucket: dict, row: dict, rates: Rates | None = None) -> None:
     bucket["cache_write_tokens"] += _int(row.get("cache_write_tokens"))
     bucket["duration_ms"] += _int(row.get("duration_ms"))
     # Only once a row carries one: `_ZERO` has no `images`, so the empty
-    # summary, the persisted rollup and the shell's Costs tail keep their shape
+    # summary, the persisted rollup and the shell's money block keep their shape
     # and a bucket written before #377 folds a new row without a KeyError.
     if images := _int(row.get("images")):
         bucket["images"] = bucket.get("images", 0) + images
+    # The breakdown counts below are counts, never money, and lazy like
+    # `images` for the same reason. Each sits INSIDE a count `_ZERO` already
+    # has (the cache-pair precedent): `estimated_token_calls` inside `calls`,
+    # the two subscription counts inside `modelled_calls` and `unpriced_calls`.
+    # There is no subscription dollar figure -- a fourth one would be one more
+    # thing to add to the other three.
+    if row.get("tokens_estimated") is True:
+        _bump(bucket, "estimated_token_calls")
+    subscription = row.get("billing") == "subscription"
     cost = _float(row.get("cost_usd"))
     if cost is None:
         modelled = rates.estimate(row) if rates is not None else None
         if modelled is None:
             bucket["unpriced_calls"] += 1
+            if subscription:
+                _bump(bucket, "unpriced_subscription_calls")
             # Counted whether or not a rate exists, and read straight off the
             # row rather than from the estimator's verdict: the question is
             # "could ANY rate have priced this", and the answer is no whenever
-            # a count is missing -- see `pricing.estimate`, which requires both.
-            # An embed row's absent completion count is a structural zero
-            # (`_completion_count`), not a count nobody took.
-            if _count(row.get("prompt_tokens")) is None \
-                    or _completion_count(row) is None:
+            # a count is missing -- see `pricing.estimate`, which requires both,
+            # and `_counts`, which knows an embedding completes nothing.
+            if not _metered(row):
                 bucket["unmetered_calls"] += 1
         else:
             bucket["modelled_calls"] += 1
             bucket["modelled_usd"] += modelled
+            if subscription:
+                _bump(bucket, "modelled_subscription_calls")
         return
+    # `cost_basis` alone moves a figure (spec 9.1, ruling 4). `billing` is a
+    # label: a provider tagged subscription that reported a BILLED price said
+    # it charged, so that figure is spend and counts against a budget.
     bucket["priced_calls"] += 1
     if row.get("cost_basis") == "equivalent":
         bucket["subscription_calls"] += 1
         bucket["estimated_usd"] += cost
     else:
         bucket["cost_usd"] += cost
+
+
+def _bump(bucket: dict, key: str) -> None:
+    """Add one to a lazy breakdown count -- one `_ZERO` does not carry."""
+    bucket[key] = bucket.get(key, 0) + 1
 
 
 def _int(value: object) -> int:
@@ -1043,6 +1203,11 @@ def _turn(row: dict, rates: Rates | None = None) -> dict:
                         else (rates.estimate(row) if rates is not None else None),
         "post": _post(row),
         "duration_ms": _int(row.get("duration_ms")),
+        # Labels for the view (spec 9.1), never figures: `billing` says a
+        # subscription served the turn, and `tokens_estimated` that its counts
+        # (and so any modelled figure) rest on a local count.
+        "billing": _text(row.get("billing")),
+        "tokens_estimated": row.get("tokens_estimated") is True,
     }
 
 
@@ -1533,8 +1698,8 @@ def budget(campaign: str, limit_usd: object, period: object = "") -> dict:
             "warn_fraction": WARN_FRACTION}
 
 
-#: `unpriced_models`' memo: per month file, how many calls of each model a
-#: rate COULD price. A pool of its own rather than the shared `statcache`
+#: `unpriced_models`' memo: per month file, how many calls of each call shape
+#: a rate COULD price. A pool of its own rather than the shared `statcache`
 #: FIFO, which the sync sweeps fill with every entity and card hash. The
 #: budget covers the two months read plus the signatures the current month
 #: leaves behind as it is appended to -- each is a handful of model names, so
@@ -1552,10 +1717,19 @@ def unpriced_models(months: int = 2) -> list[dict]:
     holds, so the only way to notice was to compare a rollup against a table by
     eye and conclude that the feature was broken.
 
+    One entry per call shape, `{"model", "facts_model", "provider_id",
+    "calls"}`: `model` is the recorded string, which a `pricing.json` key must
+    match; `facts_model` is the key a model's own rates are stated under on
+    `provider_id` (the model that was asked for, when the answer named a dated
+    snapshot of it). One model served by two providers is two entries, because
+    each would be priced by its own provider's rates. A row that names no
+    provider has `provider_id` "" and only the table can price it.
+
     Only calls that a rate *could* have priced are counted -- no `cost_usd`, and
-    both token counts present. A call nobody metered cannot be rescued by a
-    rate (rates times nothing is zero), so listing its model here would send the
-    reader to write an entry that changes nothing.
+    both token counts present (an embed row's completion is 0, `_counts`). A
+    call nobody metered cannot be rescued by a rate (rates times nothing is
+    zero), so listing its model here would send the reader to write an entry
+    that changes nothing.
 
     Bounded to the newest `months` ledger files rather than the whole history:
     this backs a chore and a hint, both opened casually, and `lifetime_since`
@@ -1568,9 +1742,10 @@ def unpriced_models(months: int = 2) -> list[dict]:
     file's stat signature, so a past month is parsed once per process and the
     current one whenever it has actually grown -- `statcache` refuses to keep
     anything inside its racy window, so a row appended a moment ago is never
-    missed. The rate table is deliberately applied AFTER the memo: it is the
-    user's to edit at any moment, and a memo holding verdicts would keep
-    listing a model for as long as its month file happened not to change.
+    missed. The rates are deliberately applied AFTER the memo, through
+    `pricing.rate_for_call` as every rollup applies them: they are the user's
+    to edit at any moment, and a memo holding verdicts would keep listing a
+    model for as long as its month file happened not to change.
     """
     root = ledger_dir()
     try:
@@ -1579,7 +1754,8 @@ def unpriced_models(months: int = 2) -> list[dict]:
     except OSError:
         return []
     table = pricing.read_pricing()
-    counts: dict[str, int] = {}
+    providers = pricing.provider_rates()
+    counts: dict[tuple[str, str, str], int] = {}
     for path in files:
         sig = statcache.signature(path)
         if sig is None:
@@ -1592,23 +1768,27 @@ def unpriced_models(months: int = 2) -> list[dict]:
             # has locked costs this read, not every read until the file next
             # changes -- which for a past month is never.
             continue
-        for model, n in month:
-            counts[model] = counts.get(model, 0) + n
-    return [{"model": m, "calls": n}
-            for m, n in sorted(counts.items(), key=lambda kv: -kv[1])
-            if pricing.rate_for(table, m) is None]
+        for shape, n in month:
+            counts[shape] = counts.get(shape, 0) + n
+    return [{"model": model, "facts_model": facts_model, "provider_id": provider_id,
+             "calls": n}
+            for (provider_id, facts_model, model), n
+            in sorted(counts.items(), key=lambda kv: -kv[1])
+            if pricing.rate_for_call(table, providers, provider_id=provider_id,
+                                     model=model, requested_model=facts_model) is None]
 
 
-def _month_unpriced(path: Path) -> tuple[tuple[str, int], ...]:
-    """One month file's rate-priceable calls, as ``(model, calls)`` pairs in
-    order of first appearance -- the order `unpriced_models` breaks ties in.
+def _month_unpriced(path: Path) -> tuple[tuple[tuple[str, str, str], int], ...]:
+    """One month file's rate-priceable calls, as
+    ``((provider_id, requested_model or model, model), calls)`` pairs in order
+    of first appearance -- the order `unpriced_models` breaks ties in.
 
     A tuple, because the value lives in a memo other requests read. Raises
     OSError rather than answering empty, so a file that could not be opened is
     never remembered as one with nothing in it. Bytes that are not UTF-8 end
     the read where the decoder meets them, the tolerance `_read_rows` has: a
     list drawn short rather than a chore that raises."""
-    counts: dict[str, int] = {}
+    counts: dict[tuple[str, str, str], int] = {}
     with open(path, encoding="utf-8") as f:
         try:
             for line in f:
@@ -1618,12 +1798,13 @@ def _month_unpriced(path: Path) -> tuple[tuple[str, int], ...]:
                     continue
                 if not isinstance(row, dict) or _float(row.get("cost_usd")) is not None:
                     continue
-                if _count(row.get("prompt_tokens")) is None \
-                        or _count(row.get("completion_tokens")) is None:
+                if not _metered(row):
                     continue
                 model = str(row.get("model") or "")
                 if model:
-                    counts[model] = counts.get(model, 0) + 1
+                    shape = (_text(row.get("provider_id")),
+                             _text(row.get("requested_model")) or model, model)
+                    counts[shape] = counts.get(shape, 0) + 1
         except ValueError:      # UnicodeDecodeError, surfacing mid-file
             pass
     return tuple(counts.items())

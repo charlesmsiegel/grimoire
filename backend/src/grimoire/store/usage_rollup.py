@@ -13,10 +13,18 @@ not change what a figure means: what it reports is the same all-time rollup
 ``usage`` would compute, arrived at by not re-reading bytes it has already
 read.
 
-**The aggregate is derived, never authoritative.** ``<home>/usage/rollup.json``
+**The aggregate is derived, never authoritative.** ``<home>/usage/rollup-v4.json``
 can be deleted at any moment and the next read rebuilds it from the ledger. No
 caller may ever treat it as a record of anything -- the JSONL files are the
 ledger, and this is a bookmark in them.
+
+**Its name carries its version, and an older name is left alone.** An older
+build keeps its aggregate in ``rollup.json``. The library may be a synced
+folder that two builds read, and if both wrote one file each would discard
+the other's as the wrong version (or the wrong rates) and rebuild all of
+history on every navigation. So this build never reads, writes or deletes
+``rollup.json``; each build keeps its own bookmark, and the ledger both fold
+is the same.
 
 How it stays cheap
 ------------------
@@ -32,10 +40,13 @@ this legal on a surface that runs on every navigation, where
 Four things force a full rebuild, and each is a case where the bookmark is
 provably meaningless rather than merely old:
 
-- **The rate table changed.** ``modelled_usd`` is arithmetic done against the
-  user's own per-token table, so a stored figure is only true of the table it
-  was computed under. The fingerprint is part of the file, and a mismatch
-  discards the whole aggregate rather than leaving one column priced two ways.
+- **The rates changed.** ``modelled_usd`` is arithmetic done against the
+  user's own per-token rates -- the ``pricing.json`` table and every model's
+  rates on its provider (``pricing.provider_rates``) -- so a stored figure is
+  only true of the rates it was computed under. The fingerprint is part of the
+  file, and a mismatch discards the whole aggregate rather than leaving one
+  column priced two ways. Deleting a provider removes its rates, so it
+  re-prices that provider's history the same way.
 - **A month file shrank.** The ledger only grows, so a file shorter than the
   bookmark into it is a file somebody rewrote by hand. Everything before the
   bookmark is then unverified.
@@ -79,24 +90,34 @@ from pathlib import Path
 
 from . import atomic, pricing, usage
 
-#: Bumped when the stored shape changes. A file from an older version is
-#: discarded rather than migrated: it is a cache, and rebuilding it costs one
-#: scan that the very next read would otherwise have had to do anyway.
-#: 3: an embed row's absent completion count became a structural zero
-#: (`usage._completion_count`), so a v2 file holds embed rows as unmetered and
-#: unpriced that the same rates now model.
-VERSION = 3
+#: Bumped when the stored shape changes, or when the code that prices a row
+#: does: the fingerprint covers the rates, not the precedence that applies
+#: them, so a folded row would keep its old verdict until a rate moved. A file
+#: from an older version is discarded rather than migrated: it is a cache, and
+#: rebuilding it costs one scan that the very next read would otherwise have
+#: had to do anyway. 3: an embed row's absent completion count became a
+#: structural zero (`usage._completion_count`), so a v2 file holds embed rows
+#: as unmetered and unpriced that the same rates now model. 4: the pricing
+#: table also matches the model asked for, and a model's own rates outrank it.
+VERSION = 4
 
 #: What a caller gets for a campaign the ledger has never mentioned, and what a
 #: failed scan degrades to. `partial` is the field that keeps it honest -- see
 #: `_empty`.
+#: The three breakdown counts (`estimated_token_calls`,
+#: `modelled_subscription_calls`, `unpriced_subscription_calls`) are counts,
+#: never money: each sits inside a count beside it (`usage._add`).
 _FIELDS = ("calls", "cost_usd", "estimated_usd", "modelled_usd",
            "unpriced_calls", "unmetered_calls", "subscription_calls",
-           "modelled_calls", "priced_calls", "total_tokens")
+           "modelled_calls", "priced_calls", "total_tokens",
+           "estimated_token_calls", "modelled_subscription_calls",
+           "unpriced_subscription_calls")
 
 
 def rollup_path() -> Path:
-    return usage.ledger_dir() / "rollup.json"
+    """Named for its `VERSION`: an older build's `rollup.json` is never
+    touched (see the module docstring)."""
+    return usage.ledger_dir() / f"rollup-v{VERSION}.json"
 
 
 def campaign_totals(cid: str) -> dict:
@@ -155,19 +176,26 @@ def _fresh() -> dict:
 
 
 def _rates_fingerprint() -> str:
-    """A stable digest of the user's per-token table.
+    """A stable digest of every rate `usage.Rates.current` prices against: the
+    user's per-token table and each provider's model rates.
 
-    Sorted keys so two reads of one unchanged file agree, and a digest rather
-    than the table itself so the aggregate does not grow a second copy of a
-    file that has its own home. A table that will not read is `{}`, which is
-    the same value `Rates.current` prices against -- so the fingerprint follows
-    the pricing rather than second-guessing it.
+    Sorted keys so two reads of unchanged files agree, and a digest rather
+    than the rates themselves so the aggregate does not grow a second copy of
+    files that have their own home. A table that will not read is `{}`, and a
+    facts file that will not read contributes nothing -- the same values
+    `Rates.current` prices against -- so the fingerprint follows the pricing
+    rather than second-guessing it.
+
+    This runs on every navigation, and `provider_rates` is what keeps it cheap:
+    each facts file is memoized on its stat signature, so a stable one costs a
+    stat and not a parse.
     """
     try:
         table = pricing.read_pricing()
     except (OSError, ValueError):
         table = {}
-    blob = json.dumps(table, sort_keys=True, default=str)
+    blob = json.dumps({"table": table, "providers": pricing.provider_rates()},
+                      sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:16]
 
 
@@ -209,7 +237,8 @@ def _month_files() -> dict[str, Path]:
     Globbed rather than derived from a window, unlike `usage._window_files`:
     the window here is all of time, and the directory is the only thing that
     knows how far back that goes. Names that are not a month are ignored --
-    `rollup.json` is in this directory and must not be mistaken for a ledger.
+    the aggregate (and an older build's `rollup.json`) is in this directory
+    and must not be mistaken for a ledger.
     """
     out: dict[str, Path] = {}
     try:

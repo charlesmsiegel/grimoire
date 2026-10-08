@@ -44,7 +44,7 @@ import json
 import threading
 from collections.abc import Callable
 
-from .. import atomic, config, llm_connections
+from .. import atomic, config, llm_connections, pricing
 from ..paths import now_iso, safe_id
 from .providers import CAPABILITIES
 
@@ -161,14 +161,14 @@ def _view(entry: dict, rev: str) -> dict:
     vision = entry.get("vision")
     prefill = entry.get("prefill")
     post_process = entry.get("post_process")
-    rates = entry.get("rates")
+    rates = entry.get("rates")      # usable or None: `pricing.entry`, the reader's rule
     verified = entry.get("verified")
     overrides = entry.get("overrides")
     return {
         "vision": vision if vision in _VISION else "",
         "prefill": prefill if isinstance(prefill, bool) else None,
         "post_process": post_process if isinstance(post_process, str) else "",
-        "rates": rates if isinstance(rates, dict) else None,
+        "rates": pricing.entry(rates),
         "verified": (_clean_results(verified.get("caps"))
                      if isinstance(verified, dict) and verified.get("rev") == rev
                      else {}),
@@ -339,21 +339,35 @@ def set_stated(provider_id: str, model: str, *, vision: str | None = None,
 
 def state(provider_id: str, model: str, *, vision: object = None, prefill: object = None,
           post_process: object = None, overrides: object = None,
-          guard: Guard | None = None) -> None:
+          rates: object = None, guard: Guard | None = None) -> None:
     """The facts panel's write: `set_stated`'s fields, and `overrides` MERGED
     per capability -- `{cap: "yes"|"no"}` sets one, `{cap: ""}` removes it,
     and a capability the dict does not name is left as it is. Everything is
     checked (`ValueError`) before the file is touched, and lands as one write.
     `ConnectionNotFound` when the provider is gone (`_write_existing`);
-    `guard` is checked in the hold that writes (see there)."""
+    `guard` is checked in the hold that writes (see there).
+
+    `rates` is the model's own per-token price: `None` leaves it as it is, `{}`
+    removes it, and anything else replaces it after `pricing.check_entry` --
+    both base rates, no unknown field -- so a partial entry is refused rather
+    than half-stored. A stated fact like the rest: it survives a `rev` change.
+    """
     _require_safe(provider_id)
     stated = _check_stated(vision, prefill, post_process)
     changed = {} if overrides is None else _check_overrides(overrides, blank=True)
-    if not stated and not changed:
+    priced = (None if rates is None
+              else {} if isinstance(rates, dict) and not rates
+              else pricing.check_entry(rates))
+    if not stated and not changed and priced is None:
         return
 
     def change(entry: dict) -> None:
         entry.update(stated)
+        if priced is not None:
+            if priced:
+                entry["rates"] = priced
+            else:
+                entry.pop("rates", None)
         if not changed:
             return
         old = entry.get("overrides")

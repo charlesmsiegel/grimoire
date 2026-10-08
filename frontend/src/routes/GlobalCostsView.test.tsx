@@ -38,7 +38,52 @@ test("global Costs shows campaign rows and modelled activity in its projected tr
   expect(screen.getByText("Outside a campaign")).toBeInTheDocument();
   expect(screen.getByText(/2026-09: 2026-09-01 through 2026-09-30 UTC/)).toBeInTheDocument();
   expect(screen.getAllByText(/Incomplete: 1 unpriced call/i).length).toBeGreaterThan(0);
-  expect(screen.getAllByText("$1.25").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("≈ $1.25").length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Previous month" }));
   await waitFor(() => expect(api.getMonthlyCosts).toHaveBeenCalledWith("2026-08"));
+});
+
+test("the Estimated and Modelled cells are marked as estimates, a zero rate included", async () => {
+  // Neither column is spend. A zero-rated month under Modelled is an estimate
+  // of nothing, never a bare `$0.00` that reads as a bill.
+  vi.mocked(api.getMonthlyCosts).mockResolvedValue({
+    month: "2026-09", since: "2026-09-01", until: "2026-09-30",
+    available_months: ["2026-09"],
+    totals: { ...zero, calls: 3 },
+    campaigns: [{ ...zero, calls: 3, priced_calls: 1, subscription_calls: 1,
+      estimated_usd: 0.4, modelled_calls: 2, modelled_usd: 0, estimated_total_usd: 0.4,
+      campaign_id: "saltmarch", campaign_name: "Saltmarch" }],
+    unassigned: { ...zero },
+    trend: [],
+  });
+  render(<MemoryRouter initialEntries={["/costs?month=2026-09"]}><Routes>
+    <Route path="/costs" element={<GlobalCostsView />} />
+  </Routes></MemoryRouter>);
+  const row = (await screen.findByRole("link", { name: "Saltmarch" })).closest("tr")!;
+  const cells = [...row.querySelectorAll("td")].map((td) => td.textContent);
+  expect(cells[3]).toBe("≈ $0.40");
+  expect(cells[4]).toBe("≈ $0.00");
+});
+
+test("a campaign's estimate cells say when its token counts were estimated here", async () => {
+  vi.mocked(api.getMonthlyCosts).mockResolvedValue({
+    month: "2026-09", since: "2026-09-01", until: "2026-09-30",
+    available_months: ["2026-09"],
+    totals: { ...zero, calls: 2, modelled_calls: 2, estimated_token_calls: 2 },
+    campaigns: [{ ...zero, calls: 2, modelled_calls: 2, modelled_usd: 0,
+      estimated_total_usd: 0, estimated_token_calls: 2,
+      campaign_id: "saltmarch", campaign_name: "Saltmarch" }],
+    unassigned: { ...zero },
+    trend: [],
+  });
+  render(<MemoryRouter initialEntries={["/costs?month=2026-09"]}><Routes>
+    <Route path="/costs" element={<GlobalCostsView />} />
+  </Routes></MemoryRouter>);
+  const row = (await screen.findByRole("link", { name: "Saltmarch" })).closest("tr")!;
+  const cells = [...row.querySelectorAll("td")];
+  // The Estimated total is a projection, never spend: `≈` on a zero-rated row.
+  expect(cells[4].textContent).toBe("≈ $0.00");
+  expect(cells[5].textContent).toBe("≈ $0.00");
+  expect(cells[4].getAttribute("title")).toMatch(/2 calls with tokens estimated/);
+  expect(cells[5].getAttribute("title")).toMatch(/2 calls with tokens estimated/);
 });

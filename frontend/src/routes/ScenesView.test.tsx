@@ -367,6 +367,35 @@ test("a scene the ledger cannot price says so rather than showing $0.00", async 
   expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
 });
 
+test("a zero estimate beside calls nobody priced says not reported, not ≈ $0.00", async () => {
+  // A zero-rated call next to ten unpriced ones: `≈ $0.00` would read as a
+  // complete total, and the scene list has no footnote to say otherwise.
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "A scene", done: true }),
+  ]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue(
+    costs([costRow("001--a", { calls: 11, cost_usd: 0, priced_calls: 0,
+                               modelled_calls: 1, modelled_usd: 0,
+                               unpriced_calls: 10 })]));
+  renderScenes();
+
+  expect(await screen.findByText("not reported")).toBeInTheDocument();
+  expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
+});
+
+test("a scene's price says when its token counts were estimated here", async () => {
+  (api.listScenes as any).mockResolvedValue([
+    scene({ id: "001--a", title: "A scene", done: true }),
+  ]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue(
+    costs([costRow("001--a", { calls: 2, cost_usd: 0, priced_calls: 0, modelled_calls: 2,
+                               modelled_usd: 0.37, estimated_token_calls: 2 })]));
+  renderScenes();
+
+  expect(await screen.findByText("≈ $0.37"))
+    .toHaveAttribute("title", expect.stringMatching(/2 calls with tokens estimated/));
+});
+
 test("a ledger read that failed costs the figures and nothing else", async () => {
   (api.listScenes as any).mockResolvedValue([
     scene({ id: "001--a", title: "A scene", done: true }),

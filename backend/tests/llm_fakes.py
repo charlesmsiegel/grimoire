@@ -62,6 +62,7 @@ from pathlib import Path
 
 import anyio
 
+from grimoire import llm_usage
 from grimoire.llm import ATTEMPTED, effective_model
 from grimoire.llm_errors import LLMError
 
@@ -223,6 +224,11 @@ class FakeLLM:
                           or conn.get("kind") or "?",
                           "provider": conn.get("kind", "openrouter"), "attempts": 1,
                           ATTEMPTED: conn})
+            # What served it, as `llm._stamp` files it, so a route test sees
+            # the row the real facade writes. No count: that is the facade's
+            # `_resilient`, after a natural end, never a stamp.
+            usage["requested_model"] = effective_model(conn)
+            llm_usage.account(usage, conn)
         deltas = self._next(messages, conn)   # records the request and counts it
         for delta in deltas:
             yield delta
@@ -426,11 +432,15 @@ class StallingGateway(FakeCatalog):
 # written inline in a suite drifts the moment the facade changes, and the suite
 # goes on passing.
 class ScriptedProvider:
-    """Streams `chunks`, then raises `error` if it was given one."""
+    """Streams `chunks`, then raises `error` if it was given one. Given `usage`,
+    a stream that raised nothing merges it into the `usage=` holder it was
+    handed after its last chunk, as a provider's final frame would (a dated
+    snapshot's `model`, its counts, its price)."""
 
-    def __init__(self, chunks=("hi",), error=None):
+    def __init__(self, chunks=("hi",), error=None, usage: dict | None = None):
         self.chunks = list(chunks)
         self.error = error
+        self.usage = usage
         self.calls = 0
         self.requests: list[dict] = []
 
@@ -442,6 +452,9 @@ class ScriptedProvider:
             yield chunk
         if self.error is not None:
             raise self.error
+        holder = kwargs.get("usage")
+        if self.usage is not None and holder is not None:
+            holder.update(self.usage)
 
 
 class FlakyProvider:

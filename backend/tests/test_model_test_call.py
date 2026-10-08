@@ -246,6 +246,157 @@ def test_the_preview_prices_from_the_cached_catalog_row(client):
     assert body["estimated_cost_usd"] > 0
 
 
+# ---- the user's rates ----------------------------------------------------------
+
+RATES = {"prompt_usd_per_1k": 0.001, "completion_usd_per_1k": 0.002}
+
+
+def _preview(client, conn, caps=("generate",)) -> dict:
+    r = client.post(f"/api/llm-connections/{conn}/test/preview",
+                    json={"model": MODEL, "capabilities": list(caps)})
+    assert r.status_code == 200, r.text
+    assert _rows() == []
+    assert client.get("/api/runs").json()["runs"] == []
+    return r.json()
+
+
+def _at_rates(caps, rates=RATES) -> float:
+    return sum(probes.PROBES[c].prompt_tokens * rates["prompt_usd_per_1k"] / 1000
+               + probes.PROBES[c].completion_tokens * rates["completion_usd_per_1k"] / 1000
+               for c in caps)
+
+
+def _unreported(client) -> str:
+    """A provider that does not report its own price, the only kind the
+    user's rates may price (an OpenRouter row is the catalog's or unknown)."""
+    return _connection(client, kind="openai_compatible", name="Saltmarch Local",
+                       base_url="https://saltmarch.example/v1", api_key="sk-fake-local",
+                       model=MODEL)
+
+
+def test_estimate_from_rates_sums_the_probes_and_prices_images_as_tokens():
+    entry = dict(RATES)
+    assert probes.estimate_from_rates(entry, ["generate", "vision"]) == pytest.approx(
+        _at_rates(["generate", "vision"]))
+    # An embed probe has no completion; the counts are still both stated.
+    assert probes.estimate_from_rates(entry, ["embed"]) == pytest.approx(_at_rates(["embed"]))
+    # A free model is a reported zero.
+    free = {"prompt_usd_per_1k": 0.0, "completion_usd_per_1k": 0.0}
+    assert probes.estimate_from_rates(free, ["generate"]) == 0.0
+
+
+def test_estimate_from_rates_is_none_without_an_entry():
+    assert probes.estimate_from_rates(None, ["generate"]) is None
+    assert probes.estimate_from_rates({}, ["generate"]) is None
+    assert probes.estimate_from_rates({"prompt_usd_per_1k": 1.0}, ["generate"]) is None
+
+
+def test_preview_prices_from_model_rates_when_the_catalog_states_none(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _unreported(client)
+    facts.state(conn, MODEL, rates=RATES)
+    body = _preview(client, conn, ["generate", "vision"])
+    assert body["estimated_cost_usd"] == pytest.approx(_at_rates(["generate", "vision"]))
+    assert body["estimate_basis"] == "rates"
+    assert fake.calls == 0
+
+
+def test_a_catalog_row_without_an_image_price_falls_through_to_rates(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _unreported(client)
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003", "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+    facts.state(conn, MODEL, rates=RATES)
+    body = _preview(client, conn, ["generate", "vision"])
+    assert body["estimated_cost_usd"] == pytest.approx(_at_rates(["generate", "vision"]))
+    assert body["estimate_basis"] == "rates"
+    assert fake.calls == 0
+
+
+def test_preview_prices_from_pricing_json_when_the_model_has_no_rates(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _unreported(client)
+    store.pricing.write_pricing({MODEL: RATES})
+    body = _preview(client, conn)
+    assert body["estimated_cost_usd"] == pytest.approx(_at_rates(["generate"]))
+    assert body["estimate_basis"] == "rates"
+    assert fake.calls == 0
+
+
+def test_the_models_rates_outrank_pricing_json(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _unreported(client)
+    store.pricing.write_pricing({MODEL: {"prompt_usd_per_1k": 9.0, "completion_usd_per_1k": 9.0}})
+    facts.state(conn, MODEL, rates=RATES)
+    assert _preview(client, conn)["estimated_cost_usd"] == pytest.approx(_at_rates(["generate"]))
+    assert fake.calls == 0
+
+
+def test_a_catalog_price_outranks_rates(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003", "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+    facts.state(conn, MODEL, rates=RATES)
+    body = _preview(client, conn)
+    assert body["estimated_cost_usd"] == pytest.approx(probes.estimate_usd(row, ["generate"]))
+    assert body["estimate_basis"] == "catalog"
+    assert fake.calls == 0
+
+
+def test_no_price_anywhere_is_null(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+    body = _preview(client, conn)
+    assert body["estimated_cost_usd"] is None
+    assert body["estimate_basis"] is None
+    assert fake.calls == 0
+
+
+def test_a_stated_free_catalog_row_is_a_catalog_zero_not_a_fall_through(client):
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0", "completion": "0"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+    facts.state(conn, MODEL, rates=RATES)
+    body = _preview(client, conn)
+    assert body["estimated_cost_usd"] == 0.0
+    assert body["estimate_basis"] == "catalog"
+    assert fake.calls == 0
+
+
+def test_a_provider_that_reports_its_price_is_never_priced_from_the_users_rates(client):
+    """OpenRouter bills what it says it bills, and the ledger never applies a
+    user rate to it -- so with no catalog row the preview is "cost unknown",
+    never "≈ $0.00 at your rates" from a zero default meant for local models."""
+    fake = FakeOpenRouter(["ok"])
+    _use(client, fake)
+    conn = _connection(client)
+    store.pricing.write_pricing({"": {"prompt_usd_per_1k": 0.0, "completion_usd_per_1k": 0.0}})
+    body = _preview(client, conn, ["generate", "vision"])
+    assert body["estimated_cost_usd"] is None
+    assert body["estimate_basis"] is None
+    # Nor from rates stated on the model itself.
+    facts.state(conn, MODEL, rates=RATES)
+    body = _preview(client, conn, ["generate", "vision"])
+    assert body["estimated_cost_usd"] is None
+    assert body["estimate_basis"] is None
+    # A catalog row that states token prices but no image price stays unknown too.
+    row = catalog.entry({"id": MODEL, "pricing": {"prompt": "0.000003", "completion": "0.000015"}})
+    store.llm_connections.set_cached_models(conn, [row], _rev(conn))
+    body = _preview(client, conn, ["generate", "vision"])
+    assert body["estimated_cost_usd"] is None
+    assert body["estimate_basis"] is None
+    assert fake.calls == 0
+
+
 # ---- refusals: nothing sent, nothing metered ---------------------------------
 
 @pytest.mark.parametrize("confirm", [None, False, "true", 1])
@@ -349,15 +500,18 @@ def test_a_confirmed_test_meters_one_row_per_probe_and_records_the_verdicts(
     rows = _rows()
     assert sorted(r["task"] for r in rows) == ["model-test"] * 3
     assert all(not r.get("campaign") for r in rows)
-    # The embed probe's row carries no token counts (`_vector` reports none)
-    # and says its operation; the two chat probes' rows carry what the
-    # provider reported.
-    uncounted = [r for r in rows
-                 if r.get("prompt_tokens") is None and r.get("completion_tokens") is None]
-    assert len(uncounted) == 1
-    assert uncounted[0]["model"] == MODEL
-    assert uncounted[0]["provider"] == "openrouter"
-    assert uncounted[0]["operation"] == "embed"
+    # The embed probe's endpoint reported no counts (`_vector` reports none),
+    # so its prompt is counted locally and says so, and it never gets a
+    # completion count (slice E, ruling I1); it says its operation. The two
+    # chat probes' rows carry what the provider reported.
+    embedded = [r for r in rows if r.get("operation") == "embed"]
+    assert len(embedded) == 1
+    assert embedded[0]["model"] == MODEL
+    assert embedded[0]["provider"] == "openrouter"
+    assert embedded[0]["prompt_tokens"] > 0
+    assert embedded[0]["tokens_estimated"] is True
+    assert "completion_tokens" not in embedded[0]
+    assert not any(r.get("tokens_estimated") for r in rows if r is not embedded[0])
 
     verified = facts.of(conn, MODEL, rev)["verified"]
     assert {c: r["ok"] for c, r in verified.items()} == {
@@ -963,3 +1117,20 @@ def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
     got = run["result"]["results"]
     assert got["generate"]["kind"] == "timeout", got
     assert got["vision"]["kind"] == "not_sent", got
+
+
+def test_a_model_test_row_carries_its_probe_operation(client, monkeypatch):
+    """M9: each probe's row names the operation it probed, and the billing the
+    lowered connection carries -- through `llm_usage.with_account`, so the
+    connection the run holds is never written to."""
+    _use(client, FakeOpenRouter(["ok"]))
+    conn = _connection(client)
+    _embedder(monkeypatch, _vector)
+
+    _run(client, conn, ["embed", "generate"])
+
+    rows = _rows()
+    assert sorted(r.get("operation") for r in rows) == ["embed", "generate"]
+    assert all(r["provider_id"] == conn for r in rows)
+    assert all(r["billing"] == "metered" for r in rows)
+    assert all("role" not in r for r in rows)

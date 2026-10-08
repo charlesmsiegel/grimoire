@@ -274,7 +274,13 @@ def test_a_route_pin_lowers_to_that_connections_dict(at_state):
     assert conn["id"] == "local" and conn["base_url"] == "http://localhost:1234/v1"
     # The fallback the call carries (`spare`) is the facade's, not the record's.
     assert conn[llm.FALLBACK_KEY]["id"] == "spare"
-    assert {k: v for k, v in conn.items() if k not in ("sampling", llm.FALLBACK_KEY)} == raw
+    # The account block is the ledger's (slice E): what the resolution knows of
+    # the attempt, not a field of the record.
+    assert {k: v for k, v in conn.items()
+            if k not in ("sampling", llm.FALLBACK_KEY, inf.ACCOUNT_KEY)} == raw
+    # ...and the excluded block is pinned in place: the provider's billing and
+    # the operation, with no role, because a pin is no role's slot.
+    assert conn[inf.ACCOUNT_KEY] == {"billing": "metered", "operation": "generate"}
     assert conn["sampling"] == {"preset_id": "warm", "preset_name": "warm",
                                 "scope": "connection", "params": {"temperature": 0.9}}
     assert "model_params" not in conn          # not an OpenRouter connection

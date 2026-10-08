@@ -412,6 +412,12 @@ def _age(path, seconds_ago: int) -> None:
     os.utime(path, (stamp, stamp))
 
 
+def _unpriced(model: str, calls: int) -> dict:
+    """One `unpriced_models` entry for a row that names no provider: only the
+    table can price it, so its facts key is its own model string."""
+    return {"model": model, "facts_model": model, "provider_id": "", "calls": calls}
+
+
 def test_an_appended_row_reaches_the_unpriced_list_once_the_file_changes(home, monkeypatch):
     path = home / "usage" / "2026-08.jsonl"
     _write(home, "2026-08", [_call("2026-08-14T10:00:00Z", "saltmarch", model="local/glm")])
@@ -420,15 +426,15 @@ def test_an_appended_row_reaches_the_unpriced_list_once_the_file_changes(home, m
     real = usage._month_unpriced
     monkeypatch.setattr(usage, "_month_unpriced", lambda p: parsed.append(p) or real(p))
 
-    assert usage.unpriced_models() == [{"model": "local/glm", "calls": 1}]
-    assert usage.unpriced_models() == [{"model": "local/glm", "calls": 1}]
+    assert usage.unpriced_models() == [_unpriced("local/glm", 1)]
+    assert usage.unpriced_models() == [_unpriced("local/glm", 1)]
     assert len(parsed) == 1, "an unchanged month file is not parsed twice"
 
     _write(home, "2026-08", [_call("2026-08-14T11:00:00Z", "saltmarch", model="local/glm"),
                              _call("2026-08-14T11:01:00Z", "saltmarch", model="local/mistral")])
     _age(path, 30)
-    assert usage.unpriced_models() == [{"model": "local/glm", "calls": 2},
-                                       {"model": "local/mistral", "calls": 1}]
+    assert usage.unpriced_models() == [_unpriced("local/glm", 2),
+                                       _unpriced("local/mistral", 1)]
     assert len(parsed) == 2
 
 
@@ -444,7 +450,7 @@ def test_a_pricing_edit_applies_without_the_ledger_changing(home, monkeypatch):
 
     pricing.write_pricing({"local/glm": {"prompt_usd_per_1k": 1.0,
                                          "completion_usd_per_1k": 1.0}})
-    assert usage.unpriced_models() == [{"model": "z-ai/glm", "calls": 1}]
+    assert usage.unpriced_models() == [_unpriced("z-ai/glm", 1)]
 
 
 def test_the_unpriced_list_still_counts_only_what_a_rate_could_price(home):
@@ -462,8 +468,8 @@ def test_the_unpriced_list_still_counts_only_what_a_rate_could_price(home):
         _call("2026-08-01T10:04:00Z", "saltmarch", model=""),
     ])
 
-    assert usage.unpriced_models() == [{"model": "b/two", "calls": 2},
-                                       {"model": "a/one", "calls": 1}]
+    assert usage.unpriced_models() == [_unpriced("b/two", 2),
+                                       _unpriced("a/one", 1)]
 
 
 def test_an_unreadable_month_is_not_remembered_as_empty(home, monkeypatch):
@@ -481,7 +487,7 @@ def test_an_unreadable_month_is_not_remembered_as_empty(home, monkeypatch):
     monkeypatch.setattr(usage, "_month_unpriced", locked)
     assert usage.unpriced_models() == []
     monkeypatch.setattr(usage, "_month_unpriced", real)
-    assert usage.unpriced_models() == [{"model": "local/glm", "calls": 1}]
+    assert usage.unpriced_models() == [_unpriced("local/glm", 1)]
 
 
 def test_bytes_that_are_not_utf8_cost_their_own_month_not_the_list(home):
@@ -494,4 +500,4 @@ def test_bytes_that_are_not_utf8_cost_their_own_month_not_the_list(home):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b'{"ts": "2026-07-14T10:01:00Z", "model": "\xff\xfe"}\n')
 
-    assert usage.unpriced_models() == [{"model": "local/glm", "calls": 1}]
+    assert usage.unpriced_models() == [_unpriced("local/glm", 1)]

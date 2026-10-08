@@ -690,13 +690,25 @@ Hidden rows are returned with their reasons for the screens that explain them.
 Optional; offered on unverified rows and on the model-facts panel.
 
 1. The user clicks **Test…**. A confirmation states the provider, model, what
-   will be sent, and the estimated cost when the catalog states a price
-   (otherwise "cost unknown — one tiny request"; the user's rates and
-   `pricing.json` join the estimate with slice E). The vision probe also adds
-   one image at the catalog row's per-image price (OpenRouter's
-   `pricing.image`, kept on the normalised row as `image`); a row that states
-   token prices but no parseable non-negative image price leaves the vision
-   probe, and so the whole estimate, unknown — never priced as free.
+   will be sent, and the estimated cost. The estimate is the catalog's reported
+   price when it states one. Otherwise it depends on whether the provider
+   reports its own price (its preset's `reports_price`, e.g. OpenRouter):
+   - a provider that **reports** its price is "cost unknown". It never falls
+     through to the model's rates or `pricing.json`, because the ledger never
+     prices its calls from them (what it reports always wins, §9.1), and a
+     zero default there would read "≈ $0.00 at your rates" for a call that
+     will be billed;
+   - a provider that does **not** report a price is priced from the model's
+     rates, then `pricing.json`.
+
+   `estimate_basis` says which source priced it. Only when none of them does
+   the dialog say "cost unknown — one tiny request". The vision probe also
+   adds one image at the catalog row's per-image price (OpenRouter's
+   `pricing.image`, kept on the normalised row as `image`); a catalog row that
+   states token prices but no parseable non-negative image price leaves the
+   *catalog* estimate unknown — never priced as free — and the rule above
+   then applies. With user rates the vision probe is priced from its token
+   guess, since rates price image input as prompt tokens.
 2. On confirm, one probe per capability asked about:
    - generate: a fixed instruction, the reply capped at 64 tokens (the vision
      probe takes the same cap)
@@ -944,19 +956,77 @@ table of its own.
 
 ### 9.1 Price precedence
 
-1. **The provider reported a price** → `cost_usd`; or `estimated_usd` when the
-   provider reports a subscription-equivalent price (today's `claude_agent`).
+1. **The provider reported a price** → the column its `cost_basis` names:
+   `billed` → `cost_usd`, `equivalent` → `estimated_usd` (today's
+   `claude_agent` reports the second). `billing` is a label and never a
+   switch: `cost_basis` alone decides the column. A subscription-tagged row
+   counts against a budget only when its provider reported a *billed* price,
+   because then the provider said it charged; the tag changes what a surface
+   says, never which column a figure lands in.
 2. **Otherwise** rates × tokens → `modelled_usd`. Rates: the model facts'
    `rates` for (provider, model) first, then a `pricing.json` match (exact,
-   then wildcard, then `""`). A provider with `billing: subscription` tags the
-   row `subscription`, and cost surfaces label those rows "subscription — not
-   billed"; they never count against a budget (they never did: only
-   `cost_usd` does).
+   then wildcard, then `""`).
+   - Facts rates price only a row that names a provider (`provider_id`, §9.3).
+     A row filed before that field has only `connection`, a display name that
+     is neither unique nor stable, so it prices from `pricing.json` alone; no
+     name is matched.
+   - Facts rates are stated under the selection's model, so they are looked up
+     by the row's `requested_model` when it has one. `pricing.json` matches
+     `model` first, so an existing table prices exactly what it did (no older
+     row carries `requested_model`), and then `requested_model`, tier by tier
+     (every name's exact entry, then every name's wildcard, then `""`). The
+     second name is what keeps the two chores agreeing (§9.2): configuration
+     knows only the name asked for, so an entry under it must price the calls
+     that answered as a dated snapshot of it, or the Housekeeping chore would
+     clear while every call stayed unpriced. Both chores and every rollup ask
+     the one function, `pricing.rate_for_call`.
+   - `provider_id` is unique at any instant but not stable across a delete:
+     a provider id is its name's slug, and a slug is reusable. Rollups price
+     history at current rates, so deleting a provider (its facts go with it)
+     sends its rows to `pricing.json` or to unpriced, and a provider created
+     later under the deleted one's id prices that id's old rows with its own
+     rates wherever the model strings coincide. The ledger has nothing else to
+     tell the two apart, and this is accepted: only `modelled_usd` moves,
+     never spend (`cost_usd`) and never a budget, because no rate touches a
+     row its provider priced.
+   - Writing rates is strict and reading them is fail-soft: `PUT …/facts`
+     refuses a partial, invalid or unknown-field entry with 400 (`{}` clears),
+     and a mangled file reads as no rates, falling back to `pricing.json`.
+   - A provider with `billing: subscription` tags the row `subscription`, and
+     cost surfaces label those rows "subscription — not billed". Their modelled
+     figure is arithmetic this side did and stays in `modelled_usd`. Such rows
+     are a breakdown count rather than a figure: `modelled_subscription_calls`
+     sits inside `modelled_calls` and `unpriced_subscription_calls` inside
+     `unpriced_calls`. There is no subscription dollar figure, since a fourth
+     one is one more thing to be added to the other three.
 3. **Tokens** are the provider-reported counts when present. When a provider
-   reports no counts, Grimoire counts locally with `store/tokens.py` (tiktoken
+   reports no count, Grimoire counts locally with `store/tokens.py` (tiktoken
    on desktop, the characters/4 heuristic on Android) and flags the row
    `tokens_estimated`. A row with estimated tokens is labelled as such wherever
    its figure appears.
+   - Local estimation runs only for an attempt whose stream ended on its own,
+     which the facade decides and the row's status does not: a route can file
+     `ok` after breaking out early, and nobody knows what such a call billed.
+     An aborted or failed call is the same, since an estimate would invent
+     cost. Only the count the provider omitted is filled; image parts are not
+     estimated, and reasoning text is counted as completion.
+   - Estimated counts go in `prompt_tokens` / `completion_tokens`, flagged
+     `tokens_estimated: true`, so every existing reader sums them and every
+     rate can price them; the flag drives the labels, and buckets count
+     `estimated_token_calls`. An older build reading a synced ledger sees them
+     as counts.
+   - An `embed` row with no completion count is priced with completion 0: an
+     embedding generates nothing, so this is a structural fact rather than a
+     guess, and no estimate ever fills an embed row's completion. Every other
+     operation still needs both counts.
+   - The facade counts, off the event loop: the counter is injected into
+     `LLMClient` (the gateway imports no store), runs on a worker thread and is
+     bounded by `COUNT_TIMEOUT_S`. `Meter.done` only reads numbers.
+   - An embed call (slice D's door, `inference.embed`, and the model test's
+     embed probe) that returned without a prompt count gets one estimated from
+     its input texts, flagged the same way. It never starts an encoder load:
+     an encoder already loaded counts, else the characters/4 heuristic
+     (`tokens.count_if_loaded`). A failed or aborted embed is not estimated.
 4. **No rates anywhere** → `unpriced_calls`, as today.
 
 The three money columns and the "Estimated total" projection keep their
@@ -966,20 +1036,49 @@ rates.
 
 ### 9.2 The Housekeeping chore
 
-`chores.py` gains "Models in use with no price" in the Housekeeping group: the
-count of distinct selections in use — roles, role fallbacks, route pins, and
-campaign overrides of those — whose provider does not report prices and which
-have no rates in model facts or `pricing.json`. It is computed from
-configuration, never from the ledger (the chores contract: a live, cheap
-count). Its action opens that model's rates field.
+`routes/todo.py` gains "Models in use with no price" in the Housekeeping
+group (`store/chores.py` only holds the ignore set): the count of distinct
+`(provider, model)` pairs in use whose provider does not report prices and
+which have no rates in model facts or `pricing.json`. It counts across the
+global roles, their fallbacks and the chosen route pins, the Embedding role,
+and each campaign's overrides of those, so it is library-scoped. It skips
+dangling references, blank models and unchosen pins. "Reports a price" is the
+provider preset's `reports_price`, so OpenRouter and the Claude subscription
+never count; zero rates are a price. It is computed from configuration, never
+from the ledger (the chores contract: a live, cheap count), and sits beside the
+ledger-based `unpriced` chore: that one asks which recorded strings no rate
+matches, this one asks which configured models nothing would price. Its action
+opens that model's rates field.
 
 ### 9.3 Ledger rows
 
-Each usage row keeps `task` and gains `operation`, `provider`, `model`,
-`preset`, `role` (when a role supplied the selection), `decision_mode`
-(`native` | `structured`), `billing`, `tokens_estimated`. Embed and decide
-calls are metered from their first slice onward. `usage.Meter.done` remains
-the one place LLM failures are logged (CLAUDE.md, Observability).
+Each usage row keeps `task` and gains `operation`, `provider_id`,
+`requested_model`, `model`, `preset`, `role` (when a role supplied the
+selection), `decision_mode` (`native` | `structured`), `billing`,
+`tokens_estimated`. Embed and decide calls are metered from their first slice
+onward. `usage.Meter.done` remains the one place LLM failures are logged
+(CLAUDE.md, Observability).
+
+- `provider` stays the adapter kind, as every existing row already writes it
+  and an append-only ledger cannot change a field's meaning under rows older
+  builds still read. The provider goes in `provider_id`, and `connection`
+  stays the display name.
+- `model` is what answered. `requested_model` is what was asked for, recorded
+  only when it differs (a provider may name a dated snapshot of the model
+  requested); it keys the model's rates, which facts state under the
+  selection's model.
+- `role` is the slot that supplied the resolution, on both attempts, after
+  inheritance: a route whose role (e.g. Fast) has no selection inherits
+  Primary's and files `role: "primary"`, since Primary is the slot that
+  supplied it. It is absent for a pin, and absent when a per-call override
+  changed the provider or the model, because then the user supplied the
+  selection. A pinned route's
+  fallback does come from `default_role`'s fallback (§5.5) but files no role:
+  the row names the resolution's slot, not a separate guess at which slot the
+  fallback came from.
+- `preset` is the sampler preset actually sent: `conn["sampling"]["preset_id"]`
+  on the attempted dict, after `fallback_sampling`. It is never the §6.1
+  provider preset, which §5.4 names apart as `provider_preset`.
 
 An embed call files **one row per `embed_sync` call**, covering all of its
 batches. `operation` lands with slice D, which is first to write it; no row is
@@ -1327,7 +1426,7 @@ against this spec) and lands green under `make check`. Order is chosen so that
 | **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources) and the §5.3 capability check, OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
 | **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI, dropping an incapable fallback attempt (§5.3; B reports it); legacy settings UI removed. Also: the format-2 lowering overlaying model facts (§4.2); the migration run in the background with 409 `not_migrated` until it completes, the never-pruned `pre-inference-` safety backup, campaign markers, and fresh stores born at format 2 (§11); legacy keys refused at format 2 (§11.3); one refusal decision shared by the seam and the settings view (§12); the server-enforced confirmations for the Claude health check and for an **Embedding role change** (`confirm_embedding`, §10) — C makes paid OpenRouter embeddings selectable, so rule 1 cannot wait for D | **Yes** |
 | **D — Embedding operation** (settled) | `embed` / `embed_sync` in `store/inference/embed.py`, embed tasks (`routing.EMBED_TASKS`), metering (the confirmation on an Embedding-role change already landed in C and stays), and one reader of the Embedding role, `resolve.embedding` (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
-| **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag, the Housekeeping chore | Yes |
+| **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag (D's embed rows included: E stamps their account fields and estimates an unreported prompt, §9.1), the Housekeeping chore | Yes |
 | **F — `decide()`** | The contract, `generate(schema=)`, the structured backend, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
 | **G — Continuity decisions** | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision` | — |
 | **H — Native decisions** | OpenRouter and OpenAI decision adapters, the native → structured → fallback chain, `--live` evals | Opt-in |

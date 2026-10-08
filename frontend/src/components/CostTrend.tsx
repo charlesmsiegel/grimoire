@@ -1,5 +1,5 @@
 import type { MonthlyCosts } from "../api/types";
-import { money } from "./cost";
+import { about, estimatedTokensLine, estimatedTokensTitle, money } from "./cost";
 
 export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
   const ordered = [...rows].sort((a, b) => a.month.localeCompare(b.month));
@@ -31,8 +31,17 @@ export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
     if (key === "modelled_usd" && row.modelled_calls === 0) return "—";
     if (key === "estimated_total_usd" && row.unpriced_calls > 0
         && row.estimated_total_usd === 0) return "Incomplete";
-    return money(row[key]);
+    // Only the provider's charges are spend. The two estimate series and the
+    // projection are marked `≈`, so a month played only on a zero-rated model
+    // reads `≈ $0.00`, never a bare `$0.00` that looks like a bill.
+    return key === "cost_usd" ? money(row[key]) : about(row[key]);
   };
+  /** The estimated-tokens note, on a figure a count of ours can move: the
+   *  modelled series and the projection over it, never a provider's charge or
+   *  its own subscription estimate. */
+  const title = (row: MonthlyCosts["trend"][number], key: typeof series[number]["key"]) =>
+    key === "modelled_usd" || key === "estimated_total_usd"
+      ? estimatedTokensTitle(row) : undefined;
   return <section className="stats-block" aria-label="Monthly cost trend">
     <h2 className="section-label">Estimated total cost by month</h2>
     {months.length > 0 && <div className="cost-line-wrap">
@@ -53,7 +62,7 @@ export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
           points={months.map((row, index) => `${x(index)},${y(row.estimated_total_usd)}`).join(" ")} />
         {months.map((row, index) => <circle key={row.month} cx={x(index)}
           cy={y(row.estimated_total_usd)} r="4" fill="var(--accent)">
-          <title>{row.month}: {money(row.estimated_total_usd)} estimated total
+          <title>{row.month}: {about(row.estimated_total_usd)} estimated total
             {row.unpriced_calls > 0 ? `, incomplete: ${row.unpriced_calls} unpriced calls` : ""}</title>
         </circle>)}
       </svg>
@@ -67,10 +76,14 @@ export default function CostTrend({ rows }: { rows: MonthlyCosts["trend"] }) {
             <span className="field-hint">{label}</span>
             <span className="stats-trend-track"><span className="stats-trend-bar"
               style={{ width: `${row[key] / peak * 100}%`, backgroundColor: color }} /></span>
-            <span className="stats-trend-value">{amount(row, key)}</span>
+            <span className="stats-trend-value" title={title(row, key)}>{amount(row, key)}</span>
           </span>)}</span>
         {row.unpriced_calls > 0 &&
           <span className="field-hint">Incomplete: {row.unpriced_calls} unpriced calls</span>}
+        {/* Visible, beside "Incomplete", because the values' `title` is never
+            seen on a touch screen. */}
+        {estimatedTokensLine(row) !== undefined &&
+          <span className="field-hint">{estimatedTokensLine(row)}</span>}
       </li>)}
     </ol>
   </section>;

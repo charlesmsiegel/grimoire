@@ -7,7 +7,7 @@ import { api, type CampaignMeta, type CampaignSceneCosts,
          type SceneMeta } from "../api/client";
 import { PageShell, ColumnSection } from "../components/PageShell";
 import { errorText } from "../api/errors";
-import { bucketPrice, UNPRICED } from "../components/cost";
+import { bucketPrice, estimatedTokensTitle, UNPRICED } from "../components/cost";
 import { usePublishShellContext } from "../components/ShellStatus";
 import { useCampaignShell } from "../shell/ShellPayloadContext";
 import { sceneNumber } from "./sceneNumber";
@@ -436,7 +436,8 @@ export default function ScenesView({ ready = true }: { ready?: boolean }) {
                   {t === undefined ? "" : `${t}t`}
                 </span>
                 <span className={"scene-item-spend"
-                                 + (price === UNPRICED ? " money-unpriced" : "")}>
+                                 + (price === UNPRICED ? " money-unpriced" : "")}
+                      title={row ? estimatedTokensTitle(row) : undefined}>
                   {price ?? ""}
                 </span>
                 <Link className={"scene-item-act " + act.tone}

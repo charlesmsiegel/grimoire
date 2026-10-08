@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client";
 import type { MonthlyCosts } from "../api/types";
-import { MoneyColumns, money } from "../components/cost";
+import { MoneyColumns, about, estimatedTokensTitle, money } from "../components/cost";
 import CostTrend from "../components/CostTrend";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import ReportMonth, { useReportMonth } from "../components/ReportMonth";
@@ -45,7 +45,7 @@ export default function GlobalCostsView() {
         <CostTrend rows={report.trend} />
         <MoneyColumns bucket={report.totals} />
         <p className="field-hint">Estimated total {report.totals.unpriced_calls > 0
-          && report.totals.estimated_total_usd === 0 ? "incomplete" : money(report.totals.estimated_total_usd)}
+          && report.totals.estimated_total_usd === 0 ? "incomplete" : about(report.totals.estimated_total_usd)}
           {report.totals.unpriced_calls > 0 && ` · Incomplete: ${report.totals.unpriced_calls} unpriced calls`}
         </p>
         {rows.length === 0 && report.unassigned.calls === 0 &&
@@ -62,10 +62,14 @@ export default function GlobalCostsView() {
                 : row.campaign_name}</td>
               <td>{row.calls}</td>
               <td>{row.priced_calls > row.subscription_calls ? money(row.cost_usd) : "—"}</td>
-              <td>{row.subscription_calls > 0 ? money(row.estimated_usd) : "—"}</td>
-              <td>{row.modelled_calls > 0 ? money(row.modelled_usd) : "—"}</td>
-              <td>{row.unpriced_calls > 0 && row.estimated_total_usd === 0
-                ? "Incomplete" : money(row.estimated_total_usd)}{row.unpriced_calls > 0 &&
+              <td>{row.subscription_calls > 0 ? about(row.estimated_usd) : "—"}</td>
+              <td title={estimatedTokensTitle(row)}>
+                {row.modelled_calls > 0 ? about(row.modelled_usd) : "—"}</td>
+              {/* A projection, never spend: `≈`, so a zero-rated row reads
+                  `≈ $0.00` rather than a bare `$0.00`. */}
+              <td title={estimatedTokensTitle(row)}>{row.unpriced_calls > 0
+                && row.estimated_total_usd === 0
+                ? "Incomplete" : about(row.estimated_total_usd)}{row.unpriced_calls > 0 &&
                 <span className="field-hint"> incomplete: {row.unpriced_calls} unpriced</span>}</td>
             </tr>)}</tbody>
           </table></div>}

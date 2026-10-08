@@ -18,7 +18,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query
 
 from .. import store
-from .common import _campaign_root_or_404, _require_scene
+from .common import RATES_NEWER_FORMAT, _campaign_root_or_404, _require_scene, rates_block
 from .models import BudgetBody, PricingBody
 
 router = APIRouter()
@@ -159,9 +159,16 @@ def get_campaign_scene_costs(cid: str, order: str = _ORDER, month: str = ""):
     # Which model strings the ledger holds that no pricing entry matches. The
     # page's "N calls reported no price" is a count; this is the reason, and
     # without it the reader has no way to see that their table says
-    # `z.ai/...` where the ledger recorded `z-ai/...`.
+    # `z.ai/...` where the ledger recorded `z-ai/...`. `rates_editable` says
+    # whether a line may offer the model's own rates: their editor saves only
+    # on a store at the current model-settings format. `rates_newer` says the
+    # store is past it, written by a newer build, so the page never tells the
+    # reader the rates arrive "after the upgrade" there.
+    block = rates_block()
     return {**rollup, "scenes": named,
-            "unpriced_models": store.usage.unpriced_models()}
+            "unpriced_models": store.usage.unpriced_models(),
+            "rates_editable": block is None,
+            "rates_newer": block == RATES_NEWER_FORMAT}
 
 
 @router.get("/usage/monthly")

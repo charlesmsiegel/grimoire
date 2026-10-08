@@ -596,6 +596,49 @@ def test_claude_md_names_every_run_class():
     )
 
 
+#: The ledger fields `CLAUDE.md`'s Costs section tells a reader a row carries.
+#: A rename in `usage.record` would leave the section naming a field no row has.
+COSTS_LEDGER_FIELDS = ("provider_id", "requested_model", "tokens_estimated", "billing")
+
+#: The bucket counts the same section names, each a key `store/usage.py` bumps.
+COSTS_BUCKET_COUNTS = ("modelled_subscription_calls", "estimated_token_calls")
+
+
+def test_claude_md_costs_names_real_ledger_fields():
+    """`CLAUDE.md`'s Costs section names ledger fields, a bucket count or two
+    and the one rate-precedence function, and each must still exist under that
+    name: a field is a parameter of `usage.record`, a count is a key
+    `store/usage.py` writes, and `rate_for_call` is a callable in `pricing`.
+
+    The section is the first thing a reader of the cost surfaces is pointed
+    at, so a field renamed in code and not in prose sends them looking for a
+    row key that no row carries."""
+    import inspect
+
+    from grimoire.store import pricing, usage
+
+    section = _section(_read(CLAUDE), "Costs")
+    unnamed = [f for f in COSTS_LEDGER_FIELDS + COSTS_BUCKET_COUNTS
+               if f"`{f}`" not in section]
+    assert not unnamed, f"CLAUDE.md's Costs section no longer names: {unnamed}"
+
+    params = inspect.signature(usage.record).parameters
+    missing = [f for f in COSTS_LEDGER_FIELDS if f not in params]
+    assert not missing, (
+        f"CLAUDE.md's Costs section names ledger fields `usage.record` does not "
+        f"take: {missing}"
+    )
+    source = (SRC / "store" / "usage.py").read_text(encoding="utf-8")
+    gone = [c for c in COSTS_BUCKET_COUNTS if f'"{c}"' not in source]
+    assert not gone, f"store/usage.py no longer writes these bucket counts: {gone}"
+
+    assert "`pricing.rate_for_call`" in section
+    assert callable(getattr(pricing, "rate_for_call", None)), (
+        "CLAUDE.md names `pricing.rate_for_call` as the rate-precedence function, "
+        "and `store/pricing.py` has no such callable"
+    )
+
+
 def test_no_orphan_images():
     """No capture under `docs/` that nothing references.
 

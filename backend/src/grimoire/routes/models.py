@@ -133,7 +133,9 @@ class FactsUpdate(BaseModel):
     field but `model` is `Any`: the store checks each value (`facts.state`),
     so a `"true"` for `prefill` is the 400 it is rather than coerced into a
     bool by one pydantic version and not the other. `overrides` is
-    `{capability: "" | "yes" | "no"}`, merged per capability ("" removes)."""
+    `{capability: "" | "yes" | "no"}`, merged per capability ("" removes).
+    `rates` is the model's own per-token price (`pricing.FIELDS`): both base
+    rates or a 400, `{}` removing them, null leaving them."""
 
     model: str = ""
     vision: Any = None
@@ -142,6 +144,7 @@ class FactsUpdate(BaseModel):
     overrides: Any = None
     #: Only `true` confirms a write that turns the Embedding role on.
     confirm_embedding: Any = None
+    rates: Any = None
 
 
 class HealthCheck(BaseModel):

@@ -37,7 +37,11 @@ from .. import store
 from ..store.continuity import candidates as continuity_candidates
 from ..store.continuity import effective as continuity_effective
 from ..store.continuity import pending as continuity_pending
-from .common import _dump  # noqa: F401  (kept for the pydantic-agnostic rule)
+from .common import (
+    _dump,  # noqa: F401  (kept for the pydantic-agnostic rule)
+    rates_block,
+    rates_editable,
+)
 
 router = APIRouter()
 
@@ -429,13 +433,17 @@ def _chore_continuity_closures(ctx: _Ctx) -> dict | None:
 
 
 def _chore_unpriced(ctx: _Ctx) -> dict | None:
-    """Models the ledger holds that no pricing entry matches.
+    """Models the ledger holds that no rate prices.
 
     The chore exists because the failure is silent: a table is matched by model
     string, so an entry whose key does not match what was actually recorded
     prices nothing and says nothing. Naming the strings is the whole fix -- the
     reader can then see that their entry reads `z.ai/...` where the ledger says
     `z-ai/...`, which no amount of staring at a rollup would reveal.
+
+    `unpriced_models` answers per provider, so one model served by two
+    providers is two entries there (and two items below, each opening its own
+    provider's rates); the names here list each recorded string once (M6).
     """
     try:
         models = store.usage.unpriced_models()
@@ -444,15 +452,72 @@ def _chore_unpriced(ctx: _Ctx) -> dict | None:
     if not models:
         return None
     calls = sum(m["calls"] for m in models)
-    names = ", ".join(m["model"] for m in models[:3])
-    more = "" if len(models) <= 3 else f", and {len(models) - 3} more"
+    distinct = list(dict.fromkeys(m["model"] for m in models))
+    names = ", ".join(distinct[:3])
+    more = "" if len(distinct) <= 3 else f", and {len(distinct) - 3} more"
+    block = rates_block()
+    how = ("Either the model's own rates, on its provider, or an entry in your "
+           "pricing table can price them; a table entry has to match the model "
+           "string exactly." if block is None else
+           "An entry in your pricing table can price them; a table entry has to "
+           "match the model string exactly. " + block)
     return {
         "id": "unpriced", "scope": "library", "group": "Costs & pricing", "severity": "warn", "n": calls,
-        "what": f"{calls} call{'s' if calls != 1 else ''} no pricing entry matches",
-        "why": f"Nobody reported a price for these and your table has no rate that "
-               f"matches them, so they are counted rather than costed: {names}{more}. "
-               f"The model string has to match exactly.",
+        "what": f"{calls} call{'s' if calls != 1 else ''} no rate prices",
+        "why": f"Nobody reported a price for these and no rate you have entered "
+               f"prices them, so they are counted rather than costed: {names}{more}. "
+               + how,
         "fix": "/config?section=pricing", "fix_label": "Pricing",
+    }
+
+
+#: What stops the models chore and its items from answering: `config.md`, the
+#: connection lookup or a campaign that cannot be read, or a store lock held
+#: too long (M11). Each costs this chore, never the page.
+_UNPRICED_IN_USE_UNREADABLE = (OSError, UnicodeDecodeError, ValueError, store.locks.StoreBusy)
+
+
+def _unpriced_in_use() -> list[dict] | None:
+    """`in_use.unpriced()`, or None when it could not be read."""
+    try:
+        return store.inference.in_use.unpriced()
+    except _UNPRICED_IN_USE_UNREADABLE:
+        return None
+
+
+def _chore_unpriced_models(ctx: _Ctx) -> dict | None:
+    """Models the settings select that nothing would price (spec 9.2).
+
+    The configuration-side twin of `unpriced`: that one asks which strings the
+    ledger RECORDED that no rate matches, this one which models the roles,
+    fallbacks, chosen pins and campaign overrides SELECT that no rate would
+    price -- so a local model is named before its first call is counted
+    rather than costed. Computed from settings alone, never the ledger, so it
+    costs the same however long the library has been played."""
+    models = _unpriced_in_use()
+    if not models:
+        return None
+    n = len(models)
+    first = models[0]
+    why = ("Their provider reports no price, and neither the model's own rates nor "
+           "your pricing table covers them, so their calls are counted rather than "
+           "costed. A local model is free only once you enter zero rates for it.")
+    block = rates_block()
+    if block is not None:
+        return {
+            "id": "unpriced-models", "scope": "library", "group": "Housekeeping",
+            "severity": "note", "n": n,
+            "what": f"{n} model{'s' if n != 1 else ''} in use with no price",
+            "why": why + " " + block,
+            "fix": "/config?section=pricing", "fix_label": "Pricing",
+        }
+    return {
+        "id": "unpriced-models", "scope": "library", "group": "Housekeeping",
+        "severity": "note", "n": n,
+        "what": f"{n} model{'s' if n != 1 else ''} in use with no price",
+        "why": why,
+        "fix": _model_rates_href(first["provider_id"], first["model"]),
+        "fix_label": "Set rates",
     }
 
 
@@ -731,6 +796,7 @@ LIBRARY_BUILDERS = (
     ("world-covers", _chore_world_covers),
     ("world-subjects", _chore_world_subjects),
     ("unpriced", _chore_unpriced),
+    ("unpriced-models", _chore_unpriced_models),
     ("embeddings", _chore_embeddings),
 )
 
@@ -944,13 +1010,106 @@ def _items_owed(cid: str) -> list[dict]:
 
 
 def _items_unpriced(cid: str) -> list[dict]:
+    """One item per call shape -- provider, the model asked for, the model that
+    answered -- as `unpriced_models` keeps them apart, so the id carries all
+    three and no two items share one: two providers serving one model (M6), or
+    two names asked of one provider that answered as one snapshot. The label
+    says which name it was asked for as when that differs, as the Costs page
+    does. An item whose provider still exists opens that model's rates, under
+    the model the rates are stated for; one with no provider, or a deleted
+    one, opens the pricing table, the only rate that can reach it -- and so
+    does every item while a model's own rates cannot be written
+    (`rates_editable`)."""
     try:
         models = store.usage.unpriced_models()
     except (OSError, ValueError):
         return []
-    return [{"id": m["model"], "label": m["model"],
-             "detail": f"{m['calls']} calls that a rate would price",
-             "fix": "/config?section=pricing"} for m in models]
+    named = any(m.get("provider_id") for m in models)
+    providers = _provider_ids() if named and rates_editable() else set()
+    out = []
+    for m in models:
+        provider_id = m.get("provider_id") or ""
+        asked = m.get("facts_model") or m["model"]
+        fix = "/config?section=pricing"
+        if provider_id in providers:
+            fix = _model_rates_href(provider_id, asked)
+        label = m["model"] if asked == m["model"] else f"{m['model']} asked for as {asked}"
+        out.append({"id": f"{provider_id}:{m['model']}:{asked}", "label": label,
+                    "detail": f"{m['calls']} calls that a rate would price",
+                    "fix": fix})
+    return out
+
+
+def _provider_ids() -> set[str]:
+    """The providers that exist now, or none when they cannot be listed --
+    every item then opens the pricing table, which can price any of them."""
+    try:
+        return {c["id"] for c in store.llm_connections.list_connections()}
+    except (OSError, ValueError):
+        return set()
+
+
+#: What `encodeURIComponent` leaves unescaped beyond what `quote` always does.
+_URI_COMPONENT_SAFE = "!*'()"
+
+
+def _model_rates_href(provider_id: str, model: str) -> str:
+    """`/providers/<id>/models/<model>?edit=rates`, encoded as the frontend's
+    `ProvidersView.modelPath` encodes it: the id whole, the model segment by
+    segment, because a model id's own `/` is part of the path the `models/*`
+    splat reads back."""
+    segments = "/".join(quote(seg, safe=_URI_COMPONENT_SAFE) for seg in model.split("/"))
+    return (f"/providers/{quote(provider_id, safe=_URI_COMPONENT_SAFE)}"
+            f"/models/{segments}?edit=rates")
+
+
+#: Each route's label, for the models chore's detail.
+_ROUTE_LABELS = {route.key: route.label for route in store.routing.ROUTES}
+
+
+def _use_label(use: dict, names: dict[str, str]) -> str:
+    """One use as the models chore's detail names it: the role (or its
+    fallback) or the route, and the campaign's name where it is a campaign's."""
+    if use["kind"] == "route":
+        label = _ROUTE_LABELS.get(use["key"], use["key"])
+    else:
+        label = use["key"].capitalize()
+        if use["kind"] == "fallback":
+            label += " fallback"
+    if use["scope"] == "campaign":
+        cid = use.get("cid", "")
+        label += f" ({names.get(cid, cid)})"
+    return label
+
+
+def _campaign_names(models: list[dict]) -> dict[str, str]:
+    """The name of each campaign a use names, by id; an id where it cannot be read."""
+    names: dict[str, str] = {}
+    for m in models:
+        for use in m["uses"]:
+            cid = use.get("cid", "")
+            if cid and cid not in names:
+                try:
+                    meta = store.inference.in_use.campaign_meta(cid)
+                except (store.CampaignNotFound, *_UNPRICED_IN_USE_UNREADABLE):
+                    meta = {}
+                names[cid] = str(meta.get("name") or cid)
+    return names
+
+
+def _items_unpriced_models(cid: str) -> list[dict]:
+    """One item per (provider, model) in use with no price; a model on two
+    providers is two items, each opening its own provider's rates (M6) -- or
+    the pricing table, while those cannot be written (`rates_editable`)."""
+    models = _unpriced_in_use() or []
+    names = _campaign_names(models)
+    editable = rates_editable()
+    return [{"id": f"{m['provider_id']}:{m['model']}",
+             "label": f"{m['model']} on {m['provider_name']}",
+             "detail": "Used by " + ", ".join(_use_label(u, names) for u in m["uses"]),
+             "fix": (_model_rates_href(m["provider_id"], m["model"]) if editable
+                     else "/config?section=pricing")}
+            for m in models]
 
 
 def _items_embeddings(cid: str) -> list[dict]:
@@ -1063,6 +1222,7 @@ ITEMS = {
     "continuity-overlaps": _items_continuity_overlaps,
     "continuity-closures": _items_continuity_closures,
     "unpriced": _items_unpriced,
+    "unpriced-models": _items_unpriced_models,
     "embeddings": _items_embeddings,
     "world-describe": _items_world_describe,
     "world-taglines": _items_world_taglines,

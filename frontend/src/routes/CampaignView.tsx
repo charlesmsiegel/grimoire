@@ -35,7 +35,9 @@ import { CalendarConfig } from "../components/CalendarConfig";
 import { CampaignCover } from "../components/CoverPanel";
 import { SceneTrackerPanel } from "../components/tracker/SceneTrackerPanel";
 import { SceneInspector, type RewrittenPost } from "../components/SceneInspector";
-import { UNPRICED, bucketPrice, money } from "../components/cost";
+import {
+  UNPRICED, bucketPrice, estimatedTokensTitle, headlineIsEstimate, money,
+} from "../components/cost";
 import MechanicsConfig from "../components/MechanicsConfig";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
 import { NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "../components/RerollRoute";
@@ -1877,6 +1879,11 @@ export default function CampaignView({ ready }: { ready: boolean }) {
     // different claims, and only the caller knows which one it is holding.
     ? bucketPrice(sceneCosts.usage.totals)
     : null;
+  /** Whether that figure is spend -- `cost_usd`, what a provider charged. An
+   *  estimate (`≈`) is real usage and not money anybody paid, so it is never
+   *  labelled SPEND; neither is "not reported". */
+  const sceneSpendIsSpend = sceneSpend !== null && sceneSpend !== UNPRICED
+    && !!sceneCosts && !headlineIsEstimate(sceneCosts.usage.totals);
 
   // A dismissal belongs to the campaign it was made in, to the level it was
   // made at, and to the budget it was made against. Without the campaign, "I
@@ -5422,8 +5429,10 @@ export default function CampaignView({ ready }: { ready: boolean }) {
                     can be clamped, and a headline built by adding a capped
                     list would understate without saying so. */}
                 {sceneSpend && (
-                  <span className={sceneSpend === UNPRICED ? "money-unpriced" : undefined}>
-                    {" · "}{sceneSpend}{sceneSpend === UNPRICED ? "" : " SPEND"}
+                  <span className={sceneSpend === UNPRICED ? "money-unpriced" : undefined}
+                        title={sceneCosts ? estimatedTokensTitle(sceneCosts.usage.totals)
+                          : undefined}>
+                    {" · "}{sceneSpend}{sceneSpendIsSpend ? " SPEND" : ""}
                   </span>
                 )}
               </div>

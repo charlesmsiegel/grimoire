@@ -6,13 +6,25 @@ The shared error type lives in `llm_errors.py`, not here — see its docstring.
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
+import queue
 import random
+import threading
 import time
 import uuid
 from collections.abc import AsyncIterator
+from concurrent.futures import Executor, Future
 
-from . import content_parts, llm_capture, llm_errors, llm_reasoning, llm_sampling, model_guidance
+from . import (
+    content_parts,
+    llm_capture,
+    llm_errors,
+    llm_reasoning,
+    llm_sampling,
+    llm_usage,
+    model_guidance,
+)
 from .anthropic import AnthropicClient
 from .claude_agent import ClaudeAgentClient
 from .llm_errors import LLMError
@@ -42,6 +54,88 @@ _CLOSE_TIMEOUT = 5.0
 # unlike the other two kinds, whose empty model reaches the provider as an
 # empty model.
 CLAUDE_DEFAULT_MODEL = "opus"
+# The bound on counting a reply locally when its provider reported no counts
+# (spec 9.1; `_estimate`). A warm count is far below it. A cold count is an
+# encoder download, and the end of the reply must not wait on that. A count
+# that times out still finishes on its worker thread, and the loader memoizes
+# the encoder it fetched, so the next call's count is warm.
+COUNT_TIMEOUT_S = 5.0
+
+class _DaemonExecutor(Executor):
+    """One daemon thread running what is submitted, in order.
+
+    A `ThreadPoolExecutor` cannot be this: its workers are joined at
+    interpreter exit, so a count parked behind an encoder download with no
+    timeout of its own would hold the process open. A count is worth nothing
+    once the process is going, so its thread is a daemon. A future cancelled
+    before its turn (`asyncio.wait_for` cancels it at `COUNT_TIMEOUT_S`) is
+    skipped, never run."""
+
+    def __init__(self, name: str) -> None:
+        self._name = name
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def submit(self, fn, /, *args, **kwargs) -> Future:
+        future: Future = Future()
+        self._queue.put((future, fn, args, kwargs))
+        with self._lock:
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._run, name=self._name,
+                                                daemon=True)
+                self._thread.start()
+        return future
+
+    def _run(self) -> None:
+        while True:
+            future, fn, args, kwargs = self._queue.get()
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                result = fn(*args, **kwargs)
+            except BaseException as exc:  # noqa: BLE001 - handed to the waiter
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+
+
+@functools.cache
+def _count_executor() -> Executor:
+    """The one thread local counts run on, made on first use.
+
+    Its own, never asyncio's default executor: the encoder loader holds its
+    lock across a download that has no timeout of its own, and a count parked
+    behind it must not occupy a default-executor worker that `_lowered`'s
+    picture loads and httpx's DNS lookups need. One worker, so a hung download
+    parks one thread; the counts queued behind it are cancelled unstarted when
+    their `COUNT_TIMEOUT_S` runs out. A daemon (`_DaemonExecutor`), so that
+    thread never holds up process exit."""
+    return _DaemonExecutor("grimoire-count")
+
+
+class _Stall:
+    """Whether counting is failing, so a stall logs one warning rather than one
+    per call: while an encoder load is stuck or broken, every reply whose
+    provider reported no counts fails its count the same way. A count that
+    works ends the stall, and the next failure is news again."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._stalled = False
+
+    def failed(self) -> bool:
+        """Record a failure; whether it is the first of its stall."""
+        with self._lock:
+            first, self._stalled = not self._stalled, True
+            return first
+
+    def worked(self) -> None:
+        with self._lock:
+            self._stalled = False
+
+
+_count_stall = _Stall()
 
 # --- retry with backoff, and the fallback route (#144) ---
 #: Failure kinds a second attempt could plausibly fix. `rate_limit` and
@@ -439,7 +533,14 @@ def _stamp(usage: dict | None, conn: dict, attempts: int) -> None:
     `model` is what the request will really run on (`effective_model`), not
     `conn["model"]`, and a provider that reports its own overwrites it: an alias
     resolves to a dated snapshot, and a ledger that says `opus` where the bill
-    says `opus-2026-08` cannot be reconciled against an invoice.
+    says `opus-2026-08` cannot be reconciled against an invoice. So the model
+    the call ASKED for is kept beside it (`requested_model`): a model's own
+    rates are stated under that name, never under a snapshot's.
+
+    What served the attempt is filed from THIS attempt's dict
+    (`llm_usage.account`): its provider id, the sampler preset it was sent,
+    and its account block. So a fallback, a degrade sibling or a retry each
+    describes itself, and a row that fell back names the fallback.
     """
     if usage is None:
         return
@@ -453,6 +554,49 @@ def _stamp(usage: dict | None, conn: dict, attempts: int) -> None:
                   # Which connection is live, for the route that may have to
                   # report an outcome this facade never sees. See `ATTEMPTED`.
                   ATTEMPTED: conn})
+    usage["requested_model"] = effective_model(conn)
+    llm_usage.account(usage, conn)
+
+
+async def _estimate(usage: dict | None, conn: dict, counter) -> None:
+    """Mark the attempt as ended on its own, and count what its provider did
+    not (spec 9.1, ruling 14).
+
+    Reached only after an attempt's stream ran out by itself -- never on an
+    early break, a close or a failure, which nobody can say what was billed
+    for. Counted on the counting thread (`_count_executor`), because a counter
+    can start an encoder download, and bounded by `COUNT_TIMEOUT_S` so the end
+    of the reply never waits on one. Only the half nobody reported is counted.
+    A counter that raises or overruns costs the estimate and never fails the
+    reply, which has already been delivered; it logs one warning per stall
+    (`_count_stall`), not one per call."""
+    if usage is None:
+        return
+    usage[llm_usage.ENDED_KEY] = True
+    if counter is None:
+        return
+    try:
+        estimate = usage.get(llm_usage.ESTIMATE_KEY)
+        if not isinstance(estimate, llm_usage.Estimate):
+            return
+        need_prompt = llm_usage.tokens(usage.get("prompt_tokens")) is None
+        need_completion = (usage.get("operation") != "embed"
+                           and llm_usage.tokens(usage.get("completion_tokens")) is None)
+        if not (need_prompt or need_completion):
+            return
+        work = functools.partial(estimate.count, counter, prompt=need_prompt,
+                                 completion=need_completion)
+        prompt, completion = await asyncio.wait_for(
+            asyncio.get_running_loop().run_in_executor(_count_executor(), work),
+            COUNT_TIMEOUT_S)
+        llm_usage.fill(usage, prompt, completion)
+        _count_stall.worked()
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        if _count_stall.failed():
+            # The type only: a counter's message could quote the text it counted.
+            log.warning("could not count the tokens %r did not report: %s "
+                        "(said once until a count works again)",
+                        _label(conn), type(exc).__name__)
 
 
 def _observe(observer, conn: dict, error: LLMError | None) -> None:
@@ -576,7 +720,8 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
 async def _resilient(open_stream, routes, timeout: float,
                      tick: float | None = None,
                      usage: dict | None = None,
-                     observer=None, capture: llm_capture.Sink | None = None) -> AsyncIterator[str]:
+                     observer=None, capture: llm_capture.Sink | None = None,
+                     counter=None) -> AsyncIterator[str]:
     """Run `routes` in order, retrying each for as many attempts as it carries.
 
     `routes` is a list of `(conn, retries)` -- the active connection first,
@@ -628,6 +773,12 @@ async def _resilient(open_stream, routes, timeout: float,
 
     When both routes fail the caller gets the *primary's* kind, with the
     fallback's failure appended: see the tail of this function.
+
+    `counter` (`str -> int`, or None for no estimate) counts what a provider
+    did not report, for an attempt whose stream ended on its own: each prose
+    chunk is noted as it is yielded (reasoning is noted by the adapters), and
+    `_estimate` runs before the return. An attempt the caller broke out of,
+    closed or that failed never reaches it, so it is never estimated.
     """
     # A holder is needed even for callers uninterested in usage: the adapters
     # receive their recorder through this existing per-attempt seam, and a
@@ -695,9 +846,21 @@ async def _resilient(open_stream, routes, timeout: float,
             try:
                 async for chunk in agen:
                     sent = sent or bool(chunk)
+                    if chunk:
+                        llm_usage.note_reply(usage, chunk)
                     yield chunk
                 outcome = "complete"
                 _observe(observer, conn, None)
+                # The reply has been yielded in full, but the call is not
+                # over until this returns: a cancel landing here (a
+                # disconnect, a detached run's cancel) or `_bounded_call`'s
+                # ceiling discards a generated reply, and the ceiling's
+                # `on_timeout` marks the connection timed out after `_observe`
+                # recorded its success. Accepted, because the window is
+                # bounded by `COUNT_TIMEOUT_S` and is open only when a
+                # provider reported no counts (usually warm: a turn's compose
+                # has already loaded, or failed to load, the encoder).
+                await _estimate(usage, conn, counter)
                 return
             except LLMError as exc:
                 outcome = "error"
@@ -734,6 +897,9 @@ async def _resilient(open_stream, routes, timeout: float,
                     await agen.aclose()
                 finally:
                     llm_capture.emit(usage, "end", {"status": outcome})
+                    # The prompt reference does not outlive the attempt.
+                    if usage is not None:
+                        usage.pop(llm_usage.ESTIMATE_KEY, None)
             if not retryable:
                 break  # a repeat cannot fix this one; the next route might
     # Only reachable with every attempt swallowed above, which is the only way
@@ -769,7 +935,7 @@ class LLMClient:
 
     def __init__(self, openrouter=None, claude=None, openai_compatible=None, timeout=None,
                  retries=None, fallback=None, observer=None, capture=None,
-                 images=None, load_image=None, anthropic=None):
+                 images=None, load_image=None, anthropic=None, count_tokens=None):
         self._openrouter = openrouter if openrouter is not None else OpenRouterClient()
         self._claude = claude if claude is not None else ClaudeAgentClient()
         self._openai_compatible = (openai_compatible if openai_compatible is not None
@@ -809,6 +975,11 @@ class LLMClient:
         # Both are store lookups, so both arrive as callables.
         self._images = images
         self._load_image = load_image
+        # Once more, and last in the signature so no positional caller shifts:
+        # `count_tokens(text)` counts what a provider did not report (spec
+        # 9.1). It is the store's tokenizer, so it arrives as a callable. None
+        # counts nothing -- a hand-built client files exactly what it did.
+        self._count_tokens = count_tokens
 
     def _timeout_seconds(self) -> float:
         if self._timeout is None:
@@ -904,6 +1075,8 @@ class LLMClient:
             messages = messages.for_connection(conn, effective_model(conn))
         if usage is not None:
             usage["images"] = 0
+        # After `_stamp` cleared the holder, so each attempt counts only itself.
+        llm_usage.note_prompt(usage, messages)
         if not content_parts.needs_lowering(messages):
             return self._provider(messages, conn, usage)
         return self._lowered(messages, conn, usage, campaign, degrade)
@@ -923,6 +1096,8 @@ class LLMClient:
         lowered, sent = await asyncio.to_thread(self._lower, messages, conn, campaign, degrade)
         if usage is not None:
             usage["images"] = sent
+        # What was sent, not what was asked: text lowering drops carriers (M10).
+        llm_usage.note_prompt(usage, lowered)
         inner = self._provider(lowered, conn, usage)
         try:
             async for chunk in inner:
@@ -1019,7 +1194,8 @@ class LLMClient:
             sink = None
         return _resilient(lambda route, holder: self._dispatch(messages, route, holder),
                           self._usable_routes(messages, conn), self._timeout_seconds(),
-                          usage=usage, observer=self._observer, capture=sink)
+                          usage=usage, observer=self._observer, capture=sink,
+                          counter=self._count_tokens)
 
     async def complete(self, messages: list[dict], conn: dict,
                        usage: dict | None = None) -> str:
@@ -1059,7 +1235,7 @@ class LLMClient:
             sink = None
         agen = _resilient(lambda route, holder: self._dispatch(messages, route, holder),
                           [(_without_fallback(conn), 0)], self._timeout_seconds(), usage=usage,
-                          capture=sink)
+                          capture=sink, counter=self._count_tokens)
         return "".join([chunk async for chunk in agen])
 
     def note_outcome(self, conn: dict, error: LLMError | None) -> None:

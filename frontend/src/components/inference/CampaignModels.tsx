@@ -17,6 +17,7 @@ import {
   CHOOSE_A_MODEL, describe, droppedFallbackWords, inheritedPreset, inheritWords, ROLE_LABEL,
   ROLE_NEEDS, routePinNeeds, routePresetWords, wantsModel,
 } from "./selection";
+import { providerPath } from "../../providerPaths";
 
 /** The roles a campaign may override. Embedding is the library's alone: the
  *  campaign view carries no card for it and the server refuses one here. */
@@ -255,7 +256,7 @@ function SelectionChips({ sel, settings }: { sel: InferenceSelection; settings: 
   return (
     <div className="chips">
       {sel.provider && (
-        <Link className="chip" to={`/providers/${encodeURIComponent(sel.provider)}`}>
+        <Link className="chip" to={providerPath(sel.provider)}>
           {provider?.name ?? `${sel.provider} (missing provider)`}
         </Link>
       )}

@@ -9,6 +9,7 @@ vi.mock("../api/client", () => ({
     getCampaignSceneCosts: vi.fn(),
     getMonthlyCosts: vi.fn(),
     listCampaigns: vi.fn().mockResolvedValue([]),
+    listConnections: vi.fn(),
   },
 }));
 import { api } from "../api/client";
@@ -39,7 +40,7 @@ const REPORT = {
                                              total_tokens: 30000,
                                              last_ts: "2026-08-12T10:00:00Z" }),
   ],
-  listed: 2, truncated: false,
+  listed: 2, truncated: false, rates_editable: true,
 };
 
 beforeEach(() => {
@@ -47,6 +48,7 @@ beforeEach(() => {
   (api.getCampaign as any).mockResolvedValue({ meta: { id: "run", name: "Saltmarch" }, body: "" });
   (api.getCampaignSceneCosts as any).mockResolvedValue(REPORT);
   (api.getMonthlyCosts as any).mockResolvedValue({ trend: [] });
+  (api.listConnections as any).mockResolvedValue([]);
 });
 
 function renderCosts() {
@@ -310,4 +312,151 @@ test("the way back to the campaign is a link", async () => {
 
   expect(await column().findByRole("link", { name: /saltmarch/i }))
     .toHaveAttribute("href", "/campaigns/run");
+});
+
+test("estimated tokens are marked wherever a token total is shown", async () => {
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    totals: { ...REPORT.totals, estimated_token_calls: 2 },
+    scenes: [{ ...REPORT.scenes[0], estimated_token_calls: 2 }, REPORT.scenes[1]],
+  });
+  renderCosts();
+
+  const [first, second] = await screen.findAllByRole("row").then((r) => r.slice(1));
+  expect(column().getByText(/9 generations · ≈ 90,000 tok/)).toBeInTheDocument();
+  expect(within(first).getByText("≈ 60,000 tok")).toBeInTheDocument();
+  expect(within(second).getByText("30,000 tok")).toBeInTheDocument();
+});
+
+test("an unpriced model on two providers is two lines, each naming its provider", async () => {
+  (api.listConnections as any).mockResolvedValue([
+    { id: "realm-local", name: "Realm Local" }, { id: "saltmarch", name: "Saltmarch" },
+  ]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    totals: { ...REPORT.totals, unpriced_calls: 3 },
+    unpriced_models: [
+      { model: "vendor/model-a", facts_model: "vendor/model-a", provider_id: "realm-local",
+        calls: 2 },
+      { model: "vendor/model-a-2026", facts_model: "vendor/model-a",
+        provider_id: "saltmarch", calls: 1 },
+      { model: "vendor/model-a", facts_model: "vendor/model-a", provider_id: "", calls: 1 },
+    ],
+  });
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  renderCosts();
+
+  const list = await screen.findByText("No rate matches these").then(
+    (label) => within(label.closest(".unpriced-models") as HTMLElement));
+  const items = list.getAllByRole("listitem");
+  expect(items).toHaveLength(3);
+  expect(items[0].textContent).toMatch(/vendor\/model-a.*Realm Local.*2 calls/);
+  expect(items[1].textContent)
+    .toMatch(/vendor\/model-a-2026 asked for as vendor\/model-a.*Saltmarch.*1 call\b/);
+  // The rates are stated under the model that was asked for, on that provider.
+  expect(within(items[0]).getByRole("link").getAttribute("href"))
+    .toBe("/providers/realm-local/models/vendor/model-a?edit=rates");
+  expect(within(items[1]).getByRole("link").getAttribute("href"))
+    .toBe("/providers/saltmarch/models/vendor/model-a?edit=rates");
+  // A row filed before providers were named has only the table to price it.
+  expect(within(items[2]).getByRole("link").getAttribute("href"))
+    .toBe("/config?section=pricing");
+  expect(list.getByText(/own rates on its provider page/)).toBeInTheDocument();
+  expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+  errors.mockRestore();
+});
+
+test("one dated snapshot asked for under two names is two distinct lines", async () => {
+  // The backend keys on (provider, asked-for model, answering model): one
+  // provider answering `-2026` whether asked for the alias or the snapshot.
+  (api.listConnections as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    totals: { ...REPORT.totals, unpriced_calls: 3 },
+    unpriced_models: [
+      { model: "vendor/model-a-2026", facts_model: "vendor/model-a",
+        provider_id: "saltmarch", calls: 2 },
+      { model: "vendor/model-a-2026", facts_model: "vendor/model-a-2026",
+        provider_id: "saltmarch", calls: 1 },
+    ],
+  });
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  renderCosts();
+
+  const list = await screen.findByText("No rate matches these").then(
+    (label) => within(label.closest(".unpriced-models") as HTMLElement));
+  const [aliased, direct] = list.getAllByRole("listitem");
+  expect(aliased.textContent).toMatch(/asked for as vendor\/model-a\b/);
+  expect(direct.textContent).not.toMatch(/asked for as/);
+  expect(within(aliased).getByRole("link").getAttribute("href"))
+    .toBe("/providers/saltmarch/models/vendor/model-a?edit=rates");
+  expect(within(direct).getByRole("link").getAttribute("href"))
+    .toBe("/providers/saltmarch/models/vendor/model-a-2026?edit=rates");
+  expect(errors.mock.calls.flat().join(" ")).not.toMatch(/same key/);
+  errors.mockRestore();
+});
+
+test("before the model-settings upgrade every line points at the pricing table", async () => {
+  // A model's own rates save only on a store at the current format (`PUT
+  // .../facts` answers 409 before it), so no line opens an editor that cannot
+  // save; the hint says the rates arrive after the upgrade.
+  (api.listConnections as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT, rates_editable: false,
+    totals: { ...REPORT.totals, unpriced_calls: 1 },
+    unpriced_models: [
+      { model: "vendor/model-a", facts_model: "vendor/model-a", provider_id: "saltmarch",
+        calls: 1 },
+    ],
+  });
+  renderCosts();
+
+  const list = await screen.findByText("No rate matches these").then(
+    (label) => within(label.closest(".unpriced-models") as HTMLElement));
+  const [item] = list.getAllByRole("listitem");
+  expect(item.textContent).toMatch(/Saltmarch/);
+  expect(within(item).getByRole("link").getAttribute("href")).toBe("/config?section=pricing");
+  expect(list.queryByText("Set its rates")).toBeNull();
+  expect(list.getByText(/after the upgrade/)).toBeInTheDocument();
+});
+
+test("a store a newer version wrote says so, never \"after the upgrade\"", async () => {
+  (api.listConnections as any).mockResolvedValue([{ id: "saltmarch", name: "Saltmarch" }]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT, rates_editable: false, rates_newer: true,
+    totals: { ...REPORT.totals, unpriced_calls: 1 },
+    unpriced_models: [
+      { model: "vendor/model-a", facts_model: "vendor/model-a", provider_id: "saltmarch",
+        calls: 1 },
+    ],
+  });
+  renderCosts();
+
+  const list = await screen.findByText("No rate matches these").then(
+    (label) => within(label.closest(".unpriced-models") as HTMLElement));
+  const [item] = list.getAllByRole("listitem");
+  expect(within(item).getByRole("link").getAttribute("href")).toBe("/config?section=pricing");
+  expect(list.getByText(/newer version/)).toBeInTheDocument();
+  expect(list.queryByText(/after the upgrade/)).toBeNull();
+});
+
+test("a deleted provider's line points at the pricing table, not a dead page", async () => {
+  // Housekeeping does the same (`routes/todo.py`): only a provider that still
+  // exists has a rates page to open.
+  (api.listConnections as any).mockResolvedValue([]);
+  (api.getCampaignSceneCosts as any).mockResolvedValue({
+    ...REPORT,
+    totals: { ...REPORT.totals, unpriced_calls: 1 },
+    unpriced_models: [
+      { model: "vendor/model-a", facts_model: "vendor/model-a", provider_id: "gone",
+        calls: 1 },
+    ],
+  });
+  renderCosts();
+
+  const list = await screen.findByText("No rate matches these").then(
+    (label) => within(label.closest(".unpriced-models") as HTMLElement));
+  const [item] = list.getAllByRole("listitem");
+  expect(item.textContent).toMatch(/gone/);
+  expect(within(item).getByRole("link").getAttribute("href")).toBe("/config?section=pricing");
 });

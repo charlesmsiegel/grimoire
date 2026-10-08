@@ -46,8 +46,8 @@ import asyncio
 import time
 from typing import Any
 
-from ... import embeddings
-from .. import logs, routing, usage
+from ... import embeddings, llm_usage
+from .. import logs, routing, tokens, usage
 
 
 def _stamp(holder: dict, space: dict) -> None:
@@ -59,10 +59,14 @@ def _stamp(holder: dict, space: dict) -> None:
     sent"). The provider fields are read with `.get`, because a test double's
     space may carry only the four keys `embed_space.resolve` returns.
 
-    **This is the one place slice E adds its account line**,
-    `llm_usage.account(holder, space.get("conn") or {})`, after the identity
-    keys below (ruling 12c). If E changes what those keys mean, it changes
-    `llm._stamp` and this together.
+    Then what served the call (slice E, spec 9.3): `requested_model`, the
+    model asked for (the client refills `model` with what the endpoint
+    named), and `llm_usage.account` over the attempt's lowered `conn` --
+    `provider_id`, the provider's `billing`, and the account block
+    `resolve.embedding` stamped (`operation: "embed"`, `role: "embedding"`).
+    A space without a `conn` (a test double's) files no account fields; the
+    identity keys still make the row. If what those keys mean changes,
+    `llm._stamp` and this change together.
     """
     holder.update({
         "model": space["model"],
@@ -70,7 +74,33 @@ def _stamp(holder: dict, space: dict) -> None:
         "provider": space.get("provider_kind", ""),
         "attempts": 1,
         "operation": usage.EMBED_OPERATION,
+        "requested_model": space["model"],
     })
+    conn = space.get("conn")
+    llm_usage.account(holder, conn if isinstance(conn, dict) else {})
+
+
+def estimate_prompt(holder: dict, texts: list[str]) -> None:
+    """Count locally the prompt a provider did not report, for an embed call
+    that returned (spec 9.1; slice E owns this, ruling I1).
+
+    Only when the holder carries no usable `prompt_tokens` -- a reported count
+    is never replaced -- and only by an encoder that has already loaded, else
+    the characters/4 heuristic (`tokens.count_if_loaded`): never a load on the
+    request path. The row then says the count was estimated
+    (`tokens_estimated`), as a chat attempt's does. Never a completion count:
+    an embedding generates nothing, and `usage._completion_count` reads its
+    absence as the structural zero it is. Never raises -- bookkeeping beside a
+    call that has already returned."""
+    try:
+        if llm_usage.tokens(holder.get("prompt_tokens")) is not None:
+            return
+        count = sum(tokens.count_if_loaded(t) for t in texts if isinstance(t, str))
+        # Ended on its own: the one kind of attempt `Meter` lets carry the flag.
+        holder[llm_usage.ENDED_KEY] = True
+        llm_usage.fill(holder, count, None)
+    except Exception:  # noqa: BLE001 - see the docstring
+        return
 
 
 def record_failure(meter: usage.Meter, exc: BaseException, *,
@@ -154,6 +184,7 @@ def embed_sync(task: str, texts: list[str], *, space: dict,
             except Exception as exc:
                 error = record_failure(m, exc, own_deadline=budgeted and deadline is not None)
                 raise
+            estimate_prompt(m.usage, texts)
     finally:
         if error is not None:
             _capture(task, texts, space, campaign=campaign, scene=scene, vectors=vectors,

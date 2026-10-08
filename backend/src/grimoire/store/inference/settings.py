@@ -62,11 +62,8 @@ from .. import (
 )
 from .. import inference_keys as keys
 from ..campaigns import lifecycle as campaign_lifecycle
-from ..campaigns import paths as campaign_paths
-from ..campaigns import read as campaign_read
-from ..frontmatter import breaks_line, parse_frontmatter
-from ..paths import safe_id
-from . import capabilities, cascade, facts, migrate, providers, resolve, translate
+from ..frontmatter import breaks_line
+from . import capabilities, cascade, facts, in_use, migrate, providers, resolve, translate
 from .resolved import ResolvedInference
 
 SCOPES: tuple[str, ...] = ("global", "campaign")
@@ -114,30 +111,9 @@ def _bad(detail: str) -> RefusedError:
 
 
 # ---- reading ----
-def _campaign_meta(cid: str, *, strict: bool = True) -> dict:
-    """A campaign's frontmatter; `CampaignNotFound` when there is none. Not
-    `strict` (the view), one that cannot be read is no campaign choice at all,
-    as `resolve.campaign_meta` treats it -- the rows still say what plays."""
-    path = campaign_paths.campaign_meta_path(cid)
-    if not path.exists():
-        raise campaign_paths.CampaignNotFound(cid)
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        if strict:
-            raise
-        return {}
-    meta, _ = parse_frontmatter(text)
-    return meta
-
-
-def _text(view: dict, key: str) -> str:
-    return str(view.get(key, "") or "")
-
-
 def _stored(view: dict, key: Callable[[str], str],
             parts: tuple[str, ...] = keys.PARTS) -> dict[str, str]:
-    return {part: _text(view, key(part)) for part in parts}
+    return {part: in_use.text(view, key(part)) for part in parts}
 
 
 def _sel(resolved: ResolvedInference) -> dict | None:
@@ -189,9 +165,9 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str) -> dict:
             "tasks": list(route.tasks), "operation": route.operation,
             "default_role": route.default_role, "requires": list(route.requires),
             "campaign_scoped": route.campaign_scoped,
-            "use": _text(own, keys.use_key(route.key)),
+            "use": in_use.text(own, keys.use_key(route.key)),
             "pin": _stored(own, functools.partial(keys.pin_key, route.key)),
-            "preset": _text(own, keys.preset_key(route.key)),
+            "preset": in_use.text(own, keys.preset_key(route.key)),
             "resolves": _sel(resolved), "inherits": _sel(inherited),
             "problem": _problem(resolved),
             "fallback_missing": list(resolved.fallback_missing),
@@ -261,7 +237,8 @@ def view(scope: str, cid: str = "") -> dict:
     lookup = resolve.connection_lookup()
     current = keys.is_current(cfg)
     if scope == "campaign":
-        own = translate.campaign_view(_campaign_meta(cid, strict=False), lookup, current=current)
+        own = translate.campaign_view(in_use.campaign_meta(cid, strict=False), lookup,
+                                      current=current)
     else:
         cid = ""
         own = translate.global_view(cfg, lookup)
@@ -270,7 +247,7 @@ def view(scope: str, cid: str = "") -> dict:
     if scope == "global":
         roles["embedding"] = _embedding_card(cfg, lookup)
     return {
-        "format": _text(cfg, keys.FORMAT_KEY).strip() or "1",
+        "format": in_use.text(cfg, keys.FORMAT_KEY).strip() or "1",
         "newer": keys.is_newer(cfg),
         "migration": migrate.status().as_dict(),
         "roles": roles,
@@ -321,48 +298,25 @@ def summary() -> dict:
 
 
 # ---- what names a provider ----
-def _uses(own: dict, provider_id: str, scope: str, routes: list[routing.Route]) -> list[dict]:
-    """The roles, fallbacks and chosen pins in one scope's settings (already in
-    the current layout) that name `provider_id`. A pin its route does not
-    choose (`use_<k>` other than the pin) is not a use."""
-    def names(key: str) -> bool:
-        return _text(own, key).strip() == provider_id
-
-    selections = [(kind, role, key(role, "provider"))
-                  for role in keys.GENERATIVE_ROLES
-                  for kind, key in (("role", keys.role_key), ("fallback", keys.fallback_key))]
-    selections += [("route", route.key, keys.pin_key(route.key, "provider"))
-                   for route in routes
-                   if _text(own, keys.use_key(route.key)).strip() == keys.PIN]
-    return [{"kind": kind, "key": name, "scope": scope}
-            for kind, name, key in selections if names(key)]
-
-
 def used_by(provider_id: str) -> list[dict]:
     """Where the stored settings name `provider_id`: `[{kind: "role" |
     "fallback" | "route", key, scope: "global" | "campaign", cid?}]` -- a
     role, a role's fallback, a route's chosen pin, or the Embedding role.
 
-    Read as `view` reads them, through the legacy translation, so a store the
-    migration has not reached reports what plays. Global first, then each
-    campaign by id; a campaign that cannot be read names nothing. Reads every
-    campaign's frontmatter, so it belongs on a provider's detail, never its
-    list."""
-    cfg = config.read_config()
-    lookup = resolve.connection_lookup()
-    out = _uses(translate.global_view(cfg, lookup), provider_id, "global",
-                list(routing.ROUTES))
-    if translate.embedding_role(cfg)[0] == provider_id:
-        out.append({"kind": "role", "key": "embedding", "scope": "global"})
-    current = keys.is_current(cfg)
-    scoped = [r for r in routing.ROUTES if r.campaign_scoped]
-    for cid in sorted(c for c, _name, _world in campaign_read.world_refs() if safe_id(c)):
-        try:
-            meta = _campaign_meta(cid)
-        except (campaign_paths.CampaignNotFound, OSError, UnicodeDecodeError, ValueError):
+    `in_use.selections`, filtered to this provider: read as `view` reads them,
+    through the legacy translation, so a store the migration has not reached
+    reports what plays. Global first, then each campaign by id; a campaign
+    that cannot be read names nothing. Walks every campaign (each one's parse
+    memoized on its file), so it belongs on a provider's detail, never on the
+    list, which would ask it once per provider."""
+    out: list[dict] = []
+    for use in in_use.selections():
+        if use.provider != provider_id:
             continue
-        own = translate.campaign_view(meta, lookup, current=current)
-        out += [{**use, "cid": cid} for use in _uses(own, provider_id, "campaign", scoped)]
+        row = {"kind": use.kind, "key": use.key, "scope": use.scope}
+        if use.scope == "campaign":
+            row["cid"] = use.cid
+        out.append(row)
     return out
 
 
@@ -560,8 +514,8 @@ def _confirmed(plan: _Plan, confirm: bool) -> None:
     if new is None or confirm or not all(new):
         return
     cfg = config.read_config()
-    before = (_text(cfg, keys.role_key("embedding", "provider")).strip(),
-              _text(cfg, keys.role_key("embedding", "model")).strip())
+    before = (in_use.text(cfg, keys.role_key("embedding", "provider")).strip(),
+              in_use.text(cfg, keys.role_key("embedding", "model")).strip())
     if new != before:
         raise RefusedError(400, {
             "kind": "confirm_embedding",
@@ -620,7 +574,9 @@ def _write_campaign(cid: str, plan: _Plan) -> None:
     # connections. A global switch cannot land between the format check and
     # this campaign's write, whichever process makes it.
     with locks.campaign_lock(cid), llm_connections.LOCK, config.format_hold():
-        meta = _campaign_meta(cid)
+        # Fresh, not through the memo: what this decides (refuse a newer
+        # campaign, migrate an unmarked one) must be the file as it is now.
+        meta = in_use.campaign_meta(cid, memo=False)
         if not plan.fields:
             return
         if keys.is_newer(meta):

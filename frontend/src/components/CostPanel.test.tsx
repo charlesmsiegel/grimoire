@@ -108,6 +108,22 @@ test("a call nobody priced is estimated from the user's own rates, marked", asyn
   expect(screen.queryByText(UNPRICED)).not.toBeInTheDocument();
 });
 
+test("a task chip says when its token counts were estimated here", async () => {
+  vi.mocked(api.getSceneUsage).mockResolvedValue({
+    ...USAGE,
+    totals: { ...ZERO, calls: 1, modelled_calls: 1, modelled_usd: 0.25,
+              estimated_token_calls: 1 },
+    by_task: [{ key: "chat", ...ZERO, calls: 1, modelled_calls: 1, modelled_usd: 0.25,
+                estimated_token_calls: 1 }],
+    turns: [{ ...TURN, cost_usd: null, modelled_usd: 0.25, tokens_estimated: true }],
+    listed: 1,
+  });
+  render(<CostPanel cid="c" sid="s" />);
+
+  expect(await screen.findByText(/^chat 1 · ≈ \$0\.25$/))
+    .toHaveAttribute("title", expect.stringMatching(/1 call with tokens estimated/));
+});
+
 test("says when the turn list was cut and the totals were not", async () => {
   vi.mocked(api.getSceneUsage).mockResolvedValue(
     { ...USAGE, listed: 2, truncated: true } as never);
@@ -303,4 +319,32 @@ test("a parent still reading renders as a read in flight, not as nothing spent",
   expect(screen.queryByText(/\$0\.00/)).toBeNull();
   expect(screen.queryByText("Campaign budget")).toBeNull();
   expect(api.getSceneUsage).not.toHaveBeenCalled();
+});
+
+test("a subscription turn is tagged beside its price, and a billed one is not", async () => {
+  vi.mocked(api.getSceneUsage).mockResolvedValue({
+    ...USAGE,
+    turns: [{ ...TURN, billing: "subscription", cost_usd: null, modelled_usd: 0.25,
+              tokens_estimated: true },
+            { ...TURN, ts: "2026-08-14T09:00:00Z", task: "retry",
+              billing: "subscription", cost_basis: "billed" }],
+  });
+  const { container } = render(<CostPanel cid="c" sid="s" />);
+  await screen.findByText("retry");
+
+  const [tagged, billed] = [...container.querySelectorAll(".cost-turn summary")];
+  const chips = (el: Element) => [...el.querySelectorAll(".chip")].map((c) => c.textContent);
+  expect(chips(tagged)).toEqual(["subscription — not billed", "tokens estimated"]);
+  expect(chips(billed)).toEqual([]);
+});
+
+test("estimated tokens are marked wherever a token total is shown", async () => {
+  vi.mocked(api.getSceneUsage).mockResolvedValue({
+    ...USAGE,
+    totals: { ...USAGE.totals, estimated_token_calls: 1 },
+  });
+  render(<CostPanel cid="c" sid="s" />);
+
+  expect(await screen.findByText(/\$0\.0084 · 2 turns · ≈ 1,880 tok/)).toBeInTheDocument();
+  expect(screen.getByText(/1 call had token counts estimated here/)).toBeInTheDocument();
 });

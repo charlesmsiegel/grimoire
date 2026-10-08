@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { ApiError, api, type PricingEntry } from "../api/client";
+import { RATE_FIELDS, RateFields, complete as completeRates, emptyRates, formOf, typed,
+         type RateForm } from "./RateFields";
 
 /** Per-model token rates, for the providers that report no price (#158).
  *
@@ -20,17 +22,6 @@ import { ApiError, api, type PricingEntry } from "../api/client";
  *  fail on its own.
  */
 
-/** The four rates an entry can carry, in the order they are asked for. The
- *  cache pair is optional, and its absence is NOT zero: cache counts are slices
- *  of the prompt, so a row naming no cache rate has already priced them at the
- *  prompt rate — which is right for a provider that does not discount them. */
-const FIELDS: { key: keyof PricingEntry; label: string; required?: boolean }[] = [
-  { key: "prompt_usd_per_1k", label: "Input", required: true },
-  { key: "completion_usd_per_1k", label: "Output", required: true },
-  { key: "cache_read_usd_per_1k", label: "Cache read" },
-  { key: "cache_write_usd_per_1k", label: "Cache write" },
-];
-
 /** A row as the form holds it: rates as the strings that were typed, so a
  *  half-entered "0." survives a re-render and an empty box stays empty rather
  *  than becoming a 0 nobody meant.
@@ -39,8 +30,7 @@ const FIELDS: { key: keyof PricingEntry; label: string; required?: boolean }[] =
  *  stylistic choice: a freshly added row also has an empty id — nobody has
  *  typed one yet — and inferring the catch-all from emptiness would turn every
  *  new row into a second rate claiming to price everything. */
-type Row = { key: number; id: string; isDefault: boolean;
-             rates: Record<string, string> };
+type Row = { key: number; id: string; isDefault: boolean; rates: RateForm };
 
 /** Row keys, so React reconciles by identity rather than by position. An index
  *  key would make removing the first of three rows reuse its inputs for the
@@ -55,8 +45,7 @@ const DEFAULT_KEY = "";
 function toRows(table: Record<string, PricingEntry>): Row[] {
   const rows = Object.entries(table).map(([id, entry]) => ({
     key: nextKey++, id, isDefault: id === DEFAULT_KEY,
-    rates: Object.fromEntries(FIELDS.map((f) => [f.key,
-      entry[f.key] === undefined ? "" : String(entry[f.key])])),
+    rates: formOf(entry),
   }));
   // Named entries first, the catch-all last: it is what applies when nothing
   // above it matched, and reading it in that position says so.
@@ -72,24 +61,18 @@ function toTable(rows: Row[]): Record<string, PricingEntry> {
     // A named row nobody has named yet is not sent: it would land on the
     // catch-all key and quietly become the rate for every model in the library.
     if (!row.isDefault && !key) continue;
-    const entry: Record<string, number> = {};
-    for (const field of FIELDS) {
-      const typed = (row.rates[field.key] ?? "").trim();
-      if (typed === "") continue;
-      const value = Number(typed);
+    const entry: PricingEntry = {};
+    for (const field of RATE_FIELDS) {
       // Left out rather than sent as NaN: the server drops an unusable rate
       // anyway, and sending one would make the answer disagree with the form
       // for reasons the form never explained.
-      if (Number.isFinite(value) && value >= 0) entry[field.key] = value;
+      if (typed(row.rates[field.key])) entry[field.key] = Number(row.rates[field.key].trim());
     }
-    // BOTH base rates, mirroring the store: an entry with one prices half a
-    // call and values the other half at nothing, which on a reply that
-    // generated nothing renders `$0.00` for a call nobody priced at all. The
-    // server drops such a row, and mirroring it here is what keeps the form
-    // from appearing to have saved something it did not.
-    if (entry.prompt_usd_per_1k !== undefined && entry.completion_usd_per_1k !== undefined) {
-      table[key] = entry;
-    }
+    // BOTH base rates, mirroring the store (`complete`): an entry with one
+    // prices half a call and values the other half at nothing. The server
+    // drops such a row, and mirroring it here is what keeps the form from
+    // appearing to have saved something it did not.
+    if (completeRates(row.rates)) table[key] = entry;
   }
   return table;
 }
@@ -120,14 +103,9 @@ function duplicates(rows: Row[]): Set<string> {
   return twice;
 }
 
-function typed(row: Row, key: string): boolean {
-  const raw = (row.rates[key] ?? "").trim();
-  return raw !== "" && Number.isFinite(Number(raw)) && Number(raw) >= 0;
-}
-
 /** Whether this row will survive a save. Both base rates, per `toTable`. */
 function complete(row: Row): boolean {
-  return ["prompt_usd_per_1k", "completion_usd_per_1k"].every((k) => typed(row, k));
+  return completeRates(row.rates);
 }
 
 /** A row somebody has started filling in. Anything typed counts — the point is
@@ -135,7 +113,7 @@ function complete(row: Row): boolean {
  *  about to be thrown away". */
 function started(row: Row): boolean {
   return row.isDefault || row.id.trim() !== ""
-    || Object.keys(row.rates).some((k) => typed(row, k));
+    || RATE_FIELDS.some(({ key }) => typed(row.rates[key]));
 }
 
 /** A row that has been filled in but never named. `toTable` drops it — an
@@ -143,15 +121,6 @@ function started(row: Row): boolean {
  *  silently, under a "Rates saved" that discarded everything typed into it. */
 function unnamed(row: Row): boolean {
   return !row.isDefault && row.id.trim() === "" && started(row);
-}
-
-/** The same rate as providers publish it. Every price sheet quotes dollars per
- *  million tokens; the file's unit is per 1,000 (#158's shape), and showing
- *  both is what stops a rate being typed a thousandfold off. */
-function perMillion(typed: string): string {
-  const value = Number((typed ?? "").trim());
-  if (!(typed ?? "").trim() || !Number.isFinite(value) || value < 0) return "";
-  return `$${(value * 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })}/M`;
 }
 
 export function PricingEditor() {
@@ -185,10 +154,9 @@ export function PricingEditor() {
     return () => { live = false; };
   }, [reload]);
 
-  function edit(index: number, key: string, value: string) {
+  function edit(index: number, rates: RateForm) {
     setSaved(false);
-    setRows((old) => (old ?? []).map((row, i) =>
-      i === index ? { ...row, rates: { ...row.rates, [key]: value } } : row));
+    setRows((old) => (old ?? []).map((row, i) => i === index ? { ...row, rates } : row));
   }
 
   async function save() {
@@ -281,27 +249,13 @@ export function PricingEditor() {
               half of every call at nothing. This row will not be saved.
             </div>
           )}
-          <div className="pricing-rates">
-            {FIELDS.map((field) => (
-              <label className="pricing-rate" key={field.key}>
-                <span className="pricing-rate-label">
-                  {field.label}{field.required ? " *" : ""}
-                </span>
-                {/* Frozen while the PUT is in flight, like the buttons beside
-                    it: the answer re-seeds every row from what the server kept,
-                    so anything typed after Save was clicked would be discarded
-                    by a response that never saw it. */}
-                <input type="number" step="0.0001" min="0" inputMode="decimal"
-                       disabled={busy}
-                       aria-label={`${field.label} rate for ${row.isDefault ? "every other model" : row.id || "a new model"}`}
-                       value={row.rates[field.key] ?? ""}
-                       onChange={(e) => edit(i, field.key, e.target.value)} />
-                <span className="pricing-rate-hint">
-                  {perMillion(row.rates[field.key] ?? "") || "$ per 1K"}
-                </span>
-              </label>
-            ))}
-          </div>
+          {/* Frozen while the PUT is in flight, like the buttons beside it:
+              the answer re-seeds every row from what the server kept, so
+              anything typed after Save was clicked would be discarded by a
+              response that never saw it. */}
+          <RateFields value={row.rates} onChange={(rates) => edit(i, rates)}
+                      idPrefix={`pricing-${row.key}`} disabled={busy}
+                      subject={row.isDefault ? "every other model" : row.id || "a new model"} />
         </div>
       ))}
 
@@ -309,7 +263,7 @@ export function PricingEditor() {
         <button disabled={busy}
                 onClick={() => { setSaved(false);
                                  setRows([...rows, { key: nextKey++, id: "",
-                                                     isDefault: false, rates: {} }]); }}>
+                                                     isDefault: false, rates: emptyRates() }]); }}>
           + Add a model
         </button>
         {/* Offered only while nothing holds the catch-all key, so the list
@@ -318,7 +272,7 @@ export function PricingEditor() {
           <button disabled={busy}
                   onClick={() => { setSaved(false);
                                    setRows([...rows, { key: nextKey++, id: DEFAULT_KEY,
-                                                       isDefault: true, rates: {} }]); }}>
+                                                       isDefault: true, rates: emptyRates() }]); }}>
             + Add a catch-all rate
           </button>
         )}
