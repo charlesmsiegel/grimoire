@@ -1034,10 +1034,19 @@ def _items_unpriced(cid: str) -> list[dict]:
         if provider_id in providers:
             fix = _model_rates_href(provider_id, asked)
         label = m["model"] if asked == m["model"] else f"{m['model']} asked for as {asked}"
-        out.append({"id": f"{provider_id}:{m['model']}:{asked}", "label": label,
+        out.append({"id": ":".join(_id_part(x) for x in (provider_id, m["model"], asked)),
+                    "label": label,
                     "detail": f"{m['calls']} calls that a rate would price",
                     "fix": fix})
     return out
+
+
+def _id_part(part: str) -> str:
+    """One part of a `:`-joined item id, with `%` and `:` escaped so the join
+    cannot collide: an Ollama-style model name holds a colon (`llama3:8b`),
+    and `(p, "a:b", asked "c")` and `(p, "a", asked "b:c")` would otherwise
+    be one id. A name holding neither reads as it is."""
+    return part.replace("%", "%25").replace(":", "%3A")
 
 
 def _provider_ids() -> set[str]:
@@ -1104,6 +1113,8 @@ def _items_unpriced_models(cid: str) -> list[dict]:
     models = _unpriced_in_use() or []
     names = _campaign_names(models)
     editable = rates_editable()
+    # A provider id is a `safe_id` slug, which never holds `:`, so the first
+    # colon always ends it and this id cannot collide.
     return [{"id": f"{m['provider_id']}:{m['model']}",
              "label": f"{m['model']} on {m['provider_name']}",
              "detail": "Used by " + ", ".join(_use_label(u, names) for u in m["uses"]),

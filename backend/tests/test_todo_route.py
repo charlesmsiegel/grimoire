@@ -1544,6 +1544,20 @@ def test_an_unpriced_item_without_a_provider_opens_the_pricing_table(client, mon
                                         "deleted-provider:vendor/gone:vendor/gone"]
 
 
+def test_item_ids_do_not_collide_for_model_names_holding_a_colon(client, monkeypatch):
+    """An Ollama-style name carries `:` (`llama3:8b`), so joining the three
+    parts with `:` gave two different call shapes one id -- `(p, "a:b",
+    asked "c")` and `(p, "a", asked "b:c")`. Each part escapes `:` (and `%`,
+    so the escape cannot collide either); a name without one reads as before."""
+    monkeypatch.setattr(store.usage, "unpriced_models", lambda: [
+        {"model": "vendor/a:b", "facts_model": "c", "provider_id": "", "calls": 1},
+        {"model": "vendor/a", "facts_model": "b:c", "provider_id": "", "calls": 1},
+        {"model": "vendor/a%3Ab", "facts_model": "c", "provider_id": "", "calls": 1}])
+    ids = [i["id"] for i in _items(client, "unpriced", "")["items"]]
+    assert len(set(ids)) == 3, ids
+    assert ids[0] == ":vendor/a%3Ab:c"
+
+
 def test_one_model_on_two_providers_is_named_once_with_distinct_item_ids(
         client, monkeypatch):
     """M6: the chore names each recorded string once; the items stay apart,
