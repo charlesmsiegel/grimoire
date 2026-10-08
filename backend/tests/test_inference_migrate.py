@@ -1285,42 +1285,6 @@ def test_embedding_facts_unreadable_during_the_switch_fail_the_run(home, monkeyp
         "vectors", "embed-small")
 
 
-@pytest.mark.parametrize("exc", [OSError("held by a sync client"),
-                                 UnicodeDecodeError("utf-8", b"\xff", 0, 1, "half-synced")])
-def test_a_facts_file_unreadable_during_the_facts_step_is_never_overwritten(
-        home, monkeypatch, exc):
-    """Step 3 writes a legacy connection's stated behaviour into its model's
-    facts. A facts file a sync client holds must not read as empty and be
-    rewritten with only the new fact -- that destroys the user's own word
-    already in it. The run fails, nothing is written, and the next start
-    finishes with both."""
-    _legacy()
-    llm_connections.create_connection("openrouter", "spare", api_key="sk-spare",
-                                      model="vendor/spare", vision="on")
-    facts.set_overrides("spare", "vendor/spare", {"structured_output": "yes"})
-    path = llm_connections.facts_path("spare")
-    before = path.read_bytes()
-    real = Path.read_text
-    held = [True]
-
-    def flaky(self, *a, **kw):
-        if held[0] and self.name.endswith(".facts.json"):
-            raise exc
-        return real(self, *a, **kw)
-
-    monkeypatch.setattr(Path, "read_text", flaky)
-    got = migrate.ensure()
-    assert got.state == "failed", got
-    assert path.read_bytes() == before
-    assert not inference_keys.is_current(config.read_config())
-
-    held[0] = False
-    assert migrate.ensure().state == "done"
-    got_facts = facts.of("spare", "vendor/spare", "")
-    assert got_facts["overrides"] == {"structured_output": "yes"}
-    assert got_facts["vision"] == "on"
-
-
 def test_a_missing_connection_is_still_a_dangling_reference(home):
     """Only an unreadable file fails the run: a reference to a connection that
     does not exist is persisted as it was."""
@@ -1480,16 +1444,26 @@ def test_a_facts_file_that_cannot_be_read_fails_the_run_and_is_kept(home, placeh
     assert facts.of("openrouter", "vendor/active", "")["vision"] == "off"
 
 
-def test_a_facts_file_a_sync_client_holds_fails_the_run(home, monkeypatch):
+@pytest.mark.parametrize("exc", [
+    PermissionError("held by a sync client"),
+    # Not an OSError: a half-synced file that does not decode is unreadable
+    # too, and must not read as empty and be rewritten from `{}`.
+    UnicodeDecodeError("utf-8", b"\xff", 0, 1, "half-written by a sync client"),
+], ids=["held", "undecodable"])
+def test_a_facts_file_a_sync_client_holds_fails_the_run(home, monkeypatch, exc):
     _legacy()
     llm_connections.update_connection("openrouter", vision="off")
-    whole = _verified_other()
+    _verified_other()
+    # The user's own word on the model the copy lands on, which a file read as
+    # empty and rewritten would lose beside the other model's paid results.
+    facts.set_overrides("openrouter", "vendor/active", {"structured_output": "yes"})
     path = llm_connections.facts_path("openrouter")
+    whole = path.read_bytes()
     real = Path.read_text
 
     def held(self, *a, **kw):
         if self == path:
-            raise PermissionError("held by a sync client")
+            raise exc
         return real(self, *a, **kw)
 
     monkeypatch.setattr(Path, "read_text", held)
@@ -1501,6 +1475,9 @@ def test_a_facts_file_a_sync_client_holds_fails_the_run(home, monkeypatch):
     assert path.read_bytes() == whole
     assert migrate.ensure().state == "done"
     assert set(facts.read("openrouter")) == {"vendor/other", "vendor/active"}
+    active = facts.of("openrouter", "vendor/active", "")
+    assert active["overrides"] == {"structured_output": "yes"}
+    assert active["vision"] == "off"
 
 
 def _stated_of(conn_id: str, model: str) -> tuple:

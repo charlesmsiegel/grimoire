@@ -672,22 +672,21 @@ def _choose_embedding(client, name: str, base_url: str) -> dict:
     return _ok(client, body)["roles"]["embedding"]
 
 
-def test_the_embedding_card_says_why_a_known_no_turned_it_off(client):
-    """Slice D (ruling 4): a provider whose adapter cannot embed is off, and
-    the card says so from the same `missing` that switched it off."""
+def test_the_settings_write_answers_with_the_embedding_cards_problem(client):
+    """Slice D (ruling 4): the write's own answer carries the Embedding card,
+    and its `problem` comes from the same `missing` that switched the role off.
+    The card tests above read it back after a config write; this is the answer
+    to the `PUT` that chose the role, off and then on."""
     _fresh(client)
-    card = _choose_embedding(client, "Winifred Zai", "https://api.z.ai/api/paas/v4")
-    assert card["on"] is False
-    assert card["problem"] == ("vec-small on Winifred Zai cannot make embeddings, so "
-                               "embedding is off — choose another Embedding model.")
-    assert _global(client)["roles"]["embedding"]["problem"] == card["problem"]
+    off = _choose_embedding(client, "Winifred Zai", "https://api.z.ai/api/paas/v4")
+    assert off["on"] is False
+    assert off["problem"] == ("vec-small on Winifred Zai cannot make embeddings, so "
+                              "embedding is off — choose another Embedding model.")
+    assert _global(client)["roles"]["embedding"]["problem"] == off["problem"]
 
-
-def test_a_working_embedding_card_has_no_problem(client):
-    _fresh(client)
-    card = _choose_embedding(client, "Saltmarch Vectors", "https://vectors.example/v1")
-    assert card["on"] is True
-    assert card["problem"] is None
+    on = _choose_embedding(client, "Saltmarch Vectors", "https://vectors.example/v1")
+    assert on["on"] is True
+    assert on["problem"] is None
 
 
 def test_an_unreadable_campaign_still_has_a_view(client):
