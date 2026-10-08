@@ -829,6 +829,138 @@ def test_reconcile_case_is_what_these_tests_grade_and_the_app_keeps(tmp_path, mo
         d["candidate"]: d["decision"] for d in sent}
 
 
+# ------------------------------------------------ reconcile, as decision items
+
+#: The case's seven candidates, `build_payload`-shaped with no store: every
+#: scene is a recent chronicle line, as in the case, so every item shows all
+#: three and asks three evidence questions.
+_RECONCILE_REFS = {
+    "c1": ("same_thread", ("thread:the-saltmarch-smuggling",
+                           "thread:who-bribes-the-saltmarch-harbourmaster")),
+    "c2": ("same_thread", ("thread:seraphines-debts",
+                           "thread:what-seraphines-debt-to-mara-costs-her")),
+    "c3": ("cross", ("commitment:pay-mara-for-finding-the-ledger", "thread:find-the-ledger")),
+    "c4": ("thread", ("thread:maras-map",)),
+    "c5": ("thread", ("thread:winifreds-chart",)),
+    "c6": ("commitment", ("commitment:maras-oath",)),
+    "c7": ("commitment", ("commitment:seraphines-berth",)),
+}
+
+
+def _reconcile_decision_payload() -> dict:
+    known = sorted(RECONCILE_KNOWN)
+    cands = []
+    for key, (vocab, refs) in _RECONCILE_REFS.items():
+        records = [{"letter": letter, "ref": ref, "type": "", "line": ref, "beats": [],
+                    "pressure": "", "links": [], "actors": []}
+                   for letter, ref in zip("AB", refs, strict=False)]
+        cands.append({"key": key, "id": f"candidate-{key}", "vocabulary": vocab,
+                      "records": records, "signal_text": ""})
+    return {"now": "", "chronicle": [{"id": sid, "one_line": sid} for sid in known],
+            "recent": known, "candidates": cands, "known_scenes": known}
+
+
+_RD = {
+    "c1": {"decision": "distinct"},
+    "c2": {"decision": "continuation", "from": "B", "to": "A"},
+    "c3": {"decision": "pays_off", "from": "B", "to": "A"},
+    "c4": {"decision": "close", "evidence_scene": "003--the-pier-at-dusk"},
+    "c5": {"decision": "keep_open"},
+    "c6": {"decision": "fulfilled", "evidence_scene": "002--realm-road"},
+    "c7": {"decision": "uncertain"},
+}
+
+
+def _reconcile_decided(*, skip: str = "", **over: dict) -> set[str]:
+    from tests.llm_fakes import decision_reply
+
+    payload = _reconcile_decision_payload()
+    items = reconcile.build_items(payload)
+    answers = []
+    for item, cand in zip(items, payload["candidates"], strict=True):
+        if cand["key"] == skip:
+            break
+        answer = {q.id: None for q in item.questions}
+        answers.append({**answer, **_RD[cand["key"]], **over.get(cand["key"], {})})
+    return failed(graders.grade_reconcile_decision(decision_reply(*answers), items, payload,
+                                                   RECONCILE_EXPECTED))
+
+
+def test_reconcile_decision_compliant_passes():
+    from tests.llm_fakes import decision_reply
+
+    payload = _reconcile_decision_payload()
+    items = reconcile.build_items(payload)
+    assert all(len([q for q in item.questions if q.id in reconcile.EVIDENCE_IDS]) == 3
+               for item in items)
+    answers = [{**{q.id: None for q in item.questions}, **_RD[c["key"]]}
+               for item, c in zip(items, payload["candidates"], strict=True)]
+    checks = graders.grade_reconcile_decision(decision_reply(*answers), items, payload,
+                                              RECONCILE_EXPECTED)
+    assert failed(checks) == set()
+    assert [c.name for c in checks] == [
+        "reconcile.json", "reconcile.covers", "reconcile.enum", "reconcile.evidence",
+        "reconcile.distinct", "reconcile.continuation", "reconcile.cross_type",
+        "reconcile.close", "reconcile.keep_open", "reconcile.fulfilled",
+        "reconcile.unproven"]
+    # No rationale is required of a status word (I4): none was given above.
+    assert '"rationale"' not in decision_reply(*answers)
+
+
+def test_reconcile_decision_undecodable_fails_json_only():
+    payload = _reconcile_decision_payload()
+    items = reconcile.build_items(payload)
+    for text in ("Mara's map looks finished to me.",
+                 '{"0": {"answers": {"decision": "distinct", "from": null, "to": nu'):
+        checks = graders.grade_reconcile_decision(text, items, payload, RECONCILE_EXPECTED)
+        assert [(c.name, c.ok) for c in checks] == [("reconcile.json", False)], text
+
+
+def test_reconcile_decision_merged_pairs_fail_their_own_verdicts():
+    merged = {"decision": "duplicate", "from": "B", "to": "A"}
+    assert _reconcile_decided(c1=merged, c2=merged) == {"reconcile.distinct",
+                                                        "reconcile.continuation"}
+    # The concrete record must still be the `from` of a continuation.
+    assert _reconcile_decided(c2={"from": "A", "to": "B"}) == {"reconcile.continuation"}
+
+
+def test_reconcile_decision_eager_lifecycle_fails_keep_open_and_unproven():
+    cited = {"evidence_scene": "001--saltmarch-docks"}
+    assert _reconcile_decided(c5={"decision": "close", **cited},
+                              c7={"decision": "fulfilled", **cited}) == {
+        "reconcile.keep_open", "reconcile.unproven"}
+
+
+def test_reconcile_decision_unfounded_closure_fails_evidence_alone():
+    """The verdict reads the raw word, so an unfounded closure trips the
+    evidence check alone; a scene in any slot founds it, and a scene the item
+    does not offer is no scene."""
+    assert _reconcile_decided(c4={"evidence_scene": None}) == {"reconcile.evidence"}
+    assert _reconcile_decided(c4={"evidence_scene": "999--nowhere"}) == {
+        "reconcile.evidence"}
+    assert _reconcile_decided(c4={"evidence_scene": None,
+                                  "evidence_scene_3": "003--the-pier-at-dusk"}) == set()
+    assert _reconcile_decided(c7={"decision": "broken"}) == {"reconcile.evidence",
+                                                            "reconcile.unproven"}
+
+
+def test_reconcile_decision_timid_fails_the_three_verdicts_nothing_else_reaches():
+    assert _reconcile_decided(c3={"decision": "distinct", "from": None, "to": None},
+                              c4={"decision": "keep_open", "evidence_scene": None},
+                              c6={"decision": "keep_open", "evidence_scene": None}) == {
+        "reconcile.cross_type", "reconcile.close", "reconcile.fulfilled"}
+
+
+def test_reconcile_decision_unknown_word_fails_enum():
+    assert _reconcile_decided(c3={"decision": "duplicate"}) == {"reconcile.enum",
+                                                               "reconcile.cross_type"}
+
+
+def test_reconcile_decision_missing_item_fails_covers_alone():
+    checks = _reconcile_decided(skip="c7")
+    assert checks == {"reconcile.covers"}
+
+
 # --------------------------------------------------------- scene suggestions
 #
 # Pure over a hand-built snapshot and the real Gregorian provider: two focused

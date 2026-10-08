@@ -554,6 +554,61 @@ def grade_reconcile(text: str, expected: dict[str, dict],
          for key, want in expected.items() if key in by_key]
 
 
+
+def grade_reconcile_decision(text: str, items: Sequence[decisions.Item], payload: dict,
+                             expected: dict[str, dict]) -> list[Check]:
+    """The reconciliation sweep through `decide()`: does the reply decode,
+    answer every candidate in its own vocabulary, found every status word on a
+    scene its item showed -- and give the right verdict on each scored
+    candidate?
+
+    Read through `decisions.parse`, and scored on the RAW parsed answers
+    rather than `reconcile.proposals_of`, as `grade_reconcile` is and for its
+    reason: the mapping rewrites a word outside the vocabulary, a refused
+    direction and an unfounded closure all as ``uncertain``, so an enum or
+    evidence check over its output could never fail. `reconcile.json` is the
+    one check on the raw reply (`decisions.find_object`), and with no object
+    nothing else is reported.
+
+    A candidate the reply never reached (`NO_ITEM`) fails `reconcile.covers`
+    alone: its own verdict is left out rather than failed beside it.
+    `reconcile.enum` fails a decision answered with no option of its item
+    (`NOT_AN_OPTION`). `reconcile.evidence` fails a status word with no
+    evidence scene read in any `reconcile.EVIDENCE_IDS` slot; a rationale is
+    not required (I4), and an item's options are only the scenes it shows.
+    Each verdict reads the decision answer and the `from` letter.
+    `expected` is `grade_reconcile`'s, keyed by candidate key."""
+    if decisions.find_object(text) is None:
+        return [Check("reconcile.json", False, "no JSON object recoverable from the reply")]
+    results = decisions.parse(text, items, explain=True)
+    keyed = [(cand["key"], result) for cand, result in
+             zip(payload["candidates"], results, strict=True)]
+    decided = {key: result.answers[reconcile.DECISION_ID] for key, result in keyed}
+    skipped = [key for key, answer in decided.items() if answer.detail == decisions.NO_ITEM]
+    unknown = [key for key, answer in decided.items()
+               if answer.detail == decisions.NOT_AN_OPTION]
+    unfounded = [key for key, result in keyed
+                 if decided[key].answer in RECONCILE_STATUS
+                 and not any(isinstance(_answer_of(result, slot), str)
+                             for slot in reconcile.EVIDENCE_IDS)]
+    read = {key: {"decision": decided[key].answer,
+                  "from": _answer_of(result, reconcile.FROM_ID)}
+            for key, result in keyed if decisions.was_read(decided[key])}
+    return [
+        Check("reconcile.json", True),
+        Check("reconcile.covers", not skipped, f"no decision for {skipped}"),
+        Check("reconcile.enum", not unknown,
+              f"decisions outside their candidate's vocabulary: {unknown}"),
+        Check("reconcile.evidence", not unfounded,
+              f"status words without an evidence scene the item showed: {unfounded}"),
+    ] + [_reconcile_verdict(key, read[key], want)
+         for key, want in expected.items() if key in read]
+
+
+def _answer_of(result: decisions.ItemResult, question: str) -> object:
+    answer = result.answers.get(question)
+    return answer.answer if answer is not None else None
+
 # ----------------------------------------------------------- scene suggestions
 
 def _raw_driver_misses(entries: list[dict], kinds: dict[str, str]) -> list[str]:

@@ -312,6 +312,49 @@ including each `reason`, are captured at Debug level like every other LLM
 response, under the existing Settings disclosure, while its info-level log row
 carries counts and modes only.
 
+**As decision items (slice G, prepared; the call site switches later).**
+`store/continuity/reconcile.py:build_items` makes one `decide()` item per
+payload candidate, in order, and `decide/` renders the prompt around them;
+`system.j2` and `user.j2` above stay until the switch retires them.
+`build_payload` also names the recent window itself (`recent`, in play order),
+which today's prompt does not read. `reconcile.item_scenes` is the scenes one
+item shows: its records' beat scenes and the chronicle lines of those and of
+the recent window, in `known_scenes` order, an id `decisions.offerable`
+refuses or one colliding once normalised with an earlier one dropped from the
+item's options and lines (over every candidate, the union is today's
+`known_scenes`).
+- `item.j2` is the item's context. Vars: `now`, `chronicle` (only the lines
+  of the scenes the item shows) and `c` (`{label, records, signal_text}`):
+  `user.j2`'s preamble, a heading `Candidate — <label>`, then `user.j2`'s
+  record and signal block byte for byte.
+- `question.j2` is the first question's instructions (a choice under the id
+  `decision`, no null, each option labelled by its own word with `_` as a
+  space). Var: `vocabulary`. The legacy prompt's criteria, one sentence
+  reworded for one candidate shown above, and the vocabulary's whole bullet
+  (two commitments carry the plot threads' bullet too, which theirs calls
+  "the same rules").
+- `direction.j2` and `direction_to.j2` are a pair's direction questions
+  (choices under `from` and `to`, null allowed; asked only under
+  `reconcile.PAIR_VOCABULARIES`), over the record letters, each described by
+  `record_option.j2` (var: `letter`; "record A"). No vars otherwise.
+- `evidence.j2` and `evidence_more.j2` are the evidence questions: one
+  nullable choice per scene the item shows, up to `reconcile.EVIDENCE_SCENES`
+  (`evidence_scene`, then `evidence_scene_2` and `evidence_scene_3`), each
+  over every scene it shows, described by `scene_option.j2` (var: `sid`; "the
+  scene listed above as <id>"). No vars otherwise.
+- `explain.j2` is the rationale instruction (`reconcile.explain`): the
+  proposal's display-only reason. No vars.
+
+`reconcile.proposals_of` maps the parsed batch back to today's proposals
+through today's `_decide`, leaving out a candidate the reply never reached
+(`decisions.was_read`), so it gets no proposal and is asked again; a status
+word stands on a shown evidence scene without a rationale, its `reason` then
+`""`. `scripts/verify_templates.py` holds each criterion of `system.j2` to a
+decide-era template (`RECONCILE_CARRIED`, `RECONCILE_BULLETS` keyed by
+vocabulary, `RECONCILE_REWORDED` with why), prints the words it adds
+(`RECONCILE_ADDED`), and holds every sentence of `system.j2` to those or its
+reply format (`RECONCILE_FORMAT`), which `decide/system.j2` owns now.
+
 ### `rolling_summary/` — POST /campaigns/{cid}/scenes/{sid}/rolling-summary
 The live running summary of a scene **still being played** (#85). Mirrors
 `store/rolling_summary.py:build_prompt`. Messages: system, user.

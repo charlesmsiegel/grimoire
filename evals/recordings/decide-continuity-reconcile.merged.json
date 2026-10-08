@@ -1,0 +1,9 @@
+{
+  "0": {"answers": {"decision": "duplicate", "from": "B", "to": "A", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Both threads ask who is behind the Saltmarch smuggling."},
+  "1": {"answers": {"decision": "duplicate", "from": "B", "to": "A", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Both threads are about Seraphine's debts."},
+  "2": {"answers": {"decision": "pays_off", "from": "B", "to": "A", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Finding the ledger is what earns Mara her pay."},
+  "3": {"answers": {"decision": "close", "evidence_scene": "003--the-pier-at-dusk", "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Mara followed the map to the cove it marks and found it."},
+  "4": {"answers": {"decision": "keep_open", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Nothing shown says what lies past the reef on Winifred's chart."},
+  "5": {"answers": {"decision": "fulfilled", "evidence_scene": "002--realm-road", "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Mara put the ring back in Winifred's hand, as she swore."},
+  "6": {"answers": {"decision": "uncertain", "evidence_scene": null, "evidence_scene_2": null, "evidence_scene_3": null}, "rationale": "Nothing shown says whether Winifred got her berth."}
+}

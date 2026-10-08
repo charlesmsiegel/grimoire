@@ -1,0 +1,30 @@
+{#- The reconciliation sweep's first question, as `decide()` asks it
+    (`reconcile.build_items`, a choice under the id `decision`, no null).
+    Vars: vocabulary, the candidate's `reconcile.DECISIONS` key. The
+    criteria are the legacy one-call prompt's (`system.j2`, until the switch
+    retires it), moved here: one sentence reworded for one candidate shown
+    above (`verify_templates.py`'s RECONCILE_REWORDED says why), the rest
+    word for word (RECONCILE_CARRIED), and each vocabulary's whole bullet
+    selected by `vocabulary` (RECONCILE_BULLETS) -- two commitments are
+    judged by "the same rules" as two plot threads, so that vocabulary
+    carries the plot threads' bullet before its own. Each option is labelled
+    by its own word (ruling 6); the direction is `direction.j2`'s, the
+    evidence `evidence.j2`'s, the reason `explain.j2`'s, and the reply format
+    `decide/system.j2`'s. -#}
+You are reviewing a campaign's story ledger for records that may overlap or be finished. A plot thread is an open narrative question; a commitment is an obligation someone owes (a promise, a debt, a threat or a piece of foreshadowing); an event is a dated occasion on the campaign calendar. The candidate above shows one or two records, lettered A and B: the record's line, its latest beats with the scene each happened in, its deadline or staleness, the links already recorded on it and the people involved, and then the signals that put it on the list. Signals say why a candidate is worth a look, never what the answer is.
+
+{% if vocabulary in ("same_thread", "same_commitment") -%}
+- Two plot threads ("duplicate", "continuation", "subthread", "related", "distinct", "uncertain"): "duplicate" only when both records are the same question or obligation, so the two should be read as one record; a narrower or later question is "continuation" or "subthread", not "duplicate". "related" when they bear on each other but are separate business, "distinct" when they do not.
+{% endif -%}
+{% if vocabulary == "same_commitment" -%}
+- Two commitments ("duplicate", "related", "distinct", "uncertain"): the same rules, except that a commitment is never a continuation or a subthread of another.
+{% elif vocabulary == "cross" -%}
+- A plot thread and a commitment ("pays_off", "related", "distinct", "uncertain"): "pays_off" when settling the thread is how the commitment is settled. A thread and a commitment are never "duplicate".
+{% elif vocabulary == "thread" -%}
+- Whether a plot thread is finished ("close", "keep_open", "uncertain"): "close" only when a beat or a scene line shows the question answered. Age alone is never evidence that a thread is finished.
+{% elif vocabulary == "commitment" -%}
+- Whether a commitment is resolved ("fulfilled", "broken", "expired", "keep_open", "uncertain"): "expired" when its occasion went by with nobody keeping or breaking it. A passed deadline alone is never evidence that a promise was kept or broken.
+{% elif vocabulary == "temporal" -%}
+- A commitment and a dated event ("before", "on", "after", "by", "unrelated", "uncertain"): whether the commitment falls due before, on, after or by that event. Do not invent a date: when nothing shown ties the commitment to the event, answer "unrelated" or "uncertain".
+{% endif %}
+When what is shown cannot settle a candidate, answer "uncertain".

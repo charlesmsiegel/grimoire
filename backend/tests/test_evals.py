@@ -270,3 +270,33 @@ def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch
     assert case.schema(ctx) == decisions.schema(items, explain=True)
     # Today's case still stands beside it until the switch retires it.
     assert "continuity-identity" in case_mod.BY_ID
+
+
+def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatch, tmp_path):
+    """The permanent reconciliation decide case: its prompt is the structured
+    prompt the switch will send for `build_items`' items over the payload the
+    case builds, a live run sends that batch's schema, and each counterexample
+    carries today's recording's failure mode into the decide shape."""
+    from grimoire import decisions, inference
+    from grimoire.store.continuity import reconcile
+
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case = case_mod.BY_ID["decide-continuity-reconcile"]
+    assert case.task == "continuity-reconcile"
+    assert {r.variant: r.expect_fail for r in case.recordings} == {
+        "compliant": (), "undecodable": ("reconcile.json",),
+        "merged": ("reconcile.distinct", "reconcile.continuation"),
+        "eager": ("reconcile.keep_open", "reconcile.unproven"),
+        "unfounded": ("reconcile.evidence",),
+        "timid": ("reconcile.cross_type", "reconcile.close", "reconcile.fulfilled")}
+    ctx = runner.prepare(case)
+    payload = ctx["payload"]
+    items = ctx["items"]
+    assert items == reconcile.build_items(payload)
+    assert len(items) == len(payload["candidates"]) == 7
+    assert ctx["messages"] == inference.structured_messages(items, explain=reconcile.explain())
+    assert set(ctx["expected"]) == {f"c{n}" for n in range(1, 8)}
+    assert case.schema is not None
+    assert case.schema(ctx) == decisions.schema(items, explain=True)
+    # Today's case still stands beside it until the switch retires it.
+    assert "continuity-reconcile" in case_mod.BY_ID

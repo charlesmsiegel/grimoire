@@ -579,6 +579,104 @@ def test_continuity_identity_decide_reads_every_entry():
     assert fenced.decide.count('"0":') == 2
 
 
+# --- continuity reconcile --------------------------------------------------
+
+def _reconcile_gate() -> gate.Conversion:
+    return next(c for c in gate.GATES if c.id == "continuity-reconcile")
+
+
+def test_the_reconcile_copy_answers_as_production_does():
+    """The frozen `reconcile_parse_output` reads every legacy case as today's
+    production parser does, over the gate's fixture payload, and its frozen
+    domain tables are production's. Deleted with the production parser
+    (Task 6)."""
+    from grimoire.store.continuity import effective, pending, reconcile
+
+    conv = _reconcile_gate()
+    for case in conv.legacy_cases:
+        assert (legacy_mod.reconcile_parse_output(case, gate._RECONCILE_PAYLOAD)
+                == reconcile.parse_output(case, gate._RECONCILE_PAYLOAD)), case
+    assert legacy_mod.RECONCILE_DECISIONS == reconcile.DECISIONS
+    assert legacy_mod.RECONCILE_REASON_CHARS == reconcile.RECONCILE_REASON_CHARS
+    assert legacy_mod.RELATIONS == effective.RELATIONS
+    assert legacy_mod.TEMPORAL_RELATIONS == pending.TEMPORAL_RELATIONS
+
+
+def test_continuity_reconcile_is_gated_on_the_proposals_the_sweep_stores():
+    """The outcome is the proposals dict persist 2 is handed, or None for a
+    failed run: today through the frozen parse, after the switch through the
+    production `proposals_of`. The fixture holds one candidate per
+    vocabulary, and the thread closure shows all four scenes, so one item
+    asks three evidence questions and has a fourth scene to leave out."""
+    from grimoire.store.continuity import reconcile
+
+    conv = _reconcile_gate()
+    assert conv.explain
+    assert _from_legacy(conv.legacy)
+    payload = gate._RECONCILE_PAYLOAD
+    items = conv.items()
+    assert [c["vocabulary"] for c in payload["candidates"]] == [
+        "same_thread", "same_commitment", "cross", "temporal", "thread", "commitment"]
+    assert len(items) == 6
+    closure = items[4]
+    assert len(reconcile.item_scenes(payload, payload["candidates"][4])) == 4
+    assert [q.id for q in closure.questions if q.id in reconcile.EVIDENCE_IDS] == list(
+        reconcile.EVIDENCE_IDS)
+    assert conv.settle(conv.legacy("I think so.")) is None
+    entry = gate.Entry("planted", None, "", "")
+    parsed = decisions.parse(json.dumps({"4": {"answers": {
+        "decision": "close", "evidence_scene": "0001--saltmarch-docks"}}}), items,
+        explain=True)
+    assert conv.settle(conv.decide(parsed, entry)) == {payload["candidates"][4]["id"]: {
+        "decision": "close", "from": "", "to": "", "relation": "", "status": "closed",
+        "reason": "", "evidence_scenes": ["0001--saltmarch-docks"]}}
+
+
+def test_continuity_reconcile_decide_reads_every_entry():
+    """Today's parse loses only what the slice settled by ruling: a status
+    verdict without a rationale, a fourth cited scene, a scene the item does
+    not show, and a reply in today's format to the decide prompt. The
+    structured parse loses nothing -- a candidate it never reached gets no
+    proposal, and a repeated key keeps its first value."""
+    conv = _reconcile_gate()
+    result = gate.judge(conv)
+    assert result.passed, "\n".join(result.regressions)
+    assert result.decide_right == result.entries
+    ruled = [e for e in gate.load(conv) if e.ruling]
+    assert result.legacy_right == result.entries - len(ruled) == result.entries - 5
+    entries = {entry.shape: entry for entry in gate.load(conv)}
+    assert {"todays-format", "two-scenes-cited", "four-scenes-cited",
+            "evidence-from-another-candidate", "one-item-unreadable", "null-decision",
+            "related-without-letters", "closure-without-rationale"} <= set(entries)
+    assert entries["todays-format"].intended == {}
+    assert len(entries["four-scenes-cited"].intended[
+        gate._RECONCILE_PAYLOAD["candidates"][4]["id"]]["evidence_scenes"]) == 3
+    unread = entries["one-item-unreadable"].intended
+    assert gate._RECONCILE_PAYLOAD["candidates"][1]["id"] not in unread and len(unread) == 5
+
+
+def test_the_reconcile_sources_are_gate_entries_with_their_twins():
+    """Each deleted parse test's reply, adapted through its own maps, is the
+    legacy side of an entry whose decide side is its twin: the checkable form
+    of "every deleted parse input is a gate entry" (ruling 11, M11)."""
+    conv = _reconcile_gate()
+    pairs = {(entry.legacy, entry.decide) for entry in gate.load(conv)}
+    assert len(gate.RECONCILE_SOURCES) >= 30
+    for source, elements, keys, scenes in gate.RECONCILE_SOURCES:
+        adapted = gate._adapt(elements, keys, scenes)
+        assert adapted in conv.legacy_cases, source
+        assert (adapted, gate._twin(elements, keys, scenes)) in pairs, source
+
+
+def test_reconcile_adapt_refuses_a_map_that_merges_two_candidates():
+    element = {"candidate": "c1", "decision": "close"}
+    with pytest.raises(ValueError, match="same fixture"):
+        gate._adapt([element], {"c1": "c5", "c2": "c5"}, {})
+    with pytest.raises(ValueError, match="same fixture"):
+        gate._adapt([element], {"c1": "c5"}, {"s0": "0001--saltmarch-docks",
+                                              "s1": "0001--saltmarch-docks"})
+
+
 # --- the legacy side is the frozen copy ------------------------------------
 
 def test_legacy_imports_nothing_from_grimoire():
@@ -601,6 +699,7 @@ _PRODUCTION = frozenset({"grimoire.store.scene_break", "grimoire.store.voice_dri
                          "grimoire.store.response_protocol",
                          "grimoire.routes.character_turns",
                          "grimoire.store.continuity.identity",
+                         "grimoire.store.continuity.reconcile",
                          "grimoire.store.absorb.parse"})
 
 
@@ -739,7 +838,12 @@ def test_the_corpora_mark_their_deliberate_changes():
     assert ruled == {("scene-break", "multi-line"), ("scene-break", "quoted-title"),
                      ("voice-drift", "todays-format"), ("speaker", "case-folded"),
                      ("continuity-identity", "normalised-id"),
-                     ("continuity-identity", "todays-format")}
+                     ("continuity-identity", "todays-format"),
+                     ("continuity-reconcile", "closure-without-rationale"),
+                     ("continuity-reconcile", "closure-without-rationale-spaces"),
+                     ("continuity-reconcile", "four-scenes-cited"),
+                     ("continuity-reconcile", "evidence-from-another-candidate"),
+                     ("continuity-reconcile", "todays-format")}
     printed = gate.report([gate.judge(conv) for conv in gate.GATES])
     assert printed.count("ruling: ") == len(ruled)
     assert "ruling: entry 6 (multi-line), legacy loses: " in printed
