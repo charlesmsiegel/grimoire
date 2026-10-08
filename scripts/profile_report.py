@@ -33,8 +33,10 @@ a single test over the slow-test line, and a session slower than the
 tolerance -- plus a short Markdown summary. It always exits 0. Session time is
 judged on the median of five comparable runs, never on one: `--previous`
 names earlier runs' profiles, newest first, and those with the same Python
-minor version, worker count, scheduler and coverage measurement as this one
-make up the window. With fewer than five the summary shows the median so far
+minor version, worker count, scheduler, coverage measurement and recorded
+package versions (pytest, its plugins, coverage, pydantic, FastAPI, Starlette,
+anyio, httpx) as this one make up the window -- CI installs unpinned
+dependencies, and a release of any of them is a different job. With fewer than five the summary shows the median so far
 and warns of nothing, since one run on a shared runner is noise, not a
 regression. The reference moves deliberately, in the commit that moves it.
 """
@@ -183,7 +185,9 @@ WINDOW = 5
 def _settings(doc: dict) -> tuple:
     """What makes two runs' session times comparable."""
     minor = ".".join(str(doc.get("python") or "").split(".")[:2])
-    return (minor, doc.get("workers"), doc.get("distribution"), bool(doc.get("coverage")))
+    packages = tuple(sorted((doc.get("packages") or {}).items()))
+    return (minor, doc.get("workers"), doc.get("distribution"), bool(doc.get("coverage")),
+            packages)
 
 
 def session_window(doc: dict, previous: list[dict] = ()) -> list[float]:
@@ -279,6 +283,9 @@ def _print_summary(s: dict, top: int) -> None:
 
 
 def _summary_command(args: argparse.Namespace) -> int:
+    if not pathlib.Path(args.profile).exists():
+        print(f"no profile at {args.profile} -- pytest stopped before writing one")
+        return 1
     s = summarize(load(args.profile), top=max(args.top, 100) if args.json else args.top)
     if args.json:
         print(json.dumps(s, indent=1, sort_keys=True))

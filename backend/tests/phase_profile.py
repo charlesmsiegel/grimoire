@@ -40,7 +40,13 @@ What it records, and its reach:
 - **The run's environment**: interpreter, package versions, CPU and memory,
   the checkout's SHA and whether the tree was dirty, whether `grimoire` was
   imported from this checkout's `src`, and the process's own CPU time and peak
-  memory. `wall_s` starts when the plugin is registered, so it leaves out
+  memory.
+- **The sources the run measured**: the SHA-256 of every `.py` file of the
+  `grimoire` package the run would import, taken when the plugin is
+  registered -- before any test runs -- and keyed as `grimoire/...`.
+  Coverage's line and arc numbers mean something only against that text, and
+  `scripts/coverage_arcs.py dump` checks the tree against it, so a coverage
+  file kept across an edit cannot be read against code it never measured. `wall_s` starts when the plugin is registered, so it leaves out
   interpreter start-up and the conftest import; an outer timer is the
   measure for those.
 
@@ -60,8 +66,10 @@ so point those inside the checkout when the file is to be shared.
 from __future__ import annotations
 
 import functools
+import hashlib
 import importlib
 import importlib.metadata
+import importlib.util
 import json
 import os
 import platform
@@ -95,6 +103,22 @@ OPS = ("app_built", "lifespan_entered", "module_reloaded", "uvicorn_started",
 #: Distributions whose versions decide what a run measures.
 PACKAGES = ("pytest", "pytest-cov", "coverage", "pytest-xdist", "pytest-asyncio",
             "pydantic", "fastapi", "starlette", "anyio", "httpx")
+
+
+def source_hashes(package: str = "grimoire") -> dict[str, str] | None:
+    """{"<package>/<path>.py": sha256} for every module file of `package` as
+    the import system would find it, or None when it cannot be found. Finds
+    without importing, so registering the plugin imports nothing."""
+    try:
+        spec = importlib.util.find_spec(package)
+    except (ImportError, ValueError):
+        return None
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    root = Path(next(iter(spec.submodule_search_locations)))
+    return {f"{package}/{path.relative_to(root).as_posix()}":
+            hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in sorted(root.rglob("*.py"))}
 
 
 def _git(rootdir, *args: str) -> str | None:
@@ -225,6 +249,7 @@ class PhaseProfile:
         self.collection_agrees: bool | None = None
         self.ops = _Ops()
         self._t0 = time.perf_counter()
+        self.sources = None if self.is_worker else source_hashes()
         self.collect_s: float | None = None
         # [start, seconds spent in fixtures set up from inside this one]
         self._fixture_stack: list[list[float]] = []
@@ -348,6 +373,7 @@ class PhaseProfile:
             "python": platform.python_version(),
             "implementation": platform.python_implementation(),
             "packages": _versions(),
+            "sources": self.sources,
             "machine": _machine(),
             "coverage": bool(getattr(self.config.option, "cov_source", None)),
             "coverage_core": os.environ.get("COVERAGE_CORE"),

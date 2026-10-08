@@ -249,7 +249,11 @@ workers' data before `--cov-fail-under` is evaluated.
 
 **Arc sets** (`scripts/coverage_arcs.py`, every package file listed, each
 file's source hash checked, stable set = the intersection of a configuration's
-runs, spec finding B1):
+runs, spec finding B1). The campaign's dumps predate `dump --profile` (which
+now takes each file's hash from the run's own phase profile, after Codex's
+review); they hashed the worktree at dump time, which is the same text only
+because each measurement worktree was a detached checkout of one commit and
+never edited -- `git status` clean in every profile's `git_dirty`:
 
 | Set | runs | arcs | lines | variable arcs |
 |---|---|---|---|---|
@@ -458,7 +462,8 @@ never elapse. None appears among the profile's slow tests.
   time is judged on the median of five comparable runs -- this one and the
   newest four earlier CI runs (this branch's, then `main`'s) whose
   `backend-profile` the job can fetch, with the same Python minor version,
-  workers, scheduler and coverage setting, run to completion -- and with fewer
+  workers, scheduler, coverage setting and recorded package versions, run to
+  completion -- and with fewer
   than five it shows the median and warns of nothing. Collected and skipped
   counts and the slow-test line are judged per run. The total critical path
   across jobs is not budgeted automatically; §3 reports it.
