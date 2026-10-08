@@ -934,8 +934,12 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
   const unreadable = facts.unreadable === true;
   const unreadableNote = unreadable && (
     <div className="banner" role="status">
-      This model&apos;s facts file could not be read, so it cannot be edited until it has
-      synced.
+      {facts.unreadable_reason === "mangled"
+        ? "This provider's model facts file is not valid JSON (it may have been edited by "
+          + "hand), so nothing here can be edited until the file is fixed or removed. "
+          + "Saving now would replace every model's facts in it."
+        : "This model's facts file could not be read, so it cannot be edited until it "
+          + "has synced."}
     </div>
   );
   const stated = OVERRIDABLE.filter(({ name }) => facts.overrides[name]);

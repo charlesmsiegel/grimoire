@@ -496,13 +496,45 @@ def test_unreadable_facts_are_flagged_and_never_written(client, monkeypatch):
 
     got = client.get(url, params={"model": "m"})
     assert got.status_code == 200, got.text
-    assert got.json()["unreadable"] is True
+    assert (got.json()["unreadable"], got.json()["unreadable_reason"]) == (True, "held")
 
     got = client.put(url, json={"model": "m", "prefill": True})
     assert got.status_code == 503, got.text
     assert got.json() == {"detail": routes.config.FACTS_UNREADABLE}
     assert "sync client" not in got.text
     assert store.llm_connections.facts_path(pid).read_bytes() == before
+
+
+@pytest.mark.parametrize("raw", ["{not json", "[]", '{"m": "oops"}', ""])
+def test_a_mangled_facts_file_is_flagged_and_refused_with_409(client, raw):
+    """A file that was read and does not parse is not the transient 503: it
+    will not clear on its own, so the write is refused as 409
+    `facts_unreadable` with a fixed detail saying what a person must do, and
+    the file is never replaced. The GET flags it too, so no save is offered."""
+    _format("2")
+    pid = _spare(client)
+    path = store.llm_connections.facts_path(pid)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+    url = f"/api/llm-connections/{pid}/facts"
+
+    got = client.get(url, params={"model": "m"})
+    assert got.status_code == 200, got.text
+    assert (got.json()["unreadable"], got.json()["unreadable_reason"]) == (True, "mangled")
+
+    got = client.put(url, json={"model": "m", "prefill": True})
+    assert got.status_code == 409, got.text
+    assert got.json() == {"kind": "facts_unreadable",
+                          "detail": routes.config.FACTS_MANGLED}
+    assert path.read_text(encoding="utf-8") == raw
+
+
+def test_a_readable_facts_file_carries_no_unreadable_reason(client):
+    _format("2")
+    pid = _spare(client)
+    got = client.get(f"/api/llm-connections/{pid}/facts", params={"model": "m"}).json()
+    assert got["unreadable"] is False
+    assert "unreadable_reason" not in got
 
 
 # ---- health ----

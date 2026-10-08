@@ -991,7 +991,10 @@ table of its own.
      row its provider priced.
    - Writing rates is strict and reading them is fail-soft: `PUT …/facts`
      refuses a partial, invalid or unknown-field entry with 400 (`{}` clears),
-     and a mangled file reads as no rates, falling back to `pricing.json`.
+     and a mangled file reads as no rates, falling back to `pricing.json`. A
+     write never replaces a facts file it could not parse: a mangled file is
+     refused with 409 `facts_unreadable` (a held one with 503), and the GET
+     flags it `unreadable` so the panel offers no save.
    - A provider with `billing: subscription` tags the row `subscription`, and
      cost surfaces label those rows "subscription — not billed". Their modelled
      figure is arithmetic this side did and stays in `modelled_usd`. Such rows

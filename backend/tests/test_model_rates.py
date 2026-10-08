@@ -367,6 +367,29 @@ def test_put_facts_rates_then_get(client):
     assert client.get(url, params={"model": MODEL}).json()["rates"] is None
 
 
+def test_a_rates_save_over_a_mangled_facts_file_is_refused_not_written(client):
+    """A trailing comma makes every model on the provider read "None stated";
+    saving one model's rates onto that empty read would replace the file and
+    lose every other model's rates for good. The GET flags the file so the
+    panel offers no save, and the PUT refuses (409 `facts_unreadable`) and
+    leaves the bytes as they were."""
+    pid = _provider(client)
+    url = f"/api/llm-connections/{pid}/facts"
+    for model in ("vendor/a", "vendor/b"):
+        assert client.put(url, json={"model": model, "rates": BOTH}).status_code == 200
+    path = _facts_file(pid)
+    mangled = path.read_text(encoding="utf-8").rstrip().rstrip("}") + ",}\n"
+    path.write_text(mangled, encoding="utf-8")
+
+    got = client.get(url, params={"model": "vendor/c"}).json()
+    assert (got["unreadable"], got["unreadable_reason"]) == (True, "mangled")
+    r = client.put(url, json={"model": "vendor/c", "rates": {
+        "prompt_usd_per_1k": 0.0, "completion_usd_per_1k": 0.0}})
+    assert r.status_code == 409, r.text
+    assert r.json()["kind"] == "facts_unreadable"
+    assert path.read_text(encoding="utf-8") == mangled
+
+
 def test_put_facts_refuses_a_partial_rate(client):
     pid = _provider(client)
     url = f"/api/llm-connections/{pid}/facts"

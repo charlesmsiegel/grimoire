@@ -392,10 +392,13 @@ export type ModelFacts = {
   verified: Partial<Record<CapabilityName, VerifiedResult>>;
   overrides: Partial<Record<CapabilityName, "yes" | "no">>;
   capabilities: Record<CapabilityName, CapabilityValue>;
-  /** The facts file exists and could not be read (a sync client holding it):
-   *  nothing above is what the user said, and a save is refused (503, try
-   *  again), so none is offered. */
+  /** The facts file exists and could not be read: nothing above is what the
+   *  user said, and a save is refused, so none is offered. */
   unreadable?: boolean;
+  /** Why, when `unreadable`: `held` -- another program has the file (a save
+   *  answers 503, try again) -- or `mangled` -- it does not parse, which a
+   *  person has to fix (a save answers 409 `facts_unreadable`). */
+  unreadable_reason?: "held" | "mangled";
 };
 /** `PUT /api/llm-connections/{id}/facts`. A field left out is left as it is;
  *  an override of `""` removes that override. */

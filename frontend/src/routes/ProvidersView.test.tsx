@@ -807,6 +807,22 @@ test("an unreadable facts file is said, and Save stays off", async () => {
   expect(api.putModelFacts).not.toHaveBeenCalled();
 });
 
+test("a mangled facts file says it needs fixing by hand, and Save stays off", async () => {
+  // Not the transient case: waiting for a sync will not help, and a save
+  // would replace every other model's facts with this one entry.
+  (api.readModelFacts as any).mockResolvedValue(
+    facts({ unreadable: true, unreadable_reason: "mangled" }));
+  open("/providers/saltmarch");
+  fireEvent.click(await main().findByRole("link", { name: "vendor/m" }));
+
+  expect(await main().findByText(/not valid JSON/)).toBeInTheDocument();
+  expect(main().queryByText(/until it has synced/)).not.toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  expect(await main().findByText(/fixed or removed/)).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeDisabled();
+  expect(api.putModelFacts).not.toHaveBeenCalled();
+});
+
 test("a facts save that turns embedding on is asked, then resent with the yes", async () => {
   (api.putModelFacts as any)
     .mockRejectedValueOnce(new ApiError(400,

@@ -1561,18 +1561,24 @@ def _facts_body(conn: dict, model: str) -> dict:
     its current rev) and every capability as it resolves with them.
 
     Read strictly, as `GET /pricing` reads its table: a facts file that exists
-    and cannot be read answers `unreadable: true` with nothing stated, rather
-    than reading as a model nothing was said of -- the panel must not offer a
-    save over the user's word it could not read (the write would be refused
-    anyway, `put_connection_facts`)."""
+    and cannot be read -- held by another program, or not parseable --
+    answers `unreadable: true` with nothing stated, rather than reading as a
+    model nothing was said of -- the panel must not offer a save over the
+    user's word it could not read (the write would be refused anyway,
+    `put_connection_facts`). `unreadable_reason` says which: `held` clears on
+    its own, `mangled` needs the file fixed by hand."""
     caps = capabilities.caps_for(conn, model)
+    reason = ""
     try:
         known = facts.of(conn["id"], model, conn["rev"], strict=True)
-        unreadable = False
-    except facts.FactsUnreadableError:
-        known, unreadable = facts.of(conn["id"], model, conn["rev"]), True
-    return {"provider": conn["id"], "model": model, **known, "unreadable": unreadable,
+    except facts.FactsUnreadableError as exc:
+        known = facts.of(conn["id"], model, conn["rev"])
+        reason = "mangled" if isinstance(exc, facts.FactsMangledError) else "held"
+    body = {"provider": conn["id"], "model": model, **known, "unreadable": bool(reason),
             "capabilities": {n: capabilities.cap_body(c) for n, c in caps.items()}}
+    if reason:
+        body["unreadable_reason"] = reason
+    return body
 
 
 @router.get("/llm-connections/{conn_id}/facts")
@@ -1590,6 +1596,14 @@ def get_connection_facts(conn_id: str, model: str = ""):
 FACTS_UNREADABLE = ("This provider's model facts could not be read just now "
                     "(another program may hold the file); nothing was saved. Try again.")
 
+#: A facts write onto a file that was read and does not parse (`facts
+#: .FactsMangledError`): refused as 409 `facts_unreadable` rather than written
+#: over every other model's rates, verdicts and overrides. Unlike the 503 it
+#: will not clear on its own, so it says what a person has to do.
+FACTS_MANGLED = ("This provider's model facts file is not valid JSON (it may have been "
+                 "edited by hand); nothing was saved. Fix or remove the file, then try "
+                 "again.")
+
 
 @router.put("/llm-connections/{conn_id}/facts")
 def put_connection_facts(conn_id: str, body: FactsUpdate):
@@ -1599,7 +1613,9 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
     null) is left as it is. 400 for a value the store refuses -- a partial or
     unknown-field rate included -- before anything is written; 404 for a
     provider that does not exist -- or stopped existing before the write, which
-    `facts.state` checks under the connection lock.
+    `facts.state` checks under the connection lock. The facts file it merges
+    onto is never replaced: 503 while another program holds it (try again),
+    409 `facts_unreadable` when it does not parse (a person fixes it).
 
     A model-settings write like any other (spec 11.2, 12): 409 `not_migrated`
     until the store is at format 2, where the lowering reads facts rather than
@@ -1630,6 +1646,12 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
+    except facts.FactsMangledError:
+        # Read, and not a facts document: a write would replace every other
+        # model's word with this one entry. Nothing was written, and a retry
+        # will not help until a person fixes the file.
+        raise HTTPException(status_code=409, detail={
+            "kind": "facts_unreadable", "detail": FACTS_MANGLED}) from None
     except facts.FactsUnreadableError:
         # Held by another program: nothing was written, and a retry may land.
         raise HTTPException(status_code=503, detail=FACTS_UNREADABLE) from None
