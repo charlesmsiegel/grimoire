@@ -25,6 +25,7 @@ from fastapi import APIRouter
 from grimoire import routes
 from grimoire.main import app
 from grimoire.routes import entities, router
+from tests import route_memo
 
 
 def _table() -> list[tuple[frozenset[str], str]]:
@@ -298,9 +299,16 @@ def test_a_first_request_analyses_only_the_domains_it_walks(client, monkeypatch)
     over twice as long as the list itself. Counted in analyses rather than
     time: `get_dependant` runs once per route and once per sub-dependency. On
     a FastAPI that analyses at include time both counts are zero, which holds
-    the same property."""
+    the same property.
+
+    Counted with the suite's route memo (`tests/route_memo.py`) bypassed for
+    this test: with it on, `get_dependant` runs only for routes no earlier test
+    in this process analysed, so the counts would measure the test order --
+    which xdist varies -- rather than FastAPI. On CI, a worker whose earlier
+    tests had warmed most of the later routes counted (46, 110)."""
     import fastapi.routing
 
+    monkeypatch.setattr(fastapi.routing, route_memo.TARGET, route_memo.original())
     calls: list[int] = []
     real = fastapi.routing.get_dependant
 

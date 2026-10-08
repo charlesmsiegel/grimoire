@@ -35,6 +35,11 @@ Test-only and opt-out:
 - An unhashable dependency marker (a `Security` with a list of scopes) is
   built fresh, never cached.
 
+A test that COUNTS FastAPI's analyses (`test_route_order.py`'s first-request
+test) must count with the memo bypassed -- `monkeypatch.setattr(fastapi.routing,
+TARGET, original())` -- or it counts the memo's misses, which depend on what
+earlier tests in the same worker happened to analyse.
+
 Production builds one app per process and pays the analysis once; nothing in
 `backend/src` changes.
 """
