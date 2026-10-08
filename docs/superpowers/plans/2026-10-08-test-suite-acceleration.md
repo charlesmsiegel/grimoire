@@ -162,7 +162,9 @@ and the commit messages are the record. Where they differ:
   equivalence- and isolation-tested); `guard_markers` caches its tokenizer.
   Sleeps and polls were classified rather than changed (performance report).
 - **G**: also a non-failing performance budget in CI (`perf_budget.json`,
-  `profile_report.py budget`), `faulthandler_timeout`, and job timeouts.
+  `profile_report.py budget`, session time judged on the median of five
+  comparable runs fetched from earlier CI runs' profiles),
+  `faulthandler_timeout`, and job timeouts.
 
 **Decision 1** (which interpreter measures coverage) was not put to the user:
 with the suite parallel, the 3.11 coverage job that motivated it fell from a

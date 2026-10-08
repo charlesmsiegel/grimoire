@@ -8,6 +8,7 @@ coverage data files built in `tmp_path` through coverage.py's own API.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import pathlib
 import sys
@@ -83,6 +84,26 @@ def test_manifest_is_the_sorted_node_ids():
     assert profile_report.manifest(doc) == ["t.py::a", "t.py::b"]
 
 
+def test_manifest_lists_what_was_collected_even_if_it_never_reported():
+    """A run stopped by -x, an interrupt or a crash reported on fewer nodes
+    than it collected; the manifest is the collection."""
+    doc = _profile({"t.py::a": _node(outcome="failed")},
+                   collected=["t.py::c", "t.py::a", "t.py::b"])
+    assert profile_report.manifest(doc) == ["t.py::a", "t.py::b", "t.py::c"]
+
+
+@pytest.mark.parametrize("header,code", [({"exitstatus": 0}, 0), ({"exitstatus": 1}, 1),
+                                         ({"exitstatus": 5}, 5), ({}, 1)])
+def test_summary_can_exit_with_the_profiled_runs_status(tmp_path, capsys, header, code):
+    """`make test-py-profile` summarises a failing selection and still fails;
+    a profile with no recorded status is not read as a pass."""
+    path = tmp_path / "p.json"
+    path.write_text(json.dumps(_profile({"t.py::a": _node()}, **header)), encoding="utf-8")
+    assert profile_report.main(["summary", str(path), "--exit-with-run"]) == code
+    assert "t.py::a" in capsys.readouterr().out
+    assert profile_report.main(["summary", str(path)]) == 0
+
+
 def test_compare_fails_on_a_node_that_went_missing(tmp_path, capsys):
     before = _profile({"t.py::a": _node(), "t.py::b": _node()})
     after = _profile({"t.py::a": _node(), "t.py::d": _node()})
@@ -136,26 +157,62 @@ def _budget(**over) -> dict:
 
 
 def _budgeted(wall=100.0, collected=("t.py::a", "t.py::b", "t.py::c"), skipped=1,
-              slow=None) -> dict:
+              slow=None, **header) -> dict:
     tests = {nid: _node(call=0.1) for nid in collected}
     for nid in list(tests)[:skipped]:
         tests[nid] = _node(outcome="skipped")
     if slow:
         tests[collected[-1]] = _node(call=slow)
-    return _profile(tests, wall_s=wall, collected=list(collected))
+    header = {"python": "3.11.16", "coverage": True, "exitstatus": 0, **header}
+    return _profile(tests, wall_s=wall, collected=list(collected), **header)
+
+
+def _earlier(*walls, **header) -> list[dict]:
+    return [_budgeted(wall=w, **header) for w in walls]
 
 
 def test_a_run_within_budget_warns_of_nothing():
-    assert profile_report.budget_findings(_budgeted(wall=119.0), _budget()) == []
+    assert profile_report.budget_findings(_budgeted(wall=119.0), _budget(),
+                                          _earlier(119, 119, 119, 119)) == []
 
 
 def test_the_budget_warns_on_time_count_skips_and_slow_tests():
     found = profile_report.budget_findings(
         _budgeted(wall=125.0, collected=("t.py::a", "t.py::b", "t.py::c"), skipped=2,
                   slow=11.0),
-        _budget(collected=4))
+        _budget(collected=4), _earlier(125, 125, 125, 125))
     kinds = sorted(kind for kind, _ in found)
     assert kinds == ["fewer-tests", "more-skips", "slow-test", "slower"]
+
+
+def test_one_slow_session_is_noise_and_five_are_a_regression():
+    """Session time is judged on the median of five comparable runs: one slow
+    run warns of nothing, nor does a short window however slow, and a fast
+    outlier cannot hide a slow median."""
+    slow = _budgeted(wall=500.0)
+
+    def kinds(doc, previous):
+        return [k for k, _ in profile_report.budget_findings(doc, _budget(), previous)]
+
+    assert kinds(slow, _earlier(100, 100, 100, 100)) == []
+    assert kinds(slow, _earlier(500, 500, 500)) == []                  # only four runs
+    assert kinds(_budgeted(wall=50.0), _earlier(500, 500, 500, 500)) == ["slower"]
+    # Only the newest four earlier runs count.
+    assert kinds(slow, _earlier(500, 500, 500, 500, 100, 100, 100)) == ["slower"]
+
+
+@pytest.mark.parametrize("other", [
+    {"python": "3.14.6"}, {"workers": 2}, {"distribution": "worksteal"},
+    {"coverage": False}, {"exitstatus": 2}, {"exitstatus": None},
+])
+def test_only_comparable_complete_runs_join_the_window(other):
+    """A different interpreter, worker count, scheduler or coverage setting
+    times a different job, and an interrupted run timed less of the suite."""
+    window = profile_report.session_window(
+        _budgeted(wall=500.0), _earlier(500, 500, 500, 500, **other))
+    assert window == [500.0]
+    assert profile_report.session_window(
+        _budgeted(wall=500.0), _earlier(500, exitstatus=1)) == [500.0, 500.0]
 
 
 def test_more_tests_is_a_notice_not_a_warning():
@@ -169,13 +226,37 @@ def test_the_budget_command_never_fails_the_job(tmp_path, capsys):
     gate -- and a run that died before writing its profile says so the same
     way."""
     (tmp_path / "b.json").write_text(json.dumps(_budget()), encoding="utf-8")
-    (tmp_path / "p.json").write_text(json.dumps(_budgeted(wall=500.0)), encoding="utf-8")
+    (tmp_path / "p.json").write_text(json.dumps(_budgeted(slow=60.0)), encoding="utf-8")
     assert profile_report.main(["budget", str(tmp_path / "p.json"),
                                 str(tmp_path / "b.json")]) == 0
     assert "::warning" in capsys.readouterr().out
     assert profile_report.main(["budget", str(tmp_path / "missing.json"),
                                 str(tmp_path / "b.json")]) == 0
     assert "no profile" in capsys.readouterr().out
+
+
+def test_the_budget_command_reads_the_earlier_runs_it_was_handed(tmp_path, capsys):
+    """CI fetches up to four earlier profiles and passes them all; the ones it
+    could not fetch are paths that do not exist, and are skipped."""
+    (tmp_path / "b.json").write_text(json.dumps(_budget()), encoding="utf-8")
+    (tmp_path / "p.json").write_text(json.dumps(_budgeted(wall=500.0)), encoding="utf-8")
+    previous = []
+    for i in range(4):
+        path = tmp_path / str(i) / "backend-profile.json"
+        if i < 3:
+            path.parent.mkdir()
+            path.write_text(json.dumps(_budgeted(wall=500.0)), encoding="utf-8")
+        previous.append(str(path))
+    args = ["budget", str(tmp_path / "p.json"), str(tmp_path / "b.json")]
+    assert profile_report.main([*args, "--previous", *previous]) == 0
+    out = capsys.readouterr().out
+    assert "median of 4 comparable run(s); 5 are needed" in out
+    assert "::warning" not in out
+    (tmp_path / "3").mkdir()
+    (tmp_path / "3" / "backend-profile.json").write_text(
+        json.dumps(_budgeted(wall=500.0)), encoding="utf-8")
+    assert profile_report.main([*args, "--previous", *previous]) == 0
+    assert "test budget (slower)" in capsys.readouterr().out
 
 
 # ------------------------------------------------------------ coverage_arcs
@@ -206,9 +287,11 @@ def test_dump_lists_every_package_file_including_ones_never_imported(tmp_path):
                              src=src)
     assert set(doc["files"]) == {"grimoire/__init__.py", "grimoire/a.py",
                                  "grimoire/never_imported.py"}
-    assert doc["files"]["grimoire/a.py"] == {"lines": [1, 2],
+    source = hashlib.sha256(b"x = 1\n").hexdigest()
+    assert doc["files"]["grimoire/a.py"] == {"sha256": source, "lines": [1, 2],
                                              "arcs": [[-1, 1], [1, 2], [2, -1]]}
-    assert doc["files"]["grimoire/never_imported.py"] == {"lines": [], "arcs": []}
+    assert doc["files"]["grimoire/never_imported.py"] == {"sha256": source,
+                                                          "lines": [], "arcs": []}
     fp = coverage_arcs.fingerprint(doc)
     assert (fp["files"], fp["files_executed"], fp["lines"], fp["arcs"]) == (3, 1, 2, 3)
 
@@ -233,21 +316,44 @@ def test_dump_reads_a_run_made_in_another_tree_when_told_so(tmp_path):
     assert doc["files"]["grimoire/a.py"]["arcs"] == [[1, 2]]
 
 
+def _file(lines=(), arcs=(), sha256="s1") -> dict:
+    return {"sha256": sha256, "lines": list(lines), "arcs": [list(a) for a in arcs]}
+
+
 def test_stable_keeps_what_every_run_executed_and_lists_the_rest():
     def run(arcs):
-        return {"files": {"grimoire/a.py": {"lines": sorted({b for _, b in arcs if b > 0}),
-                                            "arcs": [list(x) for x in arcs]}}}
+        return {"files": {"grimoire/a.py": _file(sorted({b for _, b in arcs if b > 0}), arcs)}}
     always = [(-1, 1), (1, 2)]
     doc = coverage_arcs.stable([run([*always, (2, 3)]), run([*always, (2, 4)]), run(always)])
     assert doc["files"]["grimoire/a.py"]["arcs"] == [[-1, 1], [1, 2]]
+    assert doc["files"]["grimoire/a.py"]["sha256"] == "s1"
     assert doc["variable"]["grimoire/a.py"]["arcs"] == [[2, 3], [2, 4]]
     assert doc["runs"] == 3
 
 
 def test_stable_refuses_dumps_of_different_source_trees():
     with pytest.raises(ValueError, match="different files"):
-        coverage_arcs.stable([{"files": {"a": {"lines": [], "arcs": []}}},
-                              {"files": {"b": {"lines": [], "arcs": []}}}])
+        coverage_arcs.stable([{"files": {"a": _file()}}, {"files": {"b": _file()}}])
+
+
+@pytest.mark.parametrize("combine", ["stable", "diff"])
+def test_dumps_of_different_source_text_never_combine(tmp_path, combine):
+    """Same file names, different code (a rebase, a production edit): line and
+    arc numbers point at different statements, so neither command compares
+    them -- nor a dump that cannot say what text it measured."""
+    one = {"files": {"grimoire/a.py": _file([1], [(1, 2)], sha256="s1")}}
+    edited = {"files": {"grimoire/a.py": _file([1], [(1, 2)], sha256="s2")}}
+    unhashed = {"files": {"grimoire/a.py": {"lines": [1], "arcs": [[1, 2]]}}}
+    run = (coverage_arcs.stable if combine == "stable"
+           else lambda docs: coverage_arcs.diff(*docs))
+    with pytest.raises(ValueError, match="different source text"):
+        run([one, edited])
+    with pytest.raises(ValueError, match="no source hash"):
+        run([one, unhashed])
+    (tmp_path / "1.json").write_text(json.dumps(one), encoding="utf-8")
+    (tmp_path / "2.json").write_text(json.dumps(edited), encoding="utf-8")
+    args = (["stable", str(tmp_path / "out.json")] if combine == "stable" else ["diff"])
+    assert coverage_arcs.main([*args, str(tmp_path / "1.json"), str(tmp_path / "2.json")]) == 2
 
 
 @pytest.mark.parametrize("after,lost", [
@@ -256,7 +362,8 @@ def test_stable_refuses_dumps_of_different_source_trees():
     ({}, "file"),
 ])
 def test_diff_fails_on_any_loss_and_only_on_a_loss(tmp_path, after, lost):
-    before = {"files": {"grimoire/a.py": {"lines": [1], "arcs": [[-1, 1], [1, 2]]}}}
+    before = {"files": {"grimoire/a.py": _file([1], [(-1, 1), (1, 2)])}}
+    after = {k: {"sha256": "s1", **v} for k, v in after.items()}
     result = coverage_arcs.diff(before, {"files": after})
     (tmp_path / "b.json").write_text(json.dumps(before), encoding="utf-8")
     (tmp_path / "a.json").write_text(json.dumps({"files": after}), encoding="utf-8")
@@ -271,8 +378,8 @@ def test_diff_fails_on_any_loss_and_only_on_a_loss(tmp_path, after, lost):
 
 
 def test_a_lost_line_alone_fails_the_diff():
-    before = {"files": {"grimoire/a.py": {"lines": [1, 5], "arcs": []}}}
-    after = {"files": {"grimoire/a.py": {"lines": [1], "arcs": []}}}
+    before = {"files": {"grimoire/a.py": _file([1, 5])}}
+    after = {"files": {"grimoire/a.py": _file([1])}}
     assert coverage_arcs.diff(before, after)["lost"]["grimoire/a.py"]["lines"] == [5]
 
 
@@ -293,3 +400,16 @@ def test_contexts_reports_what_each_matching_test_executed(tmp_path):
     assert out == {"tests/t.py::test_one|run": {"grimoire/a.py": [[1, 2]]},
                    "tests/t.py::test_two|run": {"grimoire/a.py": [[1, 3]]}}
 
+
+def test_contexts_refuses_data_recorded_without_arcs(tmp_path):
+    """A run measured without branch = true has lines and no arcs; read per
+    test it would look like tests that executed nothing, which is exactly the
+    wrong evidence for a consolidation."""
+    src = _source_tree(tmp_path)
+    path = tmp_path / "lines-only"
+    data = CoverageData(basename=str(path))
+    data.set_context("tests/t.py::test_one|run")
+    data.add_lines({str(src / "grimoire" / "a.py"): {1}})
+    data.write()
+    with pytest.raises(SystemExit, match="no arc data"):
+        coverage_arcs.contexts(path, "tests/t.py::", src=src)

@@ -191,11 +191,13 @@ test-py-failed:
 
 # The pytest line is `-`-prefixed: a failing or slow selection is exactly when
 # the summary is wanted, so make prints its "Error (ignored)" and summarises
-# anyway. This target is a diagnostic; its exit status is the summary's.
+# anyway. The summary then exits with the status pytest recorded in the
+# profile, so the target still fails when a selected test did -- portably,
+# where carrying `$?` across a line would need one recipe per shell.
 test-py-profile:
 	@echo NOT A GATE: a diagnostic profile, written to $(PROFILE).
 	-$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_MEASURE),) $(ARGS)
-	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE)
+	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE) --exit-with-run
 
 # `test:coverage`, not `test`: same suite, same pass/fail, plus it drops
 # frontend/coverage/lcov.info. Measuring in the gate rather than in a separate

@@ -23,16 +23,25 @@ its numbers say nothing about this one. `--src` names a different tree on
 purpose -- a worktree the run was made in -- and the same rule then holds
 against that tree.
 
+Each file's entry carries the SHA-256 of its source as the dump read it.
+Line and arc numbers mean something only against the text they were measured
+on, so **stable** and **diff** refuse two dumps whose shared files differ in
+content -- a rebase or a production edit between the runs -- rather than
+intersecting numbers that now point at different code.
+
 **stable** is the intersection of several dumps, plus the remainder that some
 runs executed and others did not. Some production branches here depend on
 timing (a wall-clock second boundary, a persist retry, a held thread), so one
 run's set is not a reference anything can be held to; the intersection is.
 
 **diff** exits 1 when AFTER is missing a file, line or arc BEFORE had. It
-prints what was gained too, but only a loss fails.
+prints what was gained too, but only a loss fails. Either command exits 2 on
+dumps it refuses to compare.
 
 **contexts** reads a run measured with `--cov-context=test` and writes, for
-each test context whose name contains `--match`, the arcs it executed. That is
+each test context whose name contains `--match`, the arcs it executed. Like
+**dump**, it refuses data recorded without branch measurement, which has no
+arcs to report and would read as tests that executed nothing. That is
 the per-test half of a consolidation's evidence: which arcs only the tests
 being merged reached. Narrow it with `--match`; every context of a whole
 suite is a large file and a slow read.
@@ -55,21 +64,32 @@ from coverage import CoverageData
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SRC = ROOT / "backend" / "src"
 PACKAGE = SRC / "grimoire"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 def _key(path: pathlib.Path, src: pathlib.Path) -> str:
     return path.relative_to(src).as_posix()
 
 
-def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
-    """Every package file's executed lines and arcs, keyed under `src`."""
+def _source_hash(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_with_arcs(data_file: str | pathlib.Path) -> CoverageData:
     data = CoverageData(basename=str(data_file))
     data.read()
     if not data.has_arcs():
         raise SystemExit(f"{data_file}: no arc data -- was the run measured with branch = true?")
+    return data
+
+
+def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
+    """Every package file's executed lines and arcs, keyed under `src`, each
+    with the hash of the source those numbers refer to."""
+    data = _read_with_arcs(data_file)
     files: dict[str, dict] = {
-        _key(p, src): {"lines": [], "arcs": []} for p in sorted((src / "grimoire").rglob("*.py"))
+        _key(p, src): {"sha256": _source_hash(p), "lines": [], "arcs": []}
+        for p in sorted((src / "grimoire").rglob("*.py"))
     }
     foreign = []
     for measured in sorted(data.measured_files()):
@@ -80,6 +100,7 @@ def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
             foreign.append(measured)
             continue
         files[key] = {
+            "sha256": _source_hash(path),
             "lines": sorted(data.lines(measured) or []),
             "arcs": sorted([a, b] for a, b in (data.arcs(measured) or [])),
         }
@@ -92,8 +113,7 @@ def dump(data_file: str | pathlib.Path, src: pathlib.Path = SRC) -> dict:
 
 def contexts(data_file: str | pathlib.Path, match: str, src: pathlib.Path = SRC) -> dict:
     """{context: {file: arcs}} for every test context containing `match`."""
-    data = CoverageData(basename=str(data_file))
-    data.read()
+    data = _read_with_arcs(data_file)
     root = src.resolve()
     files = {}
     for measured in data.measured_files():
@@ -128,8 +148,21 @@ def _sets(entry: dict) -> tuple[set[int], set[tuple[int, int]]]:
     return set(entry["lines"]), {tuple(a) for a in entry["arcs"]}
 
 
-def _entry(lines, arcs) -> dict:
-    return {"lines": sorted(lines), "arcs": sorted(list(a) for a in arcs)}
+def _entry(lines, arcs, sha256: str | None = None) -> dict:
+    entry = {"lines": sorted(lines), "arcs": sorted(list(a) for a in arcs)}
+    return {"sha256": sha256, **entry} if sha256 else entry
+
+
+def _same_source(docs: list[dict], keys) -> None:
+    """Refuse dumps whose files in `keys` were not measured on the same text."""
+    for key in sorted(keys):
+        hashes = [d["files"][key].get("sha256") for d in docs]
+        if None in hashes:
+            raise ValueError(f"{key}: a dump carries no source hash -- it predates "
+                             f"schema {SCHEMA_VERSION}; dump the run again")
+        if len(set(hashes)) > 1:
+            raise ValueError(f"{key}: the dumps were measured on different source text -- "
+                             "line and arc numbers do not compare across it")
 
 
 def stable(docs: list[dict]) -> dict:
@@ -140,6 +173,7 @@ def stable(docs: list[dict]) -> dict:
     for d in docs[1:]:
         if set(d["files"]) != keys:
             raise ValueError("the dumps list different files -- not the same source snapshot")
+    _same_source(docs, keys)
     files, variable = {}, {}
     for key in sorted(keys):
         sets = [_sets(d["files"][key]) for d in docs]
@@ -147,7 +181,7 @@ def stable(docs: list[dict]) -> dict:
         arcs_all = set.intersection(*(s[1] for s in sets))
         lines_any = set.union(*(s[0] for s in sets))
         arcs_any = set.union(*(s[1] for s in sets))
-        files[key] = _entry(lines_all, arcs_all)
+        files[key] = _entry(lines_all, arcs_all, docs[0]["files"][key]["sha256"])
         if lines_any - lines_all or arcs_any - arcs_all:
             variable[key] = _entry(lines_any - lines_all, arcs_any - arcs_all)
     return {"schema_version": SCHEMA_VERSION, "runs": len(docs), "files": files,
@@ -155,7 +189,8 @@ def stable(docs: list[dict]) -> dict:
 
 
 def diff(before: dict, after: dict) -> dict:
-    """What AFTER lost and gained relative to BEFORE."""
+    """What AFTER lost and gained relative to BEFORE, over the same source."""
+    _same_source([before, after], set(before["files"]) & set(after["files"]))
     lost, gained = {}, {}
     lost_files = sorted(set(before["files"]) - set(after["files"]))
     for key, entry in sorted(before["files"].items()):
@@ -200,6 +235,14 @@ def main(argv: list[str] | None = None) -> int:
                    help="the backend/src the run imported (default: this checkout's)")
     args = parser.parse_args(argv)
 
+    try:
+        return _run(args)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+def _run(args: argparse.Namespace) -> int:
     if args.cmd == "dump":
         doc = dump(args.data_file, src=args.src)
         _write(args.out, doc)
