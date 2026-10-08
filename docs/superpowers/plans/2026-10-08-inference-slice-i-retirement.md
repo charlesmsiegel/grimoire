@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Revision 2.** This revision answers the round-1 adversarial plan review (`.superpowers/sdd/plan-reviews/slice-i-plan-review.md`, verdict "No"). Every finding is answered under "Rulings": the controller's twelve rulings first, then the review's other findings, then the plan's own rulings as amended. A second review follows.
+**Revision 3.** Revision 2 answered the round-1 adversarial plan review (`.superpowers/sdd/plan-reviews/slice-i-plan-review.md`, verdict "No"). This revision answers its re-review (`slice-i-plan-rereview.md`, verdict "NEEDS FIXES": N1–N20). Every finding is answered under "Rulings", in this order: the controller's rulings on each round, then the review's other findings, then the plan's own rulings as amended.
 
 **Goal:** Retire the legacy settings layout and the connection-dict lowering, with no change a user can see except those listed under "Needs user ratification before Task 2". The legacy GLM reasoning effort becomes derived presets. The legacy keys and connection fields are deleted from format-2 stores. The translation layer is deleted as a second runtime read path. Every generation goes through `inference.generate` and an adapter registry that takes typed targets instead of connection dicts, and `FALLBACK_KEY` and `STRUCTURED_KEY` are deleted with the lowering.
 
@@ -36,29 +36,53 @@
 
 ## Needs user ratification before Task 2
 
-Row I says "User-visible: No". Each item below is a user-visible change, or a departure from the spec's text, that this plan could not remove. **The controller asks the user about every item before Task 2 starts.** Task 2 folds each answer into the spec. An item the user declines takes the fallback named beside it.
+Row I says "User-visible: No". Each item below is a user-visible change, or a departure from the spec's text, that this plan could not remove. **The controller asks the user about every item before Task 2 starts.** Task 2 folds each answer into the spec. Beside each item is what a decline means (N7). Each is one of three things:
+- **Fallback:** a named alternative, with the step that implements it.
+- **No alternative:** the item is a consequence of something else, which is named.
+- **Re-plan:** declining it means the controller stops and the plan is revised.
 
 1. **GLM `max` becomes a preset reasoning effort** (CR5; review Q3, I6 item 1).
    - What changes: the preset editor's Reasoning choice gains `max`. It is sent only to GLM models on `openai_compatible`; on every other adapter it is "unsupported" and nothing is sent. A GLM selection whose connection is at `max` is repointed to a derived "… · reasoning max" preset, so its wire does not change.
    - Side effect on other devices: a C–H build on the same synced library reads a `max` preset as invalid and sends no effort.
-   - Fallback if declined: `max` is not added. A GLM connection at `max` stops sending it on every task once this build runs. The loss is reported in the durable notice (item 7), and `glm_max_under_route_preset` carries an exact named difference (Task 5).
-2. **Derived presets start from the slot's own preset** (ruling 4; review M4). §11.2 step 4 says "its own sampler preset" (the connection's legacy `sampler_preset`). This plan derives from the preset the role, fallback or pin selects, which is the only reading that keeps the wire when a user repointed a role's preset after C.
+   - **Fallback (Task 4 Step 5, "Declined" branch):** `max` is not added. A GLM connection at `max` stops sending it on every task once this build runs. The loss is reported in the durable notice (item 7), and `glm_max_under_route_preset` carries an exact named difference (Task 5).
+2. **Derived presets start from the slot's own preset** (ruling 4; review M4). §11.2 step 4 says "its own sampler preset" (the connection's legacy `sampler_preset`). This plan derives from the preset the role, fallback or pin selects. That is the only reading that keeps the wire when a user repointed a role's preset after C.
    - Visible: new presets named "<preset> · reasoning <effort>" (or "Reasoning <effort>") appear in the Presets list, and each GLM selection shows its derived preset.
    - Visible: editing the base preset (for example "Warm") no longer reaches those selections, which now point at the frozen copy (review I6 item 4).
-   - Visible: the Presets editor's "Preview on…" a GLM provider shows only what the preset itself sets; it no longer adds the provider's legacy effort, which no selection reads any more.
-3. **A route-level preset that sets no reasoning effort, over a GLM connection with a legacy effort, stops sending that effort on that route** (review I6 item 2). No form keeps the wire whole. A route preset is shared by the route's primary and its fallback (§5.2), so a derived route preset would start sending reasoning to a fallback that never sent it, and leaving it alone drops the primary's effort. The plan leaves the route preset alone, which keeps every fallback exactly as it was. The loss is reported in the durable notice (item 7).
-4. **A reroll's override preset that sets no reasoning effort stops inheriting the GLM connection's legacy effort** (review I6 item 3). An override is not stored, so no notice is written.
+   - **Re-plan if declined.** The literal text changes the wire for every role whose preset was repointed after C, which row I forbids.
+3. **A route-level preset that sets no reasoning effort, over a GLM connection with a legacy effort, stops sending that effort on that route** (review I6 item 2). A route preset is shared by the route's primary and its fallback (§5.2). A derived route preset would therefore start sending reasoning to a fallback that never sent it, and leaving it alone drops the primary's effort. The plan leaves the route preset alone, which keeps every fallback exactly as it was. The loss is reported in the durable notice (item 7).
+   - **No alternative:** no form keeps the wire whole. Declining means a re-plan.
+4. **Calls outside a stored selection stop adding a GLM connection's legacy effort** (review I6 item 3; re-review N15). This covers:
+   - a reroll's override preset that sets no reasoning effort;
+   - the model test call on such a connection;
+   - the provider editor's controls readout;
+   - the Presets editor's "Preview on…" a GLM provider.
+
+   None of these is stored, so no notice is written.
+   - **No alternative:** this is a consequence of §11.4's "the legacy GLM `reasoning_effort` stops being read".
 5. **Older builds on a synced library after retirement** (review I6 item 5; §11.3).
    - A pre-C build sees no model settings: its connections have no `model`, so it sends requests with an empty model.
-   - A C–H build keeps playing. It loses only what item 1 names. It writes empty legacy fields back on each connection edit and `active_connection_id` on each start, which this build ignores and removes again on its next start.
-6. **A second never-pruned archive, `pre-retirement-<stamp>.zip`** (CR4; review I5, Q2). It is listed in Backups beside `pre-inference-` and is never deleted by retention. It is a full-library archive, like `pre-inference-`. The review's smaller option (only `config.md`, each `campaign.md` and `llm_connections/*.md`) is the fallback if the user prefers it, for example for Android storage.
-7. **A durable "not carried over" notice on the `/models` page** (CR5 fallback; review I6). It is stored in the library (`inference-retired.json`), so every device shows it until the user dismisses it. It lists what items 1 (if declined) and 3 lost, worded as permanent.
-8. **§13's per-adapter `embed` is dropped** (ruling 10; review M6). Embedding stays D's caller-owned `EmbeddingsClient` door, because the store must not import the gateway (#239). The registry carries an `embeds` flag held equal to the store's rule by a test.
+   - A C–H build keeps playing, and loses only what item 1 names. It writes `active_connection_id` back on each start. This build ignores it and removes it again on its next start (re-review N5).
+   - **No alternative:** this is a consequence of §11.4's deletion itself.
+6. **A second never-pruned archive, `pre-retirement-grimoire-<stamp>.zip`** (CR4; review I5, Q2; re-review N12). It is listed in Backups beside `pre-inference-grimoire-` and is never deleted by retention. It is a full-library archive, like `pre-inference-`. A fresh install never takes one, because it is born retired (re-review N3).
+   - **Fallback (Task 6a Step 4, "Declined" branch):** a settings-only archive, under the same prefix and the same never-prune rule. It holds `config.md`, each `campaign.md`, `llm_connections/*.md`, `sampler_presets/` and `inference-retired.json`. That may suit Android storage.
+7. **A durable "not carried over" notice on the `/models` page** (CR5 fallback; review I6). It is stored in the library (`inference-retired.json`), so every device shows it until the user dismisses it. It lists what items 1 (if declined) and 3 lost, and any model fact the C migration did not carry (re-review N9), worded as permanent.
+   - **Re-plan if declined.** Without it, those losses would be silent, which guarantee 7 forbids.
+8. **§13's per-adapter `embed` is dropped** (ruling 10; review M6). Embedding stays D's caller-owned `EmbeddingsClient` door, because the store must not import the gateway (#239). The registry carries an `embeds` flag that a test holds equal to the store's rule.
+   - **Re-plan if declined.** A per-adapter embed that the store calls breaks #239.
 9. **§7.2's `generate` signature** (ruling 8): `generate(task, messages, *, client, resolved, usage=None, schema=None, stream=True)`. It takes the call site's resolution, as `decide` does, rather than `cid` and `override`.
-10. **How §11.4's "delete the translation layer" is read** (CR1; review Q1). The second runtime read path is deleted: `translate.py`, every format-1 branch of the resolver and the legacy GLM read. The mapping itself lives on in one guarded planner, which the migration persists and play uses in memory. That is what keeps §11.2, §12, §5.6, §15 and §17.8 true.
+   - **Re-plan if declined.** Task 8's call-site shape and its guards are built on it.
+10. **How §11.4's "delete the translation layer" is read** (CR1; review Q1). The second runtime read path is deleted: `translate.py`, every format-1 branch of the resolver, and the legacy GLM read. The mapping itself lives on in one guarded planner, which the migration persists and play uses in memory. That is what keeps §11.2, §12, §5.6, §15 and §17.8 true.
+    - **Re-plan if declined.** The literal reading brings back round 1's C1: play refused at format 1.
 11. **New storage the spec does not name** (rulings 15 and 16): the retirement marker `inference_retired: "1"` in `config.md` and each `campaign.md`, and the retirement record `<home>/inference-retired.json`. Neither is visible on its own. They are listed because they are spec additions.
+    - **Re-plan if declined.** The marker is what keeps a retired scope free of the legacy read. The record is what keeps a campaign that arrives after the strip resolvable.
 
-The plan removed these user-visible changes from round 1 (CR1): 409 `not_migrated` on play, `ready: False` on a format-1 store, the "Play resumes once it has finished" banner sentence, the migration retry loop, retirement's effect on the migration status line, and the `skipped` channel for losses.
+The plan removed these user-visible changes from round 1 (CR1):
+- 409 `not_migrated` on play;
+- `ready: False` on a format-1 store;
+- the "Play resumes once it has finished" banner sentence;
+- the migration retry loop;
+- retirement's effect on the migration status line;
+- the `skipped` channel for losses.
 
 ---
 
@@ -83,7 +107,7 @@ The plan removed these user-visible changes from round 1 (CR1): 409 `not_migrate
   - Fake keys look like `sk-test-…`.
   - No figure measured from a real library goes anywhere.
 - **Docs move with the code** (CR10). A task that changes a claim `CLAUDE.md`, `CONTRIBUTING.md` or `docs/store-guarantees.md` makes updates that document in the same commit. A task that adds a `*_guard.py` adds its `CONTRIBUTING.md` row. Either way, the task runs `tests/test_docs_guard.py`. Task 12 only sweeps what is left.
-- **Ratified departures only.** Nothing under "Needs user ratification" is implemented in a form the user did not approve. Task 4 Step 5 is the one step that is conditional on an answer.
+- **Ratified departures only.** Nothing under "Needs user ratification" is implemented in a form the user did not approve. Two steps are conditional on an answer: Task 4 Step 5 (item 1) and Task 6a Step 4 (item 6). Declining any item marked "Re-plan" stops the controller before Task 2 (N7).
 
 **Spec values that bind here (verbatim):**
 
@@ -134,13 +158,21 @@ Only `frozen_campaign/snapshot.json` may be regenerated, deliberately and with t
 3. **Format 1 always migrates first, backup included.**
    - Retirement runs only inside `migrate.ensure`, and only on a `config.md` that is already current.
    - If the migration's backup fails, nothing is written and retirement never starts.
-4. **No archive, no write.** Retirement takes a `pre-retirement-` archive before its first write, unless this same run already took `pre-inference-`. If the archive fails, retirement writes nothing: no preset, no repoint, no deletion (Task 6, `test_a_failed_retirement_archive_writes_nothing`). Play is unaffected, because the planner serves in memory.
+4. **No archive, no write.** Retirement takes a `pre-retirement-` archive before its first write that deletes or replaces a stored value. It skips the archive in two cases: when this same run *created* a `pre-inference-` archive, or when the pass only adds markers. If the archive fails, retirement writes nothing: no preset, no repoint, no deletion (Task 6a, `test_a_failed_retirement_archive_writes_nothing`). Play is unaffected, because the planner serves in memory. A fresh install and a new campaign are born retired, so neither ever takes an archive (N3).
 5. **Derive before delete; migrate before retire.**
    - A scope's legacy keys go in the same write that repoints that scope.
    - A campaign is retired only after its marker is re-read inside the hold. An unmarked campaign is migrated in that same write first. A newer one is skipped (Task 6, C2).
    - Connection fields are stripped only once `config.md` and every campaign are readable, marked and retired, and no connection is unreadable (C3).
-   - Each connection's fields are written to the retirement record before the strip, so a campaign that arrives unmarked later still resolves.
-6. **Fail closed** (ruling 6; CR3). Every new writer reads strictly. A file that exists and cannot be read, or whose frontmatter does not parse, or that lacks its expected marker or `kind`, raises `frontmatter.UnreadableError`. That item is not retired and never rewritten. The status reader is fail-soft and never raises.
+   - Each connection's fields are written to the retirement record before the strip, so a campaign that arrives unmarked later still resolves. A model fact the C migration did not carry gets a note first (N9).
+   - The strip holds `llm_connections.LOCK` across its read, record and write, so a connection edit is never overwritten (N4).
+   - The migration persists only the old mapping, never a repoint, so no persisted preset key names a file that does not exist (N2).
+6. **Fail closed** (ruling 6; CR3; N1, N6). Every new writer reads strictly, and so does every lookup that feeds a write. The failure is `frontmatter.UnreadableError`, or `ConnectionUnreadableError` from retirement's lookup. It is raised when a file exists and:
+   - cannot be read;
+   - is empty;
+   - has frontmatter that does not parse;
+   - lacks its expected marker or `kind`.
+
+   This covers a zero-byte or unfenced connection file, and an unparseable retirement record. That item is not retired and never rewritten, and nothing that names it is retired. The status reader is fail-soft and never raises.
 7. **Nothing is lost silently.** What cannot be carried over is a note in the retirement record, shown on `/models` until dismissed, on every device (ruling 5). It is never only in `skipped`.
 8. **The legacy state stays restorable** from the `pre-retirement-` archive, taken on the day of retirement (item 4 above).
 9. **Proven on the old trees.**
@@ -151,7 +183,7 @@ Only `frozen_campaign/snapshot.json` may be regenerated, deliberately and with t
 
 ## Assumptions to re-check in Task 1
 
-G and H are planned in parallel with this plan. This section was rewritten against their revised plans (`claude/inference-slice-g` at `fe38689` and `claude/inference-slice-h` at `fcf0f8a`) (CR8). Each line is what this plan assumes they deliver, together with how Task 1 checks it. **If one fails, Task 1 stops and reports. It does not improvise.**
+G and H are planned in parallel with this plan. This section was rewritten against their revised plans, re-read for revision 3 at the heads of `claude/inference-slice-g` and `claude/inference-slice-h` (CR8). Task 1 checks against whatever those branch heads hold when they are integrated, not against a pinned sha (re-review, neighbour pins). Each line is what this plan assumes they deliver, together with how Task 1 checks it. **If one fails, Task 1 stops and reports. It does not improvise.**
 
 - **A1 (G).** `continuity` is `operation="decide", default_role="decision"` (G Task 5). Absorb's identity phase and the reconcile sweep resolve with `require_inference("continuity-identity"|"continuity-reconcile", cid, operation="decide")` inside the thunk `_soft_resolved` takes, then call `operations.decide("<task>", items, client=client, resolved=resolved, explain=…, campaign=…, around=…)`. The task literal is on the line after `operations.decide(`.
   - Check: `grep -n '"continuity"' backend/src/grimoire/store/routing.py`.
@@ -181,6 +213,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
   - F: `resolve.FALLBACK_KEY`/`STRUCTURED_KEY`/`ACCOUNT_KEY`, `llm.FALLBACK_KEY` (`"_fallback"`)/`STRUCTURED_KEY` (`"_structured"`), `llm.DEGRADE` (`"_degrade"`), `llm.ATTEMPTED`, `inference._with_mode`, `inference._BACKENDS`.
   - Check each with one `grep -n`. A rename is followed silently. A missing name stops the task.
 - **A10 (H).** H adds no new private connection-dict key. `NONE_KEY` (`"<none>"`) is a distribution key in `decisions`, not a conn key. H's `stages` uses `_without_fallback`, which Task 10 deletes and its guard catches.
+- **A12 (cross-slice, C; re-review N1).** C's migration lookup (`migrate._lookup` → `llm_connections._read(strict=True)`) raises only on `OSError`/`UnicodeDecodeError`. A zero-byte or unfenced connection file therefore reads as "no such connection", and step 8 or the switch can persist a pin with an empty model on top of it. That is C's hole: I keeps that lookup's behaviour for the migration (`mode="migrate"`) and does not widen into it. I's own writes use `mode="retire"`. Task 1's report hands A12 to the controller for C.
 - **A11 (H ruling 21).** H leaves OpenRouter's `provider.require_parameters` to I. **I declines it.** It is a wire change, and row I is "User-visible: No". Task 1's report hands it back to the controller as an open item for a later slice.
 
 ---
@@ -196,8 +229,9 @@ G and H are planned in parallel with this plan. This section was rewritten again
 3. **An unmarked campaign at format 2**: skipped as busy, created by an older build, or imported from an old bundle after the strip. Its legacy overrides resolve in memory, including while another writer holds its lock, and nothing is written. Retirement migrates it first, in the same write, and the strip waits for it.
    - Task 5: `test_an_unmarked_campaign_resolves_its_overrides_in_memory`, `test_a_busy_unmarked_campaign_still_resolves_and_nothing_is_written`.
    - Task 6: `test_a_campaign_skipped_by_step_8_is_migrated_before_it_is_retired`, `test_a_newer_campaign_is_never_retired`, `test_an_unreadable_campaign_holds_the_strip`, `test_the_strip_records_the_fields_first_and_the_planner_reads_them`.
-4. **A file a writer cannot read** (a zero-byte sync placeholder, a truncated download, a sync client holding it). It is never rewritten, never treated as done, and the status never raises.
-   - Task 6: `test_retire_global_refuses_a_config_it_cannot_parse`, `test_retire_campaign_refuses_an_unparseable_campaign`, `test_strip_model_fields_refuses_an_unparseable_connection`, `test_status_never_raises_on_an_unreadable_connection`.
+4. **A file a writer cannot read** (a zero-byte sync placeholder, a truncated download, a sync client holding it): `config.md`, a `campaign.md`, a connection, or the retirement record. It is never rewritten, never treated as done, nothing that names it is retired, and the status never raises.
+   - Task 6a: `test_retire_global_refuses_a_config_it_cannot_parse`, `test_retire_campaign_refuses_an_unparseable_campaign`, `test_an_unreadable_connection_holds_the_scopes_that_name_it` (zero-byte, unfenced, no `kind`), `test_status_never_raises_on_an_unreadable_connection`.
+   - Task 6b: `test_strip_model_fields_refuses_an_unparseable_connection`, `test_an_unreadable_record_holds_a_late_unmarked_campaign`, `test_a_connection_edit_during_the_strip_survives`.
 5. **The fallback, structured mode, the native chain, the degrade sibling and image-bearing messages through `Chain`.** The facade sends what it sent before:
    - a route preset follows onto the fallback;
    - a text-only fallback is dropped for image-bearing messages;
@@ -207,8 +241,8 @@ G and H are planned in parallel with this plan. This section was rewritten again
    - E's estimate still runs where it ran.
 
    Tests: `test_a_chain_sends_what_the_lowered_dict_sent` (9a); Task 9's converted facade suites keep every assertion; `test_format2_play` passes in Tasks 8–10.
-6. **A synced library where an older build writes legacy keys or fields after retirement.** The resolver never reads them (the retirement marker stops the in-memory derivation), the next `ensure` deletes them again, and nothing raises.
-   - Task 6: `test_legacy_keys_written_after_retirement_are_ignored_then_removed`, `test_a_connection_edit_after_retirement_writes_no_legacy_field`.
+6. **A synced library where an older build writes legacy keys or fields after retirement.** The resolver never reads them, because the retirement marker stops the in-memory derivation. `retire.left()` sees them, so the next `ensure` deletes them again. Nothing raises.
+   - Task 6b: one test per scope, each writing only that scope's legacy key: `test_a_legacy_config_key_written_after_retirement_is_ignored_then_removed`, `test_a_legacy_campaign_key_written_after_retirement_is_ignored_then_removed` and `test_a_legacy_connection_field_written_after_retirement_is_ignored_then_removed`. Also `test_a_connection_edit_after_retirement_writes_no_legacy_field`.
 
 ---
 
@@ -222,7 +256,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
 - **CR4 (I5, Q2).** A `pre-retirement-` archive is taken before retirement's first write. It is never pruned, taken once per root, reused on resume, and skipped only when this same run took `pre-inference-`. No archive, no write.
 - **CR5 (Q3, I6).** `max` joins `REASONING` as a GLM-only value, unsupported elsewhere: **needs user approval** (ratification item 1; Task 4 Step 5). The fallback beside it accepts the loss and reports it in the durable, library-stored notice, never through `skipped`.
 - **CR6 (Q4, M7).** The birth seam is public (`config.birth_fields()`), and the test birth comes from `GRIMOIRE_TEST_BIRTH`, set at conftest import beside `GRIMOIRE_INFERENCE_AUTOMIGRATE`.
-- **CR7 (Q5).** Task 9 is split four ways: 9a the registry; 9b the facade behind a stdlib-only shim (`wire.from_lowered`); 9c H's native chain on targets; 9d the fakes and suites, with the shim deleted. Task 10's guard names the shim.
+- **CR7 (Q5).** Task 9 is split four ways: 9a the registry; 9b the facade behind a stdlib-only shim (`wire.from_lowered`); 9c H's native chain on targets; 9d the fakes and suites, with the facade's dict door deleted. `wire.from_lowered` itself goes in Task 10, with the probes that still use it (re-review N8). Task 10's guard names the shim.
 - **CR8 (I7, M2).** A1–A10 are rewritten against the current G and H plans (A3, A4, A7 and A8 corrected; A11 added).
 - **CR9 (I8).** CI runs on the branch through `workflow_dispatch` after Tasks 3, 5, 6, 9 and 10, and the controller waits for green before the next task. The full suite is never run locally.
 - **CR10 (I8).** Docs move with the code task that changes the claim. A task adding a guard adds its `CONTRIBUTING.md` row and runs `test_docs_guard.py`, so the tree is never red between Tasks 5 and 12.
@@ -241,12 +275,46 @@ G and H are planned in parallel with this plan. This section was rewritten again
 - **M8.** There is no retry loop (CR1 removed its reason), so a data-dir change has nothing to rebind. `PUT /config/data-dir` reschedules `ensure` as today.
 - **M9.** The two direct `inference.resolve("chat", cid)` reads in `routes/scenes.py` already carry `# routing-ok:` markers. Task 8 changes `.conn` to `.chain` on the same lines, and the marker cap does not move.
 
+### Controller rulings on the re-review (revision 3)
+
+- **N1 (Critical).** Retirement's strict lookup separates "absent" from "unreadable".
+  - A zero-byte, whitespace, unfenced or `kind`-less connection file raises `ConnectionUnreadableError` (`legacy_plan.lookup(mode="retire")`, built on `read_strict(require="kind")`). That scope stops: nothing is rewritten and nothing is marked retired.
+  - The test covers a zero-byte file, an unfenced one and a `kind`-less one.
+  - C's migration keeps its own lookup unchanged (`mode="migrate"`). The same hole there is reported as a cross-slice item for C (A12), not widened into I.
+- **N2.** The migration's mapping and retirement's repoints are two products: `Plan.mapped` and `Plan.repoint`.
+  - The migration persists `mapped` only, so it never persists a derived preset id without its preset file, and a base preset's params are never lost.
+  - `test_the_global_mapping_is_translates` reads `mapped`.
+- **N3 / I2.** `RETIRED_KEY` is stamped at birth, so a fresh install takes no `pre-retirement-` archive and a new campaign triggers no pass. Both are tested.
+  - `config.md` gets it through `birth_fields()`, the existing `born_current` seam.
+  - Each new `campaign.md` gets it through `lifecycle._inference_marker()` when `config.md` is itself retired, which is always so on a fresh install. In an unretired store a new campaign joins the next pass with the rest, so its GLM pins still get their derived presets.
+- **N4.** `strip_model_fields` holds `llm_connections.LOCK` across the read, the record and the write. `retire.strip` re-checks its precondition per connection inside that hold. The interleaving is tested.
+- **N5.** `retire.left()` sees a legacy key or field an older build wrote back into a retired scope, so the next start removes it with a deletion-only write. The test is split per scope, so each case fails for its own reason first.
+- **N6.** Every path that persists from the retirement record reads it strictly, and an unparseable record stops that item (fail closed). The fallback applies only when the connection file exists and holds no **non-empty** `MODEL_FIELDS` value.
+- **N7.** Every ratification item names a fallback with its implementing step, "no alternative", or "re-plan". Item 6's settings-only archive has a conditional step (Task 6a Step 4). The claim that only one step is conditional is corrected.
+- **N8.** The target builders exist before 9b needs them: `resolve.target_for` moves into Task 9a.
+  - `llm_sampling.effective`/`split`/`not_applicable` accept the dict callers until those callers move in Task 10.
+  - `wire.from_lowered` stays until the model-test probes and those callers stop needing it, and is deleted with them in Task 10. Task 10's guard keeps banning it.
+- **N9.** Before a connection is stripped, a `vision`, `prefill` or `post_process` value that its model's facts do not state gets a `Note(kind="fact_not_carried")`. C's PR re-copies those facts before its switch, and this note covers whatever still differs.
+- **N10–N20 (Minor).** Applied as proposed. Each change and where it lands:
+  - **N10:** `Note` lives in the leaf `retired.py`, created in Task 4.
+  - **N11:** notes reach `settings.view` through `resolve.retirement_notes`, and `resolve` calls `legacy_plan.overlay` from one private wrapper.
+  - **N12:** the archive is named `pre-retirement-grimoire-`, and `RETIRE_PREFIX` joins `_sweep_abandoned_temps`.
+  - **N13:** only a `pre-inference-` archive *created* this run skips retirement's. A reused archive's age is acceptable, for the reason stated in ruling 6.
+  - **N14:** dismissing records a planner-only note first. A note's id ignores its text.
+  - **N15:** ratification item 4 now covers the model test and the readouts.
+  - **N16:** the birth-stamp sentence in CLAUDE.md moves with Task 3a.
+  - **N17:** `test_a_c_era_writer_keeps_the_retired_marker`.
+  - **N18:** a newer campaign holds the strip, and that is stated.
+  - **N19:** `config_lock` is taken around `put_derived`, and each retirement item checks `run.halted()`.
+  - **N20:** `record_fields` keeps the first values, and the fallback never answers for an absent file.
+
 ### The plan's rulings (Task 2 folds each into the spec, as ratified)
 
 1. **Play is never refused, and it reads the legacy layout only through the planner, in memory** (CR1).
    - `resolve` makes one call, `legacy_plan.overlay(cfg, meta)`. It returns the format-2 view of the global and campaign settings, the virtual derived presets, the model-facts overlay and the notes. The resolver reads that view as format 2.
    - Below format 2, `overlay` plans the whole mapping. At format 2 it plans an unmarked campaign's mapping, and the derived-preset repoint of every scope without the retirement marker. A retired scope costs nothing, because the marker is already in the `cfg`/`meta` in hand.
-   - The lookup is fail-soft, as today's translation is. The migration and retirement use the strict one.
+   - Play's lookup is fail-soft, as today's translation is (`mode="soft"`). The migration keeps C's lookup unchanged (`mode="migrate"`). Retirement and every write it makes use `mode="retire"`, which raises on an unreadable, empty, unfenced or `kind`-less file and on an unparseable retirement record (N1, N6).
+   - The migration persists `Plan.mapped`, the old translation verbatim, and never a repoint. Retirement persists `mapped | repoint` after writing the derived presets. Play applies both in memory (N2).
    - Nothing is written on the play path. The banner, `GET /config`'s `ready` and §12's rows are unchanged. There is no retry loop: the next start retries, as §11.2 says.
 2. **The mapping moves; the translation is deleted.** `translate.global_view`/`campaign_view`/`embedding_view` move verbatim into `legacy_plan.py`, the one legacy reader, shared by `migrate`, `retire` and `resolve`. `translate.py` and every format-1 branch of `resolve`/`settings`/`in_use` go. `routing.legacy_key`/`routing.CONFIG_KEYS` stay as spelling data that the planner, the write refusals and retirement read.
 3. *(Dropped: CR1/I3. An unmarked campaign is read in memory and persisted only by the background migration and §11.1's write path.)*
@@ -264,11 +332,23 @@ G and H are planned in parallel with this plan. This section was rewritten again
    - `E == "max"` gets one note per slot, **only if ratification item 1 is declined**.
    - Notes are computed by the planner, so `/models` shows them from this build's first start. Retirement persists them in the retirement record, and they stay until dismissed, worded "was not carried over". A per-call override is not stored, so it gets no note. §11.2 step 4 gains one line saying so.
 6. **Retirement order and failure policy** (CR2–CR4). After the marker, in the same `ensure`:
-   - **(0) Archive.** `backups.create_backup(prefix=RETIRE_PREFIX)`, unless this run took `pre-inference-`. It is reused on resume while the note names it and it exists. If it fails, nothing below runs.
+   - **(0) Archive.** `backups.create_backup(prefix=RETIRE_PREFIX)` (or the settings-only form, if item 6 is declined), before the first write that deletes or replaces a stored value.
+     - It is reused on resume while the note names it and the file exists.
+     - It is skipped when this run *created* a `pre-inference-` archive. A `pre-inference-` archive reused from an earlier run does not count: it predates every edit since (N13). It is also skipped when the pass only adds markers.
+     - If it fails, nothing below runs.
+     - A reused `pre-retirement-` archive can predate items a later run retires. That is acceptable because every retirement deletion keeps its value in a new key or in the record. The one exception is a legacy key an older build wrote *after* retirement (N5), whose value this build never read.
    - **(a) Global.** One `config.md` write under `llm_connections.LOCK` then `config_lock`: derived presets first (`sampler_presets.put_derived`), then the repoint, the deletion of every legacy config key and global `route_*`, and `RETIRED_KEY`.
-   - **(b) Campaigns.** Each under `campaign_lock_nowait(cid)`, with the marker re-read inside the hold. Unmarked: migrated in the same write first. Newer: skipped. Busy: left for the next run. One write carries the repoint, the deletion, the markers and `revision.bump(cid)`.
-   - **(c) Strip.** Only when `config.md` and every campaign are readable, marked and retired, and every connection reads: each connection's non-empty `MODEL_FIELDS` go to the retirement record, then a `keep_rev` write strips them.
-   - **Fail closed.** Every reader in (a)–(c) is strict. An `UnreadableError` stops that item, and only that item.
+   - **(b) Campaigns.** Each under `campaign_lock_nowait(cid)`, with the marker re-read inside the hold.
+     - Unmarked: migrated in the same write first.
+     - Newer: skipped. It holds the strip for as long as it stays newer, which is fail-safe and stated in the docs and in `left()` (N18).
+     - Busy: left for the next run.
+     - Its derived presets are written under `config_lock` (N19). Then one write carries the repoint, the deletion, the markers and `revision.bump(cid)`.
+   - **(a′/b′) Stray keys.** A retired scope that holds a legacy key again, written by an older build, gets a deletion-only write: nothing derived, nothing read from the key (N5).
+   - **(c) Strip.** Only when `config.md` and every campaign are readable, marked and retired, and every connection reads. Per connection, under `llm_connections.LOCK` across the precondition re-check, the read, the record and the write (N4):
+     - each `vision`/`prefill`/`post_process` its model's facts do not state becomes a `fact_not_carried` note (N9);
+     - its non-empty `MODEL_FIELDS` go to the retirement record;
+     - a `keep_rev` write strips them.
+   - **Fail closed.** Every reader in (a)–(c) is strict, including the lookup and the record. An `UnreadableError` or `ConnectionUnreadableError` stops that item, and every scope that names it. Each item checks `run.halted()` first, as the migration's steps do (N19).
    - **The status.** Retirement never moves `migrate.status().state`. What is left is reported in `Status.retirement` (`left`, `failed`), read fail-soft, and is not rendered. So a fresh install reads `done`, and the Models page's quiet line is unchanged (CR11, I2, I4).
 7. **Legacy keys and fields stay writable at format 1** (they are the planner's input) **and refused at format 2**, as today. `llm_connections.ensure_migrated` seeds them only below format 2. `_write_raw` never writes an empty `MODEL_FIELDS` value (I2).
 8. **`inference.generate`** is `generate(task, messages, *, client, resolved, usage=None, schema=None, stream=True)` (ratification item 9).
@@ -293,14 +373,20 @@ G and H are planned in parallel with this plan. This section was rewritten again
     - The frozen JSONs are never regenerated.
     - The pre-migration comparisons are **kept**. They and the migrated-and-retired comparisons share one exact named-difference transform (I9).
 14. *(Dropped: CR12. H bounds the strict-mode limits.)*
-15. **Retirement markers.** `inference_keys.RETIRED_KEY = "inference_retired"`, value `"1"`, written in the retirement write of `config.md` and of each `campaign.md`.
+15. **Retirement markers.** `inference_keys.RETIRED_KEY = "inference_retired"`, value `"1"`.
+    - It is written in the retirement write of `config.md` and of each `campaign.md`.
+    - **It is stamped at birth** (N3): by `config.birth_fields()` on a new `config.md`, and by `lifecycle._inference_marker()` on a new campaign when `config.md` is retired. A fork or an import copies what its source says.
     - It gates the in-memory derivation (ruling 1), so a legacy field an older build writes after retirement changes nothing here (§11.3).
     - It is how retirement knows a scope is verified retired (ruling 6c).
-    - It is in `config._CONFIG_KEYS` (default `""`). C–H writers keep unknown frontmatter keys, and Task 6 checks that.
+    - It is in `config._CONFIG_KEYS` (default `""`). C–H writers keep unknown frontmatter keys, which `test_a_c_era_writer_keeps_the_retired_marker` checks (N17).
 16. **The retirement record** `<home>/inference-retired.json`, owned by the new `store/inference/retired.py`, written through `store.atomic` under its own lock, and resolved through `store.paths`.
-    - `fields`: `{conn_id: {MODEL_FIELDS: value}}`, written before the strip. `MODEL_FIELDS` holds no key or URL, so the record never holds a credential (§9.4). Only the planner's lookup reads it, as the fallback for a connection with no legacy fields left, so a campaign that arrives unmarked after the strip still resolves (C3).
-    - `notes`: the ruling-5 notes, `{id, scope, subject, provider_id, effort, kind, text, dismissed}`. `id` is a digest of the note's other fields. Merging never un-dismisses a note.
-    - Writers read it strictly, and readers fail soft.
+    - `fields`: `{conn_id: {MODEL_FIELDS: value}}`, written before the strip. `MODEL_FIELDS` holds no key or URL, so the record never holds a credential (§9.4).
+      - Only the planner's lookup reads it. It is the fallback for a connection whose file exists and holds no **non-empty** `MODEL_FIELDS` value, so a campaign that arrives unmarked after the strip still resolves (C3, N6).
+      - It never answers for a connection whose file is absent, so a deleted provider does not come back as a selection (N20).
+      - A later strip keeps the first recorded values, which are the ones C translated (N20).
+    - `notes`: the ruling-5 notes plus `fact_not_carried` (N9), each `{id, scope, subject, provider_id, effort, kind, text, dismissed}`. `id` is a digest of (`scope`, `subject`, `provider_id`, `effort`, `kind`) only, so a wording change in a later build does not bring back a dismissed note (N14). Merging never un-dismisses a note.
+    - `retired.Note` is defined here, in a leaf module the planner imports, so the two never import each other (N10).
+    - Every writer, and every lookup that feeds a write (`mode="retire"`), reads it strictly: a non-empty file that does not parse raises `UnreadableError` (N6). Display readers fail soft.
 
 ---
 
@@ -320,7 +406,8 @@ G and H are planned in parallel with this plan. This section was rewritten again
 | `tests/test_legacy_reader_guard.py` (new) | only the planner reads the legacy layout | 5 |
 | `tests/fixtures/frozen_campaign/sweep.py`, `tests/frozen_copy.py` (new helper) | the sweep and the tests prepare their copy identically | 5 |
 | `store/inference/retire.py` (new), `store/frontmatter.py` (`UnreadableError`, `read_strict`), `store/backups.py` (`RETIRE_PREFIX`), `store/sampler_presets.py` (`put_derived`), `store/locks.py` | retirement writes, fail closed, archive | 6a |
-| `store/inference/retired.py` (new), `store/llm_connections.py` (`strip_model_fields`, `_write_raw`, `ensure_migrated`, `_dangling`), `routes/inference.py` or the settings route module (dismiss) | record, strip, I2, notes | 6b |
+| `store/inference/retired.py` (new in Task 4 with `Note`), `store/llm_connections.py` (`strip_model_fields`, `_write_raw`, `ensure_migrated`, `_dangling`), `routes/inference.py` or the settings route module (dismiss) | record, strip, I2, notes, facts check | 4, 6b |
+| `store/campaigns/lifecycle.py` (`_inference_marker`), `store/config.py` (`birth_fields`) | born retired (N3) | 6a |
 | `frontend/src/components/inference/RetiredNotes.tsx` (+ test), `frontend/src/routes/ModelsView.tsx`, `frontend/src/api/types.ts`, `client.ts`, `routes/ConfigView.tsx` | the notice; legacy fields out of the types | 6b |
 | `wire.py` (new), `tests/wire_kit.py` (new) | `Target`, `Account`, `Sampling`, `Chain`; test builders | 7 |
 | `store/inference/capabilities.py` | `post_image_reach(kind, vision_fact, vision_cap)` | 7 |
@@ -328,9 +415,10 @@ G and H are planned in parallel with this plan. This section was rewritten again
 | every generation call site: `routes/*.py`, `store/usage.py`, `llm_reasoning.py`, `backend/scripts/ingest_scene.py`, `evals/runner.py`, `evals/run.py` | through `operations.generate`; display reads off the target | 8 |
 | `tests/test_routing_guard.py`, `test_usage_guard.py`, `test_operation_guard.py` | the generate rules | 8 |
 | `adapters.py` (new), `tests/test_adapter_registry.py` (new) | the registry | 9a |
-| `llm.py`, `llm_sampling.py`, `llm_usage.py`, `model_guidance.py`, `health.py`, `store/post_images.py`, `routes/common.py` (`build_llm`), `wire.py` (`from_lowered`, temporary) | on `Target`/`Chain` behind the shim | 9b |
+| `llm.py`, `llm_sampling.py`, `llm_usage.py`, `model_guidance.py`, `health.py`, `store/post_images.py`, `routes/common.py` (`build_llm`), `wire.py` (`from_lowered`, temporary, deleted in Task 10) | on `Target`/`Chain` behind the shim | 9b |
+| `store/inference/resolve.py` (`target_for`) | every target builder before 9b | 9a |
 | `inference.py` (`Stage`, `stages`, `run_stages`, `_Call`, `_native`, `Capture`), `routes/config.py` (probe), `routes/character_turns.py` (`_capture`), `evals/runner.py` | H's chain on targets | 9c |
-| `tests/llm_fakes.py` and the facade suites | on chains; shim deleted | 9d |
+| `tests/llm_fakes.py` and the facade suites | on chains; the facade's dict door deleted | 9d |
 | `store/inference/resolve.py`, `resolved.py`, `controls.py`, `store/embed_space.py`, `store/inference/embed.py`, `routes/config.py`, `routes/scenes.py`, equivalence helpers | the lowering deleted | 10 |
 | `tests/test_lowering_retired_guard.py` (new) | the lowering stays gone | 10 |
 | `CLAUDE.md`, `CONTRIBUTING.md`, `docs/store-guarantees.md`, `AGENTS.md`, `evals/README.md` | each with the task that changes its claim; Task 12 sweeps | 3–10, 12 |
@@ -358,7 +446,7 @@ G and H are planned in parallel with this plan. This section was rewritten again
   ```
 
   Expected: all pass. A failure here belongs to a sibling slice: report it and stop.
-- [ ] **Step 5:** If any assumption FAILs, stop. Report the failing line and the plan edit it needs, and wait for the controller. Otherwise report PASS, with A11 listed as an open item for the controller.
+- [ ] **Step 5:** If any assumption FAILs, stop. Report the failing line and the plan edit it needs, and wait for the controller. Otherwise report PASS, with A11 and A12 listed as open items for the controller.
 
 **Controller, between Task 1 and Task 2:** ask the user every item under "Needs user ratification before Task 2", and record the answers in the Task 1 report. Task 4 Step 5 and Task 2 read them.
 
@@ -420,8 +508,9 @@ No product behaviour changes, except that `born_current()` is no longer tied to 
 
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3: Implement.** Change `born_current()`, `birth_fields()` and their callers. Register `upgraded_birth` in `pytest_configure`. `client_at(home)` calls `legacy_store(home)` before `create_app()`. Rewrite conftest's `AUTOMIGRATE` comment: it now means "no background thread".
-- [ ] **Step 4:** Run `tests/test_inference_storage.py tests/test_config_store.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py tests/test_inference_migrate.py`, then the gates.
-- [ ] **Step 5:** Commit: `test(inference): a public birth seam, and legacy_store()`.
+- [ ] **Step 4: Docs with code** (N16). Edit `CLAUDE.md` "Working notes". Before: "`GRIMOIRE_INFERENCE_AUTOMIGRATE=0` … turns off that birth stamp and the background migration together". After: it turns off the background migration only, and the birth stamp is always written. Run `tests/test_docs_guard.py`.
+- [ ] **Step 5:** Run `tests/test_inference_storage.py tests/test_config_store.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py tests/test_inference_migrate.py tests/test_docs_guard.py`, then the gates.
+- [ ] **Step 6:** Commit: `test(inference): a public birth seam, and legacy_store()`.
 
 #### Tasks 3b, 3c, 3d: Convert by family
 
@@ -449,7 +538,7 @@ Each hit is converted one of two ways:
   - **Flip the default.** `conftest.py` sets `os.environ["GRIMOIRE_TEST_BIRTH"] = "upgraded-default"` at import, beside `AUTOMIGRATE`, so a spawned subprocess inherits it and a mid-test `monkeypatch.undo()` cannot reach it (M7).
   - Delete the `upgraded_birth` marker, every `pytestmark` that names it, and every `@pytest.mark.upgraded_birth` (3a's test included).
   - Add the `product_birth` marker, an autouse check that applies `monkeypatch.delenv(TEST_BIRTH_ENV)` to a marked test, and mark `test_a_product_store_is_born_with_the_marker_alone` with it.
-  - **Docs with code:** in `CLAUDE.md` "Working notes", the suite is born an upgraded default library at format 2 (`GRIMOIRE_TEST_BIRTH`), and "So the older play suites run at format 1" is deleted. Run `tests/test_docs_guard.py`.
+  - **Docs with code:** in `CLAUDE.md` "Working notes", the suite is born an upgraded default library at format 2 (`GRIMOIRE_TEST_BIRTH`), and "So the older play suites run at format 1" is deleted. (The birth-stamp sentence already moved in 3a.) Run `tests/test_docs_guard.py`.
   - Run every converted file, plus `tests/test_inference_storage.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py tests/test_routes.py tests/test_character_turns.py`, then the gates.
   - Expected: all pass. A converted suite that fails has found a real format-1/format-2 difference: report it, and do not special-case it.
   - Commit: `test(inference): the suite is born an upgraded default library at format 2`.
@@ -460,10 +549,10 @@ Each hit is converted one of two ways:
 The mapping moves into `legacy_plan.py`, and the derivation and the notes are added there, pure. `translate` and `migrate` delegate to it, so the runtime is unchanged and every existing equivalence test still passes. Task 5 makes play use it.
 
 **Files:**
-- Create: `backend/src/grimoire/store/inference/legacy_plan.py`, `backend/tests/test_inference_legacy_plan.py`.
+- Create: `backend/src/grimoire/store/inference/legacy_plan.py`, `backend/src/grimoire/store/inference/retired.py` (only `Note` and `note_id` in this task; N10), `backend/tests/test_inference_legacy_plan.py`.
 - Modify:
   - `store/inference/translate.py`: `global_view`/`campaign_view`/`embedding_view` call the planner (deleted in Task 5).
-  - `store/inference/migrate.py`: `global_fields`, `campaign_fields`, `_enriched` and `_stated` call the planner.
+  - `store/inference/migrate.py`: `global_fields`, `campaign_fields`, `_enriched` and `_stated` call the planner, and persist `Plan.mapped` only (N2).
   - `store/inference_keys.py`: `RETIRED_KEY = "inference_retired"` (ruling 15; nothing writes it until Task 6a).
   - `store/config.py`: `RETIRED_KEY` in `_CONFIG_KEYS`, default `""`, so `read_config` returns it.
   - `store/inference/__init__.py`.
@@ -477,34 +566,41 @@ PresetRead = Callable[[str], dict | None]     # preset id -> preset
 REPRESENTABLE: tuple[str, ...]                # tuple(e for e in llm_reasoning.GLM_EFFORTS if e in llm_sampling.REASONING)
 
 class Derived(NamedTuple): id: str; name: str; params: dict
-class Note(NamedTuple):
-    id: str; scope: str; subject: str; provider_id: str; effort: str
-    kind: str          # "route_preset" | "unrepresentable"
-    text: str
+# retired.Note (leaf module, N10):
+#   Note(id, scope, subject, provider_id, effort, kind, text)
+#   kind: "route_preset" | "unrepresentable" | "fact_not_carried"
+#   id = retired.note_id(scope, subject, provider_id, effort, kind)   (never the text, N14)
 class Plan(NamedTuple):
-    fields: dict[str, str]                    # the format-2 keys this scope would be written with (repointed preset keys included)
+    mapped: dict[str, str]                    # the migration's fields: today's translation, byte for byte (N2)
+    repoint: dict[str, str]                   # retirement's derived preset keys, applied over `mapped`
     facts: dict[str, dict[str, dict]]         # provider -> model -> facts overlay (global, format 1 only)
-    presets: tuple[Derived, ...]
-    notes: tuple[Note, ...]
+    presets: tuple[Derived, ...]              # the presets `repoint` names
+    notes: tuple[retired.Note, ...]
 
 def derived_name(base_name: str, effort: str) -> str
 def derive(base: dict | None, effort: str, existing: PresetRead) -> Derived
 def global_plan(cfg: Mapping[str, str], lookup: Lookup, presets: PresetRead) -> Plan
 def campaign_plan(meta: Mapping[str, str], *, global_current: bool, lookup: Lookup, presets: PresetRead) -> Plan
 def legacy_embeds(cfg: Mapping[str, str], lookup: Lookup) -> bool   # in place of embed_space.resolve (no cycle)
-def lookup(*, strict: bool) -> Lookup     # moved from migrate._lookup (strict: ConnectionUnreadableError) and translate's fail-soft read
+def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup
+    # "soft": translate's fail-soft read (play).
+    # "migrate": migrate._lookup moved verbatim -- C's behaviour, unchanged (A12).
+    # "retire": raises ConnectionUnreadableError when the file exists and is unreadable, empty,
+    #   unfenced or has no `kind` (read_strict(require="kind")) -- N1. From Task 6b it falls back to
+    #   the record, read strictly (N6).
 ```
 
 - `global_plan`, by state:
-  - **Below format 2:** the mapping (moved verbatim from `translate.global_view`), `_enriched`, the Embedding role when `legacy_embeds`, the facts overlay as values (what `migrate._stated` reads off each connection; `migrate._facts` keeps the writes), then the derivation over the mapped selection slots.
-  - **At format 2 and not retired:** the derivation only. `fields` holds only the changed preset keys.
+  - **Below format 2:** `mapped` is the mapping (moved verbatim from `translate.global_view`), `_enriched`, and the Embedding role when `legacy_embeds`. `facts` is the facts overlay as values (what `migrate._stated` reads off each connection; `migrate._facts` keeps the writes). `repoint` is the derivation over the mapped selection slots.
+  - **At format 2 and not retired:** `mapped` is empty, and `repoint` holds the derivation.
   - **Retired (`RETIRED_KEY`):** an empty plan.
 - `campaign_plan`, by state:
   - **`global_current` false:** the mapping, as `translate.campaign_view` gives it below format 2.
-  - **Global current, campaign unmarked:** the mapping plus the derivation.
-  - **Marked, not retired:** the derivation.
+  - **Global current, campaign unmarked:** `mapped` is the mapping, and `repoint` the derivation.
+  - **Marked, not retired:** `repoint` only.
   - **Retired:** empty.
 - Notes are ruling 5's, computed per scope.
+- **Who persists what (N2).** `migrate` persists `mapped` and never `repoint`, so a persisted preset key always names a preset file that exists, and the slot keeps its base preset (for example "warm") for the derivation to read. Only `retire` persists `repoint`, after `put_derived`. `overlay` (Task 5) applies `mapped | repoint` in memory.
 
 - [ ] **Step 1: Write the failing tests** in `test_inference_legacy_plan.py`. They build legacy stores with `legacy_store()` plus raw connection writes, and read plans directly:
 
@@ -523,21 +619,26 @@ def lookup(*, strict: bool) -> Lookup     # moved from migrate._lookup (strict: 
       assert d1 == d2 and d1.id.startswith("warm-reasoning-high-") and len(d1.id) == len("warm-reasoning-high-") + 8
 
   def test_the_global_mapping_is_translates(state):        # every baseline state, both baselines:
-      # global_plan(cfg).fields == the pre-Task-4 translate.global_view output, persisted
+      # global_plan(cfg).mapped == the pre-Task-4 translate.global_view output, persisted (N2)
       # (recorded at the start of this task into the test as a literal per state; never regenerated)
   def test_the_facts_overlay_is_step_3s(home):             # vision/prefill/post_process -> facts, as `_stated` wrote them
   def test_legacy_embeds_agrees_with_embed_space_resolve(state):   # every baseline state: legacy_embeds(cfg) == (embed_space.resolve(cfg) is not None)
   def test_derived_presets_keep_the_wire_in_memory(home):
       # `glm` openai_compatible, effort "high", model "glm-5.3", sampler_preset "warm" (temperature 0.9);
       # Primary on it; fallback on `glm2` (effort "low", no preset); Saltmarch pins `scene`
-      # to glm at a dangling preset id -> repoint: role_primary_preset "warm-reasoning-high",
-      # role_primary_fallback_preset "reasoning-low", Saltmarch use_scene_preset "reasoning-high"
+      # to glm at a dangling preset id -> plan.repoint: role_primary_preset "warm-reasoning-high",
+      # role_primary_fallback_preset "reasoning-low", Saltmarch use_scene_preset "reasoning-high";
+      # plan.mapped keeps role_primary_preset "warm"
   def test_identical_derivations_collapse(home):           # two slots, same base and effort -> one Derived
   def test_a_preset_that_already_sets_reasoning_is_left_alone(home):
   def test_openrouter_and_non_glm_slots_derive_nothing(home):   # the openrouter_glm_with_effort shape
   def test_a_route_preset_over_a_glm_effort_is_noted(home):     # preset_summary="cold" over glm -> one Note(kind="route_preset")
   def test_a_retired_scope_plans_nothing(home):                 # RETIRED_KEY set -> Plan((), …) empty
-  def test_a_marked_unretired_scope_plans_the_derivation_only(home)
+  def test_a_marked_unretired_scope_plans_the_derivation_only(home)   # mapped == {}, repoint non-empty
+  def test_the_migration_never_persists_a_repoint(home)         # N2: legacy GLM store, ensure() without retirement ->
+                                                                # role_primary_preset == "warm", and every persisted preset key names an existing file
+  def test_the_migrate_lookup_is_cs(home)                       # A12: mode="migrate" on a zero-byte file answers None, as C's did
+  def test_the_retire_lookup_refuses_what_it_cannot_read(home)  # N1: zero bytes, unfenced, no `kind` -> ConnectionUnreadableError; absent -> None
   def test_notes_have_stable_ids(home)                          # same store, two plans -> same Note.id
   ```
 
@@ -599,8 +700,10 @@ def lookup(*, strict: bool) -> Lookup     # moved from migrate._lookup (strict: 
   ```
 
   - `overlay` is identity, with no reads, when `cfg` carries `RETIRED_KEY` and `meta` is empty or carries it too.
-  - It builds its own fail-soft lookup (`lookup(strict=False)`: an unreadable connection reads as absent, as the translation read it) and reads presets through `sampler_presets.read_preset`, so `resolve` names one function of the planner. From Task 6b the lookup falls back to the retirement record's `fields`.
-- `resolve.resolve` calls `legacy_plan.overlay(cfg, meta)` **once**, then resolves `overlay.cfg`/`overlay.meta` as format 2. A preset read checks `overlay.presets` first, and a facts read checks `overlay.facts` first.
+  - It applies `mapped | repoint` for each scope (N2).
+  - It builds its own fail-soft lookup (`lookup(mode="soft")`: an unreadable connection reads as absent, as the translation read it) and reads presets through `sampler_presets.read_preset`, so `resolve` names one function of the planner. From Task 6b the lookup falls back to the retirement record's `fields`.
+- `resolve` holds the single call site: a private `_overlay(cfg, meta)` that calls `legacy_plan.overlay`. `resolve.resolve` resolves `_overlay(...).cfg`/`.meta` as format 2. A preset read checks `overlay.presets` first, and a facts read checks `overlay.facts` first.
+- `resolve.retirement_notes(cid: str = "") -> tuple[retired.Note, ...]` reads `_overlay(...).notes`. `settings.view` gets its notes there and never imports the planner (N11).
 - `llm_reasoning.glm_effort(model: str, value: str | None) -> str`: the preset's value only.
 - `refuse_unmigrated` uses `keys.is_current` (I1).
 - Deleted:
@@ -645,10 +748,10 @@ def lookup(*, strict: bool) -> Lookup     # moved from migrate._lookup (strict: 
 - [ ] **Step 2:** Run those tests. Expected: FAIL.
 - [ ] **Step 3: Implement.**
   - `resolve` makes its single `overlay` call. Delete the format-1 branches and `translate.py`, and point every `translate` import at the planner or the resolver.
-  - `settings.view` and `in_use` read through `resolve`, so they show a format-1 store as the format-2 layout it will be written as. There is no legacy wording. `settings.view` also returns `retirement_notes` (the planner's notes; Task 6b adds the record's), not rendered yet.
+  - `settings.view` and `in_use` read through `resolve`, so they show a format-1 store as the format-2 layout it will be written as. There is no legacy wording. `settings.view` also returns `retirement_notes`, from `resolve.retirement_notes` (Task 6b adds the record's). They are not rendered yet.
   - `embed_space`/`resolve.embedding` read `role_embedding_*` from `overlay.cfg` (D's note). `embed_endpoint(conn, current)` loses `current`.
   - `routes/config._public_config` is unchanged, so `ready` and the banner are unchanged.
-  - `migrate` persists `global_plan`/`campaign_plan`. Its `_run` early return is unchanged in this task.
+  - `migrate` persists `global_plan(...).mapped`/`campaign_plan(...).mapped`, and never `repoint` (N2). Its `_run` early return is unchanged in this task.
 - [ ] **Step 4: The frozen campaign** (I9).
   - `tests/frozen_copy.py` holds `copy_home(dst) -> Path`, the one way to copy `home/`. `frozen_client`, `frozen_home` and `sweep._write_snapshot` all use it.
   - `test_frozen_campaign`'s existing turn and absorb tests run on the format-1 copy, in memory, unchanged.
@@ -662,7 +765,10 @@ def lookup(*, strict: bool) -> Lookup     # moved from migrate._lookup (strict: 
     - `X.get("reasoning_effort"|"sampler_preset")` or `X["reasoning_effort"|"sampler_preset"]` where the receiver's name is `conn`, `raw` or `connection`.
 
     These may appear only in `ALLOWED = {"store/inference/legacy_plan.py", "store/inference/retire.py", "store/inference/retired.py", "store/inference_keys.py", "store/config.py", "store/llm_connections.py", "store/routing.py", "store/campaigns/lifecycle.py"}`. (`retire.py` and `retired.py` arrive in Task 6; the guard allows them by path.)
-  - `test_only_resolve_migrate_and_retire_import_the_planner`: `resolve.py` calls exactly one name of `legacy_plan` (`overlay`), exactly once.
+  - `test_only_resolve_migrate_and_retire_import_the_planner`. Three rules:
+    - only `resolve.py`, `migrate.py` and `retire.py` import it (`settings.py` does not, N11);
+    - `resolve.py` names exactly one function of `legacy_plan`, `overlay`;
+    - it calls it exactly once, inside `_overlay`.
   - `test_the_guard_flags_a_planted_reader`: a planted `cfg.get("active_connection_id")` in a temp module is reported.
   - The docstring states its reach. A preset's `params["reasoning_effort"]` is legitimate, and `migrate.py` is deliberately not in `ALLOWED`: anything it would read moves into the planner. CLAUDE.md: "The guards do not prove absence".
 - [ ] **Step 6: Docs with code** (CR10).
@@ -696,9 +802,11 @@ Two commits. **CI checkpoint after 6b.**
 - Create: `store/inference/retire.py`, `tests/test_inference_retire.py`.
 - Modify:
   - `store/frontmatter.py`: `UnreadableError`, `read_strict`.
-  - `store/backups.py`: `RETIRE_PREFIX`; `_PREFIXES`; `sweep`'s exclusion; the listing.
+  - `store/backups.py`: `RETIRE_PREFIX`; `_PREFIXES`; `sweep`'s exclusion; `_sweep_abandoned_temps`' prefix list (N12); the listing; `create_backup(..., only=None)` (Step 4, item 6 declined only).
   - `store/sampler_presets.py`: `put_derived`.
-  - `store/config.py`: `retire_write`.
+  - `store/config.py`: `retire_write`; `birth_fields()` stamps `RETIRED_KEY` (N3).
+  - `store/campaigns/lifecycle.py`: `_inference_marker()` stamps `RETIRED_KEY` when `config.md` carries it (N3).
+  - `store/inference/legacy_plan.py`: `lookup(mode="retire")` (N1).
   - `store/inference/migrate.py`: the retirement stage; `Status.retirement`; the note's `retire_safety`/`retire_failed`; the `_run` early return.
   - `store/locks.py`.
   - Docs: `docs/store-guarantees.md`, `CLAUDE.md`, `tests/test_docs_guard.py`.
@@ -712,29 +820,34 @@ Two commits. **CI checkpoint after 6b.**
   - `require` is given and is missing or empty in it.
 
   Otherwise it returns the meta.
-- `backups.RETIRE_PREFIX = "pre-retirement-"`, kept by the same never-prune rule as `SAFETY_PREFIX` and listed by `GET /backups` beside it.
+- `backups.RETIRE_PREFIX = "pre-retirement-"`, so archives are named `pre-retirement-grimoire-<stamp>.zip`. It is kept by the same never-prune rule as `SAFETY_PREFIX`, listed by `GET /backups` beside it, and its `.pre-retirement-…` temp is cleaned by `_sweep_abandoned_temps` (N12).
 - `config.retire_write(set_keys: Mapping[str, str], drop: Iterable[str]) -> None`. Under `config_lock`, it calls `read_strict(config path, require=FORMAT_KEY)`, refuses a non-current marker, sets and drops, and writes atomically. It never adds a key outside `set_keys`.
 - `sampler_presets.put_derived(pid: str, name: str, params: dict) -> None`. It writes when absent and does nothing when identical. It raises `ValueError` when the id holds something else, which `derive`'s digest suffix makes unreachable.
 - In `retire.py`:
-  - `retire_global(lookup: Lookup) -> tuple[Note, ...]`, under `llm_connections.LOCK` then `config_lock`. It reads `config.md` strictly, computes `global_plan`, writes each derived preset, then `config.retire_write(plan.fields | {RETIRED_KEY: "1"}, drop=LEGACY_GLOBAL_KEYS + global route keys)`.
+  - `retire_global(lookup: Lookup) -> tuple[Note, ...]`, under `llm_connections.LOCK` then `config_lock`. It reads `config.md` strictly and computes `global_plan` with `lookup(mode="retire")`. It writes each derived preset, then calls `config.retire_write(plan.mapped | plan.repoint | {RETIRED_KEY: "1"}, drop=LEGACY_GLOBAL_KEYS + global route keys)`.
+    - On an already-retired `config.md` that holds a legacy key again, it writes the deletion only (N5).
+    - A `ConnectionUnreadableError` from the lookup stops it before any write (N1).
   - `retire_campaign(cid: str, lookup: Lookup) -> tuple[Note, ...] | None`. The caller holds the campaign lock; like `migrate.campaign`, it raises `RuntimeError` when `locks.holds_campaign(cid)` is false. Inside the hold it calls `read_strict(campaign.md, require=None)` and re-reads the marker:
     - **newer:** returns `None`, nothing written;
     - **unmarked:** `campaign_plan(meta, global_current=True, …)` carries the migration's fields (step 8's work) and the derivation;
     - **marked:** the derivation only.
 
-    It writes its plan's derived presets first (`put_derived`), then one atomic `campaign.md` write: the fields, `FORMAT_KEY`, `RETIRED_KEY`, the `route_*` keys deleted, `updated` left alone. Then `revision.bump(cid)`.
+    - **retired, holding a `route_*` key again:** the deletion only (N5).
+
+    It writes its plan's derived presets first, with `put_derived` under `config_lock` (N19). Then comes one atomic `campaign.md` write, holding `mapped | repoint`, `FORMAT_KEY` and `RETIRED_KEY`, with the `route_*` keys deleted and `updated` left alone. Then `revision.bump(cid)`. A `ConnectionUnreadableError` from `lookup(mode="retire")` stops it before any write (N1).
   - `left() -> tuple[str, ...]`, **fail-soft, never raises**, one human-readable item each:
-    - `config.md` unretired or unreadable;
-    - a campaign unretired, unmarked or unreadable;
+    - `config.md` unretired or unreadable, or retired but holding a `LEGACY_GLOBAL_KEYS` member or a global `route_*` key (N5);
+    - a campaign unretired, unmarked or unreadable, or retired but holding a `route_*` key (N5). A newer campaign reads "written by a newer build; the strip waits for it" (N18);
     - a connection unreadable, or holding a non-empty `MODEL_FIELDS` value (6b).
+  - `needs_archive(plan) -> bool`: true when the pass deletes or replaces a stored value (a legacy key, a field, a repointed preset key). It is false when the pass only adds markers (N3).
 - `migrate`:
   - `_retire(run)` runs after the marker, and on every `ensure` of a current store:
-    1. the archive (ruling 6.0);
+    1. the archive (ruling 6.0), when `needs_archive`;
     2. `retire_global`;
     3. `retire_campaign` for each campaign under `campaign_lock_nowait`, where busy, unreadable or a strict lookup failure leaves that campaign;
     4. the strip (6b).
 
-    An `UnreadableError` or `ConnectionUnreadableError` stops only its item.
+    An `UnreadableError` or `ConnectionUnreadableError` stops only its item, and every scope that names it. Each item checks `run.halted()` first (N19).
   - `_run`'s early return `if current and not left` becomes `if current and not left and not retire.left()`.
   - `Status` gains `retirement: dict = {"left": [...], "failed": ""}`. `state` is computed exactly as before.
 
@@ -746,6 +859,13 @@ Two commits. **CI checkpoint after 6b.**
                                                                               # no deletion, no RETIRED_KEY; a chat turn plays identically
   def test_the_archive_is_taken_once_per_root_and_reused_on_resume(home)    # a later step fails; the next run reuses it
   def test_a_format_1_store_retires_under_its_pre_inference_archive(home)   # one archive, pre-inference-, none pre-retirement-
+  def test_a_reused_pre_inference_archive_does_not_stand_in(home)       # N13: a pre-inference- archive kept from an earlier run -> a pre-retirement- one is taken
+  def test_a_product_birth_store_takes_no_archive_and_writes_nothing(home)   # N3: product_birth; ensure() twice -> no RETIRE_PREFIX file in
+                                                                              # backup_dir(), home digest unchanged, config.md born with RETIRED_KEY
+  def test_a_new_campaign_on_a_retired_store_triggers_no_pass(home)     # N3: born with RETIRED_KEY; retire.left() empty; ensure() writes nothing
+  def test_a_new_campaign_on_an_unretired_store_joins_the_next_pass(home)   # N3: no RETIRED_KEY at birth; the next ensure() retires it
+  def test_a_c_era_writer_keeps_the_retired_marker(home)                # N17: config.write_config, set_campaign_inference and a connection
+                                                                        # edit each leave RETIRED_KEY where it was
   def test_sweep_never_prunes_a_pre_retirement_archive(home)
   def test_backups_lists_a_pre_retirement_archive(client)
   def test_derived_presets_keep_the_wire(home)                          # the Task 4 store: effective before == after; presets on disk
@@ -756,7 +876,10 @@ Two commits. **CI checkpoint after 6b.**
   def test_a_newer_campaign_is_never_retired(home)                      # C2
   def test_retire_global_refuses_a_config_it_cannot_parse(home)         # I4: zero bytes, a truncated fence, no marker -> UnreadableError; file bytes unchanged
   def test_retire_campaign_refuses_an_unparseable_campaign(home)        # I4: same three cases; campaign.md bytes unchanged; the others retire
-  def test_an_unreadable_connection_holds_the_scopes_that_name_it(home) # CR3
+  @pytest.mark.parametrize("damage", ["zero_bytes", "unfenced", "no_kind"])
+  def test_an_unreadable_connection_holds_the_scopes_that_name_it(home, damage)   # N1: the GLM connection a global slot and an
+                                                                        # unmarked Saltmarch pin name is damaged -> config.md and campaign.md bytes unchanged,
+                                                                        # no RETIRED_KEY on either, no preset written; once repaired, the next run retires both
   def test_a_busy_campaign_is_retired_on_the_next_run(home)
   def test_retirement_is_idempotent(home)                               # ensure() twice -> the second writes nothing (digest of home)
   def test_retirement_never_moves_the_migration_state(home)             # a product-birth store reads "done"; a store with left items reads "done" and names them in retirement.left
@@ -767,7 +890,12 @@ Two commits. **CI checkpoint after 6b.**
   Plus `test_planned_equals_persisted` (Task 5), whose persisted side is now retired, and `test_a_migrated_and_retired_copy_plays_a_turn` in `test_frozen_campaign.py`.
 - [ ] **Step 2:** Run them. Expected: FAIL.
 - [ ] **Step 3: Implement** in ruling 6's order. Classify `retire.py` in `store/locks.py` beside `migrate`, in the same list and for the same reason: its campaign step runs under `campaign_lock_nowait`, taken by the caller.
-- [ ] **Step 4: Docs with code** (CR10).
+- [ ] **Step 4: The archive's form, by ratification item 6** (N7). Run exactly one branch, by the answer recorded in Task 1's report.
+  - **Approved:** the full archive, `backups.create_backup(prefix=RETIRE_PREFIX)`.
+  - **Declined (the fallback):** `backups.create_backup` gains `only: Iterable[str] | None = None`, a set of root-relative globs. Retirement passes `retire.TOUCHED = ("config.md", "campaigns/*/campaign.md", "llm_connections/*.md", "sampler_presets/**", "inference-retired.json")`. The prefix and the never-prune rule are unchanged.
+    - Test: `test_a_settings_only_archive_holds_exactly_the_touched_files`. Its zip's name list equals the glob expansion, and no scene file is in it.
+    - Docs: the Retirement section says which files the archive holds.
+- [ ] **Step 5: Docs with code** (CR10).
   - `docs/store-guarantees.md` "Model settings migration" gains "### Retirement". It covers:
     - the order;
     - "no archive, no write", and the `pre-retirement-grimoire-` archive, never pruned;
@@ -775,29 +903,32 @@ Two commits. **CI checkpoint after 6b.**
     - fail closed;
     - `rev` kept;
     - the markers;
-    - that retirement never moves the status `state`.
+    - that retirement never moves the status `state`;
+    - that a fresh install and a new campaign are born retired and take no archive (N3);
+    - that a campaign a newer build marked holds the strip until this build can read it as retired (N18).
   - `CLAUDE.md` "Model settings moved…" gains one sentence on retirement and names the `pre-retirement-grimoire-` archive.
   - `test_docs_guard.test_store_guarantees_names_the_inference_migration` also holds `backups.RETIRE_PREFIX` and `migrate`'s retirement entry point, in the section and in `CLAUDE.md`.
-- [ ] **Step 5:** Run:
+- [ ] **Step 6:** Run:
 
   ```
   tests/test_inference_retire.py tests/test_inference_migrate.py tests/test_inference_legacy_plan.py
   tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py tests/test_frozen_campaign.py
   tests/test_sampler_presets_store.py tests/test_backups*.py tests/test_config_store.py
   tests/test_lock_domain_guard.py tests/test_atomic_guard.py tests/test_legacy_reader_guard.py
-  tests/test_docs_guard.py
+  tests/test_campaign_lifecycle*.py tests/test_inference_storage.py tests/test_docs_guard.py
   ```
 
   Then the gates.
-- [ ] **Step 6:** Commit: `feat(inference): retirement archives, derives, repoints and deletes the legacy keys, failing closed`.
+- [ ] **Step 7:** Commit: `feat(inference): retirement archives, derives, repoints and deletes the legacy keys, failing closed`.
 
 #### Task 6b: The record, the strip, and the notice
 
 **Files:**
-- Create: `store/inference/retired.py`, `frontend/src/components/inference/RetiredNotes.tsx` (+ `.test.tsx`).
+- Create: `frontend/src/components/inference/RetiredNotes.tsx` (+ `.test.tsx`).
 - Modify:
-  - `store/inference/retire.py`: `strip`; `left` widened.
-  - `store/inference/legacy_plan.py`: `lookup` falls back to `retired.read()["fields"]` for a connection whose file holds no legacy field.
+  - `store/inference/retired.py` (created in Task 4 with `Note`): the record.
+  - `store/inference/retire.py`: `strip`; `left` widened; the facts check (N9).
+  - `store/inference/legacy_plan.py`: `lookup` falls back to the record's `fields` for a connection whose file exists and holds no non-empty `MODEL_FIELDS` value. `mode="retire"` reads the record strictly (N6, N20).
   - `store/llm_connections.py`: `strip_model_fields`; `_write_raw`; `ensure_migrated`; `_dangling`.
   - `store/config.py`: the legacy defaults out of `read_config` (kept in `_CONFIG_KEYS`).
   - `store/inference/settings.py`: `retirement_notes`.
@@ -807,24 +938,29 @@ Two commits. **CI checkpoint after 6b.**
 
 **Interfaces:**
 - `retired.py` (ruling 16):
-  - `record_fields(conn_id, values: Mapping[str, str]) -> None`;
+  - `record_fields(conn_id, values: Mapping[str, str]) -> None`. It keeps any values already recorded for `conn_id` and adds only keys not yet there, so the first values (the ones C translated) win (N20).
   - `record_notes(notes: Iterable[Note]) -> None`, which merges by id and never un-dismisses;
-  - `dismiss(note_id) -> bool`;
-  - `read() -> dict`, fail-soft.
+  - `dismiss(note: Note | str) -> bool`;
+  - `read(*, strict: bool = False) -> dict`. Fail-soft for display. `strict=True` is for every writer and for `lookup(mode="retire")`: it raises `UnreadableError` on a non-empty file whose JSON does not parse (N6).
 
-  Writers read the file strictly (`UnreadableError` on a non-empty file whose JSON does not parse) and write through `store.atomic` under `retired._lock`.
-- `llm_connections.strip_model_fields(conn_id: str) -> bool`:
+  Writes go through `store.atomic` under `retired._lock`. **Lock order:** `llm_connections.LOCK` → `retired._lock`, never the reverse. Nothing that holds `retired._lock` takes another lock (N4).
+- `llm_connections.strip_model_fields(conn_id: str) -> bool`. It holds `llm_connections.LOCK` (an RLock) across all three steps, so a `PUT /llm-connections/{id}` waits rather than being overwritten (N4):
   1. `read_strict(path, require="kind")`;
   2. `retired.record_fields(conn_id, <its non-empty MODEL_FIELDS>)`;
   3. a raw frontmatter rewrite minus `MODEL_FIELDS`, with `keep_rev`.
 
   It returns whether it wrote.
-- `retire.strip(lookup) -> list[str]`. It runs only when `config.md` carries `RETIRED_KEY`, every campaign reads, is marked and carries `RETIRED_KEY`, and every connection file reads. Otherwise it writes nothing, and the reason is in `left()`.
+- `retire.strip(lookup) -> list[Note]`.
+  - **Precondition.** `config.md` carries `RETIRED_KEY`; every campaign reads, is marked and carries `RETIRED_KEY`; every connection file reads. Otherwise it writes nothing, and the reason is in `left()`.
+  - It takes `llm_connections.LOCK` per connection and **re-checks the precondition inside that hold**, then runs that connection's facts check and `strip_model_fields` (N4).
+  - **The facts check (N9).** For each of the connection's non-default `vision`, `prefill` and `post_process`, it compares against its model's facts. The read is strict, and a `FactsUnreadableError` stops that connection's strip. Where the facts state no value for the field, a `Note(kind="fact_not_carried", subject=<field>, provider_id=<id>)` is recorded **before** the strip. The facts are never written here: the user's word is never overwritten, and C's own fix re-copies them before its switch. This note covers whatever still differs.
 - `llm_connections._write_raw` omits every `MODEL_FIELDS` key whose value is empty. A read already defaults them to `""` (I2).
 - `ensure_migrated` seeds model fields and `active_connection_id` only below format 2 (ruling 7, I2).
 - Retirement persists each scope's notes with `retired.record_notes` in the same pass.
-- `settings.view` returns `retirement_notes`: the record's undismissed notes, plus the planner's notes not yet recorded (ids collapse).
-- The dismiss route: `POST /api/inference/retired-notes/{note_id}/dismiss` → 200, or 404 for an unknown id. It calls `refuse_newer()` only. It is a settings write that spends nothing and touches no campaign.
+- `settings.view` returns `retirement_notes`: the record's undismissed notes, plus `resolve.retirement_notes()`' planner notes not yet recorded (ids collapse; N11).
+- The dismiss route: `POST /api/inference/retired-notes/{note_id}/dismiss` → 200. It calls `refuse_newer()` only. It is a settings write that spends nothing and touches no campaign.
+  - A note the planner computed but the record does not hold yet is recorded first, already dismissed (N14).
+  - It answers 404 only for an id that neither the record nor the planner knows.
 - `RetiredNotes`: on `/models`, under the page heading, a list of the notes' sentences, each with "Dismiss". It renders nothing when the list is empty.
   - The sentence ends "— this was not carried over." It never says "for later" (I6).
   - A note names its scope (global, or the campaign's name), its route or role, and its provider, for example: "On the Summary route, the preset “Cold” sets no reasoning effort, so the GLM provider “glm” no longer sends its reasoning effort (high) there — this was not carried over."
@@ -838,15 +974,32 @@ Two commits. **CI checkpoint after 6b.**
   def test_an_unreadable_campaign_holds_the_strip(home)                 # C3: a zero-byte unmarked campaign.md -> no strip; retirement.left names it;
                                                                         # once readable, the next run migrates, retires, strips
   def test_strip_model_fields_refuses_an_unparseable_connection(home)   # I4: bytes unchanged, nothing recorded
+  def test_a_connection_edit_during_the_strip_survives(client, home)    # N4: a patched retired.record_fields starts a PUT /llm-connections/glm
+                                                                        # (new key) in a thread and asserts it is still blocked; after the strip, join:
+                                                                        # the new key and its new rev are in the file, and no MODEL_FIELDS key is
+  def test_an_unreadable_record_holds_a_late_unmarked_campaign(home)    # N6: after the strip, corrupt inference-retired.json, add an unmarked
+                                                                        # Saltmarch with route_scene: spare -> ensure() leaves campaign.md bytes unchanged,
+                                                                        # retirement.left names it; once the record is repaired, it migrates and retires
+  def test_an_empty_legacy_field_still_falls_back_to_the_record(home)   # N6: a C-H edit wrote model: "" after the strip -> the fallback answers
+  def test_the_record_never_answers_for_a_deleted_connection(home)      # N20
+  def test_the_first_recorded_fields_win(home)                          # N20: a pre-C build re-adds model: "other"; the next strip keeps the first value
+  def test_a_fact_the_migration_skipped_is_noted_before_the_strip(home) # N9: C's facts write for glm raised FactsUnreadableError, so glm
+                                                                        # carries prefill: true with no stated fact -> one fact_not_carried note, recorded
+                                                                        # before the field goes; a stated fact gives no note
   def test_the_strip_records_the_fields_first_and_the_planner_reads_them(home)   # C3: after the strip, write an unmarked Saltmarch with
                                                                                 # route_scene: spare -> resolves spare's model in memory; the next ensure persists it
-  def test_legacy_keys_written_after_retirement_are_ignored_then_removed(home)   # raw-write active_connection_id and a connection's
-                                                                                # reasoning_effort -> resolve unchanged (RETIRED_KEY); ensure() removes both
+  # N5: one scope per test, each writing ONLY that scope's legacy key, so each fails for its own reason first
+  def test_a_legacy_config_key_written_after_retirement_is_ignored_then_removed(home)     # active_connection_id -> resolve unchanged;
+                                                                                          # retire.left() names it; ensure() deletes it alone
+  def test_a_legacy_campaign_key_written_after_retirement_is_ignored_then_removed(home)   # route_scene in a retired campaign.md
+  def test_a_legacy_connection_field_written_after_retirement_is_ignored_then_removed(home)   # reasoning_effort on a stripped connection
   def test_a_product_birth_store_reads_done(home)                       # I2 (product_birth marker)
   def test_a_connection_edit_after_retirement_writes_no_legacy_field(client)    # I2: rename and key change -> no MODEL_FIELDS key in the file
   def test_a_fresh_store_never_gets_active_connection_id(home)          # product_birth; list_connections(); raw config has none
   def test_retired_notes_are_durable_and_dismissable(client, home)      # a route-preset note survives a second run; dismissed stays dismissed after
                                                                         # another retirement pass; a second root reading the same files sees it
+  def test_a_planner_note_can_be_dismissed_before_retirement(client)    # N14: format-1 store; dismiss -> recorded dismissed; never shown again
+  def test_a_note_id_ignores_its_wording(home)                          # N14: same fields, different text -> same id
   def test_a_noted_loss_is_shown_before_retirement_writes_it(client)    # format-1 store: settings view carries the planner's note
   ```
 
@@ -1050,7 +1203,7 @@ Split per CR7. Each sub-task runs `tests/test_format2_play.py` and both equivale
 
 #### Task 9a: The registry, beside the facade
 
-**Files:** Create `backend/src/grimoire/adapters.py`, `backend/tests/test_adapter_registry.py`. Production still dispatches dicts.
+**Files:** Create `backend/src/grimoire/adapters.py`, `backend/tests/test_adapter_registry.py`. Modify `store/inference/resolve.py` (`target_for`, moved here from Task 10 so that every target builder exists before 9b; N8). Production still dispatches dicts.
 
 **Interfaces:**
 
@@ -1072,6 +1225,8 @@ TEXT_ONLY_KINDS: frozenset[str]   # derived: not carries_images
 LISTABLE_KINDS: frozenset[str]    # derived: lists_models
 ```
 
+- `resolve.target_for(raw: dict, model: str, sampling: dict, *, model_facts: dict) -> wire.Target`. It is the same builder `_attempt`'s `_target` (Task 7) uses, for a target outside any route: `controls.preview`, `routes/config._with_effective` and the model test's two probes. Task 10 points those callers at it.
+
 The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapter` and `ClaudeAgentAdapter`, each wrapping its client. In this sub-task their bodies are copies of today's per-kind code in `LLMClient._provider`, `list_models`, `check`, `decide_native` and `native_body`. 9b deletes the facade's copies.
 
 - [ ] **Step 1: Write the failing tests:**
@@ -1092,14 +1247,15 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
       # today's LLMClient._provider with attempt.conn; the wire calls (model, api_key,
       # base_url, sampling kwargs, reasoning kwargs, strict, schema) are equal.
   def test_a_native_body_is_the_same_from_a_target(tmp_path):   # adapters' decision_body == llm.native_body(item, conn)
+  def test_target_for_matches_the_attempt_target(state):         # every baseline state: target_for(raw, model, sampling, facts) == attempt.target
   ```
 
-- [ ] **Step 2:** Run. Expected: FAIL. **Step 3:** Implement. **Step 4:** Run `tests/test_adapter_registry.py tests/test_import_guard.py tests/test_format2_play.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py`, then the gates.
+- [ ] **Step 2:** Run. Expected: FAIL. **Step 3:** Implement. **Step 4:** Run `tests/test_adapter_registry.py tests/test_inference_target.py tests/test_import_guard.py tests/test_format2_play.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py`, then the gates.
 - [ ] **Step 5:** Commit: `feat(llm): the adapter registry, beside the facade`.
 
 #### Task 9b: The facade on chains, behind a shim
 
-**Files:** `llm.py`, `llm_sampling.py` (`effective(target)`, `split(target)`, `not_applicable(target, why)`), `llm_usage.py` (`account(usage, target)`), `model_guidance.py` (`for_target(target)`), `health.py` (`record(target, error)`), `store/post_images.py` (`images_for(target)`, `reach(target | None)`), `routes/common.py` (`build_llm`'s `images` callable), `wire.py` (`from_lowered`), `tests/llm_fakes.py` (dual recording), `docs/store-guarantees.md` (E's cancel window).
+**Files:** `llm.py`, `llm_sampling.py` (`effective`, `split` and `not_applicable` take `Target | dict`; N8), `llm_usage.py` (`account(usage, target)`), `model_guidance.py` (`for_target(target)`), `health.py` (`record(target, error)`), `store/post_images.py` (`images_for(target)`, `reach(target | None)`), `routes/common.py` (`build_llm`'s `images` callable), `wire.py` (`from_lowered`), `tests/llm_fakes.py` (dual recording), `docs/store-guarantees.md` (E's cancel window).
 
 **Interfaces:**
 - `LLMClient`:
@@ -1108,14 +1264,23 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - `list_models(target)`, `check(target)`, `note_outcome(target, error)`.
 
   Each entry point passes its argument through **one** private `_as_chain`, which calls `wire.from_lowered` on a dict. That is the shim. The constructor keeps its client keywords (the test seams). Its `fallback=` keyword is deleted, because every call carries its chain.
-- `wire.from_lowered(conn: dict) -> Chain`: **standard library only** (#239). It knows `"_fallback"`, `"_structured"`, `"_account"` and `"_degrade"` as literals. It is temporary: 9d deletes it, and Task 10's guard bans the name.
+- `wire.from_lowered(conn: dict) -> Chain`: **standard library only** (#239). It knows `"_fallback"`, `"_structured"`, `"_account"` and `"_degrade"` as literals.
+  - It is temporary. It stays until the model-test probes and the dict callers below stop needing it, and **Task 10 deletes it with them** (N8). Task 10's guard bans the name.
+- `llm_sampling.effective(x: Target | dict)`, `split(x)` and `not_applicable(x, why)` take a `Target`. A dict goes through `from_lowered(x).primary` (N8). These are the dict callers that keep that door open until Task 10:
+  - `store/inference/controls.preview` (`controls.py`'s `llm_sampling.effective(lowered)`);
+  - `store/inference/resolve._attempt` (the attempt's `controls`) and H's `_chain` (`not_applicable(conn, WHY_NATIVE)`);
+  - `routes/config._with_effective`;
+  - the model test's probes (Task 9c).
 - `llm.fallback_sampling(primary: Target, fallback: Target) -> Target`; `llm._same_route(a, b)` by `provider_id`; `llm.prefill_capable(target) -> bool`. The degrade sibling is `dataclasses.replace(target, degrade=True)`. `llm.ATTEMPTED` holds the `Target`.
 - `_routes(chain)` builds `[(primary, retries), (fallback_sampling(primary, fallback), 0)]`. `_usable_routes` drops a fallback whose kind is in `adapters.TEXT_ONLY_KINDS` for image-bearing messages. `_dispatch` calls `self._adapters[target.kind].generate(…, schema=schema if target.structured else None)`.
 - **E's `_estimate` call stays exactly where `_resilient` makes it** (ruling 11), with a comment naming the window.
 - `inference.generate`/`decide`/`note_outcome` **still hand dicts** in this sub-task, through the shim. `decide_native` still takes a dict, and `llm_usage.with_account` stays, both until 9c.
 - `FakeLLM.stream/complete/single` accept a dict or a `Chain`/`Target`. They record `request["chain"]`/`request["target"]` always (converting a dict with `wire.from_lowered`), and `request["conn"]` only when handed a dict. So every existing assertion holds.
 
-- [ ] **Step 1:** Write `test_the_shim_is_the_only_dict_door` (only `_as_chain` calls `from_lowered` in `llm.py`) and `test_from_lowered_round_trips_every_baseline_attempt` (`from_lowered(attempt.conn) == Chain(attempt.target, fallback target)` for every state). Run: FAIL.
+- [ ] **Step 1:** Write these tests, then run them. Expected: FAIL.
+  - `test_the_shim_is_the_only_dict_door`: in `llm.py`, only `_as_chain` calls `from_lowered`.
+  - `test_from_lowered_round_trips_every_baseline_attempt`: `from_lowered(attempt.conn) == Chain(attempt.target, fallback target)` for every state.
+  - `test_effective_answers_the_same_for_a_dict_and_its_target`: for every baseline attempt, `effective(attempt.conn) == effective(attempt.target)`.
 - [ ] **Step 2:** Implement. Delete the facade's per-kind copies, so only the adapters hold them.
 - [ ] **Step 3: Docs with code.** `docs/store-guarantees.md` "What is not promised" gains E's cancel window (ruling 11).
 - [ ] **Step 4:** Run:
@@ -1143,7 +1308,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - `_with_mode(chain, mode)` is `chain.with_account(decision_mode=mode)`.
 - `LLMClient.decide_native(item, target: Target, usage=None, *, retries=None)`. It dispatches `self._adapters[target.kind].decide`, and keeps H's refusals, retries, observer and capture. `llm.native_body(item, target)`.
 - `Capture = Callable[[list[dict], dict, Target], Awaitable[None]]`. A native stage passes `target.without_sampling()`. `_capture(cid, sid, task, messages, target, outcome=None)` reads `.kind`/`.model`/`.provider_id`.
-- H's probe: `client.decide_native(probes.PROBE_ITEM, target.with_account(operation="decide", decision_mode="native"), m.usage, retries=0)`, where `target` is the model test's `Target`. Until Task 10 it comes from `wire.from_lowered(conn).primary`, and then from `resolve.target_for`.
+- H's probe: `client.decide_native(probes.PROBE_ITEM, target.with_account(operation="decide", decision_mode="native"), m.usage, retries=0)`, where `target` is the model test's `Target`. Until Task 10 it is `wire.from_lowered(conn).primary`, and Task 10 moves both probes to `resolve.target_for` and deletes `from_lowered` with them (N8).
 - `evals/runner`: the forced one-stage chains use `Stage("native"|"structured", Chain(A0.target), None)`.
 - `FakeLLM.decide_native(item, target, usage=None, *, retries=None)` records `(item, target, retries)` in `native_requests`.
 
@@ -1152,9 +1317,9 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
 - [ ] **Step 3:** Run those suites plus `tests/test_usage_guard.py tests/test_operation_guard.py tests/test_routing_guard.py tests/test_prompt_log*.py tests/test_format2_play.py tests/test_inference_equivalence.py tests/test_inference_equivalence_c.py`, then the gates.
 - [ ] **Step 4:** Commit: `refactor(inference): decide's stages carry chains of targets`.
 
-#### Task 9d: The generate path, the fakes and the suites on chains; the shim deleted
+#### Task 9d: The generate path, the fakes and the suites on chains; the facade's dict door deleted
 
-**Files:** `inference.py` (`generate`/`note_outcome` hand `resolved.chain`/`.chain.primary`), `tests/llm_fakes.py` (no `request["conn"]`), `wire.py` (`from_lowered` deleted), `llm.py` (`_as_chain` deleted), and the suites:
+**Files:** `inference.py` (`generate`/`note_outcome` hand `resolved.chain`/`.chain.primary`), `tests/llm_fakes.py` (no `request["conn"]`), `llm.py` (`_as_chain` deleted), `routes/config.py` (the generate probe hands `single` `wire.from_lowered(conn).primary`, as H's probe already does), and the suites. `wire.from_lowered` stays: the probes and the `llm_sampling` dict callers still use it until Task 10 (N8). The suites:
 - `tests/test_llm.py`, `test_llm_structured.py`, `test_llm_lifecycle.py`, `test_llm_error_status.py`, `test_llm_image_adapters.py`, `test_llm_sampling.py`;
 - `test_post_images_dispatch.py`, `test_model_guidance_dispatch.py`, `test_model_guidance.py`, `test_provider_health.py`, `test_reasoning_display.py`, `test_llm_fakes.py`;
 - every suite reading `request["conn"]` (Task 1's inventory): `test_routing_routes.py`, `test_scene_break_routes.py`, `test_routes.py`, `test_character_turns.py`, `test_model_test_call.py`, `test_inference_override.py`, `test_format2_play.py`.
@@ -1165,7 +1330,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - Each `conn[FALLBACK_KEY] = fb` becomes `wire_kit.chain(primary, fb)`.
 
   Do not change what any test asserts about the wire, the holder, the retry count or the fallback. Only the input spelling changes.
-- [ ] **Step 2:** Delete the shim (`from_lowered`, `_as_chain`, the fakes' dict branch). `test_the_shim_is_the_only_dict_door` becomes `test_the_facade_takes_no_dict` (passing a dict raises `TypeError`).
+- [ ] **Step 2:** Delete the facade's dict door (`_as_chain`) and the fakes' dict branch. `test_the_shim_is_the_only_dict_door` becomes `test_the_facade_takes_no_dict`: passing a dict raises `TypeError`. `from_lowered` and its round-trip test stay until Task 10.
 - [ ] **Step 3:** Run every suite listed under **Files**, plus:
 
   ```
@@ -1175,7 +1340,7 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   ```
 
   Then the gates. Expected: pass.
-- [ ] **Step 4:** Commit: `refactor(llm): the facade takes chains of typed targets; the dict shim goes`.
+- [ ] **Step 4:** Commit: `refactor(llm): the facade takes chains of typed targets; its dict door goes`.
 - [ ] **CI checkpoint (Task 9).**
 
 ### Task 10: Delete the connection-dict lowering
@@ -1185,8 +1350,10 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - `store/inference/resolve.py`: delete `_lowered`, `lower`, `with_facts`, `own_sampling`, `FALLBACK_KEY`, `STRUCTURED_KEY`, `ACCOUNT_KEY`, and the dict writes in `_account`/`_flag_structured`; build `Target` directly in `_attempt`.
   - `store/inference/resolved.py`: delete `Attempt.conn` and `ResolvedInference.conn`/`.fallback`.
   - `routes/common.py`: `UsableInference.conn` becomes `.chain`, never None.
-  - `store/inference/controls.py`: `preview(preset_id, target, operation="")` builds a `Target` (H's `operation`, A5).
-  - `routes/config.py`: the model test's probes (H's included) and `_with_effective` for the provider editor build targets through `resolve.target_for`; `post_images.reach(chat.chain…)`.
+  - `store/inference/controls.py`: `preview(preset_id, target, operation="")` builds a `Target` with `resolve.target_for` (H's `operation`, A5).
+  - `routes/config.py`: the model test's probes (H's included) and `_with_effective` for the provider editor build targets through `resolve.target_for` (Task 9a); `post_images.reach(chat.chain…)`.
+  - `llm_sampling.py`: `effective`/`split`/`not_applicable` take a `Target` only (the dict door goes; N8).
+  - `wire.py`: `from_lowered` deleted, together with its last callers above (N8), and its round-trip test.
   - `store/embed_space.py`: D's note. `endpoint_of` reads `attempt.target.api_key`, and its `"conn"` entry becomes `"target"`.
   - `store/inference/embed.py`: `_stamp` reads the target.
   - `llm.py`: `FALLBACK_KEY`, `STRUCTURED_KEY`, `_without_fallback`, and `DEGRADE` as a dict key.
@@ -1199,8 +1366,8 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
 
 **Interfaces:**
 - Consumes: `wire.Target`/`Chain` (Task 7) and the registry (Task 9).
+- Consumes: `resolve.target_for` (Task 9a).
 - Produces:
-  - `resolve.target_for(raw: dict, model: str, sampling: dict, *, model_facts: dict) -> wire.Target`, for `controls.preview` and the model test, which build a target outside any route.
   - `embed_space.endpoint()` returns `{model, base_url, key, space, provider, provider_name, provider_kind, target}`.
 
 - [ ] **Step 1: Write the failing guard:**
@@ -1279,12 +1446,23 @@ The classes are `OpenRouterAdapter`, `OpenAICompatibleAdapter`, `AnthropicAdapte
   - H's I11 (two `FALLBACK_KEY` dependencies as stage data): Task 9c, `Chain.alone()` and the attach rule.
   - H's strict-mode limits: H's (A6).
   - H's ruling 21 (`require_parameters`): declined, reported (A11).
+- **Revision 3 (the re-review).** N1–N9 are answered in the task text, not only in the rulings:
+  - N1: `lookup(mode="retire")` and its parametrised test (6a); A12 hands C's own hole to the controller.
+  - N2: `Plan.mapped`/`repoint` (Task 4), with the migration persisting `mapped` only (Tasks 4 and 5).
+  - N3: born retired (6a), with archive-free birth tests.
+  - N4: the strip's lock and its interleaving test (6b).
+  - N5: `left()` widened (6a), with three per-scope tests (6b).
+  - N6: the record read strictly by writers and the retire lookup (6b).
+  - N7: a decline for every ratification item, and Task 6a Step 4 for item 6.
+  - N8: `target_for` in 9a, the `llm_sampling` dict door until Task 10, and `from_lowered` deleted in Task 10.
+  - N9: the `fact_not_carried` note (6b).
+  - N10–N20 are listed in the rulings with where each landed.
 - **The order keeps the tree green, and CI proves it at five points.**
   - The suite moves to format 2 per family, each family opting in until the flip (3a–3d, then CI).
   - The planner lands beside translate before play uses it (Task 4). Play switches to it with every baseline still compared (Task 5, then CI).
   - Retirement writes only what the planner already serves in memory, so `test_planned_equals_persisted` covers both sides (Task 6, then CI).
   - Targets exist before anything consumes them (Task 7).
   - Call sites move before the facade's types change (Task 8).
-  - The facade moves behind a shim that the fakes share, then decide moves, then generate, then the shim goes (9a–9d, then CI).
+  - Every target builder exists first (9a). The facade moves behind a shim that the fakes share (9b), then decide moves (9c), then generate, and the facade's dict door goes (9d, then CI). `from_lowered` goes last, with the probes and readouts that used it (Task 10).
   - The dict is deleted only when its guard finds nothing left (Task 10, then CI).
   - Every doc claim moves in the task that changes it, so `test_docs_guard` is green at every commit.
