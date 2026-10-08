@@ -783,8 +783,12 @@ def _fork(client, cid: str) -> str:
     got = client.post(f"/api/campaigns/{cid}/fork", json={"name": "Saltmarch Fork"})
     assert got.status_code == 200, got.text
     fork = got.json()["id"]
-    assert keys.FORMAT_KEY not in _meta(fork)
-    assert _meta(fork)["route_scene"] == "spare"
+    # A fork is born through the birth seam: translated, then marked, so its
+    # source's legacy `route_scene` arrives as the pin it meant.
+    meta = _meta(fork)
+    assert meta[keys.FORMAT_KEY] == keys.CURRENT_FORMAT
+    assert meta[keys.use_key("scene")] == keys.PIN
+    assert meta[keys.pin_key("scene", "provider")] == "spare"
     return fork
 
 
