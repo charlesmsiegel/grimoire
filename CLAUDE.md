@@ -780,7 +780,10 @@ would answer neither question.
   through, which restamps that provider's `rev` (`PUT /llm-connections/{id}`,
   judged by `embed_space.moved_by`), or a model-facts write that turns the
   role on, such as the user's `embed: yes` over a known `no` (`PUT
-  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`) -- each
+  /llm-connections/{id}/facts`, judged by `embed_space.facts_moved`), or, on a
+  store not yet at format 2, a legacy `embeddings_connection_id` /
+  `embeddings_model` change through `PUT /config` (judged by
+  `embed_space.config_moved`) -- each
   400 `confirm_embedding` without `confirm_embedding: true`, compared inside
   the hold that writes, because re-embedding a library may cost money. Two
   things can still lift a known `no` without that question, because neither
