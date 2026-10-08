@@ -500,11 +500,16 @@ def test_off_on_an_adaptive_model_that_cannot_turn_it_off_is_unsupported(enabled
     assert report["dropped"] == [{"param": "reasoning_effort", "reason": entry["why"]}]
 
 
+@pytest.mark.parametrize("disabled", [True, False, None])
 @pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-sonnet-5-5-20260928"])
-def test_off_on_sonnet_5_5_is_sent_as_between_tools(model):
+def test_off_on_sonnet_5_5_is_sent_as_between_tools(model, disabled):
     """Sonnet 5.5 refuses `disabled`; `between_tools` is its off -- no thinking
-    before the reply -- and the API takes it on that model alone."""
-    features = {**OPUS_5, "disabled_thinking": False}
+    before the reply -- and the API takes it on that model alone. That is the
+    model's documented behaviour, not the catalog's: a row cached before
+    `disabled` was read (absent), or one that says True, still sends it."""
+    features = {k: v for k, v in OPUS_5.items() if k != "disabled_thinking"}
+    if disabled is not None:
+        features["disabled_thinking"] = disabled
     conn = _claude_api({"reasoning_effort": "off"}, features, model=model)
     eff = ls.effective(conn)
     assert eff["effective"]["thinking"] == {"type": "between_tools"}
@@ -513,6 +518,15 @@ def test_off_on_sonnet_5_5_is_sent_as_between_tools(model):
     assert (entry["state"], entry["wire"], entry["source"]) == ("translated", "thinking",
                                                                  "adapter")
     assert ls.report(conn)["applied"] == {"reasoning_effort": "off"}
+
+
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-5-5"])
+def test_off_on_another_adaptive_model_whose_row_omits_disabled_is_unknown(model):
+    features = {k: v for k, v in OPUS_5.items() if k != "disabled_thinking"}
+    eff = ls.effective(_claude_api({"reasoning_effort": "off"}, features, model=model))
+    assert "thinking" not in eff["effective"]
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"]) == ("unknown", None)
 
 
 def test_between_tools_is_never_sent_to_another_model():

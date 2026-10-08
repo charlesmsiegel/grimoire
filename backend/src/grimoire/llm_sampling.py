@@ -422,17 +422,20 @@ def _thinking_off(c: _Conn, adaptive: bool, omission_is_off: bool) -> _Control:
     does -- so off has to be SENT there, and only to a model whose catalog says
     it takes `disabled` (one that cannot turn thinking off answers it with a
     400) -- except Claude Sonnet 5.5, which refuses `disabled` and takes
-    `between_tools` as its off (`_BETWEEN_TOOLS`). On a budget-only model, or
+    `between_tools` as its off (`_BETWEEN_TOOLS`). That exception is decided by
+    the id alone, whatever the row's `disabled_thinking` says or omits: it is
+    the model's documented behaviour, and a row cached before that field was
+    read would otherwise leave the model thinking. On a budget-only model, or
     one that does not think at all (`omission_is_off`), sending nothing is off."""
     if adaptive:
+        if _BETWEEN_TOOLS.search(c.model.lower()):
+            return _Control(TRANSLATED, "thinking", WHY_THINKING_BETWEEN, "adapter",
+                            {"thinking": {"type": "between_tools"}})
         disabled = c.features.get("disabled_thinking")
         if disabled is True:
             return _Control(TRANSLATED, "thinking", WHY_THINKING_DISABLED, "catalog",
                             {"thinking": {"type": "disabled"}})
         if disabled is False:
-            if _BETWEEN_TOOLS.search(c.model.lower()):
-                return _Control(TRANSLATED, "thinking", WHY_THINKING_BETWEEN, "adapter",
-                                {"thinking": {"type": "between_tools"}})
             return _Control(UNSUPPORTED, None, WHY_THINKING_ALWAYS, "catalog")
         return _Control(UNKNOWN, None, WHY_THINKING_OFF, "catalog")
     if omission_is_off:
