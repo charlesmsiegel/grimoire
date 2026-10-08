@@ -395,6 +395,52 @@ async def test_a_refusal_after_partial_text_still_raises():
     assert err.value.detail == "the model declined (cyber)"
 
 
+async def test_a_stream_that_ends_without_message_stop_is_a_network_failure():
+    """Content deltas and no `message_stop`: the reply was cut off, and a
+    truncated reply must not be accepted as a complete one. `network` is the
+    kind an upstream failure carries, so the facade treats it as a failed
+    attempt (retry, fallback) rather than an answer."""
+    body = _sse(START, _text("Hel"), _text("lo"))
+    agen = _client(_ok(body)).stream(MSG, "m", KEY)
+    chunks: list = []
+    with pytest.raises(AnthropicError) as err:
+        while True:
+            chunks.append(await anext(agen))
+    assert "Hel" in chunks
+    assert err.value.kind == "network"
+    assert err.value.status is None
+    assert "message_stop" in err.value.detail
+
+
+async def test_a_stream_cut_after_message_delta_is_still_truncated():
+    body = _sse(START, _text("Hello"), _done())
+    with pytest.raises(AnthropicError) as err:
+        await _client(_ok(body)).complete(MSG, "m", KEY)
+    assert err.value.kind == "network"
+
+
+async def test_an_empty_200_stream_is_a_network_failure():
+    with pytest.raises(AnthropicError) as err:
+        await _client(_ok("")).complete(MSG, "m", KEY)
+    assert err.value.kind == "network"
+
+
+async def test_a_refusal_wins_over_a_missing_message_stop():
+    """The refusal arrived (on `message_delta`) before the cut: it is the more
+    exact account of what happened, and it is the model's answer."""
+    body = _sse(START, _done("refusal", stop_details={"category": "cyber"}))
+    with pytest.raises(AnthropicError) as err:
+        await _client(_ok(body)).complete(MSG, "m", KEY)
+    assert err.value.kind == "bad_response"
+    assert err.value.detail == "the model declined (cyber)"
+
+
+async def test_a_complete_stream_still_passes():
+    assert await _client(_ok()).complete(MSG, "m", KEY) == "Hello"
+    # Nothing but `message_stop` is still a completed (empty) response.
+    assert await _client(_ok(_sse(START, _done(), STOP))).complete(MSG, "m", KEY) == ""
+
+
 async def test_complete_joins_the_stream():
     assert await _client(_ok()).complete(MSG, "m", KEY) == "Hello"
 

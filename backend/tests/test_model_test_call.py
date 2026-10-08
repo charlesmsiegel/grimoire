@@ -31,6 +31,7 @@ import pytest
 
 import grimoire.store as store
 from grimoire import catalog, embeddings, routes
+from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
@@ -574,6 +575,42 @@ def test_an_empty_stream_on_the_wire_counts_as_accepted(client):
     assert sent["model"] == MODEL
     assert sent["messages"] == probes.messages("generate")
     assert run["result"]["results"]["generate"] == {"ok": True}
+
+
+def test_a_truncated_anthropic_stream_is_a_failed_probe_not_an_accepted_one(client):
+    """A 200 whose stream ends before `message_stop` did not complete, so the
+    probe did not succeed: it is reported as a failure, and -- a malformed
+    stream being no verdict on the model -- nothing is filed."""
+    conn = _connection(client, kind="anthropic", name="Saltmarch Direct",
+                       api_key="sk-ant-fake-0001", model="claude-model-x")
+    seen: list[httpx.Request] = []
+    start = {"type": "message_start", "message": {
+        "id": "msg_1", "model": "claude-model-x", "role": "assistant", "content": [],
+        "usage": {"input_tokens": 10, "output_tokens": 1}}}
+    delta = {"type": "content_block_delta", "index": 0,
+             "delta": {"type": "text_delta", "text": "o"}}
+    cut = "".join(f"event: {e['type']}\ndata: {json.dumps(e)}\n\n" for e in (start, delta))
+
+    def record(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, text=cut, headers={"content-type": "text/event-stream"})
+
+    adapter = AnthropicClient(http=httpx.AsyncClient(transport=httpx.MockTransport(record)))
+    facade = LLMClient(anthropic=adapter, retries=3)
+    client.app.dependency_overrides[routes.get_llm] = lambda: facade
+
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": "claude-model-x", "capabilities": ["generate"],
+                          "confirm": True})
+    assert r.status_code == 202, r.text
+    run = _wait(client, r.json()["run"]["id"])
+
+    assert len(seen) == 1
+    got = run["result"]["results"]["generate"]
+    assert got["ok"] is False
+    assert got["kind"] == "network"
+    assert run["result"]["recorded"] is False
+    assert facts.read(conn) == {}
 
 
 def test_the_rev_moving_during_the_run_records_nothing(client):

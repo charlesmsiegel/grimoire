@@ -310,7 +310,7 @@ class AnthropicClient:
                         yield text
                     if reader.stopped:
                         break
-            reader.check_refusal()
+            reader.finish()
         except AnthropicError:
             raise
         except httpx.HTTPError as exc:
@@ -422,6 +422,19 @@ class _Reader:
         elif kind == "message_stop":
             self.stopped = True
         return ""
+
+    def finish(self) -> None:
+        """The body has ended: raise unless it ended a complete reply.
+
+        A refusal (on `message_delta`) is checked first -- it is the model's
+        own answer, and more exact than any cut that followed it. Then a body
+        that ended before `message_stop` was cut off upstream, however much
+        of it arrived (or an empty 200): `network`, as any other upstream
+        failure, so the facade counts a failed attempt rather than accepting
+        a truncated reply."""
+        self.check_refusal()
+        if not self.stopped:
+            raise AnthropicError("network", "the response ended before message_stop")
 
     def check_refusal(self) -> None:
         """A refusal is a failure, however much text arrived before it: a
