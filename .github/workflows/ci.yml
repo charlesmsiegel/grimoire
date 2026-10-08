@@ -45,7 +45,24 @@ jobs:
           python-version: ${{ matrix.python }}
       - run: pip install -e "./backend[dev]"
       - run: pip check
-      - run: make check-py PY=python
+      - run: make check-py PY=python PROFILE_OUT=build/perf/backend-profile.json
+      # The lightweight performance budget (spec section 13): this run's
+      # session time, collected and skipped counts and slowest tests against
+      # backend/tests/perf_budget.json, as ::warning:: annotations and a job
+      # summary. It never fails the job -- one run on a shared runner is a
+      # signal, not a measurement -- and reads a missing profile (a run that
+      # died first) as a warning too. On the 3.11 leg only, which the budget's
+      # figures describe.
+      - if: ${{ !cancelled() && matrix.python == '3.11' }}
+        run: python scripts/profile_report.py budget build/perf/backend-profile.json backend/tests/perf_budget.json | tee -a "$GITHUB_STEP_SUMMARY"
+      - if: ${{ !cancelled() && matrix.python == '3.11' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: backend-profile
+          path: build/perf/backend-profile.json
+          # A diagnostic, unlike the coverage report: its absence is already
+          # a warning from the budget step and must not turn the job red.
+          if-no-files-found: warn
       # One matrix leg's report, not both: they cover the same lines, and two
       # uploads under one artifact name is an error, not a merge. 3.11 is the
       # floor `requires-python` declares, so it is the one whose reachable

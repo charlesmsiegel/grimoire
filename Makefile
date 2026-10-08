@@ -132,7 +132,10 @@ check: check-lint check-mypy check-templates check-eslint check-web check-py che
 # The coverage arguments live in one variable so that every target measuring
 # the backend -- this gate and `test-py-profile COV=1` below -- measures it
 # with byte-identical settings.
-COV_ARGS = --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:skip-covered --cov-report=xml:backend/coverage.xml --cov-fail-under=$(COV_FLOOR)
+# COV_MEASURE is the measurement alone, for a diagnostic over a subset, which
+# would always miss a whole-suite floor and stop before reporting anything.
+COV_MEASURE = --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:skip-covered --cov-report=xml:backend/coverage.xml
+COV_ARGS = $(COV_MEASURE) --cov-fail-under=$(COV_FLOOR)
 
 #
 # The suite runs across WORKERS pytest-xdist processes (both full backend runs
@@ -145,14 +148,17 @@ COV_ARGS = --cov=grimoire --cov-config=backend/pyproject.toml --cov-report=term:
 #
 # WORKERS=0 is the serial run, with no -n at all: the one-variable rollback,
 # and the reference a parallel result is compared against. DIST is xdist's
-# scheduler; `load` was measured against `worksteal` and `loadfile` on this
-# suite (docs/superpowers/validation/2026-10-08-test-performance-report.md).
+# scheduler: `load` tied `worksteal` and beat `loadfile` (which strands
+# test_routes.py on one worker) on this suite, with and without coverage --
+# docs/superpowers/validation/2026-10-08-test-performance-report.md.
 WORKERS ?= 4
 DIST ?= load
 XDIST = $(if $(filter-out 0,$(WORKERS)),-n $(WORKERS) --dist=$(DIST),)
 
+# PROFILE_OUT, when given, also writes the phase profile there (CI passes it,
+# for the budget check and the backend-profile artifact).
 check-py:
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(XDIST) $(COV_ARGS)
+	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend -q $(XDIST) $(COV_ARGS) $(if $(PROFILE_OUT),--phase-profile=$(PROFILE_OUT),)
 
 # ---- development commands. NOT gates: none is named check-*, none is in
 # `check:` above, and each says so before it runs, so a green one cannot be
@@ -175,14 +181,20 @@ test-py-fast:
 
 # --lfnf=none: with no failure on record, select nothing rather than quietly
 # run the whole suite. Not -q, so pytest's "run-last-failure:" line says which
-# happened; with nothing on record pytest exits 5 (no tests ran).
+# happened; with nothing on record pytest exits 5 (no tests ran). One case it
+# cannot catch: failures on record for tests that no longer exist (renamed,
+# merged) leave pytest selecting everything -- its "known failures not in
+# selected tests" line says so; delete backend/.pytest_cache to reset.
 test-py-failed:
 	@echo NOT A GATE: re-runs only what failed last time, without coverage. Exit 5 means nothing failed last time.
 	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest backend --lf --lfnf=none --tb=short $(ARGS)
 
+# The pytest line is `-`-prefixed: a failing or slow selection is exactly when
+# the summary is wanted, so make prints its "Error (ignored)" and summarises
+# anyway. This target is a diagnostic; its exit status is the summary's.
 test-py-profile:
 	@echo NOT A GATE: a diagnostic profile, written to $(PROFILE).
-	$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_ARGS),) $(ARGS)
+	-$(WITH_SRC) "$(call fixpath,$(PY))" -m pytest $(TESTS) -q --phase-profile=$(PROFILE) $(if $(COV),$(COV_MEASURE),) $(ARGS)
 	"$(call fixpath,$(PY))" scripts/profile_report.py summary $(PROFILE)
 
 # `test:coverage`, not `test`: same suite, same pass/fail, plus it drops

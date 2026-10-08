@@ -10,12 +10,21 @@ disappeared or changed outcome. Standard library only.
     python scripts/profile_report.py summary PROFILE.json [--top N]
     python scripts/profile_report.py manifest PROFILE.json
     python scripts/profile_report.py compare BEFORE.json AFTER.json
+    python scripts/profile_report.py budget PROFILE.json BUDGET.json
 
 `compare` exits 1 when a node in BEFORE is missing from AFTER, when a node's
 outcome changed (per phase, so a teardown error cannot mask a call that began
 failing), or when AFTER collected a node it never reported on: a run that
 quietly ran less is the failure every other number here would hide. Nodes
 AFTER added are listed and do not fail it.
+
+`budget` is the lightweight performance budget CI runs after the backend
+suite (spec §13): it compares one run against a committed, versioned
+reference and prints GitHub `::warning::` lines -- a session more than the
+tolerance slower, fewer tests collected, more skipped, a single test over the
+slow-test line -- plus a short Markdown summary. It always exits 0. One run on
+a shared runner is a signal to look at, not a measurement to fail a pull
+request on; the reference moves deliberately, in the commit that moves it.
 """
 
 from __future__ import annotations
@@ -156,6 +165,52 @@ def failed(diff: dict) -> bool:
     return bool(diff["missing"] or diff["outcome_changed"] or diff["unreported"])
 
 
+def budget_findings(doc: dict, ref: dict) -> list[tuple[str, str]]:
+    """(kind, message) for each way `doc` departs from the budget `ref`.
+
+    `kind` is one of slower, fewer-tests, more-tests, more-skips, slow-test;
+    `more-tests` is a notice (tests were added), every other kind a warning.
+    """
+    found = []
+    tolerance = ref.get("tolerance", 0.2)
+    wall, budget = doc.get("wall_s") or 0.0, ref["wall_s"]
+    if wall > budget * (1 + tolerance):
+        found.append(("slower", (f"the session took {wall:.0f}s against a budget of "
+                                 f"{budget:.0f}s (+{wall / budget - 1:.0%}); check the runner "
+                                 f"and dependency versions before calling it a regression")))
+    collected = len(doc.get("collected") or doc["tests"])
+    if collected < ref["collected"]:
+        found.append(("fewer-tests", (f"{ref['collected'] - collected} fewer tests collected "
+                                      f"than the budget's {ref['collected']}; a removal should "
+                                      f"be deliberate, and move the budget in the same commit")))
+    elif collected > ref["collected"]:
+        found.append(("more-tests", (f"{collected - ref['collected']} more tests collected "
+                                     f"than the budget's {ref['collected']}")))
+    skipped = sum(1 for rec in doc["tests"].values() if rec.get("outcome") == "skipped")
+    if skipped > ref["skipped"]:
+        found.append(("more-skips", (f"{skipped} tests skipped against the budget's "
+                                     f"{ref['skipped']}")))
+    line = ref.get("slow_test_s", 30.0)
+    for nid, rec in sorted(doc["tests"].items()):
+        if total(rec) > line:
+            found.append(("slow-test", f"{nid} took {total(rec):.1f}s (the line is {line:.0f}s)"))
+    return found
+
+
+def _print_budget(doc: dict, ref: dict, found: list) -> None:
+    for kind, message in found:
+        level = "notice" if kind == "more-tests" else "warning"
+        print(f"::{level} title=test budget ({kind})::{message}")
+    print("\n### Backend test budget\n")
+    print(f"| | this run | budget |\n|---|---|---|\n"
+          f"| session | {doc.get('wall_s', 0):.0f}s | {ref['wall_s']:.0f}s "
+          f"(+{ref.get('tolerance', 0.2):.0%} allowed) |\n"
+          f"| collected | {len(doc.get('collected') or doc['tests'])} | {ref['collected']} |\n"
+          f"| skipped | {sum(1 for r in doc['tests'].values() if r.get('outcome') == 'skipped')}"
+          f" | {ref['skipped']} |")
+    print(f"\n{len(found)} finding(s); this step never fails the job.")
+
+
 def _print_summary(s: dict, top: int) -> None:
     h = s["header"]
     print(f"python {h.get('python')}  sha {h.get('git_sha')}  coverage {h.get('coverage')}  "
@@ -194,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("compare")
     p.add_argument("before")
     p.add_argument("after")
+    p = sub.add_parser("budget")
+    p.add_argument("profile")
+    p.add_argument("budget")
     args = parser.parse_args(argv)
 
     if args.cmd == "summary":
@@ -202,6 +260,14 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(s, indent=1, sort_keys=True))
         else:
             _print_summary(s, args.top)
+        return 0
+    if args.cmd == "budget":
+        if not pathlib.Path(args.profile).exists():
+            print(f"::warning title=test budget::no profile at {args.profile} -- "
+                  "the suite stopped before writing one; its own step says why")
+            return 0
+        doc, ref = load(args.profile), load(args.budget)
+        _print_budget(doc, ref, budget_findings(doc, ref))
         return 0
     if args.cmd == "manifest":
         print("\n".join(manifest(load(args.profile))))

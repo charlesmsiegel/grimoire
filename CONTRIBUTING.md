@@ -184,8 +184,8 @@ tests the worktree (pass `PY` as above).
 | Target | Runs |
 |---|---|
 | `make test-py-fast TESTS=backend/tests/test_scenes.py` | the paths or node IDs in `TESTS` (default: the whole suite), stopping at the first failure; `ARGS="-k reroll"` is handed to pytest |
-| `make test-py-failed` | only what failed last time; with nothing on record it selects nothing and pytest exits 5 |
-| `make test-py-profile TESTS=… [COV=1]` | the selection with a per-node phase profile written to `build/perf/profile.json`, then a summary of where the time went; `COV=1` adds the exact coverage arguments `check-py` uses |
+| `make test-py-failed` | only what failed last time; with nothing on record it selects nothing and pytest exits 5 (a failure recorded for a test since renamed makes pytest select everything, and it says so — delete `backend/.pytest_cache` to reset) |
+| `make test-py-profile TESTS=… [COV=1]` | the selection with a per-node phase profile written to `build/perf/profile.json`, then a summary of where the time went; `COV=1` adds `check-py`'s coverage measurement, without the whole-suite floor a subset would always miss |
 
 The profile behind the last one is the `--phase-profile` option in
 `backend/tests/phase_profile.py`; `scripts/profile_report.py` summarizes and

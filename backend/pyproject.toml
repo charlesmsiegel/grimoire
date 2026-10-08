@@ -33,10 +33,10 @@ dev = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5.0",
     # Parallel test runs (`WORKERS=` on the Makefile's backend targets). Dev
-    # only -- never a base dependency, which the APK ships. Bounded below at
-    # the release whose `--dist worksteal` and crash reporting the harness
-    # self-tests rely on, and above at the next major, which may change the
-    # scheduling and reporting those tests pin.
+    # only -- never a base dependency, which the APK ships. Bounded below at a
+    # release with the `load`, `loadfile` and `each` schedulers and the crash
+    # report the harness self-tests (test_parallel_harness.py) rely on, and
+    # above at the next major, which may change what those tests pin.
     "pytest-xdist>=3.6,<4",
     # Pinned exactly: an unpinned linter turns a green commit red on someone
     # else's release schedule. The `lint` CI job installs this same pin.
@@ -81,5 +81,11 @@ exclude_also = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# A test still running after this many seconds gets every thread's stack
+# printed (pytest's own faulthandler hook) -- and nothing else: it neither
+# fails nor retries anything. It is there so a hung test, under xdist's dots,
+# is named in the log before CI's job timeout ends the run. The slowest test
+# in the suite takes well under a minute.
+faulthandler_timeout = 300
 testpaths = ["tests"]
 pythonpath = ["src"]

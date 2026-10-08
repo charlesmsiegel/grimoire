@@ -46,12 +46,15 @@ What it records, and its reach:
 
 The fixture and operation annotations ride the test's reports as plain
 attributes, which pytest's report serialization copies, so they cross the
-xdist wire with the report. That path is exercised only once xdist is a
-dependency of the suite; until then it is designed, not proven.
+xdist wire with the report -- `test_parallel_harness.py` runs the profiler
+under `-n 2` and reads worker ids, outcomes and a crashed node back from the
+controller's file.
 
-Never recorded: a path outside the repo, a response body, a prompt, a
-fixture's value. Node IDs are repo-relative and carry no store content; the
-command line is recorded with the repo root and the home directory masked.
+Never recorded: a response body, a prompt, a fixture's value. Node IDs are
+repo-relative and carry no store content. The command line is recorded with
+the checkout and the home directory masked; any other absolute path typed on
+it (a `--basetemp`, a profile written outside the checkout) is kept as typed,
+so point those inside the checkout when the file is to be shared.
 """
 
 from __future__ import annotations
