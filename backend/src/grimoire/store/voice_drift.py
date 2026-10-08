@@ -4,8 +4,8 @@ next turn can be told to correct it.
 
 Two halves, both here because they are one loop:
 
-- **The judge.** Prompt/parse only -- one LLM call per present NPC *that has an
-  anchor*, made at absorb time in the route layer. "In voice or not" is a
+- **The judge.** The question and its reading only -- one `decide()` item per
+  present NPC *that has an anchor*, asked at absorb time in the route layer. "In voice or not" is a
   qualitative judgment, so it is asked of a model rather than inferred from text
   statistics; keying on the anchor's existence is what keeps the cost opt-in
   (a library with no anchors makes no extra calls at all).
@@ -31,11 +31,12 @@ the same slot, and the same reasoning, as the length corrective.
 from __future__ import annotations
 
 import hashlib
-import json
 from pathlib import Path
 
-from .. import prompts
-from . import atomic, paths
+from .. import decisions, prompts
+from . import atomic, characters, paths, voice_anchors
+from .appearances import paths as appearances_paths
+from .appearances import versions as appearances_versions
 from .frontmatter import dump_frontmatter, parse_frontmatter
 
 
@@ -220,95 +221,161 @@ def fingerprint_matches(stored: str, anchor: str, anchor_id: str = "") -> bool:
 MAX_NOTE = 1000
 
 
-def build_prompt(name: str, anchor: str, transcript: str, correction: str = "") -> list[dict]:
-    """The judge's messages.
-
-    `correction` is the character's outstanding drift note, and the CALLER owns
-    deciding whether it is still in force -- this module is prompt/parse only
-    and does not read the store. Handing over a note whose fingerprint no longer
-    matches the anchor would tell the judge that a retired instruction overrides
-    the current one, and mint a fresh flag against the anchor that replaced it.
-
-    Optional because it usually is not there: a character with no flag produces
-    the user message this function always produced.
-    """
-    return [{"role": "system", "content": prompts.render("voice_drift/system.j2")},
-            {"role": "user", "content": prompts.render("voice_drift/user.j2", name=name,
-                                                       anchor=anchor, transcript=transcript,
-                                                       correction=correction)}]
-
-
 #: The judge's verdicts. Deliberately FOUR values, not a boolean, because
-#: clearing a standing flag is a write and only one of these justifies it:
+#: clearing a standing flag is a write and only one of these justifies it. The
+#: verdict is read from an explicit enum rather than inferred from the note's
+#: prose: "no drift, though she was a little terse" and "drift: she was a
+#: little terse" are the same sentence with opposite meanings.
 DRIFT = "drift"              # out of voice; `note` is the corrective
 IN_VOICE = "in_voice"        # judged, and they sounded right -> safe to clear
 NOT_ENOUGH = "not_enough"    # too little dialogue to judge either way
-UNKNOWN = "unknown"          # no usable verdict came back at all
+UNKNOWN = "unknown"          # no usable verdict came back at all -- never an option
 
-#: Synonyms the judge might reasonably use. Leniency is ASYMMETRIC on purpose:
-#: IN_VOICE authorizes a destructive clear, so only spellings that can mean
-#: nothing else map to it. NOT_ENOUGH is the conservative outcome (it preserves
-#: a standing flag), so a loose word landing there costs nothing.
-#:
-#: "none" and "ok" were here and are deliberately gone: "none" can mean "no
-#: drift" OR "no judgment"/"no dialogue", and "ok" can be an acknowledgement
-#: rather than a verdict. An ambiguous token must never authorize a clear --
-#: unmapped spellings fall through to UNKNOWN, which preserves the flag and
-#: reports a failed check.
-_VERDICTS = {DRIFT: DRIFT, IN_VOICE: IN_VOICE, NOT_ENOUGH: NOT_ENOUGH,
-             "in voice": IN_VOICE, "in-voice": IN_VOICE,
-             "not enough": NOT_ENOUGH, "not-enough": NOT_ENOUGH,
-             "insufficient": NOT_ENOUGH, "unclear": NOT_ENOUGH,
-             "unknown": UNKNOWN}
+# --- the judge, asked through decide() (spec 7.4) ---------------------------
+#
+# `build_item` is the judge's request as a decision item, `explain` the
+# corrective it asks for, and `finding_of` maps the answer back to the
+# `{"verdict", "note"}` finding `stage_edit` and the route read.
+# `check_failure` is the route's per-finding refusal, with its words.
+
+#: The choice's id.
+QUESTION_ID = "verdict"
+
+#: The legacy parser's two word-synonyms, kept as the option's aliases (the
+#: structured parser accepts them after `decisions.normalise`, which also
+#: covers the spaced and hyphenated spellings of every id). Leniency is
+#: ASYMMETRIC on purpose: only NOT_ENOUGH has any, because it is the
+#: conservative outcome (it preserves a standing flag), so a loose word landing
+#: there costs nothing -- where IN_VOICE authorizes a destructive clear, and an
+#: ambiguous token ("none" can mean "no drift" or "no judgment"; "ok" can be an
+#: acknowledgement) must never reach it. Anything off the vocabulary is
+#: unreadable, which is UNKNOWN. `decisions.validate` refuses an alias that
+#: collides with another spelling once normalised.
+ALIASES: dict[str, tuple[str, ...]] = {NOT_ENOUGH: ("insufficient", "unclear")}
 
 
-def _extract_object(text: str) -> dict | None:
-    """The JSON object embedded in a reply, tolerating prose or a fence around it.
+def build_item(name: str, anchor: str, transcript: str,
+               correction: str = "") -> decisions.Item:
+    """The judge's request as a decision item: `voice_drift/user.j2` (the
+    legacy one-call prompt's user message, unchanged) as its context, and one
+    choice over the three verdicts a judge can give, whose instructions are the
+    legacy system prompt's standard and criteria (`voice_drift/question.j2`)
+    and whose options carry its bullets (`voice_drift/option.j2`). The reply
+    format is `decide`'s own, and the corrective travels as the item's
+    rationale (`explain`).
 
-    Deliberately a copy of `absorb.parse.extract_object` rather than an import of
-    it: `absorb/apply.py` imports THIS module to write an approved flag, so
-    importing absorb back would make the store graph cyclic, which
-    `tests/test_import_guard.py` forbids outright. The duplication is ten lines
-    and `test_voice_drift_store.py` pins both parsers against the same fenced and
-    prose-wrapped shapes, so they cannot silently drift apart.
+    No `allow_none`: UNKNOWN is what an unreadable answer becomes, never
+    something the judge is offered. `correction` is the character's
+    outstanding drift note, optional because it usually is not there, and the
+    CALLER owns deciding that it is still in force (`judge_item` does, through
+    `live_correction`): this module does not read the store to build an item.
     """
-    start, end = text.find("{"), text.rfind("}")
-    raw = text[start:end + 1] if start != -1 and end > start else ""
-    try:
-        obj = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    return obj if isinstance(obj, dict) else None
+    context = prompts.render("voice_drift/user.j2", name=name, anchor=anchor,
+                             transcript=transcript, correction=correction)
+    options = tuple(
+        decisions.Option(verdict, prompts.render("voice_drift/option.j2", verdict=verdict),
+                         ALIASES.get(verdict, ()))
+        for verdict in (DRIFT, IN_VOICE, NOT_ENOUGH))
+    return decisions.Item(context, (decisions.Choice(
+        QUESTION_ID, prompts.render("voice_drift/question.j2"), options),))
 
 
-def parse_output(text: str) -> dict:
-    """{"verdict": one of the four above, "note": str} from the judge's reply.
+def locked_name(cid: str, char_id: str) -> object:
+    """The raw `data.name` of the character's LOCKED card -- what the
+    transcript labels its lines with -- or None when the card's `data` is not
+    an object. Not checked: cards are arbitrary dicts, so this can be a number
+    or an object, and the caller decides what an unusable name costs.
 
-    The verdict is read from an explicit enum rather than inferred from the
-    note's prose: "no drift, though she was a little terse" and "drift: she was
-    a little terse" are the same sentence with opposite meanings, and guessing
-    between them is how a corrective ends up nagging a model that did nothing
-    wrong.
-
-    An unreadable reply is UNKNOWN, NOT "in voice". That distinction is the
-    whole reason this is not a boolean. A no-drift verdict is not inert -- with
-    a flag standing it proposes a CLEAR -- so collapsing "the model returned
-    garbage" into "they sounded fine" would let a malformed reply silently
-    retire a real corrective on a review the user approves by default.
+    The locked version's card rather than the container's meta name, which can
+    differ from it, and rather than `_actor_name`'s id fallback, which nothing
+    labels a line with. Raises what reading the card raises, and LookupError
+    for a character the campaign's appearance record does not hold -- which a
+    cast member never is, since the cast is read from that record.
     """
-    obj = _extract_object(text)
-    if not isinstance(obj, dict):
-        return {"verdict": UNKNOWN, "note": ""}
-    raw = obj.get("verdict")
-    verdict = _VERDICTS.get(raw.strip().lower(), UNKNOWN) if isinstance(raw, str) else UNKNOWN
-    # Only a STRING note survives. `str(...)` on an object or a list would
-    # render it as Python source ("{'tone': 'terse'}") -- nonempty text that
-    # reads as a usable corrective, gets staged default-approved, and is then
-    # injected verbatim into every following turn's system prompt. Blanking it
-    # instead routes a malformed drift reply to the caller's "drift reported
-    # with no corrective" failure, which is exactly what it is.
-    note = obj.get("note")
-    return {"verdict": verdict, "note": note.strip() if isinstance(note, str) else ""}
+    vid = appearances_versions.locked_version(cid, "characters", char_id)
+    if vid is None:
+        raise LookupError(f"{char_id!r} has no locked version in this campaign")
+    data = characters.read_card(appearances_paths.locked_actor_root(cid), char_id,
+                                vid).get("data")
+    return data.get("name") if isinstance(data, dict) else None
+
+
+def live_correction(flag: dict, anchor_record: dict) -> str:
+    """The stored note, when it is still in force against `anchor_record`
+    (`overlay.voice_anchor_record`'s `{"text", "id"}`), else "".
+
+    `flag` is ONE `read_record` snapshot, so the note and its provenance came
+    from the same committed file. A blank provenance is a flag that predates
+    the field, and counts as in force (`anchor_fingerprint`'s reason). A note
+    fingerprinted to a REPLACED anchor is suppressed for the writer
+    (`context/cast.py` applies this same test), so handing it to the judge as
+    current would mint a fresh flag against the anchor that replaced it.
+    """
+    note, stored = flag["note"], flag["anchor"]
+    if not stored or fingerprint_matches(stored, anchor_record["text"], anchor_record["id"]):
+        return note
+    return ""
+
+
+def judge_item(name: str, anchor_record: dict, transcript: str, flag: dict) -> decisions.Item:
+    """`build_item` for one NPC as the absorb phase gathers it: the EFFECTIVE
+    anchor (`voice_anchors.effective`, all the generator ever saw, so a rule
+    past the cap is enforced against neither) and the correction only while it
+    is in force (`live_correction`). The fingerprint stays on the raw stored
+    text -- capping it would retire every correction whose anchor is long."""
+    return build_item(name, voice_anchors.effective(anchor_record["text"]), transcript,
+                      correction=live_correction(flag, anchor_record))
+
+
+def explain() -> str:
+    """The rationale instruction: the corrective the next turn is given, empty
+    unless the verdict is drift. It becomes the finding's note."""
+    return prompts.render("voice_drift/explain.j2")
+
+
+def finding_of(result: decisions.ItemResult) -> dict:
+    """`{"verdict", "note"}` from the item's result: the finding `stage_edit`
+    and `check_failure` read.
+
+    An answer of `None`, whatever its reason, is UNKNOWN -- the failed check --
+    and NOT "in voice". That distinction is the whole reason the verdict is not
+    a boolean: a no-drift verdict with a flag standing proposes a CLEAR, so
+    collapsing "the model returned garbage" into "they sounded fine" would let
+    a malformed reply silently retire a real corrective on a review the user
+    approves by default. The note is the rationale, which the parser has
+    already stripped, and blanked when it was not a string: `str(...)` on an
+    object would render Python source that reads as a usable corrective."""
+    answer = result.answers.get(QUESTION_ID)
+    verdict = answer.answer if answer is not None and isinstance(answer.answer, str) else None
+    return {"verdict": verdict or UNKNOWN, "note": result.rationale}
+
+
+def check_failure(finding: dict) -> str | None:
+    """Why `_stage_voice_drift` reports this finding as a failed check, or
+    None when it is usable. Its three per-finding checks, in its order and
+    with its words.
+
+    - An UNKNOWN verdict is a failed call, not a quiet pass: conflated with
+      "in voice" it would stage a default-approved clear of a standing flag on
+      the strength of a garbled reply.
+    - Both note checks are DRIFT-only, because only a drift verdict stores a
+      note: `stage_edit` writes `after=""` for IN_VOICE and proposes nothing
+      for NOT_ENOUGH, so their notes never reach a prompt, and failing them on
+      a chatty note would leave an obsolete corrective standing.
+    - A drift with no note is unusable -- the note IS the corrective -- and one
+      over MAX_NOTE would be charged against every later generation from the
+      post-history message, which the packer cannot trim.
+    """
+    verdict, note = finding.get("verdict"), finding.get("note", "")
+    if verdict == UNKNOWN:
+        return "unreadable verdict from the voice judge"
+    if verdict == DRIFT:
+        if not note:
+            return "drift reported with no corrective"
+        if len(note) > MAX_NOTE:
+            return (f"the voice judge returned a corrective over {MAX_NOTE} characters, "
+                    f"too long to put in front of every following turn")
+    return None
 
 
 def stage_edit(char_id: str, name: str, prior: str, finding: dict,

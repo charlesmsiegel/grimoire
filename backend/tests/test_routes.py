@@ -24,14 +24,17 @@ from grimoire.routes import character_turns
 from grimoire.store import atomic
 from tests import draft_runs as drafts
 from tests import review_runs
+from tests.inference_fixtures import SAME_PROVIDER, SPARE, decide_only, format2, put_settings
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter,
+    CassetteProvider,
     FailingOpenRouter,
     FakeCatalog,
     FakeOpenRouter,
     FakeOpenRouterComplete,
     QuietThenAnswers,
     StallingOpenRouter,
+    decision_reply,
     from_entries,
 )
 
@@ -6876,7 +6879,11 @@ def _voice_scene(client, anchor: str = "Clipped. Never uses contractions.", prio
 _WHEN_EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
 _WHEN_AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
 _WHEN_DOSSIER = {"system_contains": "You are updating a game master's dossier"}
-_WHEN_VOICE = {"system_contains": "You are checking one character's dialogue"}
+#: The voice check is a `decide()` call (slice F), whose system prompt every
+#: decision shares, so it is told apart by its item's context too: the anchor
+#: heading of `voice_drift/user.j2`.
+_DECIDE_SYSTEM = "You answer closed questions about material you are given."
+_WHEN_VOICE = {"system_contains": _DECIDE_SYSTEM, "user_contains": "Voice anchor:"}
 #: The order a positional reply list means, for the fakes that take one.
 _PHASE_ORDER = (_WHEN_EXTRACTION, _WHEN_DOSSIER, _WHEN_VOICE, _WHEN_AUDIT)
 
@@ -6891,6 +6898,13 @@ def _absorb_script(extraction, dossier=None, voice=None, audit=None):
     return from_entries([{"when": w, "reply": r} for w, r in pairs if r is not None])
 
 _EXTRACTION = ('{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}')
+
+
+def _verdict(verdict: str, note: str = "") -> str:
+    """The voice judge's decide reply: `verdict` as the one answer, and the
+    corrective (`note`) as the item's rationale."""
+    return decision_reply({"verdict": verdict}, rationales=[note])
+
 _DOSSIER = "Aese now trusts the owner."
 
 
@@ -6898,7 +6912,7 @@ def test_absorb_stages_voice_drift_without_writing_it(client):
     """The judge runs, but absorb writes NOTHING: the finding comes back as an
     approvable edit, on the same commit boundary as every other one (#235)."""
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She used contractions twice; Aese never does."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She used contractions twice; Aese never does."))
     body = review_runs.absorb(client, cid, sid).json()
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
     assert edit["id"] == "voice_drift:aese"
@@ -6926,7 +6940,7 @@ def test_an_anchorless_npc_is_never_judged(client):
 
 def test_voice_drift_edit_is_written_on_save(client):
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She hedged."))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                    json={"one_line": "o", "summary": "s", "keywords": [],
@@ -6940,7 +6954,7 @@ def test_the_saved_flag_records_the_anchor_it_was_judged_against(client):
     cannot be suppressed when the anchor moves after the commit."""
     cid, sid = _voice_scene(client)
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She hedged."))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
                json={"one_line": "o", "summary": "s", "keywords": [],
@@ -6956,7 +6970,7 @@ def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
     corrected. Without this the flag is permanent and the corrective never
     stops firing."""
     cid, sid = _voice_scene(client, prior="She hedged.")
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
     body = review_runs.absorb(client, cid, sid).json()
     edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
     assert edit["before"] == "She hedged." and edit["after"] == ""
@@ -6969,7 +6983,7 @@ def test_an_in_voice_scene_stages_a_clear_for_a_standing_flag(client):
 
 def test_an_in_voice_scene_with_no_flag_stages_nothing(client):
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
     body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
@@ -6979,7 +6993,7 @@ def test_a_drift_verdict_with_no_note_is_reported_not_staged(client):
     """The note IS the corrective. A verdict without one must not be quietly
     downgraded to "in voice", nor staged as a blank instruction."""
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift"))
     body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     assert body["voice"]["status"] == "failed"
@@ -7007,7 +7021,7 @@ def test_a_silent_character_never_clears_a_standing_flag(client):
     nothing is not proof of sounding right, so the flag holds until a scene
     actually shows the voice again."""
     cid, sid = _voice_scene(client, prior="She hedged.")
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "not_enough", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("not_enough"))
     body = review_runs.absorb(client, cid, sid).json()
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
     # a real judgment, so the phase is ok -- but named apart from "in voice",
@@ -7024,7 +7038,7 @@ def test_a_finding_judged_against_a_replaced_anchor_is_rejected_on_save(client):
     turn, so the save reports a conflict instead."""
     cid, sid = _voice_scene(client)
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She hedged."))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid), "aese", "Warm and rambling now.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -7041,7 +7055,7 @@ def test_reformatting_the_anchor_still_lets_a_finding_land(client):
     real findings for an innocuous edit."""
     cid, sid = _voice_scene(client, anchor="Clipped. Never uses contractions.")
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She hedged."))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid),
                               "aese", "  Clipped. Never uses contractions.\n\n")
@@ -7058,7 +7072,7 @@ def test_a_clear_lands_even_when_the_anchor_moved(client):
     made obsolete."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     wid = store.campaigns.read_campaign(cid)["meta"]["world"]
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_anchors.write(store.worlds.world_root(wid), "aese", "A different standard.")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -7077,16 +7091,16 @@ def test_the_judge_is_told_the_locked_card_name(client):
     card = store.characters.read_card(aroot, "aese", "main")
     card["data"]["name"] = "Aese Vane"           # card name diverges from meta "Aese"
     store.characters.update_version(aroot, "aese", "main", card)
-    fake = _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     seen = []
-    real = store.voice_drift.build_prompt
-    store.voice_drift.build_prompt = lambda name, anchor, transcript, correction="": (
+    real = store.voice_drift.build_item
+    store.voice_drift.build_item = lambda name, anchor, transcript, correction="": (
         seen.append(name) or real(name, anchor, transcript, correction))
     try:
         review_runs.absorb(client, cid, sid)
     finally:
-        store.voice_drift.build_prompt = real
+        store.voice_drift.build_item = real
     assert seen == ["Aese Vane"]
 
 
@@ -7205,7 +7219,7 @@ def test_one_malformed_roster_card_does_not_fail_the_whole_voice_phase(client):
         store.appearances.locked_actor_root(cid), "mara", "main").write_text(
         "{}", encoding="utf-8")
 
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She used contractions; Aese never does."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She used contractions; Aese never does."))
     body = review_runs.absorb(client, cid, sid).json()
 
     assert body["voice"]["status"] == "ok"          # not "failed"
@@ -7248,7 +7262,7 @@ def test_an_oversized_judge_note_is_reported_not_staged(client):
     cid, sid = _voice_scene(client)
     huge = "She used contractions. " * 200
     assert len(huge) > store.voice_drift.MAX_NOTE
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, json.dumps({"verdict": "drift", "note": huge}))
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", huge))
     body = review_runs.absorb(client, cid, sid).json()
 
     assert not [e for e in body["edits"] if e["kind"] == "voice_drift"]
@@ -7266,7 +7280,7 @@ def test_a_clean_verdict_clears_the_flag_however_chatty_its_note(client):
     cid, sid = _voice_scene(client, prior="She hedged.")
     huge = "She sounded exactly right, at length. " * 200
     assert len(huge) > store.voice_drift.MAX_NOTE
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, json.dumps({"verdict": "in_voice", "note": huge}))
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice", huge))
     body = review_runs.absorb(client, cid, sid).json()
 
     assert body["voice"]["failed"] == []
@@ -7387,7 +7401,7 @@ def test_a_unique_name_is_still_judged_alongside_a_clashing_pair(client):
     card["data"]["name"] = "Aese"                # mara + aese clash; winifred is unique
     store.characters.update_version(aroot, "mara", "main", card)
 
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "Winifred rambled; she is normally curt."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "Winifred rambled; she is normally curt."))
     body = review_runs.absorb(client, cid, sid).json()
 
     assert body["voice"]["checked"] == ["winifred"]
@@ -7402,15 +7416,23 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
 
     cid, sid = _voice_scene(client)
 
-    class Failing(FakeOpenRouterComplete):
-        async def complete(self, messages, cfg, usage=None):
-            if self.calls >= 2:                  # the voice call, after extraction + dossier
-                self.calls += 1
-                raise LLMError("bad_response", "the model exploded")
-            return await super().complete(messages, cfg)
+    class Failing:
+        """Extraction and dossier answer by request; the voice check, which
+        runs beside them, is the one that raises."""
 
-    client.app.dependency_overrides[routes.get_llm] = \
-        lambda: Failing([_EXTRACTION, _DOSSIER])
+        def __init__(self):
+            self._fake = from_entries([{"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+                                       {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
+
+        async def stream(self, messages, cfg, usage=None):
+            yield "{}"
+
+        async def complete(self, messages, cfg, usage=None, *, schema=None):
+            if self._fake.cassette._matches(_WHEN_VOICE, messages):
+                raise LLMError("bad_response", "the model exploded")
+            return await self._fake.complete(messages, cfg, usage, schema=schema)
+
+    client.app.dependency_overrides[routes.get_llm] = Failing
     body = review_runs.absorb(client, cid, sid).json()
     assert body["one_line"] == "o"               # the absorb itself survived
     assert body["voice"]["status"] == "failed"
@@ -7418,11 +7440,179 @@ def test_a_failing_voice_check_does_not_fail_absorb(client):
     assert "the model exploded" in body["voice"]["failed"][0]["reason"]
 
 
+# ---- voice drift through decide(), on the Decision role (slice F) ----
+def _voice_requests(fake) -> list[dict]:
+    """The requests a fake answered as the voice check."""
+    return [r for r in fake.requests if fake.cassette._matches(_WHEN_VOICE, r["messages"])]
+
+
+def _voice_rows() -> list[dict]:
+    return [r for r in store.usage.calls(days=1) if r.get("task") == "voice-drift"]
+
+
+def test_voice_drift_runs_on_decide_and_meters_under_its_task(client):
+    """The judge is one `decide()` item: the shared decision prompt around the
+    judge's context, the question and the corrective instruction, sent with
+    the batch's schema, and filed as a decide row under `voice-drift`."""
+    from grimoire import decisions, inference
+
+    cid, sid = _voice_scene(client, prior="Keep her answers short.")
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She rambled again."))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    assert body["voice"]["flagged"] == ["aese"] and body["voice"]["status"] == "ok"
+    edit = next(e for e in body["edits"] if e["kind"] == "voice_drift")
+    assert (edit["before"], edit["after"]) == ("Keep her answers short.", "She rambled again.")
+
+    (sent,) = _voice_requests(fake)
+    system, user = sent["messages"]
+    item = store.voice_drift.build_item("Aese", "Clipped. Never uses contractions.", "x")
+    prompt = inference.structured_messages([item], explain=store.voice_drift.explain())
+    assert system == prompt[0]               # depends on the schema alone
+    for part in ("Character: Aese", "Voice anchor:\nClipped. Never uses contractions.",
+                 "Outstanding correction", "Keep her answers short.",
+                 store.voice_drift.explain(), item.questions[0].instructions):
+        assert part in user["content"], part
+    assert fake.schemas[fake.requests.index(sent)] == decisions.schema([item], explain=True)
+    (row,) = _voice_rows()
+    assert row["status"] == "ok"
+    assert (row["operation"], row["decision_mode"]) == ("decide", "structured")
+
+
+def test_an_unreadable_decision_is_a_failed_check_not_a_clear(client):
+    """An answer `decide()` cannot read -- off the vocabulary, null, or no JSON
+    at all -- is `None`, which is the failed check, never `in_voice`: with a
+    flag standing that would stage a default-approved clear."""
+    for reply in (decision_reply({"verdict": "none"}), decision_reply({"verdict": None}),
+                  _verdict("fine", "She sounded fine."), "I'm sorry, I can't do that."):
+        cid, sid = _voice_scene(client, prior="She hedged.")
+        client.app.dependency_overrides[routes.get_llm] = \
+            lambda: _absorb_script(_EXTRACTION, _DOSSIER, reply)  # noqa: B023 -- called in this iteration
+        body = review_runs.absorb(client, cid, sid).json()
+        assert not [e for e in body["edits"] if e["kind"] == "voice_drift"], reply
+        assert body["voice"]["status"] == "failed", reply
+        assert body["voice"]["failed"] == [{"id": "aese",
+                                            "reason": "unreadable verdict from the voice judge"}]
+        assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "She hedged."
+
+
+@pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
+def test_voice_drift_on_a_decide_only_model_answers_on_the_fallback(client, on):
+    """Review Focus 1: until native decisions arrive, a Decision model that
+    cannot generate is skipped for a role fallback that can -- on another
+    provider or its own (spec I-1). The judge is asked of the fallback, and
+    nothing is sent to the decide-only model."""
+    cid, sid = _voice_scene(client)
+    decide_only(client, fallback=True, on=on)
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
+    (sent,) = _voice_requests(fake)
+    assert (sent["conn"]["id"], sent["conn"]["model"]) == on
+    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+
+
+def test_voice_drift_on_a_decide_only_model_without_a_fallback_fails_the_phase_not_the_absorb(
+        client):
+    """With no generating fallback the seam refuses (spec 5.3's 409), and the
+    absorb phase reports that refusal as its own failure: the review still
+    lands, and nothing is sent for the voice check."""
+    cid, sid = _voice_scene(client)
+    decide_only(client, fallback=False)
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    r = review_runs.absorb(client, cid, sid)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["one_line"] == "o" and body["dossiers"]["status"] == "ok"
+    voice = body["voice"]
+    assert voice["status"] == "failed" and voice["attempted"] is False
+    assert voice["reason"].startswith("The Voice drift checks route runs on the Decision "
+                                      "role (vendor/decider on OpenRouter)"), voice["reason"]
+    assert _voice_requests(fake) == [] and _voice_rows() == []
+
+
+def test_a_voice_drift_overrun_on_the_fallback_is_filed_and_noted_against_it(client):
+    """I2: the absorb budget runs inside `decide()`'s meter (`around`). The
+    Decision model fails, the fallback takes over and stalls, and the budget
+    cuts it off: the meter files one `error/timeout` row, the error store gets
+    one row under `voice-drift`, and the overrun is noted against the
+    connection that was running -- the fallback, read off the live holder --
+    rather than the primary that had already failed."""
+    cid, sid = _voice_scene(client)
+    format2(client)
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/judge"},
+        "fallback": {"provider": "spare", "model": "vendor/spare"}}}})
+    # Wide enough that extraction and the dossier, which answer at once, never
+    # meet it on a slow runner; the fallback's stall is ten times longer.
+    client.put("/api/config", json={"absorb_budget": "1.0"})
+    provider = CassetteProvider([
+        {"when": _WHEN_VOICE, "model": "vendor/judge",
+         "error": {"kind": "network", "message": "connection reset"}},
+        {"when": _WHEN_VOICE, "model": "vendor/spare", "stall": 10, "reply": VOICE_OK},
+        {"when": _WHEN_EXTRACTION, "reply": _EXTRACTION},
+        {"when": _WHEN_DOSSIER, "reply": _DOSSIER}])
+    real = LLMClient(openrouter=provider, timeout=0, retries=0)
+    noted: list[tuple] = []
+    real.note_outcome = lambda conn, exc: noted.append((conn, exc))  # type: ignore[method-assign]
+    client.app.dependency_overrides[routes.get_llm] = lambda: real
+
+    r = review_runs.absorb(client, cid, sid)
+    assert r.status_code == 200, r.text
+    voice = r.json()["voice"]
+    assert voice["status"] == "failed" and voice["budget_exhausted"] is True
+    assert voice["attempted"] is True
+    assert [q["model"] for q in provider.requests
+            if q["model"] in ("vendor/judge", "vendor/spare")] == ["vendor/judge", "vendor/spare"]
+    (row,) = _voice_rows()
+    assert (row["status"], row["error"]) == ("error", "timeout")
+    # ...and charged to the connection that was answering, read off the holder.
+    assert (row["connection"], row["model"]) == ("spare", "vendor/spare")
+    logged = store.logs.read(level="error", module="voice-drift")["rows"]
+    assert len(logged) == 1 and logged[0]["kind"] == "timeout"
+    assert [(c["id"], c["model"], e.kind) for c, e in noted] == [
+        ("spare", "vendor/spare", "timeout")]
+
+
+def test_the_decision_role_now_serves_voice_drift(client):
+    """The route's default flipped from Fast to Decision: a Decision role set
+    on its own is what the judge runs on, and the other phases stay where they
+    were."""
+    cid, sid = _voice_scene(client)
+    format2(client)
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "spare", "model": "vendor/spare"}}}})
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    assert review_runs.absorb(client, cid, sid).json()["voice"]["status"] == "ok"
+    (sent,) = _voice_requests(fake)
+    assert (sent["conn"]["id"], sent["conn"]["model"]) == ("spare", "vendor/spare")
+    assert {r["conn"]["id"] for r in fake.requests if r is not sent} == {"openrouter"}
+
+
+def test_voice_drift_on_a_legacy_store_resolves_as_before(client):
+    """A format-1 store has no Decision role: the judge inherits Fast, then
+    Primary, and the legacy `route_voice` key still moves it."""
+    client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
+                                              "api_key": "sk-spare", "model": "vendor/spare"})
+    for legacy, want in (("", "openrouter"), ("spare", "spare")):
+        if legacy:
+            store.write_config(route_voice=legacy)
+        cid, sid = _voice_scene(client)
+        fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+        client.app.dependency_overrides[routes.get_llm] = lambda: fake  # noqa: B023 -- this iteration
+        review_runs.absorb(client, cid, sid)
+        (sent,) = _voice_requests(fake)
+        assert sent["conn"]["id"] == want, legacy
+
+
 def test_a_stale_voice_finding_is_reported_as_a_conflict(client):
     """Same discipline as the dossier: the staged `before` dates the proposal, so
     a newer verdict already on disk must not be silently overwritten."""
     cid, sid = _voice_scene(client)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "She hedged."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "She hedged."))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     store.voice_drift.write(store.campaigns.campaign_root(cid), "aese", "a newer finding")
     r = client.put(f"/api/campaigns/{cid}/scenes/{sid}/chronicle",
@@ -7948,7 +8138,7 @@ def test_a_dossier_written_mid_call_is_not_overwritten(client):
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, msgs, cfg, usage=None):
+        async def complete(self, msgs, cfg, usage=None, *, schema=None):
             if "Character: Aese" in msgs[1]["content"]:
                 store.dossiers.write(croot, "aese", "Aese joined the guard.")
                 return "Aese is still a stranger, per the old context."
@@ -7997,8 +8187,10 @@ def _cast_npc(client, wid, cid, sid, name, ident):
 
 
 class _DossierFake:
-    """1st complete() = the prose extraction; every later call is a dossier
-    refresh, failing for any character named in `boom`."""
+    """The extraction prompt gets the prose extraction; every other call is a
+    dossier refresh, failing for any character named in `boom`. Told apart by
+    the request -- the phases run together, so none has a fixed place in the
+    call order."""
 
     def __init__(self, *boom: str):
         self.boom, self.calls = boom, 0
@@ -8006,9 +8198,10 @@ class _DossierFake:
     async def stream(self, m, cfg, usage=None):
         yield "{}"
 
-    async def complete(self, m, cfg, usage=None):
+    async def complete(self, m, cfg, usage=None, *, schema=None):
         self.calls += 1
-        if self.calls == 1:
+        system = "\n".join(x.get("content", "") for x in m if x.get("role") == "system")
+        if _WHEN_EXTRACTION["system_contains"] in system:
             return '{"one_line": "ok", "summary": "s", "keywords": [], "timeline_events": []}'
         if any(f"Character: {n}" in m[1]["content"] for n in self.boom):
             raise RuntimeError("dossier boom")
@@ -8267,7 +8460,7 @@ def test_absorb_upstream_error_returns_502(client):
     from grimoire.openrouter import OpenRouterError
 
     class FakeRaises:
-        async def complete(self, messages, cfg, usage=None):
+        async def complete(self, messages, cfg, usage=None, *, schema=None):
             raise OpenRouterError("bad_response", "boom")
 
     _, cid = _campaign(client)
@@ -8300,7 +8493,7 @@ def test_absorb_returns_edits_without_persisting(client):
 
 ABSORB_JSON = '{"one_line": "o", "summary": "s", "keywords": [], "timeline_events": []}'
 AUDIT_OK = '{"warnings": ["Mara claimed a hit with no roll"], "sheet_deltas": []}'
-VOICE_OK = '{"verdict": "in_voice", "note": ""}'
+VOICE_OK = _verdict("in_voice")
 
 
 @pytest.fixture
@@ -8457,7 +8650,7 @@ def test_a_retry_with_no_open_review_is_refused_before_a_token_is_spent(
             sent.append(m)
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             sent.append(m)
             return "{}"
 
@@ -8663,7 +8856,7 @@ def test_a_zero_call_budget_disables_the_ceiling(client):
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             await asyncio.sleep(0.08)  # far past any ceiling a test would set
             return "no suggestions"
 
@@ -8684,7 +8877,7 @@ def test_a_timeout_from_inside_the_call_is_not_blamed_on_the_ceiling(client):
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             raise TimeoutError("the upstream gave up")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Upstream()
@@ -8712,7 +8905,7 @@ class _OverlapRecorder:
         async for delta in self._fake.stream(m, cfg, usage):
             yield delta
 
-    async def complete(self, m, cfg, usage=None):
+    async def complete(self, m, cfg, usage=None, *, schema=None):
         self.inflight += 1
         self.peak = max(self.peak, self.inflight)
         self.calls += 1
@@ -8770,18 +8963,23 @@ def test_the_one_shot_ceiling_does_not_bound_absorb(client, npc_module_scene):
     client.put("/api/config", json={"absorb_budget": "0", "llm_call_budget": "0.02"})
 
     class Slow:
+        """Every call overruns the ceiling; each phase is answered by its
+        request, because the phases run concurrently and which of them reaches
+        `complete` first is not something this test is about."""
+
         def __init__(self):
-            self.replies = [ABSORB_JSON, "Aese is steady.", VOICE_OK, AUDIT_OK]
-            self.calls = 0
+            self._fake = from_entries([
+                {"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                {"when": _WHEN_DOSSIER, "reply": "Aese is steady."},
+                {"when": _WHEN_VOICE, "reply": VOICE_OK},
+                {"when": _WHEN_AUDIT, "reply": AUDIT_OK}])
 
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             await asyncio.sleep(0.05)  # every call overruns the one-shot ceiling
-            reply = self.replies[min(self.calls, len(self.replies) - 1)]
-            self.calls += 1
-            return reply
+            return await self._fake.complete(m, cfg, usage, schema=schema)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Slow()
 
@@ -8829,7 +9027,7 @@ class ClockEatingFake:
     async def stream(self, m, cfg, usage=None):
         yield "{}"
 
-    async def complete(self, m, cfg, usage=None):
+    async def complete(self, m, cfg, usage=None, *, schema=None):
         system = "\n".join(x.get("content", "") for x in m if x.get("role") == "system")
         self.systems.append(system)
         # `replies` is positional BY PHASE -- extraction, dossier, voice, audit
@@ -8871,7 +9069,7 @@ class _SlowPhaseFake:
     async def stream(self, m, cfg, usage=None):
         yield "{}"
 
-    async def complete(self, m, cfg, usage=None):
+    async def complete(self, m, cfg, usage=None, *, schema=None):
         when, reply = self._kind(m)
         self.calls += 1
         await asyncio.sleep(self._slow if when is self._slow_when else self._quick)
@@ -8988,7 +9186,7 @@ def test_absorb_extraction_overrunning_the_budget_is_a_504(client, npc_module_sc
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             # Cancelled by the budget after ~0.05s; kept short so a regression
             # that drops the budget fails the suite in seconds, not minutes.
             await asyncio.sleep(5)
@@ -9346,7 +9544,7 @@ def test_dossier_retry_reports_a_failure_rather_than_500ing(client, npc_module_s
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             raise RuntimeError("dossier boom")
 
     client.app.dependency_overrides[routes.get_llm] = lambda: Boom()
@@ -9491,18 +9689,25 @@ def test_a_dossier_call_cancelled_mid_flight_counts_as_attempted(
     client.put("/api/config", json={"absorb_budget": "0.5"})
 
     class SlowDossier:
+        """The extraction answers at once; every other phase is still running
+        when the budget expires. Told apart by request, not by call index."""
+
         def __init__(self):
             self.calls = 0
+            self._fake = from_entries([
+                {"when": _WHEN_EXTRACTION, "reply": ABSORB_JSON},
+                {"when": _WHEN_DOSSIER, "reply": "never"},
+                {"when": _WHEN_VOICE, "reply": "never"},
+                {"when": _WHEN_AUDIT, "reply": "never"}])
 
         async def stream(self, m, cfg, usage=None):
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             self.calls += 1
-            if self.calls == 1:
-                return ABSORB_JSON
-            await asyncio.sleep(5)   # still running when the budget expires
-            return "never"
+            if not self._fake.cassette._matches(_WHEN_EXTRACTION, m):
+                await asyncio.sleep(5)   # still running when the budget expires
+            return await self._fake.complete(m, cfg, usage, schema=schema)
 
     client.app.dependency_overrides[routes.get_llm] = lambda: SlowDossier()
 
@@ -9620,10 +9825,12 @@ def test_an_upstream_timeout_is_not_mistaken_for_the_budget(
     monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
 
     class StallsOnAudit(ClockEatingFake):
-        async def complete(self, m, cfg, usage=None):
-            # call 3 is the audit: extraction, dossier, voice, audit (#59 added
-            # the third — the fixture's NPC is anchored). Budget untouched.
-            if self.calls == 3:
+        async def complete(self, m, cfg, usage=None, *, schema=None):
+            # The audit is told apart by its prompt, not by its place in the
+            # call order: the phases run together, so no phase has a fixed
+            # place. Budget untouched.
+            system = "\n".join(x.get("content", "") for x in m if x.get("role") == "system")
+            if _WHEN_AUDIT["system_contains"] in system:
                 self.calls += 1
                 raise LLMError("timeout", "no data for 90s")
             return await super().complete(m, cfg)
@@ -14166,7 +14373,7 @@ def test_a_save_during_an_absorb_supersedes_the_review_it_was_preparing(client):
             super().__init__(reply)
             self.fired = False
 
-        async def complete(self, messages, cfg, usage=None):
+        async def complete(self, messages, cfg, usage=None, *, schema=None):
             if not self.fired:
                 self.fired = True
                 store.commits.reserve(cid, "rival", "fp", sid, {})
@@ -14359,7 +14566,7 @@ def test_a_raise_edited_down_to_blank_is_refused_not_treated_as_a_clear(client):
     empty."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "drift", "note": "A newer corrective."}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("drift", "A newer corrective."))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     for e in edits:                      # the reviewer empties the textarea
         if e["kind"] == "voice_drift":
@@ -14379,7 +14586,7 @@ def test_a_stale_clear_cannot_delete_a_re_confirmed_flag(client):
     had just revalidated against the current anchor."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     # meanwhile another review re-confirms the same note against a new anchor
     store.voice_drift.write(croot, "aese", "She hedged.", "a-newer-fingerprint")
@@ -14398,7 +14605,7 @@ def test_a_clear_row_typed_into_is_checked_like_the_raise_it_became(client):
     anchor checks and write one unverified."""
     cid, sid = _voice_scene(client, prior="She hedged.")
     croot = store.campaigns.campaign_root(cid)
-    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, '{"verdict": "in_voice", "note": ""}')
+    client.app.dependency_overrides[routes.get_llm] = lambda: _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
     edits = review_runs.absorb(client, cid, sid).json()["edits"]
     for e in edits:                    # the reviewer types a note into the clear row
         if e["kind"] == "voice_drift":
@@ -14812,7 +15019,7 @@ def test_absorb_primes_the_extraction_with_the_campaigns_standing_facts(client):
     seen: list = []
 
     class _Recording(FakeOpenRouterComplete):
-        async def complete(self, messages, cfg, usage=None):
+        async def complete(self, messages, cfg, usage=None, *, schema=None):
             seen.append(messages)
             return await super().complete(messages, cfg)
 
@@ -15406,19 +15613,19 @@ def test_creating_a_pc_with_any_version_name_leaves_one_the_reader_can_open(clie
 
 
 def _spy_on_drift_prompt(monkeypatch):
-    """Capture the kwargs `build_prompt` is actually called with during absorb.
+    """Capture the kwargs `build_item` is actually called with during absorb.
 
     A ROUTE-level spy, not a unit test of `fingerprint_matches`: the wiring is
     the change, and a helper test passes even if the stage never calls it,
     still sends the raw anchor, or drops the correction entirely."""
     seen = {}
-    real = store.voice_drift.build_prompt
+    real = store.voice_drift.build_item
 
     def spy(name, anchor, transcript, correction=""):
         seen.update(name=name, anchor=anchor, correction=correction)
         return real(name, anchor, transcript, correction)
 
-    monkeypatch.setattr(store.voice_drift, "build_prompt", spy)
+    monkeypatch.setattr(store.voice_drift, "build_item", spy)
     return seen
 
 

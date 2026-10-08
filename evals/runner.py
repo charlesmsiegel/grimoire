@@ -7,7 +7,8 @@ Two ways to obtain output:
                     API key — this is the mode pytest runs, and the one that
                     guards prompt-template edits.
   live              call the model the app routes each case's task to, once per
-                    case. Costs money
+                    case -- a decide case (one with a `schema`) on its decide
+                    resolution, with `schema=`. Costs money
                     and is never deterministic, so it is opt-in and its result
                     is a report, not a gate.
 
@@ -105,9 +106,25 @@ def replay_all(cases: tuple[Case, ...], isolate) -> list[Result]:
 
 # -------------------------------------------------------------------- live
 
+def operation(case: Case) -> str:
+    """The operation the app runs `case`'s task as: `decide` for a case with a
+    schema, `generate` otherwise."""
+    return "decide" if case.schema is not None else "generate"
+
+
+def conn_key(case: Case) -> str:
+    """Where `resolve_connections` files `case`'s connection: its task, or
+    `<task> (decide)` for a decide case, so one task asked both ways is two
+    resolutions rather than one silently serving both."""
+    return case.task if case.schema is None else f"{case.task} (decide)"
+
+
 def resolve_connections(cases: tuple[Case, ...]) -> dict[str, dict]:
-    """task -> the connection dict the app would send that task's generation
-    to, read from the real store -- one resolution per distinct `Case.task`.
+    """`conn_key` -> the connection dict the app would send that case's call
+    to, read from the real store -- one resolution per distinct key. A decide
+    case resolves its task with `operation="decide"`, as `inference.decide`'s
+    callers do, so the Decision role (or whatever the route chose) answers it
+    and its structured-capable attempts carry the flag the facade reads.
 
     Must be called BEFORE GRIMOIRE_HOME is repointed at a fixture — that is the
     whole reason it is a separate function. Resolves through the app's own seam
@@ -127,31 +144,43 @@ def resolve_connections(cases: tuple[Case, ...]) -> dict[str, dict]:
     from grimoire.routes.common import require_inference
 
     out: dict[str, dict] = {}
-    for task in dict.fromkeys(case.task for case in cases):
+    for case in cases:
+        key = conn_key(case)
+        if key in out:
+            continue
         try:
-            out[task] = require_inference(task).conn
+            out[key] = require_inference(case.task, operation=operation(case)).conn
         except HTTPException as exc:
             detail = exc.detail
             if isinstance(detail, dict):
                 detail = detail.get("detail") or detail.get("kind") or ""
-            raise RuntimeError(f"{task}: {detail} (choose a model on the Models page)") from exc
+            raise RuntimeError(f"{key}: {detail} (choose a model on the Models page)") from exc
     return out
 
 
-def live(case: Case, conn: dict, record: bool = False) -> Result:
+def live(case: Case, conn: dict, record: bool = False, *, client=None) -> Result:
     """One real generation for `case`, scored against the baseline expectation
     (live output must PASS). With `record`, the reply replaces the baseline
-    recording — counterexample variants are never overwritten."""
+    recording — counterexample variants are never overwritten.
+
+    A decide case is asked with `schema=` (its `schema(ctx)`), exactly as
+    `inference.decide` asks the facade; the facade sends the provider's
+    structured mode on each attempt `conn` flags capable. `client` is the
+    facade to send through, owned by the caller (a test's fake); by default
+    one `LLMClient` is opened and closed here."""
     from grimoire.llm import LLMClient, LLMError
 
     ctx = prepare(case)
+    schema = case.schema(ctx) if case.schema is not None else None
 
     async def run() -> str:
-        client = LLMClient()
+        if client is not None:
+            return await client.complete(ctx["messages"], conn, schema=schema)
+        own = LLMClient()
         try:
-            return await client.complete(ctx["messages"], conn)
+            return await own.complete(ctx["messages"], conn, schema=schema)
         finally:
-            await client.aclose()
+            await own.aclose()
 
     try:
         output = asyncio.run(run())
@@ -169,11 +198,11 @@ def live(case: Case, conn: dict, record: bool = False) -> Result:
 def live_all(cases: tuple[Case, ...], conns: dict[str, dict], isolate,
              record: bool = False) -> list[Result]:
     """Each case live, on the connection its task resolved to
-    (`resolve_connections`)."""
+    (`resolve_connections`, keyed by `conn_key`)."""
     out = []
     for case in cases:
         with isolate():
-            out.append(live(case, conns[case.task], record=record))
+            out.append(live(case, conns[conn_key(case)], record=record))
     return out
 
 

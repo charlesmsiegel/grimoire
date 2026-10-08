@@ -1,0 +1,37 @@
+{#- The user message of every structured decision (`grimoire.inference.structured_messages`).
+    Vars:
+      items   — [decisions.Item]: each its `context` (text) and its ordered
+                `questions`. A question is a Predicate (`id`, `instructions`),
+                a Choice (also `options`, each `id` and `description`, and
+                `allow_none`) or a Score (also `levels`, ordered descriptions).
+                Option `aliases` are the parser's and are never shown.
+      explain — str: the rationale instruction ("" when none is asked for). -#}
+{%- for item in items %}
+{%- if not loop.first %}
+
+{% endif -%}
+Item {{ loop.index0 }}
+
+{{ item.context }}
+
+Questions:
+{%- for q in item.questions %}
+{%- if q.options is defined %}
+- {{ q.id }} (choice{% if q.allow_none %}, or null for none of these{% endif %}): {{ q.instructions }}
+{%- for opt in q.options %}
+  - {{ opt.id }}: {{ opt.description }}
+{%- endfor %}
+{%- elif q.levels is defined %}
+- {{ q.id }} (scale): {{ q.instructions }}
+{%- for level in q.levels %}
+  - {{ loop.index0 }}: {{ level }}
+{%- endfor %}
+{%- else %}
+- {{ q.id }} (yes/no): {{ q.instructions }}
+{%- endif %}
+{%- endfor %}
+{%- endfor %}
+{%- if explain %}
+
+Rationale, for each item: {{ explain }}
+{%- endif %}

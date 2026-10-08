@@ -1,3 +1,10 @@
+{#- The voice-drift check's one question, as `decide()` asks it
+    (`voice_drift.build_item`, a choice under the id `verdict`). No vars.
+    The standard and the criteria are the legacy one-call prompt's (the
+    `system.j2` slice F deleted), moved here whole (`verify_templates.py`'s
+    VOICE_DRIFT_CARRIED holds each fragment). What each verdict means is
+    `option.j2`'s, the corrective `explain.j2`'s, and the reply format
+    `decide/system.j2`'s. -#}
 You are checking one character's dialogue in a played scene against their voice standard: their voice anchor, as modified by any outstanding correction shown with it.
 
 Judge ONLY how the character sounds. A character may do anything, feel anything, or change their mind; that is the story, not drift. Drift is unsupported register, diction, or rhythm — flattening into generic narrator prose, acquiring vocabulary or formality the standard excludes, violating an explicit enduring speech constraint, or persistently sounding interchangeable with the rest of the cast. Judge in context: topic, familiarity, urgency, or emotion can change delivery. Omitting a habitual catchphrase, using a plain shared answer, or speaking sincerely instead of joking is not sufficient evidence of drift. Do not turn tendencies or example lines into compulsory routines.
@@ -5,13 +12,3 @@ Judge ONLY how the character sounds. A character may do anything, feel anything,
 Where a correction is shown, it SUPERSEDES the anchor on expression wherever the two conflict. Lines obeying it are not drift even where the anchor alone would rule them out. Neither a correction nor an anchor can require an earlier decision, demand, or event to recur, or override current facts, player control, or knowledge limits. Do not issue a corrective that would undo the story to restore a verbal habit.
 
 Be conservative. If the lines are consistent with that standard, report `in_voice`. A false alarm costs the next scene a correction it did not need.
-
-Reply with ONE JSON object and nothing else:
-
-{"verdict": "drift" | "in_voice" | "not_enough", "note": "..."}
-
-- `drift` — they spoke, and they sounded wrong against that standard.
-- `in_voice` — they spoke enough to judge, and they sounded right against that standard.
-- `not_enough` — they were silent, or said too little to tell. This is a real answer, not a fallback: use it whenever you cannot actually hear the voice in this scene. Do NOT report `in_voice` for a character who barely spoke — saying nothing is not evidence of sounding right, and a standing correction stays in force until a scene shows otherwise.
-
-`note` is the corrective the model will be given on its next turn: one or two sentences, addressed to the writer, naming the specific way the voice slipped and what to do instead. Quote a short offending line if it helps. Leave `note` empty unless the verdict is `drift`.

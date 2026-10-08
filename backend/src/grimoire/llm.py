@@ -210,6 +210,18 @@ ROUTE_SCOPES = frozenset({"campaign", "global"})
 #: sends the chain to an adapter.
 FALLBACK_KEY = "_fallback"
 
+#: The key under which a call's connection dict says THIS attempt may be asked
+#: for structured output (spec 7.2): `True` on the lowered dict of each attempt
+#: of a decide resolution whose `structured_output` is `yes`, set by
+#: `store.inference.resolve` and absent everywhere else -- so a generate
+#: resolution's dicts are what they were before slice F.
+#:
+#: Read per attempt, from the dict each attempt already carries, so a fallback
+#: without the mode is sent the same prompt (the schema rides in it) and no
+#: structured envelope, without the facade importing the store. Unlike
+#: `FALLBACK_KEY` it is about one attempt, so nothing strips it.
+STRUCTURED_KEY = "_structured"
+
 
 def _without_fallback(conn: dict) -> dict:
     """`conn` as one attempt: without the fallback it carries (`FALLBACK_KEY`).
@@ -670,6 +682,30 @@ def _wire_spellings(share: dict, prefix: str = "") -> set[str]:
     return names
 
 
+def _structured_share(conn: dict) -> dict:
+    """The structured-output envelope this attempt puts on the wire, as a share
+    `_wire_spellings` reads: `{}` unless the attempt is flagged
+    (`STRUCTURED_KEY`), and `{}` for `claude`, which never takes it.
+
+    The schema itself is emptied: its property names are question ids, and a
+    question id that happened to spell a sampler (`temperature`) would be
+    subtracted from that sampler's spellings, so a refusal of the sampler
+    would stop reading as the preset refused. Only the adapters' own envelope
+    keys are named. Read from the flag rather than from
+    whether a schema was sent, because only a decide resolution carries the
+    flag and `decide` always sends one."""
+    if conn.get(STRUCTURED_KEY) is not True:
+        return {}
+    kind = conn.get("kind", "openrouter")
+    if kind == "claude":
+        return {}
+    if kind == "anthropic":
+        return {"output_config": {"format": {"type": None, "schema": None}}}
+    # `openrouter` and `openai_compatible` -- and whatever else `_provider`
+    # dispatches to the OpenRouter adapter.
+    return {"response_format": {"type": None, "json_schema": None}}
+
+
 def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     """The error to raise in place of `exc` when it is a preset being refused.
 
@@ -700,8 +736,17 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
     # AND `output_config.effort`, and the Anthropic API's refusal of the effort
     # names only the second.
     detail = (exc.detail or "").lower()
+    # Less the structured envelope's own spellings (I3): adaptive effort and a
+    # schema share the `output_config` parent on the Anthropic API, and a
+    # refusal of `output_config.format` is the SCHEMA refused -- which leaves
+    # the fallback, sent the same prompt without the mode, to be tried. A
+    # refusal naming `output_config.effort` (or `effort`) still matches.
+    # Known limit: only the envelope's own names are subtracted, so a
+    # structured refusal whose message ALSO names a sent sampler ("response_format
+    # is not supported with reasoning") still reads as a preset refusal.
+    envelope = _wire_spellings(_structured_share(conn))
     spellings = {name: {name, name.replace("_", "-"), name.replace("_", " "),
-                        *_wire_spellings(shares[name])}
+                        *_wire_spellings(shares[name])} - envelope
                  for name in sent}
     # llama.cpp's spelling, whichever one this endpoint was sent.
     spellings.get("repetition_penalty", set()).add("repeat_penalty")
@@ -715,6 +760,42 @@ def _preset_refusal(exc: LLMError, conn: dict) -> PresetRefusalError | None:
         f"({', '.join(sent)}) and the provider's refusal names one of them, so "
         "the fallback connection was not tried",
         exc.retry_after, status=exc.status, code=exc.code)
+
+
+class SchemaRefusalError(LLMError):
+    """An `LLMError` that is the structured-output field THIS attempt was sent
+    being refused (`_schema_refusal`), raised when no other attempt was left
+    to fall to.
+
+    A subclass so `inference.decide` can ask the type: it retries that same
+    attempt once without the mode (spec M-4, ruling 3). The schema always
+    rides the prompt, so the reply still parses -- and the call that worked as
+    a prompt-only call before slice F still works after it. Every `except
+    LLMError` still catches it, with the same kind and status."""
+
+
+def _schema_refusal(exc: LLMError, conn: dict) -> bool:
+    """Whether `exc` is the structured envelope `conn` was sent being refused:
+    an attempt flagged for the mode, a refusal status, and a message that
+    names one of the envelope's own spellings and nothing else that was sent.
+
+    Only the envelope's specific spellings count (a dotted path or an
+    underscored key -- `response_format`, `output_config.format`), never its
+    bare words: "format" and "schema" are in plenty of 400s that are about
+    something else. A message that also names a sent sampler is that
+    sampler's business (`_preset_refusal` reads it first on a primary)."""
+    envelope = _wire_spellings(_structured_share(conn))
+    if (not envelope or exc.status not in PRESET_REFUSAL_STATUSES
+            or llm_errors.account_limit(exc)):
+        return False
+    detail = (exc.detail or "").lower()
+    if not any(form in detail for form in envelope if "." in form or "_" in form):
+        return False
+    shares = llm_sampling.sent_fields(conn)
+    others = {form for name in shares
+              for form in (name, name.replace("_", "-"), name.replace("_", " "),
+                           *_wire_spellings(shares[name]))} - envelope
+    return not any(form in detail for form in others)
 
 
 async def _resilient(open_stream, routes, timeout: float,
@@ -876,15 +957,27 @@ async def _resilient(open_stream, routes, timeout: float,
                     # refused was a setting. A health verdict here would mark
                     # it failing for a problem no connection change can fix.
                     raise refused from exc
-                _observe(observer, conn, exc)
+                schema = _schema_refusal(exc, conn)
+                if schema:
+                    # Not observed either, for the preset's reason (CODE-M5):
+                    # the connection answered and refused the mode -- a
+                    # catalog that over-advertised it -- and it still serves
+                    # every generate call. The next route, sent the same
+                    # prompt, is tried as for any failure.
+                    log.warning("structured output refused by %r: %s", _label(conn),
+                                exc.detail)
+                else:
+                    _observe(observer, conn, exc)
                 if sent:
                     raise
-                last = exc
+                last = (SchemaRefusalError(exc.kind, exc.detail, exc.retry_after,
+                                           status=exc.status, code=exc.code)
+                        if schema else exc)
                 sent_images = usage.get("images", 0) if usage is not None else 0
                 # The primary's word is its first failure -- or, when its own
                 # degrade sibling ran, that sibling's (#377).
                 first = exc if first is None or (primary and index == 1) else first
-                retryable = (exc.kind in RETRYABLE_KINDS
+                retryable = (exc.kind in RETRYABLE_KINDS and not schema
                              and not (exc.retry_after or 0.0) > RETRY_AFTER_CAP)
             finally:
                 # A no-op for the exhausted and the raised cases, and the whole
@@ -1058,7 +1151,8 @@ class LLMClient:
         # `_resilient`'s question, asked after the attempt before it.
         return _with_degrades(routes) if _may_send_refs(messages) else routes
 
-    def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None):
+    def _dispatch(self, messages: list[dict], conn: dict, usage: dict | None = None,
+                  schema: dict | None = None):
         # Read before selecting: `for_model` returns a plain list.
         campaign = getattr(messages, "campaign", "")
         degrade = bool(conn.get(DEGRADE))
@@ -1078,11 +1172,11 @@ class LLMClient:
         # After `_stamp` cleared the holder, so each attempt counts only itself.
         llm_usage.note_prompt(usage, messages)
         if not content_parts.needs_lowering(messages):
-            return self._provider(messages, conn, usage)
-        return self._lowered(messages, conn, usage, campaign, degrade)
+            return self._provider(messages, conn, usage, schema)
+        return self._lowered(messages, conn, usage, campaign, degrade, schema)
 
     async def _lowered(self, messages: list[dict], conn: dict, usage: dict | None,
-                       campaign: str, degrade: bool):
+                       campaign: str, degrade: bool, schema: dict | None = None):
         """`messages` lowered for `conn`, then streamed (#377).
 
         Lowering resolves the image budget (a catalog sidecar read) and loads
@@ -1098,7 +1192,7 @@ class LLMClient:
             usage["images"] = sent
         # What was sent, not what was asked: text lowering drops carriers (M10).
         llm_usage.note_prompt(usage, lowered)
-        inner = self._provider(lowered, conn, usage)
+        inner = self._provider(lowered, conn, usage, schema)
         try:
             async for chunk in inner:
                 yield chunk
@@ -1135,8 +1229,16 @@ class LLMClient:
             log.warning("could not load a post image to send: %s", exc)
             return None
 
-    def _provider(self, messages: list[dict], conn: dict, usage: dict | None):
+    def _provider(self, messages: list[dict], conn: dict, usage: dict | None,
+                  schema: dict | None = None):
         kind = conn.get("kind", "openrouter")
+        # Structured output, decided per ATTEMPT like the preset (spec 7.2):
+        # only an attempt its resolver flagged capable (`STRUCTURED_KEY`) is
+        # asked for it, and the keyword is passed only when there is something
+        # to send, so every other call is the call it was before slice F. The
+        # prompt carries the schema either way; this adds the provider's mode.
+        structured = schema if schema is not None and conn.get(STRUCTURED_KEY) is True else None
+        shaped = {"schema": structured} if structured is not None else {}
         # Decided per ATTEMPT against that attempt's own connection, so a
         # fallback of a different kind is held to what ITS backend takes
         # (`llm_sampling.effective`, the one function that decides). Passed
@@ -1149,6 +1251,7 @@ class LLMClient:
             log.debug("sampler preset on %r: not sent %s", _label(conn),
                       ", ".join(f"{d['param']} ({d['reason']})" for d in dropped))
         if kind == "claude":
+            # Never structured: the SDK path has no structured mode to ask for.
             return self._claude.stream(messages, effective_model(conn), usage=usage)
         if kind == "anthropic":
             # The whole body share, not `split`'s sampler half: `max_tokens` is
@@ -1156,7 +1259,7 @@ class LLMClient:
             # `output_config` are the reasoning control's.
             return self._anthropic.stream(
                 messages, conn.get("model", ""), conn.get("api_key", ""), usage=usage,
-                base_url=conn.get("base_url", ""), effective=controls["effective"])
+                base_url=conn.get("base_url", ""), effective=controls["effective"], **shaped)
         if kind == "openai_compatible":
             # Its reasoning travels as the adapter's own keyword, as the GLM
             # setting always has (`llm_reasoning.glm_effort`, via `effective`).
@@ -1165,12 +1268,14 @@ class LLMClient:
                 messages, conn.get("model", ""), conn.get("api_key", ""),
                 conn.get("base_url", ""), strict=conn.get("post_process") == "strict",
                 usage=usage, **({"reasoning_effort": effort} if effort else {}),
-                **({"sampling": applied} if applied else {}))
+                **({"sampling": applied} if applied else {}), **shaped)
         sampling = {**applied, **reasoning}
         return self._openrouter.stream(messages, conn["model"], conn.get("api_key", ""),
-                                       usage=usage, **({"sampling": sampling} if sampling else {}))
+                                       usage=usage, **({"sampling": sampling} if sampling else {}),
+                                       **shaped)
 
-    def stream(self, messages: list[dict], conn: dict, usage: dict | None = None):
+    def stream(self, messages: list[dict], conn: dict, usage: dict | None = None, *,
+               schema: dict | None = None):
         """Every provider stream leaves the facade idle-bounded — the one place
         the bound is provider-independent (the Claude SDK has no httpx client
         to configure at all) — and retried-then-fallen-back, which for the same
@@ -1187,19 +1292,29 @@ class LLMClient:
         return value: an async generator has nowhere to put a summary, and the
         numbers arrive on the provider's last frame anyway, after the caller has
         consumed every delta. `store.usage.Meter` owns one and files it.
+
+        `schema`, when given, asks for JSON matching that JSON Schema (spec
+        7.2): each attempt whose dict is flagged (`STRUCTURED_KEY`) is sent its
+        provider's structured mode, and every other attempt -- a fallback
+        without the mode included -- is sent the call it would have been sent
+        anyway. The caller puts the schema in the prompt too, so an unflagged
+        attempt can still answer it.
         """
         try:
             sink = self._capture() if self._capture is not None else None
         except Exception:  # noqa: BLE001 - failed diagnostic setup must not stop generation
             sink = None
-        return _resilient(lambda route, holder: self._dispatch(messages, route, holder),
+        return _resilient(lambda route, holder: self._dispatch(messages, route, holder, schema),
                           self._usable_routes(messages, conn), self._timeout_seconds(),
                           usage=usage, observer=self._observer, capture=sink,
                           counter=self._count_tokens)
 
     async def complete(self, messages: list[dict], conn: dict,
-                       usage: dict | None = None) -> str:
-        return "".join([chunk async for chunk in self.stream(messages, conn, usage)])
+                       usage: dict | None = None, *, schema: dict | None = None) -> str:
+        """`stream`, joined. `schema` is `stream`'s; slice F's only caller is
+        `decide` (spec 7.2's `generate(schema=)` until slice I)."""
+        return "".join([chunk async for chunk in self.stream(messages, conn, usage,
+                                                             schema=schema)])
 
     async def single(self, messages: list[dict], conn: dict,
                      usage: dict | None = None) -> str:

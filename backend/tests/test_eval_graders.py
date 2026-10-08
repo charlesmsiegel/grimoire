@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from grimoire import prompts
+from grimoire import decisions, prompts
 from grimoire.store import absorb, calendars, scenes, suggest
 from grimoire.store.continuity import reconcile
 
@@ -1520,3 +1520,79 @@ def test_actor_length_excludes_preparation_and_trailing_controls():
     checks = cases.grade_scene_length(ctx, output)
     assert next(c.ok for c in checks if c.name == "length.words")
     assert next(c.ok for c in checks if c.name == "length.paragraphs")
+
+
+# --------------------------------------------------------------- decisions
+
+def _decision_items():
+    return (decisions.Item("Seraphine pays Mara on the Saltmarch pier.",
+                           (decisions.Predicate("over", "Is the scene over?"),)),)
+
+
+def _decision(over, rationale="The debt is paid.") -> str:
+    return json.dumps({"0": {"answers": {"over": over}, "rationale": rationale}})
+
+
+def test_grade_decision_passes_a_right_answer_with_a_reason():
+    checks = graders.grade_decision(_decision(True), _decision_items(),
+                                    explain=True, question="over", expected=True)
+    assert [c.name for c in checks] == ["decide.json", "decide.answer", "decide.rationale"]
+    assert failed(checks) == set()
+
+
+def test_grade_decision_short_circuits_when_nothing_decodes():
+    for text in ("", "no idea", '{"0": {"answers": {"over": true}, "rationale": "The de'):
+        checks = graders.grade_decision(text, _decision_items(), explain=True,
+                                        question="over", expected=True)
+        assert [(c.name, c.ok) for c in checks] == [("decide.json", False)], text
+
+
+def test_grade_decision_fails_the_wrong_answer_alone():
+    checks = graders.grade_decision(_decision(False), _decision_items(),
+                                    explain=True, question="over", expected=True)
+    assert failed(checks) == {"decide.answer"}
+
+
+def test_grade_decision_reads_an_unreadable_answer_as_wrong_not_as_a_default():
+    """The string "true" is not a predicate's answer, and `1` is not `True`:
+    the parser reads both as `None`, and the check compares types as well."""
+    for over in ("true", 1, None):
+        checks = graders.grade_decision(_decision(over), _decision_items(),
+                                        explain=True, question="over", expected=True)
+        assert failed(checks) == {"decide.answer"}, over
+
+
+def test_grade_decision_fails_a_missing_rationale_alone():
+    for rationale in ("", "   "):
+        checks = graders.grade_decision(_decision(True, rationale), _decision_items(),
+                                        explain=True, question="over", expected=True)
+        assert failed(checks) == {"decide.rationale"}, rationale
+    bare = json.dumps({"0": {"answers": {"over": True}}})
+    assert failed(graders.grade_decision(bare, _decision_items(), explain=True,
+                                         question="over", expected=True)) == {"decide.rationale"}
+
+
+def test_grade_decision_asks_no_rationale_when_none_was_asked_for():
+    """A decision asked with no rationale (the speaker pick) is graded on its
+    object and its answer alone: there is no `decide.rationale` to fail."""
+    bare = json.dumps({"0": {"answers": {"over": True}}})
+    checks = graders.grade_decision(bare, _decision_items(), explain=False,
+                                    question="over", expected=True)
+    assert [c.name for c in checks] == ["decide.json", "decide.answer"]
+    assert failed(checks) == set()
+    assert failed(graders.grade_decision(_decision(False), _decision_items(), explain=False,
+                                         question="over", expected=True)) == {"decide.answer"}
+
+
+def test_grade_decision_holds_the_rationale_to_a_cap_when_given_one():
+    """Voice drift's rationale is the stored corrective, which may not exceed
+    `MAX_NOTE`: a reply over the cap fails `decide.rationale` alone."""
+    at_cap = _decision(True, "x" * 20)
+    over = _decision(True, "x" * 21)
+    for text, want in ((at_cap, set()), (over, {"decide.rationale"})):
+        checks = graders.grade_decision(text, _decision_items(), explain=True,
+                                        question="over", expected=True, max_rationale=20)
+        assert failed(checks) == want
+    # Without a cap a long rationale is still fine.
+    assert failed(graders.grade_decision(over, _decision_items(), explain=True,
+                                         question="over", expected=True)) == set()

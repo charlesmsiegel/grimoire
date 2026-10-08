@@ -326,6 +326,10 @@ export type RouteRow = {
   /** As on `RoleCard`: why the route's fallback cannot send at all. */
   fallback_problem: string | null;
   role: GenerativeRole | null;
+  /** The role the route walks (its own `use`, else its default), whichever
+   *  role ends up supplying it -- a route can use Decision while Decision
+   *  inherits Fast. `null` for a pin. */
+  uses: GenerativeRole | null;
 };
 /** A provider as the settings view lists it, with whether it can send at all. */
 export type InferenceProvider = {

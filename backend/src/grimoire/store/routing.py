@@ -42,8 +42,11 @@ class Route(NamedTuple):
     #: written there anyway (by hand; the PUT refuses it) is ignored, rather
     #: than being a setting that silently never fires.
     campaign_scoped: bool
-    #: What kind of call this is. Both are `generate` in this slice; `decide`
-    #: is reserved for routes that answer a yes/no or a pick.
+    #: What kind of call this is: `generate` (prose), or `decide` for a route
+    #: whose call site answers a closed question through `inference.decide`
+    #: (spec 7.4). A route flips to `decide` only in the change whose call
+    #: site decides (spec 14), and `test_operation_guard.py` holds that both
+    #: ways.
     operation: str = "generate"
     #: Which connection role serves this route when nothing overrides it.
     default_role: str = "primary"
@@ -84,7 +87,8 @@ ROUTES: tuple[Route, ...] = (
           True),
     Route("speaker", "Next speaker",
           "Which character speaks next in group play.",
-          ("response-selector",), True, default_role="fast", legacy="scene"),
+          ("response-selector",), True, operation="decide", default_role="decision",
+          legacy="scene"),
     Route("opener", "Scene openers",
           "The drafted first post of a new scene.", ("opener",), True),
     Route("absorb", "Absorb & mechanics audit",
@@ -98,12 +102,13 @@ ROUTES: tuple[Route, ...] = (
           "The duplicate check beside absorb and the reconciliation sweep after "
           "End Scene or a refresh.",
           ("continuity-identity", "continuity-reconcile"), True, default_role="fast"),
-    Route("summary", "Summaries & scene-break checks",
-          "The live rolling summary and the is-this-scene-over question.",
-          ("rolling-summary",), True, default_role="fast"),
+    Route("summary", "Summaries & scene titles",
+          "The live rolling summary, and the title a proposed scene break suggests.",
+          ("rolling-summary", "scene-break-title"), True, default_role="fast"),
     Route("scene_break", "Scene-break checks",
           "Whether the scene has reached a natural break.",
-          ("scene-break",), True, default_role="fast", legacy="summary"),
+          ("scene-break",), True, operation="decide", default_role="decision",
+          legacy="summary"),
     Route("tracker", "Scene state tracker",
           "One small call after every post to keep each character's tracked state current.",
           ("tracker-update",), True, default_role="fast"),
@@ -117,7 +122,8 @@ ROUTES: tuple[Route, ...] = (
           ("voice-anchor",), True),
     Route("voice_drift", "Voice drift checks",
           "Whether a played scene drifted from a character's voice anchor.",
-          ("voice-drift",), True, default_role="fast", legacy="voice"),
+          ("voice-drift",), True, operation="decide", default_role="decision",
+          legacy="voice"),
     Route("image", "Image descriptions",
           "What a picture shows, drafted for the alt text and the art catalog. A "
           "campaign override reaches its own image library; a world record's "

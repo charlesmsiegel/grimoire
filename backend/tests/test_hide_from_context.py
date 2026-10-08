@@ -344,7 +344,7 @@ def test_selector_conversation_omits_an_excluded_post(client):
     store.scenes.append_message(cid, sid, "user", "ooc: brb, kettle")
     store.scenes.append_message(cid, sid, "user", "Winifred, the lamps.")
     store.scenes.set_excluded(cid, sid, 0, True)
-    prompt = character_turns._selector_messages(cid, sid, {"eligible": [], "note": ""})[0]["content"]
+    prompt = character_turns._selector_item(cid, sid, {"eligible": [], "note": ""}).context
     assert "brb, kettle" not in prompt and "Winifred, the lamps." in prompt
 
 

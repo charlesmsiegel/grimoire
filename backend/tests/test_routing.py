@@ -118,7 +118,7 @@ _ORIGINAL_TASKS = {
     "absorb": ("absorb", "audit"),
     "dossier": ("dossier",),
     "continuity": ("continuity-identity", "continuity-reconcile"),
-    "summary": ("rolling-summary", "scene-break"),
+    "summary": ("rolling-summary", "scene-break-title", "scene-break"),
     "tracker": ("tracker-update",),
     "suggestions": ("suggestions", "intent", "character-from-passage"),
     "voice": ("voice-anchor", "voice-drift"),
@@ -157,15 +157,29 @@ def test_legacy_surfaces_still_see_twelve_routes():
 
 
 def test_every_route_declares_operation_and_default_role():
+    """Slice F flips a route to `decide` and the Decision role only in the
+    task whose call site decides (spec 14): scene-break, voice drift and the
+    speaker pick."""
+    primary = {"scene", "opener", "suggestions", "voice"}
+    decide = {"scene_break", "voice_drift", "speaker"}
     for r in routing.ROUTES:
         assert r.operation in routing.OPERATIONS
         assert r.default_role in routing.DEFAULT_ROLES
-        assert r.operation == "generate"
-    primary = {"scene", "opener", "suggestions", "voice"}
-    for r in routing.ROUTES:
-        want = "primary" if r.key in primary else "fast"
-        assert r.default_role == want, r.key
+        want = (("decide", "decision") if r.key in decide
+                else ("generate", "primary") if r.key in primary
+                else ("generate", "fast"))
+        assert (r.operation, r.default_role) == want, r.key
     assert routing.route_by_key("image").requires == ("vision",)
     assert len(routing.ROUTES) == 15
 
 
+def test_the_scene_break_title_is_drafted_on_the_summary_route():
+    """The title a YES suggests is prose, not a decision: it rides the
+    `summary` route (and so its model), never the Decision role."""
+    summary = routing.route_by_key("summary")
+    assert summary.tasks == ("rolling-summary", "scene-break-title")
+    assert summary.label == "Summaries & scene titles"
+    assert summary.hint == ("The live rolling summary, and the title a proposed "
+                            "scene break suggests.")
+    assert (summary.operation, summary.default_role) == ("generate", "fast")
+    assert routing.TASK_ROUTE["scene-break-title"] == "summary"

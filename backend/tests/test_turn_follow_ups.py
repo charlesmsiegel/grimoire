@@ -25,12 +25,12 @@ from grimoire.routes import runs as runs_routes
 from grimoire.routes import scenes as scenes_routes
 from grimoire.routes import streaming as streaming_routes
 
-from .llm_fakes import FakeLLM, from_entries
+from .llm_fakes import FakeLLM, decision_reply, from_entries
 
-#: A scene-break verdict the parser accepts. `break: false` deliberately, so a
+#: A scene-break verdict, as `decide()` reads it. No break deliberately, so a
 #: fold and a question can both run without the suggestion changing what the
-#: rolling-summary assertions are looking at.
-NO_BREAK = '{"break": false, "reason": "They are still mid-argument.", "title": ""}'
+#: rolling-summary assertions are looking at -- and without a title call.
+NO_BREAK = decision_reply({"over": False}, rationales=["They are still mid-argument."])
 
 #: How long a test waits for the two background runs a turn schedules. They are
 #: driven by the lifespan loop and the POST does not await them, so every
@@ -57,8 +57,9 @@ def _use(client, llm):
 
 
 def _provider(reply: str = "The lamps are already lit.", summary: str = "A summary.",
-              verdict: str = NO_BREAK) -> FakeLLM:
-    """One fake answering all three kinds of call this suite drives.
+              verdict: str = NO_BREAK, title: str = "The Long Walk Back") -> FakeLLM:
+    """One fake answering every kind of call this suite drives: the turn, the
+    fold, the scene-break decision and, after a YES, its title.
 
     A cassette rather than a script, for `llm_fakes`' documented reason: the
     turn, the fold and the question are issued by different code paths and the
@@ -68,8 +69,10 @@ def _provider(reply: str = "The lamps are already lit.", summary: str = "A summa
     """
     return from_entries([
         {"when": {"system_contains": "keeping a running summary"}, "reply": summary},
-        {"when": {"system_contains": "has the scene reached a natural place to stop?"},
+        {"when": {"system_contains": "You answer closed questions",
+                  "user_contains": "has the scene reached a natural place to stop?"},
          "reply": verdict},
+        {"when": {"system_contains": "You are naming the next scene"}, "reply": title},
         {"when": {}, "reply": reply},
     ], "turn-follow-ups")
 
@@ -151,13 +154,14 @@ def test_a_turn_short_of_the_threshold_still_spends_nothing(client):
 
 def test_the_scene_break_question_is_asked_when_the_heuristic_crosses(client):
     store.write_config(scene_break_every="2")
-    _use(client, _provider(verdict='{"break": true, "reason": "The ledger changed '
-                                   'hands.", "title": "The Long Walk Back"}'))
+    _use(client, _provider(verdict=decision_reply(
+        {"over": True}, rationales=["The ledger changed hands."])))
     cid, sid = _scene(client, posts=8)
     _send(client, cid, sid)
     _settled(client, cid, sid)
     stored = store.scenes.get_scene_break(cid, sid)
     assert stored["verdict"] == "yes" and stored["title"] == "The Long Walk Back"
+    assert stored["reason"] == "The ledger changed hands."
 
 
 def test_the_boundary_is_the_transcript_the_turn_left(client):

@@ -1,0 +1,264 @@
+[
+  {
+    "shape": "enum-not-prose",
+    "intended": [
+      "in_voice",
+      "a little terse"
+    ],
+    "legacy": "{\"verdict\": \"in_voice\", \"note\": \"a little terse\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"in_voice\"}, \"rationale\": \"a little terse\"}}"
+  },
+  {
+    "shape": "prose-and-fence",
+    "intended": [
+      "drift",
+      "She used contractions."
+    ],
+    "legacy": "Here you go:\n```json\n{\"verdict\": \"drift\", \"note\": \"She used contractions.\"}\n```",
+    "decide": "Here you go:\n```json\n{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": \"She used contractions.\"}}\n```"
+  },
+  {
+    "shape": "synonym-in-voice-spaced",
+    "intended": [
+      "in_voice",
+      ""
+    ],
+    "legacy": "{\"verdict\": \"in voice\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"in voice\"}}}"
+  },
+  {
+    "shape": "synonym-in-voice-hyphen",
+    "intended": [
+      "in_voice",
+      ""
+    ],
+    "legacy": "{\"verdict\": \"in-voice\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"in-voice\"}}}"
+  },
+  {
+    "shape": "synonym-not-enough-spaced",
+    "intended": [
+      "not_enough",
+      ""
+    ],
+    "legacy": "{\"verdict\": \"not enough\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"not enough\"}}}"
+  },
+  {
+    "shape": "synonym-insufficient",
+    "intended": [
+      "not_enough",
+      ""
+    ],
+    "legacy": "{\"verdict\": \"insufficient\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"insufficient\"}}}"
+  },
+  {
+    "shape": "synonym-unclear",
+    "intended": [
+      "not_enough",
+      ""
+    ],
+    "legacy": "{\"verdict\": \"unclear\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"unclear\"}}}"
+  },
+  {
+    "shape": "padded-uppercase-drift",
+    "intended": [
+      "failed",
+      "drift reported with no corrective"
+    ],
+    "legacy": "{\"verdict\": \"  DRIFT  \"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"  DRIFT  \"}}}"
+  },
+  {
+    "shape": "ambiguous-none",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": \"none\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"none\"}}}"
+  },
+  {
+    "shape": "ambiguous-ok",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": \"ok\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"ok\"}}}"
+  },
+  {
+    "shape": "ambiguous-fine",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": \"fine\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"fine\"}}}"
+  },
+  {
+    "shape": "ambiguous-na",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": \"n/a\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"n/a\"}}}"
+  },
+  {
+    "shape": "ambiguous-yes",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": \"yes\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"yes\"}}}"
+  },
+  {
+    "shape": "refusal-prose",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "I'm sorry, I can't do that.",
+    "decide": "I'm sorry, I can't do that."
+  },
+  {
+    "shape": "no-verdict",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"note\": \"no verdict\"}",
+    "decide": "{\"0\": {\"answers\": {}, \"rationale\": \"no verdict\"}}"
+  },
+  {
+    "shape": "null-verdict",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": null}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": null}}}"
+  },
+  {
+    "shape": "unknown-word",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": \"maybe?\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"maybe?\"}}}"
+  },
+  {
+    "shape": "boolean-verdict",
+    "intended": [
+      "failed",
+      "unreadable verdict from the voice judge"
+    ],
+    "legacy": "{\"verdict\": true}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": true}}}"
+  },
+  {
+    "shape": "null-note",
+    "intended": [
+      "failed",
+      "drift reported with no corrective"
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": null}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": null}}"
+  },
+  {
+    "shape": "object-note",
+    "intended": [
+      "failed",
+      "drift reported with no corrective"
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": {\"tone\": \"terse\"}}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": {\"tone\": \"terse\"}}}"
+  },
+  {
+    "shape": "list-note",
+    "intended": [
+      "failed",
+      "drift reported with no corrective"
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": [\"terse\", \"clipped\"]}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": [\"terse\", \"clipped\"]}}"
+  },
+  {
+    "shape": "number-note",
+    "intended": [
+      "failed",
+      "drift reported with no corrective"
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": 42}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": 42}}"
+  },
+  {
+    "shape": "boolean-note",
+    "intended": [
+      "failed",
+      "drift reported with no corrective"
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": true}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": true}}"
+  },
+  {
+    "shape": "flattened",
+    "intended": [
+      "drift",
+      "She used contractions."
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": \"She used contractions.\"}",
+    "decide": "{\"verdict\": \"drift\", \"rationale\": \"She used contractions.\"}"
+  },
+  {
+    "shape": "unwrapped-item",
+    "intended": [
+      "drift",
+      "She used contractions."
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": \"She used contractions.\"}",
+    "decide": "{\"answers\": {\"verdict\": \"drift\"}, \"rationale\": \"She used contractions.\"}"
+  },
+  {
+    "shape": "double-space",
+    "intended": [
+      "in_voice",
+      ""
+    ],
+    "legacy": "{\"verdict\": \"in  voice\"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"in  voice\"}}}"
+  },
+  {
+    "shape": "long-note",
+    "intended": [
+      "failed",
+      "the voice judge returned a corrective over 1000 characters, too long to put in front of every following turn"
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": \"She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. \"}",
+    "decide": "{\"0\": {\"answers\": {\"verdict\": \"drift\"}, \"rationale\": \"She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. She hedged where the anchor says she never does. \"}}"
+  },
+  {
+    "shape": "todays-format",
+    "intended": [
+      "drift",
+      "She used contractions."
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": \"She used contractions.\"}",
+    "decide": "{\"verdict\": \"drift\", \"note\": \"She used contractions.\"}",
+    "ruling": "A reply in today's voice-drift format, read through the flattened shape and its `note` rationale alias (spec 7.4) so its corrective is kept."
+  },
+  {
+    "shape": "keyed-flattened",
+    "intended": [
+      "drift",
+      "She used contractions."
+    ],
+    "legacy": "{\"verdict\": \"drift\", \"note\": \"She used contractions.\"}",
+    "decide": "{\"0\": {\"verdict\": \"drift\", \"note\": \"She used contractions.\"}}"
+  }
+]

@@ -71,7 +71,7 @@ const route = (over: Record<string, unknown>) => ({
   hint: "", tasks: [], operation: "generate", default_role: "fast", requires: [],
   campaign_scoped: true, use: "", pin: sel(), preset: "", resolves: resolved(),
   inherits: resolved(), problem: null, fallback_missing: [], fallback_problem: null,
-  role: "fast", ...over,
+  role: "fast", uses: "fast", ...over,
 });
 
 const ROUTES = [
@@ -523,13 +523,38 @@ test("the Decision card lists the routes using it", async () => {
   (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
     ...ROUTES,
     route({ key: "speaker", label: "Who speaks next", operation: "decide",
-            default_role: "decision", role: "decision" }),
+            default_role: "decision", role: "decision", uses: "decision" }),
   ] }));
   await openCards();
   const routes = within(await roleCard("Decision").findByRole("list", { name: "Routes using Decision" }));
   expect(routes.getByRole("link", { name: "Who speaks next" }))
     .toHaveAttribute("href", "/models/route/speaker");
   expect(routes.queryByRole("link", { name: "Rolling summary" })).not.toBeInTheDocument();
+  expect(routes.queryByText(/inherits/)).not.toBeInTheDocument();
+});
+
+test("the Decision card lists a route that uses it while Decision inherits", async () => {
+  // CODE-M3: Decision unset, so Fast supplies the decide routes -- they still
+  // use Decision, and setting it moves them. A pinned one uses no role.
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+    ...ROUTES,
+    route({ key: "speaker", label: "Who speaks next", operation: "decide",
+            default_role: "decision", role: "fast", uses: "decision" }),
+    route({ key: "scene_break", label: "Scene-break checks", operation: "decide",
+            default_role: "decision", role: "primary", uses: "decision" }),
+    route({ key: "voice_drift", label: "Voice drift checks", operation: "decide",
+            default_role: "decision", role: null, uses: null, use: "model",
+            resolves: resolved({ via: "route" }) }),
+  ] }));
+  await openCards();
+  const card = roleCard("Decision");
+  const routes = within(await card.findByRole("list", { name: "Routes using Decision" }));
+  expect(routes.getByRole("link", { name: "Who speaks next" })).toBeInTheDocument();
+  expect(routes.getByText(/inherits Fast/)).toBeInTheDocument();
+  expect(routes.getByRole("link", { name: "Scene-break checks" })).toBeInTheDocument();
+  expect(routes.getByText(/inherits Primary/)).toBeInTheDocument();
+  expect(routes.queryByRole("link", { name: "Voice drift checks" })).not.toBeInTheDocument();
+  expect(card.queryByText("No route uses Decision yet.")).not.toBeInTheDocument();
 });
 
 test("the Decision card says when no route uses it", async () => {

@@ -1,0 +1,17 @@
+{#- The head both scene-break calls show above the transcript: the verdict's
+    (scene_break/user.j2) and the title's (scene_break_title/user.j2), shared
+    so the two cannot drift. Included, so it reads the includer's vars:
+      title — the scene's own title. "" when untitled.
+      facts — dict from chronicle.scene_facts(), or None: location (str),
+              date (str), cast ([str] of "<kind>/<id>" refs).
+    Renders each part that is set, one per line, then a blank line; nothing
+    at all when no part is set. -#}
+{%- set head = [] -%}
+{%- if title -%}{%- set _ = head.append("Scene: " ~ title) -%}{%- endif -%}
+{%- if facts and facts.get("location") -%}{%- set _ = head.append("Location: " ~ facts.location) -%}{%- endif -%}
+{%- if facts and facts.get("date") -%}{%- set _ = head.append("Date: " ~ facts.date) -%}{%- endif -%}
+{%- if facts and facts.get("cast") -%}{%- set _ = head.append("Present: " ~ (facts.cast | join(", "))) -%}{%- endif -%}
+{%- if head -%}
+{{ head | join("\n") }}
+
+{% endif -%}

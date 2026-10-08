@@ -241,9 +241,9 @@ async def test_the_fallback_key_reaches_no_adapter_capture_or_health_record(monk
     real_stamp = llm._stamp
     real_sent = llm_sampling.sent_fields
 
-    def provider_spy(self, messages, conn, usage):
+    def provider_spy(self, messages, conn, usage, schema=None):
         seen["adapter"].append(conn)
-        return real_provider(self, messages, conn, usage)
+        return real_provider(self, messages, conn, usage, schema)
 
     def stamp_spy(usage, conn, attempts):
         seen["stamp"].append(conn)
@@ -304,9 +304,9 @@ async def test_single_never_uses_a_fallback(monkeypatch):
     adapter: list[dict] = []
     real_provider = LLMClient._provider
 
-    def provider_spy(self, messages, conn, usage):
+    def provider_spy(self, messages, conn, usage, schema=None):
         adapter.append(conn)
-        return real_provider(self, messages, conn, usage)
+        return real_provider(self, messages, conn, usage, schema)
 
     monkeypatch.setattr(LLMClient, "_provider", provider_spy)
     provider = Recorder(failing={"primary"})

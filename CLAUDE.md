@@ -707,8 +707,8 @@ would answer neither question.
   that covers its commit (a check the token has not moved under is not binding).
   Everything a *detached* run writes bumps where it writes, since the run
   outlives the response the middleware stamps — `routes/scenes._under_review_lock`
-  for a review's terminal write, `_rolling_commit` and `_break_commit` for the
-  follow-ups a landed turn schedules (#397), and `routes/streaming._turn_settled`
+  for a review's terminal write, `_rolling_commit`, `_break_commit` and
+  `_break_title_commit` for the follow-ups a landed turn schedules (#397), and `routes/streaming._turn_settled`
   at each of a turn's terminal points, which is not the same thing as "a post
   landed": a closed roll fence writes a proposal and no post at all. The
   continuity sweep's two persists (`reconcile.persist_found` and
@@ -780,11 +780,50 @@ would answer neither question.
   (wearing the route's preset when the route has one), under `FALLBACK_KEY`,
   and the facade sends that one. A fallback *known* unable to do what the route needs is reported
   (`fallback_missing`) and never attached, so the facade never sends it -- nor
-  one that names the primary's own connection, nor one that cannot carry the
-  call's images. A reroll's connection override goes through `override_inference`, and
-  absorb's secondary phases hand `_soft_inference` a thunk, so a phase that
-  cannot resolve reports itself failed with a reason instead of losing the
-  review.
+  one that names the primary's own connection (a retry, which the retry budget
+  covers; the decide skip below is the exception), nor one that cannot carry
+  the call's images. A reroll's connection override goes through `override_inference`, and
+  absorb's secondary phases hand `_soft_inference` a thunk (voice drift hands
+  one to `_soft_resolved`, which keeps the whole resolution `decide` takes), so
+  a phase that cannot resolve reports itself failed with a reason instead of
+  losing the review.
+  **A yes/no, pick-one or graded question is a `decide` call**, never prose
+  parsed afterwards. Resolve it with `require_inference(<task>, cid,
+  operation="decide")` on a route whose `operation` is `decide`, bind the
+  operation module as `from .. import inference as operations`, and pass the
+  resolution and the app's client to `operations.decide(<task>, items,
+  client=…, resolved=…)`, which refuses a resolution for another task or
+  operation. It opens one meter per chunk itself, so a caller with a time
+  budget hands it over as `around` and the budget runs inside that meter.
+  `test_operation_guard.py` finds the call by import binding (a continuity
+  `Examination.decide` is not one), fails a task literal that is not on a
+  decide route or a call with no `resolved=`, and holds the safety rule both
+  ways: a route flips to `operation="decide"` and the Decision role only in the
+  change whose call site decides. Prose never rides a decision -- the
+  scene-break title is its own `generate`, `scene-break-title` on the
+  `summary` route, drafted only once a YES verdict is written, so a read
+  between the two writes sees a YES with no title and the inspector shows the
+  proposal untitled until its next refresh. Whether an attempt is also sent
+  its provider's structured mode is decided per attempt (`STRUCTURED_KEY`,
+  present on decide resolutions only); the schema is in the prompt either
+  way, and the mode is filed per call on a copied account block, never by
+  mutating the resolution's. A provider that refuses the structured field
+  with no other attempt to fall to is sent that attempt once more without the
+  mode, as its own metered call (`llm.SchemaRefusalError`), and the refusal is
+  never a health failure. Until slice H, a decide-only Decision model is
+  skipped for a role fallback that can generate -- on its own provider too,
+  since the skipped primary is never sent -- and the route row's `problem`
+  says so (`resolve.skip_text`); with no such fallback the 409 `incapable`
+  stands, and for the speaker pick `post_chat` raises it before it writes
+  anything (`refuse_an_unanswerable_pick`). The three decide routes use the
+  Decision role, which inherits Fast, so on them a campaign's own Fast
+  override no longer outranks a global pin (spec 5.1): a campaign that wants
+  that sets its own Decision role. A call site converts only behind `evals/run.py --gate`, whose corpus
+  starts from the legacy parser's own tests (`evals/README.md`). The speaker
+  pick turns a roster `decide` refuses before sending -- two refs that read as
+  one once normalised, or more than 254 refs (with `grimoire`, past a choice's
+  255 options) -- into the invalid-handoff issue, so control returns to the
+  player rather than the round failing.
   `test_routing_guard.py` fails a call that names no task, a task no route
   claims, an `operation=` that differs from its route's, a reference to
   `require_inference` that is not a call (a task handed through

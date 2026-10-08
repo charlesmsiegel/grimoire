@@ -25,6 +25,12 @@ from . import test_inference_equivalence as equivalence
 
 BASELINE = json.loads(baseline.FIXTURE.read_text(encoding="utf-8"))
 
+#: Where this sweep observes a task: the seam's answer (`tasks`) and the
+#: lowered connection (`c.lowered`). A task claimed since the JSON was recorded
+#: (`test_inference_equivalence.NEW_TASKS`) is held to its sibling in both.
+CELLS = ("tasks", "c.lowered")
+NEW_TASKS = equivalence.NEW_TASKS
+
 
 def test_every_state_has_a_recorded_baseline():
     assert sorted(BASELINE) == sorted(baseline.STATES)
@@ -37,7 +43,8 @@ def test_resolution_matches_the_baseline(state, tmp_path):
     (`test_inference_equivalence.RETIRED`)."""
     with baseline.base.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
-        assert (equivalence.without_retired(baseline.observe(client, ctx))
+        observed = equivalence.without_new_tasks(baseline.observe(client, ctx), CELLS)
+        assert (equivalence.without_retired(observed)
                 == equivalence.without_retired(BASELINE[state]))
 
 
@@ -50,6 +57,7 @@ def test_each_baseline_state_resolves_identically_after_migration(state, tmp_pat
         got = migrate.ensure()
         assert got.state == "done", got
         assert store.inference_keys.is_current(store.read_config())
-        assert (equivalence.without_allowed_differences(baseline.observe(client, ctx))
+        observed = equivalence.without_new_tasks(baseline.observe(client, ctx), CELLS)
+        assert (equivalence.without_allowed_differences(observed)
                 == equivalence.without_allowed_differences(
                     equivalence.migrated_expectation(BASELINE[state])))

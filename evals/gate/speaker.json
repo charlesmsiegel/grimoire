@@ -1,0 +1,156 @@
+[
+  {
+    "shape": "not-json",
+    "intended": [
+      null,
+      "missing or invalid handoff"
+    ],
+    "legacy": "not json",
+    "decide": "not json"
+  },
+  {
+    "shape": "empty-object",
+    "intended": [
+      null,
+      "missing or invalid handoff"
+    ],
+    "legacy": "{}",
+    "decide": "{\"0\": {\"answers\": {}}}"
+  },
+  {
+    "shape": "player-character",
+    "intended": [
+      null,
+      "ineligible or repeated speaker"
+    ],
+    "legacy": "{\"next\":\"pcs:seraphine\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"pcs:seraphine\"}}}"
+  },
+  {
+    "shape": "absent",
+    "intended": [
+      null,
+      "ineligible or repeated speaker"
+    ],
+    "legacy": "{\"next\":\"absent\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"absent\"}}}"
+  },
+  {
+    "shape": "hand-back",
+    "intended": [
+      null,
+      null
+    ],
+    "legacy": "{\"next\":null}",
+    "decide": "{\"0\": {\"answers\": {\"next\": null}}}"
+  },
+  {
+    "shape": "listed-mara",
+    "intended": [
+      "characters:mara",
+      null
+    ],
+    "legacy": "{\"next\":\"characters:mara\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"characters:mara\"}}}"
+  },
+  {
+    "shape": "listed-winifred",
+    "intended": [
+      "characters:winifred",
+      null
+    ],
+    "legacy": "{\"next\":\"characters:winifred\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"characters:winifred\"}}}"
+  },
+  {
+    "shape": "grimoire",
+    "intended": [
+      "grimoire",
+      null
+    ],
+    "legacy": "{\"next\":\"grimoire\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"grimoire\"}}}"
+  },
+  {
+    "shape": "fenced",
+    "intended": [
+      "characters:winifred",
+      null
+    ],
+    "legacy": "```json\n{\"next\":\"characters:winifred\"}\n```",
+    "decide": "```json\n{\"0\": {\"answers\": {\"next\": \"characters:winifred\"}}}\n```"
+  },
+  {
+    "shape": "prose-wrapped",
+    "intended": [
+      "characters:winifred",
+      null
+    ],
+    "legacy": "Winifred was asked directly.\n{\"next\":\"characters:winifred\"}",
+    "decide": "Winifred was asked directly.\n{\"0\": {\"answers\": {\"next\": \"characters:winifred\"}}}"
+  },
+  {
+    "shape": "extra-key",
+    "intended": [
+      "characters:winifred",
+      null
+    ],
+    "legacy": "{\"next\":\"characters:winifred\",\"why\":\"She was asked directly.\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"characters:winifred\"}, \"why\": \"She was asked directly.\"}}"
+  },
+  {
+    "shape": "flattened",
+    "intended": [
+      "characters:mara",
+      null
+    ],
+    "legacy": "{\"next\":\"characters:mara\"}",
+    "decide": "{\"next\": \"characters:mara\"}"
+  },
+  {
+    "shape": "unwrapped-item",
+    "intended": [
+      "characters:mara",
+      null
+    ],
+    "legacy": "{\"next\":\"characters:mara\"}",
+    "decide": "{\"answers\": {\"next\": \"characters:mara\"}}"
+  },
+  {
+    "shape": "non-string",
+    "intended": [
+      null,
+      "ineligible or repeated speaker"
+    ],
+    "legacy": "{\"next\": 5}",
+    "decide": "{\"0\": {\"answers\": {\"next\": 5}}}"
+  },
+  {
+    "shape": "truncated",
+    "intended": [
+      null,
+      "missing or invalid handoff"
+    ],
+    "legacy": "{\"next\":\"characters:wini",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"characters:wini"
+  },
+  {
+    "shape": "case-folded",
+    "intended": [
+      "characters:winifred",
+      null
+    ],
+    "legacy": "{\"next\":\"Characters:Winifred\"}",
+    "decide": "{\"0\": {\"answers\": {\"next\": \"Characters:Winifred\"}}}",
+    "ruling": "Refs are matched after `decisions.normalise` (spec 7.4), so a case-folded ref names its character where today's exact match called it ineligible."
+  },
+  {
+    "shape": "keyed-flattened",
+    "intended": [
+      "characters:winifred",
+      null
+    ],
+    "legacy": "{\"next\":\"characters:winifred\"}",
+    "decide": "{\"0\": {\"next\": \"characters:winifred\"}}"
+  }
+]

@@ -32,8 +32,16 @@ from grimoire.store.inference.cascade import Selection
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as baseline
+from .test_inference_equivalence import NEW_TASKS
 
 TASKS = [*sorted(routing.TASK_ROUTE), ""]
+
+
+def _recorded(state: str, task: str, scope: str) -> dict:
+    """The baseline's cell for `task`, or, for a task claimed since it was
+    recorded (`test_inference_equivalence.NEW_TASKS`), its route sibling's --
+    which that task must resolve exactly as."""
+    return BASELINE[state]["tasks"][NEW_TASKS.get(task, task)][scope]
 
 #: The frozen answers (never regenerated -- see `inference_baseline`).
 BASELINE = json.loads(baseline.FIXTURE.read_text(encoding="utf-8"))
@@ -99,7 +107,7 @@ def test_every_task_resolves_as_the_baseline_recorded(state, at_state):
     for task in TASKS:
         for scope, scope_cid in (("global", ""), ("campaign", cid)):
             where = (state, task, scope)
-            recorded = BASELINE[state]["tasks"][task][scope]
+            recorded = _recorded(state, task, scope)
             resolved = inf.resolve(task, scope_cid)
             assert resolved.task == task and resolved.operation == "generate", where
 
@@ -163,7 +171,7 @@ def test_the_resolved_fallback_is_what_the_facade_sent(state, at_state):
     for task in TASKS:
         for scope, scope_cid in (("global", ""), ("campaign", ctx["cid"])):
             where = (state, task, scope)
-            recorded = BASELINE[state]["tasks"][task][scope]
+            recorded = _recorded(state, task, scope)
             resolved = inf.resolve(task, scope_cid)
             if resolved.conn is None:
                 assert resolved.fallback is None and "status" in recorded, where
@@ -863,7 +871,7 @@ def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
     for task in TASKS:
         for scope, scope_cid in (("global", ""), ("campaign", ctx["cid"])):
             where = (state, task, scope)
-            recorded = BASELINE[state]["tasks"][task][scope]
+            recorded = _recorded(state, task, scope)
             try:
                 served = routes.common.require_inference(task, scope_cid)
             except HTTPException as exc:

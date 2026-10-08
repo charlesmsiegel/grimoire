@@ -4,6 +4,7 @@
     backend/.venv/Scripts/python.exe evals/run.py --live          # one real call per case
     backend/.venv/Scripts/python.exe evals/run.py --live --record # ...and save as baseline
     backend/.venv/Scripts/python.exe evals/run.py --case roll-fence
+    backend/.venv/Scripts/python.exe evals/run.py --gate          # the decide gate, offline
 
 Bootstraps sys.path the same way scripts/verify_templates.py does, so it runs
 from a checkout without the package being installed.
@@ -24,7 +25,7 @@ sys.path.insert(0, str(REPO))                      # for `evals`
 sys.path.insert(0, str(REPO / "backend" / "src"))  # for `grimoire`
 
 from evals import cases as case_mod  # noqa: E402
-from evals import runner  # noqa: E402
+from evals import gate, runner  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -43,6 +44,25 @@ def temp_home():
         shutil.rmtree(path, ignore_errors=True)
 
 
+def run_gate(ap: argparse.ArgumentParser, args: argparse.Namespace) -> int:
+    """`--gate`: every decide conversion judged offline (evals/gate.py)."""
+    # Offline and whole: anything that would spend money or narrow the gate to
+    # some of its conversions is refused before anything runs.
+    clash = [flag for flag, on in (("--live", args.live), ("--record", args.record),
+                                   ("--case", bool(args.case))) if on]
+    if clash:
+        ap.error(f"--gate is offline and judges every conversion; "
+                 f"it takes no {', '.join(clash)}")
+    # A throwaway store, as replay has: no conversion's builder or mapping can
+    # read the user's real one.
+    results = []
+    for conv in gate.GATES:
+        with temp_home():
+            results.append(gate.judge(conv))
+    print(runner.ascii_safe(gate.report(results)))
+    return 0 if all(r.passed for r in results) else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Score grimoire's LLM output against the eval suite.")
     ap.add_argument("--live", action="store_true",
@@ -51,7 +71,13 @@ def main(argv: list[str] | None = None) -> int:
                     help="with --live, overwrite each case's baseline recording")
     ap.add_argument("--case", action="append", metavar="ID",
                     help="run only this case (repeatable); default is all")
+    ap.add_argument("--gate", action="store_true",
+                    help="compare each decide conversion's structured parse with "
+                         "today's on its recorded corpus; offline, never a call")
     args = ap.parse_args(argv)
+
+    if args.gate:
+        return run_gate(ap, args)
 
     if args.record and not args.live:
         ap.error("--record only means anything with --live")
@@ -73,9 +99,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         # ascii_safe: the model id is user-configured free text and may not
         # encode in the console's code page (see runner.report).
-        for task, conn in conns.items():
+        for key, conn in conns.items():
             print(runner.ascii_safe(
-                f"live: {task} -> {conn['kind']} / {conn.get('model') or '(default)'}"))
+                f"live: {key} -> {conn['kind']} / {conn.get('model') or '(default)'}"))
         if args.record:
             print("  [recording baselines]")
         results = runner.live_all(selected, conns, temp_home, record=args.record)

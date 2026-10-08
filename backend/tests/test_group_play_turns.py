@@ -10,7 +10,7 @@ from grimoire import routes, store
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns, streaming
 from grimoire.store import group_play
-from tests.llm_fakes import FakeLLM
+from tests.llm_fakes import FakeLLM, decision_reply
 
 MARA = "characters:mara"
 WINIFRED = "characters:winifred"
@@ -265,7 +265,8 @@ def test_manual_reply_as_still_needs_a_connection(client):
 
 def test_scene_without_settings_keeps_the_whole_cast_eligible(client):
     cid, sid, base = seed(client)
-    fake = FakeLLM([['{"next":"characters:winifred"}'], reply("Winifred answers.", None)])
+    fake = FakeLLM([[decision_reply({"next": "characters:winifred"})],
+                    reply("Winifred answers.", None)])
     use(client, fake)
     response = client.post(base + "/chat", json={"content": "Hello"})
     assert "error" not in response.text, response.text
@@ -278,7 +279,8 @@ def test_scene_without_settings_keeps_the_whole_cast_eligible(client):
 def test_directed_with_saved_defaults_keeps_full_roster(client):
     cid, sid, base = seed(client)
     group(client, base, order="directed", sitting_out=[], auto_rounds=0)
-    fake = FakeLLM([['{"next":"characters:mara"}'], reply("Mara answers.", None)])
+    fake = FakeLLM([[decision_reply({"next": "characters:mara"})],
+                    reply("Mara answers.", None)])
     use(client, fake)
     response = client.post(base + "/chat", json={"content": "Hello"})
     assert "error" not in response.text, response.text
@@ -583,7 +585,7 @@ def test_stop_at_round_start_of_a_selector_round_leaves_nothing_to_retry(client)
         run_id="test", actor_ref=MARA, mode="list", plan=[], auto_remaining=1,
         round_index=1, auto_total=1)
     run = _run(cid, sid)
-    fake = FakeLLM([reply("Mara one.", None), ['{"next":"characters:winifred"}'],
+    fake = FakeLLM([reply("Mara one.", None), [decision_reply({"next": "characters:winifred"})],
                     reply("Winifred one.", None)])
 
     def on_frame(data):

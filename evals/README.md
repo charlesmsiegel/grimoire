@@ -8,7 +8,7 @@ pytest/vitest suites verify the plumbing around them — that the right variable
 reach the right template — but nothing verified the hypothesis itself, and a
 template edit takes effect live, with no restart and no code change.
 
-This suite closes that. It is not an eval framework; it is ten pass/fail
+This suite closes that. It is not an eval framework; it is thirteen pass/fail
 questions that need no human judgement and that the codebase already has a
 stake in:
 
@@ -24,6 +24,9 @@ stake in:
 | `continuity-reconcile` | the reconciliation sweep keeps a same-topic question apart (distinct or related), reads a concrete question as a continuation or subthread of the broad one, never merges a thread with a commitment, closes a thread or resolves a commitment only on a shown beat, and keeps an old or overdue record open when nothing shown settles it |
 | `scene-suggestions` | with two focused drivers and a batch anchor in a custom calendar, the suggestions spread focus coverage instead of cloning one premise, cite only known drivers, and carry dates the anchor rule accepts, written in the calendar's own notation |
 | `scene-suggestions-anchor-on` | with a batch anchor `on` an event in a custom calendar, every parsed date is the anchor's own date in the calendar's notation, whatever the model wrote |
+| `decide-scene-break` | asked through `decide()` whether a scene whose beat has resolved is over, the reply is the schema's object, answers yes, and says why; the prompt carries the question, the transcript, the schema and the rationale instruction |
+| `decide-voice-drift` | asked through `decide()` whether a character with a clipped, contraction-free anchor and a standing correction drifted when she chattered in contractions, the reply is the schema's object, answers `drift`, and gives a corrective no longer than `MAX_NOTE`; the prompt carries the question, every verdict with its description, the transcript and anchor, the correction and the schema |
+| `decide-speaker` | asked through `decide()` who opens a round in which the player has just put a question to one of two NPCs by name, the reply is the schema's object and picks that NPC (no rationale is asked for); the prompt carries the question, every eligible ref with its name and `grimoire` with its description, null allowed, the observable transcript (gathered by the store helpers the route calls, so a director note in the scene never reaches it) and the schema |
 
 ## Running it
 
@@ -40,17 +43,41 @@ backend\.venv\Scripts\python.exe evals\run.py
 backend/.venv/bin/python evals/run.py --case roll-fence
 backend\.venv\Scripts\python.exe evals\run.py --case roll-fence
 
-# live: one real generation per case through your ACTIVE LLM connection
+# live: one real generation per case, on the model the app routes its task to
 backend/.venv/bin/python evals/run.py --live
 backend\.venv\Scripts\python.exe evals\run.py --live
 
 # ...and save each reply as that case's new baseline recording
 backend/.venv/bin/python evals/run.py --live --record
 backend\.venv\Scripts\python.exe evals\run.py --live --record
+
+# the decide gate: today's parse against the structured one. Offline.
+backend/.venv/bin/python evals/run.py --gate
+backend\.venv\Scripts\python.exe evals\run.py --gate
 ```
 
-Replay also runs under pytest (`backend/tests/test_evals.py`) — this repo has
-no CI, so pytest is the gate.
+### What each mode can and cannot show
+
+- **`--gate` compares parsers on recorded shapes.** It feeds hand-recorded
+  replies to today's parser and to `decide()`'s, and scores what the call site
+  would store from each. It says the structured parse reads every shape
+  today's did; it says nothing about what a model would write. Offline, no
+  key, and it refuses `--live`, `--record` and `--case`.
+- **Replay grades recorded output.** It holds the prompt contract (every
+  `prompt.*` check runs on the freshly assembled prompt) and the graders,
+  against a fixed recording (below).
+- **`--live` measures whether a model follows the prompt** on the model the
+  app routes each case's task to. For a decide case (one with a `schema`)
+  that is the decide resolution -- the Decision role, unless the Models page
+  routed the task elsewhere -- sent with the schema, in the provider's
+  structured mode wherever that model is known to support it: exactly what
+  production sends. It **costs money**, and is never run without the user's
+  explicit approval; `--record` too, since it is a live run.
+
+Replay also runs under pytest (`backend/tests/test_evals.py`), and so does the
+decide gate (`backend/tests/test_decide_gate.py`): both are part of `make
+check` and of CI (`.github/workflows/ci.yml`), so neither waits for someone to
+remember the CLI.
 
 ### What replay can and cannot catch
 
@@ -102,6 +129,69 @@ written. The one real-store write it can make is the same one-off
 `llm_connections/` migration the app itself runs at startup, on a library old
 enough to predate that feature. Live runs cost API credits, so they are opt-in
 and the result is a report, never a gate.
+
+## The decide gate
+
+`decide()` (spec 7.4) replaces three call sites' hand-written prompts and
+parsers -- the scene-break check, the voice-drift check and the next-speaker
+pick -- with one decision contract answered by structured generation. Each
+call site switches only when the structured parse **equals or beats** today's
+on recorded replies, offline: `evals/gate.py`, run by `--gate` and by pytest
+(`backend/tests/test_decide_gate.py`).
+
+- **A conversion** (`gate.Conversion`, one per call site, in `gate.GATES`)
+  names the decision items the production builder makes from a fixed fixture,
+  today's parser, the production mapping from a parsed answer to what the
+  call site stores, and its corpus.
+- **A corpus** is `gate/<conversion>.json`: a list of entries, each a reply
+  to today's prompt (`legacy`) and a reply of the same shape to the decide
+  prompt (`decide`), with what the reply means (`intended`) and, where a
+  conversion needs them, its other replies (`aux`). It starts from today's
+  parser tests: every input string those tests feed the legacy parser is the
+  `legacy` of some entry, and `test_every_legacy_parse_case_is_a_gate_entry`
+  holds that before the tests themselves are deleted.
+- **Outcomes are whole.** Each side is scored by the value the call site acts
+  on -- a verdict with its stored reason, a speaker with its issue string --
+  never a boolean alone. Where the call site checks a parsed value further
+  before storing it (voice drift's `check_failure`), that production check is
+  the conversion's `settle`, applied to both sides alike. `gate.judge`
+  guards it both ways: a `settle` that binds anything from `legacy.py`, at
+  any depth (through a helper, a closure or a partial), would
+  carry today's parse onto the decide side, and one that merges outcomes the
+  corpus tells apart would pass any gate, so each is refused before scoring
+  (`test_decide_gate.py` plants both). The speaker's
+  outcome is `_select`'s `(next, issue)` pair, so both of today's issue
+  strings -- `missing or invalid handoff` and `ineligible or repeated
+  speaker` -- are part of what the gate compares.
+- **The rule**: wherever today's parse reaches `intended`, the decide parse
+  must too. It may win an entry today's parse loses; it may never lose one.
+  `--gate` prints one line per conversion
+  (`<id>: legacy 19/24, decide 24/24 -- PASS`) and exits non-zero on a
+  regression, naming it.
+- **A deliberate change says so.** An entry whose `intended` is a change of
+  behaviour the switch brings by ruling, rather than today's reading of the
+  reply (a title cut to its first line, a case-folded speaker ref), carries a
+  `ruling`: the sentence saying why. `--gate` prints each one under its
+  conversion's line, with whether today's parse loses it, so a legacy loss by
+  ruling is visible beside the score instead of counted as a parser win.
+- **One item per conversion.** `gate.judge` refuses a conversion whose
+  builder makes more than one decision item: every call site converted so far
+  sends one. A conversion whose call site sends several (slice G's
+  continuity checks, one item per row or candidate, against legacy parsers
+  that answer a whole batch) either extends `judge` to score a multi-item
+  reply as one outcome, or writes its corpus as per-entry items, one row or
+  candidate per entry.
+- **Today's parsers are frozen** in `legacy.py`, verbatim, and imported from
+  nowhere in production: the switch deletes the originals, and the gate has to
+  keep measuring against what they did. The copies are never edited.
+  `legacy.py` imports the standard library alone, and every conversion's
+  `legacy` must call through it and bind no production parser module
+  (`test_every_conversion_parses_today_through_the_frozen_copy`).
+
+What it cannot show is the other half of the switch: whether a model, given
+the decide prompt and schema, writes the right answer. Each conversion lands
+with a permanent `decide-*` case beside its corpus, which holds that prompt's
+contract offline, and `--live` (above) is the only thing that asks a model.
 
 ## How a case works
 
@@ -194,7 +284,8 @@ and renders the drivers and controls addenda whole.
   (`bloated`, `collapsed`, `no-fence`, `unknown-check`, `unclosed`,
   `truncated`, `no-summary`, `laundered`, `leaked`, `monologue`, `out-talked`,
   `chorus`, `slop`, `flat`, `terse`, `undecodable`, `merged`, `unknown-id`,
-  `eager`, `unfounded`, `timid`, `cloned`, `bad-date`, `unknown-ref`)
+  `eager`, `unfounded`, `timid`, `cloned`, `bad-date`, `unknown-ref`,
+  `wrong`, `no-reason`, `no-note`, `long-note`, `off-roster`, `abstained`)
   and is never touched by a live run.
 
 A file in `recordings/` that no case claims fails `test_no_orphan_recordings` —

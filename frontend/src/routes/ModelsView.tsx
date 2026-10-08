@@ -98,13 +98,22 @@ function Problem({ text }: { text: string | null }) {
   return text ? <p className="field-hint problem">{text}</p> : null;
 }
 
-/** The routes whose resolution came from Decision, from the view's `role`. */
+/** The routes that use Decision (the view's `uses`), and for each one that
+ *  Decision does not itself supply, the role it inherits -- with Decision
+ *  unset the decide routes still use it, and setting it moves them. */
 function DecisionRoutes({ routes }: { routes: RouteRow[] }) {
-  const using = routes.filter((r) => r.role === "decision");
+  const using = routes.filter((r) => r.uses === "decision");
   if (using.length === 0) return <p className="field-hint">No route uses Decision yet.</p>;
   return (
     <ul aria-label="Routes using Decision">
-      {using.map((r) => <li key={r.key}><Link to={routePath(r.key)}>{r.label}</Link></li>)}
+      {using.map((r) => (
+        <li key={r.key}>
+          <Link to={routePath(r.key)}>{r.label}</Link>
+          {r.role && r.role !== "decision" && (
+            <span className="field-hint"> — inherits {ROLE_LABEL[r.role]}</span>
+          )}
+        </li>
+      ))}
     </ul>
   );
 }

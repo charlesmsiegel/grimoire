@@ -1,0 +1,19 @@
+{#- The scene-break title call's one user message (`scene_break.build_title_prompt`).
+    Vars:
+      title — the scene's own title, so the next one is not a restatement of
+              it. "" when untitled.
+      facts — dict from chronicle.scene_facts(): location (str), date (str),
+              cast ([str] of "<kind>/<id>" refs). `title` and `facts` render
+              as the head scene_break/user.j2 shows, through the same
+              snippets/scene_break_head.j2.
+      reason — the stored verdict's reason (what resolved). "" renders nothing.
+      transcript — str (see snippets/transcript.j2): the posts the verdict was
+              formed from, the same text scene_break/user.j2 showed. -#}
+{%- include "snippets/scene_break_head.j2" -%}
+{%- if reason -%}
+Why it ended: {{ reason }}
+
+{% endif -%}
+The scene since it was last considered:
+
+{{ transcript }}

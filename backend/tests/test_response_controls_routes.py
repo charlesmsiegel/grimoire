@@ -3,7 +3,7 @@ import pytest
 
 from grimoire import routes, store
 from grimoire.llm_errors import LLMError
-from tests.llm_fakes import FakeLLM
+from tests.llm_fakes import FakeLLM, decision_reply
 from tests.test_character_turns import seed
 
 
@@ -80,7 +80,9 @@ def test_retry_after_same_length_player_edit_is_refused(client):
     assert fake.calls == 1
 
 
-@pytest.mark.parametrize("answer", ["not json", "{}", '{"next":"pcs:seraphine"}', '{"next":"absent"}'])
+@pytest.mark.parametrize("answer", ["not json", decision_reply({}),
+                                    decision_reply({"next": "pcs:seraphine"}),
+                                    decision_reply({"next": "absent"})])
 def test_invalid_selector_stops_without_a_repair_or_actor_call(client, answer):
     cid, sid = seed(client)
     fake = FakeLLM([[answer]])

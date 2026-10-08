@@ -15,7 +15,6 @@
     "index": 1
   },
   "backend/src/grimoire/routes/scenes.py": {
-    "arg-type": 1,
     "var-annotated": 1
   },
   "backend/src/grimoire/routes/streaming.py": {

@@ -1131,7 +1131,12 @@ class UsableInference(ResolvedInference):
 
     @property
     def conn(self) -> dict:
-        return self.attempts[0].conn
+        """The connection dict the facade is sent (`ResolvedInference._sent`):
+        the primary attempt's, or the fallback's when a decide resolution
+        `skipped` the primary."""
+        sent = self._sent
+        assert sent is not None, "a usable resolution always resolved an attempt"
+        return sent.conn
 
 
 def _narrowed(resolved: ResolvedInference) -> UsableInference:
@@ -1488,7 +1493,33 @@ def _require_scene(cid: str, sid: str) -> dict:
         raise HTTPException(status_code=404, detail="scene not found")
 
 
-def _soft_inference(resolve: Callable[[], ResolvedInference]) -> tuple[dict | None, str]:
+def _soft_resolved(resolve: Callable[[], UsableInference]
+                   ) -> tuple[UsableInference | None, str, str]:
+    """A resolution that may fail without failing its caller, or why it has
+    none: `(None, reason, kind)` in place of the seam's raised refusal, and
+    `(resolved, "", "")` when it resolved.
+
+    `reason` is the refusal's sentence, which names the provider and model;
+    `kind` is its fixed vocabulary (`missing_key`, `incapable`, ...; "" for a
+    refusal that carries none), which is what a log line may say.
+
+    `_soft_inference` is this, keeping the connection dict. The resolution
+    itself is for a caller that hands it on whole -- the scene-break title,
+    which runs only after a verdict has been stored, and whose failure must
+    leave that verdict standing with no title rather than lose it. Takes a
+    THUNK for `_soft_inference`'s reason: the task stays a literal at the call
+    site, where `test_routing_guard.py` reads it.
+    """
+    try:
+        return resolve(), "", ""
+    except HTTPException as exc:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            return None, str(detail.get("detail")), str(detail.get("kind") or "")
+        return None, str(detail), ""
+
+
+def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None, str]:
     """A SECONDARY absorb phase's connection, or why it has none (#142).
 
     `(None, reason)` rather than a raised 409, because the three phases below
@@ -1503,11 +1534,8 @@ def _soft_inference(resolve: Callable[[], ResolvedInference]) -> tuple[dict | No
     forwarded `task` would hide all three calls from it behind one unroutable
     one -- which is how a routing map goes stale without anything failing.
     """
-    try:
-        return resolve().conn, ""
-    except HTTPException as exc:
-        detail = exc.detail
-        return None, str(detail.get("detail") if isinstance(detail, dict) else detail)
+    resolved, why, _kind = _soft_resolved(resolve)
+    return (None, why) if resolved is None else (resolved.conn, "")
 
 
 def computes_only(fn):

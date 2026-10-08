@@ -79,7 +79,7 @@ class OpenRouterClient:
             )
         return self._http
 
-    def _payload(self, messages, model, stream, sampling=None):
+    def _payload(self, messages, model, stream, sampling=None, schema=None):
         # `usage.include` is what makes OpenRouter attach token counts and the
         # call's cost in credits to the final SSE chunk (#152). Free, and
         # accepted by every model on the platform -- unlike the equivalent
@@ -90,8 +90,19 @@ class OpenRouterClient:
         # Merged FIRST so it can never overwrite a field this adapter owns: its
         # keys are sampler wire names and cannot collide today, and if one ever
         # did, the request's own shape must win over a preset.
-        return {**(sampling or {}), "model": model, "messages": messages, "stream": stream,
-                "usage": {"include": True}}
+        #
+        # `schema` asks for structured output (spec 7.2) and is only ever given
+        # for an attempt its resolver flagged capable; absent, the body is the
+        # one sent before it existed. Strict, so the reply is held to the
+        # schema rather than guided by it -- which is why `decisions` keeps the
+        # schema to strict mode's subset. The name is required and says nothing.
+        payload = {**(sampling or {}), "model": model, "messages": messages, "stream": stream,
+                   "usage": {"include": True}}
+        if schema is not None:
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {"name": "reply", "strict": True, "schema": schema}}
+        return payload
 
     def _headers(self, key: str) -> dict[str, str]:
         """`Authorization` only when there is something to authorize with.
@@ -110,7 +121,8 @@ class OpenRouterClient:
 
     async def stream(self, messages, model: str, key: str,
                      usage: dict | None = None,
-                     sampling: dict | None = None) -> AsyncIterator[str]:
+                     sampling: dict | None = None,
+                     schema: dict | None = None) -> AsyncIterator[str]:
         """`usage`, when given, is filled in place with what the provider
         reported about this call — see `llm_usage`. It arrives on the last
         chunk, long after the caller has consumed the deltas it wanted, which
@@ -121,7 +133,7 @@ class OpenRouterClient:
             http = self._client()
             async with http.stream(
                 "POST", API_URL, headers=self._headers(key),
-                json=self._payload(messages, model, True, sampling),
+                json=self._payload(messages, model, True, sampling, schema),
                 # The facade owns the read bound (#243) — it is the configurable,
                 # provider-independent one, and a read timeout here would cap it
                 # at 120s no matter what the user set, including "0 = no bound".

@@ -152,6 +152,27 @@ def choose(route: routing.Route | None, *, campaign: dict, glob: dict,
     return Choice(got, supplier, "role", scope, fallback_of(used))
 
 
+def walked_role(route: routing.Route, *, campaign: dict, glob: dict,
+                exists: Callable[[str], bool]) -> str:
+    """The role `choose` walks for `route` -- the role a settings row says the
+    route USES -- or "" when a pin answers it. Not `Choice.role`, which is the
+    role that SUPPLIED the selection: an unset Decision role inherits Fast, so
+    a decide route that uses Decision is supplied by Fast (or Primary).
+
+    The same four steps as `choose`, stopped at the role rather than walked
+    to a selection."""
+    scoped = campaign if route.campaign_scoped else {}
+    named = _named_role(scoped, route.key)
+    if named:
+        return named
+    if _pin_slot(scoped, route.key, exists) is not None:
+        return ""
+    used = _named_role(glob, route.key) or route.default_role
+    if _role_slot(scoped, used, exists) is None and _pin_slot(glob, route.key, exists):
+        return ""
+    return used
+
+
 def choose_role(role: str, *, campaign: dict, glob: dict,
                 exists: Callable[[str], bool]) -> Choice:
     """A ROLE's own answer, with no route in front of it: what a role card

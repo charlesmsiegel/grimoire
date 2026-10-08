@@ -435,3 +435,181 @@ def test_swipe_state_of_hand_edited_prose_names_no_variant(client):
     state = client.get(_swipe_path(base, rid)).json()
     assert state["edited"] is True and state["active"] is None
     assert len(state["variants"]) == 2
+
+
+# --- the speaker pick as a decision item (slice F, spec 7.4) ---------------
+
+_SPEAKERS = [{"ref": "characters:mara", "name": "Mara"},
+             {"ref": "characters:winifred", "name": "Winifred"}]
+_HEARD = [{"speaker": "You", "content": "Winifred, where were you when the tide turned?"}]
+
+
+def test_selector_item_offers_the_roster_and_grimoire_and_allows_none():
+    """One choice, `next`, over every eligible ref -- described by its name --
+    and `grimoire`, with null allowed: null is how the selector hands control
+    back to the player. The context is the observable transcript, and the user
+    direction only when there is one."""
+    from grimoire import decisions, prompts
+    from grimoire.store import response_protocol as rp
+
+    item = rp.selector_item(_SPEAKERS, _HEARD)
+    decisions.validate([item])
+    (choice,) = item.questions
+    assert isinstance(choice, decisions.Choice)
+    assert choice.id == rp.SELECTOR_QUESTION == "next"
+    assert choice.allow_none
+    assert choice.instructions == prompts.render("scene/response_selector_question.j2")
+    assert [(o.id, o.description, o.aliases) for o in choice.options] == [
+        ("characters:mara", "Mara", ()), ("characters:winifred", "Winifred", ()),
+        (rp.GRIMOIRE_REF, prompts.render("scene/response_selector_grimoire.j2"), ())]
+    assert rp.GRIMOIRE_REF == "grimoire"
+    assert item.context == prompts.render("scene/response_selector_context.j2",
+                                          conversation=_HEARD, note="")
+    assert item.context.startswith("Observable transcript: ")
+    assert "Winifred, where were you" in item.context
+    assert "User direction" not in item.context
+    noted = rp.selector_item(_SPEAKERS, _HEARD, note="Let Mara answer first.")
+    assert noted.context == item.context + "\nUser direction: Let Mara answer first."
+    assert noted.questions == item.questions
+
+
+@pytest.mark.parametrize("first,second", [
+    ("characters:mara", "Characters:Mara"),           # case
+    ("characters:mara", "characters:mara "),          # surrounding space
+    ("characters:mara-vale", "characters:mara_vale"),  # separator
+    ("characters:mara-vale", "characters:mara vale"),
+    ("Grimoire", "characters:mara"),                  # the grimoire option's own id
+], ids=["case", "space", "hyphen-underscore", "hyphen-space", "grimoire"])
+def test_selector_item_refuses_a_roster_whose_refs_collide_once_normalised(first, second):
+    """Two offered ids that differ only in case or separator would read as one
+    answer, so the request is refused before anything is sent (Task 10 maps
+    the refusal to `INVALID_HANDOFF`, plan Minor 15)."""
+    from grimoire import decisions
+    from grimoire.store import response_protocol as rp
+
+    roster = [{"ref": first, "name": "Mara"}, {"ref": second, "name": "Mara again"}]
+    with pytest.raises(decisions.DecideRequestError, match="collides"):
+        decisions.validate([rp.selector_item(roster, _HEARD)])
+
+
+def test_the_issue_constants_are_todays_strings():
+    """`selection_of` must store exactly what `validate_handoff` reports, and
+    what `character_turns._HANDOFF_ISSUES` ends a Directed chain on."""
+    from grimoire.routes import character_turns
+    from grimoire.store import response_protocol as rp
+
+    assert rp.INVALID_HANDOFF == "missing or invalid handoff"
+    assert rp.INELIGIBLE == "ineligible or repeated speaker"
+    assert validate_handoff(None, [], []) == (None, rp.INVALID_HANDOFF)
+    assert validate_handoff({"next": "absent"}, [], []) == (None, rp.INELIGIBLE)
+    assert {rp.INVALID_HANDOFF, rp.INELIGIBLE} <= character_turns._HANDOFF_ISSUES
+
+
+def _selected(reply):
+    from grimoire import decisions
+    from grimoire.store import response_protocol as rp
+
+    item = rp.selector_item(_SPEAKERS, _HEARD)
+    (result,) = decisions.parse(reply, [item], explain=False)
+    return rp.selection_of(result)
+
+
+def test_selection_of_an_answer_is_the_speaker_with_no_issue():
+    assert _selected('{"0": {"answers": {"next": "characters:winifred"}}}') == (
+        "characters:winifred", None)
+    assert _selected('{"0": {"answers": {"next": "grimoire"}}}') == ("grimoire", None)
+
+
+def test_selection_of_null_returns_control_without_an_issue():
+    from grimoire import decisions
+    from grimoire.store import response_protocol as rp
+
+    assert _selected('{"0": {"answers": {"next": null}}}') == (None, None)
+    abstained = decisions.ItemResult({"next": decisions.Answer(None, "abstained")})
+    assert rp.selection_of(abstained) == (None, None)
+
+
+def test_selection_of_an_off_roster_answer_raises_the_ineligible_issue():
+    from grimoire.store import response_protocol as rp
+
+    for ref in ('"pcs:seraphine"', '"absent"', "5", "true"):
+        assert _selected(f'{{"0": {{"answers": {{"next": {ref}}}}}}}') == (
+            None, rp.INELIGIBLE), ref
+
+
+def test_selection_of_an_unreadable_answer_raises_the_invalid_handoff_issue():
+    from grimoire import decisions
+    from grimoire.store import response_protocol as rp
+
+    for reply in ("not json", "{}", '{"0": {"answers": {}}}', '{"0": {"answers": {"next'):
+        assert _selected(reply) == (None, rp.INVALID_HANDOFF), reply
+    # Every other reason a backend can give is the same issue: only an answer
+    # present and naming nobody listed is ineligible.
+    for reason in ("refused", "error", "unreadable"):
+        result = decisions.ItemResult({"next": decisions.Answer(None, reason)})
+        assert rp.selection_of(result) == (None, rp.INVALID_HANDOFF), reason
+    # No answer at all for the question is unreadable, never a hand-back.
+    assert rp.selection_of(decisions.ItemResult({})) == (None, rp.INVALID_HANDOFF)
+
+
+# --- what the speaker pick reads (the route and the decide-speaker case alike)
+
+def test_npc_roster_is_the_present_cast_but_the_player():
+    """A scene's cast as roster entries -- `kind:id` refs named by the cast's
+    names, in cast order -- with the player's own character left out: the
+    shape the planner plans over and `selector_item` offers."""
+    from grimoire.store import response_protocol as rp
+
+    cast = [{"kind": "characters", "id": "mara", "name": "Mara", "role": "npc"},
+            {"kind": "pcs", "id": "rowan", "name": "Rowan", "role": "player"},
+            {"kind": "characters", "id": "winifred", "name": "Winifred", "role": "npc"}]
+    assert rp.npc_roster(cast) == _SPEAKERS
+    assert rp.npc_roster([]) == []
+
+
+def _post(n, **extra):
+    return {"role": "assistant", "speaker": "Mara", "content": f"post {n}", **extra}
+
+
+def test_observable_conversation_is_the_last_twelve_posts_in_context_through_the_view():
+    """The last twelve posts IN CONTEXT -- a hidden post neither shows nor
+    takes a slot -- each through the caller's view, which is handed the window
+    from the first kept post on with its offset and the whole transcript's
+    length (so a depth-limited rule counts over the whole scene). A synthetic
+    line keeps its slot and is dropped from what the pick reads, and a post
+    with no speaker is the player's or the narrator's by its role."""
+    from grimoire import store
+    from grimoire.store import response_protocol as rp
+
+    messages = [_post(n) for n in range(14)]
+    messages[13] = {"role": "user", "content": "post 13"}
+    messages[12] = {"role": "assistant", "content": "post 12"}
+    messages[11] = _post(11, speaker=store.scenes.DIRECTOR_SPEAKER)
+    messages[5] = _post(5, excluded="2026-10-08T00:00:00Z")
+    calls = []
+
+    def view(posts, offset, total):
+        calls.append((len(posts), offset, total))
+        return [{**m, "content": m["content"].upper()} for m in posts]
+
+    got = rp.observable_conversation(messages, view)
+    # Kept: 1-4 and 6-13, twelve posts in context; the window starts at 1.
+    assert calls == [(13, 1, 14)]
+    assert got == [{"speaker": "Mara", "content": f"POST {n}"} for n in (1, 2, 3, 4, 6, 7, 8,
+                                                                         9, 10)] + [
+        {"speaker": "Grimoire", "content": "POST 12"},
+        {"speaker": "You", "content": "POST 13"}]
+
+
+def test_observable_conversation_of_an_empty_or_all_hidden_scene_is_empty():
+    from grimoire.store import response_protocol as rp
+
+    seen = []
+
+    def view(posts, offset, total):
+        seen.append((posts, offset, total))
+        return posts
+
+    assert rp.observable_conversation([], view) == []
+    assert rp.observable_conversation([_post(0, excluded="x")], view) == []
+    assert seen == [([], 0, 0), ([], 1, 1)]

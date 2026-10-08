@@ -20,8 +20,10 @@ Each grader returns a list of Check. A case passes when every check passes.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+from grimoire import decisions
 from grimoire.store import absorb, fence, length_drift, scenes, suggest
 from grimoire.store.continuity import drivers, identity, reconcile
 
@@ -677,6 +679,48 @@ def grade_scene_suggestions(text: str, snapshot: dict, controls, provider) -> li
     if controls.anchor and controls.relation == "on":
         out.append(_on_derived(checked, snapshot, controls, provider))
     return out
+
+
+# ------------------------------------------------------------------ decisions
+
+def grade_decision(text: str, items: Sequence[decisions.Item], *, explain: bool,
+                   question: str, expected: object,
+                   max_rationale: int | None = None) -> list[Check]:
+    """Does a one-item decision reply decode, answer `question` with
+    `expected`, and -- when `explain` asked it to -- say why?
+
+    Read the app's way, through `decisions.parse`, which never raises and reads
+    a value of the wrong type (the string "true", a `1` for a predicate) as
+    `None` rather than a default. `decide.json` is the one check scored on the
+    raw reply, because `parse` answers every item whatever it was sent: whether
+    the reply held an object at all is `decisions.find_object`'s answer, the
+    parser's own first step. With no object the answer and rationale checks are
+    not reported, as `fence.present` short-circuits the fence checks.
+
+    `decide.answer` compares the type as well as the value, so a choice id and
+    a level index cannot pass for each other, nor `1` for `True`.
+    `max_rationale` caps `decide.rationale` too, where the call site refuses a
+    longer one (voice drift's `MAX_NOTE`). A decision asked with no rationale
+    (`explain=False`, the speaker pick) has no `decide.rationale` to fail.
+    """
+    if decisions.find_object(text) is None:
+        return [Check("decide.json", False, "no JSON object recoverable from the reply")]
+    (result,) = decisions.parse(text, items, explain=explain)
+    answer = result.answers[question]
+    checks = [Check("decide.json", True),
+              Check("decide.answer", answer.answer == expected
+                    and type(answer.answer) is type(expected),
+                    f"{question} answered {answer.answer!r} ({answer.reason or 'read'}), "
+                    f"expected {expected!r}")]
+    return [*checks, _rationale_check(result.rationale, max_rationale)] if explain else checks
+
+
+def _rationale_check(rationale: str, cap: int | None) -> Check:
+    if not rationale.strip():
+        return Check("decide.rationale", False, "no rationale, though the prompt asked for one")
+    return Check("decide.rationale", cap is None or len(rationale) <= cap,
+                 f"a rationale of {len(rationale)} characters, over the {cap} the call "
+                 f"site accepts")
 
 
 # ------------------------------------------------------------ prompt contract

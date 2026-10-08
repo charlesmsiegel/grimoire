@@ -1,17 +1,24 @@
 """Heuristic scene-break detection (#84): score the signals a scene already
-carries, and build the prompt that asks the model to confirm a crossing.
+carries, and build the decision that asks the model to confirm a crossing.
 
 Two halves, in that order, and the order is the whole design. The heuristic is
 deterministic and free -- it reads counts a scene already keeps (`location_history`,
 `time_history`, the transcript's length) and decides whether anything has
 happened that is worth a question. Only a crossing pays for the second half, one
-short call that answers the question a count cannot: whether the story actually
-reached a resting point, or merely moved rooms mid-argument.
+short decision that answers the question a count cannot: whether the story
+actually reached a resting point, or merely moved rooms mid-argument (and, only
+when it did, a second short call that names the scene that would start next).
 
 No file IO and no LLM call live here, the split every LLM-backed store module
 follows (see rolling_summary.py, taglines.py, absorb/prompt.py): the caller
 hands in what it read, the route makes the call, and the prompt text lives in
-templates/scene_break/.
+templates/scene_break/ and templates/scene_break_title/.
+
+The confirmation is a `decide()` call (spec 7.4): `build_item` is the question
+as a decision item, `verdict_of` maps its answer to what the route stores, and
+the title -- which a closed question cannot carry -- is drafted by its own call
+(`build_title_prompt`, `parse_title`) once a YES has landed, on the `summary`
+route's model rather than the Decision role's.
 
 Three things this deliberately does NOT do:
 
@@ -33,9 +40,7 @@ Three things this deliberately does NOT do:
 
 from __future__ import annotations
 
-import json
-
-from .. import prompts
+from .. import decisions, prompts
 from . import calendars
 
 #: The score a scene must reach for a confirmation call to be worth making.
@@ -226,9 +231,31 @@ def _time_detail(advanced: int, gap: int | None) -> str:
             + (" — a long skip" if size >= LONG_SKIP_MINUTES else ""))
 
 
-def build_prompt(transcript: str, signals: list[dict], facts: dict | None = None,
-                 title: str = "") -> list[dict]:
-    """The confirmation call's system/user pair.
+# ---- the decision (spec 7.4): what `decide()` is asked, and what it answers ----
+
+#: The predicate's id: "is this scene over?"
+QUESTION_ID = "over"
+
+#: The longest title stored. Structural, not measured: a title is one
+#: frontmatter line shown in a chip, and the title prompt asks for about six
+#: words, so this only bounds a reply that ignored that.
+TITLE_MAX = 80
+
+#: Quotation marks a model wraps a title in, as (opening, closing). Stripped
+#: only as a pair around the whole reply: one alone is part of the title --
+#: "'Tis the Season", "The Sisters'" -- not decoration.
+_QUOTE_PAIRS = (('"', '"'), ("'", "'"), ("`", "`"),
+                ("\u201c", "\u201d"), ("\u2018", "\u2019"))
+#: Stripped from a title's end: the prompt asks for no trailing punctuation.
+_TRAILING = ".!?:;"
+
+
+def build_item(transcript: str, signals: list[dict], facts: dict | None = None,
+               title: str = "") -> decisions.Item:
+    """The confirmation as a decision item: the legacy user message, unchanged,
+    as its context, and one predicate whose instructions are the legacy system
+    prompt's criteria (`scene_break/question.j2`). The reply format is
+    `decide`'s own, and the reason travels as the item's rationale (`explain`).
 
     `transcript` is the posts since the last question rather than the whole
     scene: the question is whether the story has arrived somewhere since it was
@@ -238,53 +265,75 @@ def build_prompt(transcript: str, signals: list[dict], facts: dict | None = None
     `facts` is `chronicle.scene_facts()`, in for rolling_summary's reason and
     no other: a scene's first location and first date are set silently, so on
     exactly the ordinary scenes -- the ones that never move -- the transcript
-    does not say where or when it is. `title` is the scene's own, so a proposed
-    NEXT title is not a restatement of the one already on screen.
+    does not say where or when it is. `title` is the scene's own, shown so the
+    head says which scene this is.
     """
-    return [{"role": "system", "content": prompts.render("scene_break/system.j2")},
-            {"role": "user", "content": prompts.render(
-                "scene_break/user.j2", transcript=transcript, signals=signals,
-                facts=facts, title=title)}]
+    context = prompts.render("scene_break/user.j2", transcript=transcript,
+                             signals=signals, facts=facts, title=title)
+    return decisions.Item(context, (decisions.Predicate(
+        QUESTION_ID, prompts.render("scene_break/question.j2")),))
 
 
-def _extract_json(text: str):
-    """The reply as an object, tolerant of a model that wrapped it in prose.
-
-    Objects only, deliberately narrower than `suggest._extract_json`, which
-    also accepts a bare top-level array because the reply it parses is a LIST
-    of openings and answering with the array alone is the natural deviation
-    there. This reply is a single verdict; a bare array is not a shape it has a
-    reading for, so accepting one would only widen what can be misread.
-    """
-    candidates = [text.strip()]
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start:end + 1])
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
+def explain() -> str:
+    """The rationale instruction: one sentence of what resolved, or of what is
+    still unresolved. It becomes the stored reason."""
+    return prompts.render("scene_break/explain.j2")
 
 
-def parse_output(text: str) -> dict:
-    """`{"break": bool, "reason": str, "title": str}` out of the model's reply.
+def verdict_of(result: decisions.ItemResult) -> dict:
+    """`{"break", "reason", "title"}` from the item's result, the shape
+    `routes.scenes._break_commit` stores.
 
-    An unreadable reply is `break: false` with empty prose rather than an
-    exception, and that is the safe direction on purpose: this route runs
+    An answer that is not `True` -- `False`, or `None` for one nobody could read
+    -- is no break, and that is the safe direction on purpose: this runs
     automatically off the play loop, and the cost of a missed suggestion is
     that nobody is asked, where the cost of raising is an error banner over a
     scene the player is in the middle of.
 
-    Prose is collapsed to one line for `scenes.set_scene_break`'s reason --
+    The reason is collapsed to one line for `scenes.set_scene_break`'s reason --
     frontmatter is one line per key and its writer does not escape newlines --
-    but the store collapses again anyway, since that invariant must not depend
-    on which parser fed it.
+    though the store collapses again anyway, since that invariant must not
+    depend on which parser fed it. The title is empty: it is drafted by its own
+    call, and only once a YES has landed."""
+    answer = result.answers.get(QUESTION_ID)
+    return {"break": answer is not None and answer.answer is True,
+            "reason": " ".join(result.rationale.split()),
+            "title": ""}
+
+
+def build_title_prompt(transcript: str, facts: dict | None, title: str,
+                       reason: str) -> list[dict]:
+    """The title call's system/user pair: the same head and transcript the
+    verdict was formed from, and the verdict's reason when it gave one, so the
+    next scene is named from what resolved rather than guessed afresh."""
+    return [{"role": "system", "content": prompts.render("scene_break_title/system.j2")},
+            {"role": "user", "content": prompts.render(
+                "scene_break_title/user.j2", transcript=transcript, facts=facts,
+                title=title, reason=reason)}]
+
+
+def parse_title(text: str) -> str:
+    """The title out of the title call's reply, cleaned and capped.
+
+    The first non-empty line only: the reply is free text, and a model that
+    explains its title on the next line has not made the explanation part of
+    it. Its whitespace collapses to single spaces, for frontmatter's reason
+    (`verdict_of`'s docstring). Then, until neither applies, a quotation
+    mark that opens AND closes the whole title is stripped as a pair, and
+    trailing `.!?:;` is stripped -- the prompt asks for neither, so a model
+    that adds them has decorated the title rather than chosen it; an
+    apostrophe alone ("'Tis", "The Sisters'") is the title's own. The result
+    is cut at `TITLE_MAX`. Nothing left is `""`.
     """
-    parsed = _extract_json(text) or {}
-    return {"break": parsed.get("break") is True,
-            "reason": " ".join(str(parsed.get("reason") or "").split()),
-            "title": " ".join(str(parsed.get("title") or "").split())}
+    line = next((ln for ln in str(text or "").splitlines() if ln.strip()), "")
+    title = " ".join(line.split())
+    while True:
+        before = title
+        title = title.rstrip(_TRAILING).rstrip()
+        for opening, closing in _QUOTE_PAIRS:
+            if len(title) >= 2 and title[0] == opening and title[-1] == closing:
+                title = title[1:-1].strip()
+                break
+        if title == before:
+            break
+    return title[:TITLE_MAX].rstrip()

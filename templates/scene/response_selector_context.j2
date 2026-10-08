@@ -1,0 +1,11 @@
+{#- The speaker pick's item context (`response_protocol.selector_item`), which
+    `decide/user.j2` shows above the question.
+    Vars: conversation (list of {"speaker", "content"}: the observable
+    transcript `response_protocol.observable_conversation` gathers, through
+    the prompt-phase regex view), note (str, the round's user direction; "" when there is none,
+    which renders no line). The roster is not listed here: the choice's
+    options are the eligible refs. -#}
+Observable transcript: {{ conversation | tojson }}
+{%- if note %}
+User direction: {{ note }}
+{%- endif %}

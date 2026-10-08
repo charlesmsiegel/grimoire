@@ -28,7 +28,7 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from tests import review_runs
-from tests.llm_fakes import from_entries
+from tests.llm_fakes import decision_reply, from_entries
 
 ABSORB_JSON = (
     '{"one_line": "They met.", "summary": "A meeting.", "keywords": ["tea"],'
@@ -41,13 +41,16 @@ ABSORB_JSON = (
 _EXTRACTION = {"system_contains": "You are absorbing a completed role-play scene"}
 _AUDIT = {"system_contains": "You are auditing a completed role-play scene"}
 _DOSSIER = {"system_contains": "You are updating a game master's dossier"}
-_VOICE = {"system_contains": "You are checking one character's dialogue"}
+#: The voice check is a `decide()` call, told apart from other decisions by
+#: its context (slice F).
+_VOICE = {"system_contains": "You answer closed questions about material you are given.",
+          "user_contains": "Voice anchor:"}
 
 
 def _fake():
     return from_entries([{"when": _EXTRACTION, "reply": ABSORB_JSON},
                          {"when": _DOSSIER, "reply": "Aese is steady."},
-                         {"when": _VOICE, "reply": '{"verdict": "in_voice", "note": ""}'},
+                         {"when": _VOICE, "reply": decision_reply({"verdict": "in_voice"})},
                          {"when": _AUDIT, "reply": '{"warnings": [], "sheet_deltas": []}'}])
 
 
@@ -390,7 +393,7 @@ def test_a_retry_of_a_scene_that_moved_is_refused_before_a_token_is_spent(client
             sent.append(m)
             yield "{}"
 
-        async def complete(self, m, cfg, usage=None):
+        async def complete(self, m, cfg, usage=None, *, schema=None):
             sent.append(m)
             return "{}"
 

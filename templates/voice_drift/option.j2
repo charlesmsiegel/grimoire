@@ -1,0 +1,13 @@
+{#- One verdict of the voice-drift choice, described (`voice_drift.build_item`
+    renders it once per option). Vars: `verdict` -- "drift", "in_voice" or
+    "not_enough", the option's id, which `decide/user.j2` lists beside this
+    text. Each description is that verdict's bullet in the legacy one-call
+    prompt (the `system.j2` slice F deleted), word for word after its label
+    (`verify_templates.py`'s VOICE_DRIFT_OPTIONS holds each, by verdict). -#}
+{%- if verdict == "drift" -%}
+they spoke, and they sounded wrong against that standard.
+{%- elif verdict == "in_voice" -%}
+they spoke enough to judge, and they sounded right against that standard.
+{%- elif verdict == "not_enough" -%}
+they were silent, or said too little to tell. This is a real answer, not a fallback: use it whenever you cannot actually hear the voice in this scene. Do NOT report `in_voice` for a character who barely spoke — saying nothing is not evidence of sounding right, and a standing correction stays in force until a scene shows otherwise.
+{%- endif -%}

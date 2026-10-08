@@ -4,11 +4,19 @@
 is how every test that must not reach a provider swaps one of these in, and
 these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
-    async def stream(messages, conn, usage=None) -> AsyncIterator[str]
-    async def complete(messages, conn, usage=None) -> str
+    async def stream(messages, conn, usage=None, *, schema=None) -> AsyncIterator[str]
+    async def complete(messages, conn, usage=None, *, schema=None) -> str
     async def single(messages, conn, usage=None) -> str
     async def list_models(conn) -> list[dict]
     async def check(conn) -> None
+
+`schema` is the JSON Schema `decide` asks the facade for (slice F, spec 7.2).
+`complete` records it in `schemas`, one entry per call (None when the call
+passed none), and consumes `stream` WITHOUT forwarding it -- so a fake that
+overrides `stream(messages, conn, usage=None)` alone still takes it. `stream`
+accepts it for signature parity and records nothing: the facade's decide path
+only completes. `single` takes no `schema`, exactly as the facade's does not:
+a model test asks one model one question, and nothing asks it for a schema.
 
 `usage` is the accounting holder the real facade fills in place (#152). Every
 call stamps the route it ran on, exactly as `llm._stamp` does -- not a courtesy,
@@ -56,7 +64,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from pathlib import Path
 
@@ -98,6 +106,8 @@ class Cassette:
     An entry may carry `error` (`{"kind", "message"}`) instead: the matching
     request then fails upstream before any delta, which is how a test fails ONE
     call (a turn) while the calls beside it (a background update) answer.
+    An entry may also name a `model`: it then answers only a request sent on
+    that model (`entry`).
     """
 
     def __init__(self, data: dict, name: str = "<inline>"):
@@ -129,30 +139,51 @@ class Cassette:
                 return False
         return True
 
-    def reply(self, messages: list[dict]) -> list[str]:
+    def reply(self, messages: list[dict], model: str | None = None) -> list[str]:
         """The deltas for this request, or `CassetteMiss` naming what was tried."""
+        return self.deltas(self.entry(messages, model))
+
+    def entry(self, messages: list[dict], model: str | None = None) -> dict:
+        """The first entry matching this request, or `CassetteMiss` naming
+        what was tried.
+
+        An entry may name a `model`, and then matches only a request sent on
+        that model -- which is how a primary and its fallback answer apart.
+        The key is honoured or refused, never ignored: asked with no `model`,
+        reaching such an entry is a `ValueError`, so a primary-only entry
+        cannot answer a request whose model nobody said."""
         for entry in self.entries:
+            if "model" in entry:
+                if model is None:
+                    raise ValueError(
+                        f"cassette {self.name}: an entry names model {entry['model']!r}, "
+                        "but this request was read without one")
+                if entry["model"] != model:
+                    continue
             if self._matches(entry.get("when", {}), messages):
-                if "error" in entry:
-                    err = entry["error"]
-                    raise LLMError(err.get("kind", "network"),
-                                   err.get("message", "connection reset"))
-                reply = entry["reply"]
-                if isinstance(reply, str):
-                    return [reply]
-                if isinstance(reply, list) and all(isinstance(d, str) for d in reply):
-                    return list(reply)
-                # A dict here means someone wrote the JSON payload as JSON
-                # instead of as the string the model would send; iterating it
-                # would stream its keys and fail somewhere far away from here.
-                raise ValueError(
-                    f"cassette {self.name}: a reply must be a string or a list of "
-                    f"strings, got {type(reply).__name__}")
+                return entry
         raise CassetteMiss(
             f"no entry in cassette {self.name!r} matches this request.\n"
             f"tried: {[e.get('when', {}) for e in self.entries]}\n"
             f"request roles: {[m.get('role') for m in messages]}\n"
             f"system message begins: {self._roles(messages, 'system')[:400]!r}")
+
+    def deltas(self, entry: dict) -> list[str]:
+        """`entry`'s reply as deltas, or the `LLMError` it carries, raised."""
+        if "error" in entry:
+            err = entry["error"]
+            raise LLMError(err.get("kind", "network"), err.get("message", "connection reset"))
+        reply = entry["reply"]
+        if isinstance(reply, str):
+            return [reply]
+        if isinstance(reply, list) and all(isinstance(d, str) for d in reply):
+            return list(reply)
+        # A dict here means someone wrote the JSON payload as JSON instead of as
+        # the string the model would send; iterating it would stream its keys
+        # and fail somewhere far away from here.
+        raise ValueError(
+            f"cassette {self.name}: a reply must be a string or a list of "
+            f"strings, got {type(reply).__name__}")
 
 
 class FakeLLM:
@@ -203,6 +234,9 @@ class FakeLLM:
         self.health_error = health_error
         self.requests: list[dict] = []
         self.calls = 0
+        #: The `schema=` each `complete` call passed, in order (None for a call
+        #: that passed none).
+        self.schemas: list[dict | None] = []
         #: The connections `list_models`/`check` were asked about, in order,
         #: and the outcomes a route filed back through `note_outcome`.
         self.listed: list[dict] = []
@@ -210,7 +244,9 @@ class FakeLLM:
         self.noted: list[tuple] = []
 
     # ---- the LLMClient surface ----
-    async def stream(self, messages, conn, usage=None):
+    async def stream(self, messages, conn, usage=None, *, schema=None):
+        # `schema` is accepted for the facade's signature and not recorded:
+        # `complete` records it, and the decide path only completes.
         # Stamped BEFORE anything can fail, like `llm._stamp`: the route is
         # known the moment the attempt starts, and an error frame still has to
         # say which connection produced it.
@@ -245,7 +281,11 @@ class FakeLLM:
         if self.stall:
             await asyncio.sleep(STALL_SECONDS)
 
-    async def complete(self, messages, conn, usage=None) -> str:
+    async def complete(self, messages, conn, usage=None, *, schema=None) -> str:
+        # The schema is recorded here and NOT forwarded to `stream`: the
+        # subclasses that hold or rewrite a request override
+        # `stream(messages, conn, usage=None)` and need not know it exists.
+        self.schemas.append(schema)
         # Consumes `stream`, exactly as the real `LLMClient.complete` does,
         # rather than reaching for the next turn itself. That is not a style
         # choice: a fake whose two methods are written separately drifts, and it
@@ -259,7 +299,8 @@ class FakeLLM:
         """The model test call's one attempt. A fake has no retries or fallback
         to skip, so this is `complete` -- consuming `stream` for the same reason
         `complete` does. That `single` itself skips both is held by the facade's
-        own tests and the route's wire tests, not by this double."""
+        own tests and the route's wire tests, not by this double. No `schema=`,
+        exactly as the facade's `single` takes none."""
         return "".join([delta async for delta in self.stream(messages, conn, usage)])
 
     async def list_models(self, conn) -> list[dict]:
@@ -299,8 +340,29 @@ class FakeLLM:
         self.requests.append({"messages": messages, "conn": conn})
         index, self.calls = self.calls, self.calls + 1
         if self.cassette is not None:
-            return self.cassette.reply(messages)
+            # The model of the attempt this fake was handed: it serves that
+            # attempt and no fallback, so an entry naming another model is not
+            # this request's.
+            return self.cassette.reply(
+                messages, effective_model(conn) if isinstance(conn, dict) else None)
         return self.turns[min(index, len(self.turns) - 1)]
+
+
+def decision_reply(*answers: dict, rationales: Sequence[str] = ()) -> str:
+    """A structured decision's reply, as `decisions.schema` shapes it (slice
+    F): `answers[i]` is item `i`'s `{question_id: value}`, and `rationales[i]`
+    (when given) its rationale. Returns the JSON string
+    `{"<i>": {"answers": ..., "rationale"?: ...}}`.
+
+    The one way a test writes a decide reply, so a change to the reply's
+    shape is made here once rather than in every hand-written string."""
+    body: dict[str, dict] = {}
+    for index, answer in enumerate(answers):
+        entry: dict = {"answers": dict(answer)}
+        if index < len(rationales):
+            entry["rationale"] = rationales[index]
+        body[str(index)] = entry
+    return json.dumps(body)
 
 
 def from_cassette(name: str) -> FakeLLM:
@@ -413,10 +475,10 @@ class StallingGateway(FakeCatalog):
             await asyncio.sleep(self.seconds)
         await super().check(conn)
 
-    async def complete(self, messages, conn, usage=None) -> str:
+    async def complete(self, messages, conn, usage=None, *, schema=None) -> str:
         if self.where == "complete":
             await asyncio.sleep(self.seconds)
-        return await super().complete(messages, conn, usage)
+        return await super().complete(messages, conn, usage, schema=schema)
 
     async def single(self, messages, conn, usage=None) -> str:
         if self.where == "single":
@@ -520,6 +582,33 @@ class SequencedProvider:
                 yield chunk
         finally:
             self.closed += 1
+
+
+class CassetteProvider:
+    """A provider that answers by request shape, as a cassette does.
+
+    For a test that needs a REAL facade -- its fallback, the `ATTEMPTED` stamp
+    it lays on the holder -- under calls that run concurrently and so cannot be
+    told apart by order: absorb's phases. Entries are `Cassette` entries,
+    matched by its own predicates (`model` included, which limits an entry to
+    the attempts sent that model: a primary and its fallback differ in nothing
+    else), with one key the gateway cassette has no use for: `stall`, seconds
+    held before the first delta -- a call the caller's own ceiling is meant to
+    cut off. Bounded, like `STALL_SECONDS`, so a ceiling that stopped firing
+    fails the test instead of hanging the suite."""
+
+    def __init__(self, entries: list[dict], name: str = "<provider>"):
+        self.cassette = Cassette({"entries": entries}, name)
+        self.requests: list[dict] = []
+
+    async def stream(self, messages, model="", *args, **kwargs):
+        self.requests.append({"messages": deepcopy(list(messages)), "model": model,
+                              "kwargs": kwargs})
+        entry = self.cassette.entry(messages, model)
+        if entry.get("stall"):
+            await asyncio.sleep(entry["stall"])
+        for delta in self.cassette.deltas(entry):
+            yield delta
 
 
 class RecordingProvider:

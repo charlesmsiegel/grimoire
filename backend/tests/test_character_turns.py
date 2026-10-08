@@ -1,7 +1,10 @@
 """Bounded individual response orchestration over the shared fake gateway."""
 
+import pytest
+
 from grimoire import routes, store
-from tests.llm_fakes import FakeLLM
+from tests.inference_fixtures import SAME_PROVIDER, SPARE, decide_only, format2, put_settings
+from tests.llm_fakes import FakeLLM, decision_reply
 
 
 def seed(client, module=None):
@@ -57,7 +60,7 @@ def test_explicit_continue_does_not_follow_handoff(client):
 
 def test_selector_can_stop(client):
     cid, sid = seed(client)
-    fake = FakeLLM([['{"next":null}']])
+    fake = FakeLLM([[decision_reply({"next": None})]])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
     assert response.status_code == 200
@@ -69,7 +72,7 @@ def test_old_combined_setting_cannot_disable_individual_generation(client):
     cid, sid = seed(client)
     store.config.write_config(character_response_mode="combined")
     fake = FakeLLM([
-        ['{"next":"characters:mara"}'],
+        [decision_reply({"next": "characters:mara"})],
         ['Mara answers.\n```handoff\n{"next":null}\n```'],
     ])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
@@ -406,7 +409,7 @@ def test_selector_and_reroll_capture_and_meter_each_actual_call(client):
     cid, sid = seed(client)
     fake = FakeLLM(
         [
-            ['{"next":"characters:mara"}'],
+            [decision_reply({"next": "characters:mara"})],
             ['Original.\n```handoff\n{"next":null}\n```'],
             ['Replacement.\n```handoff\n{"next":null}\n```'],
         ]
@@ -543,7 +546,7 @@ def test_explicit_single_response_has_no_successor_candidates(client):
 def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
     cid, sid = seed(client)
     fake = FakeLLM([
-        ['{"next":"characters:mara"}'],
+        [decision_reply({"next": "characters:mara"})],
         ['"Ready."\n```handoff\n{"next":"grimoire"}\n```'],
         ['The door opens.\n```handoff\n{"next":null}\n```'],
     ])
@@ -551,7 +554,10 @@ def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
     result = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                          json={"content": "Is it time?"})
     assert result.status_code == 200 and fake.calls == 3
-    selector, actor, narrator = [r["messages"][0]["content"] for r in fake.requests]
+    # The selector's criteria are its decide item's question, in the user
+    # message; the system message is the decide contract's.
+    selector = fake.requests[0]["messages"][1]["content"]
+    actor, narrator = [r["messages"][0]["content"] for r in fake.requests[1:]]
     assert "An established NPC's actions or physical reactions belong to that NPC" in selector
     assert "Do not select Grimoire to extend an established NPC's turn" in actor
     assert "Do not select Grimoire to extend an established NPC's turn" in narrator
@@ -562,6 +568,254 @@ def test_narrator_scope_reaches_selector_and_writer_after_npc_turn(client):
     roster, candidates = narrator.split("Present people:", 1)[1].split("Eligible next speakers:", 1)
     assert "characters:mara" in roster and "characters:winifred" in roster
     assert "characters:mara" not in candidates and "characters:winifred" in candidates
+
+
+# --- the speaker pick through decide() on the Decision role (slice F) ------
+
+def _round(cid, sid):
+    rounds = store.responses._scope(cid, sid, store.responses._read(cid))["rounds"]
+    return list(rounds.values())[-1]
+
+
+def _speakers(cid, sid):
+    return [m["speaker"] for m in store.scenes.read_scene(cid, sid)["messages"]
+            if m.get("response_id")]
+
+
+def _chat(client, cid, sid, content="Hello"):
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": content})
+    assert response.status_code == 200, response.text
+    return response
+
+
+def test_the_selector_meters_one_row_with_its_round(client):
+    """`decide()` opens the pick's meter, and the row still carries the
+    player post and the round it opened -- what attributes the pick's cost to
+    the post it answered -- plus how the decision was served."""
+    cid, sid = seed(client)
+    fake = FakeLLM([[decision_reply({"next": None})]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    record = _round(cid, sid)
+    (row,) = [r for r in store.usage.calls(campaign=cid) if r.get("task") == "response-selector"]
+    assert (row["post"], row["round_id"]) == (record["post"], record["id"])
+    assert row["post"] is not None and row["round_id"]
+    assert (row["operation"], row["decision_mode"]) == ("decide", "structured")
+    (schema,) = fake.schemas
+    assert schema is not None
+
+
+def test_the_selector_capture_is_the_decide_prompt(client):
+    """The prompt log records what was sent (spec 9.4, ruling 10): the decide
+    contract's system message with the reply's schema, and the item's context
+    and question -- not the retired one-call prompt."""
+    cid, sid = seed(client)
+    fake = FakeLLM([[decision_reply({"next": None})]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid, "Winifred, the lamps.")
+    (entry,) = [e for e in store.prompt_log.list_entries(cid, sid)
+                if e["task"] == "response-selector"]
+    captured = store.prompt_log.read_entry(cid, entry["id"], scene=sid)
+    assert captured is not None
+    sent = fake.requests[0]["messages"]
+    assert [row["text"] for row in captured["sections"]] == [m["content"] for m in sent]
+    system, user = sent
+    assert '"next"' in system["content"] and "characters:mara" in system["content"]
+    assert "Observable transcript:" in user["content"]
+    assert "Winifred, the lamps." in user["content"]
+    assert "Choose at most one initial speaker" in user["content"]
+    assert "Available NPCs:" not in system["content"] + user["content"]
+
+
+@pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
+def test_the_speaker_on_a_decide_only_model_answers_on_the_fallback(client, on):
+    """Review Focus 1: a Decision model that cannot generate is skipped for a
+    role fallback that can. The pick is asked of the fallback, nothing is
+    sent to the decide-only model, and the actor still writes on Primary --
+    the fallback on the decide-only model's own provider too (spec I-1)."""
+    cid, sid = seed(client)
+    decide_only(client, fallback=True, on=on)
+    fake = FakeLLM([[decision_reply({"next": "characters:mara"})],
+                    ['Mara answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    pick, actor = fake.requests
+    assert (pick["conn"]["id"], pick["conn"]["model"]) == on
+    assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
+    assert actor["conn"]["id"] == "openrouter"
+    assert _speakers(cid, sid) == ["Mara"]
+
+
+def _tracker_runs(client, cid, sid):
+    ident = store.scenes.scene_identity(cid, sid)
+    return [r for r in client.app.state.runs.for_subject(("scene", cid, ident))
+            if r.kind == "tracker-update"]
+
+
+@pytest.mark.tracker
+@pytest.mark.parametrize("body", [
+    {"content": "Hello there"},
+    {"content": "Somebody steer this.", "director": True},
+    {"content": ""},
+], ids=["post", "note", "continue"])
+def test_the_speaker_on_a_decide_only_model_without_a_fallback_is_refused(client, body):
+    """With no generating fallback the seam refuses the pick (spec 5.3's 409
+    `incapable`, naming the Decision role), as it refuses scene-break and
+    voice drift: nothing is sent, neither the pick nor an actor turn.
+
+    And the refusal comes BEFORE anything is written (`post_chat`'s
+    reserved-before-the-first-mutator rule): a 409 tells the player nothing
+    happened, so the post, the director note, the pending roll proposal and
+    the tracker are all as they were -- and sending again adds no copy."""
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    store.proposals.new(cid, sid, {"check": "brawl"})
+    before = store.scenes.read_scene(cid, sid)["messages"]
+    fake = FakeLLM([["must not be sent"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    for _ in range(2):
+        response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json=body)
+        assert response.status_code == 409, response.text
+        got = response.json()
+        assert got["kind"] == "incapable"
+        assert got["detail"].startswith("The Next speaker route runs on the Decision role "
+                                        "(vendor/decider on OpenRouter)"), got["detail"]
+    assert fake.calls == 0
+    assert store.scenes.read_scene(cid, sid)["messages"] == before
+    assert store.proposals.get(cid, sid)["status"] == "pending"
+    assert _tracker_runs(client, cid, sid) == []
+
+
+def test_a_scene_with_one_speaker_is_not_refused_over_the_pick(client):
+    """The refusal is for a pick: with one NPC present nobody is picked, so a
+    decide-only Decision model with no fallback refuses nothing."""
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    actor = client.post(f"/api/campaigns/{cid}/characters",
+                        json={"name": "Mara"}).json()["character"]
+    assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"id": actor}).status_code == 200
+    decide_only(client, fallback=False)
+    fake = FakeLLM([['Mara answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    assert _speakers(cid, sid) == ["Mara"]
+
+
+def test_a_pick_refused_inside_the_run_takes_the_post_back(client, monkeypatch):
+    """The request-time check is the one that answers; `start` still resolves
+    the pick as a defence (settings can change between the two). If THAT one
+    refuses, the post it was answering comes back off, as a failed turn's
+    does, so the 409 still means nothing happened."""
+    from grimoire.routes import character_turns
+
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    monkeypatch.setattr(character_turns, "refuse_an_unanswerable_pick",
+                        lambda *a, **k: None)
+    before = store.scenes.read_scene(cid, sid)["messages"]
+    fake = FakeLLM([["must not be sent"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                           json={"content": "Hello there"})
+    assert response.status_code == 409, response.text
+    assert response.json()["kind"] == "incapable"
+    assert fake.calls == 0
+    assert store.scenes.read_scene(cid, sid)["messages"] == before
+
+
+def test_a_provider_error_at_the_pick_fails_the_turn_and_is_filed_once(client):
+    """The pick's `LLMError` is the turn's, as it was before the switch: the
+    turn fails with that kind, `decide()`'s meter files exactly one error row
+    under `response-selector`, and no actor is asked to write."""
+    from grimoire.llm_errors import LLMError
+
+    cid, sid = seed(client)
+    fake = FakeLLM([[""]], error=LLMError("rate_limit", "Wait"))
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
+    assert "rate_limit" in response.text, response.text
+    assert fake.calls == 1
+    rows = [r for r in store.usage.calls(campaign=cid) if r.get("task") == "response-selector"]
+    assert [(r["status"], r["error"]) for r in rows] == [("error", "rate_limit")]
+    assert [r for r in store.usage.calls(campaign=cid)
+            if r.get("task") != "response-selector"] == []
+    assert not any(m.get("response_id") for m in store.scenes.read_scene(cid, sid)["messages"])
+
+
+def test_the_decision_role_now_serves_the_speaker(client):
+    """The `speaker` route's default flipped from Fast to Decision: a Decision
+    role set on its own is what the pick runs on, and the turn stays where it
+    was."""
+    cid, sid = seed(client)
+    format2(client)
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": "spare", "model": "vendor/spare"}}}})
+    fake = FakeLLM([[decision_reply({"next": "characters:mara"})],
+                    ['Mara answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    pick, actor = fake.requests
+    assert (pick["conn"]["id"], pick["conn"]["model"]) == ("spare", "vendor/spare")
+    assert (actor["conn"]["id"], actor["conn"]["model"]) == ("openrouter", "vendor/active")
+
+
+def test_a_fenced_selector_reply_now_reads(client):
+    """A gate "beats" entry, end to end: today's parse refused a reply wrapped
+    in a code fence as a missing handoff; `decide()` reads the object inside
+    it, so the named NPC answers."""
+    cid, sid = seed(client)
+    fenced = "```json\n" + decision_reply({"next": "characters:winifred"}) + "\n```"
+    fake = FakeLLM([[fenced], ['Winifred answers.\n```handoff\n{"next":null}\n```']])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    assert fake.calls == 2 and _round(cid, sid)["issue"] is None
+    assert _speakers(cid, sid) == ["Winifred"]
+
+
+def test_an_off_roster_selection_keeps_the_ineligible_issue(client):
+    """An answer naming nobody the round offers is today's ineligible issue,
+    never a guess and never the invalid-handoff one: control returns to the
+    player and no actor is called."""
+    cid, sid = seed(client)
+    fake = FakeLLM([[decision_reply({"next": "pcs:seraphine"})]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    record = _round(cid, sid)
+    assert record["issue"] == store.response_protocol.INELIGIBLE
+    assert record["actor_ref"] is None and record["status"] == "complete"
+    assert fake.calls == 1
+
+
+def test_a_colliding_roster_raises_an_issue_not_a_500(client, monkeypatch, caplog):
+    """Two eligible refs that read as one once normalised are a request
+    `decide()` refuses before anything is sent (plan Minor 15). The round
+    carries today's invalid-handoff issue -- control returns to the player --
+    rather than the turn failing, and the refusal is logged against the
+    campaign and scene."""
+    import logging
+
+    from grimoire.routes import character_turns
+
+    cid, sid = seed(client)
+    monkeypatch.setattr(character_turns, "roster", lambda _cid, _sid: [
+        {"ref": "characters:mara", "name": "Mara"},
+        {"ref": "Characters:Mara", "name": "Mara again"}])
+    fake = FakeLLM([["must not be sent"]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    with caplog.at_level(logging.WARNING, logger="grimoire.character_turns"):
+        response = _chat(client, cid, sid)
+    assert "error" not in response.text, response.text
+    record = _round(cid, sid)
+    assert record["issue"] == store.response_protocol.INVALID_HANDOFF
+    assert record["actor_ref"] is None and record["status"] == "complete"
+    assert fake.calls == 0
+    assert [r for r in store.usage.calls(campaign=cid)
+            if r.get("task") == "response-selector"] == []
+    warned = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert any(cid in m and sid in m for m in warned), warned
 
 
 PERCEPTION_REPLY = (
