@@ -508,6 +508,8 @@ def test_every_writable_config_key_is_reported_back(client):
     # marker: `test_pydantic_guard.py` scans `src/grimoire` only, so one here
     # would claim to clear a guard that never looked.
     writable = set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+    # A yes to a question the write asks, never stored: nothing to read back.
+    writable -= {"confirm_embedding"}
     reported = set(client.get("/api/config").json())
     assert not (writable - reported), \
         f"writable but never reported by GET /config: {sorted(writable - reported)}"
@@ -565,7 +567,9 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     # correctly. `claude` is the other connection every store is seeded with,
     # which makes this a real round trip rather than an exemption.
     live = {"active_connection_id": "claude", "character_response_mode": "individual"}
-    writable = sorted(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+    # A yes to a question the write asks, never stored: nothing to read back.
+    writable = sorted(set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+                      - {"confirm_embedding"})
 
     for key in writable:
         before = client.get("/api/config").json()

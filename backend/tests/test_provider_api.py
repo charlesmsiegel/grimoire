@@ -96,6 +96,18 @@ def test_a_locked_preset_fixes_the_address(client):
     assert client.put(f"/api/llm-connections/{zid}",
                       json={"base_url": "http://localhost:9999/v1"}).status_code == 400
     assert _raw(zid)["base_url"] == url
+    # Not even by clearing the preset in the same body.
+    assert client.put(f"/api/llm-connections/{zid}",
+                      json={"preset": "", "base_url": "http://localhost:9999/v1"}
+                      ).status_code == 400
+    assert _raw(zid)["base_url"] == url
+    # Clearing it alone, or with its own address, is still taken -- and the
+    # connection, now on the preset it infers, is still locked after it.
+    assert client.put(f"/api/llm-connections/{zid}",
+                      json={"preset": "", "base_url": url}).status_code == 200
+    assert client.put(f"/api/llm-connections/{zid}",
+                      json={"base_url": "http://localhost:9999/v1"}).status_code == 400
+    assert _raw(zid)["base_url"] == url
 
 
 def test_kind_must_match_the_preset(client):
@@ -863,3 +875,50 @@ def test_a_facts_write_that_cannot_read_the_file_is_refused_and_writes_nothing(
     monkeypatch.setattr(Path, "read_text", real)
     assert got.status_code == 503, got.text
     assert path.read_bytes() == before
+
+
+# ---- PUT /config at format 1: the legacy embedding keys ----
+
+def _legacy_embedding(client) -> str:
+    """Format 1, with the legacy embedding keys on a local provider that embeds."""
+    made = _create(client, kind="openai_compatible", name="vectors",
+                   base_url="http://localhost:1234/v1")
+    assert made.status_code == 200, made.text
+    pid = made.json()["id"]
+    store.write_config(embeddings_connection_id=pid, embeddings_model="nomic-embed")
+    assert not keys.is_current(store.read_config())
+    assert store.embed_space.resolve() is not None
+    return pid
+
+
+@pytest.mark.parametrize("change", [{"embeddings_model": "other-embed"},
+                                    {"embeddings_connection_id": "spare"}],
+                         ids=["model", "provider"])
+def test_moving_the_legacy_embedding_keys_needs_confirm(client, change):
+    """At format 1, `PUT /config` is a door to the same re-embed the provider
+    edit asks about: the rule is the server's, whatever the format."""
+    _legacy_embedding(client)
+    spare = _create(client, kind="openai_compatible", name="spare",
+                    base_url="http://localhost:4321/v1")
+    assert spare.status_code == 200, spare.text
+    before = store.embed_space.resolve()["space"]
+
+    for extra in ({}, {"confirm_embedding": False}, {"confirm_embedding": "true"}):
+        got = client.put("/api/config", json={**change, **extra})
+        assert got.status_code == 400, (extra, got.text)
+        assert got.json()["kind"] == "confirm_embedding"
+        assert store.embed_space.resolve()["space"] == before
+
+    got = client.put("/api/config", json={**change, "confirm_embedding": True})
+    assert got.status_code == 200, got.text
+    assert store.embed_space.resolve()["space"] != before
+
+
+def test_switching_the_legacy_embedding_off_or_leaving_it_asks_nothing(client):
+    pid = _legacy_embedding(client)
+    assert client.put("/api/config", json={"embeddings_model": "nomic-embed",
+                                           "embeddings_connection_id": pid,
+                                           "user_label": "Mara"}).status_code == 200
+    assert client.put("/api/config", json={"embeddings_model": ""}).status_code == 200
+    assert store.embed_space.resolve() is None
+

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import contextlib
 import math
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 
 from . import atomic, inference_keys, locks, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter
@@ -683,7 +683,8 @@ def refuse_legacy_campaign(meta: Mapping, cfg: Mapping, legacy: list[str]) -> No
         raise LegacyKeysRefusedError(legacy, unmigrated=True)
 
 
-def write_config_refusing_legacy(**fields: str) -> dict[str, str]:
+def write_config_refusing_legacy(guard: Callable[[dict[str, str]], None] | None = None,
+                                 **fields: str) -> dict[str, str]:
     """`write_config` for a body that may carry legacy inference keys
     (`inference_keys.LEGACY_GLOBAL_KEYS`): refused with `LegacyKeysRefusedError`,
     writing nothing, when the store is at format 2 or newer.
@@ -691,10 +692,15 @@ def write_config_refusing_legacy(**fields: str) -> dict[str, str]:
     The format is read inside the `config_lock` hold that writes, the same
     hold the migration's switch takes: a check made before it would let a
     switch landing in between turn this into a write of a key the resolver
-    no longer reads."""
+    no longer reads. `guard`, when given, is called in that hold with the
+    config as it stands, and whatever it raises refuses the write -- the
+    Embedding role's confirmation (`routes.config.put_config`), compared
+    against the value the write replaces."""
     with locks.config_lock():
-        refuse_legacy(read_config(),
-                      sorted(k for k in fields if k in inference_keys.LEGACY_GLOBAL_KEYS))
+        cfg = read_config()
+        refuse_legacy(cfg, sorted(k for k in fields if k in inference_keys.LEGACY_GLOBAL_KEYS))
+        if guard is not None:
+            guard(cfg)
         return write_config(**fields)
 
 

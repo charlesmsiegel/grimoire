@@ -65,6 +65,16 @@ log = logging.getLogger(__name__)
 #: that can be turned off.
 HEALTH_CHECK_CEILING = 45.0
 
+#: How long one probe of the model test may take, whatever `llm_call_budget`
+#: says -- the health check's reasoning (#146, #272) for the same kind of
+#: button: the test dialog is somebody watching, `0` there means "no ceiling
+#: at all", and a wedged Claude CLI (a subprocess, no transport bound) would
+#: otherwise hold the run -- and, through it, `PUT /config/data-dir` -- for
+#: good. Longer than the health check's: a probe generates a short reply
+#: (and the vision one reads an image) rather than a single word. An overrun
+#: is `timeout`, which `_halts` treats as answering for the probes after it.
+MODEL_TEST_CEILING = 90.0
+
 
 # ---- config ----
 class _Chat(NamedTuple):
@@ -304,9 +314,39 @@ def _recursion_depth_ok(value: str | None) -> bool:
 _ON_OFF_KEYS = ("tracker", "perception_rider", "send_images")
 
 
+#: The legacy keys that pick the Embedding role on a store not yet at format 2.
+_EMBEDDING_LEGACY_KEYS = ("embeddings_connection_id", "embeddings_model")
+
+
+def _refuse_unconfirmed_config_reembed(fields: dict[str, str]):
+    """`put_config`'s guard: 400 `confirm_embedding` for a change of the legacy
+    embedding keys that moves the Embedding role's vector space (format 1;
+    at format 2 the keys are refused as legacy before this runs). Called in
+    the `config_lock` hold that writes, with the config the write replaces,
+    so the comparison is against what is actually there (CLAUDE.md, "a
+    settings surface never spends unasked" -- the server's rule, whatever
+    the format)."""
+    moves = {k: fields[k] for k in _EMBEDDING_LEGACY_KEYS if k in fields}
+
+    def guard(cfg: dict[str, str]) -> None:
+        if not moves or not store.embed_space.config_moved(cfg, {**cfg, **moves}):
+            return
+        conn_id = str(moves.get("embeddings_connection_id",
+                                cfg.get("embeddings_connection_id", "")) or "").strip()
+        try:
+            name = store.llm_connections.read_connection_raw(conn_id).get("name") or conn_id
+        except (store.llm_connections.ConnectionNotFound, OSError, UnicodeDecodeError):
+            name = conn_id
+        raise HTTPException(status_code=400, detail={
+            "kind": "confirm_embedding",
+            "detail": inference_settings.EMBEDDING_CONFIRM.format(provider=name)})
+    return guard
+
+
 @router.put("/config")
 def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(get_health)):
     fields = {k: v for k, v in _dump(update).items() if v is not None}
+    confirmed = fields.pop("confirm_embedding", None) is True
     # The legacy inference keys are model settings: a newer store refuses
     # them, and one at format 2 refuses them in the hold that writes (below).
     if any(k in store.inference_keys.LEGACY_GLOBAL_KEYS for k in fields):
@@ -326,7 +366,8 @@ def put_config(update: ConfigUpdate, registry: health.ProviderHealth = Depends(g
         raise HTTPException(status_code=400,
                             detail=f"lore_recursion_depth must be 0-{store.config.LORE_RECURSION_MAX}")
     try:
-        saved = store.config.write_config_refusing_legacy(**fields)
+        saved = store.config.write_config_refusing_legacy(
+            guard=None if confirmed else _refuse_unconfirmed_config_reembed(fields), **fields)
     except store.config.LegacyKeysRefusedError as exc:
         raise legacy_refused(exc) from exc
     # `store.logs` holds the threshold in module state rather than reading the
@@ -677,7 +718,13 @@ def _apply_preset_update(fields: dict, stored: dict) -> bool:
         fields["preset"] = (fields["preset"] or "").strip()
         if fields["preset"]:
             _named_preset(fields["preset"], stored["kind"])
-    pid = fields.get("preset", stored.get("preset") or "")
+    # A connection with no preset stored -- one no build stamped, or one whose
+    # preset a body cleared -- is on the preset it infers (`providers.infer`),
+    # which is what every reader reports it on; so that is the lock it is
+    # judged against, not none. Otherwise a `preset: ""` riding along with a
+    # new address would walk a locked connection past its lock, and every
+    # later edit with it.
+    pid = fields.get("preset") or stored.get("preset") or providers.infer(stored).id
     preset = providers.PRESETS.get(pid) if pid else None
     if preset is None or not preset.url_locked:
         return False
@@ -1018,8 +1065,15 @@ TEST_UNCONFIRMED = ("This test sends a request to the provider and may cost mone
 
 #: The client the `embed` probe goes through: its own instance, as each store
 #: module that embeds has one (`semantic._CLIENT`), so a test can put one over
-#: a `MockTransport` in its place.
+#: a `MockTransport` in its place. A route module's, unlike those, so the
+#: lifespan that serves this router closes its pool (`close_clients`).
 _EMBEDDINGS = embeddings.EmbeddingsClient()
+
+
+def close_clients() -> None:
+    """Close this module's own connection pool (`_EMBEDDINGS`); called by the
+    app's lifespan on the way out. It reopens on its next use."""
+    _EMBEDDINGS.close()
 
 
 def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dict, str, tuple[str, ...]]:
@@ -1161,7 +1215,8 @@ async def _probe(client: LLMClient, cap: str, raw: dict, conn: dict, model: str)
             return _Outcome(await _embed_probe(raw, model), True, False)
         with store.usage.meter("model-test") as m:
             # Completed is accepted; the text is not read.
-            await _bounded_call(client.single(probes.messages(cap), conn, m.usage))
+            await _bounded_call(client.single(probes.messages(cap), conn, m.usage),
+                                ceiling=MODEL_TEST_CEILING)
     except LLMError as exc:
         return _Outcome({"ok": False, "kind": exc.kind,
                          "error": probes.scrub(exc.detail, [str(raw.get("api_key") or "")])},

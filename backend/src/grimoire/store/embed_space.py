@@ -141,6 +141,21 @@ def moved_by(cfg: dict, before: dict, after: dict) -> bool:
         return False
 
 
+def config_moved(before: dict, after: dict) -> bool:
+    """Whether replacing config mapping `before` with `after` starts the
+    Embedding role on a NEW vector space that embeds -- the `config.md` write
+    that re-embeds the library: the legacy `embeddings_connection_id` /
+    `embeddings_model` pair moved by `PUT /config` on a store not yet at
+    format 2. `moved_by`'s rule, for a change of the role's own keys rather
+    than of the provider it names: off to on is a move, a different space is
+    a move, and switching it off re-embeds nothing. Never raises."""
+    new = resolve(after)
+    if new is None:
+        return False
+    old = resolve(before)
+    return old is None or old["space"] != new["space"]
+
+
 def facts_moved(cfg: dict, provider_id: str, model: str, before: dict,
                 after: dict) -> bool:
     """Whether replacing `model`'s facts on `provider_id` (`before`, as

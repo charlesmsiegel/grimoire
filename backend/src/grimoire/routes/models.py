@@ -62,6 +62,9 @@ class ConfigUpdate(BaseModel):
     replay_fork_threshold: str | None = None
     advance_fork_threshold: str | None = None
     log_level: str | None = None
+    #: The yes to a change of the legacy embedding keys that re-embeds the
+    #: library (`put_config`); only a JSON `true` confirms.
+    confirm_embedding: Any = None
 
 
 class PromptLayoutSection(BaseModel):

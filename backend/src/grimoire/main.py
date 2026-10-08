@@ -22,6 +22,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import runner
 from .health import ProviderHealth
 from .routes import build_llm, build_openai_compatible_client, router, runs
+from .routes import config as config_routes
 from .routes.common import NEWER_FORMAT
 from .store import (
     backups,
@@ -355,17 +356,25 @@ async def _lifespan(app: FastAPI):
         # a shutdown. Each close guarded: a failing one must neither strand the
         # other pool nor bury the exception on its way out.
         #
-        # Blind spot: these are the pools an *app* owns. The `EmbeddingsClient`
-        # singletons in `store/semsearch`, `store/context/semantic`,
-        # `store/context/art` and `store/continuity/similarity` are reachable
-        # only from store code with no app to hang them on, and are still
-        # closed by nobody. `test_llm_lifecycle` fails if a closable is
-        # added to `app.state` and left out of the loop below.
+        # Blind spot: these are the pools an *app* owns, plus the model test's
+        # embed-probe client in `routes/config.py` (`close_clients`), a route
+        # module's singleton closed here because this is the lifespan of the
+        # router it serves -- it reopens on its next use. The
+        # `EmbeddingsClient` singletons in `store/semsearch`,
+        # `store/context/semantic`, `store/context/art` and
+        # `store/continuity/similarity` are reachable only from store code with
+        # no app to hang them on, and are still closed by nobody.
+        # `test_llm_lifecycle` fails if a closable is added to `app.state` and
+        # left out of the loop below.
         for client in (app.state.llm, app.state.openai_compatible):
             try:
                 await client.aclose()
             except Exception as exc:  # noqa: BLE001 -- see above
                 log.warning("closing %s failed -- %s", type(client).__name__, exc)
+        try:
+            config_routes.close_clients()
+        except Exception as exc:  # noqa: BLE001 -- see above
+            log.warning("closing the model test's embeddings client failed -- %s", exc)
 
 
 def _record_campaign_write(cid: str, stamp: bool, changed: bool) -> None:
