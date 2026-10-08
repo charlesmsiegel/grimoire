@@ -1110,6 +1110,7 @@ def _primary_phrases(resolved: ResolvedInference) -> tuple[str, str, str]:
     chosen = standing is not None and (standing.provider, standing.model) == (
         primary.provider_id, primary.model)
     subject = (f"The {routing.label_for(resolved.route)} route" if resolved.route
+               else "This decision" if resolved.operation == "decide"
                else "This generation")
     pin = " or pin this route" if resolved.route else ""
     if chosen and resolved.role:

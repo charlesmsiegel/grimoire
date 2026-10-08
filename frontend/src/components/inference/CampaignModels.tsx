@@ -280,6 +280,7 @@ function RoleDetail({ role, card, settings, blocked, onEdit }:
       <h5>{label}</h5>
       <p>{overridden(card) ? `Runs on ${describe(card.resolves)}` : inheritWords(card.inherits)}</p>
       <Problem text={card.problem} />
+      <Problem text={card.decide_skip} />
       <Problem text={droppedFallbackWords(card.fallback_missing, label, named,
                                                 card.fallback_problem)} />
       <div className="campaign-models-meta">

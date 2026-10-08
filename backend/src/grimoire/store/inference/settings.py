@@ -145,6 +145,20 @@ def _problem(resolved: ResolvedInference) -> str | None:
 def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
     silence = resolve.Silence(scope, frozenset(keys.role_key(role, p) for p in keys.PARTS))
     resolved = resolve.resolve("", cid, role=role)
+    # The card reads the role as a generation, which is right for a generate
+    # route that uses it -- and wrong, for the fallback, on the decide routes
+    # the Decision card lists: a decide-only Decision model is skipped for its
+    # fallback there (spec 5.5), so a same-provider fallback that a generation
+    # would drop as a retry is the one call those routes send. Until slice H
+    # gives the card an operation of its own, it reads Decision both ways and
+    # says what the decide routes do (`decide_skip`, `skip_text`'s sentence)
+    # rather than "never tried" about the fallback answering them.
+    decided = (resolve.resolve("", cid, role=role, operation="decide")
+               if role == "decision" else None)
+    skip = resolve.skip_text(decided) if decided is not None else None
+    fallback_problem = resolved.fallback_problem
+    if skip is not None and fallback_problem == resolve.SAME_PROVIDER:
+        fallback_problem = None
     return {"stored": _stored(own, functools.partial(keys.role_key, role)),
             "fallback": _stored(own, functools.partial(keys.fallback_key, role)),
             "resolves": _sel(resolved),
@@ -156,7 +170,10 @@ def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
             "fallback_missing": list(resolved.fallback_missing),
             # Why the fallback cannot send at all (no key, no base URL), so it
             # is left out: as silent at the seam as a dropped one.
-            "fallback_problem": resolved.fallback_problem}
+            "fallback_problem": fallback_problem,
+            # On Decision: that the decide routes skip its decide-only model
+            # for the fallback; None otherwise, and on every other role.
+            "decide_skip": skip}
 
 
 def _route_row(route: routing.Route, own: dict, scope: str, cid: str,

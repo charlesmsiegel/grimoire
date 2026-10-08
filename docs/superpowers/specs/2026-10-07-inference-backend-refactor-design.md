@@ -486,13 +486,14 @@ against the resolved capabilities (§6.2) of each attempt in the chain:
   `OPERATION_CAPABILITY` (the table of which capability an operation needs of
   its primary; decide needs `generate` today) widens decide's entry to
   "decide_native or generate".
-  Until then the Models page can disagree with itself for one such model: the
-  Decision role card resolves the role with no task, as a `generate`, and
-  shows the 409's `incapable` sentence (and, for a fallback on the primary's
-  own provider, `SAME_PROVIDER`), while a decide route row on that role
-  shows `skip_text`. Both are true (the model cannot generate; the route is
-  answered by the fallback), but they read as a contradiction. Slice H
-  reconciles them, when a decide-only model stops being skipped.
+  Until then the Decision role card reads the role both ways. Resolved with
+  no task as a `generate`, it shows the 409's `incapable` sentence, which is
+  true of any generate route that uses Decision. Resolved as a `decide` too,
+  it shows the decide routes' `skip_text` beside it (`decide_skip`) when the
+  skip lands, and then does not report `SAME_PROVIDER` for a fallback on the
+  primary's own provider -- which those routes do send, so "never tried"
+  would be false of every route the card lists. Slice H reconciles the two
+  sentences, when a decide-only model stops being skipped.
 - **known incompatible** on a fallback attempt → that attempt is dropped from
   the chain (generalising today's "text-only fallback is dropped for
   image-bearing messages"). From slice C; slice B reports it in

@@ -718,6 +718,44 @@ def test_a_same_provider_fallback_answers_for_a_decide_only_primary(client):
     assert capable.fallback_problem == inf.SAME_PROVIDER
 
 
+def test_the_decision_card_says_the_fallback_answers_its_decide_routes(client):
+    """Brutal-2 #1: the card reads the role as a generation, which drops a
+    same-provider fallback as a retry -- and so said it "is never tried", right
+    above the decide routes it answers. Read as `decide` too, the card says
+    what those routes do, the same sentence their rows show, and names no
+    problem with the fallback that answers them."""
+    _store(client)
+    _catalog("openrouter", [{"id": "vendor/decider", "outputs": ["decisions"]},
+                            {"id": "vendor/active", "outputs": ["text"]}])
+    _settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/decider"},
+        "fallback": {"provider": "openrouter", "model": "vendor/active"}}}})
+    view = client.get("/api/inference/settings").json()
+    card = view["roles"]["decision"]
+    assert card["fallback_problem"] is None
+    assert card["decide_skip"] == (
+        "This decision runs on the Decision role (vendor/decider on OpenRouter), which "
+        "cannot generate; until native decisions arrive it is answered by the fallback "
+        "(vendor/active on OpenRouter).")
+    # The generate reading stands: a generate route using Decision is refused.
+    assert "cannot generate text" in card["problem"]
+    (row,) = [r for r in view["routes"] if r["key"] == "scene_break"]
+    assert row["problem"].endswith(
+        "until native decisions arrive it is answered by the fallback "
+        "(vendor/active on OpenRouter).")
+    assert row["fallback_problem"] is None
+    # No skip, no sentence, and the drop is reported as it always was.
+    _settings(client, {"roles": {"decision": {
+        "selection": {"provider": "openrouter", "model": "vendor/active"},
+        "fallback": {"provider": "openrouter", "model": "vendor/decider"}}}})
+    card = client.get("/api/inference/settings").json()["roles"]["decision"]
+    assert card["decide_skip"] is None
+    assert card["fallback_problem"] == inf.SAME_PROVIDER
+    # Every other role carries the field, empty.
+    roles = client.get("/api/inference/settings").json()["roles"]
+    assert all(roles[r]["decide_skip"] is None for r in ("primary", "fast"))
+
+
 def test_a_same_provider_fallback_that_cannot_generate_is_still_dropped(client):
     """Admitted only for the skip: one that cannot answer either is dropped as
     it always was (not reported), and the primary's 409 stands."""
