@@ -24,8 +24,13 @@ from grimoire.store import (
     sheets,
     worlds,
 )
-from tests import phase_profile
+from tests import phase_profile, route_memo
 from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
+
+# Before any app is built: FastAPI analyses each route once per process rather
+# than once per app. Changes how often that work is done, not what it produces
+# -- see tests/route_memo.py; GRIMOIRE_TEST_ROUTE_MEMO=0 turns it off.
+route_memo.install()
 
 
 @pytest.fixture(autouse=True, scope="session")
