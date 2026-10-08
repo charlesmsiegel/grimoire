@@ -5,8 +5,7 @@
   },
   "backend/src/grimoire/llm.py": {
     "attr-defined": 1,
-    "misc": 1,
-    "union-attr": 6
+    "union-attr": 3
   },
   "backend/src/grimoire/routes/campaigns.py": {
     "union-attr": 2
