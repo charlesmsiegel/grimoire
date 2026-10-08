@@ -59,8 +59,7 @@ export async function campaignApiMock() {
       cancelAttempt: vi.fn(() => Promise.resolve(
         { run: { id: "r", attempt_id: "a", state: "cancelled", next_index: 0 } })),
       getAlternates: vi.fn(), pickAlternate: vi.fn(),
-      // The reroll popover's route picker (#77). `listConnections` fires on
-      // every open, and `readConnection` only for a chosen custom endpoint.
+      // The regex test dialog lists the connections it can test against.
       listConnections: vi.fn(), readConnection: vi.fn(),
       roll: vi.fn(),
       getRollProposal: vi.fn(), resolveProposal: vi.fn(),
@@ -118,9 +117,15 @@ export async function campaignApiMock() {
       getSceneBreak: vi.fn(), askSceneBreak: vi.fn(), dismissSceneBreak: vi.fn(),
       // Cost (#153): the page's budget banner, and the inspector's Cost section.
       getCampaignBudget: vi.fn(), setCampaignBudget: vi.fn(), getSceneUsage: vi.fn(),
-      // Per-task routing (#142): the page resolves the model its turns run on
-      // and publishes it to the header.
-      getCampaignRouting: vi.fn(), setCampaignRouting: vi.fn(),
+      // The inference settings (roles and routes) and the shared pickers in
+      // `components/inference/`: the Inspector's Models section and the reroll
+      // picker read them, a picker asks what each model can do, and the page
+      // publishes the scene route's model and readiness to the header.
+      getInferenceSettings: vi.fn(), putInferenceSettings: vi.fn(),
+      getCampaignInference: vi.fn(), putCampaignInference: vi.fn(),
+      readConnectionCapabilities: vi.fn(), previewControls: vi.fn(),
+      listProviderPresets: vi.fn(), readModelFacts: vi.fn(), putModelFacts: vi.fn(),
+      previewModelTest: vi.fn(), runModelTest: vi.fn(), checkConnection: vi.fn(),
       // Author's notes (play controls V): the inspector's section and its count.
       getAuthorsNotes: vi.fn(), setCampaignAuthorsNote: vi.fn(),
       setCharacterAuthorsNote: vi.fn(), setSceneAuthorsNote: vi.fn(),

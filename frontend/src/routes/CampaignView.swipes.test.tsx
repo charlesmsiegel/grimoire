@@ -151,7 +151,7 @@ test("› at the newest generates once, with no guidance, and keeps the pending 
   expect(row("The second answer.")).toHaveClass("swipe-target");
   const call = (api.regenerateResponse as any).mock.calls[0];
   expect(call[2]).toBe("rB");
-  expect(call[4]).toEqual({ guidance: "", connection_id: "", model: "" });
+  expect(call[4]).toEqual({ guidance: "" });
   expect(call[4].response).toBeUndefined();
   await act(async () => finish?.());
   await waitFor(() => expect(screen.getByText("The second answer.")).toBeInTheDocument());
@@ -318,7 +318,7 @@ describe("the keys", () => {
     await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
     const call = (api.regenerateResponse as any).mock.calls[0];
     expect(call[2]).toBe("rB");
-    expect(call[4]).toEqual({ guidance: "Colder", connection_id: "", model: "" });
+    expect(call[4]).toEqual({ guidance: "Colder" });
     expect(call[4].response).toBeUndefined();
     await act(async () => finish?.());
     await waitFor(() => expect(screen.getByText("The second answer.")).toBeInTheDocument());
@@ -359,6 +359,117 @@ describe("the keys", () => {
     expect(api.activateResponseVariant).not.toHaveBeenCalled();
     expect(screen.queryByLabelText("Reroll guidance")).toBeNull();
   });
+
+  // The reroll box is an overlay, so it holds the scene's bindings off while it
+  // is up. Its model list is radios, which are not typing targets: without the
+  // hold, ← on one activated another variant behind the box, and → at the
+  // newest reopened the box and threw away the route being chosen.
+  test("neither fires from a model radio in the open reroll box", async () => {
+    playing();
+    reads({ active: 2 });
+    (api.readConnectionCapabilities as any).mockImplementation(
+      (_provider: string, need: string) => Promise.resolve({
+        provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
+                           url_locked: true, billing: "metered", reports_price: true,
+                           always: [], possible: [], never: [] },
+        need, reason: null, hidden: [],
+        groups: { unverified: [], fits: ["Saltmarch One", "Saltmarch Two"].map((name) => ({
+          id: name.toLowerCase().replace(" ", "-"), name, context: null, prompt: null,
+          completion: null, reason: "the catalog says so", capabilities: {} })) } }));
+    renderCampaign();
+    expect(await screen.findByText("3/3")).toBeInTheDocument();
+    press("ArrowRight");
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "openrouter" } });
+    const radio = await screen.findByRole("radio", { name: "Saltmarch One" });
+    fireEvent.click(radio);
+    radio.focus();
+
+    press("ArrowLeft", radio);
+    press("ArrowRight", radio);
+    // Held off by the overlay, not only filtered at the radios: from the box's
+    // buttons, or with nothing focused at all, the scene's arrows are out too.
+    press("ArrowLeft", screen.getByRole("button", { name: "Default" }));
+    press("ArrowLeft");
+    press("ArrowRight");
+
+    expect(api.activateResponseVariant).not.toHaveBeenCalled();
+    // The box is still up, still holding the model chosen in it.
+    expect(screen.getByRole("radio", { name: "Saltmarch One" })).toBeChecked();
+    expect(screen.getByLabelText("Provider")).toHaveValue("openrouter");
+    // And the arrows were not spoken for: the radio group keeps its own travel.
+    const travel = new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true });
+    screen.getByRole("radio", { name: "Saltmarch One" }).dispatchEvent(travel);
+    expect(travel.defaultPrevented).toBe(false);
+
+    // Escape still backs out of it, from wherever focus is.
+    press("Escape");
+    await waitFor(() => expect(screen.queryByLabelText("Reroll guidance")).toBeNull());
+  });
+
+  // A typed model id is the route's only once "Use this id" takes it.
+  // Rerolling before that sent the provider alone -- the scene route's
+  // standing model, or the provider's own -- while the box showed another.
+  test("Reroll ▸ waits for a typed model id to be taken, and Enter does too", async () => {
+    playing();
+    reads({ active: 2 });
+    (api.readConnectionCapabilities as any).mockImplementation(
+      (_provider: string, need: string) => Promise.resolve({
+        provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
+                           url_locked: true, billing: "metered", reports_price: true,
+                           always: [], possible: [], never: [] },
+        need, reason: null, hidden: [], groups: { unverified: [], fits: [] } }));
+    (api.regenerateResponse as any).mockResolvedValue(undefined);
+    renderCampaign();
+    expect(await screen.findByText("3/3")).toBeInTheDocument();
+    press("ArrowRight");
+    fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "openrouter" } });
+    fireEvent.change(await screen.findByLabelText("Model id"), { target: { value: "vendor/typed" } });
+
+    expect(screen.getByRole("button", { name: "Reroll ▸" })).toBeDisabled();
+    fireEvent.keyDown(screen.getByLabelText("Reroll guidance"), { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
+    expect(api.regenerateResponse).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Use this id" }));
+    fireEvent.click(screen.getByRole("button", { name: "Reroll ▸" }));
+    await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
+    expect((api.regenerateResponse as any).mock.calls[0][4]).toEqual(
+      expect.objectContaining({ provider: "openrouter", model: "vendor/typed" }));
+  });
+
+  // The same picker sits in the reply's own Response actions, which is a
+  // disclosure in the page rather than an overlay -- so nothing holds the
+  // scene's bindings off there, and the picker keeps its radios' arrows itself.
+  test("neither fires from a model radio in the reply's own route picker", async () => {
+    playing();
+    reads();
+    (api.readConnectionCapabilities as any).mockImplementation(
+      (_provider: string, need: string) => Promise.resolve({
+        provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
+                           url_locked: true, billing: "metered", reports_price: true,
+                           always: [], possible: [], never: [] },
+        need, reason: null, hidden: [],
+        groups: { unverified: [], fits: ["Saltmarch One", "Saltmarch Two"].map((name) => ({
+          id: name.toLowerCase().replace(" ", "-"), name, context: null, prompt: null,
+          completion: null, reason: "the catalog says so", capabilities: {} })) } }));
+    renderCampaign();
+    expect(await screen.findByText("2/3")).toBeInTheDocument();
+    const last = row("The second answer.");
+    fireEvent.click(within(last).getByText("Response actions"));
+    fireEvent.click(within(last).getByText("Model for this reroll"));
+    fireEvent.change(await within(last).findByLabelText("Provider"), { target: { value: "openrouter" } });
+    const radio = await within(last).findByRole("radio", { name: "Saltmarch One" });
+    fireEvent.click(radio);
+    radio.focus();
+
+    const travel = new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true, cancelable: true });
+    act(() => { radio.dispatchEvent(travel); });
+    press("ArrowRight", radio);
+
+    expect(travel.defaultPrevented).toBe(false);
+    expect(api.activateResponseVariant).not.toHaveBeenCalled();
+    expect(within(row("The second answer.")).getByRole("radio", { name: "Saltmarch One" })).toBeChecked();
+  });
 });
 
 describe("the touch swipe", () => {
@@ -393,7 +504,7 @@ describe("the touch swipe", () => {
     drag(screen.getByText("The second answer."), -90);
     await waitFor(() => expect(api.regenerateResponse).toHaveBeenCalledTimes(1));
     expect((api.regenerateResponse as any).mock.calls[0][4]).toEqual(
-      { guidance: "", connection_id: "", model: "" });
+      { guidance: "" });
   });
 });
 

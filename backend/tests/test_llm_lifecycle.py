@@ -181,3 +181,20 @@ def test_a_crash_on_the_way_out_still_closes_the_clients(app):
     anyio.run(drive)
 
     assert app.state.llm.closes == 1
+
+
+def test_shutdown_closes_the_model_tests_embeddings_pool(app):
+    """`routes.config._EMBEDDINGS` is a route module's singleton: the lifespan
+    of the router it serves closes its pool, and the next app's use reopens
+    one rather than finding it closed."""
+    from grimoire.routes import config as config_routes
+
+    with TestClient(app):
+        pool = config_routes._EMBEDDINGS._client()
+        assert not pool.is_closed
+
+    assert pool.is_closed
+    fresh = config_routes._EMBEDDINGS._client()
+    assert fresh is not pool and not fresh.is_closed
+    config_routes.close_clients()
+    assert fresh.is_closed

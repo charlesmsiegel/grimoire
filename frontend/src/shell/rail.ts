@@ -176,7 +176,9 @@ export const APP_ROWS: RailRow[] = [
   {
     id: "config", label: "Settings", icon: "⚙",
     to: () => "/config",
-    match: (p) => isUnder(p, "/config"),
+    // `/models` (roles and routes) is reached from Settings (spec 10: the
+    // rail gains no row for it), so the reader is still in Settings there.
+    match: (p) => isUnder(p, "/config") || isUnder(p, "/models"),
   },
 ];
 
@@ -343,7 +345,8 @@ export const TITLES: [(p: string) => boolean, string][] = [
   [(p) => isUnder(p, "/styles"), "Styles"],
   [(p) => isUnder(p, "/calendars"), "Calendars"],
   [(p) => isUnder(p, "/climates"), "Climates"],
-  [(p) => isUnder(p, "/connections"), "Connections"],
+  [(p) => isUnder(p, "/providers"), "Providers"],
+  [(p) => isUnder(p, "/models"), "Models"],
   [(p) => isUnder(p, "/search"), "Search"],
   [(p) => isUnder(p, "/stats"), "Stats"],
   [(p) => isUnder(p, "/config"), "Settings"],

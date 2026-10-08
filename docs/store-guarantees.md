@@ -26,6 +26,7 @@ lesson is why `store/locks.py` turned its domain from prose into constants
 - [The campaign lock](#the-campaign-lock)
 - [A second process on the same store](#a-second-process-on-the-same-store)
 - [The image store](#the-image-store)
+- [Model settings migration](#model-settings-migration)
 - [What is **not** promised](#what-is-not-promised)
 
 ---
@@ -231,9 +232,10 @@ a stale field; refusing would cost the turn.
 | Lock | Scope | Notes |
 |---|---|---|
 | `locks.world_actor_lock(wid)` | world actor name claims | serializes character and PC creation against the same name in one World |
-| `locks.config_lock()` | global `config.md` | a leaf — nothing under it takes another lock |
+| `locks.config_lock()` | global `config.md`, and every model-settings read-modify-write (`llm_connections.LOCK` is this same lock; `config.format_hold()` is it with the format check) | cross-process; taken inside a campaign lock (a campaign settings write), never around one, and the only lock under it is `inference.facts`' process-local file lock; see [Model settings across processes](#model-settings-across-processes) |
 | `locks.backup_lock()` | one archive of one store at a time (#32) | a leaf; deliberately does **not** take the campaign locks |
 | `locks.module_edit_lock()` | whole-directory module-pack publication | outermost in the ordering above |
+| `locks.inference_migration_lock()` | the inference-settings migration (`store/inference/migrate.py`), one per store | only ever **tried**, never waited on: `migrate.ensure` returns the current status and `PUT /config/data-dir` answers 409 `busy`; outermost for its holder, which takes the backup, config and facts locks and, one at a time and never waiting, a campaign lock under it |
 | `locks.image_object_lock(image_id)`, `locks.image_ingest_gc_lock()` | the image store | leaves; see [The image store](#the-image-store) |
 | `locks.image_name_lock(d, name)`, `locks.image_sidecar_lock(d, filename)` | one image slot in one directory; one `descriptions.json` or `subjects.json` | striped, process-scoped, and taken **after** the campaign and collection locks and **before** the leaves above; see [Image locks](#image-locks-and-the-order-they-are-taken-in) |
 | `locks.image_collection_job_lock(wid, job)`, `locks.image_collection_lock(wid)` | one harvest journal; one world's collection manifests and library-name checks | taken in that order, and before any image lock; see [Collections](#collections-members-by-id) |
@@ -252,7 +254,9 @@ module-edit — raises that lock's subclass of `locks.StoreBusy` after
 `main.create_app` turns any of them into **HTTP 409** with a message naming
 what is busy, so the failure is retryable rather than a wedged server. (The two
 non-blocking variants above never raise — they report with a boolean instead,
-which is the whole point of them.)
+which is the whole point of them.) The inference migration lock's own
+subclass, `MigrationBusy`, is raised by the same `with` shape, but nothing
+enters that lock that way: every holder tries it and reports a boolean.
 
 The image store's locks are the other shape of the same thing. The name and
 sidecar stripes raise the base `StoreBusy` itself, worded "this image is busy;
@@ -314,6 +318,24 @@ Two details that look incidental and are not:
   would put two processes on different lock files while both believed they held
   the campaign. Inode identity also absorbs bind mounts, a mapped drive versus
   its UNC form, and hard-linked roots.
+
+### Model settings across processes
+
+The model settings are spread over files that are read, checked and rewritten
+together: `config.md`'s inference keys, a campaign's inference keys, the
+connection records in `llm_connections/`, each connection's catalog cache and
+model facts, and the sampler presets. Every read-modify-write of them holds
+**one** cross-process lock for its whole span — from the read and every check
+through the last write — so a second process's write to the same files never
+lands in between and is never lost. That lock is `config_lock`;
+`llm_connections.LOCK` is the same object rather than a second, process-local
+lock taken before it, and `config.format_hold()` is that lock with the store's
+format read inside it, which is how every one of those writes also refuses a
+store a newer build switched (below). A campaign's inference keys are written
+under its campaign lock and then this one. The migration's facts copy and the
+marker it publishes share one hold of it, so another process's provider edit
+cannot land between them either. `test_format_hold.py` enumerates the writers
+and checks that each one's read is inside the hold.
 
 ### Reads notice external writes
 
@@ -939,6 +961,168 @@ exclude.
 
 ---
 
+## Model settings migration
+
+**Module:** `backend/src/grimoire/store/inference/migrate.py` · **Keys:**
+`store/inference_keys.py` · **Started by:** `main.start`
+
+Which provider, model and sampler preset each kind of call runs on used to be
+stored as connections and per-route connection ids; it is now roles, routes
+and per-model facts. A store records which layout it holds in one key of
+`config.md`, `inference_keys.FORMAT_KEY` (`inference_format`), and a store at
+`inference_keys.CURRENT_FORMAT` is on the new one. `migrate.ensure` moves a
+store across, and this is what it promises.
+
+### The safety archive comes first, and is never pruned
+
+Nothing is written before `ensure` has zipped the whole store into
+`pre-inference-grimoire-<stamp>.zip` in the backup directory
+(`backups.SAFETY_PREFIX`). If that archive cannot be made, nothing else is
+written, the status is `failed` with the reason, and the next start tries
+again. It is a full restore point and `GET /backups` lists it with the others,
+but `backups.sweep` counts and deletes the ordinary series alone: the safety
+archive takes none of the `backup_keep` places and stays until a person
+deletes it. One is taken per root — a run resuming after a later step stopped
+reuses the archive its status note names while that file is still there, so
+retries do not pile up copies nothing will ever prune.
+
+### The global marker is written before the campaigns
+
+After the archive, in order: each connection gains its provider preset and
+billing basis (fields that leave its `rev` alone, so model catalogs, verified
+tests and vector caches survive); each connection's stated vision, prefill and
+post-processing become facts of its model; and then **one** `config.md` write
+lands the roles, the routes and the format marker together; the campaigns are
+migrated after it (below). The facts copy and that write share one hold of the
+cross-process model-settings lock, and the write's input is read inside it, so
+a legacy edit made while the archive was being built is carried over rather
+than reverted or switched past, whichever server made it. It writes every global
+key the migration owns, empty where unset, so a new-layout key left behind by
+an interrupted run or a hand edit is overwritten by what the legacy settings
+say now rather than surviving because nothing named it.
+
+Until that write lands the resolver reads the legacy settings through the
+translation (`store/inference/translate.py`), which answers as the new layout
+would, so play is the same on either side of the switch.
+
+### Idempotent and resumable
+
+Every value is derived from the legacy settings deterministically, so two runs
+— or two devices migrating one synced store — write the same bytes. A step
+either passes over what is already done — a connection that has a preset, a
+campaign carrying its marker, a `config.md` already at or past the current
+format, checked again inside the lock that would write it — or, for a model's
+facts, takes back exactly what an earlier run copied (recorded beside the
+copy) and states what the connection says now, so a field reset to its
+default between two runs, or a model the connection moved off, does not keep
+the old copy. Every write is atomic (see
+[Atomic writes](#atomic-writes)), so a run killed anywhere leaves each file
+whole — the store still on the old layout before the marker, and after it
+some campaigns still unmarked and read through the translation — and the
+next start goes on from there.
+
+The archive, the final `config.md` write, a connection file that exists
+but cannot be read, a `config.md` that holds no record (zero bytes, or a
+frontmatter fence that never arrived) and a model-facts file that cannot be
+read (held, empty, truncated) fail the migration and write nothing over
+them. None is treated as absent: every step writes down what it read, so a
+read a sync client blocked would otherwise be persisted for good — a
+selection with an empty model and no preset, an empty layout stamped
+current, a facts file holding only the copy. A connection that does not
+exist at all is a dangling reference and is persisted as one. An item that
+cannot be moved — an unreadable `campaign.md` (undecodable, or holding no
+record, which is never rewritten), a campaign naming an unreadable
+connection, a connection or facts write that fails or is refused — is
+skipped with its reason in the status's `skipped`, and the run carries on.
+A newer build's marker, seen at the start, in the switch's hold or under a
+campaign's own hold while the campaigns are moved, ends the run as `newer`
+with nothing more marked.
+
+### Campaigns, each under its own lock
+
+Each unmarked campaign is moved in one atomic write of its `campaign.md` (its
+route choices and its own marker together) under `campaign_lock_nowait`, one
+campaign at a time. A campaign whose lock is held is **skipped as busy**, not
+waited for: it keeps resolving through the translation and is finished by the
+next `ensure`, or by the first new-layout write to it —
+`store/inference/settings.py` moves an unmarked campaign inside the same lock
+hold as that write, so the marker it stamps never lands over overrides nobody
+translated. Campaigns go AFTER the global switch: a campaign's routes are
+translated from the connections they name, and before the switch a
+connection's legacy `model` could still be edited — by this server or another
+— leaving a campaign migrated earlier on the model the edit replaced. Once
+the store is at format 2 those fields are refused on write, so what a campaign
+is translated from cannot move under its step. The switch needs nothing from
+the campaigns, so a busy one does not hold it back; the status stays
+`pending` until it is done. The write bumps the campaign's write token
+(`store/revision.py`) and leaves its `updated` stamp alone, since the library
+is ordered by it and an upgrade is not something that happened in the
+campaign.
+
+### In the background, and 409 until it lands
+
+Neither play nor any request runs it. `main.start` runs `ensure` on a daemon
+thread at startup and again after `PUT /config/data-dir` moves the store,
+holding the run registry's maintenance exclusion (`runs.exclude_maintenance`)
+for its length: while an image-store maintenance run is live the pass is
+deferred to the next start, and it logs that. `ensure` itself holds
+`locks.inference_migration_lock` — a process lock plus a proclock, so two
+processes never interleave — **tried, never waited on**: a second caller gets
+the current status back at once. The data-dir move tries the same lock and
+answers 409 `busy` while a migration holds it, and a run re-checks its root
+before every step and item, so a root that moves underneath it gets no marker
+in either tree. Lifespan shutdown sets the run's stop flag and waits briefly
+(`MIGRATION_STOP_WAIT_SECONDS`); a stopped run is left `pending` and resumes on
+the next start.
+
+`migrate.status()` answers `done`, `pending`, `running`, `failed` or `newer`,
+derived on every call from the global marker and whether any readable campaign
+is still unmarked. Only `running`, a failure's reason, the last run's skips and
+the safety archive's name are remembered, in `.cache/inference-migration.json`,
+which no backup includes.
+
+While the global layout is not current, writing the new settings (`PUT
+/inference/settings`, `PUT /campaigns/{cid}/inference`) answers **409
+`not_migrated`** carrying that status (`routes.common.refuse_unmigrated`): a
+new-layout key written into a store the resolver still reads the old way would
+be a 200 that changed nothing. Play is not refused.
+
+### Older builds keep the old settings, frozen
+
+The legacy keys (`active_connection_id`, `fallback_connection_id`, the
+`route_*` keys, the two embeddings keys) and the legacy connection fields
+(`llm_connections.MODEL_FIELDS`) are left as they were at the switch. A build
+from before it keeps running on them, and nothing changed in the new settings
+reaches it. Once a store is current, writing one of them is refused, because
+it would reach older builds only: `PUT /config` answers 400 (`this setting
+moved to Models`) and a connection edit setting a legacy field answers 400
+too, each checked inside the
+hold that writes, so a switch cannot land between the check and the write.
+
+### A newer format is refused, not migrated
+
+A marker that parses as a whole number above `CURRENT_FORMAT` means a newer
+build switched this store to something this one does not understand
+(`inference_keys.is_newer`; a malformed marker is not newer). `ensure` never
+touches such a store, its status is `newer`, and every model-settings write —
+providers, presets, model facts, the model test, the new settings and the
+legacy keys alike — answers **409 `newer_format`** (`routes.common.refuse_newer`)
+so this build cannot overwrite what it would misread. Play continues on what
+it can read. A campaign a newer build marked is likewise left alone.
+
+The route's check is the cheap answer; the binding one is in the store. Every
+model-settings writer — the global and campaign settings writes, every
+provider create, edit and delete, every model-facts write, every
+sampler-preset write and the catalog cache — lands inside `config.format_hold()`: `config_lock`,
+which the switch writes its marker in and which is cross-process, with the
+format read inside it and held through the write. A newer build switching the
+store after the route checked is therefore refused there too
+(`config.NewerFormatError`, answered as the same 409), never written past; a
+model test's verdicts that arrive after such a switch are not filed.
+`test_format_hold.py` enumerates the writers.
+
+---
+
 ## What is **not** promised
 
 Collected, so that nothing here has to be inferred from an absence.
@@ -988,6 +1172,10 @@ Collected, so that nothing here has to be inferred from an absence.
 - **No background watcher.** The rebuilt app runs no resident machinery;
   conflict detection is on demand, and nothing notices an external write until
   something reads the file.
+- **No way back that keeps what changed since.** An older build runs on the
+  model settings as they stood at the switch, and the `pre-inference-` archive
+  is the whole store as it stood before it; neither carries a change made
+  afterwards. See [Model settings migration](#model-settings-migration).
 - **The guards do not prove absence.** Each names its own reach in its
   docstring and stops short of aliases, wrappers and cross-call shapes. They
   catch the idioms that have actually gone wrong; they are not a proof that
@@ -1007,5 +1195,6 @@ Collected, so that nothing here has to be inferred from an absence.
 | what the campaign write token is, and is not | `backend/src/grimoire/store/revision.py` |
 | how an image is stored, placed and resolved | `backend/src/grimoire/store/image_store.py`, `image_refs.py`, `assets.py` |
 | how legacy images migrate, and how unused ones are collected | `backend/src/grimoire/store/image_migration.py`, `image_gc.py`, `routes/maintenance.py` |
+| how model settings move to the new layout, and what is frozen for older builds | `backend/src/grimoire/store/inference/migrate.py`, `store/inference_keys.py` |
 | the rules, as tests | `backend/tests/test_atomic_guard.py`, `test_lock_domain_guard.py`, `test_lock_order_guard.py` |
 | designs | `docs/superpowers/specs/2026-07-28-atomic-store-writes-design.md`, `docs/superpowers/specs/2026-07-28-cross-process-campaign-locks-design.md`, `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md` |

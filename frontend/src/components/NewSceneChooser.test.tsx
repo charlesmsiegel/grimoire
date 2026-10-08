@@ -307,7 +307,7 @@ test("the confirm pane is told whether an LLM is connected", async () => {
   fireEvent.click(screen.getByText("With your PC"));
   fireEvent.click(await screen.findByText("Reckoning"));
   fireEvent.click(await screen.findByRole("radio", { name: /generate one/i }));
-  expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
+  expect(screen.getByText(/choose a provider and a primary model/i)).toBeInTheDocument();
 });
 
 // Issue #319: useSceneSuggestions used to live inside SceneIdeaPicker, which

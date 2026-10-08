@@ -51,7 +51,7 @@ test("the inspector says which preset parameters a turn could not send", () => {
     applied: {}, dropped: [{ param: "temperature",
                              reason: "the Claude Agent SDK takes no sampling options" }],
     verified: true } })} />);
-  expect(screen.getByText("Sampler: Warm (from the connection)")).toBeInTheDocument();
+  expect(screen.getByText("Sampler: Warm (from the provider)")).toBeInTheDocument();
   expect(screen.getByText("Not sent: temperature")).toBeInTheDocument();
 });
 

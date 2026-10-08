@@ -14,6 +14,7 @@ from .lifecycle import (  # noqa: F401
     ensure_campaign_slim,
     rename_campaign,
     set_campaign_budget,
+    set_campaign_inference,
     set_campaign_response,
     set_campaign_routing,
     set_campaign_tracker,

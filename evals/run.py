@@ -46,7 +46,7 @@ def temp_home():
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Score grimoire's LLM output against the eval suite.")
     ap.add_argument("--live", action="store_true",
-                    help="make one real LLM call per case using the active connection")
+                    help="make one real LLM call per case, on the model the app routes it to")
     ap.add_argument("--record", action="store_true",
                     help="with --live, overwrite each case's baseline recording")
     ap.add_argument("--case", action="append", metavar="ID",
@@ -65,14 +65,20 @@ def main(argv: list[str] | None = None) -> int:
         selected = tuple(case_mod.BY_ID[c] for c in args.case)
 
     if args.live:
-        # Before any temp_home(): the connection lives in the REAL store.
-        conn = runner.resolve_connection()
+        # Before any temp_home(): the settings live in the REAL store.
+        try:
+            conns = runner.resolve_connections(selected)
+        except RuntimeError as exc:
+            print(runner.ascii_safe(f"live: {exc}"), file=sys.stderr)
+            return 1
         # ascii_safe: the model id is user-configured free text and may not
         # encode in the console's code page (see runner.report).
-        print(runner.ascii_safe(
-            f"live: {conn['kind']} / {conn.get('model') or '(default)'}"
-            + ("  [recording baselines]" if args.record else "")))
-        results = runner.live_all(selected, conn, temp_home, record=args.record)
+        for task, conn in conns.items():
+            print(runner.ascii_safe(
+                f"live: {task} -> {conn['kind']} / {conn.get('model') or '(default)'}"))
+        if args.record:
+            print("  [recording baselines]")
+        results = runner.live_all(selected, conns, temp_home, record=args.record)
     else:
         print(f"replay: {sum(len(c.recordings) for c in selected)} recordings")
         results = runner.replay_all(selected, temp_home)

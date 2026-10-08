@@ -8,16 +8,16 @@ import { errorText, isOffline } from "../api/errors";
  *  since #141 the model half need not either: an OpenAI-compatible connection
  *  pointed at Ollama, LM Studio, llama.cpp-server or vLLM answers from this
  *  machine. So the useful thing to say is not "you are offline" but where the
- *  recovery is, which is why this links to Connections rather than just
+ *  recovery is, which is why this links to Providers rather than just
  *  reporting.
  *
  *  The provider's own message stays on screen. `network` is broader than "no
  *  internet" — a local endpoint that is simply not running raises exactly the
  *  same kind — and a reader debugging *that* needs the refused address, not a
  *  paragraph about being offline. The advice below is worded to hold in both
- *  cases: Connections is where a wrong base URL gets fixed too. */
+ *  cases: Providers is where a wrong address gets fixed too. */
 function OfflineNote({ detail }: { detail: string }) {
-  // The link is dropped on the page it points at -- the Connections editor
+  // The link is dropped on the page it points at -- the Providers page
   // raises this note too, when a model-catalog fetch cannot reach the
   // provider, and a link to the page you are reading is noise. Read from the
   // router rather than taken as a prop so no caller can forget it.
@@ -31,14 +31,16 @@ function OfflineNote({ detail }: { detail: string }) {
   // instead was tried and reverted: it makes ~230 existing render sites in
   // three suites need a `MemoryRouter` they otherwise have no use for, to
   // guard a host that cannot exist.
-  const here = useLocation().pathname === "/connections";
+  const { pathname } = useLocation();
+  // The whole page, a provider or a model on it as much as the list.
+  const here = pathname === "/providers" || pathname.startsWith("/providers/");
   return (
     <span>
       <strong>Couldn’t reach the model provider.</strong> {detail}
       {" — "}your library is on this machine, so everything but the model still
       works. A local model connection (Ollama, LM Studio, llama.cpp) keeps play
       going with no network at all.{" "}
-      {!here && <Link to="/connections">Connections →</Link>}
+      {!here && <Link to="/providers">Providers →</Link>}
     </span>
   );
 }

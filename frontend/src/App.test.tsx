@@ -61,6 +61,21 @@ vi.mock("./routes/CampaignWizard", () => ({
   default: () => <div data-testid="campaign-wizard" />,
 }));
 
+// Its own suite drives the page; here only the routes that reach it matter.
+vi.mock("./routes/ProvidersView", () => ({
+  default: function ProvidersViewStub() {
+    const { id, "*": model } = useParams();
+    return <div data-testid="providers-view">{id ?? ""}|{model ?? ""}</div>;
+  },
+}));
+
+vi.mock("./routes/ModelsView", () => ({
+  default: function ModelsViewStub() {
+    const { role, key } = useParams();
+    return <div data-testid="models-view">{role ?? ""}|{key ?? ""}</div>;
+  },
+}));
+
 // Stands in for the real wizard's exit: report completion, then leave for "/",
 // which is exactly what SetupWizard.finish() does.
 vi.mock("./routes/SetupWizard", () => ({
@@ -218,6 +233,9 @@ test("the palette offers campaigns, worlds and library sections, and goes there"
   expect(await screen.findByRole("option", { name: /saltmarch/i })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /realm/i })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /climates/i })).toBeInTheDocument();
+  // Models is no rail row and no library section: without this, the links in
+  // Settings were its only way in.
+  expect(screen.getByRole("option", { name: /roles and routes/i })).toHaveTextContent(/Models/);
 
   fireEvent.click(screen.getByRole("option", { name: /climates/i }));
   expect(await screen.findByRole("heading", { name: /climates/i })).toBeInTheDocument();
@@ -241,7 +259,27 @@ test("the library's card hub is gone — /library lands in a section", async () 
   // the six sections are the column now, with their counts
   expect(column().getByRole("link", { name: /worlds/i })).toHaveAttribute("href", "/worlds");
   expect(column().getByRole("link", { name: /climates/i })).toHaveAttribute("href", "/climates");
-  expect(column().getByRole("link", { name: /connections/i })).toHaveAttribute("href", "/connections");
+  expect(column().getByRole("link", { name: /providers/i })).toHaveAttribute("href", "/providers");
+});
+
+test("/connections redirects to /providers", async () => {
+  render(<MemoryRouter initialEntries={["/connections"]}><App /></MemoryRouter>);
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent("|");
+});
+
+test("a provider's model route keeps the slashes in the model id", async () => {
+  render(
+    <MemoryRouter initialEntries={["/providers/saltmarch/models/vendor/m"]}><App /></MemoryRouter>);
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent("saltmarch|vendor/m");
+});
+
+test.each([
+  ["/models", "|"],
+  ["/models/role/primary", "primary|"],
+  ["/models/route/scene_break", "|scene_break"],
+])("%s opens the models page (where Used by chips land)", async (at, shown) => {
+  render(<MemoryRouter initialEntries={[at]}><App /></MemoryRouter>);
+  expect((await screen.findByTestId("models-view")).textContent).toBe(shown);
 });
 
 test("the library column persists across a section change, keeping the lit row", async () => {

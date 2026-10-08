@@ -382,16 +382,22 @@ def test_config_retry_and_fallback_roundtrip(client):
     assert (body["llm_retries"], body["fallback_connection_id"]) == ("0", "claude")
 
 
+def _carried_fallback() -> dict | None:
+    """The fallback a generation's resolved connection carries to the facade
+    (`llm.FALLBACK_KEY`), or None."""
+    return store.inference.resolve.resolve("chat").conn.get(llm.FALLBACK_KEY)
+
+
 def test_the_fallback_resolver_reads_the_configured_connection(client):
-    """The seam #144 hangs on: `llm.py` may not import the store, so routes
-    resolves the fallback *record* and hands it over per generation."""
-    from grimoire.routes import common
-    assert common._fallback_connection() is None      # nothing configured
+    """The seam #144 hangs on: `llm.py` may not import the store, so the
+    resolver reads the fallback *record* and each call carries it to the
+    facade."""
+    assert _carried_fallback() is None      # nothing configured
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Backup", "model": "vendor/backup",
         "api_key": "sk-backup"}).json()["id"]
     client.put("/api/config", json={"fallback_connection_id": cid})
-    conn = common._fallback_connection()
+    conn = _carried_fallback()
     assert conn["id"] == cid and conn["model"] == "vendor/backup"
 
 
@@ -399,15 +405,13 @@ def test_a_fallback_that_cannot_send_is_no_fallback(client):
     """Surfacing a misconfigured fallback would replace the primary's real
     error with a confusing second one about a connection the user was not
     using -- on exactly the request where they need the first message."""
-    from grimoire.routes import common
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Keyless"}).json()["id"]
     client.put("/api/config", json={"fallback_connection_id": cid})
-    assert common._fallback_connection() is None
+    assert _carried_fallback() is None
 
 
 def test_a_fallback_pointing_at_a_deleted_connection_is_no_fallback(client):
-    from grimoire.routes import common
     cid = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Doomed", "api_key": "sk-x"}).json()["id"]
     client.put("/api/config", json={"fallback_connection_id": cid})
@@ -415,7 +419,7 @@ def test_a_fallback_pointing_at_a_deleted_connection_is_no_fallback(client):
     # config.md hand-edited to name a connection that never existed reaches the
     # same place, and must not fail a generation the primary would have served.
     client.put("/api/config", json={"fallback_connection_id": "never-existed"})
-    assert common._fallback_connection() is None
+    assert _carried_fallback() is None
 
 
 def test_deleting_a_connection_clears_it_as_the_fallback(client):
@@ -504,6 +508,8 @@ def test_every_writable_config_key_is_reported_back(client):
     # marker: `test_pydantic_guard.py` scans `src/grimoire` only, so one here
     # would claim to clear a guard that never looked.
     writable = set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+    # A yes to a question the write asks, never stored: nothing to read back.
+    writable -= {"confirm_embedding"}
     reported = set(client.get("/api/config").json())
     assert not (writable - reported), \
         f"writable but never reported by GET /config: {sorted(writable - reported)}"
@@ -561,7 +567,9 @@ def test_every_writable_config_key_reports_back_the_value_it_stored(client):
     # correctly. `claude` is the other connection every store is seeded with,
     # which makes this a real round trip rather than an exemption.
     live = {"active_connection_id": "claude", "character_response_mode": "individual"}
-    writable = sorted(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+    # A yes to a question the write asks, never stored: nothing to read back.
+    writable = sorted(set(getattr(ConfigUpdate, "model_fields", None) or ConfigUpdate.__fields__)
+                      - {"confirm_embedding"})
 
     for key in writable:
         before = client.get("/api/config").json()
@@ -3837,11 +3845,10 @@ def _real_facade(client, provider, **kw):
     """The real facade over a fake provider — real, so the retry and the
     fallback under test are the shipped code and not a fake's idea of them.
     The resolvers `common.build_llm` wires up are re-created here so the test
-    controls them."""
+    controls them; like it, no `fallback` -- each call carries its own."""
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider,
-        timeout=120, retries=store.config.llm_retries,
-        fallback=routes.common._fallback_connection, **kw)
+        timeout=120, retries=store.config.llm_retries, **kw)
 
 
 @pytest.fixture(autouse=True)
@@ -3932,16 +3939,18 @@ def test_with_no_fallback_configured_an_exhausted_connection_is_just_an_error(cl
     assert provider.models == ["primary"]
 
 
-def test_the_shipped_client_carries_the_retry_and_fallback_resolvers(client):
+def test_the_shipped_client_carries_the_retry_resolver_and_no_fallback(client):
     """The settings are read through resolvers so a Configuration-page change
     lands without a restart — and so `llm.py` never imports the store. A client
     built with the numbers baked in would satisfy every test above and still
-    ignore the user.
+    ignore the user. The fallback is no longer the client's: each call's
+    resolved connection carries its own (`llm.FALLBACK_KEY`), so a client-wide
+    one could only ever disagree with it.
 
     Read off the app rather than a module global: the client the routes get is
     the one `create_app` built and hung on `app.state` (#215)."""
     assert client.app.state.llm._retries is store.config.llm_retries
-    assert client.app.state.llm._fallback is routes.common._fallback_connection
+    assert client.app.state.llm._fallback is None
 
 
 async def test_a_failed_turn_does_not_roll_back_once_a_newer_turn_claimed(monkeypatch, tmp_path):
@@ -15892,8 +15901,11 @@ def test_listing_and_detail_carry_image_id(client):
 
 
 def test_an_anthropic_connection_needs_a_key_to_be_ready():
-    """The dict a read hands `_connection_ready` for an `anthropic` connection."""
+    """The header's `ready` is the seam's decision, whose credential half is
+    `inference.problem` -- asked here of the dict a read hands it for an
+    `anthropic` connection."""
+    from grimoire.store.inference import resolve as inference
     conn = {"id": "anthropic", "kind": "anthropic", "name": "Anthropic API",
             "base_url": "", "api_key": "", "model": "claude-test"}
-    assert routes.config._connection_ready(conn) is False
-    assert routes.config._connection_ready({**conn, "api_key": "test-key-anthropic"}) is True
+    assert inference.problem(conn) is not None
+    assert inference.problem({**conn, "api_key": "test-key-anthropic"}) is None

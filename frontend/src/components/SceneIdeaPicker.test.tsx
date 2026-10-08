@@ -328,7 +328,7 @@ test("a generation the model could not be reached for offers the recovery", asyn
   // `network` kind into somewhere to go (#210).
   renderPicker({ error: { detail: "connection refused", kind: "network" }, suggestions: [] });
   await screen.findByText(/Couldn.t reach the model provider/);
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
   expect(screen.getByText(/connection refused/)).toBeInTheDocument();
 });
 

@@ -1,17 +1,21 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
-  api, type Config, type ConfigUpdate, type LLMConnection, type PromptLayoutSection,
-  type SceneContext,
+  api, type Config, type ConfigUpdate, type GenerativeRole, type InferenceSettings,
+  type PromptLayoutSection, type RoleSummary, type SceneContext,
 } from "../api/client";
-import { errorText } from "../api/errors";
 import { BackupsPanel } from "../components/BackupsPanel";
 import { ContextBudgetBar } from "../components/ContextBudgetBar";
+import { EMBEDDINGS_COPY } from "../components/inference/copy";
+import { InferenceBanner } from "../components/inference/InferenceBanner";
+import { migrationBanner, migrationLine } from "../components/inference/migration";
+import { describe as describeSelection } from "../components/inference/selection";
+import { useInferenceSettings } from "../components/inference/useInferenceSettings";
+import { onConfigChanged } from "../appEvents";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import PricingEditor from "../components/PricingEditor";
 import { RegexRulesEditor } from "../components/RegexRulesEditor";
 import { PromptLayoutEditor } from "../components/PromptLayoutEditor";
-import { ModelRoutingPicker } from "../components/ModelRoutingPicker";
 import { ResponseTargetsPicker } from "../components/ResponseTargetsPicker";
 import { SamplerPresetEditor } from "../components/SamplerPresetEditor";
 import { ImageStoreCard } from "../components/ImageStoreCard";
@@ -19,7 +23,6 @@ import { StorageLocation } from "../components/StorageLocation";
 import { StoreConflictNotice } from "../components/StoreConflictNotice";
 import { ThemePicker } from "../components/ThemePicker";
 import { useThemeSetting } from "../theme/useThemeSetting";
-import { EMBEDDINGS_COPY, embeddingsOn } from "./embeddingsOn";
 
 /** Every config field this page edits. One list, because it is what the draft
  *  is built from, what the dirty count is counted over, and what Save sends —
@@ -53,12 +56,15 @@ function normalizeFloor(value: string): string {
 }
 
 const DRAFT_FIELDS = [
-  "active_connection_id", "fallback_connection_id", "llm_retries",
+  // No legacy inference key (`active_connection_id`, `fallback_connection_id`,
+  // `embeddings_connection_id`, `embeddings_model`): which provider and model
+  // each role runs is the Models page's, and at format 2 the server refuses a
+  // write of any of them -- it would reach older builds only.
+  "llm_retries",
   "llm_timeout", "absorb_budget", "llm_call_budget",
   "context_budget", "context_scan_depth", "lore_recursion_depth", "archive_depth",
   "prompt_log_depth", "offscene_known_limit",
   "speaker_turn_taking", "prompt_layout_enabled",
-  "embeddings_connection_id", "embeddings_model",
   "semantic_recall_depth", "semantic_recall_threshold",
   "system_prompt",
   "quote_color", "user_label", "assistant_label",
@@ -94,15 +100,24 @@ function draftOf(c: Config): Draft {
 }
 
 type SectionId =
-  | "storage" | "backups" | "logging" | "connection" | "routing" | "timeouts" | "pricing"
+  | "storage" | "backups" | "logging" | "models" | "timeouts" | "pricing"
   | "setup"
-  | "context" | "layout" | "tracker" | "semantic" | "system-prompt" | "response"
+  | "context" | "layout" | "tracker" | "system-prompt" | "response"
   | "samplers" | "transcript" | "output" | "playing" | "appearance";
 
-/** The column, as data: three groups, nineteen sections, and which draft fields
- *  each one owns — the last part is what lets a section carry an unsaved dot,
- *  so the footer's count is always findable rather than being a number about
- *  somewhere else. */
+/** Section ids that are gone, and the section that answers for them now, so a
+ *  link written before the change still lands somewhere that makes sense.
+ *  `semantic` is the one older links carry (Todo's embeddings chore). A Map
+ *  rather than an object literal: the id comes from the address bar, and an
+ *  object answers `toString` or `constructor` with what it inherits. */
+const RETIRED = new Map<string, SectionId>([
+  ["semantic", "models"], ["connection", "models"], ["routing", "models"],
+]);
+
+/** The column, as data: three groups, seventeen sections, and which draft
+ *  fields each one owns — the last part is what lets a section carry an
+ *  unsaved dot, so the footer's count is always findable rather than being a
+ *  number about somewhere else. */
 type SectionDef = { id: SectionId; group: string; label: string; fields: DraftField[] };
 const SECTIONS: SectionDef[] = [
   { id: "storage", group: "The install", label: "Storage", fields: [] },
@@ -110,11 +125,12 @@ const SECTIONS: SectionDef[] = [
     fields: ["backup_enabled", "backup_interval_hours", "backup_keep", "backup_dir"] },
   { id: "logging", group: "The install", label: "Logging",
     fields: ["log_level"] },
-  { id: "connection", group: "The install", label: "Connection",
-    fields: ["active_connection_id", "fallback_connection_id", "llm_retries"] },
-  // No `fields`: routing writes its own records as you set them, like the
-  // response preset below, so it can never carry an unsaved dot.
-  { id: "routing", group: "The install", label: "Model routing", fields: [] },
+  // A summary, not an editor: the roles are chosen on /models and the
+  // providers they name on /providers, which save themselves. What this
+  // section still owns is what applies to every call whichever model runs it
+  // (retries) and the recall knobs, which are not a model choice.
+  { id: "models", group: "The install", label: "Models",
+    fields: ["llm_retries", "semantic_recall_depth", "semantic_recall_threshold"] },
   { id: "timeouts", group: "The install", label: "Timeouts",
     fields: ["llm_timeout", "absorb_budget", "llm_call_budget"] },
   // No draft fields: the rate table is a file of its own behind its own route,
@@ -132,19 +148,16 @@ const SECTIONS: SectionDef[] = [
     fields: ["prompt_layout_enabled"] },
   { id: "tracker", group: "What the model sees", label: "Scene tracker",
     fields: ["tracker", "perception_rider"] },
-  { id: "semantic", group: "What the model sees", label: "Embeddings",
-    fields: ["embeddings_connection_id", "embeddings_model",
-             "semantic_recall_depth", "semantic_recall_threshold"] },
   { id: "system-prompt", group: "What the model sees", label: "System prompt",
     fields: ["system_prompt"] },
   { id: "response", group: "What the model sees", label: "Response targets", fields: [] },
   // No draft fields: presets are files of their own behind their own routes,
   // and the editor saves each one itself, like the token rates.
-  { id: "samplers", group: "What the model sees", label: "Sampler presets", fields: [] },
+  { id: "samplers", group: "What the model sees", label: "Presets", fields: [] },
   { id: "transcript", group: "What you see", label: "Transcript",
     fields: ["quote_color", "user_label", "assistant_label"] },
   // No draft fields: rules save as you edit them, through their own routes,
-  // like Routing and Token rates.
+  // like Token rates.
   { id: "output", group: "What you see", label: "Output processing", fields: [] },
   { id: "playing", group: "What you see", label: "While playing",
     fields: ["rolling_summary_every", "scene_break_every", "replay_fork_threshold",
@@ -193,7 +206,8 @@ function ImagesReachHint({ reach, on }: { reach?: string; on: boolean }) {
     return (
       <p className="field-hint">
         Images are not being sent: the connection your scenes use is not known to read images.
-        Open it under Connections to refresh its model list, or set Reads images there.
+        Open its provider under Providers to refresh its model list, or set the model's
+        vision there.
       </p>
     );
   }
@@ -215,34 +229,56 @@ function ImagesReachHint({ reach, on }: { reach?: string; on: boolean }) {
   return null;
 }
 
+const ROLE_LABEL: Record<GenerativeRole, string> = {
+  primary: "Primary", fast: "Fast", decision: "Decision",
+};
+
+/** provider ▸ model ▸ preset, as `GET /config` named the role. The summary is
+ *  the cascade's answer, so a role with no choice of its own already names
+ *  the one it falls through to; `null` is a role nothing selects at all. */
+function describeRole(role: RoleSummary | null): string {
+  if (!role) return "not set";
+  return [role.provider_name, role.model || "its default model",
+          role.preset_name || "no preset"].join(" ▸ ");
+}
+
+/** The role an unset Fast or Decision reads through (spec 4.4), as `/models`
+ *  words it. */
+const SAME_AS: Partial<Record<GenerativeRole, string>> = {
+  fast: "Same as Primary", decision: "Same as Fast",
+};
+
+/** A role's summary line. `GET /config` names what it resolves to either
+ *  way, so whether that is the role's own choice or what it inherits is the
+ *  settings view's to say -- a role that stores no provider and no model is
+ *  the "same as" one. Before the view answers, the line is the summary's. */
+function roleLine(role: GenerativeRole, summary: RoleSummary | null,
+                  view: InferenceSettings | null): string {
+  const stored = view?.roles[role]?.stored;
+  const unset = !!stored && !stored.provider && !stored.model;
+  return unset && SAME_AS[role] ? `${SAME_AS[role]} — ${describeRole(summary)}`
+    : describeRole(summary);
+}
+
+/** The Embedding role's chip: two answers, because they are two switches.
+ *  Whether anything embeds is the server's (`embedding_on`, the one gate
+ *  every embedder shares: recall, the art catalogue, search by meaning and the
+ *  continuity checks after a wrap-up), and how many entries recall adds is
+ *  the depth -- which turns recall off and nothing else. Conflating the two is
+ *  what let "depth 0" read as "nothing is sent" while the other embedders
+ *  still ran.
+ *
+ *  Reads the SAVED depth, not the draft: the chip states what is in force, and
+ *  the field beside it is where an unsaved one is shown. */
+function embeddingChip(c: Config): string {
+  if (!c.inference.embedding_on) return "off";
+  const depth = (c.semantic_recall_depth || "").trim();
+  return depth === "" || depth === "0" ? "on · recall off" : `on · recall ${depth}`;
+}
+
 /** Whether two layouts would store the same thing. Compared field by field
  *  rather than by JSON string so a key-order change in the API response cannot
  *  read as an edit the reader never made. */
-/** What the picked connection's line says beneath it.
- *
- *  Three claims, weakest last. A recorded failure is the strongest thing known
- *  and is said in the provider's own words (#146); a missing credential is the
- *  next, because it means nothing will be sent at all; and "key set" — all this
- *  page could say before — is what is left when nothing has been observed.
- *
- *  Reads the SELECTED connection, not `config.ready`: the latter describes the
- *  one on disk, which is the wrong one to report the moment this select has
- *  been changed and not yet saved — exactly when someone is looking at it.
- */
-function connectionCaption(conn: LLMConnection | undefined): string {
-  if (!conn) return "no connection selected";
-  if (conn.health.state === "error") {
-    return `last attempt failed — ${conn.health.detail || conn.health.kind}`;
-  }
-  if ((conn.kind === "openrouter" || conn.kind === "anthropic") && !conn.key_set) {
-    return "no key set — scenes will not send";
-  }
-  if (conn.kind === "openai_compatible" && !conn.base_url) {
-    return "no base URL set — scenes will not send";
-  }
-  return conn.health.state === "ok" ? "working" : "not checked yet";
-}
-
 function sameLayout(a: PromptLayoutSection[], b: PromptLayoutSection[]) {
   return a.length === b.length && a.every((row, i) =>
     row.id === b[i].id && row.label === b[i].label && row.enabled === b[i].enabled);
@@ -290,12 +326,12 @@ async function lastPrompt(): Promise<Probe> {
 export default function ConfigView() {
   const [config, setConfig] = useState<Config | null>(null);
   const [draft, setDraft] = useState<Draft | null>(null);
-  const [connections, setConnections] = useState<LLMConnection[]>([]);
   // `?section=` opens one section from a link elsewhere -- Todo's embeddings
-  // chore lands on Embeddings. Anything that is not a section id is ignored
-  // and the page opens where it always has.
-  const asked = useSearchParams()[0].get("section");
-  const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? null;
+  // chore lands on Models, by its old `semantic` id. Anything that is not a
+  // section id, current or retired, is ignored and the page opens where it
+  // always has.
+  const asked = useSearchParams()[0].get("section") ?? "";
+  const askedSection = SECTIONS.find((s) => s.id === asked)?.id ?? RETIRED.get(asked) ?? null;
   const [section, setSection] = useState<SectionId>(askedSection ?? "storage");
   // ...and a changed query is followed while the page stays mounted. Keyed on
   // the asked id, so the reader's own clicks in the column are not undone by a
@@ -303,8 +339,21 @@ export default function ConfigView() {
   useEffect(() => { if (askedSection) setSection(askedSection); }, [askedSection]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [testing, setTesting] = useState(false);
   const [probe, setProbe] = useState<Probe>(null);
+  /** The settings view, read for what `GET /config` does not carry: where the
+   *  move to the new model settings layout stands, what the Embedding role
+   *  embeds with (or why it embeds nothing), and which roles inherit. Read
+   *  when Models is first opened -- it resolves every role and route, and
+   *  only that section says anything about them -- then again on any
+   *  model-settings change made anywhere, and while an upgrade is on its way,
+   *  so a banner does not outlive the upgrade it describes. Undefined until
+   *  it answers; null after a failed read, which draws no banner rather than
+   *  a guessed one. */
+  const [modelsOpened, setModelsOpened] = useState(section === "models");
+  useEffect(() => { if (section === "models") setModelsOpened(true); }, [section]);
+  const inferenceView = useInferenceSettings(modelsOpened);
+  const inference: InferenceSettings | null | undefined =
+    inferenceView.settled ? inferenceView.settings : undefined;
   // Bumped when the store pointer moves, to remount anything describing the
   // old library rather than leave it showing a report about a folder the app
   // is no longer using.
@@ -329,8 +378,17 @@ export default function ConfigView() {
       setConfig(c);
       setDraft(draftOf(c));
     });
-    api.listConnections().then(setConnections).catch(() => setConnections([]));
   }, []);
+
+  // The Models summary is `GET /config`'s, read once above; a model-settings
+  // change made on this page (a preset renamed or deleted in the editor
+  // below) or anywhere else announces, and the summary follows. Only the
+  // summary: the draft is the reader's, and a re-read must not reset it.
+  useEffect(() => onConfigChanged(() => {
+    api.getConfig()
+      .then((c) => setConfig((prev) => (prev ? { ...prev, inference: c.inference } : prev)))
+      .catch(() => {});
+  }), []);
 
   // Fetched when the Context section is first opened, not on mount: it is
   // three round trips into a campaign for one bar, and ten of the eleven
@@ -380,11 +438,6 @@ export default function ConfigView() {
    */
   function valueOf(id: SectionId): string {
     switch (id) {
-      case "connection":
-        // The name, not the id: an id is what the file stores and a name is
-        // what the reader picked.
-        return connections.find((k) => k.id === draft?.active_connection_id)?.name
-          ?? (draft?.active_connection_id ? "unknown" : "none");
       case "logging": return draft?.log_level ?? "";
       case "backups": return draft?.backup_enabled === "on" ? "on" : "off";
       case "context": return draft?.context_budget ? `${draft.context_budget} tok` : "";
@@ -394,17 +447,10 @@ export default function ConfigView() {
       case "layout": return draft?.prompt_layout_enabled === "on" ? "on" : "off";
       // Unset reads as on, like the checkbox: the shipped default is on.
       case "tracker": return draft?.tracker === "off" ? "off" : "on";
-      // Two answers, because they are two switches: whether anything embeds
-      // (the connection and model — every embedder's gate), and how many
-      // entries recall adds. Depth 0 stops recall and nothing else.
-      case "semantic": {
-        if (!draft || !embeddingsOn(draft, connections)) return "off";
-        const depth = draft.semantic_recall_depth.trim();
-        return depth === "" || depth === "0" ? "on · recall off" : `on · recall ${depth}`;
-      }
-      // Deliberately blank: the rate table, the routing records and the
-      // response preset are each a document of their own, and "12 entries" is
-      // a size rather than a setting.
+      // Deliberately blank: the rate table, the presets and the response
+      // preset are each a document of their own, and "12 entries" is a size
+      // rather than a setting. Models has no one-word answer either -- four
+      // roles are not a word -- so its row carries the ready dot instead.
       default: return "";
     }
   }
@@ -426,40 +472,14 @@ export default function ConfigView() {
     setError(null);
   }
 
-  /** Ask the selected connection's provider whether it can serve (#146).
-   *
-   *  The answer is not held here: `checkConnection` files it server-side and
-   *  announces, and the connection list this page draws its caption from is
-   *  re-read on that announcement — so the verdict lands in the same sentence
-   *  that was already reporting the last one, rather than in a second place
-   *  saying something slightly different.
-   */
-  async function testConnection(cid: string) {
-    if (!cid || testing) return;
-    setTesting(true);
-    setError(null);
-    try {
-      await api.checkConnection(cid);
-      setConnections(await api.listConnections());
-    } catch (err: unknown) {
-      // Only the request failing gets here — a *provider* that refuses is a
-      // 200 whose verdict is in the caption. `errorText` rather than this
-      // file's older `err: any` idiom: it is the leaf helper written for
-      // exactly this and it costs the compiler nothing.
-      setError(errorText(err));
-    } finally {
-      setTesting(false);
-    }
-  }
-
   async function save() {
     if (!draft || !dirtyCount || busy) return;
     setBusy(true);
     setError(null);
     // Only the fields that actually changed: a whole-form PUT would carry
-    // nineteen values into an unlocked read-modify-write of one file and
-    // overwrite anything another tab (or the Connections page) moved while
-    // this form sat open.
+    // every value into an unlocked read-modify-write of one file and
+    // overwrite anything another tab (or the Models page) moved while this
+    // form sat open.
     const patch: ConfigUpdate = {};
     for (const f of dirty) patch[f] = draft[f];
     const sent = draft;
@@ -509,12 +529,13 @@ export default function ConfigView() {
   }
 
   const current = SECTIONS.find((s) => s.id === section)!;
-  /** The fallback as the picker can show it: a saved id equal to the active
-   *  connection is no longer offered as an option, and the backend drops it
-   *  anyway, so it reads as None. */
-  const fallbackShown =
-    draft && draft.fallback_connection_id !== draft.active_connection_id
-      ? draft.fallback_connection_id : "";
+
+  /** Where the upgrade stands, in the words every model-settings surface
+   *  uses (`inference/migration`): the banner while the library's settings
+   *  cannot be saved, else a quiet line on the card. */
+  const banner = migrationBanner(inference);
+  const upgradeNote = migrationLine(inference);
+  const embeddingCard = inference?.roles.embedding;
 
   const column = (
     <>
@@ -530,12 +551,13 @@ export default function ConfigView() {
               <span className="column-row-label">
                 {s.label}
                 {/* The dot is the state, so the state is also spelled out: a
-                    colour is not a label, and this row is the only place the
-                    connection reports itself on this page. */}
-                {s.id === "connection" && config && (
+                    colour is not a label. `ready` describes what chat
+                    would run on as the resolver answers it, not a legacy
+                    connection. */}
+                {s.id === "models" && config && (
                   <>
                     <span className={"conn-dot " + (config.ready ? "ok" : "off")} aria-hidden> ●</span>
-                    <span className="sr-only">{config.ready ? " ready" : " no key set"}</span>
+                    <span className="sr-only">{config.ready ? " ready" : " not ready"}</span>
                   </>
                 )}
                 {/* `off` used to be appended to these two labels. It is the
@@ -723,14 +745,49 @@ export default function ConfigView() {
           </>
         )}
 
-        {draft && section === "connection" && (
+        {draft && config && section === "models" && (
           <>
-            <p className="config-copy">
-              Which connection a call goes to unless <em>Model routing</em> sends that
-              kind of call somewhere else. Manage
-              connections (add a custom OpenAI-compatible endpoint, edit keys, pull a
-              model list) on the <Link to="/connections">Connections</Link> page.
-            </p>
+            <InferenceBanner status={banner} />
+            {/* What each role runs, at a glance and read-only. Choosing is the
+                Models page's and the providers it names are the Providers
+                page's: an editor here would be a second copy of either, and
+                the legacy one it replaces wrote keys the server now refuses. */}
+            {/* Busy until the upgrade status has answered: the roles are
+                already here, but whether a line about the upgrade belongs
+                under them is not known yet. */}
+            <section className="models-summary" aria-labelledby="models-summary-title"
+                     aria-busy={inference === undefined}>
+              <h2 id="models-summary-title" className="models-summary-title">Models in use</h2>
+              <dl>
+                {(["primary", "fast", "decision"] as const).map((role) => (
+                  <Fragment key={role}>
+                    <dt>{ROLE_LABEL[role]}</dt>
+                    <dd>{roleLine(role, config.inference.roles[role], inference ?? null)}</dd>
+                  </Fragment>
+                ))}
+                <dt>Embedding</dt>
+                <dd>
+                  <span className={"chip" + (config.inference.embedding_on ? " on" : "")}>
+                    {embeddingChip(config)}
+                  </span>
+                  {/* What embeds and where the library's text goes, or why
+                      nothing does -- both the settings view's, read beside
+                      the summary. */}
+                  {embeddingCard?.on && embeddingCard.resolves && (
+                    <span className="field-hint"> {describeSelection(embeddingCard.resolves, false)}</span>
+                  )}
+                  {embeddingCard && !embeddingCard.on && embeddingCard.problem && (
+                    <span className="field-hint"> {embeddingCard.problem}</span>
+                  )}
+                </dd>
+              </dl>
+              {upgradeNote && <p className="field-hint">{upgradeNote}</p>}
+              <p className="config-caption">
+                Roles, and which role or model each route uses, are chosen on{" "}
+                <Link to="/models">Models</Link>; the providers they name — keys,
+                endpoints, model lists — on <Link to="/providers">Providers</Link>.
+              </p>
+            </section>
             <p className="config-copy">
               A call that fails for a passing reason — a rate limit, a dropped
               connection — is re-sent up to the retry count, with a growing pause
@@ -740,109 +797,66 @@ export default function ConfigView() {
               once and reports the failure.
             </p>
             <p className="config-copy">
-              If the connection still cannot answer, the fallback gets one attempt.
-              It is a whole connection, not just another model name, so it can be an
-              entirely different provider — which also means it can be a bad key or a
-              deleted connection, and a fallback that cannot send is simply not used.
+              If the model still cannot answer, the role's fallback — set on its card
+              on the Models page — gets one attempt, and it can be an entirely
+              different provider.
             </p>
             <div className="config-fields">
-              <div className="config-field">
-                <label htmlFor="cfg-connection">LLM connection</label>
-                <select id="cfg-connection" aria-label="LLM connection"
-                        value={draft.active_connection_id}
-                        onChange={(e) => edit("active_connection_id", e.target.value)}>
-                  {connections.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                {/* The SELECTED connection's key, not `config.ready`: the
-                    latter describes the one on disk, which is the wrong one to
-                    report the moment this select has been changed and not yet
-                    saved — exactly when someone is looking at this line. */}
-                {/* "key set" was the whole of what this page could say until
-                    #146, and it is a claim about a string in a file. Whatever
-                    the provider last actually did outranks it: a rejected key
-                    is *set*, and reading "key set" over one is how someone
-                    ends up debugging their prompt. */}
-                <p className="config-caption">{connectionCaption(
-                  connections.find((c) => c.id === draft.active_connection_id))}</p>
-                {/* The button #146 asks for, beside the line it qualifies. It
-                    tests the connection the picker NAMES, saved or not: the id
-                    is a real connection either way, and the reader pressing it
-                    is asking about the one they are looking at. */}
-                <button className="link" disabled={testing}
-                        onClick={() => { void testConnection(draft.active_connection_id); }}>
-                  {testing ? "Testing…" : "Test connection"}
-                </button>
-              </div>
               <NumField id="cfg-llm-retries" label="Retries" placeholder="2"
                         caption="0 = send once, then report the failure"
                         value={draft.llm_retries}
                         onChange={(v) => edit("llm_retries", v)} />
-              <div className="config-field">
-                <label htmlFor="cfg-fallback-connection">Fallback connection</label>
-                <select id="cfg-fallback-connection" aria-label="Fallback connection"
-                        value={fallbackShown}
-                        onChange={(e) => edit("fallback_connection_id", e.target.value)}>
-                  <option value="">None</option>
-                  {connections.filter((c) => c.id !== draft.active_connection_id)
-                              .map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
-                {/* The active connection is filtered out of the list rather
-                    than merely ignored by the backend: offering it would look
-                    like a working setting, and falling back to the connection
-                    that just failed is a third attempt wearing a different
-                    name.
-
-                    Hence `fallbackShown` rather than the draft value: a saved
-                    fallback that has since been promoted to active matches no
-                    option, and a <select> whose value matches no option
-                    renders *blank* — not "None", not the stale name, nothing.
-                    Shown as None, which is what it now behaves as. The draft
-                    keeps the id, so it is neither silently rewritten on disk
-                    nor lost if the active connection changes back. */}
-                <p className="config-caption">
-                  {fallbackShown
-                    ? "tried once when the connection above is exhausted"
-                    : "no fallback — an exhausted connection is an error"}
-                </p>
-              </div>
             </div>
-          </>
-        )}
-
-        {draft && section === "routing" && (
-          <>
             <p className="config-copy">
-              Different jobs want different models: scene prose is worth the expensive
-              one, while a tagline or a dossier refresh is not. Each job below can name
-              its own connection — and because it is a whole connection rather than a
-              model name, it can be a different provider entirely.
+              World info activates on keywords. Semantic recall adds a second pass over the
+              entries the keywords missed, picking the ones closest in meaning to what has just
+              been said — so the lore about a character's inherited sword can surface when the
+              scene talks about the blade her mother left her. It only ever adds, never removes,
+              and lore owned by an absent character stays hidden either way. Set recalled entries
+              to <code>0</code> to turn recall off. It needs the Embedding role.
+            </p>
+            <p className="config-copy">{EMBEDDINGS_COPY}</p>
+            <div className="config-fields">
+              <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"
+                        caption="0 = recall off" value={draft.semantic_recall_depth}
+                        onChange={(v) => edit("semantic_recall_depth", v)} />
+              <NumField id="cfg-semantic-threshold" label="Similarity threshold" decimal
+                        placeholder="0.4" caption="0 to 1" value={draft.semantic_recall_threshold}
+                        onChange={(v) => edit("semantic_recall_threshold", v)} />
+            </div>
+            <p className="config-copy">
+              What counts as "close enough" differs between embedding models, so tune the
+              threshold (0 to 1) against the scene inspector, which shows what actually
+              activated.
             </p>
             <p className="config-copy">
-              Anything left on inherit uses the active connection, which is what every
-              install does until it says otherwise. A campaign can override any of these
-              for itself, from <em>Model routing</em> in the scene inspector. Like the
-              response preset, this block saves as you set it.
+              <strong>This sends text to the Embedding role's provider.</strong> With the
+              Embedding role set, these go to that provider as well as to the providers your
+              other roles use — a second place your campaign is read: recent scene text and the
+              world info being searched (recall), image descriptions (the art catalogue), the
+              scenes and records being searched when you search the library by meaning, and
+              plot-thread and commitment summaries after each wrap-up (finding possible
+              overlaps). Choose a local provider for
+              the <Link to="/models/role/embedding">Embedding role</Link> to keep it on your
+              machine.
             </p>
-            <ModelRoutingPicker scope="global" />
           </>
         )}
 
         {draft && section === "samplers" && (
           <>
             <p className="config-copy">
-              A sampler preset is a named set of temperature, top-p, top-k, min-p,
-              the three penalties, a token cap and stop strings — the settings
-              SillyTavern users share per model. A preset sets only what it names;
-              everything it leaves blank stays at the provider's default.
+              A preset is a named set of temperature, top-p, top-k, min-p, the three
+              penalties, a token cap, stop strings and a reasoning effort — the
+              settings SillyTavern users share per model. A preset sets only what it
+              names; everything it leaves blank stays at the provider's default.
             </p>
             <p className="config-copy">
-              Attach one to a connection (Connections page) or to a job under{" "}
-              <em>Model routing</em>; a campaign can override a job's preset from the
-              scene inspector, the same way it overrides the job's connection. Not
-              every backend takes every parameter — the Claude path takes none, and a
-              standard OpenAI-compatible endpoint takes six of the nine — so what
-              cannot be sent is dropped, and the routing picker and the scene
-              inspector say which.
+              Attach one to a role or a route on the <Link to="/models">Models</Link>{" "}
+              page; a campaign can override either from the scene inspector, the same
+              way it overrides the model. Not every backend takes every parameter, so
+              what cannot be sent is dropped — <em>Preview on…</em> below, the Models
+              page and the scene inspector say which.
             </p>
             <SamplerPresetEditor />
           </>
@@ -1011,7 +1025,7 @@ export default function ConfigView() {
               the conversation, so they are paid for on every one. A model without image input
               is always sent the descriptions, and under a tight budget pictures are the
               first thing given up. Whether a model reads images comes from its provider's model
-              list, or from the Reads images setting on the connection.
+              list, or from the model's vision setting on the Providers page.
             </p>
             <ImagesReachHint reach={config?.send_images_reach} on={draft.send_images === "on"} />
             {probe && (
@@ -1090,7 +1104,7 @@ export default function ConfigView() {
               After every post, the scene tracker keeps a small record of each character: where
               they are, what they are holding and doing, and what they have seen or heard. It
               costs one extra call per post, made on the <em>Scene state tracker</em> model route,
-              which you can point at a cheaper model from <em>Model routing</em>. A campaign can
+              which you can point at a cheaper model from <Link to="/models">Models</Link>. A campaign can
               switch it on or off for itself.
             </p>
             <label className="checkbox-row">
@@ -1115,62 +1129,6 @@ export default function ConfigView() {
               The second switch adds a short instruction to each character's turn, asking it to
               note what it perceived before it replies. Turn it off to keep the tracker's record
               while shedding that prompt cost.
-            </p>
-          </>
-        )}
-
-        {draft && section === "semantic" && (
-          <>
-            <p className="config-copy">
-              World info activates on keywords. Semantic recall adds a second pass over the
-              entries the keywords missed, picking the ones closest in meaning to what has just
-              been said — so the lore about a character's inherited sword can surface when the
-              scene talks about the blade her mother left her. It only ever adds, never removes,
-              and lore owned by an absent character stays hidden either way. Set recalled entries
-              to <code>0</code> to turn recall off.
-            </p>
-            <p className="config-copy">{EMBEDDINGS_COPY}</p>
-            <div className="config-fields">
-              <div className="config-field">
-                <label htmlFor="cfg-embeddings-connection">Embeddings connection</label>
-                <select id="cfg-embeddings-connection" value={draft.embeddings_connection_id}
-                        onChange={(e) => edit("embeddings_connection_id", e.target.value)}>
-                  <option value="">Off</option>
-                  {connections.filter((c) => c.kind === "openai_compatible").map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-                <p className="config-caption">openai-compatible endpoints only</p>
-              </div>
-              <div className="config-field">
-                <label htmlFor="cfg-embeddings-model">Embedding model</label>
-                <div className="config-input">
-                  <input id="cfg-embeddings-model" type="text" value={draft.embeddings_model}
-                         placeholder="text-embedding-3-small"
-                         onChange={(e) => edit("embeddings_model", e.target.value)} />
-                </div>
-              </div>
-              <NumField id="cfg-semantic-depth" label="Recalled entries" placeholder="0"
-                        caption="0 = recall off" value={draft.semantic_recall_depth}
-                        onChange={(v) => edit("semantic_recall_depth", v)} />
-              <NumField id="cfg-semantic-threshold" label="Similarity threshold" decimal
-                        placeholder="0.4" caption="0 to 1" value={draft.semantic_recall_threshold}
-                        onChange={(v) => edit("semantic_recall_threshold", v)} />
-            </div>
-            <p className="config-copy">
-              Only custom OpenAI-compatible connections can be used — OpenRouter and Claude serve
-              no embeddings endpoint. What counts as "close enough" differs between embedding
-              models, so tune the threshold (0 to 1) against the scene inspector, which shows what
-              actually activated.
-            </p>
-            <p className="config-copy">
-              <strong>This sends text to the endpoint above.</strong> With a connection and model
-              set, these go to that embeddings provider as well as to your LLM connection — a
-              second place your campaign is read: recent scene text and the world info being
-              searched (recall), image descriptions (the art catalogue), the scenes and records
-              being searched when you search the library by meaning, and plot-thread and
-              commitment summaries after each wrap-up (finding possible overlaps). Point it at a
-              local endpoint to keep it on your machine.
             </p>
           </>
         )}

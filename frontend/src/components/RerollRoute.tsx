@@ -1,205 +1,149 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type KeyboardEvent } from "react";
 
-import { api } from "../api/client";
-import { getModels, type Model } from "../api/models";
-import type { ActiveConnection, LLMConnection, LLMConnectionKind } from "../api/types";
-import ModelCombobox from "../routes/ModelCombobox";
-import { CLAUDE_MODEL_OPTIONS } from "./ConnectionForm";
+import { api, type InferenceSettings } from "../api/client";
+import { errorText } from "../api/errors";
+import { PresetSelect } from "./inference/PresetSelect";
+import { ProviderModelPicker } from "./inference/ProviderModelPicker";
 
-/** One reroll's route override (#77): which connection to send it to, and
- *  which model to drive that connection at. Both empty is the standing
- *  configuration, which is what every reroll did before this existed. */
-export type RerollRoute = { connection_id: string; model: string };
+/** One reroll's override (#77, spec 5.6): the provider to send it to, the
+ *  model to run there and the sampler preset to run it under. Each part `""`
+ *  leaves that part to the campaign's scene route, and all three empty is
+ *  Default -- what every reroll did before this existed. */
+export type RerollRoute = { provider: string; model: string; preset: string };
 
-export const NO_REROLL_ROUTE: RerollRoute = { connection_id: "", model: "" };
+export const NO_REROLL_ROUTE: RerollRoute = { provider: "", model: "", preset: "" };
 
-/** Pick the connection and model ONE reroll runs on.
+/** What a route adds to a reroll's body: only the parts that were chosen, so
+ *  Default sends no override at all rather than three empty ones. */
+export function rerollOverrides(route: RerollRoute): Partial<RerollRoute> {
+  return Object.fromEntries(Object.entries(route).filter(([, v]) => v));
+}
+
+/** What the campaign's scene route resolves to, if the view says. */
+function standingOf(view: InferenceSettings | null) {
+  return view?.routes.find((r) => r.tasks.includes("regenerate"))?.resolves ?? null;
+}
+
+/** Default, spelled out: what the campaign's scene route resolves to. */
+function describe(view: InferenceSettings | null): string {
+  const standing = standingOf(view);
+  if (!standing) return "the campaign's scene model";
+  return [standing.provider_name || standing.provider, standing.model, standing.preset_name]
+    .filter(Boolean).join(" · ");
+}
+
+/** What a reroll naming `provider` and no model runs, in words. */
+function providerAloneWords(view: InferenceSettings, provider: string,
+                            standingModel: string): string {
+  if (view.format !== "2") {
+    const own = view.providers.find((p) => p.id === provider)?.own_model ?? "";
+    return own ? `Runs this provider's own model, ${own}`
+      : "This provider names no model of its own: choose one.";
+  }
+  return standingModel ? `Keeps ${standingModel}`
+    : "The scene route names no model to keep: choose one.";
+}
+
+/** Pick the provider, model and preset ONE reroll runs on.
  *
- *  Two controls rather than one, because neither expresses the other's case: a
- *  model id cannot reach a different provider (the credentials and base URL
- *  that makes possible live on a connection), and a connection cannot say "the
- *  same provider, its bigger model". See `RegenerateBody`, which is shaped the
- *  same way for the same reason.
+ *  Provider ▸ model comes from `ProviderModelPicker`, asked for what a scene
+ *  turn needs (`generate`), so every kind of provider offers its models the
+ *  same way and one that lists none -- the Claude subscription -- takes a
+ *  typed id. The preset is `PresetSelect`, its "" being the route's own.
  *
- *  Both fetches are the component's own rather than the play view's, and they
- *  run when the popover opens rather than when the campaign does: this mounts
- *  only while the reader is choosing, and the alternative is a model catalog
- *  downloaded on every campaign open for a control most turns never touch.
- *  `getModels` is memoized per page load, so opening the popover twice costs
- *  one download.
+ *  The providers, presets and what Default runs are the campaign's inference
+ *  view, read when this mounts -- which is when the reader opens the popover,
+ *  so the answer is the current one rather than whatever the play view read
+ *  when the campaign opened (`getCampaignInference` is uncached).
  */
-export default function RerollRoutePicker({
-  value, onChange,
-}: {
+export default function RerollRoutePicker({ cid, value, onChange, onPending }: {
+  cid: string;
   value: RerollRoute;
   onChange: (route: RerollRoute) => void;
+  /** Whether a model id is typed and not yet taken ("Use this id"). The
+   *  holder's Reroll sends `value`, which does not name it -- so it waits
+   *  until it does, rather than silently running the standing or the
+   *  provider's own model in its place. False again once this goes. */
+  onPending?: (pending: boolean) => void;
 }) {
-  // Which connection is active is READ HERE, on mount, rather than handed down
-  // from the play view. Codex review caught the prop going stale: the view held
-  // it from a `[cid]`-keyed effect, so another tab repointing the active
-  // connection left the header (which `App` refreshes on navigation) and this
-  // picker disagreeing — Default named the old connection's model, the old one
-  // was filtered out of the list, and the real active one was offered as a
-  // redundant row. This mounts only when the popover opens, which is exactly
-  // when the answer is needed, so there is no window in which it can be wrong.
-  const [active, setActive] = useState<ActiveConnection | null>(null);
-  // Whether the read above has SETTLED, which `active === null` cannot say on
-  // its own: it is both "not asked yet" and "asked, nothing is active". The
-  // model box below is refused until this is true, so a model typed before the
-  // answer arrives cannot be stored with no route attached (Codex review). A
-  // read that FAILS still settles — we then genuinely do not know the active
-  // connection, and disabling the control forever over that would be worse
-  // than letting an unpinned model through.
-  const [activeSettled, setActiveSettled] = useState(false);
-  const [connections, setConnections] = useState<LLMConnection[]>([]);
-  const [orModels, setOrModels] = useState<Model[]>([]);
-  const [orError, setOrError] = useState(false);
-  const [endpointModels, setEndpointModels] = useState<Model[]>([]);
+  const [view, setView] = useState<InferenceSettings | null>(null);
+  const [failed, setFailed] = useState<unknown>(null);
+  const [typed, setTyped] = useState("");
 
   useEffect(() => {
     let live = true;
-    api.listConnections()
-      .then((list) => { if (live) setConnections(list); })
-      .catch(() => { if (live) setConnections([]); });
-    // `{ fresh: true }`, which Codex caught the first version of this missing:
-    // `getConfig` answers from a module cache "keyed to nothing but this tab's
-    // own writes", so relocating the read into this component fixed nothing at
-    // all for the cross-tab repoint it was moved here to handle. The popover
-    // opens rarely and this is the one moment the answer has to be current.
-    api.getConfig({ fresh: true })
-      .then((c) => { if (live) { setActive(c.active_connection); setActiveSettled(true); } })
-      .catch(() => { if (live) { setActive(null); setActiveSettled(true); } });
+    api.getCampaignInference(cid)
+      .then((v) => { if (live) { setView(v); setFailed(null); } })
+      .catch((err: unknown) => { if (live) { setView(null); setFailed(err); } });
     return () => { live = false; };
-  }, []);
+  }, [cid]);
 
-  // Which connection this reroll would actually reach: the one named, or the
-  // active one when nothing is. `null` until the list lands, and also for a
-  // choice the list does not contain — a connection deleted in another tab
-  // since the popover opened. Nothing is silently reinterpreted as the
-  // default: the state still names what was chosen, the model box offers
-  // nothing rather than the wrong provider's catalog, and sending the reroll
-  // gets the server's 400.
-  const chosen =
-    connections.find((c) => c.id === (value.connection_id || active?.id)) ?? null;
-  const kind: LLMConnectionKind | null = chosen?.kind ?? null;
-  const chosenId = chosen?.id ?? "";
+  const isDefault = !value.provider && !value.model && !value.preset;
+  const standingModel = standingOf(view)?.model ?? "";
 
-  useEffect(() => {
-    // Only for the kind whose models come from a catalog. An Ollama reroll must
-    // not pull down OpenRouter's, which is the largest single download the app
-    // makes.
-    if (kind !== "openrouter") return;
-    let live = true;
-    getModels()
-      .then((m) => { if (live) { setOrModels(m); setOrError(false); } })
-      .catch(() => { if (live) { setOrModels([]); setOrError(true); } });
-    return () => { live = false; };
-  }, [kind]);
-
-  useEffect(() => {
-    // A custom endpoint's list is whatever its last refresh cached, per
-    // connection — so this re-reads when the choice changes, and clears first
-    // so a slow read cannot leave the previous endpoint's models on screen
-    // under the new one's name.
-    setEndpointModels([]);
-    if (kind !== "openai_compatible" || !chosenId) return;
-    let live = true;
-    api.readConnection(chosenId)
-      .then((d) => { if (live) setEndpointModels(d.models); })
-      .catch(() => { if (live) setEndpointModels([]); });
-    return () => { live = false; };
-  }, [kind, chosenId]);
-
-  const models =
-    kind === "openrouter" ? orModels
-    : kind === "claude" ? CLAUDE_MODEL_OPTIONS
-    : kind === "openai_compatible" ? endpointModels
-    : [];
+  // Enter on these controls is theirs, never the popover's commit: a select's
+  // menu, a button's press and the typed-id box (whose id lands only on "Use
+  // this id") all answer it, and letting it bubble sent the reroll through the
+  // route the reader was still choosing. A model row has no Enter of its own,
+  // so there it commits like the guidance box. Escape is left to bubble:
+  // backing out of the popover from any control is deliberate. (A model row's
+  // arrows are the picker's own to keep, for every holder of one.)
+  function keepOwnKeys(e: KeyboardEvent) {
+    const t = e.target;
+    const onRadio = t instanceof HTMLInputElement && t.type === "radio";
+    if (e.key === "Enter" && !onRadio) e.stopPropagation();
+  }
 
   return (
-    <span className="reroll-route">
-      <select
-        aria-label="Reroll connection"
-        value={value.connection_id}
-        // Enter belongs to the native menu here, not to the popover's commit.
-        // Codex review: a keyboard reader confirming an option with Enter had
-        // the keydown bubble up and fire the reroll BEFORE the select's own
-        // default applied — sending the turn through the route they were in
-        // the middle of replacing. `ModelCombobox` stops the same key while
-        // its list is up; a native select has no equivalent to hook, so the
-        // guard belongs here. Escape is deliberately left to bubble: backing
-        // out of the popover from any of its three controls is the behaviour
-        // an earlier round added on purpose.
-        onKeyDown={(e) => { if (e.key === "Enter") e.stopPropagation(); }}
-        onChange={(e) => {
-          // The model is cleared with the connection, never carried across:
-          // an OpenRouter id means nothing to a local endpoint, and a picker
-          // that kept it would send a reroll to a model the chosen provider
-          // has never heard of.
-          onChange({ connection_id: e.target.value, model: "" });
-        }}
-      >
-        {/* Just "Default", with the connection's name on hover. The name does
-            not fit a control this size — a real one ran as "Default — Oper" —
-            and it is the one thing here that is already said twice over: the
-            status bar names the active connection, and the model box beside
-            this shows the model leaving it alone would run. */}
-        <option value=""
-                title={active
-                  ? `Whichever connection is active when the reroll is sent — ${active.name} now`
-                  : undefined}>
+    // Keydown is only filtered here, never acted on; the controls inside are
+    // the interactive elements.
+    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
+    <div className="reroll-route" onKeyDown={keepOwnKeys}>
+      <div className="reroll-default">
+        <button type="button" className="subtle" aria-pressed={isDefault}
+                onClick={() => onChange(NO_REROLL_ROUTE)}>
           Default
-        </option>
-        {/* The active connection IS offered again below, which an earlier
-            round removed as a duplicate and Codex caught as the removal of the
-            only way to pin a provider. The distinction is real: "Default" is
-            whichever connection is active when the reroll is sent, and the
-            named row is that connection specifically. The titles say so, since
-            the difference only shows itself when the two diverge. */}
-        {connections.map((c) => (
-          <option key={c.id} value={c.id}
-                  title={c.id === active?.id
-                    ? `${c.name} — pinned, even if the active connection changes`
-                    : c.name}>
-            {c.name}
-          </option>
-        ))}
-      </select>
-      <ModelCombobox
-        ariaLabel="Reroll model"
-        // What leaving it blank means, spelled out rather than implied: the
-        // model the chosen route will actually run. Both sources now report
-        // that directly — `/config`'s `active_connection.model` always did,
-        // and `/llm-connections` gained `effective_model` for this — so the
-        // rule that a `claude` connection with no model still runs one lives
-        // in `llm.effective_model` and nowhere else.
-        placeholder={(value.connection_id ? chosen?.effective_model
-                                          : active?.model) || "model"}
-        value={value.model}
-        // Choosing a model under "Default" PINS the connection the box is
-        // describing. Codex caught the gap: the placeholder and the catalog
-        // both come from whichever connection is active right now, so a route
-        // left dynamic would apply a model chosen against A to whatever B
-        // happens to be active by the time Reroll is clicked.
-        //
-        // The pin STAYS once set, including when the model is cleared again:
-        // an implicit pin and an explicit one are the same value and nothing
-        // here distinguishes them, and the `<select>` shows the connection by
-        // name from that moment on — so the route on screen is the route that
-        // will run, and Default is one click away for a reader who wants it
-        // dynamic again.
-        onChange={(model) => onChange({
-          connection_id: value.connection_id || (model ? active?.id ?? "" : ""),
-          model,
-        })}
-        models={models}
-        error={kind === "openrouter" && orError}
-        // Only while BOTH are unknown. An explicitly named connection is its
-        // own pin and needs nothing from the config read; it is the Default
-        // row, whose meaning is "whichever is active", that has nothing to
-        // attribute a typed model to until the answer lands.
-        disabled={!value.connection_id && !activeSettled}
-      />
-    </span>
+        </button>
+        <span className="field-hint">{describe(view)}</span>
+      </div>
+      {failed !== null && (
+        <p className="field-hint">Couldn't read the providers: {errorText(failed)}</p>
+      )}
+      {view && (
+        <>
+          <ProviderModelPicker
+            needs={["generate"]} providers={view.providers}
+            value={{ provider: value.provider, model: value.model }}
+            onChange={(pm) => onChange({ ...value, ...pm })}
+            onDraft={(draft) => { setTyped(draft); onPending?.(!!draft); }} />
+          {typed && (
+            <p className="field-hint" role="status">
+              Use this id to reroll on {typed}, or clear the box.
+            </p>
+          )}
+          {/* A provider with no model sends `{provider}` alone. Said here, so
+              the reroll says what it will run before it is sent -- and what
+              that is depends on the layout (`resolve._overridden`): at format
+              2 the scene route's standing model, THERE (spec 5.6), an id
+              another provider may not serve; at format 1 (an upgrade pending
+              or failed) the provider's OWN model, which may be another, and
+              pricier, one. */}
+          {value.provider && !value.model && (
+            <p className="field-hint">
+              {providerAloneWords(view, value.provider, standingModel)}
+            </p>
+          )}
+          {/* Offered in either settings layout: `override_inference` applies
+              a reroll's preset at format 1 as well as 2. The select names
+              itself (`label`); the caption is for the eye. */}
+          <div className="reroll-preset">
+            <span className="field-label" aria-hidden="true">Preset</span>
+            <PresetSelect value={value.preset} presets={view.presets} allowClear
+                          label="Reroll preset" emptyLabel="The route's preset"
+                          onChange={(preset) => onChange({ ...value, preset })} />
+          </div>
+        </>
+      )}
+    </div>
   );
 }

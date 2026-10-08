@@ -62,6 +62,9 @@ class ConfigUpdate(BaseModel):
     replay_fork_threshold: str | None = None
     advance_fork_threshold: str | None = None
     log_level: str | None = None
+    #: The yes to a change of the legacy embedding keys that re-embeds the
+    #: library (`put_config`); only a JSON `true` confirms.
+    confirm_embedding: Any = None
 
 
 class PromptLayoutSection(BaseModel):
@@ -98,6 +101,12 @@ class ConnectionCreate(BaseModel):
     #: Whether "Keep writing" sends a cut-short reply back as the start of the
     #: model's own turn (prefill) rather than asking it to continue.
     prefill: bool = False
+    #: The provider preset (`store/inference/providers.py`) this is made from;
+    #: "" for none named. Checked by the handler (an unknown one, or one on
+    #: another adapter, is a 400), not here.
+    preset: str = ""
+    #: "metered" or "subscription"; "" takes the preset's. Checked by the handler.
+    billing: str = ""
 
 
 class ConnectionUpdate(BaseModel):
@@ -111,6 +120,35 @@ class ConnectionUpdate(BaseModel):
     sampler_support: Literal["", "standard", "extended"] | None = None
     vision: Literal["", "on", "off"] | None = None
     prefill: bool | None = None
+    preset: str | None = None
+    billing: str | None = None
+    #: Not a field of the provider: the reader's yes to an edit that re-embeds
+    #: the library (`embed_space.moved_by`). Only `true` confirms; `Any`, so a
+    #: `"true"` is refused rather than coerced by one pydantic version.
+    confirm_embedding: Any = None
+
+
+class FactsUpdate(BaseModel):
+    """What the user says about one model on one provider (spec 4.2). Every
+    field but `model` is `Any`: the store checks each value (`facts.state`),
+    so a `"true"` for `prefill` is the 400 it is rather than coerced into a
+    bool by one pydantic version and not the other. `overrides` is
+    `{capability: "" | "yes" | "no"}`, merged per capability ("" removes)."""
+
+    model: str = ""
+    vision: Any = None
+    prefill: Any = None
+    post_process: Any = None
+    overrides: Any = None
+    #: Only `true` confirms a write that turns the Embedding role on.
+    confirm_embedding: Any = None
+
+
+class HealthCheck(BaseModel):
+    """A provider health check. `confirm` is `Any` for `ModelTestRun`'s
+    reason: only a JSON `true` lets a check that generates be sent."""
+
+    confirm: Any = None
 
 
 class CatalogProbe(BaseModel):
@@ -260,27 +298,6 @@ class TrackerEdit(BaseModel):
     edits: dict
 
 
-class RoutingUpdate(BaseModel):
-    """Which connection each route runs on, at one scope (#142).
-
-    A free-form `{route: connection_id}` map rather than ten declared fields:
-    the route list is `store.routing.LEGACY_ROUTES` and declaring it twice is how the
-    two drift. Unknown keys are refused by the handler, which is where the
-    scope's own list of allowed routes lives -- a campaign may not set the
-    world-scoped ones.
-
-    `dict` bare, not `dict[str, str]`: the Android build may pin pydantic 1.x
-    (docs/android-architecture.md §7), and the coercion the two versions apply
-    to a typed mapping differs. The handler validates the values it stores.
-    """
-
-    routes: dict | None = None
-    #: `{route: preset_id}` at the same scope -- "" to inherit,
-    #: `sampler_presets.PRESET_CLEAR` for "no preset". Bare `dict` for the same
-    #: pydantic-1 reason as `routes`; the handler validates it.
-    presets: dict | None = None
-
-
 class ResponsePresetCreate(BaseModel):
     name: str
     description: str = ""
@@ -314,11 +331,24 @@ class RegenerateBody(BaseModel):
     absent `connection_id` means the active connection, an absent `model` means
     whatever model the resolved connection carries. Nothing here is persisted
     as a preference; #142/#143 are where standing per-task routing lives.
+
+    `provider` is what `connection_id` is now called (spec 5.6), and the old
+    name is read as it when `provider` is absent. In the roles format a
+    provider alone keeps the standing MODEL on the new provider (the
+    connection no longer has a model of its own to fall back to); a store that
+    has not moved to the roles format keeps the old meaning, where
+    `connection_id` alone runs that connection's own model. On either layout
+    `preset` replaces the route's sampler preset for this call's primary
+    attempt only: the fallback gets what it would have had without the
+    override -- the route's preset when the route has one, else its own. The
+    preset id `PRESET_CLEAR` means "no preset".
     """
     guidance: str | None = None
     response: ResponseSettings | None = None
     connection_id: str | None = None
     model: str | None = None
+    provider: str | None = None
+    preset: str | None = None
 
 
 class RetryBody(BaseModel):

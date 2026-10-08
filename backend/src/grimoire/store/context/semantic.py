@@ -40,19 +40,24 @@ World info until the whole section went, keyword hits and all.
 
 ## Configuration
 
-Four keys in config.md, all off by default:
+Four settings in config.md, all off by default:
 
-``embeddings_connection_id``
-    An `llm_connections` entry of kind ``openai_compatible``; its ``base_url``
-    and ``api_key`` are the endpoint. Reusing a connection rather than adding
+The Embedding role, ``role_embedding_provider`` and ``role_embedding_model``
+(``embeddings_connection_id`` and ``embeddings_model`` on a store the
+format-2 migration has not reached; `inference.translate.embedding_role`
+reads either, and `embed_space.resolve` is the one place that turns it into
+an endpoint)
+    The provider is an `llm_connections` entry; its ``base_url`` and
+    ``api_key`` are the endpoint. Reusing a provider rather than adding
     ``embeddings_url``/``embeddings_key`` to config.md is deliberate: config.md
     gave up holding credentials when llm_connections/ took over, and the
     connection store already handles masking, editing, and dropping the key
-    when the endpoint is repointed. The other two kinds are rejected —
-    OpenRouter and the Claude SDK serve no ``/embeddings`` route, so accepting
-    one would only produce a confusing 404 per turn.
-``embeddings_model``
-    The embedding model id, e.g. ``text-embedding-3-small``.
+    when the endpoint is repointed. An ``openai_compatible`` provider brings
+    its own URL; an OpenRouter one embeds through OpenRouter's
+    ``/embeddings`` at format 2 only (a legacy choice of one has always meant
+    "off", and stays off through the migration); the Claude kinds serve no
+    ``/embeddings`` route and embed nothing. The model is the embedding
+    model id, e.g. ``text-embedding-3-small``.
 ``semantic_recall_depth``
     Entries a recall may add. 0 (default) disables the layer.
 ``semantic_recall_threshold``

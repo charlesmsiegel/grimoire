@@ -5,6 +5,8 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+import threading
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -20,16 +22,20 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from . import runner
 from .health import ProviderHealth
 from .routes import build_llm, build_openai_compatible_client, router, runs
+from .routes import config as config_routes
+from .routes.common import NEWER_FORMAT
 from .store import (
     backups,
     campaigns,
     config,
+    inference_keys,
     locks,
     logs,
     migrations,
     module_edit,
     revision,
 )
+from .store.inference import migrate as inference_migrate
 
 DEFAULT_DIST = Path(__file__).resolve().parents[2].parent / "frontend" / "dist"  # paths-ok: DEFAULT_DIST only; GRIMOIRE_DIST overrides it on Android
 
@@ -211,6 +217,79 @@ async def _backup_ticker(app: FastAPI | None = None) -> None:
         await anyio.sleep(BACKUP_TICK_SECONDS)
 
 
+def _migrate_inference(app: FastAPI, stop: threading.Event) -> None:
+    """One background pass of the inference-settings migration, holding the
+    store against image-store maintenance for its whole length.
+
+    The run exclusion is held HERE and never in `store.inference.migrate`
+    (CLAUDE.md: a store module knows nothing of this process's run registry).
+    While an image-store run is live the pass is skipped and says so; the next
+    start retries, and until then play resolves through the translation.
+    Every other failure is logged rather than raised: there is nobody on a
+    daemon thread to raise it to, and the status file says what happened.
+    """
+    log = logging.getLogger(__name__)
+    try:
+        with app.state.runs.exclude_maintenance():
+            got = inference_migrate.ensure(stop=stop)
+        if got.state not in ("done", "newer"):
+            log.warning("inference settings migration %s -- %s %s", got.state,
+                        got.reason, "; ".join(got.skipped))
+    except runs.MaintenanceRunningError as exc:
+        log.info("inference settings migration deferred -- image-store maintenance "
+                 "run %s is running", exc.run_id)
+    except Exception as exc:  # noqa: BLE001 -- see the docstring
+        log.warning("inference settings migration stopped -- %s", exc)
+
+
+def start(app: FastAPI) -> threading.Thread | None:
+    """Start the inference-settings migration for the store `paths.home()`
+    names now, without waiting for it (spec 11.2, ruling 4): startup and a
+    data-dir switch call this, and neither may block on a backup of the whole
+    library. A daemon thread, so a process that exits mid-run is not held open
+    by it -- every write it makes is atomic, and the next start resumes.
+
+    Nothing when `GRIMOIRE_INFERENCE_AUTOMIGRATE` is "0" (the suite sets it; a
+    migration test calls `ensure` itself). Returns the thread, also kept as
+    `app.state.inference_migration`.
+    """
+    if not inference_keys.automigrate():
+        return None
+    # A flag of its own per run: re-entering a lifespan must never un-stop a
+    # straggler an earlier shutdown flagged and could not wait out.
+    stop = threading.Event()
+    thread = threading.Thread(target=_migrate_inference, args=(app, stop),
+                              name="inference-migration", daemon=True)
+    app.state.inference_migration = thread
+    app.state.inference_migrations.append((thread, stop))
+    thread.start()
+    return thread
+
+
+#: How long lifespan shutdown waits for a stopped migration to reach its next
+#: item boundary. Bounded: one item can be a whole-library backup, and a
+#: server on its way out must not wait for that. A run still inside its item
+#: when this elapses finishes only that item (every write it makes is atomic)
+#: and resumes on the next start.
+MIGRATION_STOP_WAIT_SECONDS = 2.0
+
+
+def _stop_migration(app: FastAPI) -> None:
+    """Ask a running inference migration to stop at its next item boundary,
+    and wait for it briefly: an app torn down in a living process (a reload,
+    a test) must not leave it writing into whatever `home()` names next."""
+    # Every run this app started, not only the last: a data-dir switch starts
+    # one beside the lifespan's. Flag them all first, then share one bound.
+    runs_started = app.state.inference_migrations
+    for _, stop in runs_started:
+        stop.set()
+    deadline = time.monotonic() + MIGRATION_STOP_WAIT_SECONDS
+    for thread, _ in runs_started:
+        if thread is not threading.current_thread():
+            thread.join(max(0.0, deadline - time.monotonic()))
+    runs_started[:] = [(t, e) for t, e in runs_started if t.is_alive()]
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     # Every step here can now hit a cross-process lock (#234) --
@@ -233,6 +312,10 @@ async def _lifespan(app: FastAPI):
         except locks.StoreBusy as exc:
             log.warning("startup step %s skipped -- %s; it will be retried",
                         step.__name__, exc)
+    # In the background: a migration begins with a backup of the whole store,
+    # and the app serves (through the legacy translation) while it runs.
+    # Shutdown flags it to stop (`_stop_migration`); each run has its own flag.
+    start(app)
     # The ticker outlives startup and is cancelled on the way out, so a server
     # stopping mid-zip does not leave a thread writing into a store the next
     # process is about to open. `atomic.streaming_write` is what makes that
@@ -256,6 +339,9 @@ async def _lifespan(app: FastAPI):
                 # portal waits for it; this is what makes that wait one item
                 # long rather than the rest of a migration.
                 runner.stop_maintenance(app)
+                # The inference migration is not a run, so the registry
+                # cannot stop it; it has a flag of its own.
+                _stop_migration(app)
             tg.cancel_scope.cancel()
     finally:
         # Closing the gateway clients' `httpx` pools (#215). Worth nothing
@@ -270,17 +356,25 @@ async def _lifespan(app: FastAPI):
         # a shutdown. Each close guarded: a failing one must neither strand the
         # other pool nor bury the exception on its way out.
         #
-        # Blind spot: these are the pools an *app* owns. The `EmbeddingsClient`
-        # singletons in `store/semsearch`, `store/context/semantic`,
-        # `store/context/art` and `store/continuity/similarity` are reachable
-        # only from store code with no app to hang them on, and are still
-        # closed by nobody. `test_llm_lifecycle` fails if a closable is
-        # added to `app.state` and left out of the loop below.
+        # Blind spot: these are the pools an *app* owns, plus the model test's
+        # embed-probe client in `routes/config.py` (`close_clients`), a route
+        # module's singleton closed here because this is the lifespan of the
+        # router it serves -- it reopens on its next use. The
+        # `EmbeddingsClient` singletons in `store/semsearch`,
+        # `store/context/semantic`, `store/context/art` and
+        # `store/continuity/similarity` are reachable only from store code with
+        # no app to hang them on, and are still closed by nobody.
+        # `test_llm_lifecycle` fails if a closable is added to `app.state` and
+        # left out of the loop below.
         for client in (app.state.llm, app.state.openai_compatible):
             try:
                 await client.aclose()
             except Exception as exc:  # noqa: BLE001 -- see above
                 log.warning("closing %s failed -- %s", type(client).__name__, exc)
+        try:
+            config_routes.close_clients()
+        except Exception as exc:  # noqa: BLE001 -- see above
+            log.warning("closing the model test's embeddings client failed -- %s", exc)
 
 
 def _record_campaign_write(cid: str, stamp: bool, changed: bool) -> None:
@@ -542,6 +636,15 @@ def create_app() -> FastAPI:
     # every route test and every migrated handler. `runner.install` attaches the
     # parts that do need a running loop.
     runs.install_registry(app)
+    # The inference-settings migration's trigger, reachable from a route
+    # (`PUT /config/data-dir`) without that module importing this one, which
+    # would close `main -> routes -> main`. The thread it last started rides
+    # beside it, so a caller -- a test -- can wait for it.
+    app.state.start_inference_migration = lambda: start(app)
+    app.state.inference_migration = None
+    # Every run started, with the stop flag it checks between items
+    # (`migrate.ensure(stop=...)`); lifespan shutdown sets them all.
+    app.state.inference_migrations = []
     # Compression for clients that are not on this machine -- which, for the
     # servers this app ships, is nobody. `_RemoteOnlyGZip` says why.
     app.add_middleware(_RemoteOnlyGZip)
@@ -574,6 +677,14 @@ def create_app() -> FastAPI:
         # One handler rather than a try/except at every one of the ~35 call
         # sites that can take a campaign or module-edit lock (#234).
         return JSONResponse(status_code=409, content={"detail": str(exc)})
+
+    @app.exception_handler(config.NewerFormatError)
+    async def newer_format_handler(request: Request, exc: config.NewerFormatError):
+        # One handler, as for StoreBusy: every model-settings write refuses a
+        # store a newer build switched inside `config.format_hold`, which is
+        # below every route -- the route's own early `refuse_newer` is only the
+        # cheap answer, and this is the binding one.
+        return JSONResponse(status_code=409, content=NEWER_FORMAT)
 
     app.include_router(router, prefix="/api")
 

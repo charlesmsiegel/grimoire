@@ -15,7 +15,14 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
 from .. import content_parts, llm_reasoning, prompts, store
-from ..llm import ATTEMPTED, LLMClient, effective_model, fallback_sampling, prefill_capable
+from ..llm import (
+    ATTEMPTED,
+    FALLBACK_KEY,
+    LLMClient,
+    effective_model,
+    fallback_sampling,
+    prefill_capable,
+)
 from ..llm_errors import LLMError
 from ..model_guidance import PreparedMessages
 from ..store.inference import providers as inference_providers
@@ -23,7 +30,6 @@ from . import runs, streaming
 from . import tracker as tracker_routes
 from .common import (
     _dump,
-    _fallback_connection,
     _record_prompt,
     _require_scene,
     _turn_override,
@@ -622,14 +628,14 @@ def _capture(cid, sid, task, messages, conn):
 def _variant_conn(conn: dict, model: str) -> dict:
     """The connection a fallback variant was sent on, as its capture names it.
 
-    The fallback as the facade resolves it, carrying the route's sampler preset
-    under `llm.fallback_sampling`'s rule -- not the primary relabelled with the
-    fallback's model, which would record the primary's preset and catalog list
-    against a request that never carried them. Falls back to that relabel only
-    when no fallback resolves any more (repointed since the call began), minus
-    the sampling block it cannot vouch for.
+    The fallback this call carries (`llm.FALLBACK_KEY`, the resolver's own),
+    with the route's sampler preset under `llm.fallback_sampling`'s rule --
+    not the primary relabelled with the fallback's model, which would record
+    the primary's preset and catalog list against a request that never carried
+    them. Falls back to that relabel only when the call carries no fallback (a
+    connection built by hand), minus the sampling block it cannot vouch for.
     """
-    fallback = _fallback_connection()
+    fallback = conn.get(FALLBACK_KEY)
     if fallback is not None:
         return {**fallback_sampling(conn, fallback), "model": model}
     return {**{k: v for k, v in conn.items() if k not in ("sampling", "model_params")},

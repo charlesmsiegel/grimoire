@@ -1183,7 +1183,7 @@ _EMBEDDINGS = {
     "why": "Grimoire still uses basic matching to find possible overlaps in your ledgers. "
            "Semantic matching improves detection when the same story business is phrased "
            "differently.",
-    "fix": "/config?section=semantic", "fix_label": "Embeddings",
+    "fix": "/models/role/embedding", "fix_label": "Embeddings",
 }
 
 _THREADS = {
@@ -1258,7 +1258,16 @@ def test_missing_embeddings_shows_one_library_chore_on_the_global_page(client, c
     items = _items(client, "embeddings", "")
     assert items["items"] == [{"id": "embeddings", "label": "Semantic matching",
                                "detail": "No embeddings connection and model are set",
-                               "fix": "/config?section=semantic"}]
+                               "fix": "/models/role/embedding"}]
+
+
+def test_the_todo_embeddings_links_go_to_models(client, campaign):
+    """The embedding model is a role on the Models screen now (slice C,
+    Task 8): the chore and its item both link to it."""
+    chore = next(c for c in _todo(client, "")["chores"] if c["id"] == "embeddings")
+    assert chore["fix"] == "/models/role/embedding"
+    assert [i["fix"] for i in _items(client, "embeddings", "")["items"]] == [
+        "/models/role/embedding"]
 
 
 def test_no_campaign_no_embeddings_chore(client):

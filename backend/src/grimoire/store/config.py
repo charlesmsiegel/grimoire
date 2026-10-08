@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Iterator, Mapping
 
-from . import atomic, locks, routing
+from . import atomic, inference_keys, locks, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import ensure_home, home
 
@@ -239,10 +240,27 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
                 "advance_fork_threshold", "log_level",
                 "lore_recursion_depth") + _LENGTH_KEYS + routing.CONFIG_KEYS \
     + routing.PRESET_CONFIG_KEYS
+#: The new inference layout (roles, route choices, the format marker). The
+#: twelve legacy routes' `preset_<k>` keys are already above, under the same
+#: names, so only what is new is appended -- a key listed twice would be
+#: harmless here and a lie in every reader that counts them.
+_CONFIG_KEYS += tuple(k for k in inference_keys.GLOBAL_KEYS if k not in _CONFIG_KEYS)
 
 
 def _config_path():
     return home() / "config.md"
+
+
+def _birth_marker() -> dict[str, str]:
+    """What a `config.md` this build creates from nothing starts with, besides
+    its defaults: the current format marker (spec 11.1, ruling 13). A store
+    with no `config.md` has no legacy settings to translate, so it is never
+    migrated -- it is born in the new layout. Only the CREATION paths call
+    this: a `config.md` that exists without the marker is a legacy store and
+    stays one until the migration says otherwise."""
+    if not inference_keys.born_current():
+        return {}
+    return {inference_keys.FORMAT_KEY: inference_keys.CURRENT_FORMAT}
 
 
 def read_config() -> dict[str, str]:
@@ -292,12 +310,16 @@ def read_config() -> dict[str, str]:
                 **dict.fromkeys(routing.CONFIG_KEYS, ""),
                 # Every route's sampler preset, same "" = inherit, same reason.
                 **dict.fromkeys(routing.PRESET_CONFIG_KEYS, ""),
-                **dict.fromkeys(_LENGTH_KEYS, "")}
+                **dict.fromkeys(_LENGTH_KEYS, ""),
+                # The new inference layout, "" = unset. The marker's "" is
+                # format 1: a config.md that predates it is a legacy store.
+                **dict.fromkeys(inference_keys.GLOBAL_KEYS, "")}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
         # racing here would each publish a whole file.
         with locks.config_lock():
             if not path.exists():
+                defaults.update(_birth_marker())
                 atomic.write_text(path, dump_frontmatter(defaults, ""))
                 return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
@@ -520,11 +542,15 @@ def llm_call_budget() -> float:
     return _seconds("llm_call_budget", DEFAULT_LLM_CALL_BUDGET)
 
 
-def llm_retries() -> int:
+def llm_retries(cfg: Mapping[str, object] | None = None) -> int:
     """Re-attempts a transiently-failed generation gets before its connection
     is given up on (#144). 0 disables retrying; see `MAX_LLM_RETRIES` for why
-    the upper end is clamped rather than taken at face value."""
-    return min(_count("llm_retries", DEFAULT_LLM_RETRIES), MAX_LLM_RETRIES)
+    the upper end is clamped rather than taken at face value.
+
+    `cfg` is a `read_config()` already in hand -- the resolver's, which states
+    the budget on each attempt without reading `config.md` a second time."""
+    value = (read_config() if cfg is None else cfg).get("llm_retries", DEFAULT_LLM_RETRIES)
+    return min(_whole(value, DEFAULT_LLM_RETRIES), MAX_LLM_RETRIES)
 
 
 def backup_enabled() -> bool:
@@ -581,6 +607,103 @@ def log_level() -> str:
     return str(read_config().get("log_level", DEFAULT_LOG_LEVEL) or "").strip().lower()
 
 
+class LegacyKeysRefusedError(Exception):
+    """A write of legacy inference keys to a store past the legacy layout
+    (spec 11.3): at format 2 they reach older builds only and change nothing
+    here. `keys` names them; `newer` is true when a newer build wrote the
+    store, which refuses every model-settings write (409 `newer_format`)."""
+
+    def __init__(self, keys: list[str], *, newer: bool = False, unmigrated: bool = False):
+        super().__init__(", ".join(keys))
+        self.keys = keys
+        self.newer = newer
+        #: Refused by a campaign's own marker while the store's global layout
+        #: is still the legacy one: a migration that halted or failed after
+        #: marking campaigns. The key is not read for that campaign any more,
+        #: but the Models settings that replace it are not open yet either,
+        #: so the answer is the migration's status, not "it moved".
+        self.unmigrated = unmigrated
+
+
+class NewerFormatError(Exception):
+    """A model-settings write refused because a newer build wrote the store's
+    model settings (`inference_keys.is_newer`): this build would overwrite a
+    layout it does not understand. Raised inside `format_hold`; the app
+    answers it as 409 `newer_format` wherever it escapes a route."""
+
+
+@contextlib.contextmanager
+def format_hold() -> Iterator[None]:
+    """THE hold every model-settings write lands in: `config_lock`, with the
+    store's format read inside it, raising `NewerFormatError` on a store a
+    newer build wrote.
+
+    `config_lock` because it is the lock the format switch writes its marker
+    in, and the only one of the switch's locks that is cross-process -- a
+    newer build in another server takes it too -- so a write that holds it
+    from this check through its own last byte cannot have the switch land in
+    between. A check made before taking it is no check (Codex, slice C).
+
+    Every writer of the model settings goes through it, for its whole
+    read -> check -> write span: the global and campaign settings writes
+    (`inference.settings`), every provider create, edit and delete and the
+    catalog cache (`llm_connections`), every model-facts write
+    (`inference.facts`) and every sampler-preset write (`sampler_presets`);
+    `test_format_hold.py` enumerates them. `llm_connections.LOCK` is this
+    same lock, so a caller holding it holds this hold's lock already; a
+    campaign lock is taken before it, never under it."""
+    with locks.config_lock():
+        if inference_keys.is_newer(read_config()):
+            raise NewerFormatError("a newer build wrote this store's model settings")
+        yield
+
+
+def refuse_legacy(meta: Mapping, legacy: list[str]) -> None:
+    """Raise `LegacyKeysRefusedError` for `legacy` (non-empty) when `meta` -- a
+    `config.md` or a `campaign.md` -- is at the current format or newer."""
+    if not legacy:
+        return
+    newer = inference_keys.is_newer(meta)
+    if newer or inference_keys.is_current(meta):
+        raise LegacyKeysRefusedError(legacy, newer=newer)
+
+
+def refuse_legacy_campaign(meta: Mapping, cfg: Mapping, legacy: list[str]) -> None:
+    """`refuse_legacy` for a campaign's `campaign.md` (`meta`) on the store
+    whose `config.md` is `cfg`: refused when either is at the current format
+    or newer. A newer one of either refuses as newer; a current store as
+    moved; a marked campaign on a store still at the legacy layout -- a
+    migration that halted or failed after marking it -- as `unmigrated`."""
+    if not legacy:
+        return
+    newer = inference_keys.is_newer(meta) or inference_keys.is_newer(cfg)
+    if newer or inference_keys.is_current(cfg):
+        raise LegacyKeysRefusedError(legacy, newer=newer)
+    if inference_keys.is_current(meta):
+        raise LegacyKeysRefusedError(legacy, unmigrated=True)
+
+
+def write_config_refusing_legacy(guard: Callable[[dict[str, str]], None] | None = None,
+                                 **fields: str) -> dict[str, str]:
+    """`write_config` for a body that may carry legacy inference keys
+    (`inference_keys.LEGACY_GLOBAL_KEYS`): refused with `LegacyKeysRefusedError`,
+    writing nothing, when the store is at format 2 or newer.
+
+    The format is read inside the `config_lock` hold that writes, the same
+    hold the migration's switch takes: a check made before it would let a
+    switch landing in between turn this into a write of a key the resolver
+    no longer reads. `guard`, when given, is called in that hold with the
+    config as it stands, and whatever it raises refuses the write -- the
+    Embedding role's confirmation (`routes.config.put_config`), compared
+    against the value the write replaces."""
+    with locks.config_lock():
+        cfg = read_config()
+        refuse_legacy(cfg, sorted(k for k in fields if k in inference_keys.LEGACY_GLOBAL_KEYS))
+        if guard is not None:
+            guard(cfg)
+        return write_config(**fields)
+
+
 def write_config(**fields: str) -> dict[str, str]:
     # Merge onto the file's RAW frontmatter (not read_config()'s narrowed
     # reconstruction) so any key not in _CONFIG_KEYS — including the legacy
@@ -600,7 +723,8 @@ def write_config(**fields: str) -> dict[str, str]:
     # `GET /api/config`, so a second tab merely loading the app can race a
     # setting saved in the first (#194 review).
     with locks.config_lock():
-        raw, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
+        raw, _ = (parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists()
+                  else (_birth_marker(), ""))
         for key, value in fields.items():
             if key in _CONFIG_KEYS and value is not None:
                 raw[key] = value

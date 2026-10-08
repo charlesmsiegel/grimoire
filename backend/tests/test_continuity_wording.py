@@ -163,7 +163,7 @@ def test_no_continuity_surface_uses_a_phrase_section_30_avoids():
     for folder in ("frontend/src/components/continuity/", "frontend/src/components/storyGraph/",
                    "frontend/src/components/review/", "backend/src/grimoire/store/continuity/"):
         assert any(n.startswith(folder) for n in names), folder
-    for required in ("frontend/src/routes/embeddingsOn.ts",
+    for required in ("frontend/src/components/inference/copy.ts",
                      "frontend/src/components/StoryPressure.tsx",
                      "backend/src/grimoire/store/suggest.py",
                      "backend/src/grimoire/routes/scenes.py", "README.md"):

@@ -8,7 +8,7 @@
     "SIM105": 2
   },
   "backend/scripts/ingest_scene.py": {
-    "C901": 2,
+    "C901": 1,
     "N818": 1
   },
   "backend/src/grimoire/claude_agent.py": {

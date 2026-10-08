@@ -7,12 +7,15 @@ rationale, especially around the `rev` token and the migration marker.
 
 from __future__ import annotations
 
+import errno
+import functools
 import json
 import secrets
-import threading
+from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlsplit
 
-from . import atomic, config, routing
+from . import atomic, config, inference_keys, locks, routing
 from .frontmatter import dump_frontmatter, parse_frontmatter
 from .paths import home, now_iso, safe_id, slugify, uniquify
 
@@ -28,8 +31,17 @@ KINDS = ("openrouter", "claude", "openai_compatible", "anthropic")
 #: short may be sent back as the start of the model's own turn (play controls
 #: IV, "Keep writing"). Off unless the user turns it on: whether a trailing
 #: assistant message is continued depends on the model, not the kind.
+#: `preset` is the provider preset (`store/inference/providers.py`) the
+#: connection was made from, and `billing` is "metered" or "subscription"
+#: (spec 4.1); both are "" on a connection no build has stamped yet.
 _FIELDS = ("kind", "name", "base_url", "api_key", "model", "post_process", "reasoning_effort",
-           "sampler_preset", "sampler_support", "vision", "prefill")
+           "sampler_preset", "sampler_support", "vision", "prefill", "preset", "billing")
+#: The legacy per-connection fields that describe a MODEL rather than the
+#: provider. Frozen for older builds once the store is at format 2, where the
+#: model's behaviour comes from its facts and the presets instead, and refused
+#: on write there (spec 11.3).
+MODEL_FIELDS: tuple[str, ...] = ("model", "vision", "prefill", "post_process",
+                                 "reasoning_effort", "sampler_preset")
 #: The fields describing how this connection SAMPLES rather than what it is.
 #: An edit touching only these keeps the connection's `rev` (see
 #: `update_connection`): the rev exists to invalidate the cached model catalog
@@ -40,8 +52,12 @@ SAMPLER_FIELDS = frozenset({"sampler_preset", "sampler_support"})
 #: health, and bumping the rev would discard the cached catalog that "auto"
 #: reads, so setting it back to auto would read "unknown" until a refresh.
 #: `prefill` joins them for the same reason: it shapes one kind of prompt and
-#: describes neither the catalog nor the provider's health.
-REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision", "prefill"}
+#: describes neither the catalog nor the provider's health. So do `name`,
+#: `preset` and `billing` (spec 4.1): a label, where the record came from and
+#: how it is paid for say nothing about the deployment behind it, and a rename
+#: that threw away the catalog and every verified test would be a rename the
+#: user pays for in test calls.
+REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision", "prefill", "name", "preset", "billing"}
 
 
 #: The one serialization boundary over a connection's record and the files
@@ -53,14 +69,65 @@ REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision", "prefill"}
 #: (recreating an orphan facts file). Reentrant: `ensure_migrated` writes and
 #: is called from inside the other writers.
 #:
-#: Lock order: this lock, THEN `inference.facts`' own `_lock` -- never the
-#: reverse. Nothing under the facts lock takes this one. In-process only, like
-#: the facts lock: two servers on one store are not serialized by it.
-LOCK = threading.RLock()
+#: It IS `locks.config_lock()` -- the same object, not a second lock taken
+#: before it. Two servers on one store are supported (docs/store-guarantees.md,
+#: "A second process on the same store"), and the model settings are spread
+#: over files that are read, checked and rewritten together: a connection and
+#: `config.md` (a delete's sweep, the migration's switch, the settings write's
+#: existence check), a connection and its facts (a verdict's rev check), the
+#: catalog cache. A process-local lock here serialized none of that across
+#: processes, and an order of two locks (this, then `config_lock`) was one
+#: more rule for every holder to keep. One cross-process lock makes each read
+#: -> check -> write span whole, and `config.format_hold` is it with the
+#: format read inside. Taken inside a campaign lock (the campaign settings
+#: write), never around one. `inference.facts`' own `_lock` is taken under it.
+LOCK = locks.config_lock()
 
 
 class ConnectionNotFound(Exception):
     pass
+
+
+class ConnectionUnreadableError(OSError):
+    """A connection's file is there but could not be read or decoded (a strict
+    read, `_read`). An `OSError`, so a caller that already stops on I/O
+    errors stops on this one; the message names the connection."""
+
+    def __init__(self, conn_id: str, exc: BaseException):
+        super().__init__(f"connection {conn_id} could not be read: {exc}")
+        self.conn_id = conn_id
+
+
+class ModelFieldsRefusedError(Exception):
+    """A write that would set `MODEL_FIELDS` on a store at format 2 (or one a
+    newer build wrote): they reach older builds only and change nothing here
+    (spec 11.3). `fields` names them; `newer` says which store refused."""
+
+    def __init__(self, fields: list[str], *, newer: bool = False):
+        super().__init__(", ".join(fields))
+        self.fields = fields
+        self.newer = newer
+
+
+def _refuse_model_fields(names: set[str]) -> None:
+    """Raise `ModelFieldsRefusedError` when `names` is not empty and the store is
+    past the legacy layout. Called under `LOCK`, in the hold that writes: the
+    migration's switch (`inference.migrate._switch`) takes `LOCK` too, so the
+    format read here is still the store's when the write lands."""
+    if not names:
+        return
+    cfg = config.read_config()
+    newer = inference_keys.is_newer(cfg)
+    if newer or inference_keys.is_current(cfg):
+        raise ModelFieldsRefusedError(sorted(names), newer=newer)
+
+
+def _named_model_fields(fields: dict) -> set[str]:
+    """The `MODEL_FIELDS` a create body sets to something other than a blank
+    default (`post_process` "none" is its default spelled out)."""
+    return {f for f in MODEL_FIELDS
+            if fields.get(f) not in (None, "", False)
+            and not (f == "post_process" and fields.get(f) == "none")}
 
 
 def _dir() -> Path:
@@ -109,10 +176,20 @@ def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
         atomic.write_text(_path(id), dump_frontmatter(meta, ""))
 
 
-def _read(id: str) -> dict | None:
+def _read(id: str, *, strict: bool = False) -> dict | None:
     """None for unsafe, missing, unreadable, or unrecognized-kind files — all
     four count as "not a valid seeded/created connection", used both by normal
     lookups and by migration's crash-recovery check.
+
+    `strict` keeps "unreadable" apart from the other three: a file that is
+    there but cannot be read or decoded -- or that names no `kind` at all,
+    which every written record does (a zero-byte or unfenced sync placeholder)
+    -- raises `ConnectionUnreadableError` instead of reading as no connection. For a caller
+    that persists what it reads (`inference.migrate`): a sync client holding
+    the file is a reason to try again, not a dangling reference to write down.
+
+    A strict read raises `ConnectionUnreadableError`, except for a name too long
+    for the filesystem, which is no connection either way (below).
 
     The `exists()` is INSIDE the try, which review caught it not being: an id
     longer than the filesystem's NAME_MAX raises ENAMETOOLONG from the stat
@@ -138,8 +215,16 @@ def _read(id: str) -> dict | None:
         if not p.exists():
             return None
         meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError):
+    except (OSError, UnicodeDecodeError) as exc:
+        if strict and getattr(exc, "errno", None) != errno.ENAMETOOLONG:
+            raise ConnectionUnreadableError(id, exc) from exc
         return None
+    if strict and "kind" not in meta:
+        # Every record this module writes states its kind, so a file with none
+        # -- zero bytes, or a frontmatter fence that never arrived, a sync
+        # placeholder mid-download -- is one not yet readable, not one absent.
+        raise ConnectionUnreadableError(
+            id, ValueError("the file holds no connection record (empty, or unfenced)"))
     if meta.get("kind") not in KINDS:
         return None
     return {"id": id, **{k: meta.get(k, "") for k in _FIELDS},
@@ -179,7 +264,35 @@ def read_connection_raw(id: str) -> dict:
     return conn
 
 
-def create_connection(kind: str, name: str, **fields) -> str:
+def read_connection_strict(conn_id: str) -> dict | None:
+    """The raw connection, or None when none by that id exists (an unsafe id,
+    no file, an unknown kind). A file that exists but cannot be read or
+    decoded raises `ConnectionUnreadableError` -- see `_read`'s `strict`."""
+    ensure_migrated()
+    return _read(conn_id, strict=True)
+
+
+def list_connections_strict() -> list[dict]:
+    """Every connection, raw and read as `read_connection_strict` reads one:
+    a record that cannot be read raises rather than being left out."""
+    ensure_migrated()
+    out = []
+    if _dir().exists():
+        for p in sorted(_dir().glob("*.md")):
+            conn = _read(p.stem, strict=True)
+            if conn is not None:
+                out.append(conn)
+    return out
+
+
+def create_connection(kind: str, name: str, *, refuse_model_fields: bool = False,
+                      **fields) -> str:
+    """Create a connection; its id is the name's slug, made unique.
+
+    `refuse_model_fields` (the API's writes): a body setting any of
+    `MODEL_FIELDS` on a store at format 2 raises `ModelFieldsRefusedError`, checked
+    in the hold that writes. Off for the store's own callers (migration, test
+    fixtures), which write what they mean at either format."""
     ensure_migrated()
 
     def exists(c: str) -> bool:
@@ -187,34 +300,88 @@ def create_connection(kind: str, name: str, **fields) -> str:
 
     # The slug is chosen and claimed in one hold: two creates of one name
     # would otherwise both find it free and the second overwrite the first.
-    with LOCK:
+    with LOCK, config.format_hold():
+        if refuse_model_fields:
+            _refuse_model_fields(_named_model_fields(fields))
         id = uniquify(slugify(name), exists)
         _write_raw(id, kind=kind, name=name, **fields)
     return id
 
 
-def update_connection(id: str, **fields) -> None:
+#: What `update_connection` hands a guard as the `rev` of an edit that will
+#: restamp it: never a real rev (those are hex), so it equals no stored one.
+NEW_REV = "(new)"
+
+
+def update_connection(id: str, *, refuse_model_fields: bool = False,
+                      keep_key_on_same_host: bool = False,
+                      guard: Callable[[dict, dict], None] | None = None,
+                      **fields) -> None:
+    """Merge `fields` (None leaves one as it is) into the connection.
+
+    `refuse_model_fields`: as `create_connection`, for a field this edit
+    CHANGES -- resending what is stored writes nothing and is not refused,
+    because an editor sends every field on every save.
+
+    `keep_key_on_same_host`: a new `base_url` on the host (and port) the
+    stored one names keeps the key, where any repoint otherwise drops it --
+    for a provider-preset move between two plans of one service, which the
+    caller has decided is one. The hosts are compared here, in the hold that
+    writes, so an address changed after the caller read it is judged as it
+    now is.
+
+    `guard(before, after)`: called in the hold that writes, once the edit is
+    known to write, with the stored connection and what it will become
+    (`after["rev"]` is the rev the write stamps: the stored one for a
+    rev-neutral edit, `NEW_REV` otherwise); whatever it raises refuses the
+    write. The hold covers `config.format_hold` too (this lock, then
+    `config_lock`: `LOCK`'s order), so a guard reading `config.md` -- the
+    Embedding role's confirmation, `routes.config.put_connection` -- reads
+    the value no settings write can change before this one lands, and a store
+    a newer build switched is refused (`config.NewerFormatError`)."""
     ensure_migrated()
     # The read is the merge's base, so it sits in the hold with the write.
-    with LOCK:
-        _update(id, fields)
+    # In `config.format_hold`, so a store a newer build switched meanwhile is
+    # refused here rather than rewritten -- `_write_raw` keeps only the fields
+    # this build knows.
+    with LOCK, config.format_hold():
+        _update(id, fields, refuse_model_fields=refuse_model_fields,
+                keep_key_on_same_host=keep_key_on_same_host, guard=guard)
 
 
-def _update(conn_id: str, fields: dict) -> None:
+def _authority(url: object) -> tuple[str, int | None]:
+    """`(hostname, port)` a base URL names; `("", None)` for a blank or
+    unparsable one, which shares a host with nothing."""
+    if not isinstance(url, str) or not url.strip():
+        return "", None
+    try:
+        parts = urlsplit(url.strip())
+        return (parts.hostname or "").lower(), parts.port
+    except ValueError:
+        return "", None
+
+
+def _update(conn_id: str, fields: dict, *, refuse_model_fields: bool = False,
+            keep_key_on_same_host: bool = False,
+            guard: Callable[[dict, dict], None] | None = None) -> None:
     conn = _read(conn_id)
     if conn is None:
         raise ConnectionNotFound(conn_id)
     fields = {k: v for k, v in fields.items() if v is not None}
     base_url_changed = "base_url" in fields and fields["base_url"] != conn["base_url"]
-    if base_url_changed:
+    same_host = (keep_key_on_same_host and base_url_changed
+                 and _authority(conn["base_url"])[0] != ""
+                 and _authority(conn["base_url"]) == _authority(fields["base_url"]))
+    if base_url_changed and not same_host:
         # A custom endpoint's base_url is user-editable (unlike OpenRouter's
         # fixed URL) — carrying the old key over to a newly-pointed host
-        # would silently leak it, so repointing always drops the key unless
-        # this same call also supplies a fresh one.
+        # would silently leak it, so repointing drops the key unless this
+        # same call also supplies a fresh one -- or the caller asked for it
+        # kept on a new address on the same host (`keep_key_on_same_host`).
         fields.setdefault("api_key", "")
     elif not fields.get("api_key"):
         # "type to replace" convention: an omitted OR empty api_key means
-        # "keep the stored one" whenever base_url isn't changing. Dropping
+        # "keep the stored one" whenever the key is not being dropped. Dropping
         # it from `fields` here (rather than filtering only None above) is
         # what makes that true — otherwise an explicit api_key="" from any
         # caller that always serializes the field would silently erase a
@@ -222,7 +389,16 @@ def _update(conn_id: str, fields: dict) -> None:
         fields.pop("api_key", None)
     merged = {**conn, **fields}
     changed = {k for k in _FIELDS if merged[k] != conn[k]}
-    keep = conn["rev"] if changed and changed <= REV_NEUTRAL_FIELDS and conn["rev"] else ""
+    if refuse_model_fields:
+        _refuse_model_fields(changed & set(MODEL_FIELDS))
+    if not changed and conn["rev"]:
+        # Nothing to write: a no-op edit keeps the rev, and the file, as they
+        # are (a rewrite of identical fields is upload traffic in a synced
+        # store, and a fresh rev would drop the catalog and every verdict).
+        return
+    keep = conn["rev"] if changed <= REV_NEUTRAL_FIELDS and conn["rev"] else ""
+    if guard is not None:
+        guard(conn, {**merged, "rev": keep or NEW_REV})
     _write_raw(conn_id, keep_rev=keep, **{k: merged[k] for k in _FIELDS})
 
 
@@ -236,7 +412,7 @@ def delete_connection(id: str) -> None:
     # The whole delete is one hold, sidecars included: a verdict filed between
     # the record's unlink and the facts file's would recreate the file for a
     # connection that no longer exists (`inference.facts.record_verified`).
-    with LOCK:
+    with LOCK, config.format_hold():
         _delete(id)
 
 
@@ -250,34 +426,62 @@ def _delete(conn_id: str) -> None:
     # silently off while the Configuration page still shows it configured. A
     # list rather than two branches, so the next key that references a
     # connection is one entry rather than a third copy of this reasoning.
-    cfg = config.read_config()
-    # The three single-purpose keys, plus every per-task route (#142) -- built
-    # from `routing.CONFIG_KEYS` rather than listed, so a route added later is
-    # swept by construction instead of by somebody remembering this line.
     #
-    # A campaign's own routes are NOT reachable from here, and deliberately not
-    # chased: sweeping them would mean rewriting every campaign.md on a delete,
-    # under every campaign's lock. `routing.resolve` walks past a reference to a
-    # connection that no longer exists for exactly this reason.
-    named = ("active_connection_id", "embeddings_connection_id",
-             "fallback_connection_id", *routing.CONFIG_KEYS)
-    dangling = {key: "" for key in named if cfg.get(key) == conn_id}
-    if dangling:
-        # Clear these BEFORE unlinking the file, not after — otherwise a
-        # failure between the two steps (disk error, process death) leaves
-        # the file gone (its slug now reusable) while config.md still
-        # references it, reproducing the exact dangling-reference bug this
-        # exists to close, just via a partial-failure window instead of
-        # never having the fix at all. With this ordering, every failure
-        # window is retry-safe: fail here and nothing changed yet (clean
-        # retry); fail during the unlink below and the references are
-        # already correctly cleared even though the file still exists (a
-        # retriable "delete didn't finish" state, not a dangling reference).
-        config.write_config(**dangling)
+    # Read and cleared in one `config_lock` hold: a role written between the
+    # read and the write would otherwise be merged over by a stale sweep.
+    with locks.config_lock():
+        cfg = config.read_config()
+        dangling = _dangling(cfg, conn_id)
+        if dangling:
+            # Clear these BEFORE unlinking the file, not after — otherwise a
+            # failure between the two steps (disk error, process death) leaves
+            # the file gone (its slug now reusable) while config.md still
+            # references it, reproducing the exact dangling-reference bug this
+            # exists to close, just via a partial-failure window instead of
+            # never having the fix at all. With this ordering, every failure
+            # window is retry-safe: fail here and nothing changed yet (clean
+            # retry); fail during the unlink below and the references are
+            # already correctly cleared even though the file still exists (a
+            # retriable "delete didn't finish" state, not a dangling reference).
+            config.write_config(**dangling)
     p.unlink()
     _sidecar_path(conn_id).unlink(missing_ok=True)
     regex_path(conn_id).unlink(missing_ok=True)
     facts_path(conn_id).unlink(missing_ok=True)
+
+
+def _dangling(cfg: dict, conn_id: str) -> dict[str, str]:
+    """Every global key naming `conn_id`, cleared: `{key: ""}`.
+
+    The three single-purpose keys, plus every per-task route (#142) -- built
+    from `routing.CONFIG_KEYS` rather than listed, so a route added later is
+    swept by construction instead of by somebody remembering this line.
+
+    A campaign's own routes are NOT reachable from here, and deliberately not
+    chased: sweeping them would mean rewriting every campaign.md on a delete,
+    under every campaign's lock. the resolver (`store.inference`) walks past a reference to a
+    connection that no longer exists for exactly this reason.
+    """
+    named = ("active_connection_id", "embeddings_connection_id",
+             "fallback_connection_id", *routing.CONFIG_KEYS)
+    out = {key: "" for key in named if cfg.get(key) == conn_id}
+    # The new layout's selections (spec 11.3): a role, a role's fallback, a
+    # route's pin and the Embedding role, each cleared WHOLE -- a model or a
+    # preset left behind would describe a selection with no provider. A
+    # route's `use_<k>` stays: it chose its pin, and an empty pin resolves as
+    # nothing chosen. Campaign selections dangle, as the routes always have.
+    selections = [functools.partial(inference_keys.role_key, r)
+                  for r in inference_keys.GENERATIVE_ROLES]
+    selections += [functools.partial(inference_keys.fallback_key, r)
+                   for r in inference_keys.GENERATIVE_ROLES]
+    selections += [functools.partial(inference_keys.pin_key, r.key) for r in routing.ROUTES]
+    for key in selections:
+        if str(cfg.get(key("provider"), "") or "").strip() == conn_id:
+            out.update((key(part), "") for part in inference_keys.PARTS)
+    embedding = functools.partial(inference_keys.role_key, "embedding")
+    if str(cfg.get(embedding("provider"), "") or "").strip() == conn_id:
+        out.update((embedding(part), "") for part in inference_keys.EMBEDDING_PARTS)
+    return out
 
 
 def get_active() -> dict | None:
@@ -349,10 +553,15 @@ def set_cached_models(id: str, models: list[dict], rev: str,
     that, because a second tab refreshing the same connection advances the
     timestamp too. Empty for a caller that names none, which then simply
     cannot be recovered.
+
+    In `config.format_hold`: capability resolution reads this cache, so a
+    store a newer build switched is not this build's to rewrite it in
+    (`config.NewerFormatError`).
     """
     payload = {"models": models, "fetched_at": now_iso(), "rev": rev,
                "fetched_by": attempt}
-    atomic.write_text(_sidecar_path(id), json.dumps(payload, indent=2) + "\n")
+    with LOCK, config.format_hold():
+        atomic.write_text(_sidecar_path(id), json.dumps(payload, indent=2) + "\n")
 
 
 def ensure_migrated() -> None:
@@ -360,8 +569,26 @@ def ensure_migrated() -> None:
     if (_dir() / ".migrated").exists():
         return
     # Checked again in the hold: two first reads would otherwise both seed.
+    # The hold is the model-settings one (`LOCK` is `config_lock`), and the
+    # format is read inside it as `config.format_hold` reads it -- but from
+    # the file as it is, never materializing a missing `config.md` first,
+    # which is this seed's own write to make. A store a newer build wrote is
+    # left alone: seeding would create or replace its records and write
+    # `active_connection_id` into its `config.md`. Silently, unlike the
+    # writers' 409: every read of a connection comes through here.
     with LOCK:
+        if _newer_on_disk():
+            return
         _migrate()
+
+
+def _newer_on_disk() -> bool:
+    """Whether `config.md`, as it stands, is a newer build's (no file: no)."""
+    path = config._config_path()
+    if not path.exists():
+        return False
+    meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+    return inference_keys.is_newer(meta)
 
 
 def _migrate() -> None:

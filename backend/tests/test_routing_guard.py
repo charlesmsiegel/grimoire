@@ -22,7 +22,8 @@ The claims, each held against the AST of `routes/`:
   argument nothing here reads;
 - a second argument handed to `require_inference` is `cid`, and a decorated
   handler passing one is mounted under `/campaigns/{cid}`;
-- nothing in `routes/` reaches for `get_active()`, and a direct
+- nothing in `routes/` -- nor in `backend/scripts/` or `evals/` -- reaches
+  for `get_active()`, and a direct
   `store.inference.resolve.resolve(...)` is marked and capped;
 - every task literal `routes/` names (resolved, overridden, metered or
   streamed) is claimed by a route, and every claimed task is named somewhere.
@@ -83,9 +84,24 @@ ROUTES_DIR = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire" / 
 MARKER = "# routing-ok:"
 
 
+#: Outside the app, but making LLM calls all the same: the scripts a skill
+#: drives (`ingest_scene.py`) and the live eval runner. Scanned for
+#: `get_active()` only -- they hold no `require_inference` tasks to inventory,
+#: and the eval runner's task is a variable (`Case.task`, held to a route by
+#: `test_evals.py`).
+REPO = pathlib.Path(__file__).resolve().parents[2]
+OUTSIDE_DIRS = (REPO / "backend" / "scripts", REPO / "evals")
+
+
 def _sources():
     for path in sorted(ROUTES_DIR.rglob("*.py")):
         yield path, path.read_text(encoding="utf-8")
+
+
+def _outside_sources():
+    for root in OUTSIDE_DIRS:
+        for path in sorted(root.rglob("*.py")):
+            yield path, path.read_text(encoding="utf-8")
 
 
 def _calls(tree: ast.AST, name: str):
@@ -207,13 +223,19 @@ def test_the_only_way_into_a_provider_is_the_seam_this_guard_watches():
     invisibility the module docstring above admits to.
     """
     offenders = []
-    for path, text in _sources():
+    for path, text in [*_sources(), *_outside_sources()]:
         calls = list(_calls(ast.parse(text), "get_active"))
         offenders.extend(f"{path.name}:{call.lineno}" for call in calls
                          if _reason(text, call, [c for c in calls if c is not call]) is None)
     assert not offenders, (
-        "these routes reach for the active connection directly instead of "
+        "these reach for the active connection directly instead of "
         f"require_inference, so no route setting applies to them: {offenders}")
+
+
+def test_the_guard_reaches_the_scripts_and_the_evals():
+    """The outside scan sees the two callers it was extended for."""
+    names = {path.name for path, _ in _outside_sources()}
+    assert {"ingest_scene.py", "runner.py"} <= names
 
 
 #: What a direct call to the resolver is called through: `inference.resolve(`
@@ -226,8 +248,8 @@ def _resolver_calls(tree: ast.AST) -> list[ast.Call]:
     """Calls straight to `store.inference.resolve.resolve`, bypassing the seam.
 
     Matched on the receiver's name, not on `resolve` alone: `routes/` calls a
-    dozen other `resolve`s (`store.routing.resolve`, `sampler_presets.resolve`,
-    `embed_space.resolve`, `Path.resolve`), none of them a connection."""
+    dozen other `resolve`s (`response_presets.resolve`, `embed_space.resolve`,
+    `Path.resolve`), none of them a connection."""
     out = []
     for node in ast.walk(tree):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -255,9 +277,10 @@ def _unmarked_resolver_calls(text: str, where: str) -> tuple[list[str], list[tup
 
 
 #: The seam's own two calls (`require_inference`, `override_inference`) and the
-#: three display-only reads of where chat would run (`config._send_images_reach`,
-#: the scene context breakdown and the live side of a prompt diff). Raising it
-#: is a review question, not a fix.
+#: three display-only reads of where chat would run (`config._chat`, which the
+#: header and `send_images_reach` share; `scenes._chat_target`, which the
+#: context breakdown and a new scene's `model` stamp share; and the live side
+#: of a prompt diff). Raising it is a review question, not a fix.
 RESOLVER_CALL_CAP = 5
 
 

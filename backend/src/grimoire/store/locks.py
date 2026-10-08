@@ -488,6 +488,18 @@ OUTSIDE_DOMAIN: dict[str, str] = {
         "minutes-long absorb, which is the cost the whole module exists to "
         "avoid paying."
     ),
+    "store.inference.migrate": (
+        "A considered exclusion, not a gap: the caller holds the lock. "
+        "`campaign` migrates one campaign's `campaign.md` to the new layout and "
+        "is the step two holders compose -- `ensure`, one campaign at a time "
+        "under `campaign_lock_nowait(cid)` (a busy campaign is skipped and "
+        "finished later), and the first new-layout write to an unmarked "
+        "campaign, inside the hold that covers that write (spec 11.1). Taking "
+        "the lock itself would let it run without the hold that makes "
+        "migrate-then-write one step, so it refuses with RuntimeError unless "
+        "`locks.holds_campaign(cid)` -- a check this guard cannot read, which "
+        "is why the module is declared here rather than in DOMAIN_MODULES."
+    ),
     "store.campaigns.paths": (
         "`write_manifest` republishes the whole campaign manifest from a dict "
         "its callers read a moment earlier -- `overlay`, `sync`, `migrations` "
@@ -570,6 +582,10 @@ class BackupBusy(StoreBusy):
 class ModuleEditBusy(StoreBusy):
     def __init__(self, name: str = "module-edit"):
         super().__init__(name, "module library")
+
+
+class MigrationBusy(StoreBusy):
+    """The inference-settings migration lock is held (`inference_migration_lock`)."""
 
 
 class ConfigBusy(StoreBusy):
@@ -1014,8 +1030,19 @@ def config_lock() -> _ProcessScopedLock:
     review). Cross-process for the same reason the campaign locks are: the
     file belongs to the store, not to one server.
 
-    It is a leaf. Nothing under this lock takes another, so it has no place in
-    the ordering rules above and cannot participate in a cycle.
+    It is taken inside a campaign lock (`campaigns.set_campaign_routing`'s
+    `read_config`, which can write `config.md` on a store's first read, and
+    `inference.settings`' campaign write) and never around one: a holder of
+    this lock must never reach a campaign lock. `llm_connections.LOCK` is this
+    same object -- one cross-process lock over every model-settings
+    read-modify-write, rather than a process-local one taken before it -- and
+    the only lock taken under it is `inference.facts`' process-local file
+    lock.
+
+    `config.format_hold` is this lock with the store's format read inside it,
+    and the one hold every model-settings write lands in: the format switch
+    writes its marker under this lock, from any process, so a write that
+    checks and writes in one hold cannot be outrun by it.
     """
     return _config
 
@@ -1042,6 +1069,31 @@ def backup_lock() -> _ProcessScopedLock:
     archive is a coarse restore point rather than a transactional snapshot.
     """
     return _backups
+
+
+_inference_migration = _ProcessScopedLock("domain", "inference-migration", MigrationBusy)
+
+
+def inference_migration_lock() -> _ProcessScopedLock:
+    """The store-wide lock the inference-settings migration runs under
+    (`store.inference.migrate`, spec 11.2): two starts never interleave, in one
+    process or two.
+
+    Only ever TRIED, never waited on: `migrate.ensure` returns the current
+    status when it is held, and `PUT /config/data-dir` answers 409 `busy`. So
+    it cannot sit in a wait cycle. It is the outermost lock its holder takes:
+    under it the migration takes the backup lock, `config_lock`, the facts
+    module's lock and -- one at a time, never waiting -- a campaign lock; and
+    nothing that holds any of those takes this.
+    """
+    return _inference_migration
+
+
+def holds_campaign(cid: str) -> bool:
+    """Whether the calling thread holds `campaign_lock(cid)` -- for a function
+    whose contract is that its CALLER holds it, to refuse rather than write
+    unlocked (`migrate.campaign`)."""
+    return campaign_lock(cid)._is_owned()
 
 
 _module_edit = _ProcessScopedLock("domain", "module-edit", ModuleEditBusy)

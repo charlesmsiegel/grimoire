@@ -59,3 +59,41 @@ def test_no_orphan_recordings():
                 for case in case_mod.CASES for rec in case.recordings}
     on_disk = {p.name for p in case_mod.RECORDINGS.iterdir() if p.is_file()}
     assert on_disk == declared, f"orphaned: {sorted(on_disk - declared)}"
+
+
+def test_every_case_names_a_routed_task():
+    """A live run sends each case where the app sends that generation, so each
+    case names the task the app meters it under, and a route claims it."""
+    from grimoire.store import routing
+    for case in case_mod.CASES:
+        assert case.task in routing.TASK_ROUTE, (case.id, case.task)
+    assert case_mod.BY_ID["absorb"].task == "absorb"
+    assert case_mod.BY_ID["scene-length"].task == "chat"
+
+
+def test_a_live_run_resolves_through_the_seam_not_the_active_connection(
+        monkeypatch, tmp_path):
+    """On a migrated store `active_connection_id` is frozen for older builds;
+    a live pass must be scored on the model the app plays on now."""
+    from grimoire.store import config, llm_connections
+    from grimoire.store.inference import migrate
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    config.read_config()
+    llm_connections.create_connection("openai_compatible", "Mara Local",
+                                      base_url="http://localhost:1234/v1")
+    llm_connections.create_connection("openai_compatible", "Winifred Local",
+                                      base_url="http://localhost:5678/v1")
+    assert migrate.ensure().state == "done"
+    config.write_config(role_primary_provider="mara-local", role_primary_model="big",
+                        role_fast_provider="winifred-local", role_fast_model="small")
+
+    conns = runner.resolve_connections(case_mod.CASES)
+
+    assert (conns["chat"]["id"], conns["chat"]["model"]) == ("mara-local", "big")
+    # Absorb's route defaults to the Fast role.
+    assert (conns["absorb"]["id"], conns["absorb"]["model"]) == ("winifred-local", "small")
+
+    # A refusal is the seam's own reason.
+    config.write_config(role_primary_provider="openrouter", role_primary_model="vendor/m")
+    with pytest.raises(RuntimeError, match="OpenRouter key not set"):
+        runner.resolve_connections((case_mod.BY_ID["scene-length"],))

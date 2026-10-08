@@ -67,8 +67,39 @@ test("keep writing is offered on the trailing response only and calls the extend
   await waitFor(() => expect(api.extendResponse).toHaveBeenCalledOnce());
   const call = (api.extendResponse as any).mock.calls[0];
   expect(call.slice(0, 3)).toEqual(["run", "s1", "response-b"]);
-  expect(call[4]).toEqual({ guidance: "", connection_id: "", model: "" });
+  expect(call[4]).toEqual({ guidance: "" });
   expect(call[4].response).toBeUndefined();
+  expect(api.regenerateResponse).not.toHaveBeenCalled();
+});
+
+test("keep writing on a chosen route sends that route's overrides", async () => {
+  // The route picker is shared with Reroll response; what it chose has to
+  // reach the extend body too, not only the reroll's.
+  playing();
+  reads();
+  (api.readConnectionCapabilities as any).mockImplementation(
+    (_provider: string, need: string) => Promise.resolve({
+      provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
+                         url_locked: true, billing: "metered", reports_price: true,
+                         always: [], possible: [], never: [] },
+      need, reason: null, hidden: [],
+      groups: { unverified: [], fits: [{ id: "vendor/saltmarch", name: "Saltmarch", context: null,
+        prompt: null, completion: null, reason: "the catalog says so", capabilities: {} }] } }));
+  renderCampaign();
+  await screen.findByText("The accepted response.");
+  await waitFor(() => expect(api.getResponseSwipe).toHaveBeenCalledWith("run", "s1", "response-b"));
+  openActions();
+  const last = screen.getByText("The accepted response.").closest(".msg") as HTMLElement;
+  fireEvent.click(within(last).getByText("Model for this reroll"));
+  fireEvent.change(await within(last).findByLabelText("Provider"), { target: { value: "openrouter" } });
+  fireEvent.click(await within(last).findByRole("radio", { name: "Saltmarch" }));
+
+  fireEvent.click(keepWriting());
+
+  await waitFor(() => expect(api.extendResponse).toHaveBeenCalledOnce());
+  const call = (api.extendResponse as any).mock.calls[0];
+  expect(call.slice(0, 3)).toEqual(["run", "s1", "response-b"]);
+  expect(call[4]).toEqual({ guidance: "", provider: "openrouter", model: "vendor/saltmarch" });
   expect(api.regenerateResponse).not.toHaveBeenCalled();
 });
 

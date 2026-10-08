@@ -7,7 +7,7 @@ const BASE = { preset_id: "warm", preset_name: "Warm", scope: "campaign" as cons
 
 test("names the preset, where it came from, and what is sent", () => {
   render(<SamplingSummary report={BASE} />);
-  expect(screen.getByText("Sampler: Warm (from this campaign's routing)")).toBeInTheDocument();
+  expect(screen.getByText("Sampler: Warm (from this campaign's Models)")).toBeInTheDocument();
   expect(screen.getByText("temperature 0.7")).toBeInTheDocument();
 });
 
@@ -23,15 +23,27 @@ test("a cleared route and no preset at all read differently", () => {
   const { rerender } = render(
     <SamplingSummary report={{ ...BASE, preset_id: "", preset_name: "", applied: {},
                                scope: "global" }} />);
-  expect(screen.getByText("Sampler: No preset (cleared by the global routing)")).toBeInTheDocument();
+  expect(screen.getByText("Sampler: No preset (cleared by the library's Models)")).toBeInTheDocument();
   rerender(<SamplingSummary report={{ ...BASE, preset_id: "", preset_name: "", applied: {},
                                       scope: "none" }} />);
   expect(screen.getByText("Sampler: No preset — provider defaults")).toBeInTheDocument();
 });
 
+test("a reroll's own preset, and a reroll that cleared one, say so", () => {
+  const { rerender } = render(
+    <SamplingSummary report={{ ...BASE, scope: "override" }} />);
+  expect(screen.getByText("Sampler: Warm (from this reroll's override)")).toBeInTheDocument();
+  rerender(<SamplingSummary report={{ ...BASE, preset_id: "", preset_name: "", applied: {},
+                                      scope: "override" }} />);
+  expect(screen.getByText("Sampler: No preset (cleared by this reroll's override)"))
+    .toBeInTheDocument();
+});
+
 test("an unverified OpenRouter split says it cannot check", () => {
   render(<SamplingSummary report={{ ...BASE, kind: "openrouter", verified: false }} />);
-  expect(screen.getByText(/Unverified/)).toBeInTheDocument();
+  expect(screen.getByText(/Unverified/)).toHaveTextContent(
+    "refresh its models on the Providers page to check");
+  expect(screen.getByText(/Unverified/)).not.toHaveTextContent(/connection|Connections/);
 });
 
 test("no report renders nothing", () => {

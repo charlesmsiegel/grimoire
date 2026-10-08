@@ -96,7 +96,9 @@ def test_overrides_are_user():
 
 def test_facts_vision_and_prefill_are_user():
     assert _resolve("custom", vision="on")["vision"] == Cap("yes", "user")
-    assert _resolve("custom", vision="off")["vision"] == Cap("no", "user")
+    # Facts `vision: off` is a post-image preference, not a statement about
+    # the model (spec 4.2, ruling 2): it contributes nothing.
+    assert _resolve("custom", vision="off")["vision"] == Cap("unknown", "unknown")
     assert _resolve("custom", vision="")["vision"] == Cap("unknown", "unknown")
     assert _resolve("custom", prefill=True)["prefill"] == Cap("yes", "user")
     assert _resolve("custom", prefill=False)["prefill"] == Cap("no", "user")
@@ -221,8 +223,11 @@ def test_adapter_no_beats_every_yes():
 
 def test_test_beats_user_beats_catalog():
     row = {"id": "m", "vision": True, "outputs": ["text"]}
-    assert _resolve("custom", row=row, vision="off")["vision"] == Cap("no", "user")
-    assert _resolve("custom", row=row, vision="off",
+    assert _resolve("custom", row=row,
+                    overrides={"vision": "no"})["vision"] == Cap("no", "user")
+    # Facts `vision: off` leaves the catalog's word standing (ruling 2).
+    assert _resolve("custom", row=row, vision="off")["vision"] == Cap("yes", "catalog")
+    assert _resolve("custom", row=row, overrides={"vision": "no"},
                     verified={"vision": {"ok": True, "at": "x"}})["vision"] == Cap("yes", "test")
     assert _resolve("custom", row=row,
                     verified={"generate": {"ok": False, "at": "x"}})["generate"] == Cap(
@@ -297,7 +302,7 @@ def test_group_hidden_by_another_source_names_that_source():
                     verified={"embed": {"ok": False, "at": "x"}})
     assert capabilities.group_for(caps, "embed", P["custom"]) == (
         "unverified", "a test call failed")
-    caps = _resolve("custom", vision="off")
+    caps = _resolve("custom", overrides={"vision": "no"})
     assert capabilities.group_for(caps, "vision", P["custom"]) == (
         "hidden", "you marked this model as not reading images")
     caps = _resolve("custom", model="test-embed-1")

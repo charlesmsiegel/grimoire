@@ -145,9 +145,13 @@ def test_no_preset_is_still_no_report_and_no_split():
 
 
 # ---- the vocabulary ----
-def test_the_table_still_has_exactly_the_nine_rows():
-    assert [row["name"] for row in ls.table()] == list(ls.NAMES)
-    assert len(ls.table()) == 9
+def test_table_lists_reasoning_effort():
+    """The nine samplers, then the reasoning control the editor offers as a
+    choice (slice C, Task 8)."""
+    rows = ls.table()
+    assert [row["name"] for row in rows] == [*ls.NAMES, "reasoning_effort"]
+    assert rows[-1] == {"name": "reasoning_effort", "label": "Reasoning effort",
+                        "kind": "choice", "choices": list(ls.REASONING)}
 
 
 @pytest.mark.parametrize("value", ls.REASONING)

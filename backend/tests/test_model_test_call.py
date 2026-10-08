@@ -898,3 +898,24 @@ def test_the_gateway_fake_answers_single_like_complete():
     failing = FakeLLM([["x"]], error=LLMError("auth", "no"))
     with pytest.raises(LLMError):
         asyncio.run(failing.single([], {"kind": "openrouter", "model": "m"}))
+
+
+def test_a_probe_that_never_answers_ends_the_run_whatever_the_budget_says(
+        client, monkeypatch):
+    """`llm_call_budget` `0` means "no ceiling at all", which the model test
+    must not inherit: a wedged probe (the Claude CLI is a subprocess with no
+    transport bound) would hold the run -- and `PUT /config/data-dir` with it
+    -- for good. The probes carry a ceiling of their own, as the health check
+    does, and an overrun is a `timeout` that stops the probes after it."""
+    from tests.llm_fakes import StallingGateway
+
+    store.write_config(llm_call_budget="0")
+    monkeypatch.setattr(config_routes, "MODEL_TEST_CEILING", 0.05)
+    _use(client, StallingGateway(where="single"))
+    conn = _connection(client)
+
+    run = _run(client, conn, ["generate", "vision"])
+
+    got = run["result"]["results"]
+    assert got["generate"]["kind"] == "timeout", got
+    assert got["vision"]["kind"] == "not_sent", got

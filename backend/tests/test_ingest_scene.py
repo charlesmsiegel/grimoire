@@ -599,8 +599,8 @@ def test_the_cli_exits_nonzero_when_a_scene_is_incomplete(monkeypatch, tmp_path,
 
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
-    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
-                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "absorb_connection",
+                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -666,8 +666,8 @@ def test_the_cli_reports_a_resume_whose_scene_vanished(monkeypatch, tmp_path, ca
 
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
-    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
-                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "absorb_connection",
+                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -1171,8 +1171,8 @@ def test_the_cli_points_at_resolve_rather_than_at_deleting_the_key(monkeypatch, 
 
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
-    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
-                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "absorb_connection",
+                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -1240,8 +1240,8 @@ def test_the_cli_prints_each_unreplayable_reason(monkeypatch, tmp_path, capsys):
 
     scene_file = tmp_path / "scene.json"
     scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
-    monkeypatch.setattr(ingest_scene.llm_connections, "get_active",
-                        lambda: {"kind": "openrouter", "model": "m", "api_key": "k"})
+    monkeypatch.setattr(ingest_scene, "absorb_connection",
+                        lambda _cid: ({"kind": "openrouter", "model": "m", "api_key": "k"}, ""))
     monkeypatch.setattr(ingest_scene, "LLMClient", lambda: FakeClient(_PARTIAL_OUTPUT))
     monkeypatch.setattr(sys, "argv",
                         ["ingest_scene.py", "ingest", "--campaign", cid,
@@ -1381,3 +1381,61 @@ def test_run_absorb_primes_the_prompt_with_standing_facts(monkeypatch, tmp_path)
     user_message = client.calls[0][0][1]["content"]
     assert "Standing facts:" in user_message
     assert "f1: Marisol holds the stair. (before midwinter)" in user_message
+
+
+# ---- where the ingest runs: the app's absorb route, never the retired active connection ----
+
+def _format_2_campaign(monkeypatch, tmp_path) -> str:
+    """A campaign on a migrated store whose Primary is a local provider, while
+    the frozen legacy `active_connection_id` still names a keyless OpenRouter."""
+    from grimoire.store import config, llm_connections
+    from grimoire.store import worlds as worlds_store
+    from grimoire.store.inference import migrate
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    cid = ingest_scene.ensure_campaign("Silver Oath", worlds_store.create_world("Ashgrove"))
+    ingest_scene.ensure_character(cid, {"name": "Marisol"})
+    llm_connections.create_connection("openai_compatible", "Mara Local",
+                                      base_url="http://localhost:1234/v1")
+    assert migrate.ensure().state == "done"
+    config.write_config(role_primary_provider="mara-local",
+                        role_primary_model="local-model")
+    assert config.read_config()["active_connection_id"] == "openrouter"
+    return cid
+
+
+def test_the_cli_runs_where_the_apps_absorb_would(monkeypatch, tmp_path, capsys):
+    cid = _format_2_campaign(monkeypatch, tmp_path)
+    scene_file = tmp_path / "scene.json"
+    scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
+    client = FakeClient(_PARTIAL_OUTPUT)
+    monkeypatch.setattr(ingest_scene, "LLMClient", lambda: client)
+    monkeypatch.setattr(sys, "argv", ["ingest_scene.py", "ingest", "--campaign", cid,
+                                      "--input", str(scene_file)])
+
+    assert ingest_scene.main() == 0, capsys.readouterr().err
+
+    (_messages, conn), = client.calls
+    assert (conn["id"], conn["model"]) == ("mara-local", "local-model")
+    # The scene is stamped with what chat would run on, as the app stamps one.
+    sid = ingest_scene.load_manifest(cid)[_PARTIAL_SCENE["key"]]["sid"]
+    from grimoire.store import scenes
+    assert scenes.read_scene(cid, sid)["meta"]["model"] == "local-model"
+
+
+def test_the_cli_refuses_with_the_seams_reason(monkeypatch, tmp_path, capsys):
+    from grimoire.store import config
+    cid = _format_2_campaign(monkeypatch, tmp_path)
+    config.write_config(role_primary_provider="openrouter", role_primary_model="vendor/m")
+    scene_file = tmp_path / "scene.json"
+    scene_file.write_text(json_module.dumps(_PARTIAL_SCENE), encoding="utf-8")
+    client = FakeClient(_PARTIAL_OUTPUT)
+    monkeypatch.setattr(ingest_scene, "LLMClient", lambda: client)
+    monkeypatch.setattr(sys, "argv", ["ingest_scene.py", "ingest", "--campaign", cid,
+                                      "--input", str(scene_file)])
+
+    assert ingest_scene.main() == 1
+
+    err = capsys.readouterr().err
+    assert "OpenRouter key not set" in err and "Models" in err
+    assert "Configuration page" not in err
+    assert client.calls == []

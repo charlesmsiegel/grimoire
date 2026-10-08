@@ -1,233 +1,191 @@
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { useState } from "react";
 
 vi.mock("../api/client", async () => ({
   ...(await vi.importActual<typeof import("../api/client")>("../api/client")),
-  api: { listConnections: vi.fn(), readConnection: vi.fn(), getConfig: vi.fn() },
-}));
-vi.mock("../api/models", async () => ({
-  ...(await vi.importActual<typeof import("../api/models")>("../api/models")),
-  getModels: vi.fn(),
+  api: {
+    getCampaignInference: vi.fn(), readConnectionCapabilities: vi.fn(),
+    previewModelTest: vi.fn(), runModelTest: vi.fn(),
+  },
 }));
 
-import { api } from "../api/client";
-import { getModels } from "../api/models";
-import RerollRoutePicker, { NO_REROLL_ROUTE } from "./RerollRoute";
+import { api, PRESET_CLEAR, type CapabilityNeed } from "../api/client";
+import RerollRoutePicker, { NO_REROLL_ROUTE, rerollOverrides, type RerollRoute } from "./RerollRoute";
+import { forgetModelTests } from "./inference/TestCallDialog";
+import { bodiesOf, declares, stylesheet } from "../testkit/stylesheet";
 
-const OPENROUTER = {
-  id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
-  model: "vendor/campaign", effective_model: "vendor/campaign", post_process: "none", key_set: true, rev: "r1",
+const PROVIDERS = [
+  { id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter", usable: true },
+  { id: "realm", name: "Realm Local", kind: "openai_compatible", preset: "custom", usable: true },
+  { id: "winifred", name: "Winifred Anthropic", kind: "anthropic", preset: "anthropic", usable: true },
+  { id: "mara", name: "Mara Claude", kind: "claude", preset: "claude", usable: true },
+];
+
+/** The scene route as the campaign's view resolves it: what Default runs. */
+const SCENE_ROUTE = {
+  key: "scene", label: "Scene turns", hint: "", operation: "generate", default_role: "primary",
+  tasks: ["chat", "retry", "regenerate", "extend"], requires: [], campaign_scoped: true,
+  use: "", pin: { provider: "", model: "", preset: "" }, preset: "", problem: null, role: "primary",
+  resolves: { provider: "saltmarch", provider_name: "Saltmarch Router", model: "vendor/campaign",
+              preset: "warm", preset_name: "Warm", via: "role", scope: "global" },
+  inherits: null,
 };
-const LOCAL = {
-  id: "local", kind: "openai_compatible", name: "Local", base_url: "http://localhost:11434/v1",
-  model: "llama3", effective_model: "llama3", post_process: "none", key_set: false, rev: "r2",
+
+function view(over: Record<string, unknown> = {}) {
+  return {
+    format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
+    roles: {}, routes: [SCENE_ROUTE], providers: PROVIDERS,
+    presets: [{ id: "warm", name: "Warm" }, { id: "cold", name: "Cold" }],
+    preset_clear: PRESET_CLEAR, ...over,
+  };
+}
+
+const PRESET = {
+  id: "custom", label: "Custom", kind: "openai_compatible", base_url: "", url_locked: false,
+  billing: "metered", reports_price: false, always: [], possible: [], never: [],
 };
-const CLAUDE = {
-  id: "claude", kind: "claude", name: "Claude", base_url: "",
-  model: "opus", effective_model: "opus", post_process: "none", key_set: true, rev: "r3",
-};
-const ACTIVE = { id: "openrouter", kind: "openrouter" as const, name: "OpenRouter", model: "vendor/campaign" };
+
+function answer(need: CapabilityNeed, fits: { id: string; name: string }[]) {
+  return {
+    provider_preset: PRESET, need, reason: null, hidden: [],
+    groups: {
+      fits: fits.map((m) => ({ ...m, context: null, prompt: null, completion: null,
+                               reason: "the catalog says so", capabilities: {} })),
+      unverified: [],
+    },
+  };
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
-  (api.listConnections as any).mockResolvedValue([OPENROUTER, LOCAL, CLAUDE]);
-  (api.readConnection as any).mockResolvedValue({ ...LOCAL, models: [], fetched_at: "" });
-  (getModels as any).mockResolvedValue([]);
-  // Which connection is active is the picker's own read now, not a prop — so a
-  // popover that opens after another tab repointed it cannot be looking at a
-  // stale answer.
-  (api.getConfig as any).mockResolvedValue({ active_connection: ACTIVE });
+  forgetModelTests();
+  (api.getCampaignInference as any).mockResolvedValue(view());
+  (api.readConnectionCapabilities as any).mockResolvedValue(answer("generate", []));
 });
 
-test("the default option is offered, with the active connection on hover", async () => {
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
-  const select = await screen.findByLabelText<HTMLSelectElement>("Reroll connection");
-  expect(select.value).toBe("");
-  await screen.findByRole("option", { name: "Default" });
-  // Every OTHER connection is offered: reaching another provider is the case a
-  // bare model id cannot express.
-  expect(screen.getByRole("option", { name: "Local" })).toBeInTheDocument();
-  expect(screen.getByRole("option", { name: "Claude" })).toBeInTheDocument();
-  // The active connection is offered too, and means something different from
-  // Default: it PINS that connection, where Default follows whatever is active
-  // when the reroll is sent.
-  expect(screen.getByRole("option", { name: "OpenRouter" })).toBeInTheDocument();
-  expect(screen.getAllByRole("option")).toHaveLength(4);
-  expect(screen.getByRole("option", { name: "Default" }))
-    .toHaveAttribute("title", expect.stringContaining("OpenRouter now"));
+/** The picker, controlled the way the reroll popover holds it. */
+function Harness({ start = NO_REROLL_ROUTE, spy = vi.fn() }:
+  { start?: RerollRoute; spy?: (route: RerollRoute) => void }) {
+  const [route, setRoute] = useState(start);
+  return <RerollRoutePicker cid="saltmarch-campaign" value={route}
+                            onChange={(next) => { spy(next); setRoute(next); }} />;
+}
+
+test("the reroll picker sends provider, model and preset", async () => {
+  (api.readConnectionCapabilities as any).mockImplementation((provider: string) =>
+    Promise.resolve(answer("generate", provider === "realm" ? [{ id: "qwen3", name: "Qwen 3" }] : [])));
+  const spy = vi.fn();
+  render(<Harness spy={spy} />);
+
+  fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "realm" } });
+  // The model list is the provider's own, narrowed to what a reroll needs.
+  fireEvent.click(await screen.findByRole("radio", { name: "Qwen 3" }));
+  fireEvent.change(screen.getByLabelText("Reroll preset"), { target: { value: "cold" } });
+
+  expect(api.readConnectionCapabilities).toHaveBeenCalledWith("realm", "generate");
+  const last = spy.mock.lastCall![0] as RerollRoute;
+  expect(last).toEqual({ provider: "realm", model: "qwen3", preset: "cold" });
+  expect(rerollOverrides(last)).toEqual({ provider: "realm", model: "qwen3", preset: "cold" });
 });
 
-test("the config read is not served from the cache another tab left behind", async () => {
-  // `getConfig` answers from a module cache keyed to this tab's own writes, so
-  // an uncached read here would show the connection this tab last saw rather
-  // than the one that is active.
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
+test("a preset alone keeps the route and changes only how it samples", async () => {
+  const spy = vi.fn();
+  render(<Harness spy={spy} />);
 
-  await waitFor(() => expect(api.getConfig).toHaveBeenCalledWith({ fresh: true }));
+  fireEvent.change(await screen.findByLabelText("Reroll preset"), { target: { value: PRESET_CLEAR } });
+
+  expect(rerollOverrides(spy.mock.lastCall![0])).toEqual({ preset: PRESET_CLEAR });
 });
 
-test("the model box refuses input until the route it would attribute to is known", async () => {
-  // Codex review: the config read is async, so `active` is null on the first
-  // render — and a model typed in that window would be stored with no
-  // connection, which is the cross-provider mismatch the pin exists to stop.
-  let settle: (c: unknown) => void = () => {};
-  (api.getConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
-  const onChange = vi.fn();
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={onChange} />);
-  const box = await screen.findByLabelText("Reroll model");
+test("Default sends no override", async () => {
+  const spy = vi.fn();
+  render(<Harness start={{ provider: "realm", model: "qwen3", preset: "cold" }} spy={spy} />);
+  // What Default runs is said beside it: the campaign's scene route, resolved.
+  const standing = await screen.findByText(/Saltmarch Router · vendor\/campaign · Warm/);
+  expect(standing).toBeInTheDocument();
 
-  // `toBeDisabled` is the assertion that means anything here: a real browser
-  // delivers no input to a disabled control, while `fireEvent.change`
-  // dispatches synthetically and ignores the attribute (unlike
-  // `fireEvent.click`, which RTL does gate).
-  expect(box).toBeDisabled();
+  fireEvent.click(screen.getByRole("button", { name: "Default" }));
 
-  settle({ active_connection: ACTIVE });
-
-  await waitFor(() => expect(box).not.toBeDisabled());
-  fireEvent.change(box, { target: { value: "vendor/big" } });
-  expect(onChange).toHaveBeenCalledWith({ connection_id: "openrouter", model: "vendor/big" });
+  expect(spy).toHaveBeenLastCalledWith(NO_REROLL_ROUTE);
+  expect(rerollOverrides(NO_REROLL_ROUTE)).toEqual({});
+  expect(screen.getByLabelText<HTMLSelectElement>("Provider").value).toBe("");
+  expect(screen.getByLabelText<HTMLSelectElement>("Reroll preset").value).toBe("");
+  expect(screen.getByRole("button", { name: "Default" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("a config read that fails still releases the model box", async () => {
-  // "not asked yet" and "asked, nothing active" are both `active === null`;
-  // only the first should refuse input. Disabling forever over a failed read
-  // would be worse than letting an unpinned model through.
-  (api.getConfig as any).mockRejectedValue(new Error("offline"));
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
+test("an anthropic provider offers its models", async () => {
+  (api.readConnectionCapabilities as any).mockImplementation((provider: string) =>
+    Promise.resolve(answer("generate", provider === "winifred"
+      ? [{ id: "claude-opus-4-8", name: "Claude Opus 4.8" },
+         { id: "claude-haiku-4-5", name: "Claude Haiku 4.5" }]
+      : [])));
+  const spy = vi.fn();
+  render(<Harness spy={spy} />);
 
-  await waitFor(() => expect(screen.getByLabelText("Reroll model")).not.toBeDisabled());
+  fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "winifred" } });
+  const fits = await screen.findByRole("group", { name: "Fits" });
+  expect(within(fits).getAllByRole("radio").map((r) => r.getAttribute("value")))
+    .toEqual(["claude-haiku-4-5", "claude-opus-4-8"]);
+  fireEvent.click(screen.getByRole("radio", { name: "Claude Opus 4.8" }));
+
+  expect(spy).toHaveBeenLastCalledWith({ provider: "winifred", model: "claude-opus-4-8", preset: "" });
 });
 
-test("an explicitly named connection needs no config read to accept a model", async () => {
-  // That connection is its own pin; only the Default row depends on the read.
-  let settle: (c: unknown) => void = () => {};
-  (api.getConfig as any).mockReturnValue(new Promise((r) => { settle = r; }));
-  render(<RerollRoutePicker value={{ connection_id: "local", model: "" }}
-                            onChange={() => {}} />);
+test("a claude provider with no catalog takes a typed model id", async () => {
+  // The subscription lists nothing to choose from, so the id is typed --
+  // through the same picker, not a roster kept by hand on this side.
+  const spy = vi.fn();
+  render(<Harness spy={spy} />);
+  fireEvent.change(await screen.findByLabelText("Provider"), { target: { value: "mara" } });
+  // Not pointed at a Refresh it does not have.
+  await screen.findByText("This provider lists no models: type an id.");
 
-  expect(await screen.findByLabelText("Reroll model")).not.toBeDisabled();
-  settle({ active_connection: ACTIVE });
+  fireEvent.change(screen.getByLabelText("Model id"), { target: { value: "opus" } });
+  fireEvent.click(screen.getByRole("button", { name: "Use this id" }));
+
+  expect(spy).toHaveBeenLastCalledWith({ provider: "mara", model: "opus", preset: "" });
+  // and it is judged like any typed id, never silently trusted
+  expect(await screen.findByRole("group", { name: "Typed id" })).toBeInTheDocument();
 });
 
-test("choosing a model under Default pins the connection it was chosen against", async () => {
-  // The placeholder and the catalog both describe whichever connection is
-  // active right now; leaving the route dynamic would apply a model chosen
-  // against that one to whatever is active by the time Reroll is clicked.
-  const onChange = vi.fn();
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={onChange} />);
-  await screen.findByRole("option", { name: "Local" });
+test("the providers, presets and Default are this campaign's, read fresh on open", async () => {
+  render(<Harness />);
 
-  fireEvent.change(screen.getByLabelText("Reroll model"), { target: { value: "vendor/big" } });
-
-  expect(onChange).toHaveBeenCalledWith({ connection_id: "openrouter", model: "vendor/big" });
+  await screen.findByText(/Saltmarch Router · vendor\/campaign/);
+  expect(api.getCampaignInference).toHaveBeenCalledWith("saltmarch-campaign");
+  // Each provider is offered, and the presets are the library's.
+  for (const p of PROVIDERS) expect(screen.getByRole("option", { name: p.name })).toBeInTheDocument();
+  const preset = screen.getByLabelText("Reroll preset");
+  expect(within(preset).getByRole("option", { name: "Warm" })).toBeInTheDocument();
+  expect(within(preset).getByRole("option", { name: "Cold" })).toBeInTheDocument();
 });
 
-test("the pin stays once set, and the select says so", async () => {
-  // Nothing distinguishes a pin the reader made by choosing a model from one
-  // they made by choosing the row, so clearing the model does not release it —
-  // and that is visible rather than hidden: the `<select>` reads "OpenRouter"
-  // from that moment on, and Default is one click away.
-  const onChange = vi.fn();
-  render(<RerollRoutePicker value={{ connection_id: "openrouter", model: "vendor/big" }}
-                            onChange={onChange} />);
-  const select = await screen.findByLabelText<HTMLSelectElement>("Reroll connection");
-  expect(select.value).toBe("openrouter");
+test("a store still on the legacy layout keeps the per-reroll preset", async () => {
+  // `override_inference` applies a reroll's preset in either layout, so a
+  // format-1 store is offered it too.
+  (api.getCampaignInference as any).mockResolvedValue(view({ format: "1" }));
+  const spy = vi.fn();
+  render(<Harness spy={spy} />);
 
-  fireEvent.change(screen.getByLabelText("Reroll model"), { target: { value: "" } });
-
-  expect(onChange).toHaveBeenCalledWith({ connection_id: "openrouter", model: "" });
+  await screen.findByText(/Saltmarch Router · vendor\/campaign/);
+  fireEvent.change(screen.getByLabelText("Reroll preset"), { target: { value: "cold" } });
+  expect(rerollOverrides(spy.mock.lastCall![0])).toEqual({ preset: "cold" });
 });
 
-test("the model box shows what leaving it blank would run", async () => {
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
-  expect(await screen.findByPlaceholderText("vendor/campaign")).toBeInTheDocument();
+test("a view that cannot be read still offers Default, and says why nothing else is", async () => {
+  (api.getCampaignInference as any).mockRejectedValue(new Error("offline"));
+  render(<Harness />);
+
+  expect(await screen.findByText(/Couldn't read the providers/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Default" })).toHaveAttribute("aria-pressed", "true");
 });
 
-test("choosing a connection clears the model chosen for the previous one", async () => {
-  const onChange = vi.fn();
-  render(<RerollRoutePicker value={{ connection_id: "", model: "vendor/bigger" }}
-                            onChange={onChange} />);
-  await screen.findByRole("option", { name: "Local" });
-
-  fireEvent.change(screen.getByLabelText("Reroll connection"), { target: { value: "local" } });
-
-  // Not carried across: an OpenRouter id means nothing to a local endpoint.
-  expect(onChange).toHaveBeenCalledWith({ connection_id: "local", model: "" });
-});
-
-test("a custom endpoint offers the models its own refresh cached", async () => {
-  (api.readConnection as any).mockResolvedValue({
-    ...LOCAL, fetched_at: "t",
-    models: [{ id: "qwen3", name: "Qwen 3", context: 32768, prompt: null, completion: null }],
-  });
-  render(<RerollRoutePicker value={{ connection_id: "local", model: "" }}
-                            onChange={() => {}} />);
-
-  await waitFor(() => expect(api.readConnection).toHaveBeenCalledWith("local"));
-  fireEvent.focus(await screen.findByLabelText("Reroll model"));
-  expect(await screen.findByText("Qwen 3")).toBeInTheDocument();
-  // and the catalog it has no business fetching stays unfetched
-  expect(getModels).not.toHaveBeenCalled();
-});
-
-test("a claude connection's blank box names the model the dispatcher substitutes", async () => {
-  // The two sources disagree for this one kind: /config reports the EFFECTIVE
-  // model, /llm-connections the raw stored one. A blank box would say nothing
-  // about a reroll that will run `opus`.
-  // stored "" and effective "opus" — the one kind where they differ, which the
-  // server now resolves so the client never has to know the rule.
-  (api.listConnections as any).mockResolvedValue(
-    [OPENROUTER, { ...CLAUDE, model: "", effective_model: "opus" }]);
-  render(<RerollRoutePicker value={{ connection_id: "claude", model: "" }}
-                            onChange={() => {}} />);
-
-  expect(await screen.findByPlaceholderText("opus")).toBeInTheDocument();
-});
-
-test("a claude connection offers the model ids the connection form knows", async () => {
-  render(<RerollRoutePicker value={{ connection_id: "claude", model: "" }}
-                            onChange={() => {}} />);
-  await screen.findByRole("option", { name: "Claude" });
-
-  fireEvent.focus(screen.getByLabelText("Reroll model"));
-
-  expect(await screen.findByText("Opus (latest)")).toBeInTheDocument();
-  expect(getModels).not.toHaveBeenCalled();
-  expect(api.readConnection).not.toHaveBeenCalled();
-});
-
-test.each([
-  ["an endpoint with nothing cached", () => {
-    (api.readConnection as any).mockResolvedValue({ ...LOCAL, models: [], fetched_at: "" });
-    return { connection_id: "local", model: "" };
-  }],
-  ["a catalog that would not load", () => {
-    (getModels as any).mockRejectedValue(new Error("offline"));
-    return NO_REROLL_ROUTE;
-  }],
-])("Escape is not swallowed when the list is open but invisible — %s", async (_l, arrange) => {
-  // `open` is set on focus, but the list also needs a model to show and no
-  // error. Gating the swallow on `open` alone made Escape a dead key for every
-  // route with nothing to offer, which is most custom endpoints.
-  const value = arrange();
-  const onOuterEscape = vi.fn();
-  render(
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
-    <div onKeyDown={(e) => { if (e.key === "Escape") onOuterEscape(); }}>
-      <RerollRoutePicker value={value} onChange={() => {}} />
-    </div>);
-  const box = await screen.findByLabelText("Reroll model");
-  fireEvent.focus(box);
-
-  fireEvent.keyDown(box, { key: "Escape" });
-
-  expect(onOuterEscape).toHaveBeenCalledTimes(1);
-});
-
-test("Enter on the connection select belongs to the menu, not to the popover", async () => {
-  // Codex review: a keyboard reader confirming an option with Enter had the
-  // keydown bubble up and commit the reroll before the select's own default
-  // applied — sending the turn through the route they were replacing.
+test("Enter on the picker's own controls does not reach the popover; Escape does", async () => {
+  // The popover commits the reroll on Enter. On a select, a button or the
+  // typed-id box Enter already means something, and letting it bubble sent the
+  // reroll through the route the reader was in the middle of choosing.
+  (api.readConnectionCapabilities as any).mockResolvedValue(
+    answer("generate", [{ id: "qwen3", name: "Qwen 3" }]));
   const onOuterEnter = vi.fn();
   const onOuterEscape = vi.fn();
   render(
@@ -236,92 +194,85 @@ test("Enter on the connection select belongs to the menu, not to the popover", a
       if (e.key === "Enter") onOuterEnter();
       if (e.key === "Escape") onOuterEscape();
     }}>
-      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />
+      <Harness />
     </div>);
-  const select = await screen.findByLabelText("Reroll connection");
+  const provider = await screen.findByLabelText("Provider");
+  fireEvent.change(provider, { target: { value: "realm" } });
+  const radio = await screen.findByRole("radio", { name: "Qwen 3" });
 
-  fireEvent.keyDown(select, { key: "Enter" });
+  for (const control of [provider, screen.getByLabelText("Reroll preset"),
+                         screen.getByLabelText("Model id"),
+                         screen.getByRole("button", { name: "Default" })]) {
+    fireEvent.keyDown(control, { key: "Enter" });
+  }
   expect(onOuterEnter).not.toHaveBeenCalled();
 
-  // Escape still bubbles: backing out of the popover from any of its three
-  // controls is deliberate.
-  fireEvent.keyDown(select, { key: "Escape" });
-  expect(onOuterEscape).toHaveBeenCalledTimes(1);
-});
-
-test("Enter closes the model dropdown before it commits anything above it", async () => {
-  (getModels as any).mockResolvedValue(
-    [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: null, completion: null }]);
-  const onOuterEnter = vi.fn();
-  render(
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
-    <div onKeyDown={(e) => { if (e.key === "Enter") onOuterEnter(); }}>
-      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />
-    </div>);
-  await waitFor(() => expect(getModels).toHaveBeenCalled());
-  const box = screen.getByLabelText("Reroll model");
-  fireEvent.focus(box);
-  expect(await screen.findByText("Bigger")).toBeInTheDocument();
-
-  // Enter while choosing a model must not send the reroll with half-typed text
-  fireEvent.keyDown(box, { key: "Enter" });
-
-  await waitFor(() => expect(screen.queryByText("Bigger")).toBeNull());
-  expect(onOuterEnter).not.toHaveBeenCalled();
-
-  fireEvent.keyDown(box, { key: "Enter" });
+  // A chosen model row has no Enter of its own, so there it commits.
+  fireEvent.keyDown(radio, { key: "Enter" });
   expect(onOuterEnter).toHaveBeenCalledTimes(1);
-});
-
-test("Escape closes the model dropdown before it closes anything above it", async () => {
-  (getModels as any).mockResolvedValue(
-    [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: null, completion: null }]);
-  const onOuterEscape = vi.fn();
-  render(
-    // Stands in for the reroll popover, which handles Escape on its container
-    // for exactly the reason the rule objects to — see CampaignView.
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
-    <div onKeyDown={(e) => { if (e.key === "Escape") onOuterEscape(); }}>
-      <RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />
-    </div>);
-  await waitFor(() => expect(getModels).toHaveBeenCalled());
-  const box = screen.getByLabelText("Reroll model");
-  fireEvent.focus(box);
-  expect(await screen.findByText("Bigger")).toBeInTheDocument();
-
-  fireEvent.keyDown(box, { key: "Escape" });
-
-  // the list is gone, and the popover around it never heard about it
-  await waitFor(() => expect(screen.queryByText("Bigger")).toBeNull());
-  expect(onOuterEscape).not.toHaveBeenCalled();
-
-  // a second Escape, with the list already shut, reaches the popover
-  fireEvent.keyDown(box, { key: "Escape" });
+  // Escape backs out of the popover from any control.
+  fireEvent.keyDown(provider, { key: "Escape" });
   expect(onOuterEscape).toHaveBeenCalledTimes(1);
 });
 
-test("an openrouter reroll offers the catalog", async () => {
-  (getModels as any).mockResolvedValue(
-    [{ id: "vendor/bigger", name: "Bigger", context: 200000, prompt: "0.000001", completion: "0.000002" }]);
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
-  await waitFor(() => expect(getModels).toHaveBeenCalled());
+test("a provider chosen without a model says which model it keeps", async () => {
+  // `{provider}` alone runs the scene route's standing model on that provider
+  // (spec 5.6) -- so the box says which one, rather than leaving the reader to
+  // find out from the reply.
+  (api.readConnectionCapabilities as any).mockImplementation((provider: string) =>
+    Promise.resolve(answer("generate", provider === "realm" ? [{ id: "qwen3", name: "Qwen 3" }] : [])));
+  render(<Harness />);
+  await screen.findByText(/Saltmarch Router · vendor\/campaign/);
+  expect(screen.queryByText(/^Keeps /)).toBeNull();
 
-  fireEvent.focus(screen.getByLabelText("Reroll model"));
+  fireEvent.change(screen.getByLabelText("Provider"), { target: { value: "realm" } });
 
-  expect(await screen.findByText("Bigger")).toBeInTheDocument();
+  expect(await screen.findByText("Keeps vendor/campaign")).toBeInTheDocument();
+  fireEvent.click(await screen.findByRole("radio", { name: "Qwen 3" }));
+  expect(screen.queryByText(/^Keeps /)).toBeNull();
 });
 
-test("a catalog that will not load leaves the box typeable and says so", async () => {
-  (getModels as any).mockRejectedValue(new Error("offline"));
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
+test("a provider alone, where the route names no model to keep, says to choose one", async () => {
+  (api.getCampaignInference as any).mockResolvedValue(view({
+    routes: [{ ...SCENE_ROUTE, resolves: null }] }));
+  render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
 
-  expect(await screen.findByText(/couldn’t load model list/)).toBeInTheDocument();
-  expect(screen.getByLabelText("Reroll model")).not.toBeDisabled();
+  expect(await screen.findByText(/names no model to keep/)).toBeInTheDocument();
 });
 
-test("a connection list that cannot be read still offers the default", async () => {
-  (api.listConnections as any).mockRejectedValue(new Error("offline"));
-  render(<RerollRoutePicker value={NO_REROLL_ROUTE} onChange={() => {}} />);
+test("at format 1 a provider alone says it runs that provider's own model", async () => {
+  // A store whose upgrade is pending or failed resolves a provider-only reroll
+  // through the legacy keys: the provider's OWN model, not the scene route's
+  // standing one -- possibly another, pricier one. The caption says which.
+  (api.getCampaignInference as any).mockResolvedValue(view({
+    format: "1", migration: { state: "pending", reason: "", skipped: [] },
+    providers: PROVIDERS.map((p) => (p.id === "realm" ? { ...p, own_model: "qwen3-max" }
+                                                     : { ...p, own_model: "" })) }));
+  render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
 
-  expect(await screen.findByRole("option", { name: "Default" })).toBeInTheDocument();
+  expect(await screen.findByText("Runs this provider's own model, qwen3-max"))
+    .toBeInTheDocument();
+  expect(screen.queryByText(/^Keeps /)).toBeNull();
+});
+
+test("at format 1 a provider naming no model of its own says to choose one", async () => {
+  (api.getCampaignInference as any).mockResolvedValue(view({
+    format: "1", providers: PROVIDERS }));
+  render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
+
+  expect(await screen.findByText("This provider names no model of its own: choose one."))
+    .toBeInTheDocument();
+});
+
+test("the popover fits a phone: capped to the viewport, and anchored inside it", () => {
+  const { css, atWidth } = stylesheet();
+  expect(bodiesOf(css, ".reroll-pop").map((b) => declares(b, "max-width")))
+    .toContain("calc(100vw - 32px)");
+  // The route row's fixed width yields to that cap rather than pushing past it.
+  expect(bodiesOf(css, ".reroll-route").map((b) => declares(b, "max-width"))).toContain("100%");
+  // Beside the gutter there is no room on a phone, so there it opens over the
+  // post, from the gutter's own left edge.
+  const phone = bodiesOf(atWidth(720), ".reroll-pop");
+  expect(phone.map((b) => declares(b, "left"))).toContain("0");
+  expect(phone.map((b) => declares(b, "margin-left"))).toContain("0");
 });

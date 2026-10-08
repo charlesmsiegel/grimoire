@@ -16,6 +16,29 @@ def _is_fence_line(line: str) -> bool:
     return line.rstrip("\n") == "---"
 
 
+#: Every character `str.splitlines` ends a line at -- which is how
+#: `parse_frontmatter` splits the block, so a value holding one would be read
+#: back as two lines, the second a key of the writer's choosing.
+#: `test_frontmatter_line_breaks` holds this to `splitlines` itself.
+LINE_BREAKS = frozenset("\n\r\x0b\x0c\x1c\x1d\x1e\x85\u2028\u2029")
+
+
+def breaks_line(value: str) -> bool:
+    """Whether `value` holds a line boundary the parser would split on."""
+    return any(ch in LINE_BREAKS for ch in value)
+
+
+def _one_line(value: str) -> str:
+    """`value` with every line boundary made a space: the writer's backstop.
+    A caller that takes text from a request refuses a break with a 400 first
+    (`inference.settings._string`, the provider routes); this keeps any other
+    writer from putting a key into the block, where the value would otherwise
+    have been cut at the break on read anyway."""
+    if not breaks_line(value):
+        return value
+    return "".join(" " if ch in LINE_BREAKS else ch for ch in value)
+
+
 def _needs_quotes(value: str) -> bool:
     if value == "":
         return True
@@ -87,7 +110,7 @@ def parse_frontmatter_head(path: Path) -> dict[str, str]:
 def dump_frontmatter(meta: dict[str, str], body: str) -> str:
     lines = ["---"]
     for key, value in meta.items():
-        lines.append(f"{key}: {_quote('' if value is None else str(value))}")
+        lines.append(f"{key}: {_quote(_one_line('' if value is None else str(value)))}")
     lines.append("---")
     lines.append("")
     return "\n".join(lines) + "\n" + body

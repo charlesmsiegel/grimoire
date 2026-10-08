@@ -66,8 +66,24 @@ export type LLMConnection = {
    *  model's own turn (prefill) rather than asking it to continue. */
   prefill?: boolean;
   key_set: boolean; rev: string; health: ProviderHealth;
+  /** The provider preset it was made from (`ProviderPreset.id`); "" for a
+   *  record that names none, whose preset the server infers where it reads. */
+  preset?: string;
+  /** "" for a record that states none; its preset's billing then applies. */
+  billing?: "" | ProviderBilling;
+};
+/** How a provider's calls are paid for (spec 4.1). */
+export type ProviderBilling = "metered" | "subscription";
+/** One place the stored settings name a provider (`settings.used_by`): a role,
+ *  a role's fallback, or a route's chosen pin, at global or campaign scope. */
+export type ProviderUse = {
+  kind: "role" | "fallback" | "route"; key: string;
+  scope: "global" | "campaign"; cid?: string;
 };
 export type LLMConnectionDetail = LLMConnection & {
+  /** What names this provider, read on the detail only (it reads every
+   *  campaign). Absent from an update's answer. */
+  used_by?: ProviderUse[];
   models: Model[]; fetched_at: string;
   /** What this connection's OWN preset sends on it, and what it drops. */
   sampling?: SamplingReport | null;
@@ -91,20 +107,34 @@ export type LLMConnectionDraft = {
   reasoning_effort?: "" | "low" | "high" | "max";
   sampler_preset?: string; sampler_support?: "" | "standard" | "extended";
   vision?: VisionOverride; prefill?: boolean;
+  /** The provider preset it is made from (`ProviderPreset.id`); "" or absent
+   *  names none, and the server infers one where it is read. */
+  preset?: string;
+  /** "" or absent takes the preset's billing. */
+  billing?: "" | ProviderBilling;
+  /** An edit that moves the Embedding role's vector space (a new key or
+   *  address on the provider it embeds through) re-embeds the library, and is
+   *  refused with 400 `confirm_embedding` without this. */
+  confirm_embedding?: boolean;
 };
 
-/** The nine sampler parameters, as a preset stores them. Every one optional:
- *  an absent parameter is the backend's own default, never a zero. */
+/** A preset's provider-neutral reasoning effort (`llm_sampling.REASONING`). */
+export type ReasoningEffort = "off" | "low" | "medium" | "high";
+/** The nine sampler parameters and the reasoning effort, as a preset stores
+ *  them. Every one optional: an absent parameter is the backend's own
+ *  default, never a zero. */
 export type SamplerParams = {
   temperature?: number; top_p?: number; top_k?: number; min_p?: number;
   repetition_penalty?: number; frequency_penalty?: number; presence_penalty?: number;
-  max_tokens?: number; stop?: string[];
+  max_tokens?: number; stop?: string[]; reasoning_effort?: ReasoningEffort;
 };
 export type SamplerParamName = keyof SamplerParams;
-/** One row of the server's parameter table (`llm_sampling.PARAMS`). */
+/** One row of the server's parameter table (`llm_sampling.table()`): bounds
+ *  for a number, limits for the stop strings, `choices` for a choice. */
 export type SamplerParamSpec = {
-  name: SamplerParamName; label: string; kind: "float" | "int" | "stop";
+  name: SamplerParamName; label: string; kind: "float" | "int" | "stop" | "choice";
   min?: number; max?: number; max_entries?: number; max_chars?: number;
+  choices?: string[];
 };
 export type SamplerPreset = {
   id: string; name: string; params: SamplerParams; notes: string;
@@ -123,11 +153,12 @@ export type SamplerImportReport = {
 };
 /** What one connection is sent from its resolved preset, and what not (the
  *  sampler-presets spec). `scope` is where the preset came from: a route at
- *  `campaign` or `global` scope, the `connection` itself, or `none`. A
- *  `preset_id` of "" with a route scope means that scope cleared it. */
+ *  `campaign` or `global` scope, the `connection` itself, a reroll's own
+ *  `override`, or `none`. A `preset_id` of "" with a route or override scope
+ *  means that scope cleared it. */
 export type SamplingReport = {
   preset_id: string; preset_name: string;
-  scope: "campaign" | "global" | "connection" | "none" | "";
+  scope: "campaign" | "global" | "connection" | "override" | "none" | "";
   kind: string;
   applied: SamplerParams;
   dropped: { param: string; reason: string }[];
@@ -154,17 +185,25 @@ export type CapabilityModel = Model & {
   reason: string;
   capabilities: Record<CapabilityName, CapabilityValue>;
 };
+/** A provider preset (`capabilities.preset_body`): what a new provider is made
+ *  from, and what its wire protocol always, possibly or never does. Not to be
+ *  confused with a sampler preset, which is a `preset_id` everywhere else. */
+export type ProviderPreset = {
+  id: string; label: string; kind: LLMConnectionKind; base_url: string;
+  url_locked: boolean; billing: "metered" | "subscription"; reports_price: boolean;
+  always: CapabilityName[]; possible: CapabilityName[]; never: CapabilityName[];
+};
+/** `GET /api/providers/presets`: each preset, and whether its health check
+ *  GENERATES (the Claude subscription) -- such a check is sent only with
+ *  `confirm: true`, so a page offers it behind a button rather than running it. */
+export type ProviderPresetOption = ProviderPreset & { generating_check: boolean };
 /** `GET /api/llm-connections/{id}/capabilities`. Every catalog row, embedding
  *  models included. When the provider rules the need out for every model,
  *  `groups` and `hidden` are empty and `reason` says why; otherwise `reason`
  *  is `null`. */
 export type ModelCapabilities = {
   /** The provider preset; the sampler preset is `preset_id` elsewhere. */
-  provider_preset: {
-    id: string; label: string; kind: LLMConnectionKind; base_url: string;
-    url_locked: boolean; billing: "metered" | "subscription"; reports_price: boolean;
-    always: CapabilityName[]; possible: CapabilityName[]; never: CapabilityName[];
-  };
+  provider_preset: ProviderPreset;
   need: CapabilityNeed;
   groups: { fits: CapabilityModel[]; unverified: CapabilityModel[] };
   hidden: { id: string; reason: string }[];
@@ -185,8 +224,6 @@ export type ControlsPreview = {
   controls: Record<string, ControlPreview>;
 };
 export type ModelsRefreshResult = { models: Model[]; fetched_at: string; rev: string };
-/** A connection described but not saved, for the sake of listing its models. */
-export type CatalogDraft = { kind: LLMConnectionKind; base_url?: string; api_key?: string };
 /** What a connection's provider last actually did (#146).
  *
  *  `unknown` is not a third kind of failure: it means nothing has been
@@ -203,12 +240,212 @@ export type ProviderHealth = {
 export type HealthCheckResult = {
   ok: boolean; kind: string; detail: string; checked_at: string;
 };
+
+// ---- Inference settings: roles, routes, model facts, the test call ----
+// The shapes of `store/inference/settings.py` (`view`, `write`) and of the
+// facts and test routes in `routes/config.py`. Nothing here restates a rule
+// behind them: what resolves, what inherits and what is refused all come back
+// from the server.
+
+/** The three roles a campaign may override; Embedding is the library's alone. */
+export type GenerativeRole = "primary" | "fast" | "decision";
+export type InferenceRole = GenerativeRole | "embedding";
+/** A stored choice of provider, model and sampler preset; each part `""` when
+ *  unset. A write replaces a named selection WHOLE, so a part sent as `""` is
+ *  cleared. */
+export type InferenceSelection = { provider: string; model: string; preset: string };
+/** The Embedding role's choice: no preset, because an embedding samples nothing. */
+export type EmbeddingSelection = { provider: string; model: string };
+/** What a role or route resolves to (the view's `Sel`): the primary attempt
+ *  the seam would send, with the names to show. `via` is `route` for a pin and
+ *  `role` for a role's slot; `scope` is where the choice was read. */
+export type ResolvedSelection = {
+  provider: string; provider_name: string; model: string;
+  preset: string; preset_name: string;
+  via: "route" | "role" | ""; scope: "campaign" | "global" | "none";
+};
+/** Where the one-time move to the new settings layout stands
+ *  (`migrate.status`). `newer` is a store a newer build has written: this one
+ *  will not change its model settings, and play continues. */
+export type MigrationStatus = {
+  state: "done" | "pending" | "running" | "failed" | "newer";
+  /** Why a `failed` upgrade stopped ("the safety backup failed: ..."), else "". */
+  reason: string;
+  /** What the upgrade could not reach yet (a busy campaign), each with why. */
+  skipped: string[];
+};
+/** One generative role card. `inherits` is what this scope would run on with
+ *  its own choice for the role cleared -- what "Same as ..." shows -- and
+ *  `problem` is the seam's own refusal of `resolves` (no key, a known
+ *  capability `no`), never a copy of it. */
+export type RoleCard = {
+  stored: InferenceSelection;
+  fallback: InferenceSelection;
+  resolves: ResolvedSelection | null;
+  inherits: ResolvedSelection | null;
+  problem: string | null;
+  /** What the resolved fallback is KNOWN unable to do (spec 5.3), so it is
+   *  never sent: the seam refuses nothing over it, so this is the only place
+   *  it shows. Empty when the fallback is sent, or there is none. */
+  fallback_missing: CapabilityName[];
+  /** Why the stored fallback cannot send at all (no key, no base URL), so it
+   *  is left out of the chain as silently; null when it can, or there is none. */
+  fallback_problem: string | null;
+};
+/** The Embedding role (global scope only). `on` is whether anything embeds;
+ *  `problem` is null when it does, else the server's short reason it does not
+ *  ("No provider chosen", "<provider> has no key set", ...). */
+export type EmbeddingCard = {
+  stored: EmbeddingSelection;
+  resolves: ResolvedSelection | null;
+  on: boolean;
+  problem: string | null;
+};
+/** What a route's `use` says: inherit (`""`), a generative role, or the
+ *  route's own pin (`"model"`). */
+export type RouteUse = "" | GenerativeRole | "model";
+/** One routing row. `role` is the role that supplied what it resolves to;
+ *  `null` for a pin, or for nothing at all. */
+export type RouteRow = {
+  key: string; label: string; hint: string; tasks: string[];
+  operation: "generate" | "decide";
+  default_role: GenerativeRole;
+  /** What the serving model must also do (the image route's `vision`). */
+  requires: CapabilityNeed[];
+  campaign_scoped: boolean;
+  use: RouteUse;
+  pin: InferenceSelection;
+  /** This scope's sampler preset for the route: "" inherits, and
+   *  `preset_clear` stops inheriting. */
+  preset: string;
+  resolves: ResolvedSelection | null;
+  inherits: ResolvedSelection | null;
+  problem: string | null;
+  /** As on `RoleCard`: what the route's fallback is known unable to do. */
+  fallback_missing: CapabilityName[];
+  /** As on `RoleCard`: why the route's fallback cannot send at all. */
+  fallback_problem: string | null;
+  role: GenerativeRole | null;
+};
+/** A provider as the settings view lists it, with whether it can send at all. */
+export type InferenceProvider = {
+  id: string; name: string;
+  /** `""` for a record that names no kind: the view reads it as
+   *  `str(kind or "")` rather than inferring one. */
+  kind: LLMConnectionKind | "";
+  /** The provider preset it was made from, or the one inferred for it. */
+  preset: string;
+  usable: boolean;
+  /** The model the provider's own record names ("" for none): what a reroll
+   *  naming the provider alone runs while the store is at format 1. At
+   *  format 2 a provider has no model of its own and this is not used. */
+  own_model?: string;
+};
+/** `GET /api/inference/settings` and `GET /api/campaigns/{cid}/inference`. A
+ *  campaign's view has no Embedding card and only the campaign-scoped routes. */
+export type InferenceSettings = {
+  /** The store's settings layout; "1" is the legacy one. */
+  format: string;
+  newer: boolean;
+  migration: MigrationStatus;
+  roles: Record<GenerativeRole, RoleCard> & { embedding?: EmbeddingCard };
+  routes: RouteRow[];
+  providers: InferenceProvider[];
+  presets: { id: string; name: string }[];
+  /** The sampler-preset sentinel meaning "no preset at this scope". */
+  preset_clear: string;
+};
+/** `sampler_presets.PRESET_CLEAR` byte for byte (U+2063 + "none"): a route's
+ *  "no preset at this scope", which stops it inheriting one. "" is the other
+ *  answer, "no opinion here". The views carry it too (`preset_clear`). */
+export const PRESET_CLEAR = "⁣none";
+/** A route's part of a write: only the fields named change. */
+export type RouteWrite = { use?: RouteUse; pin?: InferenceSelection; preset?: string };
+/** `PUT /api/campaigns/{cid}/inference`'s body. A named selection is replaced
+ *  whole; a role, route or field the body does not name is left alone. */
+export type CampaignInferenceWrite = {
+  roles?: Partial<Record<GenerativeRole, { selection?: InferenceSelection;
+                                           fallback?: InferenceSelection }>>;
+  routes?: Record<string, RouteWrite>;
+  presets?: Record<string, string>;
+};
+/** `PUT /api/inference/settings`'s body: a campaign's, plus the Embedding role
+ *  (no preset, no fallback). */
+export type InferenceWrite = Omit<CampaignInferenceWrite, "roles"> & {
+  roles?: CampaignInferenceWrite["roles"] & { embedding?: { selection?: EmbeddingSelection } };
+};
+
+/** One recorded test result, kept only for the provider's current `rev`. */
+export type VerifiedResult = { ok: boolean; at?: string; error?: string; dims?: number };
+/** `GET /api/llm-connections/{id}/facts`: what the user said about one model
+ *  on one provider, what a test call found, and every capability as it
+ *  resolves with them. */
+export type ModelFacts = {
+  provider: string; model: string;
+  /** The post-image preference: `off` stops post images and asserts nothing. */
+  vision: VisionOverride;
+  prefill: boolean | null;
+  post_process: "" | "none" | "strict";
+  /** The user's own rates (slice E); `null` when none are stated. */
+  rates: Record<string, unknown> | null;
+  verified: Partial<Record<CapabilityName, VerifiedResult>>;
+  overrides: Partial<Record<CapabilityName, "yes" | "no">>;
+  capabilities: Record<CapabilityName, CapabilityValue>;
+};
+/** `PUT /api/llm-connections/{id}/facts`. A field left out is left as it is;
+ *  an override of `""` removes that override. */
+export type ModelFactsUpdate = {
+  model: string;
+  vision?: VisionOverride;
+  prefill?: boolean;
+  post_process?: "none" | "strict";
+  overrides?: Partial<Record<CapabilityName, "" | "yes" | "no">>;
+  /** A save that turns the Embedding role on (it embeds the library) is
+   *  refused with 400 `confirm_embedding` without this. */
+  confirm_embedding?: boolean;
+};
+/** The capabilities a test call has a probe for (`probes.PROBES`). */
+export type TestableCapability = "generate" | "vision" | "embed";
+/** `POST /api/llm-connections/{id}/test/preview`: what a test would send.
+ *  `estimated_cost_usd` is `null` when the catalog states no price; 0 is only
+ *  ever a stated free model. */
+export type ModelTestPreview = {
+  provider: string; provider_id: string; model: string;
+  sends: { capability: TestableCapability; description: string }[];
+  estimated_cost_usd: number | null;
+};
+/** One probe's outcome. `kind` is `not_sent` for a probe skipped after an
+ *  earlier failure that answered for it too. */
+export type ModelTestProbe = { ok: boolean; kind?: string; error?: string; dims?: number };
+/** What a landed test run holds. `recorded` is whether any verdict was filed
+ *  -- none is when nothing answered for the model, or the provider was edited
+ *  while the probes were out. */
+export type ModelTestResult = {
+  provider: string; model: string; rev: string;
+  results: Partial<Record<TestableCapability, ModelTestProbe>>;
+  recorded: boolean;
+};
+/** One generative role as `GET /config` names it: the provider's name, the
+ *  model it runs and the preset's name ("" for none, or one that is gone). */
+export type RoleSummary = { provider_name: string; model: string; preset_name: string };
+/** `GET /config`'s roles at a glance (`store/inference/settings.summary`).
+ *  The cascade's answer, so a role that selects nothing of its own already
+ *  names what it inherits; `null` is a role nothing at all selects. Pure:
+ *  it resolves nothing and refuses nothing. */
+export type InferenceSummary = {
+  roles: Record<GenerativeRole, RoleSummary | null>;
+  /** Whether anything embeds -- the backend's own resolve, the one gate every
+   *  embedder shares (recall, the art catalogue, search by meaning, the
+   *  continuity checks). Recall depth is not part of it. */
+  embedding_on: boolean;
+};
 export type Config = {
   theme: string; system_prompt: string;
   quote_color: string; user_label: string; assistant_label: string;
   active_connection_id: string;
   active_connection: ActiveConnection | null;
   ready: boolean;
+  inference: InferenceSummary;
   /** What the active connection's provider last did (#146), or null when there
    *  is no active connection. Read from the server's registry — no network
    *  call to the provider happens on a config read. */
@@ -261,10 +498,11 @@ export type Config = {
   /** Characters the off-scene cast's "known to exist" tier may name; "0" = no
    *  ceiling. Over it, the ones the in-scene cast mentions are kept first. */
   offscene_known_limit: string;
-  /** The openai_compatible connection serving /embeddings, "" = off. With this
-   *  and `embeddings_model` both set, EVERY embedder runs (`embed_space.resolve`):
+  /** The legacy (format 1) embeddings connection. At format 2 the Embedding
+   *  role decides, and EVERY embedder follows it (`embed_space.resolve`):
    *  recall, the art catalogue, search by meaning, and the continuity checks
-   *  after a wrap-up — so "" is the one way to stop all embedding. */
+   *  after a wrap-up — so clearing that role is the one way to stop all
+   *  embedding. Read here only for the pre-migration view. */
   embeddings_connection_id: string;
   embeddings_model: string;
   /** Entries a similarity pass may add on top of the keyword ones; "0" = recall
@@ -1089,15 +1327,18 @@ export type ResponseProvenance = Record<string, { scope: string; source?: string
 // {response_preset: id} or loose knob overrides.
 export type ResponseOverride = Partial<ResponseFields>;
 /** Everything ONE reroll may override, all of it riding that call alone.
- *  `connection_id` and `model` are the manual route override (#77): the
- *  connection to send this reroll to, and the model to drive it at. Empty
- *  means the standing configuration for that half — they compose, so a
- *  connection with no model uses the connection's own. */
+ *  `provider`, `model` and `preset` are the route override (#77, spec 5.6):
+ *  the provider to send this reroll to, the model to run there and the
+ *  sampler preset (`PRESET_CLEAR` for none) to run it under. An absent part is
+ *  the scene route's own -- a provider alone keeps the standing model, and the
+ *  server asks for a model when there is none to keep. (`connection_id` is the
+ *  legacy name for `provider`, still read by the server and sent by nothing.) */
 export type RegenerateOverrides = {
   guidance?: string;
   response?: ResponseOverride;
-  connection_id?: string;
+  provider?: string;
   model?: string;
+  preset?: string;
 };
 export type ResponseBundle = ResponseFields & { effective: ResponseEffective; provenance: ResponseProvenance };
 
@@ -1110,42 +1351,6 @@ export type GroupSettings = {
   sitting_out: string[];
   auto_rounds: number;
 };
-// --- per-task model routing (#142) ---
-/** One routing slot: a named job, and the usage tasks it covers. */
-export type RoutingRoute = { key: string; label: string; hint: string; tasks: string[] };
-/** What a routing scope says, what actually resolves, and where from.
- *  `routes` holds only what THIS scope set (""=inherit); `effective` is the
- *  cascade's answer, where "" means the active connection. */
-export type RoutingBundle = {
-  scope: "global" | "campaign";
-  routes: Record<string, string>;
-  effective: Record<string, string>;
-  provenance: Record<string, { scope: string }>;
-  /** What each route would resolve to if THIS scope said nothing — the only
-   *  honest label for an "inherit" option, since `effective` already includes
-   *  this scope's own override. */
-  inherited: Record<string, string>;
-  inherited_from: Record<string, { scope: string }>;
-  catalog: RoutingRoute[];
-  /** `usable` is false for a connection that cannot send at all (an OpenRouter
-   *  profile with no key, a custom endpoint with no base URL) — routing a job
-   *  to one is a 409 on every call, so the picker says so before you pick it. */
-  connections: { id: string; name: string; kind: string; model: string; usable: boolean }[];
-  active_connection_id: string;
-  /** The sampler preset each route names at THIS scope: "" inherits,
-   *  `preset_clear` means "no preset". */
-  presets: Record<string, string>;
-  /** What each route would resolve to if this scope said nothing. */
-  preset_inherited: Record<string, string>;
-  preset_inherited_from: Record<string, { scope: string }>;
-  preset_catalog: { id: string; name: string }[];
-  /** The sentinel that means "no preset at this scope" (U+2063 + "none"). */
-  preset_clear: string;
-  /** Per route: what its effective connection is sent from its effective
-   *  preset, and what that backend drops. Null when no connection resolves. */
-  sampling: Record<string, SamplingReport | null>;
-};
-
 export type Availability = {
   id: string; name: string; available: boolean; reasons: string[]; unlocked: boolean;
   pcless?: boolean;

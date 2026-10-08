@@ -490,6 +490,30 @@ def test_store_guarantees_image_section_cites_real_tests():
     assert not missing, f"cited test functions that do not exist: {missing}"
 
 
+def test_store_guarantees_names_the_inference_migration():
+    """The model settings migration section names its entry point and the
+    marker it writes last -- and each of those names must still be in code,
+    so a rename leaves no promise attached to nothing. The safety archive's
+    prefix is stated as a value (`pre-inference-`), in the section and in
+    `CLAUDE.md`, so it is held to `backups.SAFETY_PREFIX` too."""
+    from grimoire.store import backups, inference_keys
+    from grimoire.store.inference import migrate
+
+    section = _section(_read(GUARANTEES), "Model settings migration")
+    for name, owner, attr in (("migrate.ensure", migrate, "ensure"),
+                              ("inference_keys.FORMAT_KEY", inference_keys, "FORMAT_KEY"),
+                              ("inference_keys.CURRENT_FORMAT", inference_keys,
+                               "CURRENT_FORMAT")):
+        assert name in section, f"the model settings migration section does not name {name}"
+        assert hasattr(owner, attr), f"{name} no longer exists in code"
+    assert inference_keys.FORMAT_KEY in section, (
+        f"the section does not spell the marker key ({inference_keys.FORMAT_KEY})")
+    for doc, text in ((GUARANTEES, section), (CLAUDE, _read(CLAUDE))):
+        assert f"{backups.SAFETY_PREFIX}grimoire-" in text, (
+            f"{doc.relative_to(ROOT)} does not name the safety archive by its "
+            f"prefix ({backups.SAFETY_PREFIX})")
+
+
 def test_store_guarantees_names_every_public_atomic_writer():
     """Every public callable in `store/atomic.py`.
 

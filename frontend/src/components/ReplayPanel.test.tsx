@@ -182,7 +182,7 @@ test("a replay turn the model could not be reached for offers the recovery", asy
   await renderPanel();
   fireEvent.click(screen.getByText("Replay next turn"));
   await screen.findByText(/Couldn.t reach the model provider/);
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
 });
 
 test("stopping asks whether to put the rest of the scene back", async () => {

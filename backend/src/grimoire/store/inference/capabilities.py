@@ -8,7 +8,9 @@ authority first -- the first one that says anything is the answer:
    that nothing below may claim past, however sure it is.
 2. `test`, then `user` -- the model's facts (`facts.of`): a probe that
    PASSED for the connection's current `rev` (`yes`), then the user's
-   `overrides`, then the user's own `vision` / `prefill` statements, then a
+   `overrides`, then the user's own `prefill` statement and a facts
+   `vision: on` (a facts `vision: off` is a post-image preference and says
+   nothing about the model, spec 4.2), then a
    probe that FAILED (`unknown`, source `test`, carrying the provider's
    `error`). A failed test is never a `no` (spec 12: the row stays unverified
    with the error shown), so a test can never make the seam refuse; it still
@@ -82,7 +84,7 @@ _ADAPTER_SAYS = {
 }
 #: What a model lacking each capability cannot do: "... cannot <phrase>" and
 #: "... does not <phrase>". The one table; the seam's `incapable` refusal
-#: (`routes.common._refuse_incapable`) and `group_for`'s reasons both read it.
+#: (`resolve.incapable_text`) and `group_for`'s reasons both read it.
 CANNOT: dict[str, str] = {
     "generate": "generate text",
     "vision": "read images",
@@ -124,9 +126,12 @@ def _stated(model_facts: dict) -> dict[str, Cap]:
     the user's word wins over a failed one."""
     passed, failed = _tested(model_facts.get("verified"))
     out: dict[str, Cap] = dict(failed)
-    vision = model_facts.get("vision")
-    if vision in ("on", "off"):
-        out["vision"] = Cap(_yes_no(vision == "on"), "user")
+    # Facts `vision` is the post-image preference (spec 4.2). "on" is the
+    # user's word that the model reads images; "off" only stops post images
+    # and says nothing about the model -- read as `no`, it would refuse image
+    # descriptions that serve today. The user's `no` is `overrides.vision`.
+    if model_facts.get("vision") == "on":
+        out["vision"] = Cap(YES, "user")
     prefill = model_facts.get("prefill")
     if isinstance(prefill, bool):
         out["prefill"] = Cap(_yes_no(prefill), "user")

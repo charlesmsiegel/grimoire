@@ -7,6 +7,8 @@ vi.mock("../api/client", async () => ({
   api: {
     listSamplerPresets: vi.fn(), createSamplerPreset: vi.fn(), updateSamplerPreset: vi.fn(),
     deleteSamplerPreset: vi.fn(), importSamplerPreset: vi.fn(),
+    getInferenceSettings: vi.fn(), previewControls: vi.fn(),
+    readConnectionCapabilities: vi.fn(), previewModelTest: vi.fn(), runModelTest: vi.fn(),
   },
 }));
 
@@ -15,15 +17,30 @@ const TABLE = [
   { name: "top_k", label: "Top-k", kind: "int", min: 0, max: 1000 },
   { name: "max_tokens", label: "Max tokens", kind: "int", min: 1, max: 200000 },
   { name: "stop", label: "Stop strings", kind: "stop", max_entries: 16, max_chars: 200 },
+  { name: "reasoning_effort", label: "Reasoning effort", kind: "choice",
+    choices: ["off", "low", "medium", "high"] },
 ];
 const WARM = { id: "warm", name: "Warm", params: { temperature: 1.1, stop: ["\nYou:"] },
                notes: "For **prose**.", source: "" };
+
+/** The inference view, as far as this editor reads it: whether the store is
+ *  newer than this build, and the providers a preview can be asked on. */
+function settings(over: { newer?: boolean } = {}) {
+  return {
+    format: "2", newer: false, roles: {}, routes: [], presets: [], preset_clear: "",
+    migration: { state: "done", reason: "", skipped: [] },
+    providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter",
+                  preset: "openrouter", usable: true }],
+    ...over,
+  } as never;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.listSamplerPresets).mockResolvedValue({ presets: [WARM], params: TABLE } as never);
   vi.mocked(api.createSamplerPreset).mockResolvedValue({ ...WARM, id: "new" });
   vi.mocked(api.updateSamplerPreset).mockResolvedValue(WARM);
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings());
 });
 
 function rail() {
@@ -165,4 +182,89 @@ test("a read left over from a cancelled import cannot fill the next one", async 
   } finally {
     vi.unstubAllGlobals();
   }
+});
+
+test("the form offers reasoning effort", async () => {
+  vi.mocked(api.listSamplerPresets).mockResolvedValue({
+    presets: [{ ...WARM, params: { ...WARM.params, reasoning_effort: "high" } }],
+    params: TABLE } as never);
+  render(<SamplerPresetEditor />);
+  // The view shows it, under the server's label.
+  fireEvent.click(await within(await waitFor(rail)).findByText("Warm"));
+  const view = screen.getByRole("heading", { name: "Warm" }).closest(".detail-view") as HTMLElement;
+  expect(within(view).getByText("Reasoning effort")).toBeInTheDocument();
+  expect(within(view).getByText("high")).toBeInTheDocument();
+  // The form offers the server's choices, and blank is unset.
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const box = screen.getByLabelText<HTMLSelectElement>("Reasoning effort");
+  expect(box.tagName).toBe("SELECT");
+  expect(box.value).toBe("high");
+  expect([...box.options].map((o) => o.value)).toEqual(["", "off", "low", "medium", "high"]);
+  fireEvent.change(box, { target: { value: "medium" } });
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.updateSamplerPreset).toHaveBeenCalledWith("warm", {
+    name: "Warm", notes: "For **prose**.",
+    params: { temperature: 1.1, stop: ["\nYou:"], reasoning_effort: "medium" } }));
+  // Blank sends nothing for it.
+  fireEvent.click(await screen.findByText("+ New preset"));
+  fireEvent.change(screen.getByLabelText("Name"), { target: { value: "Cold" } });
+  expect(screen.getByLabelText<HTMLSelectElement>("Reasoning effort").value).toBe("");
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.createSamplerPreset).toHaveBeenCalledWith({
+    name: "Cold", notes: "", params: {} }));
+});
+
+test("a stored reasoning level the table does not offer is shown as itself", async () => {
+  vi.mocked(api.listSamplerPresets).mockResolvedValue({
+    presets: [{ ...WARM, params: { ...WARM.params, reasoning_effort: "max" } }],
+    params: TABLE } as never);
+  render(<SamplerPresetEditor />);
+  fireEvent.click(await within(await waitFor(rail)).findByText("Warm"));
+  fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+  const box = screen.getByLabelText<HTMLSelectElement>("Reasoning effort");
+  expect(box.value).toBe("max");
+  expect(screen.getByRole("option", { name: "max (not offered)" })).toBeDisabled();
+});
+
+test("Preview on… shows the server's controls for that model", async () => {
+  vi.mocked(api.readConnectionCapabilities).mockResolvedValue({
+    provider_preset: {}, need: "generate", hidden: [], reason: null,
+    groups: { fits: [{ id: "vendor/mara", name: "Mara", reason: "", capabilities: {} }],
+              unverified: [] },
+  } as never);
+  vi.mocked(api.previewControls).mockResolvedValue({
+    requested: {}, effective: {},
+    controls: {
+      temperature: { state: "supported", wire: "temperature", why: "", source: "adapter" },
+      reasoning_effort: { state: "translated", wire: "reasoning", why: "", source: "catalog" },
+      min_p: { state: "unsupported", wire: null, why: "not on this endpoint", source: "adapter" },
+    },
+  } as never);
+  render(<SamplerPresetEditor />);
+  fireEvent.click(await within(await waitFor(rail)).findByText("Warm"));
+  const preview = await screen.findByRole("region", { name: "Preview on…" });
+  fireEvent.change(within(preview).getByLabelText("Provider"), { target: { value: "saltmarch" } });
+  fireEvent.click(await within(preview).findByRole("radio", { name: "Mara" }));
+  // The picker asked what a turn needs, and the readout is the server's answer.
+  expect(api.readConnectionCapabilities).toHaveBeenCalledWith("saltmarch", "generate");
+  await waitFor(() => expect(api.previewControls).toHaveBeenCalledWith(
+    { preset_id: "warm", provider: "saltmarch", model: "vendor/mara" }));
+  const controls = await within(preview).findByRole("list", { name: "Controls" });
+  expect(within(controls).getByText("Reasoning effort")).toBeInTheDocument();
+  expect(within(controls).getByText("reasoning")).toBeInTheDocument();
+  expect(within(controls).getByText(/not on this endpoint/)).toBeInTheDocument();
+  expect(within(controls).queryByText("Temperature")).toBeNull();
+});
+
+test("a newer store disables editing", async () => {
+  vi.mocked(api.getInferenceSettings).mockResolvedValue(settings({ newer: true }));
+  render(<SamplerPresetEditor />);
+  expect(await screen.findByText(/upgraded by a newer Grimoire/)).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "+ New preset" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Import from SillyTavern…" })).toBeDisabled();
+  fireEvent.click(within(rail()).getByText("Warm"));
+  expect(screen.getByRole("button", { name: "Edit" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Delete" })).toBeDisabled();
+  // Reading and previewing are not writes.
+  expect(screen.getByRole("region", { name: "Preview on…" })).toBeInTheDocument();
 });

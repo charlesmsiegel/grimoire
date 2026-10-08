@@ -2,20 +2,30 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
-  api, type SamplerImportReport, type SamplerParams,
+  api, type InferenceSettings, type SamplerImportReport, type SamplerParams,
   type SamplerParamSpec, type SamplerPreset,
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { Field } from "./Field";
+import { ControlsReadout } from "./inference/ControlsReadout";
+import { InferenceBanner } from "./inference/InferenceBanner";
+import { ProviderModelPicker, type ProviderModel } from "./inference/ProviderModelPicker";
 
-/** Named sampler presets: temperature, top-p and the rest, saved as JSON under
- *  the data directory and attached to a connection or a route elsewhere.
+/** Presets (spec 4.3): temperature, top-p and the rest, plus a
+ *  provider-neutral reasoning effort, saved as JSON under the data directory
+ *  (`sampler_presets/`, a name the store keeps) and attached to a role or a
+ *  route elsewhere.
  *
  *  The list/detail editor CLAUDE.md asks of every record list: a rail of
  *  presets, a read-only view with an Edit step, and `+ New` straight to the
  *  form. Saves itself, like the pricing table beside it on the Settings page:
  *  it writes its own files through its own routes, and folding it into the
- *  config draft would make one Save mean two writes. */
+ *  config draft would make one Save mean two writes.
+ *
+ *  The form is drawn from the server's table, so a control the server adds is
+ *  a row here with no change on this side; **Preview on…** asks the server what
+ *  the viewed preset sends on one provider's model (spec 8), and this side
+ *  keeps no capability table of its own. */
 
 /** A stop string as the form shows it: control characters spelled as escapes,
  *  so `\nYou:` — the most common stop string there is — survives a one-per-line
@@ -43,13 +53,16 @@ function toDraft(p: SamplerPreset): Draft {
 }
 
 /** The draft as the params the server stores. Blank means unset. A number that
- *  is not one is sent as typed, so the server's 400 names the parameter. */
+ *  is not one is sent as typed, so the server's 400 names the parameter; a
+ *  choice is sent as chosen. */
 function toParams(d: Draft, table: SamplerParamSpec[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const spec of table) {
     const typed = (d.values[spec.name] ?? "").trim();
     if (!typed) continue;
-    if (spec.kind === "stop") {
+    if (spec.kind === "choice") {
+      out[spec.name] = typed;
+    } else if (spec.kind === "stop") {
       const lines = (d.values[spec.name] ?? "").split("\n").filter((l) => l !== "");
       if (lines.length) out[spec.name] = lines.map(decodeStop);
     } else {
@@ -117,6 +130,12 @@ export function SamplerPresetEditor() {
   const fileInput = useRef<HTMLInputElement>(null);
   /** Which file pick is current; a slower read of an earlier pick is ignored. */
   const picked = useRef(0);
+  /** The inference view: whether a newer build owns this store's model
+   *  settings, and the providers a preview can be asked on. */
+  const [settings, setSettings] = useState<InferenceSettings | null>(null);
+  /** The model "Preview on…" asks about. Kept across presets, so flicking
+   *  through them compares each on the same model. */
+  const [previewOn, setPreviewOn] = useState<ProviderModel>({ provider: "", model: "" });
 
   const reload = useCallback(() => api.listSamplerPresets().then((r) => {
     setPresets(r.presets);
@@ -127,6 +146,18 @@ export function SamplerPresetEditor() {
   useEffect(() => {
     reload().catch((err: unknown) => setError(errorText(err)));
   }, [reload]);
+  useEffect(() => {
+    // A failed read leaves it null, which blocks nothing: the server refuses
+    // what it must on its own. It also offers no providers to preview on.
+    api.getInferenceSettings().then(setSettings).catch(() => setSettings(null));
+  }, []);
+
+  // A preset write is refused only by a newer store (409 `newer_format`): the
+  // preset routes do not wait on the migration, so neither does this editor,
+  // and the upgrade-pending banner -- which says settings can be changed once
+  // the upgrade finishes -- would be untrue here.
+  const newer = !!settings?.newer;
+  const banner = settings?.newer ? { ...settings.migration, state: "newer" as const } : null;
 
   const current = presets.find((p) => p.id === pid) ?? null;
 
@@ -188,7 +219,7 @@ export function SamplerPresetEditor() {
 
   async function remove() {
     if (!current) return;
-    if (!window.confirm(`Delete the sampler preset “${current.name}”?`)) return;
+    if (!window.confirm(`Delete the preset “${current.name}”?`)) return;
     setBusy(true);
     try {
       await api.deleteSamplerPreset(current.id);
@@ -248,8 +279,10 @@ export function SamplerPresetEditor() {
   return (
     <div className="editor">
       <div className="editor-list">
-        <button className="primary new" onClick={startNew}>+ New preset</button>
-        <button className="subtle new" onClick={startImport}>Import from SillyTavern…</button>
+        <button className="primary new" onClick={startNew} disabled={newer}>+ New preset</button>
+        <button className="subtle new" onClick={startImport} disabled={newer}>
+          Import from SillyTavern…
+        </button>
         {presets.map((p) => (
           <button key={p.id} className={"row" + (pid === p.id ? " active" : "")}
                   onClick={() => open(p.id)}>
@@ -259,11 +292,12 @@ export function SamplerPresetEditor() {
       </div>
 
       <div className="editor-body">
+        <InferenceBanner status={banner} />
         {error && <div className="banner">{error}</div>}
 
         {mode === "view" && !current && (
           <p className="empty-state">
-            {presets.length ? "Pick a preset to read it." : "No sampler presets yet."}
+            {presets.length ? "Pick a preset to read it." : "No presets yet."}
           </p>
         )}
 
@@ -291,10 +325,22 @@ export function SamplerPresetEditor() {
                   <Markdown remarkPlugins={[remarkGfm]}>{current.notes}</Markdown>
                 )}
               </div>
+              <section className="preset-preview" aria-label="Preview on…">
+                <h4>Preview on…</h4>
+                <p className="field-hint">
+                  What this preset sends on one provider's model, as the server
+                  will send it: a control the model cannot take is kept in the
+                  preset and left off the wire.
+                </p>
+                <ProviderModelPicker needs={["generate"]} providers={settings?.providers ?? []}
+                                     value={previewOn} onChange={setPreviewOn} />
+                <ControlsReadout presetId={current.id} provider={previewOn.provider}
+                                 model={previewOn.model} />
+              </section>
             </div>
             <aside className="detail-sidebar">
               <div className="form-actions">
-                <button className="subtle" onClick={startEdit}>Edit</button>
+                <button className="subtle" onClick={startEdit} disabled={newer}>Edit</button>
               </div>
               <div className="side-section">
                 <h4>Source</h4>
@@ -305,14 +351,13 @@ export function SamplerPresetEditor() {
               <div className="side-section">
                 <h4>Where it applies</h4>
                 <span className="field-hint">
-                  Attach it to a connection on the Connections page, or to a job
-                  under Model routing — globally here, or per campaign in the scene
-                  inspector.
+                  Attach it to a role or a route on the Models page, or per
+                  campaign in the scene inspector.
                 </span>
               </div>
               <div className="side-section">
                 <button className="subtle danger" onClick={() => void remove()}
-                        disabled={busy}>Delete</button>
+                        disabled={busy || newer}>Delete</button>
               </div>
             </aside>
           </div>
@@ -326,10 +371,26 @@ export function SamplerPresetEditor() {
             </Field>
             <p className="field-hint">
               Leave a box blank to leave that parameter at the provider's default.
-              A parameter the connection's backend cannot take is not sent, and the
-              routing picker and scene inspector say which.
+              A parameter a model cannot take is kept here and not sent, and
+              Preview on… says which.
             </p>
-            {table.map((spec) => spec.kind === "stop" ? (
+            {table.map((spec) => spec.kind === "choice" ? (
+              <Field key={spec.name} label={spec.label}>
+                <select value={draft.values[spec.name] ?? ""}
+                        onChange={(e) => setDraft({ ...draft,
+                          values: { ...draft.values, [spec.name]: e.target.value } })}>
+                  <option value="">Provider's default</option>
+                  {(spec.choices ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
+                  {/* A stored value the table no longer offers (a hand edit, a
+                      newer build's level) is shown as itself, not as the
+                      default it is not; saving it asks the server to refuse. */}
+                  {draft.values[spec.name] && !(spec.choices ?? []).includes(draft.values[spec.name])
+                    && <option value={draft.values[spec.name]} disabled>
+                         {draft.values[spec.name]} (not offered)
+                       </option>}
+                </select>
+              </Field>
+            ) : spec.kind === "stop" ? (
               <Field key={spec.name} label={spec.label}
                      hint={`One per line, at most ${spec.max_entries}. Write a line break as \\n.`}>
                 <textarea rows={3} value={draft.values[spec.name] ?? ""}
@@ -355,7 +416,7 @@ export function SamplerPresetEditor() {
             </Field>
             <div className="form-actions">
               <button className="primary" onClick={() => void save()}
-                      disabled={busy || !draft.name.trim()}>Save</button>
+                      disabled={busy || newer || !draft.name.trim()}>Save</button>
               <button className="subtle" onClick={() => setMode("view")}>Cancel</button>
             </div>
           </div>
@@ -390,7 +451,7 @@ export function SamplerPresetEditor() {
             </p>
             <div className="form-actions">
               <button className="primary" onClick={() => void runImport()}
-                      disabled={busy || !file}>Import</button>
+                      disabled={busy || newer || !file}>Import</button>
               <button className="subtle"
                       onClick={() => { retireReads(); setFile(null); setMode("view"); }}>
                 Cancel

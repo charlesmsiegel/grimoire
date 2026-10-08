@@ -212,6 +212,13 @@ test("New campaign navigates to the wizard", async () => {
   expect(navigate).toHaveBeenCalledWith("/campaigns/new");
 });
 
+test("the column's footer leads to the providers, not the old connections page", async () => {
+  renderView();
+  expect(await screen.findByRole("link", { name: /^Providers/ }))
+    .toHaveAttribute("href", "/providers");
+  expect(screen.queryByRole("link", { name: /^Connections/ })).not.toBeInTheDocument();
+});
+
 test("with no worlds the empty state names what is missing and where to go", async () => {
   (api.listWorlds as any).mockResolvedValue([]);
   renderView();

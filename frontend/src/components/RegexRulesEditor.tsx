@@ -96,7 +96,8 @@ type Failure = { field: string; detail: string };
  *  here, which is the `off` list, and to change one you switch it off and add
  *  your own. The global and connection levels sit on nothing, so they have no
  *  `off` and no switch. */
-export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
+export function RegexRulesEditor({ scope, readOnly = false }:
+  { scope: RegexScope; readOnly?: boolean }) {
   const scopeKey = JSON.stringify(scope);
   const apiScope = useMemo(() => JSON.parse(scopeKey) as RegexScope, [scopeKey]);
   const canOff = scope.kind === "world" || scope.kind === "campaign";
@@ -107,6 +108,9 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
   const [mode, setMode] = useState<"view" | "edit">("view");
   const [draft, setDraft] = useState<Draft>(BLANK);
   const [saving, setSaving] = useState(false);
+  // What holds every write: one in flight, or a level the caller says may not
+  // be written (a store a newer build owns). Reading and testing stay open.
+  const held = saving || readOnly;
   const [error, setError] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
   // The connections, for naming the connection rules a world or a campaign
@@ -189,6 +193,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
   async function commit(next: RegexLayer, formIndex?: number):
       Promise<{ ok: boolean; current: boolean; layer?: RegexLayer }> {
     const mine = live.current;
+    if (readOnly) return { ok: false, current: true };
     setSaving(true); setError(null); setFailure(null);
     try {
       // The one place a body is built: the global and connection levels sit on
@@ -293,7 +298,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         <aside className="detail-sidebar">
           <div className="form-actions">
             {e === null ? (
-              <button className="subtle" onClick={() => startEdit(r)} disabled={saving}>Edit</button>
+              <button className="subtle" onClick={() => startEdit(r)} disabled={held}>Edit</button>
             ) : (
               <span className="field-hint">
                 {worldOff(e)
@@ -361,7 +366,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
           {e === null && (
             <div className="side-section">
               <div className="form-actions">
-                <button className="subtle" disabled={saving} onClick={() => remove(r)}>Delete</button>
+                <button className="subtle" disabled={held} onClick={() => remove(r)}>Delete</button>
               </div>
             </div>
           )}
@@ -468,7 +473,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         <div className="form-actions">
           <button className="subtle" disabled={saving}
                   onClick={() => { setMode("view"); setError(null); setFailure(null); }}>Cancel</button>
-          <button className="primary" disabled={saving || problem !== null} onClick={() => void save()}>
+          <button className="primary" disabled={held || problem !== null} onClick={() => void save()}>
             Save
           </button>
         </div>
@@ -501,7 +506,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
                 {canOff && (
                   <input type="checkbox" title={worldOff(e) ? "Switched off by the world" : "Use here"}
                          aria-label={`Use ${labelOf(e.rule)} here`}
-                         checked={!e.off && !worldOff(e)} disabled={saving || worldOff(e)}
+                         checked={!e.off && !worldOff(e)} disabled={held || worldOff(e)}
                          onChange={(ev) => setUsed(e, ev.target.checked)} />
                 )}
               </div>
@@ -512,7 +517,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         {layer.rules.map((r, i) => (
           <div key={r.id} className="regex-line">
             <input type="checkbox" title="Enabled" aria-label={`Enable ${labelOf(r)}`}
-                   checked={r.enabled} disabled={saving}
+                   checked={r.enabled} disabled={held}
                    onChange={(ev) => setEnabled(r, ev.target.checked)} />
             <button className={"row" + (selId === r.id ? " active" : "") + (r.enabled ? "" : " off")}
                     aria-current={selId === r.id ? "true" : undefined}
@@ -521,17 +526,17 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
             </button>
             <span className="row-actions">
               <button type="button" aria-label={`Move ${labelOf(r)} up`}
-                      disabled={saving || i === 0} onClick={() => move(i, -1)}>↑</button>
+                      disabled={held || i === 0} onClick={() => move(i, -1)}>↑</button>
               <button type="button" aria-label={`Move ${labelOf(r)} down`}
-                      disabled={saving || i === layer.rules.length - 1} onClick={() => move(i, 1)}>↓</button>
+                      disabled={held || i === layer.rules.length - 1} onClick={() => move(i, 1)}>↓</button>
             </span>
           </div>
         ))}
-        <button className="primary new" onClick={startNew}>+ New rule</button>
+        <button className="primary new" onClick={startNew} disabled={readOnly}>+ New rule</button>
         {/* Held while a save is in flight: an import appends to the level as
             the server has it, and a whole-layer PUT landing after it would
             write the layer back without the rules it added. */}
-        <button className="subtle new" disabled={saving} onClick={() => setImporting(true)}>Import…</button>
+        <button className="subtle new" disabled={held} onClick={() => setImporting(true)}>Import…</button>
         <details className="regex-test-panel">
           <summary>Test rules</summary>
           <RegexTestPane key={scopeKey} scope={apiScope} draft={testDraft} connections={connections} />
@@ -555,7 +560,7 @@ export function RegexRulesEditor({ scope }: { scope: RegexScope }) {
         )}
       </div>
       {importing && (
-        <RegexImportDialog scope={apiScope} held={saving} onClose={() => setImporting(false)}
+        <RegexImportDialog scope={apiScope} held={held} onClose={() => setImporting(false)}
                            onDone={() => { setImporting(false); void reload(); }} />
       )}
     </div>

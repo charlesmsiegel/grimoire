@@ -136,12 +136,16 @@ def post_scene(cid: str, body: NewScene, request: Request):
     # `reserve_turn` takes the same lock across its identity capture and its
     # reservation -- which is what makes holding it here exclude a turn rather
     # than merely narrow the window before one.
+    # The model chat would run on here, stamped on the scene. Resolved before
+    # the hold: it only reads (config, connection files and campaign.md), and
+    # a choice that changes in between is a stamp, not a transcript write.
+    _conn, model = _chat_target(cid)
     try:
         with store.locks.campaign_lock(cid):
             if store.scenes.create_would_repad(cid):
                 runs.require_campaign_free(request.app, cid)
             return {"id": store.scenes.create_scene(cid, title, body.suggested_date,
-                                                    pcless=body.pcless)}
+                                                    pcless=body.pcless, model=model)}
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
     except OSError as exc:
@@ -230,6 +234,7 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
              "role": _resolve_role(ref.kind, ref.role, body.pcless),
              "version": _actor_version(cid, ref.kind, ref.id, ref.version)}
             for ref in body.cast]
+    _conn, model = _chat_target(cid)    # `post_scene`'s stamp
     try:
         # The same hold, for the same reason, as `post_scene`: crossing the
         # number-width boundary repads every scene in the campaign, renaming
@@ -248,7 +253,7 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
             if widens:
                 runs.require_campaign_free(request.app, cid)
             sid = store.scenes.create_scene(cid, body.title or "Imported scene",
-                                            pcless=body.pcless)
+                                            pcless=body.pcless, model=model)
     except store.campaigns.CampaignNotFound:
         # `from None`: the store's own exception says nothing the caller can act
         # on beyond the 404 -- the same reading `_campaign_root_or_404` takes.
@@ -5115,6 +5120,19 @@ def put_scene_response(cid: str, sid: str, body: ResponseSettings):
     return {"ok": True}
 
 
+def _chat_target(cid: str) -> tuple[dict | None, str]:
+    """What chat would run on in campaign `cid`: the routed connection (None
+    when nothing resolves) and its effective model ("" then).
+
+    A display read -- the context view's, and the `model` a new scene is
+    stamped with (`post_scene`, `post_scene_import`) -- so it never refuses: a
+    keyless or incapable primary is still where chat would go, and the turn
+    itself is what reports it."""
+    # routing-ok: what chat WOULD run on, shown and stamped on a new scene; never refuses
+    conn = inference.resolve("chat", cid).conn
+    return conn, (effective_model(conn) if conn is not None else "")
+
+
 @router.get("/campaigns/{cid}/scenes/{sid}/context")
 def get_scene_context(cid: str, sid: str):
     """The context breakdown, as packed. `total_tokens` is what was actually
@@ -5128,9 +5146,7 @@ def get_scene_context(cid: str, sid: str):
     this model's own (`tokens.counting`) -- for most backends it is not, and the
     inspector marks the counts as estimates."""
     _require_scene(cid, sid)
-    # routing-ok: the context view shows what chat WOULD run on; it must never refuse
-    conn = inference.resolve("chat", cid).conn
-    model = effective_model(conn) if conn is not None else ""
+    conn, model = _chat_target(cid)
     # What the next turn would send, pictures included (#377): the Images row is
     # present exactly when they would reach this scene's routed connection. And
     # what the next ordinary turn's sampler preset sends on this connection,

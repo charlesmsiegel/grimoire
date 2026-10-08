@@ -279,7 +279,7 @@ def test_a_check_that_never_answers_becomes_a_verdict_rather_than_a_held_request
     stalled = StallingGateway(where="check")
     client.app.dependency_overrides[routes.get_llm] = lambda: stalled
 
-    r = client.post("/api/llm-connections/claude/health")
+    r = client.post("/api/llm-connections/claude/health", json={"confirm": True})
 
     assert (r.status_code, r.json()["ok"], r.json()["kind"]) == (200, False, "timeout")
 
@@ -326,7 +326,8 @@ def test_a_claude_connection_is_checkable_though_it_has_no_catalog(client):
     fake = FakeCatalog()
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
 
-    assert client.post("/api/llm-connections/claude/health").json()["ok"] is True
+    assert client.post("/api/llm-connections/claude/health",
+                       json={"confirm": True}).json()["ok"] is True
     assert drafts.post(client, "/api/llm-connections/claude/models/refresh").status_code == 400
 
 
@@ -434,7 +435,9 @@ def test_a_connection_deleted_mid_update_is_still_a_404(client, monkeypatch):
 
     monkeypatch.setattr(client.app.state.health, "forget", delete_it_too)
 
-    r = client.put("/api/llm-connections/openrouter", json={"name": "Renamed"})
+    # A key change, not a rename: a rename is rev-neutral now, and an edit that
+    # keeps the rev keeps the verdict, so it never reaches `forget` at all.
+    r = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-other"})
 
     assert r.status_code == 404
 

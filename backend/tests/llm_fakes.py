@@ -389,10 +389,11 @@ class StallingGateway(FakeCatalog):
     """A gateway whose call never answers — for the ceilings that exist to cut
     one off (#146, #272).
 
-    `where` names which call hangs, because the two ceilings are different
-    things: `check` is bounded by the health route's own constant, and
-    `complete` by `llm_call_budget`. Bounded rather than forever so a
-    regression in either fails the suite in seconds instead of hanging it.
+    `where` names which call hangs, because the ceilings are different
+    things: `check` is bounded by the health route's own constant, `single`
+    (the model test's probe) by the model test's, and `complete` by
+    `llm_call_budget`. Bounded rather than forever so a regression in any
+    fails the suite in seconds instead of hanging it.
     """
 
     def __init__(self, where="check", seconds=STALL_SECONDS):
@@ -409,6 +410,11 @@ class StallingGateway(FakeCatalog):
         if self.where == "complete":
             await asyncio.sleep(self.seconds)
         return await super().complete(messages, conn, usage)
+
+    async def single(self, messages, conn, usage=None) -> str:
+        if self.where == "single":
+            await asyncio.sleep(self.seconds)
+        return await super().single(messages, conn, usage)
 
 
 # ---- provider doubles ----

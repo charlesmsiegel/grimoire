@@ -11,7 +11,7 @@ import { formatChord } from "../shortcuts/keys";
  *  child route (which sits under the Play row's path too). */
 const PATHS = [
   "/", "/worlds", "/modules", "/styles", "/response-presets", "/climates",
-  "/connections", "/library", "/search", "/stats", "/config", "/open",
+  "/providers", "/models", "/models/role/primary", "/library", "/search", "/stats", "/config", "/open",
   "/campaigns/c1", "/campaigns/c1/scenes/s1", "/campaigns/c1/ledger",
   "/campaigns/c1/sheets", "/campaigns/c1/costs", "/campaigns/c1/world",
   "/campaigns/c1/timeline", "/campaigns/c1/scenes/s1/wrap-up", "/campaigns/c1/graph",
@@ -55,9 +55,17 @@ test("Library survives its own redirect", () => {
   // existed.
   expect(activeIn(APP_ROWS, "/library")).toEqual(["library"]);
   expect(activeIn(APP_ROWS, "/worlds")).toEqual(["library"]);
-  expect(activeIn(APP_ROWS, "/connections")).toEqual(["library"]);
+  expect(activeIn(APP_ROWS, "/providers")).toEqual(["library"]);
   // ...without lighting on a route that merely shares a prefix.
   expect(activeIn(APP_ROWS, "/modules-of-my-own")).toEqual([]);
+});
+
+test("/models is Settings' page, under its own title", () => {
+  expect(activeIn(APP_ROWS, "/models")).toEqual(["config"]);
+  expect(activeIn(APP_ROWS, "/models/route/summary")).toEqual(["config"]);
+  expect(titleFor("/models/role/fast")).toBe("Models");
+  // ...without lighting on a route that merely shares a prefix.
+  expect(activeIn(APP_ROWS, "/models-of-my-own")).toEqual([]);
 });
 
 test("a campaign child lights its own row and not Overview", () => {

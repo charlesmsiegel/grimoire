@@ -14,7 +14,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from grimoire.llm import LLMClient
+from fastapi import HTTPException
+
+from grimoire.llm import LLMClient, effective_model
+from grimoire.routes.common import require_inference
 from grimoire.store import (
     absorb,
     appearances,
@@ -22,12 +25,41 @@ from grimoire.store import (
     campaigns,
     characters,
     chronicle,
-    llm_connections,
     locks,
     overlay,
     scenes,
 )
+from grimoire.store.inference import resolve as inference
 from grimoire.store.paths import slugify
+
+#: The task an ingest generates under. It IS an absorb -- the end-of-scene
+#: extraction, `store/routing.py`'s `absorb` route -- so it runs wherever the
+#: app's own absorb of this campaign would: the route's choice, the campaign's
+#: overrides, the role and its fallback, the model's facts and the route's
+#: preset. Never `active_connection_id`, which is frozen for older builds once
+#: the store is at format 2 and names nothing a user chose since.
+ABSORB_TASK = "absorb"
+
+
+def absorb_connection(cid: str) -> tuple[dict | None, str]:
+    """`(conn, "")`: the connection dict the app's absorb would send for `cid`
+    -- resolved and refused by the seam itself (`require_inference`), so the
+    script cannot drift from the app on a missing key or a model that cannot
+    do the job. `(None, why)` when the seam refuses, with its reason."""
+    try:
+        return require_inference(ABSORB_TASK, cid).conn, ""
+    except HTTPException as exc:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            detail = detail.get("detail") or detail.get("kind") or ""
+        return None, str(detail)
+
+
+def chat_model(cid: str) -> str:
+    """The model chat would run on in `cid` -- what a new scene is stamped with
+    (`routes.scenes._chat_target`'s read). A display read: never refuses."""
+    conn = inference.resolve("chat", cid).conn
+    return effective_model(conn) if conn is not None else ""
 
 
 def ensure_campaign(name: str, world_id: str) -> str:
@@ -91,7 +123,7 @@ def build_scene(cid: str, scene: dict) -> str:
     for spec in scene.get("new_locations", []):
         ensure_location(cid, spec)
 
-    sid = scenes.create_scene(cid, scene["title"])
+    sid = scenes.create_scene(cid, scene["title"], model=chat_model(cid))
     if scene.get("date"):
         sid = scenes.set_datetime(cid, sid, scene["date"])["id"]
     if scene.get("location"):
@@ -696,16 +728,10 @@ def main() -> int:
         return 0 if ok else 1
 
     scene = json.loads(args.input.read_text(encoding="utf-8"))
-    conn = llm_connections.get_active()
+    conn, why = absorb_connection(args.campaign)
     if conn is None:
-        print("error: no LLM connection selected (set one up in grimoire's Configuration page)",
+        print(f"error: {why} (absorb runs on what grimoire's Models page chooses for it)",
               file=sys.stderr)
-        return 1
-    if conn["kind"] == "openrouter" and not conn["api_key"]:
-        print("error: the active OpenRouter connection has no key set", file=sys.stderr)
-        return 1
-    if conn["kind"] == "openai_compatible" and not conn["base_url"]:
-        print("error: the active custom connection has no base URL set", file=sys.stderr)
         return 1
     client = LLMClient()
     result = asyncio.run(ingest_one_scene(args.campaign, scene, client, conn))

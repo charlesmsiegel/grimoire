@@ -481,7 +481,7 @@ def _chore_embeddings(ctx: _Ctx) -> dict | None:
         "why": "Grimoire still uses basic matching to find possible overlaps in your ledgers. "
                "Semantic matching improves detection when the same story business is phrased "
                "differently.",
-        "fix": "/config?section=semantic", "fix_label": "Embeddings",
+        "fix": "/models/role/embedding", "fix_label": "Embeddings",
     }
 
 
@@ -956,7 +956,7 @@ def _items_unpriced(cid: str) -> list[dict]:
 def _items_embeddings(cid: str) -> list[dict]:
     return [{"id": "embeddings", "label": "Semantic matching",
              "detail": "No embeddings connection and model are set",
-             "fix": "/config?section=semantic"}]
+             "fix": "/models/role/embedding"}]
 
 
 #: What a continuity item says it is, in §30's hedged wording.

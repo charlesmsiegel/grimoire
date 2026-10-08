@@ -3,6 +3,7 @@ sheet/audit/absorb store fixtures."""
 
 import importlib
 import json
+import os
 import threading
 import time
 
@@ -31,6 +32,14 @@ from tests.llm_fakes import FakeOpenRouter, HeldOpenRouter
 # than once per app. Changes how often that work is done, not what it produces
 # -- see tests/route_memo.py; GRIMOIRE_TEST_ROUTE_MEMO=0 turns it off.
 route_memo.install()
+
+# The inference layout switch stays OFF in the suite (`store.inference_keys
+# .AUTOMIGRATE_ENV`): a fresh tmp store is not born at format 2, and nothing
+# migrates on its own. Almost every test builds LEGACY settings on a fresh
+# store, which a store born current would ignore. A test of the switch itself
+# unsets it with `monkeypatch.delenv`; a migration test calls the migration.
+# Set at import, not in a fixture, so a subprocess a test spawns inherits it.
+os.environ["GRIMOIRE_INFERENCE_AUTOMIGRATE"] = "0"
 
 
 @pytest.fixture(autouse=True, scope="session")

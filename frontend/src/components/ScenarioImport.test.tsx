@@ -227,7 +227,7 @@ test("a card the model could not be read for offers the local-model recovery", a
   pickFile();
   fireEvent.click(screen.getByRole("button", { name: /read card/i }));
   await screen.findByText(/Couldn.t reach the model provider/);
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
 });
 
 test("the entry category options are narrowed the same way the lorebook dialog's are", async () => {

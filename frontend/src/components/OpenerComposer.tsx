@@ -3,6 +3,7 @@ import { api, type CharacterSummary } from "../api/client";
 import { THUMB, THUMB_REV } from "../api/thumbs";
 import type { OpenerContribution, OpenerSpeaker } from "../api/stream";
 import { Portrait } from "./Portrait";
+import { NeedsModel } from "./inference/NeedsModel";
 
 const serialize = (parts: OpenerContribution[]) =>
   parts.map((part) => `**${part.speaker}:** ${part.content}`).join("\n\n");
@@ -179,7 +180,7 @@ export function OpenerComposer({ cid, sid, ready, initialPrompt, greeting, chara
   return (
     <div>
       <div className="role">Generate an opener</div>
-      {!ready && <div className="field-hint">Set up an LLM connection in Config to generate.</div>}
+      {!ready && <NeedsModel />}
       {greeting && (
         <>
           <div className="picker">

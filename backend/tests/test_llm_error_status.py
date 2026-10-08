@@ -345,10 +345,10 @@ def test_the_browser_and_the_backend_agree_on_what_a_provider_failure_is():
 
 
 def test_the_browser_and_the_backend_agree_on_which_kinds_have_a_catalog():
-    """Same drift, one layer along (#149): `ConnectionEditor` decides whether to
-    offer a Fetch-models button, and a button offered for a kind the route
+    """Same drift, one layer along (#149): `ProvidersView` decides whether to
+    offer a catalog Refresh button, and a button offered for a kind the route
     refuses can only ever produce a 400."""
-    source = (FRONTEND / "components" / "ConnectionEditor.tsx").read_text(encoding="utf-8")
+    source = (FRONTEND / "routes" / "ProvidersView.tsx").read_text(encoding="utf-8")
     block = re.search(r"LISTABLE: LLMConnectionKind\[\] = \[(.*?)\]", source, re.DOTALL)
     assert block, "LISTABLE is no longer an array literal — this guard reads it as text"
     assert set(re.findall(r'"([a-z_]+)"', block.group(1))) == set(llm.LISTABLE_KINDS)

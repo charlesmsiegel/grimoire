@@ -68,9 +68,11 @@ import logging
 import shutil
 
 from . import atomic, branch, cascade, image_scopes, locks, replay, revision, scene_ids
+from .campaigns import lifecycle as campaigns_lifecycle
 from .campaigns import paths as campaigns_paths
 from .campaigns import read as campaigns_read
-from .frontmatter import dump_frontmatter, parse_frontmatter
+from .frontmatter import parse_frontmatter
+from .inference import migrate as inference_migrate
 from .paths import ensure_home, now_iso, slugify, uniquify
 from .regex import rewrites as regex_rewrites
 from .scenes import identity as scenes_identity
@@ -603,10 +605,20 @@ def _copy(cid: str, new_cid: str, name: str, from_scene: str | None) -> None:
         meta[FORKED_AT_KEY] = from_scene
     else:
         meta.pop(FORKED_AT_KEY, None)
-    atomic.write_text(mp, dump_frontmatter(meta, body))
+    # Through the birth seam, as a created campaign is: a fork of a campaign
+    # the migration has not reached, landing after the switch, is born
+    # translated and marked rather than left unmarked behind the migration's
+    # list. The fork's own lock is held (`fork_campaign`'s `hold_all`).
+    campaigns_lifecycle.publish_birth(new_cid, meta, body, translate=_translated)
     campaigns_paths.campaign_activity_path(new_cid).unlink(missing_ok=True)
     _marker_path(new_cid).unlink(missing_ok=True)
     campaigns_paths.campaign_root(new_cid).joinpath(revision.FILENAME).unlink(missing_ok=True)
+
+
+def _translated(meta: dict[str, str]) -> dict[str, str]:
+    """A copied campaign's legacy route keys as the migration writes them
+    (`publish_birth`'s `translate`)."""
+    return inference_migrate.campaign_fields(meta, inference_migrate.connection_reader())
 
 
 def _cut_after(cid: str, from_scene: str) -> dict:

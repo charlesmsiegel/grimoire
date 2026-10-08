@@ -8,6 +8,10 @@ scope, what a per-call override resolves to, what the display surfaces say
 breakdown's sampling), what `store.embed_space.resolve` returns, and the
 routing GET endpoints' bodies.
 
+The routing endpoints were retired in slice C (Task 8): `observe` no longer
+reads them, and the equivalence tests compare every state without the
+`routing` key the JSON still holds (`test_inference_equivalence.RETIRED`).
+
 The point is the refactor of that layer (inference slice A): the resolver is
 rewritten underneath all of these call sites, and `test_inference_equivalence`
 holds every one of them to this file. **The JSON is frozen -- it records what
@@ -237,6 +241,31 @@ def _pre_connections(client: TestClient) -> dict:
     return ctx
 
 
+#: States whose store holds a connection FILE that cannot be read -> its id.
+#: The migration refuses to switch over one (it cannot tell what that
+#: connection's model was, and would write the guess down for good), and says
+#: which; removing the file is the remedy its reason points at. Every reader
+#: but the migration's already takes an unreadable connection for an absent
+#: one, so nothing this module observes moves with it.
+UNREADABLE: dict[str, str] = {"embed_with_dangling": "spare"}
+
+
+def migrate_state(state: str):
+    """`migrate.ensure()` on a store `STATES[state]` built: for a state in
+    `UNREADABLE`, the refused first run is checked and the file removed before
+    the run that switches. Returns the last run's status."""
+    from grimoire.store.inference import migrate
+
+    got = migrate.ensure()
+    if state in UNREADABLE:
+        conn_id = UNREADABLE[state]
+        assert got.state == "failed" and f"connection {conn_id}" in got.reason, got
+        assert not store.inference_keys.is_current(store.read_config())
+        (store.home() / "llm_connections" / f"{conn_id}.md").unlink()
+        got = migrate.ensure()
+    return got
+
+
 #: state name -> a builder that fills a fresh store and returns `{"cid": ...}`.
 STATES: dict[str, Callable[[TestClient], dict]] = {
     "fresh": _fresh,
@@ -385,8 +414,6 @@ def observe(client: TestClient, ctx: dict) -> dict:
         "embedding": store.embed_space.resolve(),
         "embedding_cfgs": {name: store.embed_space.resolve(cfg)
                            for name, cfg in EMBEDDING_CFGS.items()},
-        "routing": {"global": client.get("/api/routing").json(),
-                    "campaign": client.get(f"/api/campaigns/{cid}/routing").json()},
     }
     out = _normalise(out, _revs())
     leftover = re.search(r"[0-9a-f]{16}", json.dumps(out))

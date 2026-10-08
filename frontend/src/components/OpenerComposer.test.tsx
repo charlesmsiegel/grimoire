@@ -66,7 +66,7 @@ test("switching scenes clears a premise that belonged to the last one", async ()
 
 test("without an LLM connection the box still seeds, and says why it cannot run", async () => {
   renderComposer({ initialPrompt: "A debt-collector arrives.", ready: false });
-  await screen.findByText(/Set up an LLM connection/);
+  await screen.findByText(/Choose a provider and a Primary model on the Models page to generate/);
   expect(screen.getByLabelText("Opener prompt")).toHaveValue("A debt-collector arrives.");
   expect(api.opener).not.toHaveBeenCalled();
 });

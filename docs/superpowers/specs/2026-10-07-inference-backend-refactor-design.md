@@ -230,7 +230,10 @@ version:
 
 The legacy fields `model`, `post_process`, `reasoning_effort`,
 `sampler_preset`, `vision`, `prefill` are **left in place, frozen** for older
-builds (§11) and ignored by this version once the store is at format 2.
+builds (§11) and ignored by this version once the store is at format 2 — with
+one exception until slice I: a GLM connection's `reasoning_effort` still
+applies where the effective preset sets none (§11.2 step 4). At format 2 they
+are refused on write (§11.3).
 
 `rev` rules are unchanged in spirit: edits to `name`, `preset`, `billing`,
 `sampler_support` keep it; edits that could change the deployment behind the
@@ -257,13 +260,20 @@ that provider:
                      "error": "404 model does not support embeddings"}
       }
     },
-    "overrides": {"generate": "", "embed": "", "decide_native": "", "structured_output": ""}
+    "overrides": {"generate": "", "vision": "", "embed": "", "decide_native": "",
+                  "structured_output": ""}
   }
 }
 ```
 
-- `vision`: `""` (auto) / `on` / `off` — today's per-connection override, now
-  per model.
+- `vision`: `""` (auto) / `on` / `off` — today's per-connection post-image
+  setting, now per model. `on` is the user's word that the model reads images
+  (a `user` yes, §6.2). `off` **stops post images and nothing else**: it is a
+  preference about what this library sends, not a statement about the model,
+  so it never makes the vision capability `no` and never refuses an image
+  description that serves today (reading it as `no` would break rule 3). A
+  user who knows the model reads no images says so with
+  `overrides.vision = no`.
 - `prefill`, `post_process`: as today, per model.
 - `rates`: per-token rates, same field names and units as `pricing.json`
   (§9).
@@ -278,6 +288,15 @@ that provider:
 A missing entry means "nothing known beyond discovery". The file is read
 defensively (a hand-mangled file reads as empty, never raises), like the
 catalog sidecar.
+
+**Facts are what a call sends.** At format 2 the lowering (§5.4) overlays the
+selected model's facts on the connection dict it builds: `vision`, `prefill`
+and `post_process` come from `facts.json[<model>]` (a missing entry reads as
+`""`, `false`, `none`), never from the legacy connection fields. Otherwise the
+facts panel would write settings nothing sends, and a provider created at
+format 2, which has no legacy fields at all, could never prefill. The legacy
+`sampler_preset` is ignored at format 2 for the same reason: the preset
+cascade (§5.2) supplies the preset, ending at the selection's own.
 
 ### 4.3 Preset
 
@@ -370,8 +389,10 @@ Embedding is not a generate/decide role.
 ### 4.6 Format marker
 
 `config.md` gains `inference_format`. Absent means 1 (the baseline layout);
-this version writes `2` as the last step of migration (§11). Each migrated
-`campaign.md` carries its own `inference_format: 2`.
+this version writes `2` as the last step of migration (§11), or with the
+defaults it first writes into a fresh store (§11.1). Each migrated
+`campaign.md` carries its own `inference_format: 2`, and so does each campaign
+created at format 2 (§11.1).
 
 ---
 
@@ -517,7 +538,11 @@ the most specific choice there is, so it ranks above `preset_<route>`), and a
 **provider-only** override keeps the standing model on the new provider —
 the legacy meaning ("that connection's own model") ends with the legacy
 connection model field. Slice A keeps the legacy meaning and accepts no
-preset field from a request.
+preset field from a request. From slice C the preset is honoured on a
+format-1 store too (a store whose migration keeps failing stays there): the
+legacy layout lowers a named preset exactly as the new one does. The
+provider-only meaning moves only with the format, since a format-1
+connection still has a model of its own.
 
 ### 5.7 The seam
 
@@ -590,10 +615,12 @@ Sources, highest authority first:
    `openrouter` and the OpenAI preset have a native decision endpoint). Nothing
    below may claim past a hard `no` here.
 2. **User assertions** (`source: test` or `source: user`) — a passed test for
-   the current `rev`, then `overrides` (and the per-model `vision`/`prefill`
-   facts), then a failed test. A failed test is `unknown` carrying its error,
-   never `no`: it marks the row unverified without hiding it, and the user's
-   own override can still answer it.
+   the current `rev`, then `overrides` (`overrides.vision = no` is the user's
+   vision `no`), and the per-model `vision: on` and `prefill` facts, then a
+   failed test. A `vision: off` fact is **not** read here: it stops post
+   images and nothing else (§4.2). A failed test is `unknown` carrying its
+   error, never `no`: it marks the row unverified without hiding it, and the
+   user's own override can still answer it.
 3. **Provider catalog** (`source: catalog`) — OpenRouter is fetched with
    `output_modalities=all` (its default is text-only, which is why no embedding
    or decision model reaches the catalog today): `text` → generate,
@@ -607,7 +634,8 @@ Sources, highest authority first:
    (`generate`, `stream`); its hard `no`s (e.g. z.ai: embed) are source 1.
    The legacy connection `vision` field is a **post-image** setting and is not
    read as a vision assertion (the seam honours it as a bridge, §5.3); §4.2's
-   `vision` in model facts is the new-layout assertion.
+   `vision: on` in model facts is the new-layout assertion, and its `off` is
+   no assertion at all.
 5. **Name rule** (`source: name`) — an id containing `embed` → embed `yes`,
    generate `no`.
 6. Otherwise `unknown`.
@@ -689,7 +717,8 @@ not lose the result; it writes its facts in the run's terminal step.
 Free checks (OpenRouter `/key`, a `/models` listing) run as today. The
 Claude-subscription probe generates, so it now asks first (rule 1) — the
 Provider page offers "Check (sends one short message)" instead of checking
-automatically.
+automatically, and the server refuses that check without `confirm: true`
+(§12), so no client can spend on it unasked.
 
 ---
 
@@ -706,7 +735,7 @@ automatically.
   `inference.resolve` and the existing `LLMClient`.
 - `store/locks.py` classifies the new modules: global config modules are
   `OUTSIDE_DOMAIN` (they take no campaign lock), except `migrate.py`'s campaign
-  step, which takes `campaign_lock(cid)` per campaign.
+  step, which takes `campaign_lock_nowait(cid)` per campaign.
 
 ### 7.2 `generate`
 
@@ -746,7 +775,10 @@ vectors = inference.embed_sync(task, texts)   # for today's synchronous callers
 - Changing the Embedding role — provider, model, or a change that bumps the
   provider's `rev` — starts a new space. The settings surface confirms first,
   stating that the library will be re-embedded gradually as it is used
-  (rule 1). Old vectors remain as unreachable cache entries.
+  (rule 1), and the server refuses an unconfirmed change (`confirm_embedding`,
+  §10). Old vectors remain as unreachable cache entries. Turning the role on
+  is the same move, so a model-facts write that does (the user's `embed: yes`
+  over a known `no`) is confirmed the same way (§12).
 
 ### 7.4 `decide`
 
@@ -916,7 +948,9 @@ go through `useHotkeys`.
 - "+ New provider" asks which preset first; URL prefilled (locked for
   OpenRouter, Anthropic API, OpenAI, both z.ai presets).
 - Detail sidebar: billing, extended samplers, health (free checks automatic;
-  generating checks behind a button with confirmation), catalog age +
+  generating checks behind a button with confirmation, which the server
+  enforces: the Claude-subscription check is refused without `confirm: true`,
+  §6.5), catalog age +
   Refresh, **Used by** chips (each role and route using this provider) that
   navigate there.
 - **Models on this provider**: the catalog with capability badges (generate /
@@ -931,9 +965,27 @@ go through `useHotkeys`.
   8k · Min-p: unsupported, not sent"). Unset Fast/Decision show "Same as
   Primary" / "Same as Fast". The Decision card lists which routes currently
   use it (none until slice F).
+- **The Embedding card asks before it changes.** Changing the Embedding role
+  re-embeds the library through the chosen provider, which may cost money —
+  and slice C is what makes paid OpenRouter embeddings selectable — so the
+  card states that and waits for confirmation, and the write carries
+  `confirm_embedding: true`. The server enforces it (rule 1): a change of the
+  Embedding provider or model to a non-empty value without it is refused
+  (§12). Clearing the role, or rewriting the value it already has, needs no
+  confirmation. The provider's own Edit form asks the same question when the
+  edited provider is the one the Embedding role embeds through and the edit
+  would restamp its `rev` (a key or an address): `PUT /llm-connections/{id}`
+  takes `confirm_embedding` too and refuses such an edit without it (§7.3). An
+  edit after which the role embeds nothing asks nothing.
 - **Routing** (collapsed, "Advanced"): 15 rows — "Role ▾ (default: Fast)" or
-  "Specific model…", plus the preset override, with today's "inherit (resolves
-  to …)" labelling.
+  "Specific model…", plus the preset override, each labelled "Inherit
+  (resolves to …)". The label comes from the settings view's `inherits`
+  answer, which the backend resolves with the scope's own choice for that row
+  silenced — what the row would run on if it were cleared, never a frontend
+  re-derivation.
+- Each role card and route row carries the backend's `problem` for it (no key,
+  a known capability `no`), which is the seam's own refusal decision (§12),
+  not a copy that could drift from what a turn would be told.
 - Capability warnings inline on the card or row concerned:
   - "This model can't generate text, so it can't be Primary."
   - "This route sends images; the chosen model is unverified for vision."
@@ -949,6 +1001,14 @@ sections are replaced by a summary card (the four roles at a glance, links to
 threshold, and image sending stay. `embeddingsOn.ts` is deleted; the
 "Embeddings" chip reads the backend's resolved answer.
 
+**Status bar and `GET /config`**: at format 2, `GET /config`'s
+`active_connection`, `ready` and `health` describe what chat would run on —
+taken from the resolve that `_public_config` already makes — rather than the
+legacy active connection. The status bar and the frontend's model cache read
+those fields today, so they follow the resolver with no frontend change. The
+roles summary the response carries for the Settings card is pure: it reports
+the stored roles and makes no resolve calls of its own.
+
 **Campaign Inspector**: "Model routing" becomes **Models** — campaign role
 overrides (Primary, Fast, Decision) and route overrides, with inherit labels.
 
@@ -959,7 +1019,11 @@ overrides (Primary, Fast, Decision) and route overrides, with inherit labels.
 **Models** (Primary required; Fast and Decision default to "Same as …";
 Embedding optional with one line on what it enables) → Look → World.
 
-**Newer-format banner** (§11) wherever model settings are shown.
+**Newer-format banner** (§11) wherever model settings are shown, and an
+**upgrade-pending banner** while the migration is pending or failed (§11.2):
+it gives the status and, when the safety backup failed, the reason; the
+new-layout editors cannot save until the migration completes (409
+`not_migrated`), and play continues through the translation meanwhile.
 
 ---
 
@@ -970,11 +1034,13 @@ Embedding optional with one line on what it enables) → Look → World.
 `store/inference/translate.py` is a pure function from the legacy layout to
 the new one. While `inference_format` is absent, the resolver reads the store
 **through it**, so the app is correct before, during and without migration.
-Migration persists that same translation **plus the enrichments in §11.2**
-that a read-time translation deliberately does not make (an unset Claude model
-written as `opus`, derived reasoning presets): those change what a later edit
-starts from, not what resolves today, so the translation keeps the stored
-values verbatim.
+Migration persists that same translation **verbatim** — padded ids, dangling
+references and `PRESET_CLEAR` stay exactly as `translate.global_view` /
+`campaign_view` give them — **plus the enrichments in §11.2** that a read-time
+translation deliberately does not make (provider presets and billing, model
+facts, an unset Claude model written as `opus`): those change what a later
+edit starts from, not what resolves today. Every derived value is
+deterministic.
 
 **The layout is decided once, globally.** A campaign's own `inference_format`
 is honoured only when `config.md`'s is current; a campaign marker alone never
@@ -982,11 +1048,48 @@ switches that campaign to the new keys, so a store migrated by a newer build
 and opened by an older one resolves every campaign from the same frozen
 legacy state.
 
+**Campaign keys need the campaign marker.** At format 2 a campaign without
+its own marker still resolves through the translation: it was skipped as busy
+(§11.2 step 8), forked from one that was, or created by an older build on a
+synced device. So the marker is never written over legacy overrides that were
+never translated:
+
+- `set_campaign_inference` stamps the marker when the global layout is
+  current, and a campaign created at format 2 is stamped at creation.
+- A write to **any unmarked** campaign migrates that campaign first (step 8's
+  work, for that one campaign), in the same `campaign_lock` hold as the write.
+
+**A fresh store is born at format 2.** A store with no `config.md` is never
+migrated: there is no backup of an empty install, and nothing is written
+before the wizard's Storage step has said where the store lives. This build's
+first materialisation of defaults writes `inference_format: 2` with them, and
+the wizard's Provider and Models steps write the new layout directly.
+
 ### 11.2 Steps (global; once; idempotent; resumable)
 
-1. **Backup** — `backups.create_backup()`. On failure nothing is written;
+**When it runs.** The migration runs in the background, never on the play
+path and never inside a request. Startup schedules it, and `PUT
+/config/data-dir` reschedules it for the new root. It holds a migration lock,
+so two starts never interleave, and `main.start()` holds
+`maintenance_excluded` around it — the run exclusion lives in `main.py`, never
+in a store module (CLAUDE.md), so a backup, fork or image-store run cannot
+walk the tree while it is rewritten. A data-dir switch mid-run writes no
+marker: the run belongs to the root it started on. While the migration is
+`pending` or `failed`, play resolves through the translation and every
+new-layout settings write answers 409 `not_migrated` with the status — a write
+into a format-1 store would be ignored. Tests turn the automatic start off
+(`GRIMOIRE_INFERENCE_AUTOMIGRATE=0`) and call `ensure()` themselves.
+
+`llm_connections.ensure_migrated()` — today's format-1 seeding of the named
+connections — runs first. Every resolve already runs it, so it is not a
+migration write. Then:
+
+1. **Backup** — `backups.create_backup()`, named `pre-inference-…`.
+   Retention never prunes it: rule 3's "the user can go back" depends on it
+   existing. On failure (an I/O error, or the store busy) nothing is written;
    Settings shows "Upgrade pending: the safety backup failed (reason)"; play
-   continues through the translation; the next start retries.
+   continues through the translation; the next start retries. A store already
+   at format 2 with only campaigns left to finish takes no new backup.
 2. **Providers** — each connection file gains `preset` and `billing`,
    **keeping its `rev`** (a `keep_rev` write), so catalogs, health verdicts
    and vector caches survive. Preset inference: `openrouter` → OpenRouter;
@@ -995,27 +1098,43 @@ legacy state.
    (`api.z.ai/api/paas`), z.ai Coding Plan (`api.z.ai/api/coding`, billing
    subscription), Ollama (port 11434), LM Studio (port 1234), else Custom.
 3. **Model facts** — each connection's `vision`, `prefill`, `post_process` →
-   `facts.json[<its model>]`.
-4. **Presets** — a connection with `reasoning_effort` set gets a derived
-   preset: its own sampler preset's params plus that effort, named "<preset
-   name> · reasoning <effort>" (or "Reasoning <effort>" when it had no preset),
-   with a deterministic id (`slugify` of that name); identical derivations
-   collapse to one.
+   `facts.json[<its model>]`, which is what the format-2 lowering reads
+   (§4.2).
+4. **Presets — none derived; the legacy GLM effort keeps applying.** A
+   connection's legacy `reasoning_effort` is not turned into a preset in this
+   slice. It keeps applying, at both formats, whenever the effective preset
+   sets no `reasoning_effort` — slice B's rule — until slice I. Deriving
+   presets here would change every observed preset (id, name, params) and buy
+   no change on the wire; and `glm_effort` matches by model name regardless of
+   kind, so a derived preset on an OpenRouter GLM connection would start
+   sending reasoning that connection never sent. Slice I derives them when it
+   stops reading the legacy field (§14): for `openai_compatible` GLM
+   connections only, and only for values a preset can represent — its own
+   sampler preset's params plus that effort, named "<preset name> ·
+   reasoning <effort>" (or "Reasoning <effort>" when it had no preset), with a
+   deterministic id (`slugify` of that name); identical derivations collapse
+   to one.
 5. **Roles** — Primary = the active connection (its model, or `opus` for an
-   unset Claude model) with its own or derived preset. Fast and Decision unset
-   (inherit). Embedding = `embeddings_connection_id` + `embeddings_model`.
-   `fallback_connection_id` → the fallback of Primary, Fast and Decision.
+   unset Claude model) with its own sampler preset. Fast and Decision unset
+   (inherit). Embedding = `embeddings_connection_id` + `embeddings_model`
+   **only when the legacy configuration actually embeds**
+   (`embed_space.resolve` answers non-None); a legacy choice that does not —
+   an OpenRouter connection, which had no embeddings route — leaves the role
+   unset, so it stays off as §6.1 promises. `fallback_connection_id` → the
+   fallback of Primary, Fast and Decision.
 6. **Routes** — global `route_<k>=<conn>` → `use_<k>=model` +
    `use_<k>_{provider,model,preset}` from that connection. `preset_<k>`
    untouched. Unset routes stay unset; they resolve through their default role
    to Primary, which is the old active connection — today's behaviour.
 7. **Split routes** — `speaker`, `scene_break`, `voice_drift` copy the
    `use_*` and `preset_*` of `scene`, `summary`, `voice` respectively.
-8. **Campaigns** — steps 6–7 inside each `campaign.md`, under that campaign's
-   own `campaign_lock` (one at a time — never two held; `test_lock_order_guard`
-   applies), stamping the campaign's revision token, writing the campaign's own
-   `inference_format: 2`. A busy campaign is skipped and retried; until then
-   the translation answers for it.
+8. **Campaigns** — steps 6–7 inside each `campaign.md`, one campaign at a
+   time under that campaign's own `campaign_lock_nowait(cid)` — never two held
+   (`test_lock_order_guard` applies) — stamping the campaign's revision token
+   (`revision.bump(cid)`) in the same hold and writing the campaign's own
+   `inference_format: 2`. A busy campaign is skipped and retried on the next
+   `ensure()`; until then the translation answers for it, and a write to it
+   migrates it first (§11.1).
 9. **Marker last** — `inference_format: 2` in `config.md`.
 
 Two devices migrating one synced store concurrently write identical content
@@ -1027,15 +1146,28 @@ bytes.
 - **Older builds** keep running on the state as of migration: legacy keys and
   fields are left in place, frozen. Changes made in the new UI do not reach
   them.
+- **Legacy keys are refused at format 2.** A write of a legacy inference key
+  (`active_connection_id`, `fallback_connection_id`, `route_*`,
+  `embeddings_connection_id`, `embeddings_model`) or a legacy connection field
+  (`model`, `post_process`, `reasoning_effort`, `sampler_preset`, `vision`,
+  `prefill`) is a 400 once the store is at format 2: it would reach older
+  builds only and change nothing here. At format 1 they stay writable — that
+  is the layout the app still reads.
+- **Deletes sweep global references.** Deleting a provider clears the global
+  roles, fallbacks and pins that name it; deleting a preset clears the global
+  role, fallback and pin presets that name it, the same way. Campaign
+  references dangle and are walked past (§5.1).
 - **Newer formats**: from this release on, a build that reads an
   `inference_format` higher than it knows shows "This library was upgraded by
   a newer Grimoire" and refuses model-settings writes with 409
   `newer_format`, so it cannot overwrite settings it does not understand. Play
-  continues on what it can read.
+  continues on what it can read, and it never migrates that store.
 
 ### 11.4 Retirement (slice I)
 
-For stores at format 2: delete the legacy config keys (`active_connection_id`,
+For stores at format 2: derive the reasoning presets §11.2 step 4 describes
+(the legacy GLM `reasoning_effort` stops being read here, so it must become a
+preset first), delete the legacy config keys (`active_connection_id`,
 `fallback_connection_id`, `route_*`, `embeddings_connection_id`,
 `embeddings_model`) and the legacy connection fields, then delete the
 translation layer. A store still at format 1 at that point is migrated first,
@@ -1059,13 +1191,25 @@ never migrated in place; tests migrate a copy.
 | `use_<route>=embedding` written | 400 |
 | Campaign writes a global-only key (`role_embedding_*`, a non-campaign route) | 400 (today's `refused` rule, extended) |
 | Model-settings write on a newer-format store | 409 `newer_format` |
-| Migration backup failed | no write; Settings banner; translation serves |
+| New-layout settings write while the migration is pending or failed | 409 `not_migrated`, carrying the migration status |
+| Legacy inference key or legacy connection field written at format 2 | 400 (§11.3) |
+| Embedding provider or model changed to a non-empty value without `confirm_embedding: true` | 400; nothing written (rule 1) |
+| A provider edit that moves the Embedding role's vector space (a `rev` restamp on the provider it embeds through, after which it embeds, judged as the provider will read once saved: a catalog row or probe verdict the restamp leaves stale says nothing) without `confirm_embedding: true` | 400 `confirm_embedding`; nothing written (rule 1, §7.3) |
+| A model-facts write that turns the Embedding role on (the user's `embed: yes` over a known `no` for the model it embeds with) without `confirm_embedding: true` | 400 `confirm_embedding`; nothing written (rule 1, §7.3). A passed test call and a catalog refresh are not the user's settings writes to the role and can lift a `no` unasked; a failed test cannot (§6.2) |
+| Claude-subscription health check without `confirm: true` | 400; nothing sent (rule 1) |
+| Migration backup failed | no write; Settings banner ("Upgrade pending: the safety backup failed (reason)"); translation serves; the next start retries |
 | Decide question unanswerable | `answer: None` + `reason`; never a guessed default |
 | Embedding provider fails | caller degrades as today; no fallback |
 | Test call fails | a refusal of the probe itself is recorded in `verified` with the provider's error text and resolves as `unknown`, so the row stays "unverified" with that error shown and the call is never refused for it; transient failures (rate limit, outage, credits or a spend limit, auth, transport) are reported and not recorded |
 
 Reads fail soft (a mangled `facts.json`, catalog or preset reads as empty);
 writes fail visibly.
+
+**One refusal decision.** Whether a resolution can serve — a missing key, a
+known capability `no` — is decided once, by `inference.refusal`. The seam
+raises it as the 409s above, and the settings view reports it as a role's or
+route's `problem` (§10): the seam's answer, not a copy that could drift from
+what a turn would be told.
 
 ---
 
@@ -1094,13 +1238,13 @@ against this spec) and lands green under `make check`. Order is chosen so that
 |---|---|---|
 | **A — Resolver substrate** | `store/inference/` (keys, cascade, translation, resolver), the 15-route registry with `operation`/`default_role`/`requires` (legacy surfaces keep the original 12), `ResolvedInference` + lowering, `require_inference`, per-role fallback chain, `embed_space` resolved through the Embedding role, guard updates. Reads legacy state through the translation; writes nothing new | No. A behaviour-equivalence test pins every task's resolved provider, model, preset and fallback against the baseline resolver |
 | **B — Providers, capabilities, controls** | The preset table, capability resolution (all sources) and the §5.3 capability check, OpenRouter `output_modalities=all` + `outputs` in catalog entries, the `anthropic` adapter, OpenRouter embeddings, `effective_controls` with `reasoning_effort` translations, the test-call endpoint and its confirm-first contract | API only |
-| **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI, dropping an incapable fallback attempt (§5.3; B reports it); legacy settings UI removed | **Yes** |
-| **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering, the confirm on Embedding-role change, and one reader of the Embedding role (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
+| **C — The switch** | New storage writes, migration (§11), the facade taking each call's per-role fallback (re-resolved per generation, as the global one is today), retirement of the second cascade the legacy routing UI reads (`routing.resolve`/`bundle`, `sampler_presets.resolve`/`inherited`) in favour of the resolver, the newer-format guard, `/providers`, `/models`, Presets editor with reasoning and Preview on…, Settings summary card, Inspector Models, reroll override, wizard, capability warnings, test-call UI, dropping an incapable fallback attempt (§5.3; B reports it); legacy settings UI removed. Also: the format-2 lowering overlaying model facts (§4.2); the migration run in the background with 409 `not_migrated` until it completes, the never-pruned `pre-inference-` safety backup, campaign markers, and fresh stores born at format 2 (§11); legacy keys refused at format 2 (§11.3); one refusal decision shared by the seam and the settings view (§12); the server-enforced confirmations for the Claude health check and for an **Embedding role change** (`confirm_embedding`, §10) — C makes paid OpenRouter embeddings selectable, so rule 1 cannot wait for D | **Yes** |
+| **D — Embedding operation** | `inference.embed` / `embed_sync`, embed tasks, metering (the confirmation on an Embedding-role change already landed in C and stays), and one reader of the Embedding role (today `translate.embedding_role` serves `embed_space` while `cascade.role_selection("embedding")` is unused) | Small |
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag, the Housekeeping chore | Yes |
 | **F — `decide()`** | The contract, `generate(schema=)`, the structured backend, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
 | **G — Continuity decisions** | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision` | — |
 | **H — Native decisions** | OpenRouter and OpenAI decision adapters, the native → structured → fallback chain, `--live` evals | Opt-in |
-| **I — Retirement** | §11.4, the adapter registry, deletion of the connection-dict lowering | No |
+| **I — Retirement** | §11.4, including the derived reasoning presets of §11.2 step 4 (`openai_compatible` GLM connections only, representable values only) as the legacy GLM `reasoning_effort` stops being read; the adapter registry; deletion of the connection-dict lowering | No |
 
 **Safety rule across slices**: a route's `default_role` stays `fast` until
 its tasks call `decide()` (F/G). Pointing the Decision role at a decide-only
@@ -1137,11 +1281,16 @@ when identical or incapable; reroll override field by field.
 
 **Migration** (store fixtures, copies only): single active connection;
 several routes on different connections; separate embeddings connection;
-reasoning + sampler preset; derived-preset de-duplication; local Ollama;
-z.ai and Coding Plan URLs; dangling route; dangling fallback; a busy campaign
-(skipped, translated, migrated next run); a failed backup (nothing written);
-`rev` preserved; **behaviour equivalence for every task**, before and after;
-idempotence (running twice changes nothing); newer-format refusal.
+reasoning + sampler preset (no preset derived; the legacy GLM effort still
+sent, §11.2 step 4); a legacy OpenRouter embedding choice (role left off);
+local Ollama; z.ai and Coding Plan URLs; dangling route; dangling fallback; a
+busy campaign (skipped, translated, migrated next run, or migrated by its
+first write); a failed backup (nothing written); a fresh store (born at
+format 2, never migrated); `rev` preserved; **behaviour equivalence for every
+task**, before and after — against both frozen fixtures, the second of which
+(`inference_baseline_c.json`) records the GLM, post-image, prefill and
+legacy-embedding states the first never built; idempotence (running twice
+changes nothing); newer-format refusal.
 
 **Capabilities**: each source and its precedence; adapter `no` beats every
 other source; `rev` change invalidates `verified`; OpenRouter

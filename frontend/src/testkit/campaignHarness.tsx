@@ -15,6 +15,7 @@ import type { Mock } from "vitest";
 import CampaignView from "../routes/CampaignView";
 import CommandPalette, { usePaletteHotkey } from "../components/CommandPalette";
 import { PaletteProvider } from "../components/palette";
+import { ShellStatusProvider, useShellStatus } from "../components/ShellStatus";
 import ShortcutsHelp from "../shortcuts/ShortcutsHelp";
 import type { ChatEvent } from "../api/stream";
 import { api } from "../api/client";
@@ -28,6 +29,26 @@ export const NO_SCENE_BREAK = {
   verdict: "" as const, reason: "", title: "", stale: false,
   posts: 0, score: 0, signals: [], every: 20, due: false,
 };
+
+/** `GET /campaigns/{cid}/inference` as the play view reads it: one provider,
+ *  and the scene route resolving to it with nothing wrong. `scene` replaces
+ *  fields of the scene route (its `resolves` and `problem`, say). */
+export function campaignInference(scene: Record<string, unknown> = {}) {
+  return {
+    format: "2", newer: false, migration: { state: "done", reason: "", skipped: [] },
+    roles: {}, preset_clear: "⁣none",
+    routes: [{ key: "scene", label: "Scene turns", hint: "", tasks: ["chat", "retry", "regenerate", "extend"],
+               operation: "generate", default_role: "primary", requires: [], campaign_scoped: true,
+               use: "", pin: { provider: "", model: "", preset: "" }, preset: "", problem: null,
+               role: "primary", inherits: null,
+               resolves: { provider: "openrouter", provider_name: "OpenRouter", model: "campaign/model",
+                           preset: "", preset_name: "", via: "role", scope: "global" },
+               ...scene }],
+    providers: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter", preset: "openrouter",
+                  usable: true }],
+    presets: [],
+  };
+}
 
 // Stand-in `phases` for the absorb mocks that are about something else. What
 // every one of them relies on is the single property named here: no phase was
@@ -160,9 +181,18 @@ export function installCampaignMocks() {
   (api.getSceneChecks as any).mockResolvedValue({ actors: [] });
   (api.rollCheck as any).mockResolvedValue({ ok: true, resolution: {}, message: "" });
   (api.getConfig as any).mockResolvedValue({ theme: "codex", system_prompt: "", quote_color: "off", user_label: "You", assistant_label: "Grimoire", active_connection_id: "openrouter", active_connection: { id: "openrouter", kind: "openrouter", name: "OpenRouter", model: "campaign/model" }, ready: true });
-  // The reroll popover's route picker (#77): one connection, the active one, so
-  // an untouched popover offers only "Default" and the suites that never open
-  // it are unaffected.
+  // The reroll popover's route picker (#77) and the header's model: the
+  // campaign's inference view, with one provider and the scene route resolving
+  // to it, and a provider that lists no model -- so an untouched popover is
+  // Default and the suites that never open it are unaffected.
+  (api.getCampaignInference as any).mockResolvedValue(campaignInference());
+  (api.readConnectionCapabilities as any).mockImplementation(
+    (_provider: string, need: string) => Promise.resolve({
+      provider_preset: { id: "openrouter", label: "OpenRouter", kind: "openrouter", base_url: "",
+                         url_locked: true, billing: "metered", reports_price: true,
+                         always: [], possible: [], never: [] },
+      need, reason: null, groups: { fits: [], unverified: [] }, hidden: [] }));
+  // The regex test dialog's connections: one, the active one.
   (api.listConnections as any).mockResolvedValue([
     { id: "openrouter", kind: "openrouter", name: "OpenRouter", base_url: "",
       model: "campaign/model", effective_model: "campaign/model", post_process: "none", key_set: true, rev: "r1" }]);
@@ -232,13 +262,6 @@ export function installCampaignMocks() {
     // chip on every player post is a string in it. The tests that want one set
     // it themselves.
     by_task: [], by_post: [], turns: [], listed: 0, truncated: false });
-  // Nothing routed: the page publishes the active connection's model, which is
-  // what the header showed before #142 existed.
-  (api.getCampaignRouting as any).mockResolvedValue({
-    scope: "campaign", routes: {}, effective: {}, provenance: {}, catalog: [],
-    active_connection_id: "openrouter",
-    connections: [{ id: "openrouter", name: "OpenRouter", kind: "openrouter",
-                    model: "vendor/opus" }] });
   // No author's notes: the inspector section draws no count.
   (api.getAuthorsNotesNext as any).mockResolvedValue({ turn: 1, count: 0, notes: [] });
   (api.getAuthorsNotes as any).mockResolvedValue({ campaign: null, scenes: {}, characters: {} });
@@ -371,8 +394,9 @@ export function withPalette(children: ReactNode) {
  *  empty-campaign case renders the list instead, and one that wants a specific
  *  scene passes its url.
  */
-export function renderCampaign(initialEntry = "/campaigns/run/scenes/s1") {
-  return render(
+export function renderCampaign(initialEntry = "/campaigns/run/scenes/s1",
+                               { shell = false }: { shell?: boolean } = {}) {
+  const page = (
     // The provider ABOVE the router, mirroring `main.tsx`. Without it
     // `useRunRegistry` falls back to its no-op stand-in and every recovery
     // path silently does nothing -- which is the exact shape of the bug this
@@ -381,9 +405,29 @@ export function renderCampaign(initialEntry = "/campaigns/run/scenes/s1") {
       <MemoryRouter initialEntries={[initialEntry]}>
         {withPalette(<><Here />{playRoutes()}</>)}
       </MemoryRouter>
-    </RunRegistryProvider>,
+    </RunRegistryProvider>
+  );
+  // `shell`: the chrome's status, mounted as `App` mounts it, with what the
+  // page published to it readable (`shellModel`, `shellReady`). Opt-in, so
+  // the suites that never look at the header have no extra text to trip on.
+  return render(shell
+    ? <ShellStatusProvider><ShellReading />{page}</ShellStatusProvider>
+    : page);
+}
+
+/** What the page has published to the header: the model its scene turns run
+ *  on and whether that can send ("null" when it has no opinion). */
+function ShellReading() {
+  const { sceneModel, sceneReady } = useShellStatus();
+  return (
+    <>
+      <span data-testid="shell-model">{sceneModel ?? "null"}</span>
+      <span data-testid="shell-ready">{String(sceneReady)}</span>
+    </>
   );
 }
+export const shellModel = () => screen.getByTestId("shell-model").textContent;
+export const shellReady = () => screen.getByTestId("shell-ready").textContent;
 
 /** Open a scene the way the app does: ⌘K, type, pick.
  *

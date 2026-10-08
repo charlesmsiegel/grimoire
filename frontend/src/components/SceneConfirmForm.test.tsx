@@ -542,7 +542,7 @@ test("the adapted greeting is not offered without an LLM connection, and says wh
   render(<SceneConfirmForm cid="c" draft={GRT} ready={false} onBack={() => {}} onCreated={vi.fn()} />);
   expect(await screen.findByRole("radio", { name: /greeting, adapted/i })).toBeDisabled();
   expect(screen.getByRole("radio", { name: /verbatim/i })).toBeChecked();
-  expect(screen.getByText(/set up an llm connection in config to adapt/i)).toBeInTheDocument();
+  expect(screen.getByText(/primary model on the models page to adapt the greeting/i)).toBeInTheDocument();
 });
 
 test("a failed locations read still lets an adapted greeting open at its own location", async () => {
@@ -580,13 +580,13 @@ test("the generate option admits it when no LLM is connected", async () => {
   // the typed path builds a draft with a premise whether or not one is set up.
   render(<SceneConfirmForm cid="c" draft={GEN} ready={false} onBack={() => {}} onCreated={vi.fn()} />);
   fireEvent.click(await screen.findByRole("radio", { name: /generate one/i }));
-  expect(screen.getByText(/set up an llm connection/i)).toBeInTheDocument();
+  expect(screen.getByText(/choose a provider and a primary model/i)).toBeInTheDocument();
 });
 
 test("the generate option stays quiet when an LLM is connected", async () => {
   renderForm(GEN);
   await screen.findByLabelText("Premise");
-  expect(screen.queryByText(/set up an llm connection/i)).toBeNull();
+  expect(screen.queryByText(/choose a provider and a primary model/i)).toBeNull();
 });
 
 test("the first-post choice stays locked after a soft failure, like every other field", async () => {

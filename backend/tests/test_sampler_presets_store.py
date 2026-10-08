@@ -90,59 +90,7 @@ def test_delete_clears_global_route_keys_and_nothing_else():
     assert conn["sampler_preset"] == pid and conn["rev"] == rev
 
 
-# ---- resolve ----
-
-def _known(*ids):
-    return lambda pid: pid in ids
-
-
-def test_resolution_walks_campaign_then_global_then_connection():
-    known = _known("a", "b", "c")
-    conn = {"sampler_preset": "c"}
-    assert sp.resolve("chat", campaign_meta={"preset_scene": "a"}, cfg={"preset_scene": "b"},
-                      conn=conn, known=known) == {"preset_id": "a", "scope": "campaign"}
-    assert sp.resolve("chat", campaign_meta={}, cfg={"preset_scene": "b"},
-                      conn=conn, known=known) == {"preset_id": "b", "scope": "global"}
-    assert sp.resolve("chat", campaign_meta={}, cfg={}, conn=conn,
-                      known=known) == {"preset_id": "c", "scope": "connection"}
-    assert sp.resolve("chat", campaign_meta={}, cfg={}, conn={},
-                      known=known) == {"preset_id": "", "scope": "none"}
-
-
-def test_the_clear_sentinel_stops_the_walk():
-    got = sp.resolve("absorb", campaign_meta={"preset_absorb": CLEAR}, cfg={"preset_absorb": "b"},
-                     conn={"sampler_preset": "c"}, known=_known("b", "c"))
-    assert got == {"preset_id": "", "scope": "campaign"}
-
-
-def test_a_dangling_id_is_no_opinion():
-    got = sp.resolve("chat", campaign_meta={"preset_scene": "gone"}, cfg={},
-                     conn={"sampler_preset": "also-gone"}, known=_known())
-    assert got == {"preset_id": "", "scope": "none"}
-
-
-def test_a_world_scoped_route_ignores_a_campaign_key():
-    got = sp.resolve("tagline", campaign_meta={"preset_tagline": "a"}, cfg={},
-                     conn={}, known=_known("a"))
-    assert got["scope"] == "none"
-
-
-def test_an_unrouted_task_uses_the_connection():
-    got = sp.resolve("", campaign_meta={}, cfg={"preset_scene": "a"},
-                     conn={"sampler_preset": "c"}, known=_known("a", "c"))
-    assert got == {"preset_id": "c", "scope": "connection"}
-
-
-def test_inherited_ignores_this_scopes_own_value():
-    got = sp.inherited("campaign", "scene", campaign_meta={"preset_scene": "a"},
-                       cfg={"preset_scene": "b"}, conn={}, known=_known("a", "b"))
-    assert got == {"preset_id": "b", "scope": "global"}
-
-
-def test_refused_names_keys_the_scope_cannot_set():
-    assert sp.refused("campaign", ["preset_scene", "preset_tagline"]) == ["preset_tagline"]
-    assert sp.refused("global", ["preset_tagline"]) == []
-
+# ---- the clear sentinel ----
 
 def test_the_clear_sentinel_survives_a_config_round_trip():
     store.write_config(preset_absorb=CLEAR)

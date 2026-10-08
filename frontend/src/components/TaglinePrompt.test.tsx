@@ -48,7 +48,7 @@ test("a Generate that cannot reach the provider offers the local-model recovery"
   render(<MemoryRouter><TaglinePrompt wid="w" cid="aese" name="Aese" onClose={vi.fn()} /></MemoryRouter>);
   fireEvent.click(screen.getByText("Generate"));
   await screen.findByText(/Couldn.t reach the model provider/);
-  expect(screen.getByRole("link", { name: /Connections/ })).toHaveAttribute("href", "/connections");
+  expect(screen.getByRole("link", { name: /Providers/ })).toHaveAttribute("href", "/providers");
 });
 
 test("any other Generate failure still shows the endpoint's own message", async () => {
