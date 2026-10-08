@@ -901,6 +901,15 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
     const found = facts.capabilities[c];
     return !(found?.value === "no" && found.source === "adapter");
   });
+  // What the server could not read is not "nothing stated": saving over it
+  // would replace the user's word, so the panel says so and offers no save.
+  const unreadable = facts.unreadable === true;
+  const unreadableNote = unreadable && (
+    <div className="banner" role="status">
+      This model&apos;s facts file could not be read, so it cannot be edited until it has
+      synced.
+    </div>
+  );
   const stated = OVERRIDABLE.filter(({ name }) => facts.overrides[name]);
 
   async function save(confirm = false) {
@@ -940,6 +949,7 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
       <div className="form">
         {back}
         <h3>Edit {model}</h3>
+        {unreadableNote}
         {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         <Field label="Reads images"
                hint="Auto follows the catalog. No stops post images and asserts nothing about the model.">
@@ -998,7 +1008,7 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
             Cancel
           </button>
           <button className="primary" onClick={() => { void save(); }}
-                  disabled={factsBlocked || saving || asking !== null}>
+                  disabled={factsBlocked || saving || unreadable || asking !== null}>
             Save facts
           </button>
         </div>
@@ -1012,6 +1022,7 @@ function ModelFactsPanel({ provider, model, blocked, factsBlocked, onChanged }: 
       <div className="detail-main">
         {back}
         <h3>{model}</h3>
+        {unreadableNote}
         {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         <div className="detail-rendered">
           <CapabilityBadges capabilities={facts.capabilities} />

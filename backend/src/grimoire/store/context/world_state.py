@@ -113,7 +113,8 @@ def activate(entries: list[dict], recent_text: str, present: frozenset = frozens
 
     `recall` is a second-stage retrieval strategy with `semantic.recall`'s
     signature -- a test's, since production does not come through here:
-    `_world_info` hands `semantic.recall_scored` to the engine itself. It is
+    `_world_info` hands the engine a lambda over `semantic.recall_scored` that
+    adds `campaign=cid`, so the embed row is charged to the campaign. It is
     handed the entries the keyword rule *rejected*, and only after the owner
     gate has already admitted them: an entry whose owner is absent
     never reaches it, so no similarity score can leak owned lore. Its hits are
@@ -173,7 +174,7 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                 exclude: frozenset = frozenset(), present: Mapping[str, dict] | None = None,
                 pinned_refs: frozenset = frozenset(), excluded_refs: frozenset = frozenset(),
                 scan_depth: int, recursion_depth: int = 0, current_location: str | None = None,
-                recall_text: str = "", actor_ref: str | None = None,
+                recall_text: str = "", actor_ref: str | None = None, sid: str = "",
                 ) -> tuple[list[dict], list[dict], activation.Result, dict[str, str]]:
     """Activated lore/location/item/group/creature entries as
     {"body", "kind", "id", ...} dicts — _assemble renders the bodies and uses
@@ -194,7 +195,8 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
     `activation.run` reads them per entry window. `present` is the base present
     set, ref -> reason, built by the caller; the engine grows it structurally
     and by activation. `recall_text` is the joined scan
-    window the similarity query has always used.
+    window the similarity query has always used, and `sid` the scene whose
+    turn it serves, which recall's embed row is charged to beside `cid`.
 
     Two different exclusions meet here, deliberately spelled apart. `exclude` is
     the CURRENT LOCATION, held back because the Current setting section already
@@ -246,8 +248,12 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                   else actor_scope.known_entries(entries, actor_ref))
     # The only production caller that supplies a second stage, so the strategy
     # is chosen in one visible place and `activation.run` stays a pure function
-    # of its arguments. The attribute is resolved off the module on every call,
-    # which is what keeps `semantic.recall_scored` patchable from a test.
+    # of its arguments. The attribute is resolved off the module on every call
+    # (inside the lambda, not when it is built), which is what keeps
+    # `semantic.recall_scored` patchable from a test. The lambda hands recall
+    # the campaign and the scene its embed row is charged to: a turn's recall
+    # is part of what playing that scene cost, and a row without the scene
+    # would leave the scene's own totals short of it.
     #
     # The split is reported rather than merged because the two halves are
     # packed differently: keyword hits are `spotlight`, recalled ones are
@@ -259,7 +265,8 @@ def _world_info(cid: str, posts: Sequence[tuple[int, str]], seed: str, *,
                             recursion_depth=recursion_depth,
                             current_location=current_location, pinned_refs=pinned_refs,
                             excluded_refs=excluded_refs,
-                            recall=semantic.recall_scored,
+                            recall=lambda c, t: semantic.recall_scored(c, t, campaign=cid,
+                                                                      scene=sid),
                             recall_text=recall_text, scene_entries=entries)
     return ([h.entry for h in result.keyword], [h.entry for h in result.recalled], result,
             names)

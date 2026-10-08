@@ -58,6 +58,7 @@ from grimoire.store.continuity import (
     similarity,
 )
 from grimoire.store.continuity import doc as continuity_doc
+from grimoire.store.inference import embed
 from grimoire.store.scenes import read as scenes_read
 from tests import llm_fakes
 
@@ -346,7 +347,7 @@ def _armed(client, monkeypatch):
     raiser-inside-`_soft` trap one layer up."""
     r = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test"})
     assert 200 <= r.status_code < 300, r.text
-    monkeypatch.setattr(embed_space, "resolve", lambda *a, **k: {
+    monkeypatch.setattr(embed_space, "endpoint", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
     fake_embeddings = llm_fakes.FakeEmbeddings()
     monkeypatch.setattr(similarity, "_CLIENT", fake_embeddings)
@@ -392,8 +393,8 @@ def test_the_no_model_recorders_fire_on_a_tolerant_path(client, monkeypatch):
         asyncio.run(fake.complete([{"role": "system", "content": "control"}], conn))
 
     def embedding_call():
-        space = embed_space.resolve()
-        similarity._CLIENT.embed(["control"], space["model"], space["key"], space["base_url"])
+        embed.embed_sync("continuity-similarity", ["control"], space=embed_space.endpoint(),
+                         client=similarity._CLIENT)
 
     def tolerant_matching():
         drivers._soft(model_call, None)

@@ -50,7 +50,7 @@ omission.
 Keyword scoring always works and needs nothing configured: the description's
 content words are matched against the scan window, with a bonus when the
 owning record's own name is in play. With an embeddings endpoint configured
-(`embed_space.resolve`, the same one search and recall use) the ranking is by
+(`embed_space.endpoint`, the same one search and recall use) the ranking is by
 cosine instead, over `vectors.py`'s on-disk cache.
 
 **It falls back to keyword, never to an error.** No connection, a dead
@@ -126,6 +126,7 @@ from .. import (
 from ..appearances import cast as appearances_cast
 from ..appearances import paths as appearances_paths
 from ..appearances import versions as appearances_versions
+from ..inference import embed
 from . import world_state
 
 #: The library's own kind, in the handle grammar. Not an entity kind and not an
@@ -546,7 +547,8 @@ def _keyword_scores(cid: str, cands: list[dict],
     return out, was_named
 
 
-def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict) -> list[float] | None:
+def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict, *,
+                     campaign: str = "", scene: str = "") -> list[float] | None:
     """Cosines against the scan window, or None if the provider could not be
     reached — in which case the caller keeps the keyword ranking.
 
@@ -554,6 +556,10 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict) -> list[flo
     one request sits out this turn and is picked up by a later one, so turning
     an embeddings endpoint on over a described library costs a little latency
     per turn for a while rather than one enormous stall.
+
+    The request is one `embed_sync` call under ``art-catalog``, charged to
+    `campaign` and `scene` (the ones `rank` ranks for), at `cfg` -- the endpoint the cache
+    was read under, so the vectors are saved in the space they are scored in.
     """
     texts = [embed_space.clip(c["description"], DOC_BYTES) for c in cands]
     query_text = embed_space.clip(recent_text.strip(), QUERY_BYTES, tail=True)
@@ -561,12 +567,15 @@ def _semantic_scores(cands: list[dict], recent_text: str, cfg: dict) -> list[flo
     uncached = list(dict.fromkeys(t for t in texts if t not in known))
     missing = embed_space.warm_window(uncached, query_text, embeddings.BATCH - 1)
     try:
-        got = _CLIENT.embed([query_text, *missing], cfg["model"], cfg["key"], cfg["base_url"])
+        got = embed.embed_sync("art-catalog", [query_text, *missing], space=cfg,
+                               client=_CLIENT, campaign=campaign, scene=scene,
+                               cached=len(known), uncached=len(uncached))
     except (LLMError, OSError):
         # Deliberately silent, and deliberately not fatal: this runs on every
         # turn, so a provider that is down would otherwise write one identical
         # line per message -- and the keyword ranking the caller already has is
-        # a real answer, not a degraded one.
+        # a real answer, not a degraded one. The meter has already recorded the
+        # failed request.
         return None
     if len(got) != 1 + len(missing):
         return None
@@ -633,7 +642,7 @@ def settings() -> dict:
             "cfg": cfg}
 
 
-def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
+def rank(cid: str, cands: list[dict], recent_text: str, *, scene: str = "") -> list[dict]:
     """The best `depth` candidates for this moment, best first.
 
     Keyword scores are computed first and always: they are the fallback, and
@@ -657,10 +666,11 @@ def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
     if opts["depth"] <= 0:
         return []
     scores, named = _keyword_scores(cid, cands, recent_text)
-    space = embed_space.resolve(opts.get("cfg"))
+    space = embed_space.endpoint(opts.get("cfg"))
     if space is not None:
         semantic = _semantic_scores(cands, recent_text,
-                                    {**space, "threshold": opts["threshold"]})
+                                    {**space, "threshold": opts["threshold"]},
+                                    campaign=cid, scene=scene)
         if semantic is not None:
             scores = [s if s > 0.0 else (NAMED_FLOOR if was else 0.0)
                       for s, was in zip(semantic, named, strict=True)]
@@ -669,15 +679,20 @@ def rank(cid: str, cands: list[dict], recent_text: str) -> list[dict]:
 
 
 def catalogue(cid: str, cast: list[dict], current_loc: str | None,
-              wi_entries: list[dict], recent_text: str) -> list[dict]:
+              wi_entries: list[dict], recent_text: str, *, scene: str = "") -> list[dict]:
     """What the ``available_art`` section renders, or ``[]``.
 
     Never raises. A store being synced under us, a half-written sidecar, a
     campaign whose world went away: none of them is worth losing a turn to, and
     the section simply does not render.
+
+    `scene` is the scene whose turn this catalogue is built for; an embed it
+    makes is charged to it as well as to `cid`, so the scene's own totals carry
+    it.
     """
     try:
-        return rank(cid, candidates(cid, cast, current_loc, wi_entries), recent_text)
+        return rank(cid, candidates(cid, cast, current_loc, wi_entries), recent_text,
+                    scene=scene)
     except (OSError, UnicodeDecodeError, ValueError, KeyError, TypeError,
             entities.EntityNotFound):
         return []

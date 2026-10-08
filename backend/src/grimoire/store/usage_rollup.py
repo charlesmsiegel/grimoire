@@ -82,7 +82,10 @@ from . import atomic, pricing, usage
 #: Bumped when the stored shape changes. A file from an older version is
 #: discarded rather than migrated: it is a cache, and rebuilding it costs one
 #: scan that the very next read would otherwise have had to do anyway.
-VERSION = 2
+#: 3: an embed row's absent completion count became a structural zero
+#: (`usage._completion_count`), so a v2 file holds embed rows as unmetered and
+#: unpriced that the same rates now model.
+VERSION = 3
 
 #: What a caller gets for a campaign the ledger has never mentioned, and what a
 #: failed scan degrades to. `partial` is the field that keeps it honest -- see

@@ -343,7 +343,7 @@ class _NoEmbeddings:
 
 
 def test_drivers_route_makes_no_model_call(client, cid, monkeypatch):
-    monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
+    monkeypatch.setattr(store.embed_space, "endpoint", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
     monkeypatch.setattr(grimoire.embeddings, "EmbeddingsClient", _NoEmbeddings)
     client.app.dependency_overrides[routes.get_llm] = lambda: from_entries([])
@@ -406,7 +406,7 @@ def _no_model_recorders(monkeypatch) -> list:
     instances that already exist; the class swap still catches a fresh one."""
     calls: list = []
     _RecordingEmbeddings.built = []
-    monkeypatch.setattr(store.embed_space, "resolve", lambda *a, **k: {
+    monkeypatch.setattr(store.embed_space, "endpoint", lambda *a, **k: {
         "model": "m", "base_url": "http://embeddings.invalid", "key": "", "space": "s"})
     _recorded(monkeypatch, grimoire.embeddings.EmbeddingsClient, "embed", calls)
     for name in ("stream", "complete", "list_models", "check"):

@@ -621,6 +621,20 @@ test("a new key for a provider the Embedding role does not use asks nothing", as
   expect((api.updateConnection as any).mock.calls[0][1]).not.toHaveProperty("confirm_embedding");
 });
 
+test("an unreadable facts file is said, and Save stays off", async () => {
+  // Nothing stated is what the server could read, not what the user said:
+  // a save would replace their word, so the panel never offers one.
+  (api.readModelFacts as any).mockResolvedValue(facts({ unreadable: true }));
+  open("/providers/saltmarch");
+  fireEvent.click(await main().findByRole("link", { name: "vendor/m" }));
+
+  expect(await main().findByText(/facts file could not be read/)).toBeInTheDocument();
+  fireEvent.click(main().getByRole("button", { name: "Edit" }));
+  expect(await main().findByText(/facts file could not be read/)).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Save facts" })).toBeDisabled();
+  expect(api.putModelFacts).not.toHaveBeenCalled();
+});
+
 test("a facts save that turns embedding on is asked, then resent with the yes", async () => {
   (api.putModelFacts as any)
     .mockRejectedValueOnce(new ApiError(400,

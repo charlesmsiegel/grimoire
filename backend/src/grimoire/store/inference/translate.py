@@ -75,16 +75,31 @@ def _pins_and_presets(meta: dict, conn: Lookup, scoped_only: bool,
     return out
 
 
-def embedding_role(cfg: dict) -> tuple[str, str]:
-    """`(provider, model)` of the embedding role. No lookup: the embedding
-    model is read from config alone."""
+def embedding_view(cfg: dict) -> dict[str, str]:
+    """The Embedding role's slot in the current layout's keys, both values
+    stripped: `{role_embedding_provider, role_embedding_model}`. A current
+    config reads them from those keys, a legacy one from `embeddings_*`. No
+    lookup: the embedding model is read from config alone.
+
+    What `resolve.embedding` hands the cascade. Unlike `global_view`, it always
+    strips (the `embeddings_*` trim rule, kept at both formats) and always
+    carries both keys."""
     if is_current(cfg):
         provider = cfg.get(keys.role_key("embedding", "provider"), "")
         model = cfg.get(keys.role_key("embedding", "model"), "")
     else:
         provider = cfg.get("embeddings_connection_id", "")
         model = cfg.get("embeddings_model", "")
-    return str(provider or "").strip(), str(model or "").strip()
+    return {keys.role_key("embedding", "provider"): str(provider or "").strip(),
+            keys.role_key("embedding", "model"): str(model or "").strip()}
+
+
+def embedding_role(cfg: dict) -> tuple[str, str]:
+    """`(provider, model)` as stored for the Embedding role (`embedding_view`'s
+    two values): the stored pair, not the resolution (`resolve.embedding`)."""
+    view = embedding_view(cfg)
+    return (view[keys.role_key("embedding", "provider")],
+            view[keys.role_key("embedding", "model")])
 
 
 def global_view(cfg: dict, conn: Lookup, *, only: Collection[str] | None = None) -> dict:

@@ -464,7 +464,7 @@ def _semantic(cid: str, sweep: Sweep, space: dict, subjects: list[similarity.Sub
     try:
         return similarity.semantic(required, warm, deadline=deadline, space=space,
                                    cached=texts, warm_limit=room, loaded=loaded,
-                                   rotate=seed)
+                                   rotate=seed, campaign=cid)
     finally:
         budget.left -= len(required) + len(warm)
         budget.seconds -= time.monotonic() - started

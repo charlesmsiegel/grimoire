@@ -13,6 +13,7 @@ import pytest
 
 from grimoire.embeddings import EmbeddingsClient
 from grimoire.store import config, embed_space, llm_connections
+from grimoire.store import inference_keys as keys
 from grimoire.store.inference import facts, providers, translate
 
 
@@ -30,7 +31,11 @@ def _local() -> str:
 def test_the_embedding_role_is_what_resolves(monkeypatch):
     conn = _local()
     config.write_config(embeddings_connection_id="elsewhere", embeddings_model="legacy")
-    monkeypatch.setattr(translate, "embedding_role", lambda cfg: (conn, "m2"))
+    # `resolve.embedding` reads the role through `embedding_view` (slice D);
+    # `embedding_role` is only the stored-pair wrapper over it.
+    monkeypatch.setattr(translate, "embedding_view", lambda cfg: {
+        keys.role_key("embedding", "provider"): conn,
+        keys.role_key("embedding", "model"): "m2"})
     out = embed_space.resolve()
     assert out is not None
     assert out["model"] == "m2"

@@ -176,6 +176,22 @@ def test_a_changed_rate_table_reprices_the_whole_aggregate(home):
     assert out["unpriced_calls"] == 0
 
 
+def test_an_unpriced_embed_row_is_modelled_by_the_aggregate(home):
+    """An embed row carries no completion count because an embedding generates
+    nothing (`usage._completion_count`). The rail's aggregate folds it exactly
+    as a full scan does: modelled at a prompt rate, never unmetered."""
+    _call(task="semantic-recall", model="local/vectors", completion_tokens=None,
+          operation=usage.EMBED_OPERATION, ts="2026-08-01T00:00:00Z")
+    pricing.write_pricing({"local/vectors": {"prompt_usd_per_1k": 1.0,
+                                             "completion_usd_per_1k": 2.0}})
+
+    out = usage_rollup.campaign_totals("saltmarch")
+    assert out["modelled_usd"] == pytest.approx(1.0)
+    assert out["modelled_calls"] == 1
+    assert out["unpriced_calls"] == 0
+    assert out["unmetered_calls"] == 0
+
+
 def test_an_unreadable_rate_table_does_not_break_the_aggregate(home):
     _call(cost_usd=1.0, ts="2026-08-01T00:00:00Z")
     pricing.pricing_path().parent.mkdir(parents=True, exist_ok=True)

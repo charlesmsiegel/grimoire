@@ -49,6 +49,7 @@ import time
 import certifi
 import httpx
 
+from . import llm_usage
 from .llm_errors import LLMError
 
 #: Inputs per request. The endpoints cap request size rather than list length,
@@ -125,6 +126,120 @@ MAX_TOTAL_DIMS = BATCH * 8192
 
 class EmbeddingsError(LLMError):
     pass
+
+
+#: The `code` of the "deadline passed before the request" error when it fires
+#: for a call's **first** batch: no request of this call went out, so nothing
+#: was spent and the caller files an aborted attempt rather than a failed one.
+#: The same check on a later batch carries no code, because the batches before
+#: it were sent (and billed). The kind and the wording are the same either way,
+#: so a caller that never looks at the code degrades exactly as before.
+NOT_SENT = "not_sent"
+
+#: The `code` of every other error the call's own deadline raised: a later
+#: batch it stopped before its request, a body it cut mid-read, or a timeout
+#: that fired once it was spent. Whether that is a failure depends on whose
+#: deadline it was -- the client's own `TIMEOUT` cutting a slow provider is the
+#: provider failing; a caller's budget running out is the caller's clock
+#: (`store.inference.embed`) -- so the client only names it.
+DEADLINE = "deadline"
+
+#: The holder keys a batch must report for the call's total to be the call's.
+_SUMMED = ("prompt_tokens", "cost_usd")
+
+#: Every key `embed` owns in the caller's holder. Cleared at call entry, so a
+#: holder that was filled before never leaks a stale value into this call's row.
+_OWNED = ("prompt_tokens", "cost_usd", "cost_basis", "model")
+
+#: Longest provider-reported model id kept. The same bound
+#: `store.alternates.MAX_MODEL_CHARS` puts on a model id reaching the ledger
+#: (not imported: this module sits below the store). A longer one is not kept,
+#: rather than clipped into a name nobody reported.
+MAX_MODEL_CHARS = 200
+
+
+class _Spend:
+    """One call's running accounting: the caller's holder, the sums so far and
+    the keys a read batch failed to report. Travels as one object so the three
+    cannot be passed apart -- a fresh `lost` for a later batch would make it
+    look like the first.
+    """
+
+    def __init__(self, usage: dict):
+        self.usage = usage
+        self.totals: dict[str, int | float] = {}
+        self.lost: set[str] = set()
+        #: A batch's request has gone out and its body is not read yet.
+        self.in_flight = False
+        for key in _OWNED:
+            usage.pop(key, None)
+
+    def lose(self) -> None:
+        """A batch was sent and failed before its body was read: it may have
+        been billed, and what it reported is unknown, so no sum is the
+        call's. Every summed key is dropped for the rest of the call, as for a
+        read batch that omits one (`fold`)."""
+        self.in_flight = False
+        self.lost.update(_SUMMED)
+        for key in _SUMMED:
+            self.usage.pop(key, None)
+        self.usage.pop("cost_basis", None)
+
+    def fold(self, body: object) -> None:
+        """Fold one batch's parsed body into the holder.
+
+        Runs **before** `_vectors` validates the body, so a reply that was
+        billed and then turned out malformed still counts. Never raises: the
+        usage block is trailing metadata, and a shape nobody expected costs the
+        statistic, not the embed.
+
+        A count is a sum over every batch, so it is only the call's count if
+        every batch reported it. Once a batch that was read lacks one, that key
+        is dropped and stays dropped for the rest of the call -- a partial sum
+        is written as "absent" rather than as a smaller number (CLAUDE.md,
+        Costs: a price nobody reported is never rendered as zero). A body that
+        is not an object is a read batch that reported nothing. A batch that
+        failed after its request went out but before its body was read (a
+        transport error, an oversized body, the deadline mid-read) never
+        reaches here: it may have been billed for counts nobody read, so it
+        drops every sum (`lose`). One the deadline stopped before its request,
+        or whose error body was read (an HTTP error status, a redirect), sent
+        or spent nothing unread and leaves the sums as they are.
+
+        `completion_tokens` is never written: an embedding generates nothing.
+        The row's `operation: "embed"` is what tells a reader that absence is
+        a structural zero rather than an uncounted half
+        (`usage._completion_count`), so a rate can model the row.
+        """
+        body = body if isinstance(body, dict) else {}
+        model = body.get("model")
+        if isinstance(model, str) and 0 < len(model) <= MAX_MODEL_CHARS:
+            self.usage["model"] = model
+        block = body.get("usage")
+        block = block if isinstance(block, dict) else {}
+        seen = {"prompt_tokens": llm_usage.tokens(block.get("prompt_tokens")),
+                "cost_usd": llm_usage.money(block.get("cost"))}
+        for key in _SUMMED:
+            value = seen[key]
+            if value is None:
+                self.lost.add(key)
+            elif key not in self.lost:
+                self.totals[key] = self.totals.get(key, 0) + value
+        for key in _SUMMED:
+            if key in self.lost:
+                self.usage.pop(key, None)
+            else:
+                self.usage[key] = self.totals[key]
+        if "cost_usd" in self.lost:
+            self.usage.pop("cost_basis", None)
+        else:
+            self.usage["cost_basis"] = llm_usage.BILLED
+
+
+def _lost_unread(spend: _Spend | None) -> None:
+    """`spend.lose()` when the failing batch was sent and its body not read."""
+    if spend is not None and spend.in_flight:
+        spend.lose()
 
 
 def _status_kind(status: int) -> str:
@@ -266,7 +381,8 @@ class EmbeddingsClient:
         return headers
 
     def embed(self, texts: list[str], model: str, key: str, base_url: str,
-              deadline: float | None = None) -> list[list[float]]:
+              deadline: float | None = None,
+              usage: dict | None = None) -> list[list[float]]:
         """Embed `texts`, returning one vector per input, in input order.
 
         An empty `texts` returns ``[]`` without touching the network — the
@@ -277,6 +393,12 @@ class EmbeddingsClient:
         fresh `TIMEOUT`, so a loop that checks its own budget before calling —
         `semantic._isolate` did exactly this — is bounded by that check plus a
         whole further TIMEOUT, not by the budget it thinks it is enforcing.
+
+        `usage` is the holder `store.usage.Meter` hands a call: what the
+        provider stated is folded into it as each batch's body is read --
+        `prompt_tokens` and `cost_usd` (with `cost_basis`) summed over the
+        batches, `model` as the provider named it. A key stays out unless every
+        batch read reported it; see `_Spend.fold`. Without a holder nothing is read.
         """
         if not texts:
             return []
@@ -293,28 +415,43 @@ class EmbeddingsClient:
         if deadline is None:
             deadline = time.monotonic() + TIMEOUT
         out: list[list[float]] = []
+        spend = None if usage is None else _Spend(usage)
         for start in range(0, len(texts), BATCH):
             chunk = texts[start:start + BATCH]
-            out.extend(self._post(url, chunk, model, key, deadline))
+            out.extend(self._post(url, chunk, model, key, deadline,
+                                  spend=spend, first=start == 0))
         return out
 
     def _post(self, url: str, chunk: list[str], model: str, key: str,
-              deadline: float) -> list[list[float]]:
+              deadline: float, *, spend: _Spend | None,
+              first: bool) -> list[list[float]]:
         try:
-            body = self._fetch(url, chunk, model, key, deadline)
+            body = self._fetch(url, chunk, model, key, deadline, first=first, spend=spend)
         except EmbeddingsError:
+            _lost_unread(spend)
             raise
         except httpx.HTTPError as exc:
-            raise EmbeddingsError("network", str(exc)) from exc
+            _lost_unread(spend)
+            # A timeout sized to what was left of the deadline, firing once it
+            # is spent, is the deadline's (`DEADLINE`), not the transport's.
+            spent = (isinstance(exc, httpx.TimeoutException)
+                     and time.monotonic() >= deadline)
+            raise EmbeddingsError("network", str(exc),
+                                  code=DEADLINE if spent else None) from exc
         except Exception as exc:  # client/TLS setup and other unexpected failures
+            _lost_unread(spend)
             raise EmbeddingsError("network", str(exc)) from exc
+        # Before `_vectors`, so a reply that was billed and is then refused as
+        # malformed still counts.
+        if spend is not None:
+            spend.fold(body)
         # Deliberately outside the handlers above: `_vectors` raises
         # EmbeddingsError by design, and anything else escaping it is a bug in
         # this module, which must not be disguised as a provider failure.
         return _vectors(body, len(chunk))
 
     def _fetch(self, url: str, chunk: list[str], model: str, key: str,
-               deadline: float) -> object:
+               deadline: float, *, first: bool, spend: _Spend | None = None) -> object:
         """The response body, parsed, within what is left of the deadline.
 
         Streamed rather than read whole so the deadline can be enforced
@@ -324,10 +461,19 @@ class EmbeddingsClient:
         timeout, which is why that timeout is `READ_SLICE` and not the whole
         remaining budget — it is what bounds the overrun. The same loop drains
         error responses, so a slow 500 is bounded too.
+
+        `first` says no batch of this call has been sent yet, which is what lets
+        the spent-deadline error below say `NOT_SENT` (on a later batch it is
+        the deadline's, `DEADLINE`). `spend` is told when the request goes out
+        and when its body has been read (`_Spend.in_flight`), so a failure
+        between the two drops the call's sums (`_lost_unread`).
         """
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise EmbeddingsError("network", "embeddings deadline passed before the request")
+            raise EmbeddingsError("network", "embeddings deadline passed before the request",
+                                  code=NOT_SENT if first else DEADLINE)
+        if spend is not None:
+            spend.in_flight = True
         slice_ = min(remaining, READ_SLICE)
         with self._client().stream(
             "POST", url, headers=self._headers(key),
@@ -354,7 +500,12 @@ class EmbeddingsClient:
                 raw += part
                 if time.monotonic() > deadline:
                     raise EmbeddingsError(
-                        "network", f"embeddings response exceeded {TIMEOUT}s")
+                        "network", f"embeddings response exceeded {TIMEOUT}s",
+                        code=DEADLINE)
+            # The body is read: whatever follows (an error status, a redirect,
+            # a body that is not JSON) was answered in full.
+            if spend is not None:
+                spend.in_flight = False
             if 300 <= resp.status_code < 400:
                 # The client does not follow redirects, so a 3xx would sail
                 # past the check below as a "success" whose body is empty, and

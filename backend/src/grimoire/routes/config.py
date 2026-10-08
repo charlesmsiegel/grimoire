@@ -1131,21 +1131,35 @@ def _embed_endpoint(raw: dict) -> str:
 
 
 async def _embed_probe(raw: dict, model: str) -> dict:
-    """The `embed` probe: one fixed string, once, metered under `model-test`.
+    """The `embed` probe: one fixed string, once, metered under `model-test`
+    with `operation: "embed"`, on the provider under test (ruling 8: it is not
+    an embed task and resolves no role).
 
     The holder is stamped as `llm._stamp` stamps a chat attempt, which is what
-    makes the meter file a row at all (an empty holder means "never sent") --
-    and it names no token counts: the embeddings client reports none, and the
-    ledger says so by leaving them absent until slice D meters embeddings
-    (ruling 14)."""
+    makes the meter file a row at all (an empty holder means "never sent"),
+    and the client folds into it whatever counts the endpoint reports. A
+    failure is finished as the embed operation finishes one
+    (`inference.embed.record_failure`): its recorded detail is the kind and HTTP status
+    only, because a redirect's `Location` can carry a key. The verdict still
+    reads the exception's own detail (`_probe`, through `probes.scrub`)."""
     probes = store.inference.probes
-    with store.usage.meter("model-test") as m:
+    # `model=` because the client owns the holder's `model` key: it clears it
+    # at entry and refills it only with what the endpoint named.
+    with store.usage.meter("model-test", model=model) as m:
+        # Slice E meters this through `llm_usage.account(with_account(conn,
+        # operation="embed"))`; on merge E's account line is kept and this
+        # literal `operation` goes.
         m.usage.update({"model": model, "connection": raw.get("name") or raw["id"],
-                        "provider": raw.get("kind", "openrouter"), "attempts": 1})
-        # Off the loop: the embeddings client is synchronous by design.
-        vectors = await asyncio.to_thread(
-            _EMBEDDINGS.embed, [probes.EMBED_TEXT], model, raw.get("api_key", ""),
-            _embed_endpoint(raw))
+                        "provider": raw.get("kind", "openrouter"), "attempts": 1,
+                        "operation": "embed"})
+        try:
+            # Off the loop: the embeddings client is synchronous by design.
+            vectors = await asyncio.to_thread(lambda: _EMBEDDINGS.embed(
+                [probes.EMBED_TEXT], model, raw.get("api_key", ""), _embed_endpoint(raw),
+                usage=m.usage))
+        except Exception as exc:
+            store.inference.embed.record_failure(m, exc)
+            raise
     return {"ok": True, "dims": len(vectors[0])}
 
 
@@ -1518,10 +1532,20 @@ def _facts_conn(conn_id: str) -> dict:
 
 def _facts_body(conn: dict, model: str) -> dict:
     """One model's facts on a provider (`facts.of`: verified results only for
-    its current rev) and every capability as it resolves with them."""
+    its current rev) and every capability as it resolves with them.
+
+    Read strictly, as `GET /pricing` reads its table: a facts file that exists
+    and cannot be read answers `unreadable: true` with nothing stated, rather
+    than reading as a model nothing was said of -- the panel must not offer a
+    save over the user's word it could not read (the write would be refused
+    anyway, `put_connection_facts`)."""
     caps = capabilities.caps_for(conn, model)
-    return {"provider": conn["id"], "model": model,
-            **facts.of(conn["id"], model, conn["rev"]),
+    try:
+        known = facts.of(conn["id"], model, conn["rev"], strict=True)
+        unreadable = False
+    except facts.FactsUnreadableError:
+        known, unreadable = facts.of(conn["id"], model, conn["rev"]), True
+    return {"provider": conn["id"], "model": model, **known, "unreadable": unreadable,
             "capabilities": {n: capabilities.cap_body(c) for n, c in caps.items()}}
 
 

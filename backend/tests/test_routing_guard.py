@@ -554,12 +554,14 @@ def _task_literals() -> dict[str, set[str]]:
 
 
 def _unclassified(found: dict[str, set[str]]) -> dict[str, list[str]]:
-    """The named tasks neither a route claims nor `routing.NON_ROUTE_TASKS`
-    declares: a task that is metered on purpose outside every route (the
-    connection test call, which runs on the connection it is testing) is
+    """The named tasks neither a route claims nor `routing.NON_ROUTE_TASKS` or
+    `routing.EMBED_TASKS` declares: a task that is metered on purpose outside
+    every route (the connection test call, which runs on the connection it is
+    testing; an embed, which runs on the global Embedding role) is
     named-but-not-routed, not unclassified."""
     return {task: sorted(where) for task, where in found.items()
-            if task not in routing.TASK_ROUTE and task not in routing.NON_ROUTE_TASKS}
+            if task not in routing.TASK_ROUTE and task not in routing.NON_ROUTE_TASKS
+            and task not in routing.EMBED_TASKS}
 
 
 def test_a_named_but_not_routed_task_is_classified():
@@ -568,6 +570,12 @@ def test_a_named_but_not_routed_task_is_classified():
     assert not set(routing.NON_ROUTE_TASKS) & set(routing.TASK_ROUTE)
     assert routing.route("model-test") is None
     assert _unclassified({"model-test": {"planted.py:1"}}) == {}
+    # The embed tasks too. Being outside `TASK_ROUTE` is also what keeps a
+    # `require_inference("semantic-recall", ...)` failing the every-task-has-a-
+    # route check above: an embed resolves the Embedding role, never a route.
+    assert not set(routing.EMBED_TASKS) & set(routing.TASK_ROUTE)
+    assert routing.route("semantic-recall") is None
+    assert _unclassified({"semantic-recall": {"planted.py:1"}}) == {}
     assert _unclassified({"no-such-task": {"planted.py:1"}}) == {
         "no-such-task": ["planted.py:1"]}
 

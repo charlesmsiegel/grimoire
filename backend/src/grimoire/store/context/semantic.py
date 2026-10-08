@@ -27,7 +27,10 @@ there is no code path into it that could need one.
 **It fails to keyword-only, never to an error.** No connection, no model, a
 dead endpoint, a malformed body, a rate limit, a vector of the wrong
 dimensionality: every one of them returns ``[]`` and the turn proceeds on the
-keyword activation. A scene is never worth losing to a search index.
+keyword activation. A scene is never worth losing to a search index. Every
+request goes through the metered embed operation (`inference.embed.embed_sync`,
+task ``semantic-recall``), so a failed one is recorded once, by its meter, with
+its kind and HTTP status only; this module writes no line of its own.
 
 **It is bounded, and it gives way first.** `semantic_recall_depth` caps how
 many entries it may add and `semantic_recall_threshold` is the cosine floor
@@ -42,11 +45,10 @@ World info until the whole section went, keyword hits and all.
 
 Four settings in config.md, all off by default:
 
-The Embedding role, ``role_embedding_provider`` and ``role_embedding_model``
-(``embeddings_connection_id`` and ``embeddings_model`` on a store the
-format-2 migration has not reached; `inference.translate.embedding_role`
-reads either, and `embed_space.resolve` is the one place that turns it into
-an endpoint)
+The Embedding role (set on the Models page; stored as
+``role_embedding_provider`` and ``role_embedding_model``, read through the
+legacy translation on a store the format-2 migration has not reached, and
+turned into an endpoint in one place, `embed_space.endpoint`)
     The provider is an `llm_connections` entry; its ``base_url`` and
     ``api_key`` are the endpoint. Reusing a provider rather than adding
     ``embeddings_url``/``embeddings_key`` to config.md is deliberate: config.md
@@ -83,6 +85,7 @@ import time
 from ... import embeddings
 from ...llm_errors import LLMError
 from .. import config, embed_space, vectors
+from ..inference import embed
 
 #: UTF-8 *bytes* of an entry's text that get embedded — not characters.
 #: Characters are the wrong unit for a token window: an entry written in CJK
@@ -165,23 +168,25 @@ def _float(value: object, default: float) -> float:
 def settings() -> dict | None:
     """The resolved recall configuration, or None when the layer is off.
 
-    The endpoint half is `embed_space.resolve`, shared with the search surface
+    The endpoint half is `embed_space.endpoint`, shared with the search surface
     so both read and write one cache under one namespace. What this adds is the
     part that is recall's alone: `depth`, which is also recall's on/off switch,
     and `threshold`.
 
     None is the answer for every kind of "not set up" — depth 0, or anything
-    that makes `resolve` return None. The caller treats all of them the same
+    that makes `endpoint` return None. The caller treats all of them the same
     way, so distinguishing them here would buy nothing; and a store this reads
     may be hand-edited or half-synced, so it must not raise for any of them
     either.
+
+    Holds a key (the endpoint's): nothing logs or serialises this dict.
     """
     try:
         cfg = config.read_config()
         depth = max(_int(cfg.get("semantic_recall_depth"), 0), 0)
         if depth <= 0:
             return None
-        space = embed_space.resolve(cfg)
+        space = embed_space.endpoint(cfg)
         if space is None:
             return None
         threshold = _float(cfg.get("semantic_recall_threshold"),
@@ -216,10 +221,16 @@ def recall(candidates: list[dict], recent_text: str) -> list[dict]:
     return [e for e, _ in recall_scored(candidates, recent_text)]
 
 
-def recall_scored(candidates: list[dict], recent_text: str) -> list[tuple[dict, float]]:
+def recall_scored(candidates: list[dict], recent_text: str, *,
+                  campaign: str = "", scene: str = "") -> list[tuple[dict, float]]:
     """`recall`, with the cosine each hit scored: `(entry, score)` pairs, most
     similar first. The score is what the inspector shows as the reason an entry
     was recalled; the selection is `recall`'s exactly.
+
+    `campaign` and `scene` are the campaign and scene whose turn this recall
+    serves, which the embed row is charged to -- the scene too, so a scene's own
+    totals carry what its turns spent on recall. The vectors themselves are
+    global (one space, one cache).
     """
     if not candidates or not recent_text.strip():
         return []
@@ -248,11 +259,13 @@ def recall_scored(candidates: list[dict], recent_text: str) -> list[tuple[dict, 
     # must not be billed twice in one request.
     uncached = list(dict.fromkeys(t for t in wanted if t not in known))
     missing = _warm_window(uncached, query_text)
-    got = _embed(cfg, query_text, missing)
+    got = _embed(cfg, query_text, missing, campaign=campaign, scene=scene,
+                 cached=len(known), uncached=len(uncached))
     if got is None:
         # The turn proceeds on keyword activation. Deliberately silent: this
         # runs on every turn, and a provider that is down would otherwise fill
-        # the log with one identical line per message.
+        # the log with one identical line per message. The meter has already
+        # recorded the failed request.
         return []
     query = vectors.unit(got[0])
     if query is None:
@@ -295,7 +308,9 @@ def recall_scored(candidates: list[dict], recent_text: str) -> list[tuple[dict, 
     return [(candidates[i], -neg) for neg, i in hits[:cfg["depth"]]]
 
 
-def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] | None:
+def _embed(cfg: dict, query_text: str, missing: list[str], *, campaign: str = "",
+           scene: str = "", cached: int | None = None,
+           uncached: int | None = None) -> list[list[float]] | None:
     """Vectors for the query and this turn's warm run, or None if the provider
     could not be reached at all. A `[]` in place of a document's vector means
     "not this turn" — `recall` stores nothing for it and does not score it.
@@ -317,14 +332,22 @@ def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] 
     when it is not given one, so a retry after a slow failure would otherwise
     cost a second full timeout and this function would be worth twice what the
     constant says.
+
+    Each request is one `embed_sync` call, so one ledger row: a retry files a
+    second. `campaign` and `scene` ride along for that row and the capture
+    line, and
+    `cached` and `uncached` for the first call's line only (a retry is the
+    same run) -- `cfg` is the endpoint the cache was read under, never
+    re-resolved, so the vectors land in the space they are scored in.
     """
     deadline = time.monotonic() + embeddings.TIMEOUT
     # `bad_response` unless the provider says otherwise, so a wrong-length reply
     # -- which raises nothing -- is treated as the response-shaped failure it is.
     kind = "bad_response"
     try:
-        got = _CLIENT.embed([query_text, *missing], cfg["model"], cfg["key"],
-                            cfg["base_url"], deadline=deadline)
+        got = embed.embed_sync("semantic-recall", [query_text, *missing], space=cfg,
+                               client=_CLIENT, deadline=deadline, campaign=campaign,
+                               scene=scene, cached=cached, uncached=uncached)
         if len(got) == 1 + len(missing):  # defensive: the client promises this
             return got
     except LLMError as exc:
@@ -342,11 +365,13 @@ def _embed(cfg: dict, query_text: str, missing: list[str]) -> list[list[float]] 
         # only that one might have been caused by a document in the batch.
         return None
     try:
-        got = _CLIENT.embed([query_text], cfg["model"], cfg["key"], cfg["base_url"],
-                            deadline=deadline)
+        # The same run: its hits and misses were on the first call's line.
+        got = embed.embed_sync("semantic-recall", [query_text], space=cfg, client=_CLIENT,
+                               deadline=deadline, campaign=campaign, scene=scene)
     except (LLMError, OSError):
         # The turn proceeds on keyword activation. Deliberately silent: this
         # runs on every turn, and a provider that is down would otherwise fill
-        # the log with one identical line per message.
+        # the log with one identical line per message. The meter has already
+        # recorded the failed request.
         return None
     return got + [[] for _ in missing] if len(got) == 1 else None

@@ -105,6 +105,21 @@ test("the rates hint is offered only where a rate could actually help", () => {
   expect(container.textContent).not.toMatch(/Set per-token rates/);
 });
 
+test("unpriced embed calls that reported a prompt count are offered rates", () => {
+  // An embedding has no output, so its row carries a prompt count and no
+  // completion count. The server reads that as zero output, not as a call
+  // nobody counted (`usage._completion_count`), so such a bucket arrives with
+  // `unmetered_calls: 0` -- and the card must send the reader to the rate that
+  // would price them rather than say no rate can.
+  const { container } = render(
+    <Footnotes bucket={{ ...ZERO, calls: 2, prompt_tokens: 40, total_tokens: 40,
+                         unpriced_calls: 2, unmetered_calls: 0 }} />);
+
+  expect(container.textContent).toMatch(/Set per-token rates in Settings/);
+  expect(container.textContent).not.toMatch(/No rate can price these/);
+  expect(container.textContent).not.toMatch(/reported no token counts/);
+});
+
 test("a mix says how many of them no rate can reach", () => {
   const { container } = render(
     <Footnotes bucket={{ ...ZERO, calls: 3, unpriced_calls: 3, unmetered_calls: 1 }} />);

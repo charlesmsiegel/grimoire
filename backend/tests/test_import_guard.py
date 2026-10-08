@@ -69,22 +69,27 @@ def _kind_of(mod: str, name: str) -> str:
     return "other"
 
 
+def _target(node: ast.ImportFrom, mod: str, is_pkg: bool) -> str:
+    """The absolute module an `ImportFrom` in `mod` imports FROM, relative
+    levels resolved ("" for a relative import with no module, never here)."""
+    if not node.level:
+        return node.module or ""
+    pkg = mod if is_pkg else mod.rsplit(".", 1)[0]
+    base = pkg.split(".")
+    if node.level > 1:
+        base = base[: len(base) - (node.level - 1)]
+    return ".".join(base) + ("." + node.module if node.module else "")
+
+
 def _resolve(node, mod: str, is_pkg: bool) -> set[str]:
     """Absolute grimoire module names this import depends on."""
-    pkg = mod if is_pkg else mod.rsplit(".", 1)[0]
     out: set[str] = set()
     if isinstance(node, ast.Import):
         for a in node.names:
             if a.name.startswith("grimoire"):
                 out.add(a.name)
         return out
-    if node.level:
-        base = pkg.split(".")
-        if node.level > 1:
-            base = base[: len(base) - (node.level - 1)]
-        target = ".".join(base) + ("." + node.module if node.module else "")
-    else:
-        target = node.module or ""
+    target = _target(node, mod, is_pkg)
     if not target.startswith("grimoire"):
         return out
     for a in node.names:

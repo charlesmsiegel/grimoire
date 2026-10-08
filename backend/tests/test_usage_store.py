@@ -344,6 +344,26 @@ def test_the_meter_records_what_the_facade_filled_in(home, monkeypatch):
     assert row["duration_ms"] >= 0
 
 
+def test_a_row_carries_a_named_operation(home):
+    row = usage.record(task="semantic-recall", operation="embed")
+
+    assert row["operation"] == "embed"
+
+
+def test_a_row_names_no_operation_by_default(home):
+    row = usage.record(task="chat")
+
+    assert "operation" not in row
+
+
+def test_the_meter_files_the_holders_operation(home):
+    with usage.meter("art-catalog") as m:
+        m.usage.update(model="m", operation="embed")
+
+    row, = _rows(home)
+    assert row["operation"] == "embed"
+
+
 def test_a_failed_call_is_still_a_row_carrying_the_failure_kind(home):
     from grimoire.llm_errors import LLMError
 
@@ -1271,6 +1291,51 @@ def test_a_half_counted_call_is_unmetered_too(home, monkeypatch):
     monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
     _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
     _seed("2026-08-14", model="local/glm", prompt_tokens=1000)   # no completion count
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["modelled_calls"] == 0
+    assert totals["unpriced_calls"] == 1
+    assert totals["unmetered_calls"] == 1
+
+
+def test_an_unpriced_embed_row_is_modelled_once_a_rate_exists(home, monkeypatch):
+    """An embedding generates nothing, so its row carries a prompt count and no
+    completion count (`embeddings._Spend.fold` never writes one). That absence
+    is a structural zero, not a count nobody took: a prompt rate prices the
+    call completely, and the figure is arithmetic in `modelled_usd`, never
+    spend."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 5.0}})
+    _seed("2026-08-14", task="semantic-recall", model="local/vectors",
+          prompt_tokens=2000, operation=usage.EMBED_OPERATION)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["modelled_calls"] == 1
+    assert totals["modelled_usd"] == pytest.approx(2.0)
+    assert totals["unpriced_calls"] == 0
+    assert totals["unmetered_calls"] == 0
+    assert totals["cost_usd"] == 0.0, "a modelled figure is not money charged"
+
+
+def test_an_unpriced_embed_row_with_no_rate_is_not_reported_as_uncounted(home, monkeypatch):
+    """With no rate it stays unpriced -- but its provider DID count it, so the
+    Costs card must offer rates rather than say no rate can price it."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _seed("2026-08-14", task="semantic-recall", model="local/vectors",
+          prompt_tokens=2000, operation=usage.EMBED_OPERATION)
+
+    totals = usage.summary(days=30)["totals"]
+    assert totals["unpriced_calls"] == 1
+    assert totals["unmetered_calls"] == 0
+
+
+def test_an_embed_row_nobody_counted_stays_unmetered(home, monkeypatch):
+    """The structural zero is the completion side only: an embed whose provider
+    reported no prompt count is still a call nobody measured."""
+    monkeypatch.setattr(usage, "_today", lambda: "2026-08-14")
+    _rates(home, {"": {"prompt_usd_per_1k": 1.0, "completion_usd_per_1k": 1.0}})
+    _seed("2026-08-14", task="semantic-recall", model="local/vectors",
+          operation=usage.EMBED_OPERATION)
 
     totals = usage.summary(days=30)["totals"]
     assert totals["modelled_calls"] == 0

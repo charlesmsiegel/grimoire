@@ -685,6 +685,19 @@ def test_a_known_no_on_a_required_capability_is_missing(at_state):
     assert inf.resolve("chat").missing == ()
 
 
+def test_a_failed_vision_test_never_lifts_a_catalogs_vision_no(at_state):
+    """The refusal is the catalog's: a failed test is `unknown`, which never
+    overrides a lower source's known `no` (spec 5.3, 12)."""
+    at_state("fresh")
+    _catalog("openrouter", [{"id": "vendor/active", "vision": False}])
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    inference_facts.record_verified("openrouter", "vendor/active", rev,
+                                    {"vision": {"ok": False, "error": "refused"}})
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap("no", "catalog")
+    assert image.missing == ("vision",)
+
+
 def test_unknown_is_never_missing(at_state):
     at_state("fresh")
     image = inf.resolve("image-description")

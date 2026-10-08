@@ -236,6 +236,29 @@ def test_test_beats_user_beats_catalog():
                     overrides={"vision": "no"})["vision"] == Cap("no", "user")
 
 
+def test_a_failed_test_never_lifts_a_catalogs_no():
+    """A failed test is `unknown`, and an `unknown` never overrides a `no`
+    from a lower source that knows: the catalog's `no` stands, for every
+    capability (spec 5.3: a failed test is never what decides a refusal,
+    either way). It still outranks the catalog's `yes`."""
+    failed = {"ok": False, "at": "x", "error": "404"}
+    row = {"id": "m", "outputs": ["text"], "vision": False}
+    got = _resolve("custom", row=row, verified={"embed": failed, "vision": failed})
+    assert got["embed"] == Cap("no", "catalog")
+    assert got["vision"] == Cap("no", "catalog")
+    # Only a `no` stands against it: the catalog's `yes` is still outranked.
+    assert _resolve("custom", row=row, verified={"generate": failed})["generate"] == Cap(
+        "unknown", "test", "404")
+    # A guess is no knowledge: a failed test outranks the name rule's `no`.
+    assert _resolve("custom", model="test-embed-1",
+                    verified={"generate": failed})["generate"] == Cap("unknown", "test", "404")
+    # The user's word and a passed test still outrank the catalog's `no`.
+    assert _resolve("custom", row=row, verified={"embed": failed},
+                    overrides={"embed": "yes"})["embed"] == Cap("yes", "user")
+    assert _resolve("custom", row=row,
+                    verified={"embed": {"ok": True, "at": "x"}})["embed"] == Cap("yes", "test")
+
+
 def test_user_and_catalog_beat_preset_always():
     assert _resolve("openai", overrides={"generate": "no"})["generate"] == Cap("no", "user")
     got = _resolve("openai", row={"id": "m", "outputs": ["embeddings"]})

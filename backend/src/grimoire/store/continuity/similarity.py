@@ -47,6 +47,7 @@ already read once for every text it scores.
 
 from __future__ import annotations
 
+import functools
 import math
 import re
 import time
@@ -57,6 +58,7 @@ from typing import Literal
 
 from ... import embeddings
 from .. import embed_space, fieldtext, paths, vectors
+from ..inference import embed
 from . import drivers, effective, involvement
 
 #: The identity text's byte bound. The text is a label, a title, at most three
@@ -465,9 +467,10 @@ def nearest(subject: Subject, candidates: list[Subject],
 
 
 def available() -> dict | None:
-    """The configured embedding space, or None. Recall depth is never
-    consulted: it bounds lore recall, not whether continuity may embed."""
-    return embed_space.resolve()
+    """The configured embedding endpoint (`embed_space.endpoint`), or None.
+    Recall depth is never consulted: it bounds lore recall, not whether
+    continuity may embed. Holds a key: nothing logs or serialises it."""
+    return embed_space.endpoint()
 
 
 def matching() -> str:
@@ -503,20 +506,53 @@ def reference_width(fresh: list[list[float]], loaded: dict[str, list[float]]) ->
     return _most_common([len(v) for v in loaded.values()])
 
 
-def embed_missing(space: dict, texts: list[str], *,
-                  deadline: float) -> tuple[dict[str, list[float]], str]:
+class Counts:
+    """A run's cache hits and misses for the capture line, handed to the
+    run's first embed call alone (`take`): every chunk and retry of the run is
+    its own line, and a reader summing lines must count the run once."""
+
+    __slots__ = ("cached", "uncached")
+
+    def __init__(self, cached: int | None, uncached: int | None):
+        self.cached = cached
+        self.uncached = uncached
+
+    def take(self) -> tuple[int | None, int | None]:
+        got = (self.cached, self.uncached)
+        self.cached = self.uncached = None
+        return got
+
+
+def embed_missing(space: dict, texts: list[str], *, deadline: float,
+                  campaign: str = "", scene: str = "",
+                  counts: Counts | None = None) -> tuple[dict[str, list[float]], str]:
     """Embed `texts` in `embeddings.BATCH` chunks under one `deadline`, caching
     each chunk as it lands. Returns the unit vectors and ``""``, or -- on a
     provider failure -- what earlier chunks produced and the failure's kind, so
-    a chunk that failed never costs the ones already saved."""
+    a chunk that failed never costs the ones already saved.
+
+    Each chunk is one `embed_sync` call under ``continuity-similarity``, so one
+    ledger row, charged to `campaign` (and `scene`, for absorb's identity
+    check). `counts` are the run's cache hits and misses, which the first
+    call it reaches puts on its capture line (`Counts`). The meter records a
+    failed chunk; this writes nothing of its own.
+
+    `deadline` is always its run's budget (`deadline`: absorb's, or the
+    sweep's `EmbedBudget`), so it is handed in `budgeted`: a request it cuts is
+    the run's clock, filed `aborted` with no error, and the caller -- which
+    knows whether its budget ran out (`routes.scenes._embedding_reason`) --
+    says what that meant."""
     unique = list(dict.fromkeys(texts))
     out: dict[str, list[float]] = {}
     batch = embeddings.BATCH
     for start in range(0, len(unique), batch):
         chunk = unique[start:start + batch]
+        cached, uncached = counts.take() if counts is not None else (None, None)
         try:
-            got = _CLIENT.embed(chunk, space["model"], space["key"], space["base_url"],
-                                deadline=deadline)
+            got = embed.embed_sync("continuity-similarity", chunk, space=space,
+                                   client=_CLIENT, deadline=deadline, budgeted=True,
+                                   campaign=campaign, scene=scene, cached=cached,
+                                   uncached=uncached)
         except embeddings.EmbeddingsError as exc:
             return out, exc.kind
         except OSError:
@@ -573,7 +609,8 @@ def _retry_texts(required: list[str], warm: list[str], forgotten: set[str],
 
 
 def _embed_apart(space: dict, required: list[str], warm: list[str], rotate: str,
-                 deadline: float) -> tuple[dict[str, list[float]], str]:
+                 deadline: float, *, campaign: str = "", scene: str = "",
+                 counts: Counts | None = None) -> tuple[dict[str, list[float]], str]:
     """`required` and `warm` embedded in separate calls, so a text the provider
     refuses costs its own set and not the other: one refused required text
     held at the head of a single call would fail the warm window behind it on
@@ -581,14 +618,17 @@ def _embed_apart(space: dict, required: list[str], warm: list[str], rotate: str,
     required. When the required call fails, its unsaved texts are tried once
     more as a proper subset rotated on `rotate` (`embed_space.warm_window`),
     so the texts sharing a chunk with the refused one are reached within a few
-    sweeps instead of never. The first failure's kind is the one reported."""
-    fresh, error = embed_missing(space, required, deadline=deadline)
+    sweeps instead of never. The first failure's kind is the one reported.
+    `campaign`, `scene` and the run's one `counts` go to every `embed_missing`."""
+    run = functools.partial(embed_missing, space, deadline=deadline, campaign=campaign,
+                            scene=scene, counts=counts)
+    fresh, error = run(required)
     unsaved = [t for t in required if t not in fresh]
     if error and len(unsaved) > 1 and time.monotonic() < deadline:
         retry = embed_space.warm_window(unsaved, rotate, len(unsaved) - 1)
-        fresh.update(embed_missing(space, retry, deadline=deadline)[0])
+        fresh.update(run(retry)[0])
     if warm and time.monotonic() < deadline:
-        got, warm_error = embed_missing(space, warm, deadline=deadline)
+        got, warm_error = run(warm)
         fresh.update(got)
         error = error or warm_error
     return fresh, error
@@ -598,7 +638,7 @@ def semantic(required: list[str], warm: list[str], *, deadline: float | None,
              space: dict | None = None, cached: Iterable[str] = (),
              warm_limit: int = IDENTITY_WARM_LIMIT,
              loaded: dict[str, list[float]] | None = None,
-             rotate: str | None = None) -> Semantic:
+             rotate: str | None = None, campaign: str = "", scene: str = "") -> Semantic:
     """Vectors for `required` (always embedded when missing), `warm` (embedded
     when missing, best first, up to `warm_limit`) and `cached` (read only).
     `deadline` None embeds nothing. Every vector is held to one reference
@@ -608,7 +648,9 @@ def semantic(required: list[str], warm: list[str], *, deadline: float | None,
     by the caller (the reconcile sweep's one probe), so it is not read again.
     A given `rotate` (the sweep's rotation seed) embeds the required and warm
     texts apart (`_embed_apart`); without one -- absorb, whose required texts
-    are this absorb's own and never carried to another -- they share a call."""
+    are this absorb's own and never carried to another -- they share a call.
+    `campaign` (and `scene`) is what every embed this run makes is charged to.
+    The vectors are global -- one space, one cache -- whoever warmed them."""
     space = space or available()
     if space is None:
         return Semantic({}, "off")
@@ -616,24 +658,33 @@ def semantic(required: list[str], warm: list[str], *, deadline: float | None,
     required = list(dict.fromkeys(required))
     need = set(required)
     warm = [t for t in dict.fromkeys(warm) if t not in need]
+    read_only = list(cached)
     if loaded is None:
-        loaded = vectors.load(name, [*required, *warm, *cached])
+        loaded = vectors.load(name, [*required, *warm, *read_only])
+    # The capture line's hits and misses, counted once for the whole run: a
+    # miss outside this run's warm window is still a miss, so neither is the
+    # number of texts any one call sends.
+    counts = Counts(len(loaded),
+                    len({t for t in (*required, *warm, *read_only) if t not in loaded}))
     warm_misses = [t for t in warm if t not in loaded][:warm_limit]
     fresh: dict[str, list[float]] = {}
     error = ""
     required_misses = [t for t in required if t not in loaded]
     if deadline is not None and rotate is not None:
-        fresh, error = _embed_apart(space, required_misses, warm_misses, rotate, deadline)
+        fresh, error = _embed_apart(space, required_misses, warm_misses, rotate, deadline,
+                                    campaign=campaign, scene=scene, counts=counts)
     elif deadline is not None:
         fresh, error = embed_missing(space, [*required_misses, *warm_misses],
-                                     deadline=deadline)
+                                     deadline=deadline, campaign=campaign, scene=scene,
+                                     counts=counts)
     width = reference_width(list(fresh.values()), loaded)
     kept, forgotten = _keep_width(name, {**loaded, **fresh}, width)
     again = _retry_texts(required, warm, forgotten - set(fresh),
                          warm_limit - len(warm_misses))
     embedded = len(fresh)
     if again and deadline is not None and time.monotonic() < deadline:
-        healed, retry_error = embed_missing(space, again, deadline=deadline)
+        healed, retry_error = embed_missing(space, again, deadline=deadline,
+                                            campaign=campaign, scene=scene, counts=counts)
         embedded += len(healed)
         error = error or retry_error
         kept.update(_keep_width(name, healed, width)[0])
