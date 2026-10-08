@@ -63,9 +63,10 @@ def test_bogus_explicit_preset_falls_back_to_inference(bogus):
     ({"kind": "claude", "preset": "openai"}, "claude"),
     ({"kind": "openrouter", "preset": "anthropic"}, "openrouter"),
     ({**_oc("https://api.openai.com/v1"), "preset": "openrouter"}, "openai"),
-    # No kind reads as openrouter: its own preset is believed, another is not.
+    # No kind reads as openrouter: its own preset is believed, another is not,
+    # and the URL is no reason to leave the adapter it reads as.
     ({"preset": "openrouter"}, "openrouter"),
-    ({"preset": "zai", "base_url": "https://api.openai.com/v1"}, "openai"),
+    ({"preset": "zai", "base_url": "https://api.openai.com/v1"}, "openrouter"),
 ])
 def test_an_explicit_preset_on_another_adapter_is_ignored(conn, want):
     assert providers.infer(conn).id == want
@@ -131,7 +132,7 @@ def test_capability_sets_are_exact():
     gs = fz({"generate", "stream"})
     p = providers.PRESETS
     assert _sets(p["openrouter"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
-    assert _sets(p["anthropic"]) == (gs, fz({"vision", "structured_output"}), fz({"embed", "decide_native", "prefill"}))
+    assert _sets(p["anthropic"]) == (gs, fz({"vision", "structured_output", "prefill"}), fz({"embed", "decide_native"}))
     assert _sets(p["claude"]) == (gs, fz(), fz({"vision", "embed", "decide_native", "structured_output", "prefill"}))
     assert _sets(p["openai"]) == (gs, fz({"vision", "embed", "decide_native", "structured_output", "prefill"}), fz())
     for k in ("zai", "zai_coding"):
@@ -158,3 +159,33 @@ def test_every_kind_is_a_known_adapter():
 
 def test_preset_ids_match_their_keys():
     assert all(k == v.id for k, v in providers.PRESETS.items())
+
+
+def test_a_connection_with_no_kind_is_on_openrouter():
+    """A missing `kind` reads as `openrouter` everywhere else (the facade's
+    default), so the preset is OpenRouter's, not `custom`'s."""
+    assert providers.infer({}).id == "openrouter"
+    assert providers.infer({"model": "vendor/m"}).id == "openrouter"
+    assert providers.infer({"kind": ""}).id == "openrouter"
+
+
+@pytest.mark.parametrize("model, ruled_out", [
+    ("claude-haiku-4-5-20251001", False),
+    ("claude-sonnet-4-5-20250929", False),
+    ("claude-3-7-sonnet-20250219", False),
+    ("claude-opus-4-6", True),
+    ("claude-opus-4-7", True),
+    ("claude-opus-5", True),
+    ("claude-mythos-preview", True),
+    ("", True),
+])
+def test_anthropic_prefill_is_ruled_out_per_model(model, ruled_out):
+    never = providers.never_for(providers.PRESETS["anthropic"], model)
+    assert ("prefill" in never) is ruled_out
+    assert {"embed", "decide_native"} <= never
+
+
+def test_never_for_other_presets_is_the_presets_own():
+    for key, preset in providers.PRESETS.items():
+        if preset.kind != "anthropic":
+            assert providers.never_for(preset, "claude-opus-4-7") == preset.never, key

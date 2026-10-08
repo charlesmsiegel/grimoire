@@ -1886,15 +1886,18 @@ def _prefills(conn: dict) -> bool:
 
     The connection's own opt-in (`llm.prefill_capable`, a gateway rule that
     cannot read the store), unless its provider preset rules prefill out: the
-    Anthropic API's current models answer a trailing assistant turn with a 400,
-    so an opt-in there would fail every Keep writing. `claude` lists prefill
+    Anthropic API's models from Claude 4.6 on answer a trailing assistant turn
+    with a 400 (`never_for`), so an opt-in there would fail every Keep writing. `claude` lists prefill
     under `never` too, and is exempt: its SDK path has sent an opted-in
     connection the prefill tail since play controls IV, and slice B changes
     nothing an existing store does."""
     if not prefill_capable(conn):
         return False
     preset = inference_providers.infer(conn)
-    return preset.kind == "claude" or "prefill" not in preset.never
+    if preset.kind == "claude":
+        return True
+    return "prefill" not in inference_providers.never_for(preset,
+                                                          str(conn.get("model") or ""))
 
 
 def _extend_mode(conn: dict) -> str:

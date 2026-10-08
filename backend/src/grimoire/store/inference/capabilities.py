@@ -180,9 +180,10 @@ def resolve_caps(preset: providers.Preset, model: str, *, catalog_row: dict | No
     stated = _stated(facts) if isinstance(facts, dict) else {}
     listed = _listed(catalog_row)
     named = _named(model)
+    never = providers.never_for(preset, model)
     out: dict[str, Cap] = {}
     for cap in NAMES:
-        if cap in preset.never:
+        if cap in never:
             out[cap] = Cap(NO, "adapter")
         elif cap in stated:
             out[cap] = stated[cap]

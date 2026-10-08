@@ -538,7 +538,7 @@ pre-fills the URL and billing, and contributes capability facts.
 | Preset | Adapter (`kind`) | Base URL | Billing | Reports price | Can do at all |
 |---|---|---|---|---|---|
 | OpenRouter | `openrouter` | fixed | metered | yes | generate, vision, embed, decide_native, structured_output — per catalog |
-| Anthropic API (new) | `anthropic` | fixed `https://api.anthropic.com` | metered | no | generate; vision and structured_output (`output_config.format`) per the model's catalog entry; no embed, no decide_native; prefill never (current models reject it); sampling parameters per model (current models reject them) |
+| Anthropic API (new) | `anthropic` | fixed `https://api.anthropic.com` | metered | no | generate; vision and structured_output (`output_config.format`) per the model's catalog entry; no embed, no decide_native; prefill per model: a hard `no` on Claude 4.6 and later and on an id naming no version (the API answers a trailing assistant turn with a 400), possible on earlier models such as Claude Haiku 4.5; sampling parameters per model (current models reject them) |
 | Claude subscription | `claude` | — (Agent SDK) | subscription | equivalent | generate only |
 | OpenAI | `openai_compatible` | fixed `https://api.openai.com/v1` | metered | no | generate, vision, embed, structured_output, decide_native (`/v1/decisions`) |
 | z.ai | `openai_compatible` | fixed `https://api.z.ai/api/paas/v4` | metered | no | generate; vision, structured_output and prefill per model (unverified); no embed, no decide_native |

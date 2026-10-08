@@ -17,6 +17,8 @@ from __future__ import annotations
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
+from ... import llm_sampling
+
 BILLINGS: tuple[str, ...] = ("metered", "subscription")
 
 #: The capability vocabulary (spec 6.2).
@@ -66,8 +68,9 @@ PRESETS: dict[str, Preset] = {p.id: p for p in (
     _preset(
         "anthropic", "Anthropic API", "anthropic", "https://api.anthropic.com",
         locked=True, always=_GEN,
-        possible=frozenset({"vision", "structured_output"}),
-        never=frozenset({"embed", "decide_native", "prefill"})),
+        # Prefill is per model (`never_for`): Claude 4.6 and later refuse it.
+        possible=frozenset({"vision", "structured_output", "prefill"}),
+        never=frozenset({"embed", "decide_native"})),
     _preset(
         # The Agent SDK: no URL, and it reports a subscription-equivalent price.
         "claude", "Claude subscription", "claude", "",
@@ -157,9 +160,28 @@ def infer(conn: dict) -> Preset:
     if (isinstance(explicit, str) and explicit in PRESETS
             and PRESETS[explicit].kind == own_kind):
         return PRESETS[explicit]
-    if kind in ("openrouter", "claude", "anthropic"):
-        return PRESETS[str(kind)]
+    if own_kind in ("openrouter", "claude", "anthropic"):
+        return PRESETS[own_kind]
     return PRESETS[_by_url(conn.get("base_url"))]
+
+
+#: The first Claude version whose API refuses an assistant prefill with a 400
+#: (and Claude Mythos Preview, which names no version). Earlier models -- Claude
+#: Haiku 4.5 among them -- take one.
+ANTHROPIC_PREFILL_UNTIL = (4, 6)
+
+
+def never_for(preset: Preset, model: str) -> frozenset[str]:
+    """What `preset` rules out for `model`: its own `never`, plus prefill on an
+    Anthropic API model that refuses it -- one whose id names Claude 4.6 or
+    later, or names no version at all. The preset alone cannot say, because the
+    same protocol takes a prefill on older models."""
+    if preset.kind != "anthropic":
+        return preset.never
+    version = llm_sampling.claude_version(model)
+    if version is not None and version < ANTHROPIC_PREFILL_UNTIL:
+        return preset.never
+    return preset.never | {"prefill"}
 
 
 def billing(conn: dict) -> str:

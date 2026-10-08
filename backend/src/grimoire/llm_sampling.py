@@ -313,7 +313,7 @@ _DATE = re.compile(r"\d{8}")
 _SMALL = re.compile(r"\d{1,2}")
 
 
-def _claude_version(model: object) -> tuple[int, int] | None:
+def claude_version(model: object) -> tuple[int, int] | None:
     """The Claude version a model id names, as `(major, minor)`, or None when
     it names none: the first run of small numbers after `claude-`, read in
     order and stopped by a snapshot date (`claude-3-7-sonnet-20250219` is 3.7,
@@ -346,7 +346,7 @@ def _anthropic_sampler(c: _Conn, name: str, thinking: bool, temperature: bool) -
     Whether the model takes sampling at all is its id's version, never the
     thinking its catalog row lists (`ANTHROPIC_SAMPLING_UNTIL`)."""
     if name in ("temperature", "top_p", "top_k"):
-        version = _claude_version(c.model)
+        version = claude_version(c.model)
         if version is None or version >= ANTHROPIC_SAMPLING_UNTIL:
             # A version the API refuses is the adapter's knowledge; an id that
             # names none is nobody's answer, and nothing is sent on a guess.

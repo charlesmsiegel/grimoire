@@ -78,7 +78,7 @@
 - `class Preset(NamedTuple): id: str; label: str; kind: str; base_url: str; url_locked: bool; billing: str; reports_price: bool; always: frozenset[str]; possible: frozenset[str]; never: frozenset[str]` over capability names `generate, stream, vision, embed, decide_native, structured_output, prefill`.
 - `PRESETS` (ids, base URLs as spec §6.1). Exact sets:
   - `openrouter`: always `{generate, stream}`; possible `{vision, embed, decide_native, structured_output, prefill}`; never `{}`.
-  - `anthropic`: always `{generate, stream}`; possible `{vision, structured_output}`; never `{embed, decide_native, prefill}`.
+  - `anthropic`: always `{generate, stream}`; possible `{vision, structured_output, prefill}`; never `{embed, decide_native}`, plus prefill per model (`providers.never_for`: Claude 4.6 and later, or no version).
   - `claude`: always `{generate, stream}`; possible `{}`; never `{vision, embed, decide_native, structured_output, prefill}`.
   - `openai`: always `{generate, stream}`; possible `{vision, embed, decide_native, structured_output, prefill}`; never `{}`.
   - `zai`, `zai_coding`: always `{generate, stream}`; possible `{vision, structured_output, prefill}`; never `{embed, decide_native}` (vision moved to possible during execution: spec §6.1 never rules it out, and `never` changed `post_images.reach` for existing z.ai connections).

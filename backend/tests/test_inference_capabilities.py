@@ -438,3 +438,13 @@ def test_post_images_on_zai_answers_as_it_did(home):
         assert post_images.reach(conn) == want
     assert post_images.capability({**conn, "vision": "on"}) == "yes"
     assert post_images.capability({**conn, "vision": "off"}) == "no"
+
+
+def test_anthropic_prefill_follows_the_model():
+    """Claude 4.6 and later refuse a prefill: a hard adapter `no`. An older
+    model takes one, so it stays possible -- unknown until someone says."""
+    assert _resolve("anthropic", model="claude-opus-4-7")["prefill"] == Cap("no", "adapter")
+    older = _resolve("anthropic", model="claude-haiku-4-5-20251001")["prefill"]
+    assert older.value == "unknown"
+    stated = _resolve("anthropic", model="claude-haiku-4-5-20251001", prefill=True)
+    assert stated["prefill"].value == "yes"

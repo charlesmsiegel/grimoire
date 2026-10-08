@@ -268,7 +268,7 @@ def test_review_focus_4_a_current_claude_model_is_sent_no_temperature():
     ("claude-mythos-preview", None), ("claude-", None), ("gpt-4", None), ("", None),
     (None, None)])
 def test_the_claude_version_is_read_from_the_model_id(model, version):
-    assert ls._claude_version(model) == version
+    assert ls.claude_version(model) == version
 
 
 @pytest.mark.parametrize(("model", "source"), [
