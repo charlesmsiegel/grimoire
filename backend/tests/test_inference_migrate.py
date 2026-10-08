@@ -1191,17 +1191,40 @@ def test_a_connection_file_with_no_record_in_it_fails_the_run(home, placeholder)
 def test_an_embedding_connection_unreadable_during_the_switch_fails_the_run(home, monkeypatch):
     """The legacy Embedding choice is read as strictly as every other
     selection: a file a sync client held is unreadable, not "never embedded",
-    so the run fails and retries instead of clearing the choice for good."""
+    so the run fails and retries instead of clearing the choice for good.
+
+    The flake is aimed at the switch's own lookup (`migrate._lookup`, made
+    fresh for `global_fields`), so steps 2 and 3 -- which read every
+    connection strictly through `read_connection_strict` -- see the file whole,
+    and the only read that can fail the run is the one `_embeds` makes. A
+    flake on `read_connection_strict` instead trips `_providers` first and
+    passes whether or not `_embeds` reads strictly."""
     _legacy()
     llm_connections.create_connection("openai_compatible", "vectors",
                                       base_url="http://localhost:1234/v1")
     config.write_config(embeddings_connection_id="vectors", embeddings_model="embed-small")
-    asked = _flaky_read(monkeypatch, "vectors", OSError("held by a sync client"))
+    real = migrate._lookup
+    asked: list[str] = []
+
+    def flaky_lookup():
+        inner = real()
+
+        def lookup(conn_id: str):
+            asked.append(conn_id)
+            if conn_id == "vectors" and asked.count("vectors") == 1:
+                raise llm_connections.ConnectionUnreadableError(
+                    conn_id, OSError("held by a sync client"))
+            return inner(conn_id)
+
+        return lookup
+
+    monkeypatch.setattr(migrate, "_lookup", flaky_lookup)
 
     got = migrate.ensure()
 
-    assert "vectors" in asked
     assert got.state == "failed", got
+    assert "vectors" in got.reason
+    assert "vectors" in asked
     assert not inference_keys.is_current(config.read_config())
 
     assert migrate.ensure().state == "done"
@@ -1216,7 +1239,12 @@ def test_embedding_facts_unreadable_during_the_switch_fail_the_run(home, monkeyp
     """The legacy choice embeds because the user said `embed: yes` over the
     catalog's `no`. A facts file a sync client holds during the switch would
     read as "nothing stated", leaving only the catalog's `no`: the run fails
-    and retries rather than clearing the choice for good."""
+    and retries rather than clearing the choice for good.
+
+    The flake arms only once step 3 has adopted `vectors`' legacy fields
+    (`facts.adopt_legacy`, which reads the same file strictly and would
+    otherwise fail the run first), and only on that one file, so the read
+    that fails the run is `_embeds`' strict re-judge in the switch."""
     _legacy()
     llm_connections.create_connection("openai_compatible", "vectors",
                                       base_url="http://localhost:1234/v1")
@@ -1226,19 +1254,30 @@ def test_embedding_facts_unreadable_during_the_switch_fail_the_run(home, monkeyp
     facts.set_overrides("vectors", "embed-small", {"embed": "yes"})
     config.write_config(embeddings_connection_id="vectors", embeddings_model="embed-small")
     assert store_pkg.embed_space.resolve() is not None
-    real = Path.read_text
-    held = [True]
+    held_path = llm_connections.facts_path("vectors")
+    real_read = Path.read_text
+    real_adopt = facts.adopt_legacy
+    held = [False]
+
+    def adopt(provider_id, *a, **kw):
+        out = real_adopt(provider_id, *a, **kw)
+        if provider_id == "vectors":
+            held[0] = True                 # step 3 is done with this file
+        return out
 
     def flaky(self, *a, **kw):
-        if held[0] and self.name.endswith(".facts.json"):
+        if held[0] and self == held_path:
             raise exc
-        return real(self, *a, **kw)
+        return real_read(self, *a, **kw)
 
+    monkeypatch.setattr(facts, "adopt_legacy", adopt)
     monkeypatch.setattr(Path, "read_text", flaky)
     got = migrate.ensure()
+    assert held[0], "step 3 never adopted vectors' facts"
     assert got.state == "failed", got
     assert not inference_keys.is_current(config.read_config())
 
+    monkeypatch.setattr(facts, "adopt_legacy", real_adopt)
     held[0] = False
     assert migrate.ensure().state == "done"
     cfg = _raw_config(home)
