@@ -376,3 +376,46 @@ def test_the_diff_still_works_once_capture_is_switched_off(client):
 
     client.put("/api/config", json={"prompt_log_depth": "0"})
     assert _diff(client, cid, sid, eid).status_code == 200
+
+
+def test_a_contended_capture_records_nothing_stamps_nothing_and_never_waits(client):
+    """`_record_prompt` runs on the generating path, so it takes the campaign
+    lock without waiting: when another holder has it, the capture is skipped --
+    no row, and no write-token stamp, since a skipped capture wrote nothing --
+    and the turn is not held up. Only a race inside a concurrency test used to
+    reach that branch, and only when the suite ran serially; this holds it
+    deterministically, with the uncontended call as the control."""
+    import threading
+    import time
+
+    cid, sid = _scene(client)
+    _chat(client, cid, sid)
+    prompts = f"/api/campaigns/{cid}/scenes/{sid}/prompts"
+
+    before = store.revision.current(cid)
+    routes.common._record_prompt(cid, sid, "chat", {}, model="m")
+    stamped = store.revision.current(cid)
+    assert stamped != before, "the uncontended control never reached the stamp"
+    rows = len(client.get(prompts).json()["entries"])
+
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with store.locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    try:
+        assert held.wait(10)
+        started = time.monotonic()
+        routes.common._record_prompt(cid, sid, "chat", {}, model="m")
+        waited = time.monotonic() - started
+    finally:
+        release.set()
+        thread.join(10)
+    assert store.revision.current(cid) == stamped, "a skipped capture stamped the token"
+    assert len(client.get(prompts).json()["entries"]) == rows
+    # Far under LOCK_TIMEOUT (30s), the wait a blocking acquisition would cost.
+    assert waited < store.locks.LOCK_TIMEOUT / 2
