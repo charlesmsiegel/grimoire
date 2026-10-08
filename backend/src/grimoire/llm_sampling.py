@@ -139,6 +139,15 @@ WHY_THINKING_UNKNOWN = ("the catalog does not say which thinking this model take
                         "none is sent")
 WHY_THINKING_NONE = "the catalog says this model takes no thinking"
 WHY_REASONING_ENDPOINT = "whether this endpoint takes reasoning_effort is not known"
+WHY_OPENAI_NOT_REASONING = "this OpenAI model is not a reasoning model"
+WHY_OPENAI_REASONING_UNVERIFIED = ("whether this model takes reasoning_effort is unverified: "
+                                   "its id is not an OpenAI model family known here")
+#: OpenAI model families by id (lowercased, after any `vendor/` prefix). The
+#: reasoning families take `reasoning_effort`; the others answer it with a 400,
+#: which `llm._preset_refusal` would turn into a refusal that skips the
+#: fallback. An id in neither is sent it unverified.
+_OPENAI_REASONING = re.compile(r"o\d|gpt-5|gpt-oss")
+_OPENAI_NOT_REASONING = re.compile(r"gpt-4|gpt-3|chatgpt-")
 WHY_GLM = "this GLM model takes low or high (or max, set on the connection)"
 
 
@@ -390,7 +399,8 @@ def _openrouter_reasoning(c: _Conn, value: str | None) -> _Control:
 
 def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
     """`openai_compatible`: GLM by `llm_reasoning`'s rule (the connection's legacy
-    setting when the preset sets none), the OpenAI API as written, and any other
+    setting when the preset sets none), the OpenAI API by the model's family
+    (`_openai_api_reasoning`), and any other
     endpoint by the strict-endpoint rule the samplers follow (spec 8): it is not
     an OpenAI chat parameter, so it is held back unless extended samplers are
     on, and then sent unverified."""
@@ -406,14 +416,35 @@ def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
         if not effort:
             return _Control(UNSUPPORTED, None, WHY_GLM, "name")
         return _Control(SUPPORTED, "reasoning_effort", "", "name", {"reasoning_effort": effort})
-    if value == "off":
-        return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset" if c.openai else "unknown")
-    fields = {"reasoning_effort": value} if value else {}
     if c.openai:
-        return _Control(SUPPORTED, "reasoning_effort", "", "preset", fields)
+        return _openai_api_reasoning(c, value)
+    if value == "off":
+        return _Control(UNKNOWN, None, WHY_REASONING_OFF, "unknown")
+    fields = {"reasoning_effort": value} if value else {}
     if not c.extended:
         return _Control(UNSUPPORTED, None, WHY_STANDARD, "adapter")
     return _Control(UNKNOWN, "reasoning_effort", WHY_REASONING_ENDPOINT, "unknown", fields)
+
+
+def _openai_api_reasoning(c: _Conn, value: str | None) -> _Control:
+    """`reasoning_effort` at the OpenAI API itself, decided by the model's family
+    (spec 8): a reasoning model is sent it, a non-reasoning one is not (it
+    would answer a 400; and since it does not reason, `off` is honoured by
+    sending nothing), and an id in neither family is sent it unverified."""
+    family = c.model.lower().rsplit("/", 1)[-1]
+    fields = {"reasoning_effort": value} if value and value != "off" else {}
+    if _OPENAI_REASONING.match(family):
+        if value == "off":
+            return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset")
+        return _Control(SUPPORTED, "reasoning_effort", "", "name", fields)
+    if _OPENAI_NOT_REASONING.match(family):
+        if value == "off":
+            return _Control(SUPPORTED, None, "", "name")
+        return _Control(UNSUPPORTED, None, WHY_OPENAI_NOT_REASONING, "name")
+    if value == "off":
+        return _Control(UNKNOWN, None, WHY_REASONING_OFF, "preset")
+    return _Control(UNKNOWN, "reasoning_effort", WHY_OPENAI_REASONING_UNVERIFIED, "unknown",
+                    fields)
 
 
 def _thinking_off(c: _Conn, adaptive: bool, omission_is_off: bool) -> _Control:

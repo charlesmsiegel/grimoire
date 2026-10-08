@@ -243,6 +243,87 @@ async def test_a_refusal_naming_the_translated_spelling_is_a_preset_refusal():
     assert [m for m, _ in provider.calls] == ["primary"]
 
 
+# ---- OpenAI: reasoning_effort is decided by the model's family ----
+_OPENAI = "https://api.openai.com/v1"
+
+
+def _openai_model(model, value="high"):
+    return _conn("openai_compatible", {"reasoning_effort": value, "temperature": 0.5},
+                 base_url=_OPENAI, model=model)
+
+
+@pytest.mark.parametrize("model", ["o1", "o3", "o3-mini", "o4-mini", "O3-Pro",
+                                   "gpt-5", "gpt-5-mini", "gpt-5.1", "gpt-oss-120b",
+                                   "openai/o3", "openai/gpt-5"])
+def test_an_openai_reasoning_model_is_sent_reasoning_effort(model):
+    conn = _openai_model(model)
+    eff = ls.effective(conn)
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("supported",
+                                                                 "reasoning_effort", "name")
+    assert eff["effective"]["reasoning_effort"] == "high"
+    report = ls.report(conn)
+    assert report["applied"]["reasoning_effort"] == "high" and report["verified"]
+
+
+@pytest.mark.parametrize("model", ["gpt-4.1", "gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo",
+                                   "chatgpt-4o-latest", "GPT-4-turbo", "openai/gpt-4.1"])
+def test_an_openai_non_reasoning_model_is_not_sent_reasoning_effort(model):
+    conn = _openai_model(model)
+    eff = ls.effective(conn)
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("unsupported", None, "name")
+    assert entry["why"] == ls.WHY_OPENAI_NOT_REASONING
+    assert "reasoning_effort" not in eff["effective"]
+    assert ls.sent_names(conn) == ["temperature"]
+    assert "reasoning_effort" not in ls.sent_fields(conn)
+    report = ls.report(conn)
+    assert "reasoning_effort" not in report["applied"]
+    assert {"param": "reasoning_effort",
+            "reason": ls.WHY_OPENAI_NOT_REASONING} in report["dropped"]
+
+
+async def test_a_non_reasoning_openai_model_never_sees_reasoning_effort_on_the_wire():
+    from tests.test_llm import FakeProvider
+    op, cl, oc = FakeProvider("or"), FakeProvider("cl"), FakeProvider("oc")
+    client = LLMClient(openrouter=op, claude=cl, openai_compatible=oc)
+    conn = {**_openai_model("gpt-4.1"), "api_key": "k"}
+    [c async for c in client.stream([], conn)]
+    sent = oc.calls[0][1]
+    assert sent["sampling"] == {"temperature": 0.5}
+    assert "reasoning_effort" not in repr(sent)
+
+
+@pytest.mark.parametrize("model", ["mara-7b", "m", "ft:custom-model", "davinci-002"])
+def test_an_unrecognised_openai_model_is_sent_reasoning_effort_unverified(model):
+    conn = _openai_model(model)
+    eff = ls.effective(conn)
+    entry = eff["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"]) == ("unknown", "reasoning_effort")
+    assert entry["why"] == ls.WHY_OPENAI_REASONING_UNVERIFIED
+    assert eff["effective"]["reasoning_effort"] == "high"
+    report = ls.report(conn)
+    assert report["applied"]["reasoning_effort"] == "high"
+    assert report["verified"] is False
+
+
+def test_off_on_an_openai_reasoning_model_is_unchanged():
+    entry = ls.effective(_openai_model("o3", "off"))["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["why"]) == ("unknown", None,
+                                                             ls.WHY_REASONING_OFF)
+
+
+def test_off_on_an_openai_non_reasoning_model_is_honoured_by_sending_nothing():
+    """A model that does not reason is already off: nothing is sent, and the
+    reader is told it was honoured rather than dropped."""
+    conn = _openai_model("gpt-4o", "off")
+    entry = ls.effective(conn)["controls"]["reasoning_effort"]
+    assert (entry["state"], entry["wire"], entry["source"]) == ("supported", None, "name")
+    report = ls.report(conn)
+    assert report["applied"]["reasoning_effort"] == "off"
+    assert all(d["param"] != "reasoning_effort" for d in report["dropped"])
+
+
 # ---- the Anthropic API ----
 def test_review_focus_4_a_current_claude_model_is_sent_no_temperature():
     """Claude 4.7+ refuses sampling parameters: the preset's temperature is not
@@ -616,7 +697,7 @@ def test_openrouter_without_a_catalog_sends_it_unverified():
 
 def test_the_openai_api_takes_reasoning_effort():
     conn = _conn("openai_compatible", {"reasoning_effort": "medium"},
-                 base_url="https://api.openai.com/v1")
+                 base_url="https://api.openai.com/v1", model="o3")
     eff = ls.effective(conn)
     assert eff["controls"]["reasoning_effort"]["state"] == "supported"
     assert eff["effective"] == {"reasoning_effort": "medium"}
