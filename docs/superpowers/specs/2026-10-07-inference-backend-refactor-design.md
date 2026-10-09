@@ -2070,7 +2070,9 @@ moved), the read's own `OSError`/`UnicodeDecodeError`, or
 `ConnectionUnreadableError`. That item is not retired and never rewritten,
 and nothing that names it is retired. Each item checks `run.halted()` first,
 as the migration's steps do. A §11.1 write refused because the record cannot
-be read answers 409 `retirement_unreadable`, never a 500.
+be read answers 409 `retirement_unreadable`, never a 500; its sentence names
+`inference-retired.json` and tells "does not parse" (repair or restore it)
+from "not synced yet" (try again).
 
 **The status.** Retirement never moves `migrate.status().state`. What is left
 is reported in `Status.retirement` (`left`, `failed`), read fail-soft and
@@ -2133,7 +2135,8 @@ synced copy.
   notes, each `{id, scope, subject, provider_id, effort, kind, text,
   dismissed}`. `id` is a digest of everything but `text`, so a wording change
   in a later build does not bring back a dismissed note, and merging never
-  un-dismisses one.
+  un-dismisses one. Deleting a campaign drops its scope's notes, best effort
+  (a slug is reusable, and a new campaign must not be shown another's loss).
 - Every writer, and the `retire` lookup, reads it strictly. Display readers
   fail soft.
 

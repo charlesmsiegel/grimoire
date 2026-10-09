@@ -1151,8 +1151,9 @@ def test_the_write_path_reads_the_record_on_a_retired_store(client):
     assert got.status_code == 409, got.text
     assert got.json() == {
         "kind": "retirement_unreadable",
-        "detail": "The record of retired model settings could not be read; "
-                  "try again once it has synced."}
+        "detail": "The record of retired model settings (inference-retired.json, at the "
+                  "library's root) does not parse (is not JSON). It will not fix itself: "
+                  "repair that file, or restore it from a backup."}
     assert campaigns.paths.campaign_meta_path(cid).read_bytes() == before
 
     retired.path().write_bytes(good)
@@ -1612,6 +1613,62 @@ def test_dismissing_on_an_unreadable_record_is_a_409(client):
     got = client.post("/api/inference/retired-notes/0000000000000000/dismiss")
     assert got.status_code == 409
     assert got.json()["kind"] == "retirement_unreadable"
+    assert retired.path().read_text(encoding="utf-8") == "{not json"
+
+
+@pytest.mark.parametrize("record, says", [
+    ('{"fields": {}, "notes": [{"id": 5}]}', "does not parse (holds a malformed entry)"),
+    ("{not json", "does not parse (is not JSON)"),
+    ("", "try again once it has synced"),
+])
+def test_a_refused_delete_names_the_record_and_what_will_fix_it(client, record, says):
+    """Code review 🟢3: the 409 names `inference-retired.json` and tells a
+    record that does not parse -- which waiting never fixes -- from one not
+    there yet (an empty sync placeholder)."""
+    llm_connections.create_connection("openrouter", "Rowan", api_key="sk-test-rowan")
+    retired.path().write_text(record, encoding="utf-8")
+    got = client.delete("/api/llm-connections/rowan")
+    assert got.status_code == 409 and got.json()["kind"] == "retirement_unreadable"
+    detail = got.json()["detail"]
+    assert "inference-retired.json" in detail and says in detail, detail
+    dismissed = client.post("/api/inference/retired-notes/0000000000000000/dismiss")
+    assert dismissed.status_code == 409 and dismissed.json()["detail"] == detail
+
+
+def test_a_missing_entry_says_which_provider_it_waits_for(home):
+    _spare_stripped()
+    retired.path().unlink()
+    with pytest.raises(retired.EntryMissingError) as caught:
+        legacy_plan.lookup(mode="retire")("spare")
+    said = inference_settings.retirement_unreadable(caught.value)
+    assert "“spare”" in said and "once it has synced" in said
+
+
+def test_a_deleted_campaigns_notes_go_with_it(legacy_client):
+    """Code review 🟢2: deleting a campaign drops its notes from the record,
+    so `/models` stops showing them and a campaign created again under the
+    same slug -- one that never had GLM -- is never shown them."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    cid = _campaign("Saltmarch")
+    campaigns.set_campaign_routing(cid, {"route_tracker": "glm", "preset_tracker": "cold"})
+    assert migrate.ensure().state == "done"
+    scope = f"campaign:{cid}"
+    assert [n["scope"] for n in retired.read()["notes"]].count(scope) == 1
+    assert legacy_client.delete(f"/api/campaigns/{cid}").status_code == 200
+    assert scope not in [n["scope"] for n in retired.read()["notes"]]
+    assert scope not in [n["scope"] for n in _notes(legacy_client)]
+    again = _campaign("Saltmarch")
+    assert again == cid
+    assert _notes(legacy_client, again) == [n for n in _notes(legacy_client)
+                                           if n["scope"] == "global"]
+    assert scope not in [n["scope"] for n in _notes(legacy_client)]
+
+
+def test_a_campaign_delete_over_an_unreadable_record_still_deletes(legacy_client):
+    cid = _campaign("Saltmarch")
+    retired.path().write_text("{not json", encoding="utf-8")
+    assert legacy_client.delete(f"/api/campaigns/{cid}").status_code == 200
     assert retired.path().read_text(encoding="utf-8") == "{not json"
 
 

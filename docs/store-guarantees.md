@@ -1261,13 +1261,18 @@ backup and every synced copy. It holds two things:
   again. `/models` shows every note not dismissed, worded as permanent;
   dismissing one (`POST /inference/retired-notes/{id}/dismiss`) records it
   so, for every device, and a note's id names what it is about, never its
-  wording, so no later pass or build brings it back.
+  wording, so no later pass or build brings it back. Deleting a campaign
+  drops its notes, best effort, once the campaign is gone, so a campaign
+  created later under the same slug is never shown them.
 
 Every writer, and every lookup that feeds a write, reads the record strictly:
 one that is there but does not parse stops what would persist from it — the
 strip, a dismissal, a migration that would map a stripped connection — and a
-settings write that reaches it answers 409 `retirement_unreadable`. Nothing
-is ever written over it. The view reads it fail-soft.
+settings write that reaches it answers 409 `retirement_unreadable`, whose
+sentence names the file and says whether waiting for a sync will do (empty,
+held by another program, an entry not arrived) or a person must repair or
+restore it (it does not parse). Nothing is ever written over it. The view
+reads it fail-soft.
 
 ---
 

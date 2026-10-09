@@ -32,12 +32,14 @@ from .common import refuse_newer, refuse_unmigrated
 router = APIRouter()
 
 
-def _retirement_unreadable() -> HTTPException:
+def _retirement_unreadable(exc: retired.RecordUnreadableError) -> HTTPException:
     """409 `retirement_unreadable` (R3-3): a write that would read the
-    retirement record, which cannot be read just now. Never a 500, and
-    nothing is written: D's `facts_unreadable` precedent."""
+    retirement record, which cannot be read -- the sentence names the file
+    and says whether to wait for a sync or repair it
+    (`settings.retirement_unreadable`). Never a 500, and nothing is written:
+    D's `facts_unreadable` precedent."""
     return HTTPException(status_code=409, detail={
-        "kind": "retirement_unreadable", "detail": settings.RETIREMENT_UNREADABLE})
+        "kind": "retirement_unreadable", "detail": settings.retirement_unreadable(exc)})
 
 
 def _write(scope: str, cid: str, body: dict) -> None:
@@ -52,7 +54,7 @@ def _write(scope: str, cid: str, body: dict) -> None:
     except retired.RecordUnreadableError as exc:
         # Migrating an unmarked campaign in the write's hold (spec 11.1)
         # reads a stripped connection's fields from the record (R2-2).
-        raise _retirement_unreadable() from exc
+        raise _retirement_unreadable(exc) from exc
 
 
 def _campaign_view(cid: str) -> dict:
@@ -106,7 +108,7 @@ def dismiss_retired_note(note_id: str):
     try:
         found = settings.dismiss_note(note_id)
     except retired.RecordUnreadableError as exc:
-        raise _retirement_unreadable() from exc
+        raise _retirement_unreadable(exc) from exc
     if not found:
         raise HTTPException(status_code=404, detail="no such note")
     return {"ok": True}

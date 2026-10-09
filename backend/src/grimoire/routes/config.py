@@ -890,12 +890,13 @@ def delete_connection_route(id: str, registry: health.ProviderHealth = Depends(g
         store.llm_connections.delete_connection(id)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found")
-    except retired.RecordUnreadableError:
+    except retired.RecordUnreadableError as exc:
         # The retirement record, read before anything is written, cannot be
         # read: nothing was written -- no reference cleared, no file removed.
+        # The sentence names the file and says whether waiting will do.
         raise HTTPException(status_code=409, detail={
             "kind": "retirement_unreadable",
-            "detail": inference_settings.RETIREMENT_UNREADABLE}) from None
+            "detail": inference_settings.retirement_unreadable(exc)}) from None
     # Ids are slugs, and a slug is reusable: deleting "Endpoint" and creating
     # another connection by that name lands on the same id, which would
     # otherwise inherit the dead connection's last failure.

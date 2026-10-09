@@ -28,6 +28,7 @@ from .. import store
 from ..llm import LLMClient
 from ..store.continuity import doc as continuity_doc
 from ..store.continuity import effective as continuity_effective
+from ..store.inference import settings as inference_settings
 from . import characters as character_routes
 from . import ledger as ledger_routes
 from . import runs
@@ -1053,6 +1054,10 @@ def delete_campaign(cid: str, request: Request):
     # inside the retention window would otherwise inherit this one's drafts --
     # see `RunRegistry.forget_subject`.
     runs.forget_subject(request.app, runs.campaign_subject(cid))
+    # Its "not carried over" notes on `/models` go too, for the same reason: a
+    # replacement under this slug must not be shown a loss that happened here.
+    # Best effort -- the campaign is gone either way.
+    inference_settings.forget_campaign_notes(store.inference_retired.campaign_scope(cid))
     # Nothing is done about this campaign's ledger rows, and `usage_rollup` has
     # no `forget` for the same reason: the ledger is append-only and records
     # money that was actually spent, so a replacement campaign reusing the slug

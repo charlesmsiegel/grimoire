@@ -315,9 +315,31 @@ def view(scope: str, cid: str = "") -> dict:
 
 
 #: Why a write that reaches the retirement record is refused when the record
-#: cannot be read (409 `retirement_unreadable`, R3-3).
-RETIREMENT_UNREADABLE = ("The record of retired model settings could not be read; "
-                         "try again once it has synced.")
+#: cannot be read just now (409 `retirement_unreadable`, R3-3): empty, held by
+#: another program, or missing an entry a stripped connection needs -- what a
+#: sync still in flight looks like.
+RETIREMENT_UNREADABLE = (f"The record of retired model settings ({retired.FILENAME}, at "
+                         "the library's root) could not be read; try again once it "
+                         "has synced.")
+#: The same refusal when the record was read and does not parse: waiting will
+#: not fix it, so it says what will.
+RETIREMENT_MALFORMED = (f"The record of retired model settings ({retired.FILENAME}, at "
+                        "the library's root) does not parse ({why}). It will not fix "
+                        "itself: repair that file, or restore it from a backup.")
+
+
+def retirement_unreadable(exc: retired.RecordUnreadableError) -> str:
+    """The 409 `retirement_unreadable` sentence for `exc`: the file named,
+    and "does not parse" (a person must act) told apart from "not synced
+    yet" (waiting will do) -- spec review of slice I, code finding 3."""
+    if isinstance(exc, retired.RecordMalformedError):
+        why = str(exc).removeprefix("the retirement record ").split(";")[0]
+        return RETIREMENT_MALFORMED.format(why=why)
+    if isinstance(exc, retired.EntryMissingError):
+        return (f"The record of retired model settings ({retired.FILENAME}, at the "
+                f"library's root) holds nothing yet for the provider “{exc.conn_id}”, "
+                "whose old model settings it keeps; try again once it has synced.")
+    return RETIREMENT_UNREADABLE
 
 
 def _campaign_names() -> dict[str, str]:
@@ -379,6 +401,24 @@ def _planner_notes(names: Mapping[str, str]) -> list[retired.Note]:
         for note in resolve.retirement_notes(cid, cfg=cfg):
             out.setdefault(note.id, note)
     return list(out.values())
+
+
+def forget_campaign_notes(scope: str) -> bool:
+    """Drop a deleted campaign's notes from the retirement record (`scope`,
+    `retired.campaign_scope(cid)`), so `/models` stops showing them and a
+    campaign created later under the same slug never inherits them. Called
+    by the campaign delete once the campaign is gone. In
+    `config.format_hold`, the record writers' cross-process hold. Best
+    effort, never raising: the campaign is already deleted, and a record that
+    cannot be read just now (or a store a newer build switched) keeps the
+    notes rather than refusing anything -- False then, as when there were
+    none."""
+    try:
+        with config.format_hold():
+            return retired.forget_scope(scope)
+    except (retired.RecordUnreadableError, config.NewerFormatError, locks.StoreBusy,
+            OSError):
+        return False
 
 
 def dismiss_note(note_id: str) -> bool:

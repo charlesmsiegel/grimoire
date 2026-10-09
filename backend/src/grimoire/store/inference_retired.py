@@ -120,6 +120,15 @@ class RecordUnreadableError(frontmatter.RecordUnreadableError):
     reaches it answers 409 `retirement_unreadable`."""
 
 
+class RecordMalformedError(RecordUnreadableError):
+    """The retirement record is there and READ, and is not a record: not
+    JSON, the wrong shape, or a malformed entry. Unlike an empty file or one
+    the OS refuses (a sync placeholder, a file another program holds), this
+    does not fix itself by waiting: a person repairs the file or restores it
+    from a backup, and what refuses on it says so
+    (`inference.settings.retirement_unreadable`)."""
+
+
 class EntryMissingError(RecordUnreadableError):
     """A connection retirement stripped -- its file carries
     `llm_connections.STRIPPED_KEY` -- whose legacy fields the record does not
@@ -174,11 +183,13 @@ def _fields_entry(raw: object) -> dict[str, str] | None:
     return dict(raw)
 
 
-def _refused(why: str, strict: bool) -> dict:
-    """What a read makes of a record it cannot use: `RecordUnreadableError`
-    (strict), else an empty record."""
+def _refused(why: str, strict: bool, *, malformed: bool = True) -> dict:
+    """What a read makes of a record it cannot use: `RecordMalformedError`
+    (strict; `RecordUnreadableError` for an empty file, which a sync
+    placeholder is too), else an empty record."""
     if strict:
-        raise RecordUnreadableError(f"the retirement record {why}; it is left as it is")
+        error = RecordMalformedError if malformed else RecordUnreadableError
+        raise error(f"the retirement record {why}; it is left as it is")
     return _empty()
 
 
@@ -186,7 +197,7 @@ def _parsed(text: str, *, strict: bool) -> dict:
     """The record in `text`, checked; malformed parts dropped (soft) or
     `RecordUnreadableError` (strict)."""
     if not text.strip():
-        return _refused("is empty", strict)
+        return _refused("is empty", strict, malformed=False)
     try:
         data = json.loads(text)
     except ValueError:
@@ -253,6 +264,21 @@ def forget_fields(conn_id: str) -> bool:
         if conn_id not in doc["fields"]:
             return False
         del doc["fields"][conn_id]
+        _write(doc)
+        return True
+
+
+def forget_scope(scope: str) -> bool:
+    """Drop every note at `scope` -- a deleted campaign's
+    (`campaign_scope(cid)`), dismissed or not -- so a campaign created later
+    under the same slug is never shown a loss that happened in another one.
+    Returns whether it wrote. Strict: a record that cannot be read raises."""
+    with _lock:
+        doc = read(strict=True)
+        kept = [row for row in doc["notes"] if row["scope"] != scope]
+        if len(kept) == len(doc["notes"]):
+            return False
+        doc["notes"] = kept
         _write(doc)
         return True
 
