@@ -333,8 +333,10 @@ def retirement_notes(scope: str, cid: str = "") -> list[dict]:
     (`resolve.retirement_notes`) that the record does not hold yet -- one
     list, ids collapsing, so a note reads the same before and after
     retirement records it, and one dismissed before retirement stays
-    dismissed. On the global view (`/models`) every scope's; on a campaign's,
-    the global ones and that campaign's. Each row carries `scope_name`: ""
+    dismissed. On the global view (`/models`) every scope's -- the planner's
+    included, planned for every campaign (`_planner_notes`), so a campaign's
+    loss shows there from this build's first start (spec 11.4); on a
+    campaign's, the global ones and that campaign's. Each row carries `scope_name`: ""
     for the global scope, else the campaign's name, so a note on `/models`
     says where it applies. Read fail-soft: never raises."""
     record = retired.read()
@@ -350,10 +352,24 @@ def retirement_notes(scope: str, cid: str = "") -> list[dict]:
         return {**{k: fields[k] for k in retired.Note._fields},
                 "scope_name": names.get(target, target) if target else ""}
 
+    planned = (_planner_notes(names) if scope == "global"
+               else resolve.retirement_notes(cid))
     out = [row(r) for r in record["notes"] if not r["dismissed"] and shown(r["scope"])]
-    out += [row(n._asdict()) for n in resolve.retirement_notes(cid)
-            if n.id not in known and shown(n.scope)]
+    out += [row(n._asdict()) for n in planned if n.id not in known and shown(n.scope)]
     return out
+
+
+def _planner_notes(names: Mapping[str, str]) -> list[retired.Note]:
+    """What the planner could not carry over, in every scope: the global
+    plan's and each campaign's (`resolve.retirement_notes`, which gives a
+    campaign's own beside the global ones), ids collapsing. What `/models`
+    shows before retirement has recorded them (spec 11.4), and what a
+    dismissal looks a planner-only note up in."""
+    out: dict[str, retired.Note] = {}
+    for cid in ["", *names]:
+        for note in resolve.retirement_notes(cid):
+            out.setdefault(note.id, note)
+    return list(out.values())
 
 
 def dismiss_note(note_id: str) -> bool:
@@ -370,8 +386,8 @@ def dismiss_note(note_id: str) -> bool:
             return True
     # Planned outside the hold (it reads connections and presets); recorded
     # inside it, where `dismiss` reads the record again.
-    planned = next((note for cid in ["", *_campaign_names()]
-                    for note in resolve.retirement_notes(cid) if note.id == note_id), None)
+    planned = next((note for note in _planner_notes(_campaign_names())
+                    if note.id == note_id), None)
     if planned is None:
         return False
     with config.format_hold():

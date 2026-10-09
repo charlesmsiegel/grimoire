@@ -1586,3 +1586,24 @@ def test_a_kill_after_the_scope_write_keeps_the_notes(home, monkeypatch):
     assert migrate.ensure().state == "done"
     assert _route_note_ids() == noted
 
+
+def test_models_shows_a_campaigns_planner_note_before_retirement(legacy_client):
+    """6b review I-2, spec 11.4: on a format-1 store, a campaign's
+    route-preset loss is on `/models` -- with the campaign's name -- before
+    any retirement has recorded it; dismissing it from there holds."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    cid = _campaign("Saltmarch")
+    campaigns.set_campaign_routing(cid, {"route_tracker": "glm", "preset_tracker": "cold"})
+    assert not keys.is_current(config.read_config())
+
+    on_models = [n for n in _notes(legacy_client) if n["scope"] == f"campaign:{cid}"]
+    assert [(n["subject"], n["scope_name"], n["kind"]) for n in on_models] == [
+        ("tracker", "Saltmarch", "route_preset")]
+    assert not retired.path().exists()
+
+    got = legacy_client.post(f"/api/inference/retired-notes/{on_models[0]['id']}/dismiss")
+    assert got.status_code == 200, got.text
+    assert on_models[0]["id"] not in [n["id"] for n in _notes(legacy_client)]
+    assert on_models[0]["id"] not in [n["id"] for n in _notes(legacy_client, cid)]
+
