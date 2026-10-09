@@ -406,12 +406,16 @@ post) -> SemanticResult`:
   rule `embed.py`'s docstring states ("embedding with one model and saving
   under another space's key is how vectors from two models end up in one
   cache").
-- **One request per retrieval**: the query (input type `query`, 01h-C1) plus
-  up to `WARM_LIMIT` uncached documents (input type `document`), the window
+- **One request per retrieval**: every text in `Query.texts` (input type
+  `query`, 01h-C1; one for an ordinary turn, up to four once 10 adds
+  questions) plus a bounded warm run of uncached documents (input type
+  `document`). A document's semantic signal is its best cosine over the
+  texts, and records which text it was. The warm window is
   rotated by `embed_space.warm_window` exactly as semantic recall does
   (`semantic.py:142`). Pool documents are warmed before the wider live set,
-  so tier 1 converges first. `WARM_LIMIT = embeddings.BATCH - 1` keeps it one
-  round trip (`semantic.py:126`-`128`'s reasoning).
+  so tier 1 converges first. The warm run is `embeddings.BATCH - len(texts)`
+  documents, which keeps the request one round trip (`semantic.py:126`-`128`'s
+  reasoning for `WARM_LIMIT`).
 - **The embed task** is a new `EMBED_TASKS` entry, `history-recall`, for the
   query and this turn's warm run. 08-C3's document task covers builds outside
   a turn (05's eager rebuild). Two tasks because they answer different cost
@@ -932,9 +936,13 @@ tuple[Candidate, ...], coverage: Coverage, ceiling: int, query_digest: str)`:
 an optional summary, excerpts and its token cost; `candidates` are every
 admitted candidate in merged order (bounded by `POOL_MAX + WIDEN_LIMIT`), so a
 caller can see what was found and not selected. `Evidence.detail()` is the
-JSON-safe projection of section 9.5. `history.merge(a, b) -> Evidence` merges
-two evidences by scene identity, keeping every signal from both and re-ordering
-by RRF over the union, for 10's rounds.
+JSON-safe projection of section 9.5. `history.merge(a, b, *, ceiling,
+rerank=None) -> Evidence` merges two evidences by scene identity, keeping every
+signal from both, re-ordering by RRF over the union, optionally reranking the
+merged top once (section 7.3), and re-fitting to `ceiling`; 10 retrieves its
+rounds with `rerank=None` and reranks only the final merge, so a planned turn
+pays for one rerank, not one per round. The selection never exceeds
+`history_recall_depth` and the ceiling never grows, whatever a round asked for.
 
 **Guarantees.** No candidate orders at or after the played scene, is in its
 branch group, or is a closed sibling. Every lookup is over keys computed this
@@ -1121,7 +1129,8 @@ Settings:
    "decide routes and tasks for ... retrieval relevance, for 11 and 09", and
    the routing guard forbids a route whose tasks nothing uses.
    *Recommendation:* 02-C5 names the task (`history-rerank`) and the route
-   (`history_check`, Decision role, `legacy="summary"`), and the route lands
+   (`history_check`, Decision role, born at format 2 with no legacy layout:
+   10 section 4.1), and the route lands
    in 09's rerank slice with its call site; 10 then adds its
    `history-sufficiency` task to the same route. This is a **missing edge**
    (09 <- 02-C5, soft) that the checklist does not list.
