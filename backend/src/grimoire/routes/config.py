@@ -584,14 +584,15 @@ def _with_effective(conn: dict) -> dict:
     `CLAUDE_DEFAULT_MODEL`, pinned by a test that scraped a `.tsx` file with a
     regex. Reporting the answer here deletes the rule, the constant and the
     scrape together, and a fourth kind that substitutes a model is then one
-    change where a target's model is built (`inference.provider_target`)
-    rather than two in two languages.
+    change in `facts.model_of` -- the rule every target's model is built by --
+    rather than two in two languages. Only the model is read, so no target is
+    built: that would parse the provider's catalog per connection listed.
 
     Added beside `model` rather than replacing it: the connection editor edits
     the stored value, and a form that round-tripped the effective one would
     write the substitute into the file the substitution exists to avoid needing.
     """
-    return {**conn, "effective_model": inference.provider_target(conn).model}
+    return {**conn, "effective_model": facts.model_of(conn)}
 
 
 @router.get("/llm-connections")
@@ -1130,7 +1131,9 @@ def _test_plan(conn_id: str, body: ModelTestPreview | ModelTestRun) -> tuple[dic
         raise HTTPException(status_code=400, detail=(
             f"{preset.label} cannot do {', '.join(ruled_out)} on any model, so there "
             "is nothing to test"))
-    model = body.model.strip() or inference.provider_target(raw).model
+    # The model the record runs (`facts.model_of`, a pure rule): nothing is
+    # built before the refusals below and the run's `confirm` refusal.
+    model = body.model.strip() or facts.model_of(raw)
     if not model:
         raise HTTPException(status_code=400, detail="name a model to test")
     if len(model) > store.alternates.MAX_MODEL_CHARS:

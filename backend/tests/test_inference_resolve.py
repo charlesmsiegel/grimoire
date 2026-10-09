@@ -511,6 +511,33 @@ def test_own_target_drops_a_stale_model_params(at_state):
     assert got.model_params is None
 
 
+def test_facts_for_reads_the_model_at_format_2_and_the_record_below_it(at_state):
+    """`facts_for` is what a target outside any route sends its model's
+    behaviour from: below format 2 the record's own legacy fields (what it
+    sent before the migration), at format 2 its model's facts -- never the
+    record's frozen fields there."""
+    at_state("fresh")
+    assert not keys.is_current(store.read_config())
+    store.llm_connections.update_connection("openrouter", prefill=True,
+                                            post_process="strict", vision="off")
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    model = raw["model"]
+    assert inf.facts_for(raw, model) == {"vision": "off", "prefill": True,
+                                         "post_process": "strict"}
+    legacy = inf.own_target(raw)
+    assert (legacy.prefill, legacy.post_process, legacy.reads_images) == (True, "strict", "no")
+
+    store.write_config(**{keys.FORMAT_KEY: "2"})
+    assert keys.is_current(store.read_config())
+    inference_facts.set_stated("openrouter", model, prefill=False, post_process="none",
+                               vision="on")
+    got = inf.facts_for(raw, model)
+    assert (got["prefill"], got["post_process"], got["vision"]) == (False, "none", "on")
+    current = inf.own_target(raw)
+    assert (current.prefill, current.post_process, current.reads_images) == (
+        False, "none", "yes")
+
+
 def test_the_operation_is_carried(at_state):
     at_state("fresh")
     assert inf.resolve("chat", operation="decide").operation == "decide"

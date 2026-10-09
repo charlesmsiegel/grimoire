@@ -32,7 +32,7 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
-from grimoire import routes
+from grimoire import llm, routes
 from grimoire.routes.models import RegenerateBody
 from grimoire.store.inference import resolve as inf
 
@@ -126,6 +126,23 @@ def test_connection_id_is_read_as_provider(at):
     # An empty `provider` is absent.
     blank, _ = _run(RegenerateBody(provider="  ", connection_id="local"), ctx["cid"])
     assert blank.chain.primary.provider_id == "local"
+
+
+def test_naming_the_default_a_modelless_claude_selection_runs_is_no_override(at):
+    """The same-route rule compares EFFECTIVE models: a Claude selection with
+    no model runs `llm.CLAUDE_DEFAULT_MODEL`, so a reroll naming that model
+    names the standing route (`routed` False) -- and one naming another model
+    leaves it."""
+    ctx = at()
+    pid = store.llm_connections.create_connection("claude", "Seraphine Agent")
+    _format2(role_primary_provider=pid, role_primary_model="")
+    standing, routed = _run({}, ctx["cid"])
+    assert (standing.chain.primary.provider_id, standing.chain.primary.model) == (pid, "opus")
+    assert routed is False
+    same, routed = _run({"model": llm.CLAUDE_DEFAULT_MODEL}, ctx["cid"])
+    assert same.chain.primary.model == "opus" and routed is False
+    other, routed = _run({"model": "sonnet"}, ctx["cid"])
+    assert other.chain.primary.model == "sonnet" and routed is True
 
 
 # ---- a provider alone ----

@@ -37,7 +37,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
-from grimoire.store.inference import facts, probes
+from grimoire.store.inference import facts, probes, resolve
 from tests import wire_kit
 from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
 
@@ -416,6 +416,30 @@ def test_without_confirm_the_test_is_refused_and_nothing_is_sent(client, confirm
     assert client.get("/api/runs").json()["runs"] == []
 
 
+@pytest.mark.parametrize(("kind", "model"), [("openrouter", MODEL), ("claude", "")])
+def test_an_unconfirmed_test_builds_no_target(client, monkeypatch, kind, model):
+    """CLAUDE.md's spend rule, held literally: the route refuses the request
+    without its yes "before anything is built or sent". The plan's default
+    model is the record's (`facts.model_of`, a pure rule), so not even the
+    probe's target is built before the refusal."""
+    built: list[str] = []
+    for name in ("provider_target", "target_for"):
+        real = getattr(resolve, name)
+        monkeypatch.setattr(resolve, name,
+                            lambda *a, _real=real, _name=name, **kw: built.append(_name)
+                            or _real(*a, **kw))
+    _use(client, FakeOpenRouter(["ok"]))
+    # A Claude record names no model: the plan's default is the one it runs.
+    conn = _connection(client, kind=kind, name=f"Realm {kind}")
+    r = client.post(f"/api/llm-connections/{conn}/test",
+                    json={"model": model, "capabilities": ["generate"]})
+    assert r.status_code == 400 and r.json()["detail"] == REFUSAL
+    assert built == []
+    # The control: a confirmed test does build its probe's target there.
+    _run(client, conn, ["generate"], model=model)
+    assert "target_for" in built
+
+
 @pytest.mark.parametrize("path", ["test", "test/preview"])
 def test_a_capability_the_preset_rules_out_is_refused_before_sending(client, path):
     fake = FakeOpenRouter(["ok"])
@@ -463,6 +487,35 @@ def test_a_connection_that_cannot_send_is_refused_before_sending(client):
     assert r.status_code == 409
     assert r.json()["kind"] == "missing_key"
     assert fake.calls == 0
+
+
+class _StrictRecorder:
+    """An OpenAI-compatible client that answers every probe and records the
+    `strict` flag each was sent with -- the one probe field a model's facts
+    put on the wire (`post_process`)."""
+
+    def __init__(self) -> None:
+        self.strict: list[bool] = []
+
+    async def stream(self, messages, model, key, base_url, strict=False, usage=None, **kw):
+        self.strict.append(strict)
+        yield "ok"
+
+
+@pytest.mark.parametrize("stated", ["strict", "none"])
+def test_a_probe_is_sent_its_models_post_processing(client, stated):
+    """The probe target carries the model's facts (`resolve.facts_for`): a
+    model whose facts say strict post-processing is probed strict, as a turn
+    on it is sent."""
+    assert store.inference_keys.is_current(store.read_config())
+    conn = _connection(client, kind="openai_compatible", name="Saltmarch Local",
+                       base_url="http://localhost:1234/v1", api_key="sk-fake-local")
+    facts.set_stated(conn, MODEL, post_process=stated)
+    recorder = _StrictRecorder()
+    _use(client, LLMClient(openai_compatible=recorder, retries=0))  # type: ignore[arg-type]
+    got = _run(client, conn, ["generate"])
+    assert got["result"]["results"]["generate"]["ok"] is True
+    assert recorder.strict == [stated == "strict"]
 
 
 # ---- a confirmed test ----------------------------------------------------------
