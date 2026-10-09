@@ -151,7 +151,13 @@ The database:
 - carries no promise of migration.
 
 The path is built from `home()`, so `test_paths_guard.py` holds without a
-marker.
+marker. Being built from `home()` does not keep it there, though. If `.cache`
+or `.cache/compiled` is a symlink or a junction, SQLite would write derived
+private text outside the root the user chose, and the purge and retention
+rules (sections 10 and 12) would act on a directory that is not the cache.
+So the cache is **off** for any process that finds a link or junction in
+either component. This is checked when the cache opens and again before any
+purge or removal, the same rule image GC applies (`image_gc._store_blocks`).
 
 **No handle stays open while the app is idle, and no sidecar file is left
 behind.**
@@ -299,6 +305,7 @@ line endings, BOM or encoding.
 
 ```
 key_digest = SHA-256( kind
+                    ‖ version       -- the registry entry's own
                     ‖ BUILD
                     ‖ params        -- canonical JSON of every non-file input,
                                     -- path-derived inputs included
@@ -314,8 +321,15 @@ unless its key moved with the code. A version number per kind that someone has
 to remember to bump is exactly how that gets missed. `BUILD` is computed once
 per process and covers:
 
-- every file in the installed `grimoire` package, including package data
-  (`builtin_modules/`, `climates/`, `docs/`);
+- the installed `grimoire` package's **source and package-data manifest**:
+  `.py` files and the data the package ships (`builtin_modules/`,
+  `climates/`, `docs/`), selected by a fixed list of suffixes. Bytecode
+  (`__pycache__/`, `*.pyc`) and anything else Python or the app writes at
+  run time are excluded. The supported installer runs from an editable
+  checkout, where an import writes `.pyc` files inside the package, and a
+  fingerprint that counted them would change the first time any module was
+  imported, emptying the cache on the next launch for no change in any
+  derivation;
 - the templates directory (`prompts.templates_dir()`, which ships as APK
   assets and sits outside the package);
 - `sys.version`, because the Unicode tables behind `str.split`, `casefold`
@@ -333,8 +347,9 @@ There are two ways to produce it:
 
 An upgrade or a local edit therefore makes the cache cold, which is correct.
 The plan measures what the fingerprint costs at start-up. Each kind's
-`version` documents intent and lets a test force a miss. It is not the safety
-mechanism.
+`version` is part of the key, so bumping it does force a miss: that lets a test
+isolate one derivation's change, and lets a deliberate change ship without
+depending on `BUILD`. It is not the safety mechanism.
 
 **`params` carries every input that is not a file's bytes:**
 
@@ -512,18 +527,30 @@ and correctness never depends on the sweep. A cheaper rule is enough:
     file's size would never reach its low-water mark and would empty the
     cache.
   - Measure size as `(page_count − freelist_count) × page_size`.
-  - Run with `auto_vacuum=INCREMENTAL` so freed pages can be handed back.
+  - Run with `auto_vacuum=INCREMENTAL`. That setting only makes it
+    *possible* to hand freed pages back; deleting rows hands nothing back. So
+    every eviction ends with an explicit, bounded `PRAGMA
+    incremental_vacuum(N)`, and the plan's test shows the physical file
+    shrinks. Without it, the cap would bound live pages while the file stayed
+    at its high-water size, both on disk and in what the sync client
+    uploads.
   - Eviction is opportunistic: it runs on a write batch, at most once per
     interval.
 - **`last_used` is coarse and batched.** It is updated at most once per day per
   row, collected in memory and written in one transaction per batch. A warm
   read must not become a write, and a cold sweep must not be one commit per
   row. Every commit also re-uploads the file through the sync client.
-- **A device file nobody opens** is removed once its mtime is older than a
-  generous retention period. That covers another device's file after that
-  device stopped syncing, and a file left behind by a data-dir move or a schema
-  change. Any device may remove it, because it is only a cache: the owner, if
-  it is still alive, starts cold.
+- **A device file nobody opens** is removed once its owner's **lease** is older
+  than a generous retention period. A database's own mtime cannot be that
+  signal: it records writes, and rules above keep a warm read from writing, so
+  a fully warm cache in daily use would look abandoned. The lease is a small
+  file beside the database, `<device>.alive`, touched by the owning process
+  when it opens the cache and at most once a day while it stays open. A file
+  with no lease is judged by its own mtime. The removal covers another
+  device's file after that device stopped syncing, and a file left behind by a
+  data-dir move or a schema change. Any device may remove it, because it is
+  only a cache: an owner that was alive after all starts cold. This device's
+  own file is never removed this way.
 
 The cap, the low-water mark and the retention period are constants. The plan
 justifies them structurally and tunes them later.
@@ -572,6 +599,12 @@ The cache can never be the reason a read fails.
     reach the store from worker threads too. So there is one connection per
     process and root, opened with `check_same_thread=False` and used only
     behind a lock.
+  - **A read never waits for that lock.** It tries to take it without
+    blocking, and if a write batch or an eviction holds it, the read is a miss
+    and computes. Otherwise a large eviction would queue every read route
+    behind a Python lock, and the millisecond busy timeout above would never
+    be reached. A write batch may wait briefly for the lock, and drops its
+    rows if it cannot get it.
   - That connection is closed on idle and when the root changes. It is never
     opened from the event loop's thread.
   - The plan states the same rule for a forked child process (reopen, never
@@ -590,9 +623,28 @@ campaigns, in this device's file and in other devices' synced copies, and in
 SQLite's free pages. So:
 
 - The connection runs with `secure_delete=ON`.
-- Deleting a world or a campaign removes every file in `.cache/compiled/`
-  after closing this process's own handle. This is a whole-cache drop at the
-  delete route, not a hook on record writes. Every device then starts cold.
+- **Deleting a world or a campaign purges the cache in place. It never unlinks
+  a database.** Two backends on one machine share this device's file, and on
+  Windows a file another process holds open cannot be removed. So "delete the
+  file" would leave a choice between refusing the delete and keeping the
+  private text. The purge works through SQLite's own locking instead:
+  1. The delete route writes a **purge marker**, `.cache/compiled/purge`
+     (through `store.atomic`), holding a new generation token.
+  2. In the same request, it purges this device's file: every row of every
+     table deleted in one transaction, under `secure_delete`, then
+     `incremental_vacuum`. It records the token in the file's own metadata.
+  3. Every process checks the marker each time it opens the cache or starts a
+     batch, which costs one stat. If a token differs from the one its file
+     records, it purges the same way before it reads or writes. That covers
+     another backend on this machine, at its next batch, and another device,
+     whose marker arrives by sync, at its next open.
+
+  A purge that cannot get the write lock right away is retried at the next
+  batch. The marker makes the purge happen eventually, and it never makes a
+  delete wait or fail. Before a process purges, the deleted record's rows are
+  already unreachable, because no live path hashes to them. What the purge
+  removes is data at rest. This is a whole-cache purge at the delete route,
+  not a hook on record writes, and every device then starts cold.
 - The Settings text on sharing boundaries says this, and says the same is
   already true of `.cache/embeddings/` and the thumbnails.
 
@@ -625,7 +677,7 @@ new path.
   - It takes no `cid`, so it gets **no** entry in `store/locks.py`.
     `test_lock_domain_guard.py` fails an `OUTSIDE_DOMAIN` entry for a module
     that has no `cid`-taking mutator (a "phantom"). Image GC is the precedent.
-  - Deleting a world or a campaign drops the cache (section 12) from the route,
+  - Deleting a world or a campaign purges the cache (section 12) from the route,
     outside any lock that matters to it.
   - SQLite writes go through neither `write_text` nor `open(..., "w")`, so
     `test_atomic_guard.py` does not see them. That is correct: the file is
@@ -661,8 +713,17 @@ codebase's placeholder names.
 - **Degradation.** Each of these degrades to a computed answer and one log
   line: a truncated file, a garbage file, a locked database, a corrupted
   payload, and a damaged `sources` row. A locked database is never renamed.
-- **Deletes.** Deleting a world or a campaign leaves no file in
-  `.cache/compiled/`.
+- **Deletes.** After a world or campaign is deleted, this device's file holds no
+  rows. A second open connection, standing in for another backend, purges
+  at its next batch. No file under `.cache/compiled/` is unlinked to do this.
+- **Links.** A symlinked `.cache` or `.cache/compiled` turns the cache off, and
+  no purge or retention sweep acts through it.
+- **Size.** Evicting past the cap shrinks the physical file. A warm cache whose
+  lease is fresh is never removed by another device.
+- **Contention.** A read made while a write batch holds the lock is a miss, not
+  a wait.
+- **Keys.** A changed kind `version` misses that kind's rows. Writing
+  `__pycache__` into the package does not change `BUILD`.
 - **Frozen campaign.** The read-only sweep of the frozen campaign
   (`snapshot.json`) is byte-identical with the cache cold, warm and off. The
   sweep already runs on a copy of `home/`, so the cache never writes into the
@@ -712,7 +773,19 @@ the code. Its findings are folded in above:
   - the transcript readers named correctly;
   - an honest account of what forks and moves gain.
 
-Codex should still be run against this spec before the plan, if it can be.
+A Codex review of the PR (`chatgpt-codex-connector`) then added seven fixes:
+
+- a delete purges in place through a synced marker, never by unlinking a
+  file another process may hold;
+- a linked `.cache` component turns the cache off;
+- every eviction ends with an explicit `incremental_vacuum`;
+- a read never waits for the in-process lock;
+- removal is judged by a device lease, not the database's mtime;
+- a kind's `version` is part of its key;
+- `BUILD` hashes a source manifest, never bytecode.
+
+The PR's Codex review is not the CLI's `/codex:adversarial-review`. That
+gate should still be run against this spec before the plan, if it can be.
 
 ## 16. Non-goals
 
@@ -726,6 +799,6 @@ Codex should still be run against this spec before the plan, if it can be.
 - Blocking or slowing edits made outside grimoire. They are noticed by stamp,
   on the next read.
 - Hooking `store.atomic` or any other write path (section 5, rule 4). The only
-  write-side touch is the whole-cache drop on a world or campaign delete.
+  write-side touch is the purge marker a world or campaign delete writes.
 - Replacing `vectors.py`, `usage_rollup.py` or the scene-identity record. Any
   of them could later become a kind, but none needs to.
