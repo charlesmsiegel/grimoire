@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { ApiError, api, type CapabilityNeed } from "../api/client";
 import { forgetModelTests } from "../components/inference/TestCallDialog";
-import ProvidersView from "./ProvidersView";
+import ProvidersView, { validReturn } from "./ProvidersView";
 
 vi.mock("../api/client", async () => {
   const actual = await vi.importActual<typeof import("../api/client")>("../api/client");
@@ -117,8 +117,8 @@ beforeEach(() => {
 
 /** Where the router is, so a chip's navigation can be read off the page. */
 function Where() {
-  const { pathname, search } = useLocation();
-  return <><div data-testid="where">{pathname}</div><div data-testid="search">{search}</div></>;
+  const { pathname, search, hash } = useLocation();
+  return <><div data-testid="where">{pathname + hash}</div><div data-testid="search">{search}</div></>;
 }
 
 function open(at = "/providers") {
@@ -127,8 +127,10 @@ function open(at = "/providers") {
       <Where />
       <Routes>
         <Route path="/providers" element={<ProvidersView />} />
+        <Route path="/providers/new" element={<ProvidersView />} />
         <Route path="/providers/:id" element={<ProvidersView />} />
         <Route path="/providers/:id/models/*" element={<ProvidersView />} />
+        <Route path="/models" element={<div>the models page</div>} />
         <Route path="/models/*" element={<div>the models page</div>} />
         <Route path="/campaigns/:cid" element={<div>the campaign</div>} />
       </Routes>
@@ -255,7 +257,7 @@ test("Used by chips link to the models page", async () => {
   const used = within(await main().findByRole("group", { name: "Used by" }));
   fireEvent.click(used.getByRole("button", { name: "Rolling summary" }));
   expect(await screen.findByText("the models page")).toBeInTheDocument();
-  expect(screen.getByTestId("where")).toHaveTextContent("/models/route/summary");
+  expect(screen.getByTestId("where")).toHaveTextContent("/models/edit#task-summary");
 });
 
 test("a Used by role chip opens that role", async () => {
@@ -263,7 +265,7 @@ test("a Used by role chip opens that role", async () => {
   const used = within(await main().findByRole("group", { name: "Used by" }));
   fireEvent.click(used.getByRole("button", { name: "Primary" }));
   expect(await screen.findByText("the models page")).toBeInTheDocument();
-  expect(screen.getByTestId("where")).toHaveTextContent("/models/role/primary");
+  expect(screen.getByTestId("where")).toHaveTextContent(/^\/models$/);
 });
 
 test("a campaign's Used by chip opens that campaign, not the library's record", async () => {
@@ -876,4 +878,59 @@ test("the server's own confirm_embedding refusal is asked, then resent with the 
   await waitFor(() => expect(api.updateConnection).toHaveBeenLastCalledWith(
     "saltmarch", expect.objectContaining({ api_key: "sk-new", confirm_embedding: true })));
   expect(await main().findByRole("button", { name: "Edit" })).toBeInTheDocument();
+});
+
+test("+ New provider is an address of its own, and a direct load shows the form", async () => {
+  open("/providers/new");
+  expect(await main().findByRole("group", { name: "Provider presets" })).toBeInTheDocument();
+  expect(column().getByRole("button", { name: "+ New provider" })).toBeDisabled();
+});
+
+test("+ New provider goes to /providers/new", async () => {
+  open("/providers/saltmarch");
+  fireEvent.click(await column().findByRole("button", { name: "+ New provider" }));
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/providers\/new$/));
+});
+
+test("Cancel returns to the provider the form was opened from", async () => {
+  open("/providers/saltmarch");
+  fireEvent.click(await column().findByRole("button", { name: "+ New provider" }));
+  fireEvent.click(await main().findByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/providers\/saltmarch$/));
+});
+
+test("Cancel from a direct load lands on the provider list", async () => {
+  open("/providers/new");
+  fireEvent.click(await main().findByRole("button", { name: "Cancel" }));
+  await waitFor(() => expect(screen.getByTestId("where")).toHaveTextContent(/^\/providers$/));
+});
+
+test("Cancel returns to another page that opened it, such as Models", async () => {
+  render(
+    <MemoryRouter initialEntries={[{ pathname: "/providers/new", state: { returnTo: "/models" } }]}>
+      <Where />
+      <Routes>
+        <Route path="/providers/new" element={<ProvidersView />} />
+        <Route path="/models" element={<div>the models page</div>} />
+      </Routes>
+    </MemoryRouter>);
+  fireEvent.click(await main().findByRole("button", { name: "Cancel" }));
+  expect(await screen.findByText("the models page")).toBeInTheDocument();
+});
+
+test("only an internal returnTo is honoured, and never the form itself", () => {
+  expect(validReturn({ returnTo: "/models#rates" })).toBe("/models#rates");
+  expect(validReturn({ returnTo: "//evil.example" })).toBeNull();
+  expect(validReturn({ returnTo: "https://evil.example" })).toBeNull();
+  expect(validReturn({ returnTo: "/providers/new" })).toBeNull();
+  expect(validReturn({ returnTo: "/providers/new?x=1" })).toBeNull();
+  expect(validReturn(null)).toBeNull();
+  expect(validReturn({ returnTo: 7 })).toBeNull();
+});
+
+test("the column opens with the Inference group, Providers current", async () => {
+  open("/providers");
+  const nav = within(await screen.findByRole("complementary", { name: "Providers" }));
+  expect(nav.getByRole("link", { name: "Providers" })).toHaveAttribute("aria-current", "page");
+  expect(nav.getByRole("link", { name: "Models" })).toHaveAttribute("href", "/models");
 });

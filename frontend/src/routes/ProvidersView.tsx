@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useMatch, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import {
   ApiError, api, type CapabilityName, type CapabilityValue, type HealthCheckResult,
   type InferenceSettings, type LLMConnection, type LLMConnectionDetail,
@@ -10,10 +10,12 @@ import {
 import { ErrorNote } from "../components/ErrorNote";
 import { Field } from "../components/Field";
 import { CapabilityBadges } from "../components/inference/CapabilityBadges";
+import { InferenceNav } from "../components/inference/InferenceNav";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
 import { migrationBanner, migrationLine } from "../components/inference/migration";
 import { TestCallDialog, useModelTests } from "../components/inference/TestCallDialog";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
+import { taskHash } from "../components/models/taskHash";
 import { ColumnSection, PageShell } from "../components/PageShell";
 import { perThousand } from "../components/cost";
 import { RATE_FIELDS, RateFields, entryOf, filled, formOf, hasBase,
@@ -88,8 +90,19 @@ function chipFor(use: ProviderUse, settings: InferenceSettings | null):
     return { label: `${label} · ${campaign}`, to: `/campaigns/${encodeURIComponent(campaign)}`,
              title: "This campaign's own choice: change it under Models in a scene's Inspector." };
   }
-  const page = use.kind === "route" ? "route" : "role";
-  return { label, to: `/models/${page}/${encodeURIComponent(use.key)}` };
+  if (use.kind === "route") return { label, to: `/models/edit${taskHash(use.key)}` };
+  return { label, to: "/models" };
+}
+
+/** Where Cancel on `/providers/new` goes: the router state an in-app link left
+ *  (`{ returnTo }`), if it is a path inside the app and not the form itself;
+ *  null otherwise, which lands on `/providers`. A refresh keeps the state the
+ *  browser kept, so it still goes back where the form was opened from. */
+export function validReturn(state: unknown): string | null {
+  const to = (state as { returnTo?: unknown } | null)?.returnTo;
+  if (typeof to !== "string" || !to.startsWith("/") || to.startsWith("//")) return null;
+  const path = to.split(/[?#]/)[0];
+  return path === "/providers/new" ? null : to;
 }
 
 /** One row of the catalog: a model and every capability as it resolves, or —
@@ -170,7 +183,11 @@ export default function ProvidersView() {
   // re-read after a create must still say so on the provider it opens.
   const [listError, setListError] = useState<unknown>(null);
   const [mode, setMode] = useState<"view" | "edit">("view");
-  const [creating, setCreating] = useState<{ preset: ProviderPresetOption | null } | null>(null);
+  const location = useLocation();
+  const isNew = useMatch("/providers/new") !== null;
+  /** The preset the new-provider form has been given, once one is picked. */
+  const [newPreset, setNewPreset] = useState<ProviderPresetOption | null>(null);
+  useEffect(() => { if (isNew) setNewPreset(null); }, [isNew]);
   const [checking, setChecking] = useState(false);
   const [askCheck, setAskCheck] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -244,7 +261,6 @@ export default function ProvidersView() {
     setDetail(null);
     setCatalog(null);
     if (!id) return;
-    setCreating(null);
     loadDetail(id).catch((err: unknown) => { if (openId.current === id) setError(err); });
     void loadCatalog(id);
   }, [id, loadDetail, loadCatalog]);
@@ -301,15 +317,18 @@ export default function ProvidersView() {
   }
 
   function startNew() {
-    setCreating({ preset: null });
-    if (id) navigate("/providers");
+    navigate("/providers/new",
+             { state: { returnTo: location.pathname + location.search + location.hash } });
+  }
+
+  function cancelNew() {
+    navigate(validReturn(location.state) ?? "/providers");
   }
 
   // The provider exists once the create answers, so it is opened by the id
   // that answer named whatever the list re-read does: a failed re-read left on
   // the form would offer Create again, and a second press makes a duplicate.
   async function created(newId: string) {
-    setCreating(null);
     navigate(providerPath(newId));
     await reloadList().catch(setListError);
   }
@@ -340,16 +359,18 @@ export default function ProvidersView() {
 
   const column = (
     <>
+      <InferenceNav current="providers" />
       <ColumnSection label="Providers" count={providers.length}>
         <div className="column-actions">
-          <button type="button" className="column-primary" onClick={startNew} disabled={blocked}>
+          <button type="button" className="column-primary" onClick={startNew}
+                  disabled={blocked || isNew} aria-current={isNew ? "page" : undefined}>
             + New provider
           </button>
         </div>
         {providers.length === 0 && <p className="column-empty">None yet.</p>}
         {providers.map((p) => (
           <Link key={p.id} to={providerPath(p.id)}
-                className={"column-row" + (p.id === id && !creating ? " active" : "")
+                className={"column-row" + (p.id === id && !isNew ? " active" : "")
                            + (p.health.state === "error" ? " alert" : "")}>
             <span className="column-row-label">{p.name}</span>
             {/* Only the failure: a badge on every state would spend most of
@@ -376,12 +397,11 @@ export default function ProvidersView() {
   );
 
   let body;
-  if (creating && !id) {
+  if (isNew) {
     body = (
       <NewProvider presets={presets} presetsError={presetsError} onRetry={loadPresets}
-                   choice={creating.preset}
-                   onChoose={(preset) => setCreating({ preset })}
-                   onCancel={() => setCreating(null)} onCreated={created} />
+                   choice={newPreset} onChoose={setNewPreset}
+                   onCancel={cancelNew} onCreated={created} />
     );
   } else if (!id) {
     body = (
