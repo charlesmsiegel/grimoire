@@ -7,7 +7,12 @@
 (`2026-10-07-inference-backend-refactor-design.md`, landed as slices A
 through I). This spec relies on 01 for one thing only: the embedding space id
 (`ResolvedInference.space_id`, reached through `embed_space.endpoint()`).
-**Baseline reconciled against:** `main` at `7f833e7` (#493).
+**Consumers in the roadmap:** 04 (instant Worlds, Campaigns, Todo and shell),
+05 (direct-edit cache sync), which 06's store-editing skill drives, 08 (derived
+history SearchDocuments) and 09 (hybrid retrieval). 07's inverse membership
+index may also live here. Section 2a is the contract those items rely on.
+**Baseline reconciled against:** `main` at `7f833e7` (#493), and against the
+roadmap bundle of 2026-10-06 (specs 04–09).
 **Supersedes, in part:** the "No stored aggregates or index files" non-goal of
 `2026-08-28-read-path-performance-design.md`. Section 2 says how far.
 
@@ -83,14 +88,74 @@ the persisted stamp→hash map in section 5. That map is held to stricter rules
 than the in-process layer, and it is never used by anything that decides a
 write.
 
-What this adds is narrow:
+On its own, this spec adds little performance:
 
 - **Warm-after-restart reads** cost a stat and a lookup rather than a
   recompute.
 - **The same bytes at a different path** (a fork, or a campaign's copy of a
   world record) cost a read and a hash, but no recompute.
 
-The same-process warm path is already cheap, and it must not get slower.
+The same-process warm path is already cheap, and it must not get slower. Its
+real value is as the **substrate** the roadmap builds on: 04's page
+projections, 05's eager rebuild of what was hot, and 08 and 09's
+SearchDocuments. Each of those would otherwise invent its own persistence,
+keys and invalidation. So 03 is judged by whether it carries them. Section 2a
+says what that takes, and section 8 keeps its own first consumers to the ones
+that prove the substrate.
+
+## 2a. What the rest of the roadmap needs from this
+
+Each item below is a requirement on 03. None is an implementation of the later
+spec.
+
+1. **Composite keys over collections and over inputs that are not files (04,
+   08).**
+   - 04's world card, campaign card, per-scope Todo and shell projections are
+     keyed by the hashes and collection digests of what each one renders.
+   - 08's SearchDocument is keyed by the digest of its inputs plus
+     `search_document_version`.
+   - Section 6 has to carry these keys, including inputs that are not a file's
+     bytes: a chore's ignore set, a config value, a continuity cache's hash.
+   - It must not force one whole-library hash, which 04 section 4 rules out.
+2. **Liveness by construction (05, 09).** 05's core invariant is that *after
+   sync, no live query may return content derived from a superseded source
+   version*. 03 makes that true at every read, not only after a sync.
+   - A key is computed from the current bytes, so a superseded artifact has no
+     live key that could reach it (section 9).
+   - There is no live source→hash mapping for 05 to update. The filesystem is
+     that mapping.
+   - 05's sync is therefore an **eager warm-up** (rebuild what was hot) and
+     never a correctness step. Its "remove the old hash from live mappings"
+     step holds already.
+3. **A record of what was materialized (05, 08).** 05 rebuilds "what was hot"
+   for an edited path, and 08 rebuilds a hot SearchDocument and its vector.
+   Both need to know which kinds were built from a path. 03 keeps that record
+   (section 4, `materialized`). The policy that acts on it is 05's.
+4. **One validation primitive, reused (05).** 05 must not introduce *a second
+   invalidation system*. The validate-and-hash step reads use (section 5) is
+   exposed as the primitive that 05's in-process write-through and its CLI
+   both call.
+5. **Persisting an artifact is always safe, even straight after a write (04,
+   05).** An artifact is keyed by the hash of bytes that were actually read,
+   so storing it can never vouch for bytes it did not see. Only the stamp→hash
+   row in `sources` is subject to the racy window. So 05's write-through, and
+   04's rule that *normal app use should not show a stale overview after its
+   own write*, can rebuild and store artifacts at write time. The one thing
+   deferred is the `sources` row (section 5, rule 4).
+6. **Batch lookups over a live key set, with indexes allowed for ranking (08,
+   09).**
+   - 08 filters SearchDocuments by metadata (cast, location, date), and 09
+     adds lexical and semantic candidates over them.
+   - Both start from the live set (the current scenes' keys) and look up in a
+     batch.
+   - 09 may rank with an index, for example SQLite FTS5 if the Android build
+     carries it, but only over rows whose keys are in the caller's live set.
+     Section 9 holds that rule.
+7. **Vectors are keyed by text, not by build (08, 09).** 08 keys an embedding
+   on `embedding_space + hash(exact SearchDocument text)`, which is
+   `vectors.py`'s key today. Vectors are not keyed by `BUILD` (section 6). An
+   upgrade re-derives SearchDocuments, and costs an embedding call only where
+   the rendered text actually changed.
 
 ## 3. Location: in the store, one file per device, schema in the name
 
@@ -206,7 +271,28 @@ call site. Each entry declares:
 
 That makes one place list everything that persists and what each key covers.
 
-### No `embeddings` and no `materialization` table in this spec
+### `materialized`: which kinds were built from a path
+
+| field | meaning |
+|---|---|
+| `path` | a source the artifact read, relative to the store root |
+| `kind` | the registry kind built from it, or `vector:<space>` for an embedding of a projection of it |
+| `last_used` | as for artifacts |
+
+05 needs this record to rebuild "what was hot" for an edited path, and 08
+needs it to keep a hot SearchDocument and its vector current (section 2a,
+item 3).
+
+- It is written beside the artifact, in the same batch.
+- It is read only by path, for a path the caller already holds, so it never
+  answers which paths exist (section 9).
+- Losing it costs 05 its eager warm-up and nothing else: the next read
+  rebuilds lazily.
+
+The policy that acts on the record (rebuild now, rebuild later, never
+re-embed what was never embedded) belongs to 05.
+
+### No `embeddings` table in this spec
 
 **Embeddings stay in `vectors.py`.**
 
@@ -215,15 +301,16 @@ That makes one place list everything that persists and what each key covers.
   resolution (`embed_space.endpoint()["space"]`), and nothing here changes
   that.
 - Its format is already justified by measured cost on the read path.
-- Moving vectors into SQLite buys nothing until semantic search scores across
-  this cache's search documents. That belongs to a later spec, which should
-  reuse the vector key exactly.
+- 08's embedding key, `embedding_space + hash(SearchDocument text)`, is this
+  key. So 08 and 09 can keep using `vectors.py` files.
+- Whether vectors move into SQLite (for batch loading, or to share eviction
+  with this cache) is 08's or 09's call. Whichever is chosen must keep the key
+  exactly, and keep it independent of `BUILD`.
+- The `materialized` record above covers vectors either way.
 
-**There is no eager rebuild after an edit.** Recomputing artifacts that are
-"hot" straight after a direct edit is speculative work on the write path. The
-first read after an edit pays one recompute, which is how every statcache
-derivation already behaves. Revisit this only if the plan's measurements show
-a hot kind whose first read a user would notice.
+**03 does not rebuild anything eagerly.** Eager rebuild is 05's feature, built
+on the `materialized` record and the primitive in section 2a, item 4. 03's own
+consumers rebuild lazily, on the first read after an edit.
 
 ## 5. The trust point: when a persisted stamp may vouch for a hash
 
@@ -261,13 +348,20 @@ be read on a filesystem with coarse or foreign clocks.
    ctime catches an in-place rewrite that was handed its mtime back, which a
    sync client or `touch -r` can do. The inode catches a rename-replace.
 
-4. **Grimoire's own writes are not recorded.** The draft asked `store.atomic`
-   to update `sources` right after a write. That cannot be done safely: a file
-   just written is, by definition, inside the window, so rule 2 forbids
-   recording it. Recording it anyway would undo the protection the draft
-   itself asked to keep. The file is hashed once by the first read after the
-   window passes, which is what the read path pays today. This also keeps
-   SQLite off the write path.
+4. **A write never records its own `sources` row.** The draft asked
+   `store.atomic` to update `sources` straight after a write, and 04 and 05
+   ask for write-through too. A file just written is, by definition, inside
+   the window, so rule 2 forbids recording its stamp. Recording it anyway
+   would undo the protection the draft itself asked to keep. Write-through
+   still works, because the stamp row is all that is deferred:
+   - a writer, or 05's sync, may hash the bytes it wrote and **store
+     artifacts** for them at once (section 2a, item 5);
+   - the next read in this process can take the hash from the in-process
+     layer, which statcache's racy rule already governs;
+   - the persisted row lands on the first read after the window.
+
+   None of this needs `store.atomic`. 05 calls its primitive from the writers
+   (05 section 6), and `store.atomic` stays free of SQLite.
 
 5. **Anything that decides something reads bytes, not this table.** Some
    residuals are permanent once persisted:
@@ -346,6 +440,18 @@ There are two ways to produce it:
   is off rather than guessing.
 
 An upgrade or a local edit therefore makes the cache cold, which is correct.
+
+**Vectors are not keyed by `BUILD`.** An embedding is keyed by its space and
+the exact text embedded (section 4). After an upgrade, every artifact is
+rebuilt, but re-rendering a SearchDocument to the same text finds its vector
+already there. So an upgrade costs recomputation, and an embedding call only
+where the text changed.
+
+The coarse fingerprint means 04's pages are cold once after each upgrade, and
+after each pull for someone running from a checkout. A narrower fingerprint
+per kind (only the modules a kind's compute reaches) would keep more warm, but
+an import graph is easy to get wrong. That is a later refinement, once
+measurements show the cold-after-upgrade cost matters.
 The plan measures what the fingerprint costs at start-up. Each kind's
 `version` is part of the key, so bumping it does force a miss: that lets a test
 isolate one derivation's change, and lets a deliberate change ship without
@@ -413,15 +519,31 @@ never answers membership. A collection-keyed artifact saves the compute and
 the read for each member. It does not save the listing.
 
 The draft hoped that counts which currently need directory sweeps could come
-from collection digests. They cannot. The digest needs the listing, and the
-listing is the count. Getting a count more cheaply would mean persisting a
-directory's stamp as a voucher for its listing. `statcache.stamp` documents
-that a directory stamp can do that, and `migrations` relies on it for the
-identity marks. But a persisted listing is a membership answer, which section
-1 forbids. **The world shelf's counts stay live reads**, and
-`list_world_rows` already exists for callers that do not need them.
+from collection digests. Two kinds of "count" need telling apart:
+
+- **A count of members** (how many entities a world has) *is* the listing. The
+  digest needs the listing, so caching the count saves nothing.
+  - Getting it more cheaply would mean persisting a directory's stamp as a
+    voucher for its listing. `statcache.stamp` documents that a directory
+    stamp can do that, and `migrations` relies on it for the identity marks.
+  - But a persisted listing is a membership answer, which section 1 forbids.
+  - Member counts stay live reads, which costs a listing per directory.
+- **A predicate over members' content** (which characters lack an avatar or
+  an anchor, coverage, a gap probe) has to read every member. That is
+  expensive, and it is exactly what a collection digest can key. 04 section
+  7's *"invalid/missing-record probes that require directory sweeps"* are
+  this kind, and they belong in the cache.
 
 ## 8. What to cache first
+
+**The page projections are 04's, not 03's.** World cards, campaign cards,
+per-scope Todo projections and the shell's projections are 04's targets, and
+04 is the roadmap's *"first user-facing proof that the compiled-cache
+architecture is worth having"*. 03 must make them expressible (section 2a,
+item 1). 03 does not choose their shapes.
+
+03's own consumers prove the substrate: keys, trust, failure, eviction,
+guards. Each must also pass the cost test below.
 
 The draft listed targets by page. This list keeps those pages but orders the
 targets by one structural test. The cache only helps when **compute plus read
@@ -464,7 +586,8 @@ prompts later, in conversation, and commits no figures.
   - This kind is still a good *first consumer* for proving the wiring end to
     end, because its output is easy to assert byte for byte, with the
     directory name declared as a path-derived input. It is not where the
-    performance claim is made.
+    performance claim is made. 04 replaces it with the card projection the
+    page actually renders.
 - **`scene_head`.** It is already a head-only read.
 - **Roster projections and the story graph's inputs** (draft section 8). They
   are deferred, not dropped. Each is a composite over files the kinds above
@@ -481,15 +604,19 @@ prompts later, in conversation, and commits no figures.
   newline-translated UTF-8 text, and `dir_hash` is one SHA-256 over
   concatenated `(name, text)` pairs. Both are fixed by recorded sync bases and
   cannot change formula.
-- **The Todo list as a list.** `routes/todo.py`'s contract is that *"nothing
-  here is a cache that can outlive the read it was computed for"*.
-  - A content-keyed component is consistent with that, because its key is
-    recomputed from the current bytes on every request and so cannot answer
-    for bytes that have moved.
-  - A cached chore list, chore count or chore's existence is not consistent
-    with it.
-  - Todo may consume the kinds above, but it gains no kind of its own. If it
-    does consume one, its docstring is updated to say so.
+- **A Todo or shell projection whose key does not cover every input.**
+  `routes/todo.py`'s contract is that *"nothing here is a cache that can
+  outlive the read it was computed for"*. A content-keyed projection keeps
+  that contract, because its key is recomputed from the current inputs on
+  every request and cannot answer for inputs that have moved. 04's per-scope
+  Todo projections are this kind, and 03 allows them.
+  - What 03 forbids is a projection keyed on *less* than the chore reads.
+    Chores read more than record files: the ignore set
+    (`store/chores.py`), routing and config, the usage ledger, the continuity
+    candidate cache. A chore whose inputs cannot all be named in its key
+    stays live.
+  - Todo stays derived and self-healing (04 section 10). 04 amends the
+    `routes/todo.py` docstring when it lands.
 - **Anything that reads `config.md`, routing or the clock** without naming that
   input in `params`.
 - **The `/api/shell` money figures.** `usage_rollup` owns those, with its own
@@ -510,8 +637,14 @@ question of storage rather than correctness.
 The plan holds this with a guard in the house style. One module owns `sqlite3`
 and the cache's tables, and the guard fails both of these:
 
-- a read API that takes no key;
+- a read API that does not take the caller's keys or live key set;
 - an import of `sqlite3` anywhere else.
+
+An index may *rank* within a live set. 09's lexical candidates might come from
+SQLite FTS5, if the Android build has it, but every such query is restricted
+to keys the caller computed from the filesystem before anything is returned.
+That is the draft's own rule (*"score only those live hashes"*), stated once
+for every index a later spec adds.
 
 The `test_*_guard.py` modules that parse the package's own syntax trees are
 the precedent.
@@ -536,6 +669,9 @@ and correctness never depends on the sweep. A cheaper rule is enough:
     uploads.
   - Eviction is opportunistic: it runs on a write batch, at most once per
     interval.
+- **`materialized` rows are evicted with the artifacts they describe**, and by
+  the same least-recently-used rule. A missing row only means 05 rebuilds that
+  kind lazily.
 - **`last_used` is coarse and batched.** It is updated at most once per day per
   row, collected in memory and written in one transaction per batch. A warm
   read must not become a write, and a cold sweep must not be one commit per
@@ -724,6 +860,15 @@ codebase's placeholder names.
   a wait.
 - **Keys.** A changed kind `version` misses that kind's rows. Writing
   `__pycache__` into the package does not change `BUILD`.
+- **Roadmap contract (section 2a).**
+  - A composite key over a collection digest and an input that is not a file
+    misses when either input changes, and hits when an unrelated file changes.
+  - An artifact stored straight after a write is hit by the next read, and no
+    `sources` row is recorded inside the window.
+  - Every stored artifact leaves a `materialized` row for each path it read.
+    Dropping that table changes no read's answer.
+  - A query through an index returns nothing outside the caller's live key
+    set.
 - **Frozen campaign.** The read-only sweep of the frozen campaign
   (`snapshot.json`) is byte-identical with the cache cold, warm and off. The
   sweep already runs on a copy of `home/`, so the cache never writes into the
@@ -784,6 +929,19 @@ A Codex review of the PR (`chatgpt-codex-connector`) then added seven fixes:
 - a kind's `version` is part of its key;
 - `BUILD` hashes a source manifest, never bytecode.
 
+**Reconciled against the roadmap (specs 04–09).** Section 2a was added after
+reading the specs that consume this one. Several decisions were reversed:
+
+- Todo and shell projections were excluded outright. They are now allowed when
+  their key covers every input.
+- `materialized` was deferred. It is now restored for 05 and 08.
+- Write-through was rejected. It is now split: artifacts may be stored at write
+  time, and only the stamp row waits.
+- The query-safety guard banned index queries. It now allows indexes that rank
+  within a live key set.
+- Vectors were not addressed. They are now stated to be independent of
+  `BUILD`.
+
 The PR's Codex review is not the CLI's `/codex:adversarial-review`. That
 gate should still be run against this spec before the plan, if it can be.
 
@@ -798,7 +956,10 @@ gate should still be run against this spec before the plan, if it can be.
   story.
 - Blocking or slowing edits made outside grimoire. They are noticed by stamp,
   on the next read.
-- Hooking `store.atomic` or any other write path (section 5, rule 4). The only
-  write-side touch is the purge marker a world or campaign delete writes.
+- Hooking `store.atomic` (section 5, rule 4). Write-through is 05's, and it
+  calls the shared primitive from the writers. 03's only write-side touch is
+  the purge marker that a world or campaign delete writes.
+- Choosing 04's page projections, 05's eager-rebuild policy and CLI, or 08's
+  SearchDocument shape. Section 2a is what 03 owes them.
 - Replacing `vectors.py`, `usage_rollup.py` or the scene-identity record. Any
   of them could later become a kind, but none needs to.
