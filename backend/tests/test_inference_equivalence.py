@@ -280,17 +280,71 @@ def test_resolution_matches_the_baseline(state, tmp_path):
                     retired_expectation(migrated_expectation(BASELINE[state]), state)))
 
 
+#: Rule 3, the retired-and-stripped store only: the states whose recorded
+#: provider-editor readout shows a connection's OWN preset (`sampler_preset`),
+#: which the strip removes. Ruled covered by ratification item 4 (the provider
+#: editor's readout of a connection field retirement removes on purpose;
+#: nothing in the frontend renders `LLMConnectionDetail.sampling`).
+STRIPPED_OWN_PRESET = ("no_active", "routed", "glm_reasoning", "glm_max_under_route_preset")
+
+
+def _strip_rule(out: dict) -> bool:
+    """Rule 3 on `out`, in place: every connection readout
+    (`display.connection_sampling`) at `connection` scope reads as a
+    connection with no preset of its own (scope `none`, nothing applied or
+    dropped). True when it applied."""
+    readouts = out["display"]["connection_sampling"]
+    applied = False
+    for conn_id, cell in readouts.items():
+        if cell is not None and cell["scope"] == "connection":
+            readouts[conn_id] = {**cell, "applied": {}, "dropped": [], "preset_id": "",
+                                 "preset_name": "", "scope": "none"}
+            applied = True
+    return applied
+
+
+def stripped_expectation(expected: dict) -> dict:
+    """`expected` (a `retired_expectation`) as the store answers it once
+    retirement has stripped the connections' legacy fields: rule 3 above and
+    nothing else -- the wire, the reroll overrides, the embedding and every
+    lowered dict are held to the JSON unchanged."""
+    out = copy.deepcopy(expected)
+    _strip_rule(out)
+    return out
+
+
 def test_the_named_differences_touch_exactly_their_states():
     """Each of `retired_expectation`'s rules applies to the states it names
-    and to no other, across both frozen baselines."""
+    and to no other, across both frozen baselines -- and so does rule 3,
+    the stripped store's."""
     from . import test_inference_equivalence_c as equivalence_c
 
-    touched: dict[str, set[str]] = {"derived": set(), "route_preset": set()}
+    touched: dict[str, set[str]] = {"derived": set(), "route_preset": set(), "stripped": set()}
     for frozen in (BASELINE, equivalence_c.BASELINE):
         for state, recorded in frozen.items():
-            for rule in _retired(migrated_expectation(recorded), state)[1]:
+            expected, rules = _retired(migrated_expectation(recorded), state)
+            for rule in rules:
                 touched[rule].add(state)
-    assert touched == {"derived": set(DERIVED), "route_preset": set(LEGACY_EFFORT)}
+            if _strip_rule(copy.deepcopy(expected)):
+                touched["stripped"].add(state)
+    assert touched == {"derived": set(DERIVED), "route_preset": set(LEGACY_EFFORT),
+                       "stripped": set(STRIPPED_OWN_PRESET)}
+
+
+@pytest.mark.parametrize("state", sorted(baseline.STATES))
+def test_each_baseline_state_resolves_identically_after_retirement(state, tmp_path):
+    """Guarantee 9: the full `ensure` -- migrated, retired, stripped, nothing
+    left -- held to the JSON with the migration's named differences,
+    `retired_expectation`'s and rule 3's (`stripped_expectation`) only."""
+    with baseline.client_at(tmp_path) as client:
+        ctx = baseline.STATES[state](client)
+        assert baseline.migrate_state(state).state == "done"
+        status = migrate.status()
+        assert status.retirement == {"left": [], "failed": ""}, status.retirement
+        observed = without_new_tasks(baseline.observe(client, ctx))
+        assert (without_allowed_differences(observed)
+                == without_allowed_differences(stripped_expectation(
+                    retired_expectation(migrated_expectation(BASELINE[state]), state))))
 
 
 def planned_cells(cid: str) -> dict:

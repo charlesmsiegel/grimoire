@@ -83,3 +83,21 @@ def test_planned_equals_persisted(state, tmp_path):
         assert store.inference_keys.is_current(cfg)
         assert cfg[store.inference_keys.RETIRED_KEY] == "1"
         assert equivalence.planned_cells(ctx["cid"]) == planned
+
+
+@pytest.mark.parametrize("state", sorted(baseline.STATES))
+def test_each_baseline_state_resolves_identically_after_retirement(state, tmp_path):
+    """`test_inference_equivalence.test_each_baseline_state_resolves_identically_after_retirement`
+    over this baseline's states: migrated, retired and stripped, the GLM
+    efforts on their derived presets, every lowered dict held to the JSON."""
+    with baseline.base.client_at(tmp_path) as client:
+        ctx = baseline.STATES[state](client)
+        got = migrate.ensure()
+        assert got.state == "done", got
+        assert got.retirement == {"left": [], "failed": ""}, got.retirement
+        observed = equivalence.without_new_tasks(baseline.observe(client, ctx), CELLS)
+        assert (equivalence.without_allowed_differences(observed)
+                == equivalence.without_allowed_differences(equivalence.stripped_expectation(
+                    equivalence.retired_expectation(
+                        equivalence.migrated_expectation(BASELINE[state]), state))))
+
