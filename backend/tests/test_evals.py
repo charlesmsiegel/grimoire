@@ -699,7 +699,12 @@ def test_decide_continuity_identity_holds_the_decide_prompt_contract(monkeypatch
     assert {r.variant: r.expect_fail for r in case.recordings} == {
         "compliant": (), "undecodable": ("identity.json",),
         "merged": ("identity.distinct", "identity.continuation"),
-        "unknown-id": ("identity.known_ids", "identity.same_obligation")}
+        "unknown-id": ("identity.known_ids", "identity.same_obligation"),
+        "native": (),
+        "native-unknown-id": ("identity.known_ids", "identity.same_obligation"),
+        "native-refused": ("identity.covers_rows",)}
+    assert {r.variant: r.native for r in case.recordings if r.native} == {
+        "native": "openai", "native-unknown-id": "openai", "native-refused": "openai"}
     ctx = runner.prepare(case)
     exam = ctx["exam"]
     items = ctx["items"]
@@ -729,7 +734,10 @@ def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatc
         "merged": ("reconcile.distinct", "reconcile.continuation"),
         "eager": ("reconcile.keep_open", "reconcile.unproven"),
         "unfounded": ("reconcile.evidence",),
-        "timid": ("reconcile.cross_type", "reconcile.close", "reconcile.fulfilled")}
+        "timid": ("reconcile.cross_type", "reconcile.close", "reconcile.fulfilled"),
+        "native": (), "native-unfounded": ("reconcile.evidence",)}
+    assert {r.variant: r.native for r in case.recordings if r.native} == {
+        "native": "openrouter", "native-unfounded": "openrouter"}
     ctx = runner.prepare(case)
     payload = ctx["payload"]
     items = ctx["items"]
@@ -741,3 +749,88 @@ def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatc
     assert case.schema(ctx) == decisions.schema(items, explain=True)
     # The one-call case is retired: the decide case is the only one left.
     assert "continuity-reconcile" not in case_mod.BY_ID
+
+
+def _native_recording(case_id: str, variant: str = "native") -> tuple:
+    case = case_mod.BY_ID[case_id]
+    [recording] = [r for r in case.recordings if r.native and r.variant == variant]
+    return case, recording, json.loads(recording.path(case_id).read_text(encoding="utf-8"))
+
+
+def test_the_native_recordings_answer_only_one_choice_per_dependent_answer(
+        monkeypatch, tmp_path):
+    """The bug the native recordings exist for: a native endpoint answers each
+    question alone, so a direction or an id asked apart from its decision came
+    back none. These answer what the items ask and nothing that depends on
+    another answer -- no `from`, no `to`, no `id` -- and pass: the direction
+    and the record ride in the decision (spec 7.4)."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case, recording, bodies = _native_recording("decide-continuity-reconcile")
+    for body in bodies:
+        assert not {"from", "to"} & set(body["answers"])
+    assert [b["answers"]["decision"]["choice"] for b in bodies][1:3] == [
+        "continuation_b_of_a", "pays_off_b_to_a"]
+    result = runner.replay(case, recording)
+    assert result.passed, [(c.name, c.detail) for c in result.failures]
+    assert {c.name for c in result.checks} >= {"reconcile.continuation", "reconcile.cross_type"}
+
+    case, recording, bodies = _native_recording("decide-continuity-identity")
+    for body in bodies:
+        assert [a["name"] for a in body["answers"]] == ["decision"]
+    assert bodies[0]["answers"][0]["choice"] == "existing:find-the-ledger"
+    assert runner.replay(case, recording).passed
+
+
+def test_a_native_recording_is_graded_on_the_direction_it_chose(monkeypatch, tmp_path):
+    """Replay reads a native body through its adapter and the production
+    mapping, so the grader sees the direction the endpoint answered: the
+    continuation turned around fails its check, and a row merged into the
+    record its folded `existing` names fails the verdict that kept it new."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case, _, bodies = _native_recording("decide-continuity-reconcile")
+    bodies[1]["answers"]["decision"]["choice"] = "continuation_a_of_b"
+    result = runner.score(case, "native", json.dumps(bodies), "openrouter")
+    assert {c.name for c in result.failures} == {"reconcile.continuation"}
+
+    case, _, bodies = _native_recording("decide-continuity-identity")
+    bodies[1]["answers"][0]["choice"] = "existing:the-saltmarch-smuggling"
+    result = runner.score(case, "native", json.dumps(bodies), "openai")
+    assert {c.name for c in result.failures} == {"identity.distinct"}
+
+
+def test_native_grading_reads_what_the_endpoint_answered(monkeypatch, tmp_path):
+    """`decisions.render` writes every unread native answer as null, so read
+    back as structured text a native refusal looked answered and an
+    unoffered `existing:<id>` looked like a plain null. Replay keeps the
+    native results beside the text (`ctx["native_results"]`) and the graders
+    read those: the unoffered id fails `known_ids` (from its `stated`
+    value), a refusal fails `covers_rows` as the app leaves that row
+    unchecked, and an abstention on a reconcile decision fails
+    `reconcile.covers`, as the app stores that candidate no proposal."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    case, _, bodies = _native_recording("decide-continuity-identity")
+    bodies[0]["answers"][0]["choice"] = "existing:maras-map"
+    result = runner.score(case, "native", json.dumps(bodies), "openai")
+    assert {c.name for c in result.failures} == {"identity.known_ids",
+                                                "identity.same_obligation"}
+    assert json.loads(result.output)["0"]["answers"]["decision"] is None
+    bodies[0]["answers"][0]["choice"] = "maybe"
+    result = runner.score(case, "native", json.dumps(bodies), "openai")
+    assert {c.name for c in result.failures} == {"identity.enum", "identity.same_obligation"}
+    bodies[0]["answers"] = [{"type": "refusal", "name": "decision"}]
+    result = runner.score(case, "native", json.dumps(bodies), "openai")
+    assert {c.name for c in result.failures} == {"identity.covers_rows"}
+    # The same text graded as a structured reply: the null reads as answered.
+    plain = runner.score(case, "structured", result.output)
+    assert "identity.covers_rows" not in {c.name for c in plain.failures}
+
+    case, _, bodies = _native_recording("decide-continuity-reconcile")
+    decision = bodies[1]["answers"]["decision"]
+    del decision["choice"]
+    decision["probabilities"] = {"continuation_b_of_a": 0.5, "distinct": 0.5}
+    result = runner.score(case, "native", json.dumps(bodies), "openrouter")
+    assert {c.name for c in result.failures} == {"reconcile.covers"}
+    ctx = runner.prepare(case)
+    runner.native_output(ctx, "openrouter", json.dumps(bodies))
+    assert ctx["native_results"][1].answers["decision"].reason == "abstained"
+

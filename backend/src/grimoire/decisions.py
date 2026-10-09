@@ -46,8 +46,8 @@ import json
 import logging
 import math
 import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 log = logging.getLogger(__name__)
@@ -227,6 +227,13 @@ class Answer:
     `probability` and
     `distribution` are what a backend actually reported; a missing one stays
     missing, and nothing computes a stand-in.
+
+    `stated` is what a native reply named when it named no option
+    (`NOT_AN_OPTION`), as it named it, and ``""`` otherwise: a structured
+    reply's raw text is still at hand to read it from, a native one's is not,
+    and an eval grader tells an unoffered ``existing:<id>`` from an unknown
+    word by it. Never an answer, and not compared: two answers that read
+    alike are equal.
     """
 
     answer: bool | str | int | None
@@ -234,6 +241,7 @@ class Answer:
     probability: float | None = None
     distribution: dict[str, float] | None = None
     detail: str = ""
+    stated: str = field(default="", compare=False)
 
     def __post_init__(self) -> None:
         if (self.answer is None) != bool(self.reason):
@@ -242,6 +250,8 @@ class Answer:
             raise ValueError(f"unknown reason {self.reason!r}")
         if self.detail and self.reason != "unreadable":
             raise ValueError("a detail qualifies an unreadable answer only")
+        if self.stated and self.detail != NOT_AN_OPTION:
+            raise ValueError("a stated value qualifies an answer that named no option only")
 
 
 @dataclass(frozen=True)
@@ -570,10 +580,11 @@ def _foreign_index(obj: dict[str, Any], count: int) -> bool:
     (`duplicate` A->B, `related`) lands on the wrong candidate. Strict
     structured mode cannot send that shape (the schema requires `"0"` to
     `"n-1"`); a prompt-only re-send, a fallback without the mode, or a server
-    that ignores `response_format` can. Identity is safe from it (each row's
-    `id` choice offers only that row's candidates, so a shifted one reads
-    `NOT_AN_OPTION`), and so are most of reconcile's status words (their
-    evidence scene must be one of the item's own); the pair words are not.
+    that ignores `response_format` can. Identity's ``existing`` is safe from
+    it (each row's decision offers ``existing:<id>`` for that row's
+    candidates alone, so a shifted one reads `NOT_AN_OPTION`), and so are most
+    of reconcile's status words (their evidence scene must be one of the
+    item's own); the pair words are not.
 
     It is left unguarded because no test on the keys alone tells the two
     apart. The obvious one -- index keys with no `"0"` -- also refuses a
@@ -869,7 +880,7 @@ def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object
     - A choice: `chosen` an exact option id is that option (aliases are the
       structured parser's, §7.4); `NONE_KEY` or None is `abstained` with
       `allow_none` and `unreadable` without; any other value is `unreadable`
-      with `NOT_AN_OPTION`. With nothing chosen, the distribution's argmax --
+      with `NOT_AN_OPTION`, a string kept as its `stated`. With nothing chosen, the distribution's argmax --
       `abstained` on a tie or on `NONE_KEY` -- and with no usable
       distribution, `unreadable`.
     - A score: `chosen` an `int` index (never a bool or a float); else the
@@ -885,7 +896,9 @@ def native_answer(q: Question, *, chosen: object = UNSTATED, probability: object
         value, reason, detail = _native_choice(q, chosen, dist)
     else:
         value, reason, detail = _native_score(q, chosen, dist)
-    return Answer(value, reason, probability=p, distribution=dist, detail=detail)
+    stated = chosen if detail == NOT_AN_OPTION and isinstance(chosen, str) else ""
+    return Answer(value, reason, probability=p, distribution=dist, detail=detail,
+                  stated=stated)
 
 
 #: `(answer, reason, detail)`: an `Answer` before its report rides on it.
@@ -928,6 +941,45 @@ def _native_score(q: Score, chosen: object, dist: dict[str, float] | None) -> _R
         return chosen, "", ""
     key, reason = _from_distribution(dist)
     return (None if key is None else int(key)), reason, ""
+
+
+#: How far apart two summed masses may be and still tie in `regrouped`: a sum
+#: of reported probabilities carries float error (0.1 + 0.2 is not 0.3), and
+#: an error must not decide which of two equal meanings wins.
+MASS_TIE = 1e-9
+
+
+def regrouped(answer: Answer, group: Callable[[str], str],
+              order: Sequence[str]) -> str | None:
+    """The group a choice's reported distribution puts the most mass on, when
+    that is not the group of the option `answer` chose; None when it is (a
+    tie at the top that includes it counts as it), and when there is no
+    chosen option or no distribution -- a structured answer, which carries
+    none, is read as chosen.
+
+    For a choice that spells one meaning several ways (continuity's folded
+    options: ``duplicate_a_into_b`` and ``duplicate_b_into_a``, or one
+    ``existing:<id>`` per candidate), where an endpoint that scores options
+    one by one splits that meaning's probability across its spellings: 0.3 on
+    each of two and 0.4 on a rival is a 0.6 verdict that the per-option
+    argmax, and an endpoint's own `choice`, both lose. `group` maps an option
+    id to the meaning it spells; the reserved none is no group. A tie at the
+    top that leaves the chosen group out goes to the group first in `order`
+    (the caller's option order), then to the first reported."""
+    if not isinstance(answer.answer, str) or not answer.distribution:
+        return None
+    mass: dict[str, float] = {}
+    for key, weight in answer.distribution.items():
+        if key != NONE_KEY:
+            mass[group(key)] = mass.get(group(key), 0.0) + weight
+    if not mass:
+        return None
+    top = max(mass.values())
+    winners = [g for g, weight in mass.items() if weight >= top - MASS_TIE]
+    if group(answer.answer) in winners:
+        return None
+    rank = {g: n for n, g in enumerate(order)}
+    return min(winners, key=lambda g: rank.get(g, len(rank)))
 
 
 def _present(record: dict[str, Any]) -> dict[str, Any]:

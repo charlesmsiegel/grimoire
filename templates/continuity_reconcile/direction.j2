@@ -1,7 +1,10 @@
-{#- A pair's first direction question, as `decide()` asks it
-    (`reconcile.build_items`, a choice under the id `from` over the record
-    letters, null allowed; asked only under `reconcile.PAIR_VOCABULARIES`).
-    No vars. The retired one-call prompt's direction sentence: its rules
-    word for word, its opening reworded because an empty string is not an
-    option and null is. -#}
-For "duplicate", "continuation", "subthread" and "pays_off", give the direction as letters in "from" and "to", and null for both when the decision has no direction: for "duplicate", "from" is the record to fold away and "to" the one to keep; "from" continues "to", or is a subthread of "to"; for "pays_off", "from" is the plot thread and "to" the commitment.
+{#- A pair's direction, as `decide()` asks it: part of the `decision`
+    question's instructions, which `question.j2` includes under
+    `reconcile.PAIR_VOCABULARIES` only. No vars. The retired one-call
+    prompt asked the direction as letters in "from" and "to"; a native
+    decisions endpoint answers each question of an item on its own, so a
+    direction asked apart from the verdict it qualifies was answered without
+    it (spec 7.4). Each directed word is offered folded with its direction
+    instead (`reconcile.folded`), and what each direction means is its
+    option's description (`directed_option.j2`). -#}
+"duplicate", "continuation", "subthread" and "pays_off" are offered once for each way they may run between the two records, and each option says which record is which.

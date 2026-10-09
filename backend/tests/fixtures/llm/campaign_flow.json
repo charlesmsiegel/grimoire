@@ -7,7 +7,7 @@
     },
     {
       "when": {"system_contains": "You answer closed questions about material you are given.", "user_contains": "\nCandidates:\n"},
-      "reply": "{\"0\": {\"answers\": {\"decision\": \"new\", \"id\": null}, \"rationale\": \"A different debt from the one already owed.\"}}"
+      "reply": "{\"0\": {\"answers\": {\"decision\": \"new\"}, \"rationale\": \"A different debt from the one already owed.\"}}"
     },
     {
       "when": {"system_contains": "You answer closed questions about material you are given.", "user_contains": "Candidate — "},

@@ -109,6 +109,11 @@ class Recording:
     variant: str
     expect_fail: tuple[str, ...] = ()
     ext: str = "md"
+    #: For a decide case, the native adapter (`runner.NATIVE_ADAPTERS`) whose
+    #: decisions response bodies the recording holds, one per item; replay
+    #: reads them through it, as a live native run reads its replies. Empty
+    #: for a reply the graders read as written.
+    native: str = ""
 
     @property
     def expect_pass(self) -> bool:
@@ -1583,7 +1588,8 @@ def grade_decide_continuity_identity(ctx: dict, output: str) -> list[Check]:
             Check("prompt.explain", f"Rationale, for each item: {ctx['explain']}" in text,
                   "the rationale instruction did not reach the prompt"),
             *graders.grade_identity_decision(output, ctx["items"], ctx["rows"],
-                                             ctx["expected"])]
+                                             ctx["expected"],
+                                             native=ctx.get("native_results"))]
 
 
 # ------------------------------------ case 14: decide, continuity reconcile
@@ -1633,7 +1639,8 @@ def grade_decide_continuity_reconcile(ctx: dict, output: str) -> list[Check]:
             Check("prompt.explain", f"Rationale, for each item: {ctx['explain']}" in text,
                   "the rationale instruction did not reach the prompt"),
             *graders.grade_reconcile_decision(output, ctx["items"], ctx["payload"],
-                                              ctx["expected"])]
+                                              ctx["expected"],
+                                              native=ctx.get("native_results"))]
 
 
 # ------------------------------------------------------------------- the suite
@@ -1773,7 +1780,19 @@ CASES: tuple[Case, ...] = (
              Recording("unfounded", ("reconcile.evidence",), "json"),
              # §28.10 cases 4, 5 and 7 held back, as case 8's `timid`.
              Recording("timid", ("reconcile.cross_type", "reconcile.close",
-                                 "reconcile.fulfilled"), "json"))),
+                                 "reconcile.fulfilled"), "json"),
+             # The compliant verdicts from OpenRouter's decisions endpoint,
+             # which answers each question alone: every directed verdict
+             # rides on the decision it is folded into, so the two pair
+             # checks pass on that answer and no other (spec 7.4).
+             Recording("native", (), "json", native="openrouter"),
+             # The same, but the closure's evidence answered none: each
+             # evidence question stands alone (spec 7.4), so a native
+             # endpoint is asked which scene settles the thread, never "for"
+             # the decision; answered none, the closure has no scene and is
+             # stored uncertain, which the evidence check shows.
+             Recording("native-unfounded", ("reconcile.evidence",), "json",
+                       native="openrouter"))),
     Case(id="scene-suggestions",
          task="suggestions",
          hypothesis="with two focused drivers and a batch anchor in a custom calendar, "
@@ -1869,7 +1888,21 @@ CASES: tuple[Case, ...] = (
              # An id offered nowhere: no option, so `existing` names nothing,
              # and the row it was given on gets the wrong verdict.
              Recording("unknown-id", ("identity.known_ids", "identity.same_obligation"),
-                       "json"))),
+                       "json"),
+             # The compliant verdicts from OpenAI's decisions endpoint, each
+             # row answering its one folded decision: the duplicate names its
+             # record in the `existing:<id>` it chose (spec 7.4).
+             Recording("native", (), "json", native="openai"),
+             # The unknown-id counterexample answered natively: the endpoint
+             # reports the unoffered `existing:<id>` it named, so it still
+             # fails known_ids, though `decisions.render` writes it null.
+             Recording("native-unknown-id", ("identity.known_ids",
+                                             "identity.same_obligation"),
+                       "json", native="openai"),
+             # The first row refused: the app leaves that row unchecked, so it
+             # is not covered, and its verdict is left out rather than failed.
+             Recording("native-refused", ("identity.covers_rows",), "json",
+                       native="openai"))),
     Case(id="decide-speaker",
          task="response-selector",
          hypothesis="asked through decide() who opens a round in which the player has "

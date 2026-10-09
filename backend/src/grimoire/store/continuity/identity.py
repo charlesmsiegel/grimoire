@@ -41,8 +41,12 @@ and structural candidates still stand.
 
 **The check is a set of `decide()` items** (spec §7.4): `build_items` makes one
 per examined row, showing the row, its citation and identity fields, and its
-candidates with their signals, and nothing else of the campaign. Each asks
-`decision` and then, when the row has a candidate it may offer, `id`. The
+candidates with their signals, and nothing else of the campaign. Each asks one
+question, `decision`: ``existing:<id>`` once per candidate the row may offer,
+then ``new`` and ``uncertain``. The id rides in the decision rather than in a
+question of its own, because a native decisions endpoint answers each question
+of an item alone, and an `id` asked "unless the decision is existing" was
+answered without that decision (spec §7.4). The
 phase is one `decide()` over every examined row, chunked, so a long batch is
 several metered calls and the per-item wording repeats once per row.
 `answers_of` rebuilds the answers field by field into the dicts
@@ -116,10 +120,10 @@ _UNREADABLE = (OSError, ValueError, TypeError, KeyError, AttributeError)
 #: The id of each item's first question, a choice over `DECISIONS`.
 DECISION_ID = "decision"
 
-#: The id of each item's second question, a choice over the row's offered
-#: candidates (null allowed): named as today's reply field, so the sentences
-#: carried out of the legacy prompt keep their words.
-RECORD_ID = "id"
+#: What a folded ``existing`` option's id begins with: ``existing:<id>`` names
+#: the offered candidate whose record the row's beat moves (spec §7.4), so the
+#: decision and the record it names are one answer.
+EXISTING_PREFIX = "existing:"
 
 #: Why every examined row is a hint only when the check's reply held no
 #: object at all (§24): a failed check, not a decodable reply with nothing in it.
@@ -627,8 +631,8 @@ def template_rows(rows: list[dict]) -> list[dict]:
 # ------------------------------------------------------- as decision items
 #
 # The check as `decide()` items (spec §7.4): one per examined row, asking
-# `decision` and then `id`. These are what absorb sends and reads
-# (`routes.scenes._resolve_identity`).
+# `decision`, its ``existing`` folded with the candidate it names. These are
+# what absorb sends and reads (`routes.scenes._resolve_identity`).
 
 
 def _spelled(seen: set[str], spelling: str) -> bool:
@@ -642,36 +646,83 @@ def _spelled(seen: set[str], spelling: str) -> bool:
     return True
 
 
+#: The decision words a row is always offered, after its folded ``existing``
+#: options.
+_OTHER_WORDS = tuple(word for word in DECISIONS if word != "existing")
+
+
+def _fits(options: int, chars: int) -> bool:
+    """Whether a `decision` choice of `options` options whose ids total
+    `chars` characters is one `decisions.validate` accepts and a decisions
+    endpoint carries: at most `decisions.MAX_OPTIONS` options (which is
+    `decisions.NATIVE_MAX_OPTIONS`; the choice allows no none, so no reserved
+    none is added), and past `decisions.ENUM_STRING_CHARS_ABOVE` options, at
+    most `decisions.MAX_ENUM_STRING_CHARS` characters."""
+    return (options <= min(decisions.MAX_OPTIONS, decisions.NATIVE_MAX_OPTIONS)
+            and (options <= decisions.ENUM_STRING_CHARS_ABOVE
+                 or chars <= decisions.MAX_ENUM_STRING_CHARS))
+
+
 def _offered(row: dict, live: Mapping[str, str]) -> tuple[list[dict], list[decisions.Option]]:
-    """The row's candidates the `id` question may offer, in rank order, and
-    their options (Review Focus 3, M4).
+    """The row's candidates the `decision` choice may offer, in rank order,
+    and their folded ``existing:<id>`` options (Review Focus 3, M4).
 
     Two passes, so no hand-edited ledger yields a request `decisions.validate`
     refuses. Ids first: a candidate whose bare id is not offerable (an empty
-    id from a ``thread:`` key) or collides once normalised with a
-    higher-ranked one is dropped -- from the options and from the row the
-    context shows. Then aliases, the spellings today's `_existing`
-    canonicalises: the ref form ``<kind>:<id>``, and each live alias source of
-    that ref with its bare id (a source of another kind, which `_existing`
-    would never reach, is not one). An alias that is not offerable, or
-    collides with any kept id or an earlier alias, is dropped alone, so an
-    earlier candidate's alias source never shadows a later candidate's id *in
-    the options*: that holds up to the parse. `Examination.decide` maps the
-    answered id through the alias map again, so an answer naming a later
-    candidate whose id is also an earlier candidate's alias source lands the
-    row on the earlier candidate, as today's `_existing` does."""
+    id from a ``thread:`` key, which would fold into an option naming
+    nothing), whose folded option collides once normalised with a
+    higher-ranked one's, or that the choice has no room left for (`_fits`,
+    beside ``new`` and ``uncertain``) is dropped -- from the options and from
+    the row the context shows. `examine` offers at most
+    `similarity.IDENTITY_TOP_K`, far inside that room, so the last never binds
+    on a row it built. Then aliases, the spellings today's `_existing`
+    canonicalises, each folded: the ref form ``<kind>:<id>``, and each live
+    alias source of that ref with its bare id (a source of another kind,
+    which `_existing` would never reach, is not one) -- and every spelling
+    again, the id included, with one space after the colon
+    (``existing: <id>``), the most natural way to follow "existing:"
+    followed by the id, which `decisions.normalise` would otherwise read as
+    no option (it folds spaces into ``_``, never away). Each kept id's spaced
+    form is taken before any other alias, so it is shadowed by nothing but
+    an id. An alias that is not
+    offerable, or collides with any kept option or an earlier alias, is
+    dropped alone, so an earlier candidate's alias source never shadows a
+    later candidate's id *in the options*: that holds up to the parse.
+    `Examination.decide` maps the answered id through the alias map again, so
+    an answer naming a later candidate whose id is also an earlier
+    candidate's alias source lands the row on the earlier candidate, as
+    today's `_existing` does."""
     kind = row["kind"]
-    seen: set[str] = set()
-    kept = [c for c in row["candidates"] if _spelled(seen, c["id"])]
+    seen = {decisions.normalise(word) for word in _OTHER_WORDS}
+    kept: list[dict] = []
+    chars = sum(len(word) for word in _OTHER_WORDS)
+    for c in row["candidates"]:
+        option = EXISTING_PREFIX + c["id"]
+        if not decisions.offerable(c["id"]) or decisions.normalise(option) in seen:
+            continue
+        if not _fits(len(kept) + 1 + len(_OTHER_WORDS), chars + len(option)):
+            break
+        _spelled(seen, option)
+        kept.append(c)
+        chars += len(option)
+    spaced = [f"{EXISTING_PREFIX} {c['id']}" for c in kept]
+    spaced_ids = [s if _spelled(seen, s) else "" for s in spaced]
     options = []
-    for c in kept:
+    for c, spaced_id in zip(kept, spaced_ids, strict=True):
         ref = f"{kind}:{c['id']}"
         spellings = [ref]
         for src, to in live.items():
             if to == ref and src != to and src.startswith(f"{kind}:"):
                 spellings += [src, src.removeprefix(f"{kind}:")]
-        aliases = tuple(s for s in spellings if _spelled(seen, s))
-        options.append(decisions.Option(c["id"], c["title"] or c["id"], aliases))
+        plain = tuple(s for s in (EXISTING_PREFIX + s for s in spellings) if _spelled(seen, s))
+        rest = tuple(s for s in (f"{EXISTING_PREFIX} {s}" for s in spellings)
+                     if _spelled(seen, s))
+        aliases = (*plain, *((spaced_id,) if spaced_id else ()), *rest)
+        options.append(decisions.Option(
+            EXISTING_PREFIX + c["id"],
+            prompts.render("continuity_identity/option.j2", decision="existing",
+                           title=c["title"] or c["id"]),
+            aliases))
     return kept, options
 
 
@@ -680,33 +731,58 @@ def build_items(rows: list[dict], live: Mapping[str, str]) -> tuple[decisions.It
 
     Each item's context is `continuity_identity/item.j2` over the row as
     `template_rows` shapes it, holding only the candidates it offers (so it
-    stands alone: a native backend sends each item by itself). It asks
-    `decision`, a choice over `DECISIONS`, and then `id`, a choice over the
-    offered candidates by bare id with null allowed (`_offered`); a row left
-    with no offerable candidate asks `decision` alone, which an ``existing``
-    answer then downgrades as not offered. Pure, but it renders: callers run
-    it in the threadpool."""
+    stands alone: a native backend sends each item by itself). It asks one
+    question, `decision`: ``existing:<id>`` per offered candidate, in rank
+    order (`_offered`), each described by `option.j2` under the candidate's
+    title, then ``new`` and ``uncertain``. A row left with no offerable
+    candidate is offered no ``existing`` at all, so it cannot answer one.
+    Pure, but it renders: callers run it in the threadpool."""
     question = prompts.render("continuity_identity/question.j2")
-    record = prompts.render("continuity_identity/record.j2")
     words = tuple(decisions.Option(word, prompts.render("continuity_identity/option.j2",
                                                         decision=word))
-                  for word in DECISIONS)
+                  for word in _OTHER_WORDS)
     items = []
     for row in rows:
         kept, options = _offered(row, live)
         [shown] = template_rows([{**row, "candidates": kept}])
-        asked: list[decisions.Question] = [decisions.Choice(DECISION_ID, question, words)]
-        if options:
-            asked.append(decisions.Choice(RECORD_ID, record, tuple(options),
-                                          allow_none=True))
-        items.append(decisions.Item(prompts.render("continuity_identity/item.j2", r=shown),
-                                    tuple(asked)))
+        items.append(decisions.Item(
+            prompts.render("continuity_identity/item.j2", r=shown),
+            (decisions.Choice(DECISION_ID, question, (*options, *words)),)))
     return tuple(items)
+
+
+def unfolded(answer: str) -> tuple[str, str]:
+    """`(decision, id)` of a `decision` answer: a folded ``existing:<id>``
+    split back into ``existing`` and the id it names, and any other answer as
+    itself with no id -- the decision and `id` of today's decision dict, which
+    `Examination.decide` reads."""
+    if answer.startswith(EXISTING_PREFIX):
+        return "existing", answer.removeprefix(EXISTING_PREFIX).strip()
+    return answer, ""
 
 
 def explain() -> str:
     """The rationale instruction: each row's display-only reason."""
     return prompts.render("continuity_identity/explain.j2")
+
+
+def _reweighed(answer: decisions.Answer) -> tuple[str, str]:
+    """`(decision, id)` of a read `decision` answer (`unfolded`), unless the
+    distribution an endpoint reported puts more mass on another decision
+    than on the chosen option's once every ``existing:<id>`` is summed as one
+    ``existing`` (`decisions.regrouped`): an endpoint scoring options one by
+    one splits a row between two near-identical candidates across their
+    options, and reads 0.3 + 0.3 as losing to a ``new`` of 0.4 -- which opens
+    a new record with no flag. Then ``existing`` winning over a chosen ``new``
+    or ``uncertain`` is ``uncertain``, which names no record (none won) and
+    flags the row; ``new`` or ``uncertain`` winning is that word. A chosen
+    ``existing:<id>`` inside the winning ``existing`` stands. With no
+    distribution (a structured reply), as chosen."""
+    chosen = answer.answer if isinstance(answer.answer, str) else ""
+    group = decisions.regrouped(answer, lambda oid: unfolded(oid)[0], DECISIONS)
+    if group is None:
+        return unfolded(chosen)
+    return ("uncertain" if group == "existing" else group), ""
 
 
 def answers_of(rows: list[dict],
@@ -719,8 +795,14 @@ def answers_of(rows: list[dict],
     out, so `Examination.decide` leaves its row `unchecked` and the phase is
     never `ok`. Every read item gives ``{row, decision, id, reason}``: the
     decision as answered (``""`` when unreadable, which `decide` takes as
-    ``uncertain``), the id when one was read, and the rationale clipped to
-    `REASON_CHARS` (``""`` when none came back: it is display-only, I4).
+    ``uncertain``; where a native endpoint reported a distribution, read with
+    every ``existing`` summed, `_reweighed`) with a folded ``existing:<id>``
+    split back into ``existing`` and its id (`unfolded`), and the rationale
+    clipped to
+    `REASON_CHARS` (``""`` when none came back: it is display-only, I4). An
+    ``existing`` naming no offered candidate is no option of the item, so it
+    is unreadable like any word outside the options, and `decide` takes it as
+    ``uncertain``.
 
     A garbled chunk is not a garbled item (N8): "never ``uncertain``" is about
     an item the reply never reached. An object that reaches an item and
@@ -736,10 +818,8 @@ def answers_of(rows: list[dict],
         decision = result.answers.get(DECISION_ID)
         if decision is None or not decisions.was_read(decision):
             continue
-        rid = result.answers.get(RECORD_ID)
-        out.append({"row": row["key"],
-                    "decision": decision.answer if isinstance(decision.answer, str) else "",
-                    "id": rid.answer if rid is not None and isinstance(rid.answer, str) else "",
+        word, rid = _reweighed(decision)
+        out.append({"row": row["key"], "decision": word, "id": rid,
                     "reason": result.rationale.strip()[:REASON_CHARS]})
     if not out and results and all(decisions.held_no_object(result.answers.get(DECISION_ID))
                                     for result in results):

@@ -132,9 +132,24 @@ def test_cross_type_duplicate_is_uncertain(cid, s0):
     payload = _payload(cid)
     assert _by_id(payload, key)["vocabulary"] == "cross"
 
-    got = _decided(payload, key, decision="duplicate", **{"from": "A", "to": "B"})
+    # A cross pair's vocabulary has no duplicate at all, so a folded one is
+    # a word outside the options.
+    got = _decided(payload, key, decision="duplicate_a_into_b")
     assert got["decision"] == "uncertain"
     assert (got["relation"], got["from"], got["to"]) == ("", "", "")
+
+    # The vocabulary that does carry duplicate, over a thread and a
+    # commitment (a hand-edited or legacy cache: `vocabulary` reads the first
+    # ref only): `_runs` refuses a duplicate across two types either way, so
+    # none is offered, and one answered anyway is uncertain.
+    mixed = _hand(_cand(1, "same_thread", _shown("A", MAP), _shown("B", OATH)))
+    [item] = reconcile.build_items(mixed)
+    ids = [o.id for o in item.questions[0].options]
+    assert "duplicate" in reconcile.DECISIONS["same_thread"]
+    assert not [i for i in ids if reconcile.unfolded(i)[0] == "duplicate"], ids
+    for answer in ("duplicate_a_into_b", "duplicate_b_into_a", "duplicate"):
+        got = _proposals(mixed, {"decision": answer})["candidate-1"]
+        assert (got["decision"], got["from"], got["to"]) == ("uncertain", "", ""), answer
 
 
 def test_disallowed_direction_is_uncertain(cid, s0):
@@ -154,8 +169,11 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     assert _by_id(payload, plot_key)["vocabulary"] == "same_thread"
 
     def decide(key, decision, frm, to):
-        return _decided(payload, key, decision=decision,
-                        **{"from": frm or None, "to": to or None})
+        """The folded option for `decision` from `frm` to `to`, as a reply
+        would spell it whether or not the item offers it; with a letter
+        missing, the bare word."""
+        word = reconcile.folded(decision, frm, to) if frm and to else decision
+        return _decided(payload, key, decision=word)
 
     # pays_off runs from the thread to the commitment, never the other way
     assert decide(cross_key, "pays_off", "A", "B")["decision"] == "uncertain"
@@ -165,10 +183,8 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     # a commitment never continues, nor is a subthread of, another
     assert decide(owed_key, "subthread", "A", "B")["decision"] == "uncertain"
     assert decide(owed_key, "continuation", "A", "B")["decision"] == "uncertain"
-    # a duplicate needs two different records, and a direction at all
-    assert decide(plot_key, "duplicate", "A", "A")["decision"] == "uncertain"
+    # a duplicate needs a direction at all
     assert decide(plot_key, "duplicate", "", "")["decision"] == "uncertain"
-    assert decide(plot_key, "continuation", "A", "C")["decision"] == "uncertain"
     dup = decide(plot_key, "duplicate", "B", "A")
     assert (dup["decision"], dup["relation"], dup["from"], dup["to"]) == (
         "duplicate", "", CHART, MAP)
@@ -180,6 +196,57 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     related = decide(owed_key, "related", "", "")
     assert (related["decision"], related["relation"]) == ("related", "related_to")
     assert {related["from"], related["to"]} == {OATH, DEBT}
+
+
+def test_a_pair_of_one_record_offers_no_direction():
+    """`_runs` refuses a direction between a record and itself, so a pair
+    naming one ref twice (which `candidates.read` drops, but a hand-built
+    payload can carry) is offered only its undirected words, and a folded
+    answer is no option of it."""
+    same = _hand(_cand(1, "same_thread", _shown("A", MAP), _shown("B", MAP)))
+    [item] = reconcile.build_items(same)
+    assert [o.id for o in item.questions[0].options] == ["related", "distinct", "uncertain"]
+    for answer in ("duplicate_a_into_b", "continuation_b_of_a", "subthread_a_of_b"):
+        got = _proposals(same, {"decision": answer})["candidate-1"]
+        assert (got["decision"], got["from"], got["to"]) == ("uncertain", "", ""), answer
+
+
+def test_pair_refuses_a_direction_the_link_rules_refuse():
+    """`_pair`'s own guard, pinned while it exists. `proposals_of` hands it
+    only directions `_decision_options` offered, so nothing reaches it today
+    through the folded choice; `_decide` takes today's reply element, whose
+    `from` and `to` may name any letters, and a direction `_runs` refuses is
+    ``uncertain`` there too: the same record twice, a duplicate across two
+    types, and a relation against its run."""
+    cands = {
+        "plots": _cand(1, "same_thread", _shown("A", MAP), _shown("B", CHART)),
+        "mixed": _cand(2, "same_thread", _shown("A", MAP), _shown("B", OATH)),
+        "cross": _cand(3, "cross", _shown("A", OATH), _shown("B", MAP)),
+        "owed": _cand(4, "same_commitment", _shown("A", OATH), _shown("B", DEBT)),
+    }
+
+    def decide(name, word, frm, to):
+        return reconcile._decide({"decision": word, "from": frm, "to": to, "reason": ""},
+                                 cands[name], set())
+
+    for name, word, frm, to in (("plots", "duplicate", "A", "A"),
+                                ("plots", "continuation", "B", "B"),
+                                ("plots", "continuation", "A", "C"),
+                                ("mixed", "duplicate", "A", "B"),
+                                ("mixed", "duplicate", "B", "A"),
+                                ("mixed", "continuation", "A", "B"),
+                                ("cross", "pays_off", "A", "B"),
+                                ("owed", "continuation", "A", "B")):
+        got = decide(name, word, frm, to)
+        assert (got["decision"], got["from"], got["to"], got["relation"]) == (
+            "uncertain", "", "", ""), (name, word, frm, to)
+    for name, word, frm, to, want in (
+            ("plots", "duplicate", "B", "A", (CHART, MAP, "")),
+            ("plots", "continuation", "A", "B", (MAP, CHART, "continues")),
+            ("cross", "pays_off", "B", "A", (MAP, OATH, "pays_off")),
+            ("owed", "duplicate", "A", "B", (OATH, DEBT, ""))):
+        got = decide(name, word, frm, to)
+        assert (got["decision"], got["from"], got["to"], got["relation"]) == (word, *want)
 
 
 def test_temporal_words_name_the_commitment_and_the_event(cid, s0):
@@ -463,7 +530,7 @@ def test_a_pathologically_long_record_cannot_unbound_the_prompt(cid, s0):
     assert f"- {s0} — Mara came ashore. harbour" in user
     assert "\nB: event: The coronation harbour" in user
     assert " (2026-05-13)\nsignals:" in user
-    got = _decided(payload, pair_key, decision="duplicate", **{"from": "A", "to": "B"})
+    got = _decided(payload, pair_key, decision="duplicate_a_into_b")
     assert (got["decision"], got["from"], got["to"]) == ("duplicate", LEDGER, MAP)
 
 
@@ -536,7 +603,7 @@ def test_the_questions_carry_the_criteria():
                    'A thread and a commitment are never "duplicate"',
                    "Age alone is never evidence that a thread is finished",
                    "A passed deadline alone is never evidence that a promise was kept or broken",
-                   "name at least one evidence scene id from the lines shown",
+                   "Which scene shown, if any, shows a record above settled",
                    "Do not invent a date"):
         assert needle in text
 
@@ -655,8 +722,14 @@ def test_build_items_one_per_candidate_under_its_vocabulary():
         assert isinstance(decision, decisions.Choice) and not decision.allow_none
         assert decision.instructions == prompts.render("continuity_reconcile/question.j2",
                                                        vocabulary=vocab)
-        assert [(o.id, o.description) for o in decision.options] == [
-            (w, w.replace("_", " ")) for w in reconcile.DECISIONS[vocab]]
+        assert [reconcile.unfolded(o.id)[0] for o in decision.options] == [
+            w for w in reconcile.DECISIONS[vocab]
+            for _ in range(_ways(vocab, w))]
+        for o in decision.options:
+            word, frm, to = reconcile.unfolded(o.id)
+            assert o.description == (prompts.render(
+                "continuity_reconcile/directed_option.j2", word=word, frm=frm, to=to)
+                if frm else word.replace("_", " "))
         assert f"Candidate — {reconcile.LABELS[vocab]}\n" in item.context
         assert cand["key"] not in item.context.split("\n")[0]
         for rec in cand["records"]:
@@ -664,22 +737,87 @@ def test_build_items_one_per_candidate_under_its_vocabulary():
     assert reconcile.explain() == prompts.render("continuity_reconcile/explain.j2")
 
 
-def test_pair_items_ask_a_direction_and_the_others_do_not():
+def _ways(vocab, word):
+    """How many folded options `_six` offers `word` under `vocab`: two for a
+    directed word both ways can run, one for ``pays_off`` (thread to
+    commitment only), and one for any other word, offered as itself."""
+    if vocab not in reconcile.PAIR_VOCABULARIES:
+        return 1
+    return {"duplicate": 2, "continuation": 2, "subthread": 2}.get(word, 1)
+
+
+def test_pair_items_fold_their_direction_into_the_decision():
+    """The investigation's bug: a native endpoint answers each question alone,
+    so `from`/`to` asked "null when the decision has no direction" came back
+    none and every directed verdict was lost. No item asks a direction apart
+    from its decision now; a pair's directed words are offered with it."""
     payload = _six()
+    by_vocab = {}
     for item, cand in zip(reconcile.build_items(payload), payload["candidates"], strict=True):
         ids = [q.id for q in item.questions]
-        if cand["vocabulary"] in reconcile.PAIR_VOCABULARIES:
-            assert ids[:3] == [reconcile.DECISION_ID, reconcile.FROM_ID, reconcile.TO_ID]
-            frm, to = item.questions[1:3]
-            assert frm.instructions == prompts.render("continuity_reconcile/direction.j2")
-            assert to.instructions == prompts.render("continuity_reconcile/direction_to.j2")
-            for q in (frm, to):
-                assert isinstance(q, decisions.Choice) and q.allow_none
-                assert [(o.id, o.description) for o in q.options] == [
-                    ("A", "record A"), ("B", "record B")]
-        else:
-            assert reconcile.FROM_ID not in ids and reconcile.TO_ID not in ids
+        assert "from" not in ids and "to" not in ids
+        assert ids == [reconcile.DECISION_ID, *reconcile.EVIDENCE_IDS[:len(ids) - 1]]
+        by_vocab[cand["vocabulary"]] = [(o.id, o.aliases) for o in item.questions[0].options]
+        question = item.questions[0].instructions
+        direction = prompts.render("continuity_reconcile/direction.j2")
+        assert (direction in question) == (cand["vocabulary"] in reconcile.PAIR_VOCABULARIES)
+    assert by_vocab["same_thread"] == [
+        ("duplicate_a_into_b", ()), ("duplicate_b_into_a", ()),
+        ("continuation_a_of_b", ()), ("continuation_b_of_a", ()),
+        ("subthread_a_of_b", ()), ("subthread_b_of_a", ()),
+        ("related", ()), ("distinct", ()), ("uncertain", ())]
+    assert by_vocab["same_commitment"] == [
+        ("duplicate_a_into_b", ()), ("duplicate_b_into_a", ()),
+        ("related", ()), ("distinct", ()), ("uncertain", ())]
+    # A cross pair stores the commitment as A: pays_off runs B to A only, and
+    # takes its bare word as an alias, which can mean nothing else.
+    assert by_vocab["cross"] == [("pays_off_b_to_a", ("pays_off",)), ("related", ()),
+                                 ("distinct", ()), ("uncertain", ())]
+    assert by_vocab["temporal"] == [(w, ()) for w in reconcile.DECISIONS["temporal"]]
     assert reconcile.PAIR_VOCABULARIES == ("same_thread", "same_commitment", "cross")
+
+
+def test_every_directed_word_folds_and_unfolds():
+    assert set(reconcile._JOINS) == reconcile._DIRECTED
+    for word in reconcile._DIRECTED:
+        for frm, to in (("A", "B"), ("B", "A")):
+            option = reconcile.folded(word, frm, to)
+            assert decisions.offerable(option) and option == decisions.normalise(option)
+            assert reconcile.unfolded(option) == (word, frm, to)
+    for answer in ("related", "duplicate", "pays_off", "duplicate_a_into_a", "uncertain"):
+        assert reconcile.unfolded(answer) == (answer, "", "")
+
+
+def test_a_cross_pair_offers_pays_off_whichever_letter_the_thread_has():
+    """The direction offered is the one the link rules allow, read off the
+    records: a cross pair whose thread is A pays off B."""
+    payload = _hand(_cand(1, "cross", _shown("A", MAP), _shown("B", OATH)))
+    [item] = reconcile.build_items(payload)
+    assert item.questions[0].options[0].id == "pays_off_a_to_b"
+    got = _proposals(payload, {"decision": "pays_off"})["candidate-1"]
+    assert (got["decision"], got["from"], got["to"]) == ("pays_off", MAP, OATH)
+
+
+def test_a_full_chunk_of_pair_items_fits_one_call_on_both_backends():
+    """A pair's folded choice is fixed by its vocabulary, not by the ledger:
+    at most nine options, beside evidence choices over the scenes the item
+    shows. A chunk of the widest items -- two records of `RECONCILE_BEATS`
+    beats each in scenes of their own, and the recent window's lines -- is
+    one call that validate accepts and a decisions endpoint carries."""
+    recent = [f"{n:04d}--recent-{n}" for n in range(reconcile.RECONCILE_RECENT_SCENES)]
+    cands = []
+    for n in range(decisions.MAX_ITEMS_PER_CALL):
+        beats_a = [f"{n:02d}{k:02d}--a" for k in range(reconcile.RECONCILE_BEATS)]
+        beats_b = [f"{n:02d}{k:02d}--b" for k in range(reconcile.RECONCILE_BEATS)]
+        cands.append(_cand(n, "same_thread", _shown("A", MAP, *beats_a),
+                           _shown("B", CHART, *beats_b)))
+    payload = _hand(*cands, lines=[(sid, "A scene.") for sid in recent], recent=recent)
+    items = reconcile.build_items(payload)
+    decisions.validate(items)
+    assert len(decisions.chunks(items)) == 1
+    for item in items:
+        assert len(item.questions[0].options) == 9
+        assert decisions.native_gap(item) == ""
 
 
 def _evidence_options(item):
@@ -733,6 +871,20 @@ def test_an_item_asks_one_evidence_question_per_shown_scene_up_to_three():
                                       "evidence_scene_3")
 
 
+def test_no_evidence_question_depends_on_another_answer():
+    """A native decisions endpoint answers each question of an item alone
+    (spec 7.4), so an evidence question may neither name a decision word it
+    is asked "for" nor point at another question: either came back none
+    natively and cost the status verdict its evidence."""
+    words = {w for vocab in reconcile.DECISIONS.values() for w in vocab}
+    for template in ("evidence.j2", "evidence_more.j2"):
+        text = prompts.render(f"continuity_reconcile/{template}")
+        assert not any(f'"{w}"' in text for w in words), template
+        for pointer in ("the first", "the decision", "the answer", "For "):
+            assert pointer not in text, (template, pointer)
+        assert text.startswith(prompts.render("continuity_reconcile/evidence.j2"))
+
+
 def test_item_context_carries_the_date_and_only_its_own_scene_lines():
     payload = _hand(_cand(1, "thread", _shown("A", MAP, D1)),
                     _cand(2, "thread", _shown("A", CHART, D2)),
@@ -760,12 +912,14 @@ def test_item_context_carries_the_date_and_only_its_own_scene_lines():
 
 def test_option_descriptions_do_not_repeat_the_context():
     for item in reconcile.build_items(_six()):
-        for q in item.questions[1:]:
+        for q in item.questions:
             for opt in q.options:
-                if q.id in (reconcile.FROM_ID, reconcile.TO_ID):
-                    assert opt.description == f"record {opt.id}"
-                else:
+                if q.id != reconcile.DECISION_ID:
                     assert opt.description == f"the scene listed above as {opt.id}"
+                elif reconcile.unfolded(opt.id)[1]:
+                    assert "record A" in opt.description and "record B" in opt.description
+                else:
+                    continue   # a word labelled by itself (ruling 6)
                 assert opt.description not in item.context
 
 
@@ -855,9 +1009,9 @@ def test_proposals_of_runs_every_answer_through_todays_rules():
     ids = [c["id"] for c in payload["candidates"]]
     got = _proposals(payload,
                      {"decision": "related"},                              # c1: no letters
-                     {"decision": "duplicate", "from": "A", "to": "A"},    # c2: one record
-                     {"decision": "pays_off", "from": "A", "to": "B"},     # c3: refused
-                     {"decision": "before", "from": "B", "to": "A"},       # c4: temporal
+                     {"decision": "duplicate_a_into_a"},                   # c2: one record
+                     {"decision": "pays_off_a_to_b"},                      # c3: refused
+                     {"decision": "before"},                               # c4: temporal
                      {"decision": "close"},                                # c5: no scene
                      {"decision": "keep_open"})                            # c6
     assert set(got) == set(ids)
@@ -870,7 +1024,7 @@ def test_proposals_of_runs_every_answer_through_todays_rules():
     assert got[ids[4]]["decision"] == "uncertain" and got[ids[4]]["status"] == ""
     assert got[ids[5]]["decision"] == "keep_open"
     # A direction that holds stands, through the same code as today.
-    good = _proposals(payload, {}, {}, {"decision": "pays_off", "from": "B", "to": "A"})
+    good = _proposals(payload, {}, {}, {"decision": "pays_off_b_to_a"})
     assert (good[ids[2]]["decision"], good[ids[2]]["relation"], good[ids[2]]["from"],
             good[ids[2]]["to"]) == ("pays_off", "pays_off", MAP, OATH)
     assert set(good[ids[2]]) == {"decision", "from", "to", "relation", "status", "reason",

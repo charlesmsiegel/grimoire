@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
+from pathlib import Path
 
 import httpx
 import pytest
@@ -20,7 +22,14 @@ from grimoire.llm import FALLBACK_KEY, LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.openrouter import DECISIONS_URL, OpenRouterClient, decision_body, decision_result
+from grimoire.store.continuity import identity, reconcile
 from tests.llm_fakes import FIXTURES, FakeLLM
+
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from evals import gate  # noqa: E402
 
 BODIES = FIXTURES / "native" / "openrouter"
 KEY = "sk-or-secret-key"
@@ -848,3 +857,265 @@ async def test_fake_decide_native_accepts_openai_compatible():
     assert result.answers["over"].answer is True
     assert holder["provider"] == "openai_compatible"
     assert fake.native_requests == [(Item(CONTEXT, (OVER,)), OPENAI_CONN, None)]
+
+
+# ---- continuity's folded choices on the native path ------------------------
+#
+# The investigation that found slice G's direction bug, reproduced: a native
+# decisions endpoint answers each question of an item on its own, so G's
+# `from` / `to` ("null for both when the decision has no direction") and
+# identity's `id` ("null unless the decision is existing") came back none, and
+# every directed pair verdict and every native `existing` was lost. Each
+# dependent answer is folded into the one choice it depends on now (spec 7.4),
+# so the none that lost it cannot be sent: there is no such question.
+
+def _native_reply(provider: str, item: Item, chosen: dict[str, str],
+                  stale: dict[str, str] | None = None) -> dict:
+    """A decisions response answering every question `item` asks -- `chosen`
+    by key, the rest with the reserved none (or the first option) -- plus
+    `stale` answers to questions the item no longer asks, in either wire
+    shape."""
+    answers: dict[str, str] = {}
+    for q in item.questions:
+        assert isinstance(q, Choice)
+        keys = decisions.native_choice_keys(q)
+        answers[q.id] = chosen.get(q.id, keys[-1][0])
+    answers.update(stale or {})
+    if provider == "openrouter":
+        return {"answers": {qid: {"type": "choice", "choice": key, "confidence": 0.9}
+                            for qid, key in answers.items()}}
+    return {"answers": [{"type": "choice", "name": qid, "choice": key, "confidence": 0.9}
+                        for qid, key in answers.items()]}
+
+
+def _sent_questions(provider: str, item: Item) -> list[str]:
+    if provider == "openrouter":
+        return list(decision_body(item, MODEL)["questions"])
+    return [q["name"] for q in openai_compatible.decision_body(item, OPENAI_MODEL)["questions"]]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_pair_verdict_carries_its_direction_in_its_one_choice(provider):
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    for item in items:
+        sent = _sent_questions(provider, item)
+        assert "from" not in sent and "to" not in sent
+        assert sent == [q.id for q in item.questions]
+    # Only the folded decision is answered (evidence none), and a stale `from`
+    # and `to` of none ride beside it, as the bug's replies did: the adapter
+    # reads only the questions the item asked, so nothing can lose the
+    # direction the decision already carries.
+    want = {0: "continuation_b_of_a", 1: "duplicate_a_into_b", 2: "pays_off_b_to_a"}
+    results = tuple(
+        read(provider)(_native_reply(provider, item, {"decision": want.get(n, "uncertain")},
+                                     stale={"from": "none", "to": "none"}), item)
+        for n, item in enumerate(items))
+    for result in results:
+        assert set(result.answers) == {q.id for q in items[results.index(result)].questions}
+        assert result.backend == decisions.NATIVE_BACKEND
+    proposals = reconcile.proposals_of(payload, results)
+    got = [(proposals[c["id"]]["decision"], proposals[c["id"]]["from"],
+            proposals[c["id"]]["to"], proposals[c["id"]]["relation"])
+           for c in payload["candidates"][:3]]
+    assert got == [
+        ("continuation", "thread:winifreds-chart", "thread:maras-map", "continues"),
+        ("duplicate", "commitment:maras-oath", "commitment:winifreds-debt", ""),
+        ("pays_off", "thread:maras-map", "commitment:maras-oath", "pays_off")]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_every_offered_direction_round_trips_a_native_endpoint(provider):
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    pair = items[0]
+    refs = {r["letter"]: r["ref"] for r in payload["candidates"][0]["records"]}
+    for option in pair.questions[0].options:
+        word, frm, to = reconcile.unfolded(option.id)
+        if not frm:
+            continue
+        results = tuple(read(provider)(_native_reply(provider, item, {
+            "decision": option.id if item is pair else "uncertain"}), item) for item in items)
+        proposal = reconcile.proposals_of(payload, results)[payload["candidates"][0]["id"]]
+        assert (proposal["decision"], proposal["from"], proposal["to"]) == (
+            word, refs[frm], refs[to]), option.id
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_existing_names_its_record_in_its_one_choice(provider):
+    items = gate._identity_items()
+    for item in items:
+        assert _sent_questions(provider, item) == [identity.DECISION_ID]
+    want = ("existing:find-the-ledger", "new", "existing:the-midnight-deadline")
+    results = tuple(read(provider)(_native_reply(provider, item, {"decision": word},
+                                                 stale={"id": "none"}), item)
+                    for item, word in zip(items, want, strict=True))
+    exam = gate._identity_exam()
+    assert identity.take(exam, identity.answers_of(exam.prompt_rows(), results))
+    assert [(e.decision, e.status, e.target) for e in exam.rows] == [
+        ("existing", "accepted", "find-the-ledger"), ("new", "accepted", None),
+        ("existing", "accepted", "the-midnight-deadline")]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_status_word_stands_on_the_scene_its_evidence_question_names(provider):
+    """Each evidence question stands alone (spec 7.4): it asks which shown
+    scene, if any, shows a record settled -- never "for" a decision word --
+    so a native endpoint, answering it without the decision, names the scene
+    that settles the thread, and the closure is stored with it. With every
+    evidence slot none, the same closure is ``uncertain`` (`_lifecycle_word`):
+    the safety rule holds on the answers, not in the question."""
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    cands = payload["candidates"]
+    thread = next(n for n, c in enumerate(cands) if c["vocabulary"] == "thread")
+    owed = next(n for n, c in enumerate(cands) if c["vocabulary"] == "commitment")
+    for n in (thread, owed):
+        evidence = [q for q in items[n].questions if q.id in reconcile.EVIDENCE_IDS]
+        assert evidence and all(q.instructions.startswith(
+            "Which scene shown, if any, shows a record above settled") for q in evidence)
+    settled = {thread: ("close", "closed", "0003--winifreds-house"),
+               owed: ("fulfilled", "fulfilled", "0004--saltmarch-quay")}
+
+    def proposals(cited: bool) -> dict:
+        results = tuple(read(provider)(_native_reply(provider, item, {
+            "decision": settled[n][0] if n in settled else "uncertain",
+            **({"evidence_scene": settled[n][2]} if cited and n in settled else {})}), item)
+            for n, item in enumerate(items))
+        return reconcile.proposals_of(payload, results)
+
+    got = proposals(cited=True)
+    for n, (word, status, scene) in settled.items():
+        proposal = got[cands[n]["id"]]
+        assert (proposal["decision"], proposal["status"], proposal["evidence_scenes"]) == (
+            word, status, [scene])
+    got = proposals(cited=False)
+    for n in settled:
+        assert (got[cands[n]["id"]]["decision"], got[cands[n]["id"]]["status"]) == (
+            "uncertain", "")
+
+
+def _scored_reply(provider: str, item: Item, weights: dict[str, float],
+                  chosen: str | None = None) -> dict:
+    """A decisions response whose `decision` reports `weights` as its
+    per-option probabilities, with `chosen` as its `choice` (none stated when
+    None), and every other question answered with the reserved none."""
+    reply = _native_reply(provider, item, {})
+    answer = answer_in(provider, reply, "decision")
+    answer["probabilities"] = choice_probabilities(provider, weights)
+    if chosen is None:
+        del answer["choice"]
+    else:
+        answer["choice"] = chosen
+    return reply
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("chosen", ["distinct", None])
+def test_a_native_duplicate_split_across_its_directions_still_wins(provider, chosen):
+    """The fold spells one verdict two ways, and an endpoint scoring options
+    one by one splits its mass: 0.3 on each direction of a duplicate and 0.4
+    on distinct is a 0.6 duplicate, which the endpoint's own `choice` and the
+    per-option argmax both lose. Summed by word, duplicate wins, and the tie
+    between its two spellings goes to the one offered first."""
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    n = next(i for i, c in enumerate(payload["candidates"])
+             if c["vocabulary"] == "same_commitment")
+    weights = {"duplicate_a_into_b": 0.3, "duplicate_b_into_a": 0.3, "distinct": 0.4,
+               "related": 0.0, "uncertain": 0.0}
+    results = tuple(read(provider)(
+        _scored_reply(provider, item, weights, chosen) if k == n
+        else _native_reply(provider, item, {"decision": "uncertain"}), item)
+        for k, item in enumerate(items))
+    assert results[n].answers["decision"].answer == "distinct"
+    cand = payload["candidates"][n]
+    refs = {r["letter"]: r["ref"] for r in cand["records"]}
+    got = reconcile.proposals_of(payload, results)[cand["id"]]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", refs["A"], refs["B"])
+
+    # The winning word's best-scored spelling, not the first, when they differ.
+    weights.update(duplicate_a_into_b=0.2, duplicate_b_into_a=0.35, distinct=0.45)
+    results = tuple(read(provider)(
+        _scored_reply(provider, item, weights, chosen) if k == n
+        else _native_reply(provider, item, {"decision": "uncertain"}), item)
+        for k, item in enumerate(items))
+    got = reconcile.proposals_of(payload, results)[cand["id"]]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", refs["B"], refs["A"])
+
+    # A chosen word that holds the most mass stands as chosen, direction and all.
+    weights = {"duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.5, "distinct": 0.4}
+    results = tuple(read(provider)(
+        _scored_reply(provider, item, weights, "duplicate_a_into_b") if k == n
+        else _native_reply(provider, item, {"decision": "uncertain"}), item)
+        for k, item in enumerate(items))
+    got = reconcile.proposals_of(payload, results)[cand["id"]]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", refs["A"], refs["B"])
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_row_split_between_two_candidates_is_flagged(provider):
+    """Two near-identical candidates are exactly what a model cannot choose
+    between: 0.3 on each and 0.4 on new is a 0.6 verdict that the row is an
+    existing record. Read as chosen it would open a new record with no flag;
+    summed, ``existing`` wins, and since no one record won, the row is
+    ``uncertain`` (flagged, merged into nothing). A chosen ``existing:<id>``
+    inside the winning group stands."""
+    items = gate._identity_items()
+    offered = [o.id for o in items[0].questions[0].options]
+    assert offered[:2] == ["existing:find-the-ledger", "existing:maras-map"]
+    weights = {"existing:find-the-ledger": 0.3, "existing:maras-map": 0.3, "new": 0.4}
+
+    def settled(chosen: str | None) -> tuple:
+        results = tuple(read(provider)(
+            _scored_reply(provider, item, weights, chosen) if k == 0
+            else _native_reply(provider, item, {"decision": "new"}), item)
+            for k, item in enumerate(items))
+        exam = gate._identity_exam()
+        assert identity.take(exam, identity.answers_of(exam.prompt_rows(), results))
+        return exam.rows[0].decision, exam.rows[0].status, exam.rows[0].target
+
+    assert settled("new") == ("uncertain", "accepted", None)
+    assert settled(None) == ("uncertain", "accepted", None)
+    assert settled("existing:maras-map") == ("existing", "accepted", "maras-map")
+    # New holding the most mass over a chosen existing is new.
+    weights = {"existing:find-the-ledger": 0.2, "existing:maras-map": 0.2, "new": 0.6}
+    assert settled("existing:find-the-ledger") == ("new", "accepted", None)
+
+
+def test_a_reply_with_no_distribution_is_read_as_chosen():
+    """`regrouped` reads only a reported distribution: a structured reply,
+    which carries none, is read as it was chosen."""
+    choice = Choice("decision", "?", (Option("duplicate_a_into_b", "a"),
+                                      Option("duplicate_b_into_a", "b"),
+                                      Option("distinct", "c")))
+    def word(oid: str) -> str:
+        return oid.partition("_")[0]
+
+    assert decisions.regrouped(Answer("distinct"), word, ("duplicate", "distinct")) is None
+    split = decisions.native_answer(choice, chosen="distinct", distribution={
+        "duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.2, "distinct": 0.7 - 0.0})
+    assert decisions.regrouped(split, word, ("duplicate", "distinct")) is None
+    # A float sum that ties is a tie, and a tie that includes the chosen
+    # group keeps it.
+    tie = decisions.native_answer(choice, chosen="distinct", distribution={
+        "duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.2, "distinct": 0.3})
+    assert decisions.regrouped(tie, word, ("duplicate", "distinct")) is None
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_value_naming_no_option_keeps_what_it_named(provider):
+    """`Answer.stated` holds what a native reply named when it named no
+    option, which `decisions.render` cannot write back: the eval graders read
+    it to tell an unoffered ``existing:<id>`` from an unknown word. It is not
+    compared, so the answer still equals the plain not-an-option."""
+    result = read(provider)(_native_reply(provider, SPEAKER_ONLY,
+                                          {"speaker": "characters:rowan"}), SPEAKER_ONLY)
+    answer = result.answers["speaker"]
+    assert answer.detail == decisions.NOT_AN_OPTION and answer.stated == "characters:rowan"
+    assert answer == Answer(None, "unreadable", detail=decisions.NOT_AN_OPTION)
+    named = read(provider)(_native_reply(provider, SPEAKER_ONLY,
+                                         {"speaker": "characters:mara"}), SPEAKER_ONLY)
+    assert named.answers["speaker"].stated == ""
+    with pytest.raises(ValueError, match="stated value"):
+        Answer("characters:mara", stated="characters:rowan")

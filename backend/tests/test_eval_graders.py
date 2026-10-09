@@ -451,9 +451,9 @@ def _identity_decision_rows() -> list[dict]:
     return rows
 
 
-_D1 = {"decision": "existing", "id": "find-the-ledger"}
-_D2 = {"decision": "new", "id": None}
-_D3 = {"decision": "new", "id": None}
+_D1 = {"decision": "existing:find-the-ledger"}
+_D2 = {"decision": "new"}
+_D3 = {"decision": "new"}
 _WHY = ("Same ledger.", "A different question.", "It grew out of the debts.")
 
 
@@ -489,31 +489,33 @@ def test_identity_decision_undecodable_fails_json_only():
     rows = _identity_decision_rows()
     items = identity.build_items(rows, {})
     for text in ("Row r1 looks like the ledger thread.",
-                 '{"0": {"answers": {"decision": "existing", "id": "find-the-le'):
+                 '{"0": {"answers": {"decision": "existing:find-the-le'):
         checks = graders.grade_identity_decision(text, items, rows, IDENTITY_EXPECTED)
         assert [(c.name, c.ok) for c in checks] == [("identity.json", False)], text
 
 
 def test_identity_decision_merged_rows_fail_their_own_verdicts():
-    merged = (_D1, {"decision": "existing", "id": "the-saltmarch-smuggling"},
-              {"decision": "existing", "id": "seraphines-debts"})
+    merged = (_D1, {"decision": "existing:the-saltmarch-smuggling"},
+              {"decision": "existing:seraphines-debts"})
     assert _identity_decided(*merged) == {"identity.distinct", "identity.continuation"}
 
 
 def test_identity_decision_unoffered_id_fails_known_ids():
-    # An id offered nowhere is no option: unread, so `existing` names nothing,
-    # and the row it was given on gets the wrong verdict.
-    assert _identity_decided({"decision": "existing", "id": "maras-map"}, _D2, _D3) == {
-        "identity.known_ids", "identity.same_obligation"}
-    assert _identity_decided({"decision": "existing", "id": None}, _D2, _D3) == {
-        "identity.known_ids", "identity.same_obligation"}
-    # The ref form and a cased spelling are the offered id, as the app reads them.
-    for named in ("thread:find-the-ledger", "Find The Ledger"):
-        assert _identity_decided({"decision": "existing", "id": named}, _D2, _D3) == set()
+    # An `existing` folded with an id offered nowhere, or with none, is no
+    # option: unread, and told from an unknown word by its raw spelling, so
+    # it fails `known_ids` rather than `enum`, and the row it was given on
+    # gets the wrong verdict.
+    for unoffered in ("existing:maras-map", "existing", "Existing: maras-map"):
+        assert _identity_decided({"decision": unoffered}, _D2, _D3) == {
+            "identity.known_ids", "identity.same_obligation"}, unoffered
+    # The ref form, a cased spelling and a space after the colon are the
+    # offered id, as the app reads them.
+    for named in ("thread:find-the-ledger", "Find The Ledger", " find-the-ledger"):
+        assert _identity_decided({"decision": f"existing:{named}"}, _D2, _D3) == set()
 
 
 def test_identity_decision_unknown_word_fails_enum():
-    assert _identity_decided(_D1, {"decision": "maybe", "id": None}, _D3) == {
+    assert _identity_decided(_D1, {"decision": "maybe"}, _D3) == {
         "identity.enum", "identity.distinct"}
 
 
@@ -563,8 +565,8 @@ def test_reconcile_decision_scores_every_unmerged_answer_the_prompt_allows():
     them), and the concrete record still has to be the ``from`` of either
     directed word."""
     assert _reconcile_decided(c1={"decision": "related"}) == set()
-    assert _reconcile_decided(c2={"decision": "subthread", "from": "B", "to": "A"}) == set()
-    assert _reconcile_decided(c2={"decision": "subthread", "from": "A", "to": "B"}) == {
+    assert _reconcile_decided(c2={"decision": "subthread_b_of_a"}) == set()
+    assert _reconcile_decided(c2={"decision": "subthread_a_of_b"}) == {
         "reconcile.continuation"}
 
 
@@ -585,7 +587,7 @@ def test_reconcile_decision_case_is_what_these_tests_grade_and_the_app_keeps(
     text = case.baseline.path(case.id).read_text(encoding="utf-8")
     results = decisions.parse(text, ctx["items"], explain=True)
     kept = reconcile.proposals_of(ctx["payload"], results)
-    said = {c["id"]: result.answers[reconcile.DECISION_ID].answer
+    said = {c["id"]: reconcile.unfolded(result.answers[reconcile.DECISION_ID].answer)[0]
             for c, result in zip(ctx["payload"]["candidates"], results, strict=True)}
     assert {key: kept[key]["decision"] for key in kept} == said
 
@@ -623,8 +625,8 @@ def _reconcile_decision_payload() -> dict:
 
 _RD = {
     "c1": {"decision": "distinct"},
-    "c2": {"decision": "continuation", "from": "B", "to": "A"},
-    "c3": {"decision": "pays_off", "from": "B", "to": "A"},
+    "c2": {"decision": "continuation_b_of_a"},
+    "c3": {"decision": "pays_off_b_to_a"},
     "c4": {"decision": "close", "evidence_scene": "003--the-pier-at-dusk"},
     "c5": {"decision": "keep_open"},
     "c6": {"decision": "fulfilled", "evidence_scene": "002--realm-road"},
@@ -672,17 +674,18 @@ def test_reconcile_decision_undecodable_fails_json_only():
     payload = _reconcile_decision_payload()
     items = reconcile.build_items(payload)
     for text in ("Mara's map looks finished to me.",
-                 '{"0": {"answers": {"decision": "distinct", "from": null, "to": nu'):
+                 '{"0": {"answers": {"decision": "distinct", "evidence_scene": nu'):
         checks = graders.grade_reconcile_decision(text, items, payload, RECONCILE_EXPECTED)
         assert [(c.name, c.ok) for c in checks] == [("reconcile.json", False)], text
 
 
 def test_reconcile_decision_merged_pairs_fail_their_own_verdicts():
-    merged = {"decision": "duplicate", "from": "B", "to": "A"}
+    merged = {"decision": "duplicate_b_into_a"}
     assert _reconcile_decided(c1=merged, c2=merged) == {"reconcile.distinct",
                                                         "reconcile.continuation"}
     # The concrete record must still be the `from` of a continuation.
-    assert _reconcile_decided(c2={"from": "A", "to": "B"}) == {"reconcile.continuation"}
+    assert _reconcile_decided(c2={"decision": "continuation_a_of_b"}) == {
+        "reconcile.continuation"}
 
 
 def test_reconcile_decision_eager_lifecycle_fails_keep_open_and_unproven():
@@ -706,7 +709,7 @@ def test_reconcile_decision_unfounded_closure_fails_evidence_alone():
 
 
 def test_reconcile_decision_timid_fails_the_three_verdicts_nothing_else_reaches():
-    assert _reconcile_decided(c3={"decision": "distinct", "from": None, "to": None},
+    assert _reconcile_decided(c3={"decision": "distinct"},
                               c4={"decision": "keep_open", "evidence_scene": None},
                               c6={"decision": "keep_open", "evidence_scene": None}) == {
         "reconcile.cross_type", "reconcile.close", "reconcile.fulfilled"}
@@ -715,6 +718,10 @@ def test_reconcile_decision_timid_fails_the_three_verdicts_nothing_else_reaches(
 def test_reconcile_decision_unknown_word_fails_enum():
     assert _reconcile_decided(c3={"decision": "duplicate"}) == {"reconcile.enum",
                                                                "reconcile.cross_type"}
+    # A direction the item does not offer is no option either: pays_off runs
+    # from the thread (B) to the commitment (A) alone.
+    assert _reconcile_decided(c3={"decision": "pays_off_a_to_b"}) == {
+        "reconcile.enum", "reconcile.cross_type"}
 
 
 def test_reconcile_decision_missing_item_fails_covers_alone():

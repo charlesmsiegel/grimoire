@@ -1,12 +1,19 @@
-{#- One decision of the duplicate check's `decision` choice, described
+{#- One option of the duplicate check's `decision` choice, described
     (`identity.build_items` renders it once per option). Vars: `decision` --
-    "existing", "new" or "uncertain", the option's id, which `decide/user.j2`
-    lists beside this text. Each description is that decision's bullet in
-    the retired one-call prompt, word for word after its quoted
-    word (`verify_templates.py`'s IDENTITY_OPTIONS holds each, by decision);
-    the existing bullet's id sentence is `record.j2`'s. -#}
+    "existing", "new" or "uncertain" -- and, for "existing", `title`, the
+    title (else the id) of the candidate the option names. An "existing"
+    option is folded with that candidate, its id `existing:<id>`
+    (`identity.EXISTING_PREFIX`), one per offered candidate, which
+    `decide/user.j2` lists beside this text. Each description is that
+    decision's bullet in the retired one-call prompt, word for word after its
+    quoted word (`verify_templates.py`'s IDENTITY_OPTIONS holds each, by
+    decision), except that the existing bullet's names its candidate, the one
+    it folds (IDENTITY_REWORDED), quoted and followed by a comma rather
+    than a colon: `decide/user.j2` renders the line as `- <id>: <description>`,
+    and an id `existing:<id>` already carries a colon of its own, so a title
+    led in with another chained three or four on one line. -#}
 {%- if decision == "existing" -%}
-only when a listed candidate is the same narrative question or obligation, so the row's beat simply moves that record forward.
+the listed candidate "{{ title }}", only when this candidate is the same narrative question or obligation, so the row's beat simply moves that record forward.
 {%- elif decision == "new" -%}
 when the row is a different question, a continuation, or a related subplot: something that grew out of a listed record but is business of its own deserves a record of its own.
 {%- elif decision == "uncertain" -%}

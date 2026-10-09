@@ -1,0 +1,17 @@
+{#- A folded option's description: a directed word with its direction
+    (`reconcile.build_items`, one option of the `decision` choice per way the
+    word may run, its id `reconcile.folded(word, frm, to)`). Vars: word
+    ("duplicate" | "continuation" | "subthread" | "pays_off"), frm and to
+    (the letters "A" | "B" it runs from and to). The retired prompt's
+    direction rules, one clause per word (`verify_templates.py`'s
+    RECONCILE_REWORDED). The records' lines are already in the item's
+    context, so the description only names them by letter (M1). -#}
+{%- if word == "duplicate" -%}
+the same record: fold record {{ frm }} away into record {{ to }}, the one to keep
+{%- elif word == "continuation" -%}
+record {{ frm }} continues record {{ to }}
+{%- elif word == "subthread" -%}
+record {{ frm }} is a subthread of record {{ to }}
+{%- elif word == "pays_off" -%}
+record {{ frm }}, the plot thread, pays off record {{ to }}, the commitment
+{%- endif -%}

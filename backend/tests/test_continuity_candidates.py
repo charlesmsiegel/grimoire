@@ -76,7 +76,7 @@ def _store(cid, records, **top):
 def test_absent_cache_reads_empty(cid):
     assert candidates.read(cid) == candidates.empty()
     assert candidates.empty() == {
-        "version": 1, "generated": "", "generation": "",
+        "version": 1, "questions": 2, "generated": "", "generation": "",
         "basis": {"embedding_space": "", "embedding_model": "",
                   "identity_hashes": {}, "scored": {}, "text_hashes": {}},
         "records": {},
@@ -222,6 +222,8 @@ def test_bad_top_level_fields_are_normalized(cid):
     }), encoding="utf-8")
     data = candidates.read(cid)
     assert data["generated"] == "" and data["generation"] == ""
+    # A file with no question shape predates it: the shape before the fold.
+    assert data["questions"] == 1
     assert data["basis"] == {"embedding_space": "", "embedding_model": "m",
                              "identity_hashes": {"thread:maras-map": "h"}, "scored": {},
                              "text_hashes": {"thread:maras-map": "t"}}
@@ -304,3 +306,25 @@ def test_candidates_is_a_leaf():
         elif isinstance(node, ast.Import):
             reached.update(a.name for a in node.names if a.name.startswith("grimoire"))
     assert reached == {"..:atomic", "..:locks", "..campaigns:paths"}
+
+
+@pytest.mark.parametrize(("stored", "read"), [
+    (2, 2), (1, 1), (3, 3), ("2", 1), (True, 1), (0, 1), (-1, 1), (2.0, 1), (None, 1)])
+def test_the_question_shape_reads_as_stored_else_as_before_the_fold(cid, stored, read):
+    _file(cid).write_text(json.dumps({"version": 1, "questions": stored, "records": {}}),
+                          encoding="utf-8")
+    assert candidates.read(cid)["questions"] == read
+    assert candidates.QUESTIONS == 2
+
+
+def test_a_drop_keeps_the_question_shape_it_read(cid):
+    """Only a sweep's persist asks again what an older shape answered, so a
+    drop between sweeps must not stamp today's shape over a cache it did not
+    heal."""
+    data = candidates.empty()
+    data["questions"] = 1
+    data["records"] = {"a": _closure(), "b": _closure()}
+    candidates.write(cid, data)
+    assert candidates.drop(cid, "a") is not None
+    assert json.loads(_file(cid).read_text(encoding="utf-8"))["questions"] == 1
+

@@ -7,9 +7,10 @@
     selected by `vocabulary` (RECONCILE_BULLETS) -- two commitments are
     judged by "the same rules" as two plot threads, so that vocabulary
     carries the plot threads' bullet before its own. Each option is labelled
-    by its own word (ruling 6); the direction is `direction.j2`'s, the
-    evidence `evidence.j2`'s, the reason `explain.j2`'s, and the reply format
-    `decide/system.j2`'s. -#}
+    by its own word (ruling 6), a pair's directed words folded with their
+    direction (`directed_option.j2`), which `direction.j2` says, included
+    here for the pair vocabularies only; the evidence is `evidence.j2`'s,
+    the reason `explain.j2`'s, and the reply format `decide/system.j2`'s. -#}
 You are reviewing a campaign's story ledger for records that may overlap or be finished. A plot thread is an open narrative question; a commitment is an obligation someone owes (a promise, a debt, a threat or a piece of foreshadowing); an event is a dated occasion on the campaign calendar. The candidate above shows one or two records, lettered A and B: the record's line, its latest beats with the scene each happened in, its deadline or staleness, the links already recorded on it and the people involved, and then the signals that put it on the list. Signals say why a candidate is worth a look, never what the answer is.
 
 {% if vocabulary in ("same_thread", "same_commitment") -%}
@@ -26,4 +27,8 @@ You are reviewing a campaign's story ledger for records that may overlap or be f
 {% elif vocabulary == "temporal" -%}
 - A commitment and a dated event ("before", "on", "after", "by", "unrelated", "uncertain"): whether the commitment falls due before, on, after or by that event. Do not invent a date: when nothing shown ties the commitment to the event, answer "unrelated" or "uncertain".
 {% endif %}
+{% if vocabulary in ("same_thread", "same_commitment", "cross") -%}
+{% include "continuity_reconcile/direction.j2" %}
+
+{% endif -%}
 When what is shown cannot settle a candidate, answer "uncertain".
