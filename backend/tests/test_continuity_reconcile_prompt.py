@@ -132,13 +132,24 @@ def test_cross_type_duplicate_is_uncertain(cid, s0):
     payload = _payload(cid)
     assert _by_id(payload, key)["vocabulary"] == "cross"
 
-    # No duplicate is offered between a thread and a commitment, so a folded
-    # one is a word outside the options.
-    assert "duplicate_a_into_b" not in [
-        o.id for o in reconcile.build_items(payload)[0].questions[0].options]
+    # A cross pair's vocabulary has no duplicate at all, so a folded one is
+    # a word outside the options.
     got = _decided(payload, key, decision="duplicate_a_into_b")
     assert got["decision"] == "uncertain"
     assert (got["relation"], got["from"], got["to"]) == ("", "", "")
+
+    # The vocabulary that does carry duplicate, over a thread and a
+    # commitment (a hand-edited or legacy cache: `vocabulary` reads the first
+    # ref only): `_runs` refuses a duplicate across two types either way, so
+    # none is offered, and one answered anyway is uncertain.
+    mixed = _hand(_cand(1, "same_thread", _shown("A", MAP), _shown("B", OATH)))
+    [item] = reconcile.build_items(mixed)
+    ids = [o.id for o in item.questions[0].options]
+    assert "duplicate" in reconcile.DECISIONS["same_thread"]
+    assert not [i for i in ids if reconcile.unfolded(i)[0] == "duplicate"], ids
+    for answer in ("duplicate_a_into_b", "duplicate_b_into_a", "duplicate"):
+        got = _proposals(mixed, {"decision": answer})["candidate-1"]
+        assert (got["decision"], got["from"], got["to"]) == ("uncertain", "", ""), answer
 
 
 def test_disallowed_direction_is_uncertain(cid, s0):
@@ -172,10 +183,8 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     # a commitment never continues, nor is a subthread of, another
     assert decide(owed_key, "subthread", "A", "B")["decision"] == "uncertain"
     assert decide(owed_key, "continuation", "A", "B")["decision"] == "uncertain"
-    # a duplicate needs two different records, and a direction at all
-    assert decide(plot_key, "duplicate", "A", "A")["decision"] == "uncertain"
+    # a duplicate needs a direction at all
     assert decide(plot_key, "duplicate", "", "")["decision"] == "uncertain"
-    assert decide(plot_key, "continuation", "A", "C")["decision"] == "uncertain"
     dup = decide(plot_key, "duplicate", "B", "A")
     assert (dup["decision"], dup["relation"], dup["from"], dup["to"]) == (
         "duplicate", "", CHART, MAP)
@@ -187,6 +196,57 @@ def test_disallowed_direction_is_uncertain(cid, s0):
     related = decide(owed_key, "related", "", "")
     assert (related["decision"], related["relation"]) == ("related", "related_to")
     assert {related["from"], related["to"]} == {OATH, DEBT}
+
+
+def test_a_pair_of_one_record_offers_no_direction():
+    """`_runs` refuses a direction between a record and itself, so a pair
+    naming one ref twice (which `candidates.read` drops, but a hand-built
+    payload can carry) is offered only its undirected words, and a folded
+    answer is no option of it."""
+    same = _hand(_cand(1, "same_thread", _shown("A", MAP), _shown("B", MAP)))
+    [item] = reconcile.build_items(same)
+    assert [o.id for o in item.questions[0].options] == ["related", "distinct", "uncertain"]
+    for answer in ("duplicate_a_into_b", "continuation_b_of_a", "subthread_a_of_b"):
+        got = _proposals(same, {"decision": answer})["candidate-1"]
+        assert (got["decision"], got["from"], got["to"]) == ("uncertain", "", ""), answer
+
+
+def test_pair_refuses_a_direction_the_link_rules_refuse():
+    """`_pair`'s own guard, pinned while it exists. `proposals_of` hands it
+    only directions `_decision_options` offered, so nothing reaches it today
+    through the folded choice; `_decide` takes today's reply element, whose
+    `from` and `to` may name any letters, and a direction `_runs` refuses is
+    ``uncertain`` there too: the same record twice, a duplicate across two
+    types, and a relation against its run."""
+    cands = {
+        "plots": _cand(1, "same_thread", _shown("A", MAP), _shown("B", CHART)),
+        "mixed": _cand(2, "same_thread", _shown("A", MAP), _shown("B", OATH)),
+        "cross": _cand(3, "cross", _shown("A", OATH), _shown("B", MAP)),
+        "owed": _cand(4, "same_commitment", _shown("A", OATH), _shown("B", DEBT)),
+    }
+
+    def decide(name, word, frm, to):
+        return reconcile._decide({"decision": word, "from": frm, "to": to, "reason": ""},
+                                 cands[name], set())
+
+    for name, word, frm, to in (("plots", "duplicate", "A", "A"),
+                                ("plots", "continuation", "B", "B"),
+                                ("plots", "continuation", "A", "C"),
+                                ("mixed", "duplicate", "A", "B"),
+                                ("mixed", "duplicate", "B", "A"),
+                                ("mixed", "continuation", "A", "B"),
+                                ("cross", "pays_off", "A", "B"),
+                                ("owed", "continuation", "A", "B")):
+        got = decide(name, word, frm, to)
+        assert (got["decision"], got["from"], got["to"], got["relation"]) == (
+            "uncertain", "", "", ""), (name, word, frm, to)
+    for name, word, frm, to, want in (
+            ("plots", "duplicate", "B", "A", (CHART, MAP, "")),
+            ("plots", "continuation", "A", "B", (MAP, CHART, "continues")),
+            ("cross", "pays_off", "B", "A", (MAP, OATH, "pays_off")),
+            ("owed", "duplicate", "A", "B", (OATH, DEBT, ""))):
+        got = decide(name, word, frm, to)
+        assert (got["decision"], got["from"], got["to"], got["relation"]) == (word, *want)
 
 
 def test_temporal_words_name_the_commitment_and_the_event(cid, s0):
