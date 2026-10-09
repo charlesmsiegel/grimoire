@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   api, type CapabilityNeed, type DecisionMode, type EmbeddingCard, type GenerativeRole,
   type InferenceRole, type InferenceSelection, type InferenceSettings, type InferenceWrite,
-  type ModelCapabilities, type ResolvedSelection, type RoleCard, type RouteRow, type RouteUse,
+  type ModelCapabilities, type RoleCard, type RouteRow, type RouteUse,
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { onConfigChanged } from "../appEvents";
@@ -76,34 +76,26 @@ function warningOf(answer: ModelCapabilities, model: string, role: string): stri
   }
 }
 
-/** The capabilities API's answer for `model` on `provider` against `need`,
- *  narrowed to that model; null until it lands, and when it fails. Nothing to
- *  ask without all three. */
-function useCapabilities(provider: string, model: string,
-                         need: CapabilityNeed | null): ModelCapabilities | null {
-  const [answer, setAnswer] = useState<ModelCapabilities | null>(null);
+/** The capability warning for `model` on `provider` against `need`, from the
+ *  capabilities API narrowed to that model. Nothing to ask without both. */
+function useWarning(provider: string, model: string, need: CapabilityNeed | null,
+                    role: string): string | null {
+  const [warning, setWarning] = useState<string | null>(null);
   // Asked again on any model-settings change -- a landed test, a facts edit
   // (both announce) -- or a warning the test just disproved outlives it.
   const [asked, setAsked] = useState(0);
   useEffect(() => onConfigChanged(() => setAsked((n) => n + 1)), []);
   useEffect(() => {
-    setAnswer(null);
+    setWarning(null);
     if (!provider || !model || !need) return;
     let current = true;
     api.readConnectionCapabilities(provider, need, model)
-      .then((a) => { if (current) setAnswer(a); })
+      .then((a) => { if (current) setWarning(warningOf(a, model, role)); })
       // A failed read warns of nothing: the role's `problem` is the seam's word.
       .catch(() => {});
     return () => { current = false; };
-  }, [provider, model, need, asked]);
-  return answer;
-}
-
-/** The capability warning for `model` on `provider` against `need`. */
-function useWarning(provider: string, model: string, need: CapabilityNeed | null,
-                    role: string): string | null {
-  const answer = useCapabilities(provider, model, need);
-  return answer ? warningOf(answer, model, role) : null;
+  }, [provider, model, need, role, asked]);
+  return warning;
 }
 
 function Warning({ text }: { text: string | null }) {
@@ -114,19 +106,14 @@ function Problem({ text }: { text: string | null }) {
   return text ? <p className="field-hint problem">{text}</p> : null;
 }
 
-/** How the resolved model `sel` answers a decision, keyed on the server's
- *  `decision_mode` (I9). A refused one (`""`) says nothing here: its
- *  `problem` is the refusal's own sentence. Which structured sentence applies
- *  is read off the model's `decide_native`, the one thing the mode does not
- *  carry -- wording, never a second rule about what runs. */
-function DecideNote({ mode, sel }: { mode: DecisionMode; sel: ResolvedSelection | null }) {
-  const answer = useCapabilities(sel?.provider ?? "", sel?.model ?? "",
-                                 mode === "structured" ? "decide" : null);
+/** How a card's or row's model answers a decision: the server's
+ *  `decision_mode` and `decides_natively` (I9), and nothing read here. A
+ *  refused one (`""`) says nothing: its `problem` is the refusal's own
+ *  sentence. A structured one always says which kind it is. */
+function DecideNote({ mode, decidesNatively }: { mode: DecisionMode; decidesNatively: boolean }) {
   if (mode === "native") return <p className="field-hint">{DECIDE_WORDS.native}</p>;
-  if (mode !== "structured" || !answer || !sel) return null;
-  const row = [...answer.groups.fits, ...answer.groups.unverified].find((r) => r.id === sel.model);
-  if (!row) return null;
-  return row.capabilities.decide_native?.value === "yes"
+  if (mode !== "structured") return null;
+  return decidesNatively
     ? <p className="field-hint">{DECIDE_WORDS.structured}</p>
     : <Warning text={WARNINGS.decide} />;
 }
@@ -188,7 +175,7 @@ function GenerativeSummary({ role, card, routes, fallbackName }:
       )}
       <Problem text={card.problem} />
       <Warning text={warning} />
-      {decision && <DecideNote mode={card.decision_mode} sel={sel} />}
+      {decision && <DecideNote mode={card.decision_mode} decidesNatively={card.decides_natively} />}
       <Problem text={dropped} />
       {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
                                operation={decision ? "decide" : undefined} />}
@@ -623,7 +610,7 @@ function RouteDetail({ row, settings, blocked, onEdit, onOpen }:
           <p>Runs on {describe(sel)}</p>
           <Problem text={row.problem} />
           <Warning text={warning} />
-          {decides && <DecideNote mode={row.decision_mode} sel={sel} />}
+          {decides && <DecideNote mode={row.decision_mode} decidesNatively={row.decides_natively} />}
           <Problem text={droppedFallbackWords(row.fallback_missing, row.label, "",
                                                    row.fallback_problem)} />
           {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}

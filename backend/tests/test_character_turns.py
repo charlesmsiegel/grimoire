@@ -7,6 +7,7 @@ import pytest
 from grimoire import routes, store
 from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
+from grimoire.routes import character_turns
 from tests.inference_fixtures import (
     SAME_PROVIDER,
     SPARE,
@@ -654,6 +655,10 @@ def test_the_selector_capture_records_the_decision(client):
     assert captured is not None
     *sent, decision = captured["sections"]
     assert [row["id"] for row in sent] == ["message_0", "message_1"]
+    # The literal id, not the constant: the frontend's `ContextBreakdown.tsx`
+    # (`OUTCOME_ID`) keys on "decision" to draw this row as the outcome, never
+    # sent, so a rename here must move it too.
+    assert character_turns.OUTCOME_SECTION_ID == "decision"
     assert {k: decision[k] for k in ("id", "label", "tier", "tokens", "dropped")} == {
         "id": "decision", "label": "decision", "tier": "lock-in", "tokens": 0,
         "dropped": False}

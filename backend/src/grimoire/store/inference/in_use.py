@@ -18,12 +18,13 @@ whose provider's preset does not report prices (`reports_price`: OpenRouter
 and the Claude subscription never count), and which no rate prices
 (`pricing.rate_for_call`: the model's own rates, then `pricing.json`). A zero
 rate somebody entered is a price. A model served by two providers is two
-pairs, because each is priced on its own provider. A use answered natively --
-a decision slot holding a model `resolve.native_only` serves on its provider's
-decisions endpoint -- is not one a rate could price (`usage._modellable`), so
-it is left out. It is computed from configuration (and, for such a slot, the
-model's cached catalog row and facts) and never reads the usage ledger, so it
-costs the same however long the library has been played.
+pairs, because each is priced on its own provider. A generative use of a
+model `resolve.native_only` serves natively is not one a rate could price --
+its decisions are native (`usage._modellable`), and its generations are
+refused before they are sent -- so it is left out (`_native`). It is computed
+from configuration (and, for an unpriced pair, the model's cached catalog row
+and facts) and never reads the usage ledger, so it costs the same however
+long the library has been played.
 
 **What it costs, and what is memoized.** Only a campaign's frontmatter parse
 (`campaign_meta`), on the stat signature of its `campaign.md`, in a pool of its
@@ -173,9 +174,9 @@ def unpriced() -> list[dict]:
     by provider name, then model. `model` is the one its rates are stated
     under (`facts.model_of`). Raises what `config.read_config` raises.
 
-    A use answered natively (`_native`) is left out, since no rate prices a
-    native decision (`usage._modellable`): a pair used only that way is not
-    listed, and one used another way too is listed for that use alone."""
+    A generative use of a native-only model (`_native`) is left out, since
+    no rate prices it: a pair used only that way is not listed, and one used
+    another way too (the Embedding role) is listed for that use alone."""
     lookup = resolve.connection_lookup()
     table = pricing.read_pricing()
     rates = pricing.provider_rates()
@@ -204,25 +205,25 @@ def unpriced() -> list[dict]:
                 "model": model, "uses": []}
         entry = found[pair]
         if entry is None or _native(use, raw, model, native):
+            # Not a use a rate could price; the pair stays listed only if
+            # another of its uses is.
             continue
         entry["uses"].append(_where(use))
     return sorted((e for e in found.values() if e is not None and e["uses"]),
                   key=lambda e: (e["provider_name"], e["model"], e["provider_id"]))
 
 
-#: The routes that decide (`operation` "decide"): a pin on one is a decision use.
-_DECIDE_ROUTES = frozenset(r.key for r in routing.ROUTES if r.operation == "decide")
-
-
 def _native(use: Use, raw: dict, model: str, memo: dict[tuple[str, str], bool]) -> bool:
-    """Whether `use` is answered natively: a slot that decides -- the Decision
-    role, its fallback, or a pin on a decide route -- holding a model
-    `resolve.native_only` serves on its provider's decisions endpoint, the
-    resolver's own rule. The model's capabilities are read once per pair, and
-    only for a pair nothing prices that a decision slot holds."""
-    decides = (use.key == "decision" if use.kind in ("role", "fallback")
-               else use.kind == "route" and use.key in _DECIDE_ROUTES)
-    if not decides:
+    """Whether `use` is a generative slot -- any generative role, a fallback,
+    or a route pin -- holding a model `resolve.native_only` serves natively,
+    the resolver's own rule. No rate prices any such use: every decide route
+    that resolves through it, whichever role it walks, is answered on the
+    provider's decisions endpoint (never modelled, `usage._modellable`), and
+    a generate route on it is refused by the seam before anything is sent
+    (its `generate` is known `no`). The Embedding role is the exception: it
+    embeds whatever the model generates, and a rate prices that. The model's
+    capabilities are read once per pair, and only for a pair nothing prices."""
+    if use.kind == "role" and use.key == "embedding":
         return False
     pair = (use.provider, model)
     if pair not in memo:

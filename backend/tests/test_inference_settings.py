@@ -580,6 +580,36 @@ def test_the_settings_view_carries_decision_mode(client):
     assert {_row(got, k)["decision_mode"] for k in deciding} == {""}
 
 
+def test_the_settings_view_says_whether_the_model_decides_natively(client):
+    """I9: `decides_natively` is the resolved primary's own `decide_native`
+    -- the capabilities the resolver decided on -- so the page words a
+    structured decision without a second read that could disagree."""
+    deciding = {r.key for r in routing.ROUTES if r.operation == "decide"}
+    fx.format2(client)
+    rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+    # Generates, and its catalog says it decides natively too: structured
+    # (ruling 1), on a model that could also decide natively.
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active", "outputs": ["text", "decisions"]}], rev)
+    got = _global(client)
+    card = got["roles"]["decision"]
+    assert (card["decision_mode"], card["decides_natively"]) == ("structured", True)
+    assert {(_row(got, k)["decision_mode"], _row(got, k)["decides_natively"])
+            for k in deciding} == {("structured", True)}
+
+    # The same model with no native API: cleared on the card and every row.
+    store.llm_connections.set_cached_models(
+        "openrouter", [{"id": "vendor/active", "outputs": ["text"]}], rev)
+    got = _global(client)
+    assert got["roles"]["decision"]["decides_natively"] is False
+    assert {_row(got, k)["decides_natively"] for k in deciding} == {False}
+
+    # A model the user says cannot decide natively (and that cannot generate).
+    fx.neither(client)
+    got = _global(client)
+    assert got["roles"]["decision"]["decides_natively"] is False
+
+
 def _deleted_after_validation(monkeypatch, delete) -> None:
     """`settings._validated` as it is, then `delete()` -- another tab's delete
     landing between the body's check and the write."""

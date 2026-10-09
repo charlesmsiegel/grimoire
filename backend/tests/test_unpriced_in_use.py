@@ -33,7 +33,7 @@ import grimoire.store as store
 from grimoire.store import inference_keys as keys
 from grimoire.store import llm_connections, pricing, routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import facts, in_use, settings
+from grimoire.store.inference import facts, in_use, resolve, settings
 
 from . import inference_baseline as base
 
@@ -422,13 +422,31 @@ def test_a_model_in_use_only_natively_is_not_listed(client):
     assert len(in_use.selections()) == 3
 
 
-def test_a_model_also_in_use_another_way_is_listed_for_that_use(client):
+def test_a_decide_route_through_any_role_is_answered_natively(client):
+    """A decide route set to use Fast decides on Fast's model -- natively,
+    when that model is native-only. Fast's generate routes are refused by the
+    seam on that model before anything is sent, so no use of it in a
+    generative slot is one a rate could price."""
     pid = _native_only()
     _format2()
-    store.write_config(**_role("decision", pid, MODEL), **_role("fast", pid, MODEL))
+    store.write_config(**_role("fast", pid, MODEL), **{keys.use_key(DECIDE_ROUTE): "fast"})
+    resolved = resolve.resolve(next(r.tasks[0] for r in routing.ROUTES
+                                    if r.key == DECIDE_ROUTE), operation="decide")
+    assert (resolved.role, resolved.decision_mode) == ("fast", "native")
+    assert in_use.unpriced() == []
+
+
+def test_a_model_also_in_use_another_way_is_listed_for_that_use(client):
+    """The Embedding role prices by rate whatever the model generates, so a
+    native-only model also chosen there is listed for that use alone."""
+    pid = _native_only()
+    _format2()
+    store.write_config(**_role("decision", pid, MODEL),
+                       **{keys.role_key("embedding", "provider"): pid,
+                          keys.role_key("embedding", "model"): MODEL})
     assert in_use.unpriced() == [
         {"provider_id": pid, "provider_name": "Realm OpenAI", "model": MODEL,
-         "uses": [{"kind": "role", "key": "fast", "scope": "global"}]}]
+         "uses": [{"kind": "role", "key": "embedding", "scope": "global"}]}]
 
 
 def test_a_decision_model_that_generates_is_still_listed(client):

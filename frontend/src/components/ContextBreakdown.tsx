@@ -5,7 +5,8 @@ import { type ContextSection } from "../api/types";
 import { describeHeld, describeReason } from "./loreReasons";
 
 /** The section a decision's prompt capture files its outcome under
- *  (`character_turns._capture`): the answer, never part of what was sent. */
+ *  (`routes/character_turns.OUTCOME_SECTION_ID`, which a backend test pins to
+ *  this string): the answer, never part of what was sent. */
 const OUTCOME_ID = "decision";
 
 /** The context panel's body: the fill bar, the totals, and one collapsible row

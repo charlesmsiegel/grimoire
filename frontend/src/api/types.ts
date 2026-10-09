@@ -296,6 +296,11 @@ export type RoleCard = {
    *  schema), or `""` when it can do neither and is refused. `""` on every
    *  other role. The server's resolution, never re-derived here. */
   decision_mode: DecisionMode;
+  /** Whether the resolved model's `decide_native` is `yes` -- the
+   *  capabilities the resolver decided on -- so a `structured` decision is
+   *  worded without a read of its own: one that could also decide natively,
+   *  or one with no native API. */
+  decides_natively: boolean;
 };
 /** Which backend answers a decision (`RoleCard.decision_mode`). */
 export type DecisionMode = "native" | "structured" | "";
@@ -334,6 +339,8 @@ export type RouteRow = {
   fallback_problem: string | null;
   /** As on `RoleCard`, for a decide route; `""` on a generate one. */
   decision_mode: DecisionMode;
+  /** As on `RoleCard`. */
+  decides_natively: boolean;
   role: GenerativeRole | null;
   /** The role the route walks (its own `use`, else its default), whichever
    *  role ends up supplying it -- a route can use Decision while Decision

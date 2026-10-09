@@ -140,6 +140,17 @@ def _problem(resolved: ResolvedInference) -> str | None:
     return str(body["detail"]) if isinstance(body, dict) else body
 
 
+def _decides_natively(resolved: ResolvedInference) -> bool:
+    """Whether the resolved primary's `decide_native` is `yes` -- the
+    capabilities the resolver itself decided on, so the Models page can word
+    a structured decision ("could also decide natively" or "no native API")
+    without a second read that could disagree with the mode (I9)."""
+    if not resolved.attempts:
+        return False
+    cap = resolved.attempts[0].capabilities.get("decide_native")
+    return cap is not None and cap.value == capabilities.YES
+
+
 def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
     silence = resolve.Silence(scope, frozenset(keys.role_key(role, p) for p in keys.PARTS))
     # The Decision card reads its role as the decide routes it serves do
@@ -164,7 +175,8 @@ def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:
             # The backend the Decision role's model is answered by -- "native",
             # "structured", or "" when it can do neither (`decision_mode`);
             # "" on every other role.
-            "decision_mode": resolved.decision_mode or ""}
+            "decision_mode": resolved.decision_mode or "",
+            "decides_natively": _decides_natively(resolved)}
 
 
 def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
@@ -188,6 +200,7 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             # (`decision_mode`): "native", "structured", or "" when it can do
             # neither; "" on every other route.
             "decision_mode": resolved.decision_mode or "",
+            "decides_natively": _decides_natively(resolved),
             # The role that supplied the selection; None for a pin, or nothing.
             "role": resolved.role or None,
             # The role the route walks to get there (`cascade.walked_role`):

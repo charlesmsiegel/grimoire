@@ -20,7 +20,7 @@ function spoken(name: string): string {
  *  disagree. `presetId` "" is no preset; `model` "" is the provider's own.
  *  `operation="decide"` asks about a decision, which a model answered natively
  *  sends no sampling for: the server then calls every control `n/a`, and that
- *  is one line rather than ten. Draws nothing until a provider is chosen. */
+ *  is one line, in the server's words, rather than ten. Draws nothing until a provider is chosen. */
 export function ControlsReadout({ presetId, provider, model, operation }:
   { presetId: string; provider: string; model: string; operation?: "decide" }) {
   const [preview, setPreview] = useState<ControlsPreview | null>(null);
@@ -42,9 +42,12 @@ export function ControlsReadout({ presetId, provider, model, operation }:
   if (!provider) return null;
   if (error) return <p className="field-hint">Couldn't read what this sends: {errorText(error)}</p>;
   if (!preview) return null;
+  // A decision answered natively: the server says why nothing is sent, once
+  // per control and the same for each, so it is said once.
   const controls = Object.values(preview.controls);
-  if (controls.length > 0 && controls.every((c) => c.state === "n/a")) {
-    return <p className="field-hint">Not sent: a native decision takes no sampling.</p>;
+  if (operation === "decide" && controls.length > 0
+      && controls.every((c) => c.state === "n/a")) {
+    return <p className="field-hint">Not sent: {controls[0].why}.</p>;
   }
   const notAsWritten = Object.entries(preview.controls)
     .filter(([, c]) => c.state !== "supported");

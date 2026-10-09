@@ -612,6 +612,13 @@ def _normalise(cid, sid, record, text, connection=""):
     return (stored.strip(), issue, (text, fired)) if fired else (text, issue, None)
 
 
+#: The prompt-log section a decision's outcome is filed under. The frontend
+#: draws a section with this id as the outcome, "not sent", rather than as a
+#: prompt section (`frontend/src/components/ContextBreakdown.tsx`,
+#: `OUTCOME_ID`): change both together, which `test_character_turns` pins.
+OUTCOME_SECTION_ID = "decision"
+
+
 def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
     """Record one call's prompt in the prompt log. `outcome` is a decision's
     record of what it decided (`inference.Capture`), filed as a last
@@ -643,7 +650,7 @@ def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
         ]
         total = sum(row["tokens"] for row in rows)
         if outcome is not None:
-            rows.append({"id": "decision", "label": "decision",
+            rows.append({"id": OUTCOME_SECTION_ID, "label": "decision",
                          "text": json.dumps(outcome, indent=2, ensure_ascii=False),
                          "tier": "lock-in", "dropped": False, "pinned": False,
                          "trimmed": 0, "tokens": 0})
