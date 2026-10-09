@@ -2780,6 +2780,11 @@ export const api = {
       invalidateConfigCache();
       return notifyConfig(r);
     }),
+  /** Dismiss one "not carried over" note for good: it is recorded in the
+   *  library, so every device stops showing it. 404 for an id nobody knows. */
+  dismissRetiredNote: (id: string) =>
+    request<{ ok: boolean }>("POST",
+      `/api/inference/retired-notes/${encodeSegment(id)}/dismiss`),
   getCampaignInference: (cid: string) =>
     request<InferenceSettings>("GET", `/api/campaigns/${encodeSegment(cid)}/inference`,
       undefined, { fresh: true }),

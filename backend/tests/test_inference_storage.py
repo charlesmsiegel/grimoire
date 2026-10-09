@@ -161,9 +161,15 @@ def test_read_config_round_trips_every_inference_key(home):
     cfg = config.read_config()
     for key, value in values.items():
         assert cfg[key] == value, key
-    # The legacy keys are still carried, untouched.
+    # The legacy keys are read when the file holds them, and never defaulted
+    # (slice I): a store this build births holds none.
     for key in inference_keys.LEGACY_GLOBAL_KEYS:
-        assert key in cfg
+        assert key not in cfg
+    legacy = {key: f"legacy-{i}" for i, key in enumerate(inference_keys.LEGACY_GLOBAL_KEYS)}
+    config.write_config(**legacy)
+    cfg = config.read_config()
+    for key, value in legacy.items():
+        assert cfg[key] == value, key
 
 
 def test_is_current_sees_the_marker_through_read_config(home):

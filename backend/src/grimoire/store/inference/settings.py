@@ -65,8 +65,9 @@ from .. import (
 )
 from .. import inference_keys as keys
 from ..campaigns import lifecycle as campaign_lifecycle
+from ..campaigns import read as campaign_read
 from ..frontmatter import breaks_line
-from . import capabilities, cascade, facts, in_use, migrate, providers, resolve
+from . import capabilities, cascade, facts, in_use, migrate, providers, resolve, retired
 from .resolved import ResolvedInference
 
 SCOPES: tuple[str, ...] = ("global", "campaign")
@@ -307,10 +308,74 @@ def view(scope: str, cid: str = "") -> dict:
         "presets": [{"id": p["id"], "name": p["name"]}
                     for p in sampler_presets.list_presets()],
         "preset_clear": sampler_presets.PRESET_CLEAR,
-        # What could not be carried over (ruling 5): the global scope's, and
-        # the campaign's own on a campaign view. Not rendered yet.
-        "retirement_notes": [note._asdict() for note in resolve.retirement_notes(cid)],
+        # What could not be carried over (ruling 5, N9), shown on /models
+        # until dismissed: see `retirement_notes`.
+        "retirement_notes": retirement_notes(scope, cid),
     }
+
+
+#: Why a write that reaches the retirement record is refused when the record
+#: cannot be read (409 `retirement_unreadable`, R3-3).
+RETIREMENT_UNREADABLE = ("The record of retired model settings could not be read; "
+                         "try again once it has synced.")
+
+
+def _campaign_names() -> dict[str, str]:
+    try:
+        return {cid: name or cid for cid, name, _world in campaign_read.world_refs()}
+    except (OSError, UnicodeDecodeError, ValueError):
+        return {}
+
+
+def retirement_notes(scope: str, cid: str = "") -> list[dict]:
+    """What could not be carried over, as the view shows it (N11): the
+    retirement record's notes not yet dismissed, then the planner's
+    (`resolve.retirement_notes`) that the record does not hold yet -- one
+    list, ids collapsing, so a note reads the same before and after
+    retirement records it, and one dismissed before retirement stays
+    dismissed. On the global view (`/models`) every scope's; on a campaign's,
+    the global ones and that campaign's. Each row carries `scope_name`: ""
+    for the global scope, else the campaign's name, so a note on `/models`
+    says where it applies. Read fail-soft: never raises."""
+    record = retired.read()
+    known = {row["id"] for row in record["notes"]}
+    names = _campaign_names()
+
+    def shown(row_scope: str) -> bool:
+        return scope == "global" or row_scope in (retired.GLOBAL_SCOPE,
+                                                  retired.campaign_scope(cid))
+
+    def row(fields: Mapping[str, str]) -> dict:
+        target = retired.scope_campaign(fields["scope"])
+        return {**{k: fields[k] for k in retired.Note._fields},
+                "scope_name": names.get(target, target) if target else ""}
+
+    out = [row(r) for r in record["notes"] if not r["dismissed"] and shown(r["scope"])]
+    out += [row(n._asdict()) for n in resolve.retirement_notes(cid)
+            if n.id not in known and shown(n.scope)]
+    return out
+
+
+def dismiss_note(note_id: str) -> bool:
+    """Dismiss note `note_id` for good, on every device: returns whether any
+    note by that id was known. One the record does not hold yet -- the
+    planner's, before retirement recorded it -- is recorded already dismissed
+    (N14), so neither the planner nor a later retirement brings it back. A
+    settings write that spends nothing and touches no campaign: in
+    `config.format_hold` (a newer store raises `config.NewerFormatError`),
+    which is also the cross-process hold the record's writers share.
+    `retired.RecordUnreadableError` when the record cannot be read."""
+    with config.format_hold():
+        if retired.dismiss(note_id):
+            return True
+    # Planned outside the hold (it reads connections and presets); recorded
+    # inside it, where `dismiss` reads the record again.
+    planned = next((note for cid in ["", *_campaign_names()]
+                    for note in resolve.retirement_notes(cid) if note.id == note_id), None)
+    if planned is None:
+        return False
+    with config.format_hold():
+        return retired.dismiss(planned)
 
 
 def _named(selection: cascade.Selection, lookup: llm_connections.Lookup,

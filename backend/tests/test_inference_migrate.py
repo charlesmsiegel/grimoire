@@ -262,7 +262,8 @@ def test_a_connection_that_already_has_a_preset_is_left_alone(home):
     _legacy()
     llm_connections.update_connection("openrouter", preset="openrouter", billing="subscription")
     before = (home / "llm_connections" / "openrouter.md").read_bytes()
-    assert migrate.ensure().state == "done"
+    # The migration alone: retirement's strip rewrites the file afterwards.
+    assert inference_fixtures.migrate_as_c_h().state == "done"
     assert (home / "llm_connections" / "openrouter.md").read_bytes() == before
 
 
@@ -335,7 +336,8 @@ def test_a_campaign_is_not_migrated_while_its_connection_can_still_move(home, mo
                                               model="vendor/late")
 
     monkeypatch.setattr(migrate, "_campaign_step", then_edited)
-    assert migrate.ensure().state == "done"
+    # The migration alone: retirement's strip takes the legacy `model` off.
+    assert inference_fixtures.migrate_as_c_h().state == "done"
     model = llm_connections.read_connection_raw("openrouter")["model"]
     assert _meta(cid)[inference_keys.pin_key("scene", "model")] == model
     assert _raw_config(home)["role_primary_model"] == model

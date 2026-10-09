@@ -113,6 +113,7 @@ why its last pass stopped short (`retire_safety`, `retire_failed`).
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import os
@@ -120,7 +121,6 @@ import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import NamedTuple
 
 from .. import (
     atomic,
@@ -131,11 +131,12 @@ from .. import (
     locks,
     paths,
     revision,
+    sampler_presets,
 )
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
-from . import facts, legacy_plan, providers, retire
+from . import facts, legacy_plan, providers, retire, retired
 
 log = logging.getLogger(__name__)
 
@@ -152,11 +153,14 @@ MOVED = "the storage location changed during the upgrade; it resumes on the next
 STOPPED = "the app shut down during the upgrade; it resumes on the next start"
 
 
-#: `Status.retirement` when nothing about retirement was asked.
-_NO_RETIREMENT: dict = {"left": [], "failed": ""}
+def _no_retirement() -> dict:
+    """`Status.retirement` when nothing about retirement was asked: a fresh
+    dict per Status, so no caller can edit another's."""
+    return {"left": [], "failed": ""}
 
 
-class Status(NamedTuple):
+@dataclasses.dataclass(frozen=True)
+class Status:
     state: str
     reason: str = ""
     skipped: tuple[str, ...] = ()
@@ -164,7 +168,7 @@ class Status(NamedTuple):
     #: (`retire.left()`), and `failed`, why the last pass on this root stopped
     #: short ("" when it did not). Never moves `state`: a store whose
     #: migration is done reads `done` whatever retirement has left.
-    retirement: dict = _NO_RETIREMENT
+    retirement: dict = dataclasses.field(default_factory=_no_retirement)
 
     def as_dict(self) -> dict:
         """The JSON shape (`not_migrated`'s `status`, Settings)."""
@@ -421,11 +425,27 @@ def campaign(cid: str) -> bool:
         meta, body = frontmatter.read_record(mp, f"campaign {cid}'s campaign.md")
         if keys.is_current(meta) or keys.is_newer(meta):
             return False
-        meta.update(campaign_fields(meta, _lookup()))
+        lookup = _lookup()
+        if legacy_plan.is_retired(meta):
+            # A campaign marked retired before it was ever migrated is
+            # derived nothing, so a GLM effort its pins carried is lost: its
+            # notes go into the retirement record BEFORE this write, the one
+            # moment they can still be planned (guarantee 7; review M-2, I-1).
+            retired.record_notes(_stranded_notes(meta, lookup, cid))
+        meta.update(campaign_fields(meta, lookup))
         meta[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
         atomic.write_text(mp, frontmatter.dump_frontmatter(meta, body))
     revision.bump(cid)
     return True
+
+
+def _stranded_notes(meta: dict, lookup: legacy_plan.Lookup,
+                    cid: str) -> tuple[retired.Note, ...]:
+    """The notes the planner gives an unmarked campaign carrying the
+    retirement marker (`legacy_plan._stranded`)."""
+    return legacy_plan.campaign_plan(meta, glob={}, global_current=True, lookup=lookup,
+                                     presets=sampler_presets.read_preset_strict,
+                                     cid=cid).notes
 
 
 # ---- the run ----
@@ -542,8 +562,8 @@ def _run(root: Path, stop: threading.Event | None) -> Status | None:
         run.remember(running=False, failed=failed)
     if outcome is None:
         return None
-    return outcome._replace(skipped=tuple(run.skipped),
-                            retirement=_retirement(run.retire_failed))
+    return dataclasses.replace(outcome, skipped=tuple(run.skipped),
+                               retirement=_retirement(run.retire_failed))
 
 
 def _idle(root: Path, current: bool, left: list[str]) -> tuple[bool, retire.PassPlan | None]:
@@ -651,7 +671,13 @@ def _switch(run: _Run) -> Status | None:
                 return Status("newer")
             if keys.is_current(cfg):
                 return None                # switched meanwhile, by another device
-            fields = global_fields(cfg, _lookup())
+            lookup = _lookup()
+            if legacy_plan.is_retired(cfg):
+                # As `campaign`: a `config.md` already marked retired is
+                # derived nothing; its notes are recorded before the switch.
+                retired.record_notes(legacy_plan.global_plan(
+                    cfg, lookup, sampler_presets.read_preset_strict).notes)
+            fields = global_fields(cfg, lookup)
             fields[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
             config.write_config(**fields)
     return None
@@ -739,7 +765,10 @@ def _retire(run: _Run, planned: retire.PassPlan | None = None) -> None:
        written. A pass that only adds markers takes none (N3).
     1. `retire.retire_global`, then
     2. `retire.retire_campaign` for each campaign with work, under its own
-       `campaign_lock_nowait`: a busy one is left for the next start.
+       `campaign_lock_nowait`: a busy one is left for the next start, then
+    3. the strip (`retire.strip_connection`), connection by connection, which
+       stops where its precondition fails -- every scope retired -- and goes
+       on next start.
 
     Each unit is planned again inside its own hold; one that now needs the
     archive this pass did not take is left for the next run (R3-1). A file
@@ -751,30 +780,67 @@ def _retire(run: _Run, planned: retire.PassPlan | None = None) -> None:
         return
     plan = planned if planned is not None else retire.pass_plan(
         legacy_plan.lookup(mode="retire"))
+    archived = _retire_archive(run, plan)
+    if archived is None:
+        return
     failures = list(plan.dropped)
-    archived = run.created_safety or bool(run.retire_safety)
-    if retire.needs_archive(plan) and not archived:
-        try:
-            made = backups.create_backup(prefix=backups.RETIRE_PREFIX)
-        except (OSError, locks.StoreBusy) as exc:
-            run.retire_failed = f"the retirement archive failed: {exc}"
-            return
-        run.retire_safety = made.name
-        archived = True
-        # At once, so a pass killed from here on reuses it.
-        run.remember(running=True)
     try:
-        for unit in plan.units:
-            if not unit.work:
-                continue
-            if run.halted():
-                return
-            if why := _retire_unit(unit, archived):
-                failures.append(why)
+        _retire_units(run, plan, archived, failures)
     except config.NewerFormatError:
         return                      # a newer build switched the store meanwhile
     finally:
         run.retire_failed = "; ".join(failures)
+
+
+def _retire_archive(run: _Run, plan: retire.PassPlan) -> bool | None:
+    """Step 0: whether the pass is covered by an archive -- one this run
+    created (`pre-inference-`), one an earlier pass took and the note names,
+    or one taken now because the pass needs it. None when that archive
+    failed: nothing may be written."""
+    archived = run.created_safety or bool(run.retire_safety)
+    if not retire.needs_archive(plan) or archived:
+        return archived
+    try:
+        made = backups.create_backup(prefix=backups.RETIRE_PREFIX)
+    except (OSError, locks.StoreBusy) as exc:
+        run.retire_failed = f"the retirement archive failed: {exc}"
+        return None
+    run.retire_safety = made.name
+    # At once, so a pass killed from here on reuses it.
+    run.remember(running=True)
+    return True
+
+
+def _retire_units(run: _Run, plan: retire.PassPlan, archived: bool,
+                  failures: list[str]) -> None:
+    """Steps 1-3, unit by unit, appending each failure to `failures`;
+    `config.NewerFormatError` is raised."""
+    for unit in plan.units:
+        if not unit.work:
+            continue
+        if run.halted():
+            return
+        if unit.conn_id:
+            stopped, why = _strip_unit(unit, archived)
+            if why:
+                failures.append(why)
+            if stopped:
+                return
+        elif why := _retire_unit(unit, archived):
+            failures.append(why)
+
+
+def _strip_unit(unit: retire.Unit, archived: bool) -> tuple[bool, str]:
+    """One connection's strip: `(stop, why it failed)`. The strip stops at
+    the first connection whose precondition does not hold -- a campaign this
+    pass could not retire (busy, say) holds every connection's, until the
+    next start. A file that cannot be read stops that connection alone."""
+    try:
+        return retire.strip_connection(unit.conn_id, archived=archived) is None, ""
+    except retire.ArchiveNeededError:
+        return False, ""
+    except retire.UNIT_ERRORS as exc:
+        return False, f"connection {unit.conn_id}: {exc}"
 
 
 def _retire_unit(unit: retire.Unit, archived: bool) -> str:

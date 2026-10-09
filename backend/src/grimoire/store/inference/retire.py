@@ -25,7 +25,16 @@ itself -- the archive and the order -- is `migrate._retire`'s (ruling 6):
    `migrate.campaign` does), its derived presets, then ONE `campaign.md` write
    holding the repoint, the deletion of its `route_<k>` keys and both markers,
    and its write token bumped. A newer build's campaign is never touched.
-3. **The strip** of the connections' legacy fields: slice I, Task 6b.
+3. **The strip** (`strip_connection`), once `config.md` and every campaign
+   read, are marked and retired, and every connection reads: per connection,
+   in one hold of `llm_connections.LOCK`, the precondition re-checked, a
+   `fact_not_carried` note for any model behaviour its model's facts do not
+   state (N9), its non-empty legacy model fields recorded in the retirement
+   record (`retired`), and the file rewritten without them, `rev` kept.
+
+Each scope's notes -- what no preset can carry -- are recorded in the
+retirement record in the same hold as its write, so `/models` keeps showing
+them once the planner stops planning that scope.
 
 A scope that already carries the marker and holds a legacy key again -- an
 older build wrote it back (N5) -- gets a deletion-only write: nothing is
@@ -47,8 +56,8 @@ comes before any write, so a scope whose plan raises writes nothing -- not a
 preset, not a marker -- and is left for the next start. `left` is the
 fail-soft reader: it never raises.
 
-**What a write keeps.** Connection files are not touched here, so every `rev`
-is kept; a campaign's `updated` stamp is left alone (an upgrade is not
+**What a write keeps.** The strip rewrites a connection's raw frontmatter
+minus its legacy fields, so every `rev` is kept; a campaign's `updated` stamp is left alone (an upgrade is not
 something that happened in the campaign). Every value is derived
 deterministically, so two devices retiring one synced store write the same
 bytes (the write token excepted: it is unique by design).
@@ -74,7 +83,7 @@ from .. import (
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
-from . import legacy_plan, retired
+from . import facts, legacy_plan, retired
 
 #: The retirement marker (ruling 15), "1" once a scope is retired.
 RETIRED_KEY = keys.RETIRED_KEY
@@ -207,7 +216,9 @@ def retire_global(lookup: legacy_plan.Lookup, *,
     """Retire `config.md`: its derived presets, then one write repointing its
     GLM slots, deleting every legacy key and stamping `RETIRED_KEY`. Returns
     the global plan's notes (what was not carried over), () when there was
-    nothing to do.
+    nothing to do. The notes are recorded in the retirement record
+    (`retired.record_notes`) before the write, so what was not carried over
+    is on `/models` from the moment the scope stops being planned.
 
     All of it in one hold of `llm_connections.LOCK`, which is `config_lock`:
     `config.retire_write`'s `format_hold` and each `put_derived`'s re-enter
@@ -230,6 +241,7 @@ def retire_global(lookup: legacy_plan.Lookup, *,
             raise ArchiveNeededError("config.md")
         for made in change.plan.presets:
             sampler_presets.put_derived(made.id, made.name, made.params)
+        retired.record_notes(change.plan.notes)
         config.retire_write({**change.plan.mapped, **change.plan.repoint, RETIRED_KEY: "1"},
                             drop=LEGACY_GLOBAL_KEYS)
     return change.plan.notes
@@ -251,8 +263,8 @@ def retire_campaign(cid: str, lookup: legacy_plan.Lookup, *,
     - marked: derived;
     - retired: its `route_<k>` keys deleted, if one holds a value again (N5).
 
-    Its derived presets first, under `config_lock` (the hold above, N19), then
-    one atomic `campaign.md` write with `updated` left alone, then the write
+    Its derived presets first, under `config_lock` (the hold above, N19), its
+    notes into the retirement record, then one atomic `campaign.md` write with `updated` left alone, then the write
     token. `archived` is `retire_global`'s."""
     if not locks.holds_campaign(cid):
         raise RuntimeError(f"retire.retire_campaign({cid!r}) needs the caller to hold its lock")
@@ -269,6 +281,7 @@ def retire_campaign(cid: str, lookup: legacy_plan.Lookup, *,
             raise ArchiveNeededError(f"campaign {cid}")
         for made in change.plan.presets:
             sampler_presets.put_derived(made.id, made.name, made.params)
+        retired.record_notes(change.plan.notes)
         atomic.write_text(mp, frontmatter.dump_frontmatter(change.after, body))
     revision.bump(cid)
     return change.plan.notes
@@ -276,17 +289,20 @@ def retire_campaign(cid: str, lookup: legacy_plan.Lookup, *,
 
 # ---- the pass, planned whole before any write ----
 class Unit(NamedTuple):
-    """One scope's share of a pass: `GLOBAL_SCOPE`, or a campaign's scope
-    (`legacy_plan.campaign_scope`)."""
+    """One unit of a pass: a scope -- `GLOBAL_SCOPE`, or a campaign's scope
+    (`legacy_plan.campaign_scope`) -- or one connection's strip
+    (`connection:<id>`)."""
 
     scope: str
-    #: The campaign's id; "" for `config.md`.
+    #: The campaign's id; "" for `config.md` and for a strip.
     cid: str
     #: Whether its write changes anything (`Change.work`).
     work: bool
     #: Whether its write deletes or replaces a stored non-empty value.
     replaces: bool
     notes: tuple[retired.Note, ...]
+    #: The connection a strip unit strips; "" for a scope.
+    conn_id: str = ""
 
 
 class PassPlan(NamedTuple):
@@ -326,7 +342,14 @@ def pass_plan(lookup: legacy_plan.Lookup) -> PassPlan:
     that connection, not the pass (R3-1). A `config.md` that cannot be read,
     or is not current, drops every unit: each campaign's write is judged in a
     hold that reads it. A campaign a newer build marked is not a unit at all
-    (`left` names it). The strip's candidates join in Task 6b."""
+    (`left` names it).
+
+    Then the strip's units: each connection whose file holds a non-empty
+    legacy model field, a deletion of stored values. Planned only when the
+    strip can follow this pass -- no unit was dropped, no campaign is a newer
+    build's and every connection file reads -- since otherwise its
+    precondition cannot hold by the pass's end (`strip_connection` checks it
+    again in its own hold either way)."""
     try:
         cfg = _current_config(_config_path())
     except _CONFIG_STOPS as exc:
@@ -341,6 +364,7 @@ def pass_plan(lookup: legacy_plan.Lookup) -> PassPlan:
     else:
         units.append(Unit(legacy_plan.GLOBAL_SCOPE, "", g.work, g.replaces, g.plan.notes))
         virtual = {made.id: made for made in g.plan.presets}
+    newer = False
     for cid in campaign_ids():
         try:
             meta, _ = frontmatter.read_record(campaign_paths.campaign_meta_path(cid),
@@ -349,15 +373,21 @@ def pass_plan(lookup: legacy_plan.Lookup) -> PassPlan:
         except UNIT_ERRORS as exc:
             dropped.append(f"campaign {cid}: {exc}")
             continue
-        if change is not None:
-            units.append(Unit(legacy_plan.campaign_scope(cid), cid, change.work,
-                              change.replaces, change.plan.notes))
+        if change is None:
+            newer = True
+            continue
+        units.append(Unit(legacy_plan.campaign_scope(cid), cid, change.work,
+                          change.replaces, change.plan.notes))
+    if not dropped and not newer and not llm_connections.unreadable_connections():
+        units.extend(Unit(f"connection:{conn_id}", "", True, True, (), conn_id)
+                     for conn_id in sorted(llm_connections.legacy_fields_on_disk()))
     return PassPlan(tuple(units), tuple(dropped))
 
 
 def needs_archive(plan: PassPlan) -> bool:
     """Whether any unit of the pass deletes or replaces a stored non-empty
-    value: a legacy key, a field, a repointed preset key. False only when the
+    value: a legacy key, a connection's legacy model field (a strip unit), a
+    repointed preset key. False only when the
     whole pass adds markers (and derived presets nothing yet names), plus the
     deletion of keys whose values are empty (N3, R2-3)."""
     return any(unit.replaces for unit in plan.units)
@@ -374,7 +404,9 @@ def left() -> tuple[str, ...]:
     - a campaign not migrated, not retired, not readable, written by a newer
       build (which holds the strip, N18), or retired but holding a non-empty
       `route_<k>` key (N5);
-    - a connection whose file cannot be read."""
+    - a connection whose file cannot be read, or that holds a non-empty
+      legacy model field (`llm_connections.MODEL_FIELDS`) -- the strip's,
+      including one an older build wrote back after it (N5)."""
     return (*_config_left(), *_campaigns_left(), *_connections_left())
 
 
@@ -421,6 +453,120 @@ def _campaigns_left() -> list[str]:
 
 def _connections_left() -> list[str]:
     try:
-        return list(llm_connections.unreadable_connections().values())
+        out = list(llm_connections.unreadable_connections().values())
+        out += [f"connection {conn_id}: holds legacy model settings ({', '.join(held)})"
+                for conn_id, held in sorted(llm_connections.legacy_fields_on_disk().items())]
+        return out
     except _UNREADABLE as exc:
         return [f"connections: {exc}"]
+
+
+# ---- the strip (ruling 6(c)) ----
+#: The legacy model fields the C migration copied into a model's facts, and
+#: how a note names each.
+_FACT_LABELS: dict[str, str] = {"vision": "image input", "prefill": "prefill",
+                                "post_process": "post-processing"}
+
+
+def strip_blocked() -> str:
+    """Why the strip may not run now; "" when it may. Its precondition:
+    `config.md` reads, is current and retired; every campaign reads, is
+    marked current and retired (a newer build's holds it, N18); and every
+    connection file reads. Reads each `campaign.md` WITHOUT its campaign lock:
+    the strip checks this inside `config_lock`, which is never held around a
+    campaign lock (`locks.config_lock`)."""
+    try:
+        cfg = _current_config(_config_path())
+    except _CONFIG_STOPS as exc:
+        return f"config.md: {exc}"
+    if not _retired(cfg):
+        return "config.md is not retired yet"
+    for cid in campaign_ids():
+        try:
+            meta, _ = frontmatter.read_record(campaign_paths.campaign_meta_path(cid),
+                                              f"campaign {cid}'s campaign.md")
+        except _UNREADABLE as exc:
+            return f"campaign {cid}: {exc}"
+        if keys.is_newer(meta):
+            return f"campaign {cid} was written by a newer build"
+        if not (keys.is_current(meta) and _retired(meta)):
+            return f"campaign {cid} is not retired yet"
+    unreadable = llm_connections.unreadable_connections()
+    if unreadable:
+        return next(iter(unreadable.values()))
+    return ""
+
+
+def _fact_notes(raw: Mapping) -> tuple[retired.Note, ...]:
+    """N9: each `vision`, `prefill` or `post_process` the connection states
+    (`legacy_plan.stated`, what differs from the defaults) that its model's
+    facts state nothing for -- the C migration's copy failed, or was taken
+    back -- as a `fact_not_carried` note. The facts are read strictly
+    (`facts.FactsUnreadableError` stops this connection's strip) and never
+    written here: the user's word is never overwritten, and a stated value
+    that differs is theirs."""
+    stated = legacy_plan.stated(raw)
+    if not stated:
+        return ()
+    conn_id = str(raw["id"])
+    model = facts.model_of(dict(raw))
+    known = facts.of(conn_id, model, str(raw.get("rev") or ""), strict=True)
+    out: list[retired.Note] = []
+    for field, value in stated.items():
+        unstated = known["prefill"] is None if field == "prefill" else not known[field]
+        if not unstated:
+            continue
+        shown = "on" if value is True else str(value)
+        name = str(raw.get("name") or conn_id)
+        text = (f"The provider “{name}” had {_FACT_LABELS[field]} set to “{shown}” for "
+                f"{f'the model “{model}”' if model else 'its model'}, and that model's "
+                "settings do not say so — this was not carried over.")
+        kind = "fact_not_carried"
+        out.append(retired.Note(retired.note_id(legacy_plan.GLOBAL_SCOPE, field, conn_id,
+                                                "", kind),
+                                legacy_plan.GLOBAL_SCOPE, field, conn_id, "", kind, text))
+    return tuple(out)
+
+
+def strip_connection(conn_id: str, *, archived: bool = True) -> tuple[retired.Note, ...] | None:
+    """Strip one connection's legacy model fields for good, in one hold of
+    `llm_connections.LOCK` (`config_lock`), so a connection edit waits rather
+    than being overwritten (N4). Returns the notes it recorded, or None when
+    the strip's precondition does not hold (`strip_blocked`, re-checked in
+    this hold) -- nothing written.
+
+    In the hold: the precondition; the facts check (`_fact_notes`, N9), its
+    notes recorded BEFORE the field goes; then
+    `llm_connections.strip_model_fields`, which records the fields in the
+    retirement record and rewrites the file without them, `rev` kept. A file
+    that cannot be read -- the connection, its facts, the record -- raises
+    and nothing is written over it. `archived` is `retire_global`'s:
+    `ArchiveNeededError` without one."""
+    with llm_connections.LOCK:
+        if strip_blocked():
+            return None
+        if not llm_connections.legacy_fields_on_disk().get(conn_id):
+            return ()
+        if not archived:
+            raise ArchiveNeededError(f"connection {conn_id}")
+        raw = llm_connections.read_connection_strict(conn_id)
+        if raw is None:
+            return ()
+        found = _fact_notes(raw)
+        retired.record_notes(found)
+        llm_connections.strip_model_fields(conn_id, retired.record_fields)
+    return found
+
+
+def strip() -> list[retired.Note]:
+    """The strip, whole: `strip_connection` for each connection holding a
+    legacy model field, stopping at the first whose precondition fails.
+    Returns the notes recorded. For a caller outside a pass (a test, a
+    script); the pass runs `strip_connection` unit by unit."""
+    notes: list[retired.Note] = []
+    for conn_id in sorted(llm_connections.legacy_fields_on_disk()):
+        got = strip_connection(conn_id)
+        if got is None:
+            break
+        notes += got
+    return notes

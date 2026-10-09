@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import shutil
 import threading
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -35,7 +36,7 @@ from grimoire.store import (
 )
 from grimoire.store.campaigns import lifecycle as campaign_lifecycle
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import legacy_plan, migrate, retire
+from grimoire.store.inference import legacy_plan, migrate, retire, retired
 from grimoire.store.inference import resolve as inference
 from grimoire.store.inference import settings as inference_settings
 from tests import inference_baseline_c as base_c
@@ -102,6 +103,15 @@ def _c_era() -> None:
     assert inference_fixtures.migrate_as_c_h().state == "done"
     assert keys.is_current(config.read_config())
     assert not _raw_config().get(RETIRED)
+
+
+def _stripped() -> None:
+    """Every connection's legacy model fields taken off by hand (their values
+    recorded), as a pass that already ran the strip left them -- for a test
+    about a scope's own work, with no strip left to do."""
+    for conn_id in llm_connections.legacy_fields_on_disk():
+        llm_connections.strip_model_fields(conn_id, retired.record_fields)
+    assert not llm_connections.legacy_fields_on_disk()
 
 
 def _raw_config() -> dict:
@@ -237,6 +247,7 @@ def test_a_marker_only_pass_takes_no_archive(home):
     cid = _campaign("Saltmarch")
     _c_era()
     retire.retire_global(legacy_plan.lookup(mode="retire"))
+    _stripped()
     for name in _archives(backups.RETIRE_PREFIX):
         (backups.backup_dir() / name).unlink()
     (home / ".cache" / "inference-migration.json").unlink()
@@ -249,9 +260,12 @@ def test_a_marker_only_pass_takes_no_archive(home):
 
 
 def _born_by_c_h() -> dict:
-    """`config.md` as a C-H build -- or this build, before 6b takes the legacy
-    defaults out of `read_config` -- births it: every legacy key present as
-    "", the format marker, and no retirement marker."""
+    """`config.md` as a C-H build's `read_config` materializes it: every
+    legacy key present as "", the format marker, and no retirement marker.
+    Not yet what a real C-H install holds on disk -- its connection seeding
+    writes `active_connection_id: openrouter` on the first connection read
+    (`test_a_real_c_h_fresh_install_takes_one_archive`) -- but the shape that
+    proves an empty legacy value is no work."""
     meta = {**dict.fromkeys(keys.LEGACY_GLOBAL_KEYS, ""), "theme": "system",
             FORMAT: keys.CURRENT_FORMAT}
     assert len(keys.LEGACY_GLOBAL_KEYS) == 16
@@ -259,10 +273,12 @@ def _born_by_c_h() -> dict:
 
 
 def test_a_fresh_install_with_empty_legacy_keys_takes_no_archive(home):
-    """N3: empty legacy values are absent ones. A fresh C-H install and one
-    campaign born the same way: `left()` names only the missing markers, the
-    pass needs no archive, and `ensure` writes the marker (dropping the empty
-    keys with it) and nothing else; a second `ensure` writes nothing."""
+    """N3: empty legacy values are absent ones. A `config.md` holding the 16
+    legacy keys as "" (`_born_by_c_h`) and one campaign born the same way,
+    with connections seeded by this build: `left()` names only the missing
+    markers, the pass needs no archive, and `ensure` writes the marker
+    (dropping the empty keys with it) and nothing else; a second `ensure`
+    writes nothing."""
     _write_config(_born_by_c_h())
     cid = _campaign("Saltmarch")
     llm_connections.list_connections()
@@ -305,6 +321,7 @@ def test_a_unit_that_grew_work_after_planning_is_left_for_the_next_run(home, mon
     cid = _campaign("Saltmarch")
     _c_era()
     retire.retire_global(legacy_plan.lookup(mode="retire"))
+    _stripped()
     (home / ".cache" / "inference-migration.json").unlink()
     real = retire.retire_campaign
 
@@ -905,3 +922,667 @@ def test_an_unreadable_base_preset_stops_its_scope(home):
     assert not _retired(_meta(cid))     # its pin runs on "warm" too
     assert "config.md" in got.retirement["failed"]
     assert "campaign saltmarch" in got.retirement["failed"]
+
+
+# ======================================================================
+# Task 6b: the record, the strip, and the notice
+# ======================================================================
+MODEL_FIELDS = llm_connections.MODEL_FIELDS
+
+
+def _conn_file(conn_id: str) -> Path:
+    return store.home() / "llm_connections" / f"{conn_id}.md"
+
+
+def _conn_meta(conn_id: str) -> dict:
+    return parse_frontmatter(_conn_file(conn_id).read_text(encoding="utf-8"))[0]
+
+
+def _held(conn_id: str) -> list[str]:
+    return [f for f in MODEL_FIELDS if f in _conn_meta(conn_id)]
+
+
+def _spare_stripped() -> None:
+    """A legacy library with a `spare` provider (model `vendor/spare`),
+    migrated, retired and stripped: `spare.md` holds no legacy field, and the
+    retirement record holds what it had."""
+    _legacy()
+    llm_connections.create_connection("openrouter", "spare", api_key="sk-spare",
+                                      model="vendor/spare", sampler_preset="warm")
+    sampler_presets.create_preset("Warm", {"temperature": 0.9})
+    assert migrate.ensure().state == "done"
+    assert _held("spare") == []
+    assert retired.read()["fields"]["spare"] == {"model": "vendor/spare",
+                                                 "sampler_preset": "warm"}
+
+
+def _late_unmarked(name: str = "Saltmarch", route: str = "spare") -> str:
+    """A campaign as an older build (or a restore) leaves one after the
+    strip: no format marker, no retirement marker, a legacy route."""
+    cid = _campaign(name)
+    _write_meta(cid, {**{k: v for k, v in _meta(cid).items() if k not in (FORMAT, RETIRED)},
+                      "route_scene": route})
+    return cid
+
+
+def _corrupt_record() -> bytes:
+    good = retired.path().read_bytes()
+    retired.path().write_text("{not json", encoding="utf-8")
+    return good
+
+
+# ---- the strip ----
+def test_retirement_deletes_legacy_fields(home):
+    _legacy_glm()
+    revs = _revs()
+    raw_before = {c: _conn_meta(c) for c in revs}
+
+    assert migrate.ensure().state == "done"
+
+    for conn_id in revs:
+        assert _held(conn_id) == [], conn_id
+    assert _revs() == revs
+    recorded = retired.read()["fields"]
+    for conn_id, meta in raw_before.items():
+        assert recorded.get(conn_id, {}) == {
+            f: meta[f] for f in MODEL_FIELDS if str(meta.get(f, "")).strip()}, conn_id
+    assert recorded["glm"]["reasoning_effort"] == "high"
+    assert migrate.status().retirement == {"left": [], "failed": ""}
+
+
+def test_the_strip_keeps_every_other_key_and_the_catalog(home):
+    _legacy_glm()
+    rev = llm_connections.read_connection_raw("glm")["rev"]
+    llm_connections.set_cached_models("glm", [{"id": "glm-5.3"}], rev)
+    assert migrate.ensure().state == "done"
+    meta = _conn_meta("glm")
+    assert (meta["kind"], meta["name"], meta["base_url"], meta["rev"]) == (
+        "openai_compatible", "glm", base_c.GLM_URL, rev)
+    assert [m["id"] for m in llm_connections.cached_models("glm")["models"]] == ["glm-5.3"]
+
+
+def test_fields_are_stripped_only_after_every_campaign_is_retired(home):
+    cid = _legacy_glm()
+    held, release = threading.Event(), threading.Event()
+
+    def holder():
+        with locks.campaign_lock(cid):
+            held.set()
+            release.wait(WAIT)
+
+    t = threading.Thread(target=holder)
+    t.start()
+    try:
+        assert held.wait(WAIT)
+        got = migrate.ensure()
+    finally:
+        release.set()
+        t.join(WAIT)
+    assert not _retired(_meta(cid))
+    assert _conn_meta("glm")["reasoning_effort"] == "high"
+    assert "fields" not in retired.read() or "glm" not in retired.read()["fields"]
+    assert any(item.startswith("connection glm") for item in got.retirement["left"])
+
+    assert migrate.ensure().state == "done"
+    assert _retired(_meta(cid)) and _held("glm") == []
+
+
+def test_an_unreadable_campaign_holds_the_strip(home):
+    """C3: a zero-byte unmarked `campaign.md` -- nothing is stripped and
+    `left` names it; once it reads again, the next run migrates it, retires
+    it and strips."""
+    _legacy()
+    _glm("glm", "high")
+    cid = _campaign("Saltmarch")
+    campaigns.set_campaign_routing(cid, {"route_scene": "glm"})
+    path = campaigns.paths.campaign_meta_path(cid)
+    good = path.read_bytes()
+    path.write_bytes(b"")
+
+    got = migrate.ensure()
+    assert path.read_bytes() == b""
+    assert _conn_meta("glm")["reasoning_effort"] == "high"
+    assert any(item.startswith("campaign saltmarch") for item in got.retirement["left"])
+
+    path.write_bytes(good)
+    assert migrate.ensure().state == "done"
+    meta = _meta(cid)
+    assert meta[FORMAT] == "2" and _retired(meta)
+    assert meta[keys.pin_key("scene", "preset")] == "reasoning-high"
+    assert _held("glm") == []
+
+
+@pytest.mark.parametrize("damage", [b"", b"kind: openrouter\nmodel: x\n",
+                                    b"---\nmodel: vendor/spare\n---\n"],
+                         ids=["zero-bytes", "unfenced", "no-kind"])
+def test_strip_model_fields_refuses_an_unparseable_connection(home, damage):
+    config.read_config()
+    llm_connections.list_connections()
+    path = _conn_file("held")
+    path.write_bytes(damage)
+    seen: list = []
+    with pytest.raises(frontmatter.RecordUnreadableError):
+        llm_connections.strip_model_fields("held", lambda c, v: seen.append((c, v)))
+    assert path.read_bytes() == damage
+    assert seen == [] and not retired.path().exists()
+
+
+def test_a_connection_edit_during_the_strip_survives(client, monkeypatch):
+    """N4: the strip holds the model-settings lock across its read, its
+    record and its write, so a provider edit that arrives meanwhile waits --
+    and lands after it, with its own key and rev, over the stripped file."""
+    _glm("glm", "high")
+    assert _conn_meta("glm")["reasoning_effort"] == "high"
+    real = retired.record_fields
+    edit: dict = {}
+
+    def record_then_edit(conn_id, values):
+        real(conn_id, values)
+        worker = threading.Thread(target=lambda: edit.update(
+            got=client.put("/api/llm-connections/glm", json={"api_key": "sk-new"})))
+        worker.start()
+        worker.join(0.5)
+        assert worker.is_alive(), "the edit was not held back by the strip"
+        edit["worker"] = worker
+
+    monkeypatch.setattr(retired, "record_fields", record_then_edit)
+    rev = _conn_meta("glm")["rev"]
+    assert retire.strip_connection("glm") == ()
+    edit["worker"].join(WAIT)
+    assert edit["got"].status_code == 200, edit["got"].text
+    meta = _conn_meta("glm")
+    assert meta["api_key"] == "sk-new" and meta["rev"] != rev
+    assert [f for f in MODEL_FIELDS if f in meta] == []
+    assert retired.read()["fields"]["glm"]["reasoning_effort"] == "high"
+
+
+# ---- the record, read by the planner ----
+def test_the_strip_records_the_fields_first_and_the_planner_reads_them(home):
+    """C3, R2-2: after the strip a late unmarked campaign naming `spare`
+    resolves spare's recorded model in memory; the next `ensure`, with step
+    8 active, persists that model and its preset -- never "" -- and then
+    retires it."""
+    _spare_stripped()
+    cid = _late_unmarked()
+    first = inference.resolve("chat", cid).attempts[0]
+    assert (first.provider_id, first.model) == ("spare", "vendor/spare")
+
+    assert migrate.ensure().state == "done"
+    meta = _meta(cid)
+    assert meta[keys.pin_key("scene", "model")] == "vendor/spare"
+    assert meta[keys.pin_key("scene", "preset")] == "warm"
+    assert _retired(meta) and "route_scene" not in meta
+
+
+def test_an_unreadable_record_holds_a_late_unmarked_campaign(home):
+    """N6, R2-2: with the record unreadable, step 8 cannot read spare's
+    fields and leaves the campaign as it is; once repaired, the migration
+    maps it with spare's recorded model and retirement retires it."""
+    _spare_stripped()
+    cid = _late_unmarked()
+    before = campaigns.paths.campaign_meta_path(cid).read_bytes()
+    good = _corrupt_record()
+
+    got = migrate.ensure()
+    assert campaigns.paths.campaign_meta_path(cid).read_bytes() == before
+    assert any(cid in item and "retirement record" in item for item in got.skipped), got
+    assert "campaign saltmarch: not migrated yet" in got.retirement["left"]
+
+    retired.path().write_bytes(good)
+    assert migrate.ensure().state == "done"
+    meta = _meta(cid)
+    assert meta[keys.pin_key("scene", "model")] == "vendor/spare" and _retired(meta)
+
+
+def test_the_write_path_reads_the_record_on_a_retired_store(client):
+    """R2-2, R3-3: the settings write that reaches a late unmarked campaign
+    first migrates it with spare's recorded model; with the record
+    unreadable it answers 409 `retirement_unreadable` and writes nothing."""
+    llm_connections.create_connection("openrouter", "spare", api_key="sk-spare",
+                                      model="vendor/spare")
+    assert retire.strip() == []
+    assert _held("spare") == []
+    cid = _late_unmarked()
+    before = campaigns.paths.campaign_meta_path(cid).read_bytes()
+    good = _corrupt_record()
+    body = {"roles": {"fast": {"selection": {"provider": "openrouter", "model": "vendor/fast"}}}}
+
+    got = client.put(f"/api/campaigns/{cid}/inference", json=body)
+    assert got.status_code == 409, got.text
+    assert got.json() == {
+        "kind": "retirement_unreadable",
+        "detail": "The record of retired model settings could not be read; "
+                  "try again once it has synced."}
+    assert campaigns.paths.campaign_meta_path(cid).read_bytes() == before
+
+    retired.path().write_bytes(good)
+    got = client.put(f"/api/campaigns/{cid}/inference", json=body)
+    assert got.status_code == 200, got.text
+    assert _meta(cid)[keys.pin_key("scene", "model")] == "vendor/spare"
+
+
+def test_the_record_fallback_needs_no_config_marker(home):
+    """R3-2: the record's entry proves the strip happened, whatever
+    `config.md` says: with the retirement marker taken off it by hand, step 8
+    still persists spare's recorded model."""
+    _spare_stripped()
+    _write_config({k: v for k, v in _raw_config().items() if k != RETIRED})
+    cid = _late_unmarked()
+    migrate.ensure()
+    assert _meta(cid)[keys.pin_key("scene", "model")] == "vendor/spare"
+
+
+def test_an_empty_legacy_field_still_falls_back_to_the_record(home):
+    """N6: a C-H edit wrote `model: ""` back after the strip; an empty field
+    is no field, so the record still answers."""
+    _spare_stripped()
+    _conn_file("spare").write_text(
+        dump_frontmatter({**_conn_meta("spare"), "model": ""}, ""), encoding="utf-8")
+    for mode in ("soft", "migrate", "retire"):
+        assert legacy_plan.lookup(mode=mode)("spare")["model"] == "vendor/spare", mode
+
+
+def test_the_record_never_answers_for_a_deleted_connection(home):
+    _spare_stripped()
+    llm_connections.delete_connection("spare")
+    assert "spare" in retired.read()["fields"]
+    for mode in ("soft", "migrate", "retire"):
+        assert legacy_plan.lookup(mode=mode)("spare") is None, mode
+
+
+def test_the_first_recorded_fields_win(home):
+    """N20: a pre-C build writes `model: other` back after the strip; the next
+    strip takes it off again and the record keeps the first value."""
+    _spare_stripped()
+    _conn_file("spare").write_text(
+        dump_frontmatter({**_conn_meta("spare"), "model": "vendor/other"}, ""),
+        encoding="utf-8")
+    assert migrate.ensure().state == "done"
+    assert _held("spare") == []
+    assert retired.read()["fields"]["spare"]["model"] == "vendor/spare"
+
+
+def test_the_planners_record_read_is_strict_for_writers_only(home):
+    _spare_stripped()
+    _corrupt_record()
+    assert legacy_plan.lookup(mode="soft")("spare")["model"] == ""
+    for mode in ("migrate", "retire"):
+        with pytest.raises(retired.RecordUnreadableError):
+            legacy_plan.lookup(mode=mode)("spare")
+
+
+# ---- the facts check (N9) ----
+def test_a_fact_the_migration_skipped_is_noted_before_the_strip(home, monkeypatch):
+    """C's facts copy for `glm` did not land (its write raised), so glm
+    states `prefill: true` that its model's facts do not: one
+    `fact_not_carried` note, in the record before the field goes. `glm2`,
+    whose fact was copied, gives none."""
+    _legacy()
+    _glm("glm", "high")
+    _glm("glm2", "low")
+    llm_connections.update_connection("glm", prefill=True)
+    llm_connections.update_connection("glm2", prefill=True)
+    assert inference_fixtures.migrate_as_c_h().state == "done"
+    llm_connections.facts_path("glm").unlink()        # the copy that never landed
+    real = llm_connections.strip_model_fields
+    order: list[tuple[str, list[str]]] = []
+
+    def watched(conn_id, record):
+        order.append((conn_id, [n["kind"] for n in retired.read()["notes"]
+                                if n["provider_id"] == conn_id]))
+        return real(conn_id, record)
+
+    monkeypatch.setattr(llm_connections, "strip_model_fields", watched)
+    assert migrate.ensure().state == "done"
+
+    notes = [n for n in retired.read()["notes"] if n["kind"] == "fact_not_carried"]
+    assert [(n["provider_id"], n["subject"]) for n in notes] == [("glm", "prefill")]
+    assert "this was not carried over" in notes[0]["text"]
+    assert ("glm", ["fact_not_carried"]) in order
+    assert ("glm2", []) in order
+    assert _held("glm") == [] and _held("glm2") == []
+
+
+def test_an_unreadable_facts_file_stops_its_connections_strip(home):
+    _legacy()
+    _glm("glm", "high")
+    llm_connections.update_connection("glm", prefill=True)
+    assert inference_fixtures.migrate_as_c_h().state == "done"
+    llm_connections.facts_path("glm").write_text("", encoding="utf-8")
+    got = migrate.ensure()
+    assert _conn_meta("glm").get("prefill") == "true"
+    assert "connection glm" in got.retirement["failed"]
+    assert llm_connections.facts_path("glm").read_text(encoding="utf-8") == ""
+
+
+# ---- N5: a legacy key an older build writes back, one scope per test ----
+def _retired_glm_store() -> str:
+    cid = _legacy_glm()
+    assert migrate.ensure().state == "done"
+    assert migrate.status().retirement["left"] == []
+    return cid
+
+
+def _chat(cid: str = "") -> tuple:
+    first = inference.resolve("chat", cid).attempts[0]
+    conn = first.conn
+    return (first.provider_id, first.model, first.preset_id,
+            llm_sampling.effective(conn)["effective"])
+
+
+def test_a_legacy_config_key_written_after_retirement_is_ignored_then_removed(home):
+    _retired_glm_store()
+    played = _chat()
+    clean = _raw_config()
+    _write_config({**clean, "active_connection_id": "openrouter"})
+    assert _chat() == played
+    assert retire.left() == ("config.md: holds legacy settings again (active_connection_id)",)
+    assert migrate.ensure().state == "done"
+    assert _raw_config() == clean
+
+
+def test_a_legacy_campaign_key_written_after_retirement_is_ignored_then_removed(home):
+    cid = _retired_glm_store()
+    played = _chat(cid)
+    clean = _meta(cid)
+    _write_meta(cid, {**clean, "route_scene": "openrouter"})
+    assert _chat(cid) == played
+    assert retire.left() == ("campaign saltmarch: holds legacy settings again (route_scene)",)
+    assert migrate.ensure().state == "done"
+    assert _meta(cid) == clean
+
+
+def test_a_legacy_connection_field_written_after_retirement_is_ignored_then_removed(home):
+    _retired_glm_store()
+    played = _chat()
+    clean = _conn_meta("glm")
+    _conn_file("glm").write_text(dump_frontmatter({**clean, "reasoning_effort": "low"}, ""),
+                                 encoding="utf-8")
+    assert _chat() == played
+    assert retire.left() == ("connection glm: holds legacy model settings (reasoning_effort)",)
+    assert migrate.ensure().state == "done"
+    assert _conn_meta("glm") == clean
+
+
+# ---- births and edits after retirement (I2) ----
+@pytest.mark.product_birth
+def test_a_product_birth_store_reads_done(home):
+    config.read_config()
+    llm_connections.list_connections()
+    got = migrate.status()
+    assert got.state == "done" and got.retirement == {"left": [], "failed": ""}
+
+
+@pytest.mark.product_birth
+def test_a_fresh_store_never_gets_active_connection_id(home):
+    config.read_config()
+    llm_connections.list_connections()
+    raw = _raw_config()
+    assert "active_connection_id" not in raw
+    held = [k for k in keys.LEGACY_GLOBAL_KEYS if k in raw]
+    assert held == []
+    for conn_id in ("openrouter", "claude"):
+        assert _held(conn_id) == [], conn_id
+
+
+def test_a_connection_edit_after_retirement_writes_no_legacy_field(client):
+    for body in ({"name": "Router"}, {"api_key": "sk-new"}):
+        got = client.put("/api/llm-connections/openrouter", json=body)
+        assert got.status_code == 200, got.text
+        assert _held("openrouter") == [], body
+
+
+def test_a_resumed_pass_with_only_the_strip_left_takes_an_archive(home):
+    """R2-3: every scope retired, the fields still on the connections, no
+    note of an archive: the strip deletes stored values, so the pass takes
+    one first."""
+    cid = _legacy_glm()
+    _c_era()
+    retire.retire_global(legacy_plan.lookup(mode="retire"))
+    with locks.campaign_lock(cid):
+        retire.retire_campaign(cid, legacy_plan.lookup(mode="retire"))
+    for name in _archives(backups.RETIRE_PREFIX):
+        (backups.backup_dir() / name).unlink()
+    (store.home() / ".cache" / "inference-migration.json").unlink()
+    plan = retire.pass_plan(legacy_plan.lookup(mode="retire"))
+    assert {u.conn_id for u in plan.units if u.work} >= {"glm", "glm2"}
+    assert retire.needs_archive(plan)
+    before = _conn_meta("glm")
+
+    assert migrate.ensure().state == "done"
+    taken = _archives(backups.RETIRE_PREFIX)
+    assert len(taken) == 1
+    with zipfile.ZipFile(backups.backup_dir() / taken[0]) as z:
+        archived = parse_frontmatter(z.read("llm_connections/glm.md").decode("utf-8"))[0]
+    assert archived == before
+    assert _held("glm") == []
+
+
+# ---- the notes on /models ----
+def _route_preset_loss(client) -> None:
+    """A legacy library whose summary route wears "Cold" (no reasoning
+    effort) over a GLM Primary at effort high: the route's effort cannot be
+    carried (ratification item 3)."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    config.write_config(active_connection_id="glm", preset_summary="cold")
+
+
+def _notes(client, cid: str = "") -> list[dict]:
+    url = f"/api/campaigns/{cid}/inference" if cid else "/api/inference/settings"
+    got = client.get(url)
+    assert got.status_code == 200, got.text
+    return got.json()["retirement_notes"]
+
+
+def test_a_noted_loss_is_shown_before_retirement_writes_it(legacy_client):
+    _route_preset_loss(legacy_client)
+    notes = _notes(legacy_client)
+    assert [(n["kind"], n["subject"], n["provider_id"], n["effort"], n["scope_name"])
+            for n in notes] == [("route_preset", "summary", "glm", "high", ""),
+                                ("route_preset", "scene_break", "glm", "high", "")]
+    assert all(n["text"].endswith("— this was not carried over.") for n in notes)
+    assert not retired.path().exists()
+
+
+def test_retired_notes_are_durable_and_dismissable(legacy_client, tmp_path, monkeypatch):
+    """After retirement the planner plans nothing there, and the notes are
+    the record's: shown on `/models`, kept by a second run, dismissed for
+    good -- through another retirement pass, and on a second device reading
+    the same files."""
+    _route_preset_loss(legacy_client)
+    before = _notes(legacy_client)
+    assert migrate.ensure().state == "done"
+    assert _retired(_raw_config())
+    assert _notes(legacy_client) == before          # end to end: the record's now
+    assert {n["id"] for n in retired.read()["notes"]} == {n["id"] for n in before}
+    assert migrate.ensure().state == "done"
+    assert _notes(legacy_client) == before
+
+    target = before[0]["id"]
+    got = legacy_client.post(f"/api/inference/retired-notes/{target}/dismiss")
+    assert got.status_code == 200, got.text
+    assert [n["id"] for n in _notes(legacy_client)] == [before[1]["id"]]
+
+    # Another pass computes the same note again (config.md unretired by hand,
+    # glm's effort read from the record): it stays dismissed.
+    _write_config({k: v for k, v in _raw_config().items() if k != RETIRED})
+    assert migrate.ensure().state == "done"
+    assert [n["id"] for n in _notes(legacy_client)] == [before[1]["id"]]
+
+    second = tmp_path / "second-device"
+    shutil.copytree(store.home(), second)
+    monkeypatch.setenv("GRIMOIRE_HOME", str(second))
+    dismissed = {n["id"]: n["dismissed"] for n in retired.read()["notes"]}
+    assert dismissed == {before[0]["id"]: True, before[1]["id"]: False}
+
+
+def test_a_planner_note_can_be_dismissed_before_retirement(legacy_client):
+    """N14: dismissing a note the planner computed records it, dismissed, so
+    retirement never brings it back."""
+    _route_preset_loss(legacy_client)
+    target = _notes(legacy_client)[0]
+    got = legacy_client.post(f"/api/inference/retired-notes/{target['id']}/dismiss")
+    assert got.status_code == 200, got.text
+    assert [n["dismissed"] for n in retired.read()["notes"]] == [True]
+    assert target["id"] not in [n["id"] for n in _notes(legacy_client)]
+    assert migrate.ensure().state == "done"
+    assert target["id"] not in [n["id"] for n in _notes(legacy_client)]
+
+
+def test_dismissing_an_unknown_note_is_a_404(client):
+    got = client.post("/api/inference/retired-notes/0000000000000000/dismiss")
+    assert got.status_code == 404
+
+
+def test_dismissing_on_an_unreadable_record_is_a_409(client):
+    retired.path().write_text("{not json", encoding="utf-8")
+    got = client.post("/api/inference/retired-notes/0000000000000000/dismiss")
+    assert got.status_code == 409
+    assert got.json()["kind"] == "retirement_unreadable"
+    assert retired.path().read_text(encoding="utf-8") == "{not json"
+
+
+def test_a_note_id_ignores_its_wording(home):
+    config.read_config()
+    note = retired.Note(retired.note_id("global", "summary", "glm", "high", "route_preset"),
+                        "global", "summary", "glm", "high", "route_preset", "Old words.")
+    retired.record_notes([note])
+    assert retired.dismiss(note.id)
+    reworded = note._replace(text="New words.")
+    assert reworded.id == retired.note_id("global", "summary", "glm", "high", "route_preset")
+    retired.record_notes([reworded])
+    rows = retired.read()["notes"]
+    assert [(r["id"], r["text"], r["dismissed"]) for r in rows] == [
+        (note.id, "New words.", True)]
+
+
+def test_a_campaign_note_names_its_campaign(legacy_client):
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    cid = _campaign("Saltmarch")
+    campaigns.set_campaign_routing(cid, {"route_tracker": "glm", "preset_tracker": "cold"})
+    assert migrate.ensure().state == "done"
+    on_models = [n for n in _notes(legacy_client) if n["scope"] == f"campaign:{cid}"]
+    assert [(n["subject"], n["scope_name"]) for n in on_models] == [("tracker", "Saltmarch")]
+    assert [n["id"] for n in _notes(legacy_client, cid)] == [n["id"] for n in on_models]
+
+
+def test_the_record_is_strict_for_writers(home):
+    config.read_config()
+    for bad in ("", "[]", '{"fields": [], "notes": []}', '{"notes": [{"id": 3}]}'):
+        retired.path().write_text(bad, encoding="utf-8")
+        assert retired.read() == {"fields": {}, "notes": []}
+        with pytest.raises(retired.RecordUnreadableError):
+            retired.read(strict=True)
+        with pytest.raises(retired.RecordUnreadableError):
+            retired.record_fields("glm", {"model": "glm-5.3"})
+        assert retired.path().read_text(encoding="utf-8") == bad
+
+
+# ---- review round 1 ----
+def test_a_real_c_h_fresh_install_takes_one_archive(home):
+    """M-1: a C-H build's fresh install, as it is on disk: its seeding wrote
+    `active_connection_id: openrouter` and the two seeded connections' model
+    fields. Those are stored values, so retirement takes one archive, deletes
+    and strips them, and a second `ensure` writes nothing. (A fresh install
+    of THIS build takes none: `test_a_product_birth_store_takes_no_archive_and_writes_nothing`.)"""
+    _write_config({**_born_by_c_h(), "active_connection_id": "openrouter"})
+    for conn_id, kind, model in (("openrouter", "openrouter", config.DEFAULT_MODEL),
+                                 ("claude", "claude", config.DEFAULT_CLAUDE_MODEL)):
+        _conn_file(conn_id).parent.mkdir(parents=True, exist_ok=True)
+        _conn_file(conn_id).write_text(dump_frontmatter(
+            {"kind": kind, "name": conn_id.capitalize(), "base_url": "", "api_key": "",
+             "model": model, "post_process": "none", "rev": "0123456789abcdef"}, ""),
+            encoding="utf-8")
+    (_conn_file("openrouter").parent / ".migrated").write_text("1", encoding="utf-8")
+    assert retire.needs_archive(retire.pass_plan(legacy_plan.lookup(mode="retire")))
+
+    assert migrate.ensure().state == "done"
+    assert len(_archives(backups.RETIRE_PREFIX)) == 1
+    assert "active_connection_id" not in _raw_config() and _retired(_raw_config())
+    assert _held("openrouter") == [] and _held("claude") == []
+    after = _digest(store.home())
+    assert migrate.ensure().state == "done"
+    assert _digest(store.home()) == after
+    assert len(_archives(backups.RETIRE_PREFIX)) == 1
+
+
+def test_a_retired_unmarked_campaigns_lost_effort_is_noted(home):
+    """M-2, guarantee 7: a campaign marked retired but never migrated, its
+    scene pinned to a GLM provider with an effort, is derived nothing -- so
+    the effort is lost, and the record says so, from step 8's write."""
+    _legacy()
+    _glm("glm", "high")
+    cid = _campaign("Saltmarch")
+    _write_meta(cid, {**_meta(cid), RETIRED: "1", "route_scene": "glm"})
+    assert migrate.ensure().state == "done"
+    noted = [(n["kind"], n["scope"], n["subject"], n["effort"], n["dismissed"])
+             for n in retired.read()["notes"] if n["scope"] == f"campaign:{cid}"]
+    assert noted == [("unrepresentable", f"campaign:{cid}", keys.pin_key(r, "preset"),
+                      "high", False) for r in ("scene", "speaker")]
+    meta = _meta(cid)
+    assert meta[keys.pin_key("scene", "provider")] == "glm" and _retired(meta)
+
+
+class _Killed(BaseException):
+    """A process killed mid-write, as far as the code under test can tell."""
+
+
+def _route_preset_store() -> None:
+    _legacy()
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "high")
+    config.write_config(active_connection_id="glm", preset_summary="cold")
+
+
+def _route_note_ids() -> list[str]:
+    return sorted(n["id"] for n in retired.read()["notes"] if n["kind"] == "route_preset")
+
+
+def test_a_kill_between_the_notes_and_the_scope_write_loses_nothing(home, monkeypatch):
+    """I-1: a scope's notes can be planned only before its own write, so
+    they are recorded first, in the same hold. Killed between the two, the
+    notes are there; the next start finishes the scope and records them
+    again by id -- nothing duplicated, nothing lost."""
+    _route_preset_store()
+    real = config.retire_write
+
+    def killed(*_a, **_k):
+        raise _Killed
+
+    monkeypatch.setattr(config, "retire_write", killed)
+    with pytest.raises(_Killed):
+        migrate.ensure()
+    noted = _route_note_ids()
+    assert len(noted) == 2
+    assert not _retired(_raw_config())
+
+    monkeypatch.setattr(config, "retire_write", real)
+    assert migrate.ensure().state == "done"
+    assert _retired(_raw_config())
+    assert _route_note_ids() == noted
+    assert len(retired.read()["notes"]) == len({n["id"] for n in retired.read()["notes"]})
+
+
+def test_a_kill_after_the_scope_write_keeps_the_notes(home, monkeypatch):
+    """I-1: killed once `config.md` is retired -- when the planner can no
+    longer plan its notes -- they are already in the record."""
+    _route_preset_store()
+    _campaign("Saltmarch")
+    real = retire.retire_campaign
+
+    def killed(*_a, **_k):
+        raise _Killed
+
+    monkeypatch.setattr(retire, "retire_campaign", killed)
+    with pytest.raises(_Killed):
+        migrate.ensure()
+    assert _retired(_raw_config())
+    noted = _route_note_ids()
+    assert len(noted) == 2
+
+    monkeypatch.setattr(retire, "retire_campaign", real)
+    assert migrate.ensure().state == "done"
+    assert _route_note_ids() == noted
+

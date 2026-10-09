@@ -1104,7 +1104,7 @@ be a 200 that changed nothing. Play is not refused.
 The migration leaves the legacy keys (`active_connection_id`,
 `fallback_connection_id`, the `route_*` keys, the two embeddings keys) and the
 legacy connection fields (`llm_connections.MODEL_FIELDS`) as they were at the
-switch, until retirement (below) removes the keys. A build from before it
+switch, until retirement (below) removes them. A build from before it
 keeps running on them, and nothing changed in the new settings reaches it. Once a store is current, writing one of them is refused, because
 it would reach older builds only: `PUT /config` answers 400 (`this setting
 moved to Models`) and a connection edit setting a legacy field answers 400
@@ -1167,6 +1167,18 @@ campaigns, in the same run, and it runs again on any later start that
    then one write holding the repoint, the deletion of its `route_*` keys and
    both markers, and a bump of its write token. Its `updated` stamp is left
    alone.
+4. **The strip**, last: each connection's legacy model fields
+   (`llm_connections.MODEL_FIELDS`) taken off its file, connection by
+   connection. Its precondition is that `config.md` and every campaign read,
+   are marked current and carry the retirement marker, and that every
+   connection file reads; it is checked again inside each connection's hold
+   of the model-settings lock, and while it fails — a campaign busy,
+   unreadable, unmarked, unretired or written by a newer build — nothing is
+   stripped and the next start tries again. In that hold, the fields are
+   first written to the retirement record (below), then the file is
+   rewritten without them, every other key and its `rev` kept. A provider
+   edit that arrives meanwhile waits for the hold (or, after 30 s, answers
+   409), and is never overwritten.
 
 **Derive before delete; migrate before retire.** A scope's legacy keys go in
 the same write that repoints it, after the presets the repoint names exist,
@@ -1187,9 +1199,9 @@ nothing — not a preset, not a marker — and so does every scope that names
 what failed; the rest of the pass goes on, and the file is never written
 over.
 
-**What is kept.** Retirement never writes a connection file here, so every
-`rev` — and with it every cached catalog, verified test and vector space —
-survives. Every value is derived deterministically, so two devices retiring
+**What is kept.** The strip rewrites a connection's own frontmatter minus
+its legacy fields, so every `rev` — and with it every cached catalog,
+verified test and vector space — survives. Every value is derived deterministically, so two devices retiring
 one synced store write the same bytes (the write tokens aside, which are
 unique by design).
 
@@ -1215,11 +1227,47 @@ build marked stays in `left` for as long as it stays newer: this build cannot
 read it as retired, and the connections' legacy fields are not stripped while
 any campaign is unretired.
 
+**The retirement record**, `<home>/inference-retired.json` at the store root
+(`store/inference/retired.py`) — not under `.cache/`, so it is in every
+backup and every synced copy. It holds two things:
+
+- **`fields`**: each stripped connection's legacy model fields, written before
+  the strip, and never a key or a URL. Only the planner reads them, as the
+  fallback for a connection whose file is there and holds no legacy field —
+  so a campaign that arrives unmarked after the strip (a restore, an older
+  build) still migrates to the model it named. It never answers for a
+  connection whose file is gone, and the first values recorded for a
+  connection are the ones kept.
+- **`notes`**: what could not be carried over — a route-level preset that
+  sets no reasoning effort over a GLM effort, a GLM effort in a scope already
+  marked retired before it was migrated, a model behaviour the connection
+  stated that its model's facts do not. A scope's notes are written to the
+  record before that scope's own write, in the same hold: once a scope is
+  marked, the planner plans nothing for it, so nothing could compute them
+  again. `/models` shows every note not dismissed, worded as permanent;
+  dismissing one (`POST /inference/retired-notes/{id}/dismiss`) records it
+  so, for every device, and a note's id names what it is about, never its
+  wording, so no later pass or build brings it back.
+
+Every writer, and every lookup that feeds a write, reads the record strictly:
+one that is there but does not parse stops what would persist from it — the
+strip, a dismissal, a migration that would map a stripped connection — and a
+settings write that reaches it answers 409 `retirement_unreadable`. Nothing
+is ever written over it. The view reads it fail-soft.
+
 ---
 
 ## What is **not** promised
 
 Collected, so that nothing here has to be inferred from an absence.
+
+- **Older builds after retirement.** A build from before the model-settings
+  migration sees no model settings once retirement has stripped the
+  connections: their legacy `model` is gone, so it sends requests with an
+  empty model. A build from between the migration and retirement keeps
+  playing, and can write `active_connection_id` back once; this build ignores
+  it and removes it again on its next start. See
+  [Retirement](#retirement).
 
 - **Frontmatter is not validated, by design.** `store/frontmatter.py` is a
   minimal `---`-fenced format with **string scalars only** — no types, no

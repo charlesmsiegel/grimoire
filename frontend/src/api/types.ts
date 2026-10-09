@@ -55,9 +55,6 @@ export type LLMConnection = {
   id: string; kind: LLMConnectionKind; name: string;
   base_url: string; model: string; effective_model: string;
   post_process: "none" | "strict";
-  reasoning_effort?: "" | "low" | "high" | "max";
-  /** The connection's own sampler preset id, "" for none. */
-  sampler_preset?: string;
   /** Whether an OpenAI-compatible endpoint takes top-k, min-p and repetition
    *  penalty; "" reads as standard. */
   sampler_support?: "" | "standard" | "extended";
@@ -104,8 +101,7 @@ export type ActiveConnection = {
 export type LLMConnectionDraft = {
   kind?: LLMConnectionKind; name?: string; base_url?: string; api_key?: string;
   model?: string; post_process?: "none" | "strict";
-  reasoning_effort?: "" | "low" | "high" | "max";
-  sampler_preset?: string; sampler_support?: "" | "standard" | "extended";
+  sampler_support?: "" | "standard" | "extended";
   vision?: VisionOverride; prefill?: boolean;
   /** The provider preset it is made from (`ProviderPreset.id`); "" or absent
    *  names none, and the server infers one where it is read. */
@@ -274,6 +270,26 @@ export type MigrationStatus = {
   reason: string;
   /** What the upgrade could not reach yet (a busy campaign), each with why. */
   skipped: string[];
+  /** Retirement's own account (inference slice I): what it has still to do,
+   *  and why its last pass stopped short. Never moves `state`; not rendered. */
+  retirement?: { left: string[]; failed: string };
+};
+/** One thing the old model settings could not carry over, shown on `/models`
+ *  until dismissed (`GET /api/inference/settings`'s `retirement_notes`). Its
+ *  `id` names what it is about, never its wording, so a dismissal holds on
+ *  every device and through every later upgrade. */
+export type RetiredNote = {
+  id: string;
+  /** `"global"`, or `"campaign:<id>"` for one campaign's settings. */
+  scope: string;
+  /** The campaign's name for a campaign scope; `""` for the global one. */
+  scope_name: string;
+  subject: string;
+  provider_id: string;
+  effort: string;
+  kind: "route_preset" | "unrepresentable" | "fact_not_carried";
+  /** The sentence to show, ending "— this was not carried over." */
+  text: string;
 };
 /** One generative role card. `inherits` is what this scope would run on with
  *  its own choice for the role cleared -- what "Same as ..." shows -- and
@@ -378,6 +394,10 @@ export type InferenceSettings = {
   presets: { id: string; name: string }[];
   /** The sampler-preset sentinel meaning "no preset at this scope". */
   preset_clear: string;
+  /** What the old model settings could not carry over, not yet dismissed:
+   *  every scope's on the library's view, the global ones and the campaign's
+   *  own on a campaign's. */
+  retirement_notes: RetiredNote[];
 };
 /** `sampler_presets.PRESET_CLEAR` byte for byte (U+2063 + "none"): a route's
  *  "no preset at this scope", which stops it inheriting one. "" is the other
@@ -497,9 +517,6 @@ export type Config = {
   /** Re-attempts a transiently-failed generation gets before its connection is
    *  given up on (#144); "0" is the old one-attempt behaviour. */
   llm_retries: string;
-  /** Connection a generation falls back to once the active one is exhausted,
-   *  tried once; "" = no fallback. */
-  fallback_connection_id: string;
   context_budget: string;
   /** Longest anchor text the prompt and the drift judge see, in CODE
    *  POINTS. Server-owned so the editor's warning cannot drift from the
@@ -536,13 +553,6 @@ export type Config = {
   /** Characters the off-scene cast's "known to exist" tier may name; "0" = no
    *  ceiling. Over it, the ones the in-scene cast mentions are kept first. */
   offscene_known_limit: string;
-  /** The legacy (format 1) embeddings connection. At format 2 the Embedding
-   *  role decides, and EVERY embedder follows it (`embed_space.resolve`):
-   *  recall, the art catalogue, search by meaning, and the continuity checks
-   *  after a wrap-up — so clearing that role is the one way to stop all
-   *  embedding. Read here only for the pre-migration view. */
-  embeddings_connection_id: string;
-  embeddings_model: string;
   /** Entries a similarity pass may add on top of the keyword ones; "0" = recall
    *  off. It turns off recall only, never the other embedders. */
   semantic_recall_depth: string;
@@ -600,14 +610,13 @@ export type SendImagesReach = "off" | "yes" | "no" | "unknown" | "none";
  */
 export type ConfigUpdate = Partial<Pick<Config,
   "theme" | "system_prompt" | "quote_color" | "user_label" | "assistant_label" |
-  "active_connection_id" | "llm_timeout" | "absorb_budget" | "llm_call_budget" |
-  "llm_retries" | "fallback_connection_id" |
+  "llm_timeout" | "absorb_budget" | "llm_call_budget" |
+  "llm_retries" |
   "context_budget" | "context_scan_depth" | "lore_recursion_depth" | "archive_depth" |
   "setup_done" | "prompt_log_depth" |
   "rolling_summary_every" |
   "scene_break_every" |
   "offscene_known_limit" |
-  "embeddings_connection_id" | "embeddings_model" |
   "semantic_recall_depth" | "semantic_recall_threshold" |
   "prompt_layout_enabled" | "speaker_turn_taking" |
   "backup_enabled" | "backup_interval_hours" | "backup_keep" | "backup_dir" |

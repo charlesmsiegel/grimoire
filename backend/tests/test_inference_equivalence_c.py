@@ -21,6 +21,7 @@ import grimoire.store as store
 from grimoire.store.inference import migrate
 
 from . import inference_baseline_c as baseline
+from . import inference_fixtures
 from . import test_inference_equivalence as equivalence
 
 BASELINE = json.loads(baseline.FIXTURE.read_text(encoding="utf-8"))
@@ -60,7 +61,7 @@ def test_each_baseline_state_resolves_identically_after_migration(state, tmp_pat
     `retired_expectation` applies as it does before the migration."""
     with baseline.base.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
-        got = migrate.ensure()
+        got = inference_fixtures.migrate_as_c_h()       # retirement held off
         assert got.state == "done", got
         assert store.inference_keys.is_current(store.read_config())
         observed = equivalence.without_new_tasks(baseline.observe(client, ctx), CELLS)

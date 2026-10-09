@@ -97,13 +97,10 @@ OWNED_GLOBAL_KEYS: tuple[str, ...] = tuple(
     k for k in keys.GLOBAL_KEYS
     if k != keys.FORMAT_KEY and k not in SHARED_PRESET_KEYS)
 
-#: A note's scope on `config.md`; a campaign's is `campaign_scope(cid)`.
-GLOBAL_SCOPE = "global"
-
-
-def campaign_scope(cid: str) -> str:
-    """The scope of a note on campaign `cid`."""
-    return f"campaign:{cid}"
+#: A note's scope on `config.md`; a campaign's is `campaign_scope(cid)`
+#: (`retired`'s, so the record and the view spell them alike).
+GLOBAL_SCOPE = retired.GLOBAL_SCOPE
+campaign_scope = retired.campaign_scope
 
 
 class Derived(NamedTuple):
@@ -145,6 +142,12 @@ def _retired(meta: Mapping) -> bool:
     return str(meta.get(RETIRED_KEY, "") or "").strip() == "1"
 
 
+def is_retired(meta: Mapping) -> bool:
+    """Whether a `config.md` or `campaign.md` carries the retirement marker
+    (whatever its format marker says)."""
+    return _retired(meta)
+
+
 def _settled(meta: Mapping) -> bool:
     """Whether a scope plans nothing at all: a newer build's, or retired AND
     marked current. A retirement marker on a scope with no format marker (a
@@ -170,19 +173,57 @@ def _soft_read(conn_id: str) -> dict | None:
         return None
 
 
+def _holds_model_fields(raw: Mapping) -> bool:
+    """Whether a raw connection holds any non-empty legacy model field."""
+    for field in llm_connections.MODEL_FIELDS:
+        value = raw.get(field)
+        if value is True or (isinstance(value, str) and value.strip()):
+            return True
+    return False
+
+
 class _Reader:
     """A memoised connection lookup that knows how strictly it reads: the
     plan around it reads what else it needs (a model's facts, for the
-    Embedding role) as strictly as the lookup does."""
+    Embedding role; the retirement record) as strictly as the lookup does.
+
+    A connection whose file is there and holds no non-empty legacy model
+    field -- stripped by retirement, or written that way by a C-H edit after
+    the strip -- answers with the fields the retirement record holds for it
+    (`retired.read()['fields']`), so a campaign that arrives unmarked after
+    the strip still maps to the model it named (C3, N6, R2-2). Never for an
+    absent file: a deleted provider does not come back (N20). A strict lookup
+    reads the record strictly, and an unreadable record raises
+    `retired.RecordUnreadableError` rather than answering with an empty
+    pin."""
 
     def __init__(self, read: Callable[[str], dict | None], *, strict: bool):
         self._read = read
         self.strict = strict
         self._seen: dict[str, dict | None] = {}
+        self._record: dict[str, dict[str, str]] | None = None
+
+    def _fields(self, conn_id: str) -> dict[str, str]:
+        if self._record is None:
+            self._record = retired.read(strict=self.strict)["fields"]
+        return self._record.get(conn_id, {})
+
+    def _answer(self, conn_id: str) -> dict | None:
+        raw = self._read(conn_id)
+        if raw is None or _holds_model_fields(raw):
+            return raw
+        recorded = self._fields(conn_id)
+        if not recorded:
+            return raw
+        out = dict(raw)
+        for field, value in recorded.items():
+            if field in llm_connections.MODEL_FIELDS:
+                out[field] = value == "true" if field == "prefill" else value
+        return out
 
     def __call__(self, conn_id: str) -> dict | None:
         if conn_id not in self._seen:
-            self._seen[conn_id] = self._read(conn_id)
+            self._seen[conn_id] = self._answer(conn_id)
         return self._seen[conn_id]
 
 
@@ -197,7 +238,12 @@ def lookup(*, mode: Literal["soft", "migrate", "retire"]) -> Lookup:
       answers None. What is read here is written down beside the marker.
     - `retire`: the same strict read, for retirement and every write it makes
       (N1): an unreadable file stops that scope rather than being planned as
-      absent."""
+      absent.
+
+    Every mode falls back to the retirement record for a stripped connection
+    (`_Reader`): `soft` reads the record fail-soft; `migrate` and `retire`
+    read it strictly whenever they consult it (R2-2, R3-2) -- an entry there
+    proves a strip happened, whatever `config.md` says."""
     if mode == "soft":
         return _Reader(_soft_read, strict=False)
     if mode in ("migrate", "retire"):
@@ -674,6 +720,51 @@ def _route_note(scope: str, route: routing.Route, provider: str, provider_name: 
                         scope, route.key, provider, effort, kind, text)
 
 
+def _slot_label(preset_key: str) -> str:
+    """How a note names the selection slot whose preset key is `preset_key`."""
+    for role in keys.GENERATIVE_ROLES:
+        if preset_key == keys.role_key(role, "preset"):
+            return f"the {role.capitalize()} role"
+        if preset_key == keys.fallback_key(role, "preset"):
+            return f"the {role.capitalize()} role's fallback"
+    for route in routing.ROUTES:
+        if preset_key == keys.pin_key(route.key, "preset"):
+            return f"the {route.label} route"
+    return preset_key
+
+
+def _stranded(view: Mapping, *, scope: str, campaign: bool, conn: Lookup,
+              presets: PresetRead) -> tuple[retired.Note, ...]:
+    """A scope carrying the retirement marker but no format marker (N1, review
+    M-2): mapped as the migration maps it, and derived nothing, because it
+    says it is retired -- so a GLM slot whose legacy effort rode on the
+    legacy wire loses it. Each such slot is noted (guarantee 7), once per
+    (scope, slot, provider): kind `unrepresentable`, a legacy effort this
+    scope's presets cannot carry."""
+    out: dict[str, retired.Note] = {}
+    for preset_key, selection in _slots(view, campaign=campaign):
+        effort = _legacy_effort(selection, conn, llm_reasoning.GLM_EFFORTS)
+        if not effort:
+            continue
+        own = selection.preset.strip()
+        base = presets(own) if own else None
+        params = base.get("params") if base is not None else None
+        if isinstance(params, dict) and "reasoning_effort" in params:
+            continue
+        raw = conn(selection.provider) or {}
+        name = str(raw.get("name") or selection.provider)
+        where = "" if scope == GLOBAL_SCOPE else " in this campaign"
+        kind = "unrepresentable"
+        text = (f"On {_slot_label(preset_key)}{where}, the GLM provider “{name}” no longer "
+                f"sends its reasoning effort ({effort}): these settings were already marked "
+                "retired when they were upgraded, so no preset carries it — this was not "
+                "carried over.")
+        note = retired.Note(retired.note_id(scope, preset_key, selection.provider, effort, kind),
+                            scope, preset_key, selection.provider, effort, kind, text)
+        out.setdefault(note.id, note)
+    return tuple(out.values())
+
+
 def _planned(view: Mapping, *, glob: Mapping, mapped: dict[str, str], model_facts: dict,
              scope: str, campaign: bool, conn: Lookup, presets: PresetRead) -> Plan:
     repoint, made = _derivation(view, campaign=campaign, conn=conn, presets=presets)
@@ -695,7 +786,8 @@ def global_plan(cfg: Mapping[str, str], lookup: Lookup, presets: PresetRead) -> 
       nothing read.
     - Retired below format 2 (`_settled`): `mapped` and `facts`, as the switch
       will persist them, and no derivation -- retirement removes that
-      scope's legacy keys and derives nothing in a retired scope.
+      scope's legacy keys and derives nothing in a retired scope -- with a
+      note for each GLM slot that loses its effort so (`_stranded`).
     """
     if _settled(cfg):
         return empty()
@@ -704,7 +796,9 @@ def global_plan(cfg: Mapping[str, str], lookup: Lookup, presets: PresetRead) -> 
                         campaign=False, conn=lookup, presets=presets)
     mapped = global_mapped(cfg, lookup)
     if _retired(cfg):
-        return Plan(mapped, {}, _facts_overlay(lookup), (), ())
+        return Plan(mapped, {}, _facts_overlay(lookup), (),
+                    _stranded({**cfg, **mapped}, scope=GLOBAL_SCOPE, campaign=False,
+                              conn=lookup, presets=presets))
     return _planned({**cfg, **mapped}, glob={}, mapped=mapped,
                     model_facts=_facts_overlay(lookup), scope=GLOBAL_SCOPE,
                     campaign=False, conn=lookup, presets=presets)
@@ -729,7 +823,8 @@ def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_cu
     - Unmarked: `mapped` and the derivation.
     - Unmarked but carrying the retirement marker: `mapped` alone. The
       migration maps it, as it maps any unmarked campaign, and retirement
-      derives nothing in a scope that says it is retired (N1).
+      derives nothing in a scope that says it is retired (N1); a GLM slot
+      that loses its effort so is noted (`_stranded`).
     - Marked, not retired: the derivation only.
     - Marked and retired, or a newer build's: nothing, and nothing read.
     """
@@ -742,7 +837,9 @@ def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_cu
                         campaign=True, conn=lookup, presets=presets)
     mapped = campaign_mapped(meta, lookup)
     if _retired(meta):
-        return Plan(mapped, {}, {}, (), ())
+        return Plan(mapped, {}, {}, (), _stranded({**meta, **mapped}, scope=scope,
+                                                  campaign=True, conn=lookup,
+                                                  presets=presets))
     return _planned({**meta, **mapped}, glob=glob, mapped=mapped, model_facts={},
                     scope=scope, campaign=True, conn=lookup, presets=presets)
 

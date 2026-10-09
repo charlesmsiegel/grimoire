@@ -84,7 +84,7 @@ def _primary(task: str = "chat", cid: str = "") -> dict:
 
 def test_format_2_prefill_and_post_process_come_from_facts(legacy):
     base._fresh(legacy)
-    _migrate()
+    _migrate_unretired()          # the legacy fields still on the connection
     # The legacy connection says neither; the model's facts now say both.
     raw = store.llm_connections.read_connection_raw("openrouter")
     assert raw["prefill"] is False and raw["post_process"] in ("", "none")
@@ -196,7 +196,7 @@ def test_a_legacy_images_on_is_a_user_yes_until_the_facts_say_otherwise(legacy):
     _catalog(vision=False)
     routes.common.require_inference("image-description")  # format 1: the facts, in memory
 
-    _migrate()
+    _migrate_unretired()          # the flag frozen on the connection, not yet stripped
     routes.common.require_inference("image-description")  # migrated: a user yes
     facts.set_stated("openrouter", MODEL, vision="")
     assert store.llm_connections.read_connection_raw("openrouter")["vision"] == "on"

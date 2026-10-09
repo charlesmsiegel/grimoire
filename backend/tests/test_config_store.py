@@ -186,7 +186,9 @@ def test_the_fallback_connection_round_trips(monkeypatch, tmp_path):
     fallback at format 2)."""
     s = reload_with_home(monkeypatch, tmp_path)
     legacy_store(tmp_path)
-    assert s.read_config()["fallback_connection_id"] == ""   # no fallback until one is picked
+    # No fallback until one is picked -- and, since slice I, no key either:
+    # the legacy keys are never defaulted.
+    assert s.read_config().get("fallback_connection_id", "") == ""
     s.write_config(fallback_connection_id="backup")
     assert s.read_config()["fallback_connection_id"] == "backup"
 

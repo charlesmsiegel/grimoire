@@ -19,12 +19,14 @@ from __future__ import annotations
 import copy
 import json
 from typing import NamedTuple
+from unittest import mock
 
 import pytest
 
 import grimoire.store as store
 from grimoire import llm_sampling
 from grimoire.store import routing
+from grimoire.store.inference import migrate
 from grimoire.store.inference import resolve as inference
 
 from . import inference_baseline as baseline
@@ -134,12 +136,16 @@ def test_the_provider_only_overrides_are_every_one_naming_a_connection_alone():
 def test_each_baseline_state_resolves_identically_after_migration(state, tmp_path):
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
-        got = baseline.migrate_state(state)
+        # Migrated, not retired -- the store as a C-H build migrated it
+        # (retirement held off): the derivation is still the planner's, in
+        # memory, so `retired_expectation`'s differences apply here too. The
+        # retired store is held to the same answer by
+        # `test_planned_equals_persisted`.
+        with mock.patch.object(migrate, "_retire", lambda *_args: None):
+            got = baseline.migrate_state(state)
         assert got.state == "done", got
         assert store.inference_keys.is_current(store.read_config())
         observed = without_new_tasks(baseline.observe(client, ctx))
-        # Migrated, not retired: the derivation is still the planner's, in
-        # memory, so `retired_expectation`'s differences apply here too.
         assert (without_allowed_differences(observed)
                 == without_allowed_differences(
                     retired_expectation(migrated_expectation(BASELINE[state]), state)))

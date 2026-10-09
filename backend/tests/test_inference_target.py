@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from fastapi import HTTPException
@@ -20,12 +21,13 @@ from fastapi import HTTPException
 import grimoire.store as store
 from grimoire import llm, routes, wire
 from grimoire.store import post_images, routing
-from grimoire.store.inference import capabilities, resolve, resolved
+from grimoire.store.inference import capabilities, migrate, resolve, resolved
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as baseline
+from . import inference_baseline_c as baseline_c
 from . import inference_fixtures as fx
 from . import wire_kit
 
@@ -95,9 +97,28 @@ def test_every_target_mirrors_its_lowered_dict(state, tmp_path):
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
 def test_every_target_mirrors_its_lowered_dict_after_migration(state, tmp_path):
+    """Migrated as a C-H build migrated: format 2, nothing retired, the
+    legacy GLM effort still planned in memory."""
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
+        with mock.patch.object(migrate, "_retire", lambda *_args: None):
+            assert baseline.migrate_state(state).state == "done"
+        assert not store.read_config()[store.inference_keys.RETIRED_KEY]
+        _assert_every_target_mirrors(ctx["cid"])
+
+
+@pytest.mark.parametrize("state", sorted({*baseline.STATES, *baseline_c.STATES}))
+def test_every_target_mirrors_its_lowered_dict_after_retirement(state, tmp_path):
+    """The retired pass (slice I, Task 6): migrated, retired and stripped --
+    the derived presets real files, no legacy key or field left -- every
+    attempt's target still mirrors what it lowers to."""
+    builders = {**baseline.STATES, **baseline_c.STATES}
+    with baseline.client_at(tmp_path) as client:
+        ctx = builders[state](client)
         assert baseline.migrate_state(state).state == "done"
+        status = migrate.status()
+        assert store.read_config()[store.inference_keys.RETIRED_KEY] == "1"
+        assert status.retirement["left"] == [], status.retirement
         _assert_every_target_mirrors(ctx["cid"])
 
 

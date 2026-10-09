@@ -295,22 +295,19 @@ def read_config() -> dict[str, str]:
                 "archive_depth": DEFAULT_ARCHIVE_DEPTH,
                 "context_budget": DEFAULT_CONTEXT_BUDGET,
                 "user_label": DEFAULT_USER_LABEL, "assistant_label": DEFAULT_ASSISTANT_LABEL,
-                "default_style_id": "", "active_connection_id": "",
+                "default_style_id": "",
                 "llm_timeout": DEFAULT_LLM_TIMEOUT, "absorb_budget": DEFAULT_ABSORB_BUDGET,
                 "absorb_concurrency": DEFAULT_ABSORB_CONCURRENCY,
                 "setup_done": DEFAULT_SETUP_DONE,
                 "replay_fork_threshold": DEFAULT_REPLAY_FORK_THRESHOLD,
                 "advance_fork_threshold": DEFAULT_ADVANCE_FORK_THRESHOLD,
                 "llm_retries": DEFAULT_LLM_RETRIES,
-                "fallback_connection_id": DEFAULT_FALLBACK_CONNECTION_ID,
                 "prompt_log_depth": DEFAULT_PROMPT_LOG_DEPTH,
                 "character_response_mode": "individual",
                 "rolling_summary_every": DEFAULT_ROLLING_SUMMARY_EVERY,
                 "scene_break_every": DEFAULT_SCENE_BREAK_EVERY,
                 "llm_call_budget": DEFAULT_LLM_CALL_BUDGET,
                 "offscene_known_limit": DEFAULT_OFFSCENE_KNOWN_LIMIT,
-                "embeddings_connection_id": DEFAULT_EMBEDDINGS_CONNECTION_ID,
-                "embeddings_model": DEFAULT_EMBEDDINGS_MODEL,
                 "semantic_recall_depth": DEFAULT_SEMANTIC_RECALL_DEPTH,
                 "semantic_recall_threshold": DEFAULT_SEMANTIC_RECALL_THRESHOLD,
                 "art_catalog_depth": DEFAULT_ART_CATALOG_DEPTH,
@@ -326,10 +323,6 @@ def read_config() -> dict[str, str]:
                 "backup_keep": DEFAULT_BACKUP_KEEP,
                 "backup_dir": DEFAULT_BACKUP_DIR,
                 "log_level": DEFAULT_LOG_LEVEL,
-                # Every route: "" is "inherit", which is what an install that
-                # has never set one has and what makes this change invisible
-                # until someone asks for it (#142).
-                **dict.fromkeys(routing.CONFIG_KEYS, ""),
                 # Every route's sampler preset, same "" = inherit, same reason.
                 **dict.fromkeys(routing.PRESET_CONFIG_KEYS, ""),
                 **dict.fromkeys(_LENGTH_KEYS, ""),
@@ -347,7 +340,14 @@ def read_config() -> dict[str, str]:
                 atomic.write_text(path, dump_frontmatter(defaults, ""))
                 return defaults
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
-    return {k: meta.get(k, default) for k, default in defaults.items()}
+    out = {k: meta.get(k, default) for k, default in defaults.items()}
+    # The legacy inference keys (`inference_keys.LEGACY_GLOBAL_KEYS`) are read
+    # when the file holds them -- below format 2 they are the planner's input
+    # -- and never defaulted: a `config.md` born from these defaults holds
+    # none (slice I), so a fresh install has no legacy key for retirement to
+    # remove. A reader asks for them with `.get`.
+    out.update((k, meta[k]) for k in inference_keys.LEGACY_GLOBAL_KEYS if k in meta)
+    return out
 
 
 def _seconds(key: str, default: str) -> float:

@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import atomic, config, inference_keys, locks, routing
-from .frontmatter import dump_frontmatter, parse_frontmatter
+from .frontmatter import dump_frontmatter, parse_frontmatter, read_record
 from .paths import home, now_iso, safe_id, slugify, uniquify
 
 #: Every connection kind a stored connection may declare. Public, because
@@ -88,7 +88,9 @@ Lookup = Callable[[str], dict | None]
 #: more rule for every holder to keep. One cross-process lock makes each read
 #: -> check -> write span whole, and `config.format_hold` is it with the
 #: format read inside. Taken inside a campaign lock (the campaign settings
-#: write), never around one. `inference.facts`' own `_lock` is taken under it.
+#: write), never around one. `inference.facts`' own `_lock` is taken under it,
+#: and so is `inference.retired._lock` (the retirement record): both
+#: process-local and innermost.
 LOCK = locks.config_lock()
 
 
@@ -192,6 +194,14 @@ def _write_raw(id: str, keep_rev: str = "", **fields: str | bool) -> None:
     Under `LOCK`, whoever called it."""
     meta = {k: str(fields.get(k, "")) for k in _FIELDS}
     meta["prefill"] = "true" if fields.get("prefill") in (True, "true") else ""
+    # An empty legacy model field is not written (slice I, I2): a read
+    # defaults every one of them to "" anyway, and on a retired store a key
+    # left in the file -- even empty -- would read as a legacy field still to
+    # strip. A non-empty one is written as given: below format 2 they are the
+    # planner's input.
+    for field in MODEL_FIELDS:
+        if not meta[field]:
+            del meta[field]
     # `keep_rev` is the one exception, for an edit nothing the rev guards has
     # seen: the sidecar and the rev both survive it (see `REV_NEUTRAL_FIELDS`).
     meta["rev"] = keep_rev or secrets.token_hex(8)
@@ -324,22 +334,83 @@ def list_connections_strict() -> list[dict]:
     return out
 
 
+def _files() -> list[Path]:
+    try:
+        return sorted(_dir().glob("*.md")) if _dir().exists() else []
+    except OSError:
+        return []
+
+
 def unreadable_connections() -> dict[str, str]:
     """Connection id -> why, for every connection file that is there but that
     a strict read refuses (`ConnectionUnreadableError`). Reads only: unlike
     every other reader here it never seeds (`ensure_migrated` writes), so a
     status reader that must not write can ask it (`inference.retire.left`)."""
-    try:
-        found = sorted(_dir().glob("*.md")) if _dir().exists() else []
-    except OSError:
-        return {}
     out: dict[str, str] = {}
-    for p in found:
+    for p in _files():
         try:
             _read(p.stem, strict=True)
         except ConnectionUnreadableError as exc:
             out[p.stem] = str(exc)
     return out
+
+
+def legacy_fields_on_disk() -> dict[str, tuple[str, ...]]:
+    """Connection id -> the legacy model fields (`MODEL_FIELDS`) its file
+    holds with a non-empty value, for every connection that holds any: what
+    retirement's strip has left to do. Reads only, and never seeds; a file
+    that cannot be read is left out (`unreadable_connections` names it)."""
+    out: dict[str, tuple[str, ...]] = {}
+    for p in _files():
+        try:
+            if _read(p.stem, strict=True) is None:
+                continue
+            meta, _ = parse_frontmatter(p.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError):
+            continue
+        held = tuple(f for f in MODEL_FIELDS if str(meta.get(f, "") or "").strip())
+        if held:
+            out[p.stem] = held
+    return out
+
+
+def strip_model_fields(conn_id: str,
+                       record: Callable[[str, dict[str, str]], None]) -> bool:
+    """Take the legacy model fields (`MODEL_FIELDS`) off connection `conn_id`
+    for good (inference slice I, retirement's strip); returns whether it wrote.
+
+    All three steps in one hold of `LOCK` -- `config_lock`, cross-process,
+    with the store's format read inside it (`config.format_hold`) -- so a
+    `PUT /llm-connections/{id}` that meets it waits (or, after 30 s, is
+    refused with 409), and is never overwritten (N4):
+
+    1. the file's RAW frontmatter, read strictly
+       (`frontmatter.read_record(..., require="kind")`): a file that is there
+       but holds no record is never written over;
+    2. `record(conn_id, values)` with its non-empty legacy fields -- the
+       retirement record (`inference.retired.record_fields`), handed in
+       because this module sits below `inference` in the import graph;
+    3. the same frontmatter minus those fields, written atomically: every
+       other key, `rev` included, kept as it was, so the cached catalog,
+       every verified test and every vector space survive.
+
+    A connection that holds no legacy key at all writes nothing; one holding
+    only empty ones is rewritten without them, recording nothing."""
+    if not safe_id(conn_id):
+        raise ConnectionNotFound(conn_id)
+    with LOCK, config.format_hold():
+        p = _path(conn_id)
+        if not p.exists():
+            raise ConnectionNotFound(conn_id)
+        meta, body = read_record(p, f"connection {conn_id}", require="kind")
+        if not any(field in meta for field in MODEL_FIELDS):
+            return False
+        values = {f: meta[f] for f in MODEL_FIELDS if str(meta.get(f, "") or "").strip()}
+        if values:
+            record(conn_id, values)
+        kept = {k: v for k, v in meta.items() if k not in MODEL_FIELDS}
+        atomic.write_text(p, dump_frontmatter(kept, body))
+    return True
 
 
 def create_connection(kind: str, name: str, *, refuse_model_fields: bool = False,
@@ -659,21 +730,24 @@ def _migrate() -> None:
     # keys exist regardless of the "official" schema.
     path = config._config_path()
     meta, _ = parse_frontmatter(path.read_text(encoding="utf-8")) if path.exists() else ({}, "")
+    # The model fields and `active_connection_id` are the legacy layout's, so
+    # they are seeded below format 2 only (slice I, ruling 7, I2): at format 2
+    # a provider names no model of its own -- a role's selection does -- and a
+    # store born there is born retired (`config.birth_fields`), so a seeded
+    # legacy value would be one more thing for retirement to archive and
+    # strip on every fresh install. A missing `config.md` is born at format 2.
+    legacy = _legacy_on_disk(path, meta)
     if _read("openrouter") is None:
+        own = ({"model": meta.get("model", config.DEFAULT_MODEL), "post_process": "none"}
+               if legacy else {})
         _write_raw("openrouter", kind="openrouter", name="OpenRouter",
-                    api_key=meta.get("openrouter_key", ""),
-                    model=meta.get("model", config.DEFAULT_MODEL),
-                    base_url="", post_process="none")
+                    api_key=meta.get("openrouter_key", ""), base_url="", **own)
     if _read("claude") is None:
-        _write_raw("claude", kind="claude", name="Claude",
-                    model=meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
-                    base_url="", api_key="", post_process="none")
-    if not meta.get("active_connection_id") and _legacy_on_disk(path, meta):
-        # Below format 2 only (slice I, ruling 7): at format 2 the key is a
-        # legacy key nothing reads, and a store born there is born retired
-        # (`config.birth_fields`) -- seeding it would hand retirement a legacy
-        # value to delete, and an archive to take first, on every fresh
-        # install. A missing `config.md` is born at format 2 too.
+        own = ({"model": meta.get("claude_model", config.DEFAULT_CLAUDE_MODEL),
+                "post_process": "none"} if legacy else {})
+        _write_raw("claude", kind="claude", name="Claude", base_url="", api_key="", **own)
+    if not meta.get("active_connection_id") and legacy:
+        # Below format 2 only (above).
         #
         # Truthiness, not presence: this whole block only ever runs once,
         # gated by the `.migrated` marker check above — there is no

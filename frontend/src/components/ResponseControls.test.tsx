@@ -14,7 +14,7 @@ const INFERENCE = {
   roles: {} as never, routes: [], preset_clear: "\u2063none",
   providers: [{ id: "saltmarch", name: "Saltmarch Router", kind: "openrouter", preset: "openrouter",
                 usable: true }],
-  presets: [{ id: "warm", name: "Warm" }],
+  presets: [{ id: "warm", name: "Warm" }], retirement_notes: [],
 } as Awaited<ReturnType<typeof api.getCampaignInference>>;
 
 function show(extra = {}, { open = true } = {}) {

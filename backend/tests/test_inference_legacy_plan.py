@@ -984,17 +984,24 @@ def test_a_retired_but_unmarked_scope_is_mapped_as_the_migration_maps_it(home):
     current format marker. Without it the migration still maps the scope
     (`migrate.campaign` and the switch go by the format marker alone), so the
     planner maps it too -- and derives nothing there, because the scope says
-    it is retired. Both scopes, and the overlay's shortcut."""
+    it is retired, noting each GLM effort lost so. Both scopes, and the
+    overlay's shortcut."""
     _glm("glm", "high")
     retired_unmarked = {legacy_plan.RETIRED_KEY: "1", "route_scene": "glm"}
     camp = _campaign(retired_unmarked)
     assert camp.mapped[keys.pin_key("scene", "provider")] == "glm"
-    assert (camp.repoint, camp.presets, camp.notes) == ({}, (), ())
+    assert (camp.repoint, camp.presets) == ({}, ())
+    # The effort it loses so is noted (review M-2): one per slot it rode on.
+    assert sorted((n.kind, n.subject, n.provider_id, n.effort) for n in camp.notes) == [
+        ("unrepresentable", keys.pin_key(route, "preset"), "glm", "high")
+        for route in ("scene", "speaker")]
 
     cfg = {legacy_plan.RETIRED_KEY: "1", "active_connection_id": "glm"}
     glob = _plan(cfg)
     assert glob.mapped[keys.role_key("primary", "provider")] == "glm"
-    assert (glob.repoint, glob.presets, glob.notes) == ({}, (), ())
+    assert (glob.repoint, glob.presets) == ({}, ())
+    assert [(n.kind, n.subject) for n in glob.notes] == [
+        ("unrepresentable", keys.role_key("primary", "preset"))]
 
     seen = legacy_plan.overlay(cfg, retired_unmarked, cid="saltmarch")
     assert seen.cfg[keys.role_key("primary", "provider")] == "glm"

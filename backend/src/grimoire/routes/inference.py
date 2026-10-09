@@ -5,6 +5,8 @@
 * ``GET``/``PUT /campaigns/{cid}/inference`` -- one campaign's overrides: the
   three generative roles and the campaign-scoped routes. 404 for a campaign
   that does not exist, before anything else is asked of the request.
+* ``POST /inference/retired-notes/{note_id}/dismiss`` -- dismiss one of the
+  views' ``retirement_notes``, for good (slice I).
 
 A ``PUT`` takes the store's write body plus ``confirm_embedding`` (a bool,
 false when absent) and answers with the fresh view. It is refused with 409
@@ -23,10 +25,18 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException
 
 from .. import store
-from ..store.inference import settings
-from .common import refuse_unmigrated
+from ..store.inference import retired, settings
+from .common import refuse_newer, refuse_unmigrated
 
 router = APIRouter()
+
+
+def _retirement_unreadable() -> HTTPException:
+    """409 `retirement_unreadable` (R3-3): a write that would read the
+    retirement record, which cannot be read just now. Never a 500, and
+    nothing is written: D's `facts_unreadable` precedent."""
+    return HTTPException(status_code=409, detail={
+        "kind": "retirement_unreadable", "detail": settings.RETIREMENT_UNREADABLE})
 
 
 def _write(scope: str, cid: str, body: dict) -> None:
@@ -38,6 +48,10 @@ def _write(scope: str, cid: str, body: dict) -> None:
         settings.write(scope, cid, body, confirm_embedding=confirm)
     except settings.RefusedError as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
+    except retired.RecordUnreadableError as exc:
+        # Migrating an unmarked campaign in the write's hold (spec 11.1)
+        # reads a stripped connection's fields from the record (R2-2).
+        raise _retirement_unreadable() from exc
 
 
 def _campaign_view(cid: str) -> dict:
@@ -78,3 +92,20 @@ def put_campaign_inference(cid: str, body: dict):
         # Deleted in another tab between the check and the write.
         raise HTTPException(status_code=404, detail="campaign not found") from exc
     return _campaign_view(cid)
+
+
+@router.post("/inference/retired-notes/{note_id}/dismiss")
+def dismiss_retired_note(note_id: str):
+    """Dismiss one "not carried over" note on `/models`, for good and on
+    every device (the note lives in the library's retirement record). A
+    settings write that spends nothing and touches no campaign: refused only
+    on a store a newer build wrote. 404 for an id neither the record nor the
+    planner knows."""
+    refuse_newer()
+    try:
+        found = settings.dismiss_note(note_id)
+    except retired.RecordUnreadableError as exc:
+        raise _retirement_unreadable() from exc
+    if not found:
+        raise HTTPException(status_code=404, detail="no such note")
+    return {"ok": True}

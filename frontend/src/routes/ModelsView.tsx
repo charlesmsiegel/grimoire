@@ -12,6 +12,7 @@ import { ControlsReadout } from "../components/inference/ControlsReadout";
 import { InferenceBanner } from "../components/inference/InferenceBanner";
 import { migrationBanner } from "../components/inference/migration";
 import { PresetSelect } from "../components/inference/PresetSelect";
+import { RetiredNotes } from "../components/inference/RetiredNotes";
 import { ProviderModelPicker } from "../components/inference/ProviderModelPicker";
 import { useInferenceSettings } from "../components/inference/useInferenceSettings";
 import {
@@ -357,6 +358,14 @@ export default function ModelsView() {
           <h1 className="page-h1">Models</h1>
         </div>
         <InferenceBanner status={banner} />
+        {settings && (
+          <RetiredNotes notes={settings.retirement_notes ?? []}
+                        onDismissed={(id) => install({
+                          ...settings,
+                          retirement_notes: (settings.retirement_notes ?? [])
+                            .filter((n) => n.id !== id),
+                        })} />
+        )}
         {error != null && <div className="banner"><ErrorNote err={error} /></div>}
         {body}
       </div>
