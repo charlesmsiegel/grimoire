@@ -1161,8 +1161,8 @@ RECONCILE_REWORDED = (
 #: Words the decide prompt adds that the legacy prompt never said: each a
 #: pointer or a label, never a criterion. Printed, so they stay visible.
 RECONCILE_ADDED = (
-    ("Each evidence question may name a different such scene; a scene named twice counts "
-     "once.", "continuity_reconcile/evidence_more.j2"),
+    (("Each evidence question may name a different such scene; a scene named twice "
+      "counts once."), "continuity_reconcile/evidence_more.j2"),
     ("the scene listed above as {{ sid }}", "continuity_reconcile/scene_option.j2"),
 )
 for fragment, target in RECONCILE_CARRIED:

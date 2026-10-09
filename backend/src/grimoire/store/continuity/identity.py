@@ -766,6 +766,25 @@ def explain() -> str:
     return prompts.render("continuity_identity/explain.j2")
 
 
+def _reweighed(answer: decisions.Answer) -> tuple[str, str]:
+    """`(decision, id)` of a read `decision` answer (`unfolded`), unless the
+    distribution an endpoint reported puts more mass on another decision
+    than on the chosen option's once every ``existing:<id>`` is summed as one
+    ``existing`` (`decisions.regrouped`): an endpoint scoring options one by
+    one splits a row between two near-identical candidates across their
+    options, and reads 0.3 + 0.3 as losing to a ``new`` of 0.4 -- which opens
+    a new record with no flag. Then ``existing`` winning over a chosen ``new``
+    or ``uncertain`` is ``uncertain``, which names no record (none won) and
+    flags the row; ``new`` or ``uncertain`` winning is that word. A chosen
+    ``existing:<id>`` inside the winning ``existing`` stands. With no
+    distribution (a structured reply), as chosen."""
+    chosen = answer.answer if isinstance(answer.answer, str) else ""
+    group = decisions.regrouped(answer, lambda oid: unfolded(oid)[0], DECISIONS)
+    if group is None:
+        return unfolded(chosen)
+    return ("uncertain" if group == "existing" else group), ""
+
+
 def answers_of(rows: list[dict],
                results: Sequence[decisions.ItemResult]) -> list[dict] | None:
     """The parsed batch as today's decision dicts, for `Examination.decide`.
@@ -776,8 +795,10 @@ def answers_of(rows: list[dict],
     out, so `Examination.decide` leaves its row `unchecked` and the phase is
     never `ok`. Every read item gives ``{row, decision, id, reason}``: the
     decision as answered (``""`` when unreadable, which `decide` takes as
-    ``uncertain``) with a folded ``existing:<id>`` split back into
-    ``existing`` and its id (`unfolded`), and the rationale clipped to
+    ``uncertain``; where a native endpoint reported a distribution, read with
+    every ``existing`` summed, `_reweighed`) with a folded ``existing:<id>``
+    split back into ``existing`` and its id (`unfolded`), and the rationale
+    clipped to
     `REASON_CHARS` (``""`` when none came back: it is display-only, I4). An
     ``existing`` naming no offered candidate is no option of the item, so it
     is unreadable like any word outside the options, and `decide` takes it as
@@ -797,7 +818,7 @@ def answers_of(rows: list[dict],
         decision = result.answers.get(DECISION_ID)
         if decision is None or not decisions.was_read(decision):
             continue
-        word, rid = unfolded(decision.answer if isinstance(decision.answer, str) else "")
+        word, rid = _reweighed(decision)
         out.append({"row": row["key"], "decision": word, "id": rid,
                     "reason": result.rationale.strip()[:REASON_CHARS]})
     if not out and results and all(decisions.held_no_object(result.answers.get(DECISION_ID))

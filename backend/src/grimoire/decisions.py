@@ -46,7 +46,7 @@ import json
 import logging
 import math
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -929,6 +929,45 @@ def _native_score(q: Score, chosen: object, dist: dict[str, float] | None) -> _R
         return chosen, "", ""
     key, reason = _from_distribution(dist)
     return (None if key is None else int(key)), reason, ""
+
+
+#: How far apart two summed masses may be and still tie in `regrouped`: a sum
+#: of reported probabilities carries float error (0.1 + 0.2 is not 0.3), and
+#: an error must not decide which of two equal meanings wins.
+MASS_TIE = 1e-9
+
+
+def regrouped(answer: Answer, group: Callable[[str], str],
+              order: Sequence[str]) -> str | None:
+    """The group a choice's reported distribution puts the most mass on, when
+    that is not the group of the option `answer` chose; None when it is (a
+    tie at the top that includes it counts as it), and when there is no
+    chosen option or no distribution -- a structured answer, which carries
+    none, is read as chosen.
+
+    For a choice that spells one meaning several ways (continuity's folded
+    options: ``duplicate_a_into_b`` and ``duplicate_b_into_a``, or one
+    ``existing:<id>`` per candidate), where an endpoint that scores options
+    one by one splits that meaning's probability across its spellings: 0.3 on
+    each of two and 0.4 on a rival is a 0.6 verdict that the per-option
+    argmax, and an endpoint's own `choice`, both lose. `group` maps an option
+    id to the meaning it spells; the reserved none is no group. A tie at the
+    top that leaves the chosen group out goes to the group first in `order`
+    (the caller's option order), then to the first reported."""
+    if not isinstance(answer.answer, str) or not answer.distribution:
+        return None
+    mass: dict[str, float] = {}
+    for key, weight in answer.distribution.items():
+        if key != NONE_KEY:
+            mass[group(key)] = mass.get(group(key), 0.0) + weight
+    if not mass:
+        return None
+    top = max(mass.values())
+    winners = [g for g, weight in mass.items() if weight >= top - MASS_TIE]
+    if group(answer.answer) in winners:
+        return None
+    rank = {g: n for n, g in enumerate(order)}
+    return min(winners, key=lambda g: rank.get(g, len(rank)))
 
 
 def _present(record: dict[str, Any]) -> dict[str, Any]:

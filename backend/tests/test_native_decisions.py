@@ -993,3 +993,111 @@ def test_a_native_status_word_stands_on_the_scene_its_evidence_question_names(pr
     for n in settled:
         assert (got[cands[n]["id"]]["decision"], got[cands[n]["id"]]["status"]) == (
             "uncertain", "")
+
+
+def _scored_reply(provider: str, item: Item, weights: dict[str, float],
+                  chosen: str | None = None) -> dict:
+    """A decisions response whose `decision` reports `weights` as its
+    per-option probabilities, with `chosen` as its `choice` (none stated when
+    None), and every other question answered with the reserved none."""
+    reply = _native_reply(provider, item, {})
+    answer = answer_in(provider, reply, "decision")
+    answer["probabilities"] = choice_probabilities(provider, weights)
+    if chosen is None:
+        del answer["choice"]
+    else:
+        answer["choice"] = chosen
+    return reply
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+@pytest.mark.parametrize("chosen", ["distinct", None])
+def test_a_native_duplicate_split_across_its_directions_still_wins(provider, chosen):
+    """The fold spells one verdict two ways, and an endpoint scoring options
+    one by one splits its mass: 0.3 on each direction of a duplicate and 0.4
+    on distinct is a 0.6 duplicate, which the endpoint's own `choice` and the
+    per-option argmax both lose. Summed by word, duplicate wins, and the tie
+    between its two spellings goes to the one offered first."""
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    n = next(i for i, c in enumerate(payload["candidates"])
+             if c["vocabulary"] == "same_commitment")
+    weights = {"duplicate_a_into_b": 0.3, "duplicate_b_into_a": 0.3, "distinct": 0.4,
+               "related": 0.0, "uncertain": 0.0}
+    results = tuple(read(provider)(
+        _scored_reply(provider, item, weights, chosen) if k == n
+        else _native_reply(provider, item, {"decision": "uncertain"}), item)
+        for k, item in enumerate(items))
+    assert results[n].answers["decision"].answer == "distinct"
+    cand = payload["candidates"][n]
+    refs = {r["letter"]: r["ref"] for r in cand["records"]}
+    got = reconcile.proposals_of(payload, results)[cand["id"]]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", refs["A"], refs["B"])
+
+    # The winning word's best-scored spelling, not the first, when they differ.
+    weights.update(duplicate_a_into_b=0.2, duplicate_b_into_a=0.35, distinct=0.45)
+    results = tuple(read(provider)(
+        _scored_reply(provider, item, weights, chosen) if k == n
+        else _native_reply(provider, item, {"decision": "uncertain"}), item)
+        for k, item in enumerate(items))
+    got = reconcile.proposals_of(payload, results)[cand["id"]]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", refs["B"], refs["A"])
+
+    # A chosen word that holds the most mass stands as chosen, direction and all.
+    weights = {"duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.5, "distinct": 0.4}
+    results = tuple(read(provider)(
+        _scored_reply(provider, item, weights, "duplicate_a_into_b") if k == n
+        else _native_reply(provider, item, {"decision": "uncertain"}), item)
+        for k, item in enumerate(items))
+    got = reconcile.proposals_of(payload, results)[cand["id"]]
+    assert (got["decision"], got["from"], got["to"]) == ("duplicate", refs["A"], refs["B"])
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_row_split_between_two_candidates_is_flagged(provider):
+    """Two near-identical candidates are exactly what a model cannot choose
+    between: 0.3 on each and 0.4 on new is a 0.6 verdict that the row is an
+    existing record. Read as chosen it would open a new record with no flag;
+    summed, ``existing`` wins, and since no one record won, the row is
+    ``uncertain`` (flagged, merged into nothing). A chosen ``existing:<id>``
+    inside the winning group stands."""
+    items = gate._identity_items()
+    offered = [o.id for o in items[0].questions[0].options]
+    assert offered[:2] == ["existing:find-the-ledger", "existing:maras-map"]
+    weights = {"existing:find-the-ledger": 0.3, "existing:maras-map": 0.3, "new": 0.4}
+
+    def settled(chosen: str | None) -> tuple:
+        results = tuple(read(provider)(
+            _scored_reply(provider, item, weights, chosen) if k == 0
+            else _native_reply(provider, item, {"decision": "new"}), item)
+            for k, item in enumerate(items))
+        exam = gate._identity_exam()
+        assert identity.take(exam, identity.answers_of(exam.prompt_rows(), results))
+        return exam.rows[0].decision, exam.rows[0].status, exam.rows[0].target
+
+    assert settled("new") == ("uncertain", "accepted", None)
+    assert settled(None) == ("uncertain", "accepted", None)
+    assert settled("existing:maras-map") == ("existing", "accepted", "maras-map")
+    # New holding the most mass over a chosen existing is new.
+    weights = {"existing:find-the-ledger": 0.2, "existing:maras-map": 0.2, "new": 0.6}
+    assert settled("existing:find-the-ledger") == ("new", "accepted", None)
+
+
+def test_a_reply_with_no_distribution_is_read_as_chosen():
+    """`regrouped` reads only a reported distribution: a structured reply,
+    which carries none, is read as it was chosen."""
+    choice = Choice("decision", "?", (Option("duplicate_a_into_b", "a"),
+                                      Option("duplicate_b_into_a", "b"),
+                                      Option("distinct", "c")))
+    def word(oid: str) -> str:
+        return oid.partition("_")[0]
+
+    assert decisions.regrouped(Answer("distinct"), word, ("duplicate", "distinct")) is None
+    split = decisions.native_answer(choice, chosen="distinct", distribution={
+        "duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.2, "distinct": 0.7 - 0.0})
+    assert decisions.regrouped(split, word, ("duplicate", "distinct")) is None
+    # A float sum that ties is a tie, and a tie that includes the chosen
+    # group keeps it.
+    tie = decisions.native_answer(choice, chosen="distinct", distribution={
+        "duplicate_a_into_b": 0.1, "duplicate_b_into_a": 0.2, "distinct": 0.3})
+    assert decisions.regrouped(tie, word, ("duplicate", "distinct")) is None

@@ -1458,30 +1458,64 @@ def unfolded(answer: str) -> tuple[str, str, str]:
     return _UNFOLDED.get(answer, (answer, "", ""))
 
 
-def _decision_options(vocab: str, records: list[dict]) -> tuple[decisions.Option, ...]:
-    """The `decision` choice's options, in `DECISIONS` order: a word that
-    needs no direction labelled by itself (ruling 6), and a directed word on
-    a pair as one folded option per way `_runs` allows it to run between the
-    item's records, described by `directed_option.j2` -- so ``pays_off``,
-    which runs from the plot thread to the commitment only, is offered once,
-    and a word no way allows is not offered. A word offered one way only
-    takes its bare spelling as an alias: today's reply naming it without
-    letters can mean nothing else. Aliases are the structured parser's; a
-    native endpoint is sent the option ids alone."""
+def _offered(vocab: str, records: list[dict]) -> list[tuple[str, str, str]]:
+    """`(word, from, to)` of each `decision` option, in `DECISIONS` order: a
+    word that needs no direction as itself with no letters, and a directed
+    word on a pair once per way `_runs` allows it to run between the item's
+    records -- so ``pays_off``, which runs from the plot thread to the
+    commitment only, is offered once, and a word no way allows is not
+    offered. Rendering nothing, so the reading side can ask it too."""
     refs = {r["letter"]: r["ref"] for r in records}
-    options: list[decisions.Option] = []
+    out: list[tuple[str, str, str]] = []
     for word in DECISIONS[vocab]:
         if vocab not in PAIR_VOCABULARIES or word not in _DIRECTED:
-            options.append(decisions.Option(word, word.replace("_", " ")))
+            out.append((word, "", ""))
             continue
-        ways = [(frm, to) for frm, to in _WAYS
+        out += [(word, frm, to) for frm, to in _WAYS
                 if _runs(word, refs.get(frm, ""), refs.get(to, ""))]
-        aliases = (word,) if len(ways) == 1 else ()
-        options += [decisions.Option(
-            folded(word, frm, to),
-            prompts.render("continuity_reconcile/directed_option.j2", word=word, frm=frm, to=to),
-            aliases) for frm, to in ways]
-    return tuple(options)
+    return out
+
+
+def _option_id(word: str, frm: str, to: str) -> str:
+    return folded(word, frm, to) if frm else word
+
+
+def _decision_options(vocab: str, records: list[dict]) -> tuple[decisions.Option, ...]:
+    """The `decision` choice's options (`_offered`): a word that needs no
+    direction labelled by itself (ruling 6), and a directed word folded with
+    each way it may run, described by `directed_option.j2`. A word offered
+    one way only takes its bare spelling as an alias: today's reply naming it
+    without letters can mean nothing else. Aliases are the structured
+    parser's; a native endpoint is sent the option ids alone."""
+    offered = _offered(vocab, records)
+    ways = Counter(word for word, frm, _ in offered if frm)
+    return tuple(
+        decisions.Option(_option_id(word, frm, to),
+                         prompts.render("continuity_reconcile/directed_option.j2",
+                                        word=word, frm=frm, to=to),
+                         (word,) if ways[word] == 1 else ())
+        if frm else decisions.Option(word, word.replace("_", " "))
+        for word, frm, to in offered)
+
+
+def _chosen(answer: decisions.Answer, cand: dict) -> str:
+    """The option `answer` stands for. As chosen, unless the distribution an
+    endpoint reported puts more mass on another word than on the chosen
+    option's, summed over that word's folded spellings
+    (`decisions.regrouped`): an endpoint scoring options one by one splits a
+    duplicate whose direction is a coin flip across its two spellings, and
+    reads 0.3 + 0.3 as losing to 0.4. Then the winning word's best-scored
+    spelling, a tie going to the one offered first. With no distribution (a
+    structured reply), as chosen."""
+    chosen = _answered(answer)
+    offered = [_option_id(*way) for way in _offered(cand["vocabulary"], cand["records"])]
+    word = decisions.regrouped(answer, lambda oid: unfolded(oid)[0],
+                               DECISIONS[cand["vocabulary"]])
+    if word is None:
+        return chosen
+    weights = answer.distribution or {}
+    return max((oid for oid in offered if unfolded(oid)[0] == word),
+               key=lambda oid: weights.get(oid, 0.0))
 
 
 def item_scenes(payload: dict, cand: dict) -> list[str]:
@@ -1575,8 +1609,10 @@ def proposals_of(payload: dict,
     next sweep's `select` asks it again. It is never stored as ``uncertain``.
 
     Every read item is rebuilt as today's reply element -- the decision (``""``
-    when unreadable) and, for a folded option, the `from` and `to` letters it
-    carries (`unfolded`), the rationale as `reason`
+    when unreadable; where a native endpoint reported a distribution, the word
+    its mass favours once each word's folded spellings are summed, `_chosen`)
+    and, for a folded option, the `from` and `to` letters it carries
+    (`unfolded`), the rationale as `reason`
     (``""`` when none came back), and the answered evidence slots in order --
     and run through `_decide` with the scenes the item showed as the known
     ones, so a word outside the vocabulary, a direction the link rules refuse
@@ -1602,7 +1638,7 @@ def proposals_of(payload: dict,
             continue
         read = True
         answers = result.answers
-        word, frm, to = unfolded(_answered(decision))
+        word, frm, to = unfolded(_chosen(decision, cand))
         element = {"decision": word, "from": frm, "to": to, "reason": result.rationale,
                    "evidence_scenes": [_answered(answers.get(slot)) for slot in EVIDENCE_IDS
                                        if _answered(answers.get(slot))]}
