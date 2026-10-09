@@ -412,7 +412,10 @@ def test_capture_records_each_structured_call_once_it_settles(client):
     got = _decide(fake, items, capture=captured)
     assert [calls for *_, calls in captured] == [1, 2]
     assert [m for m, *_ in captured] == [r["messages"] for r in fake.requests]
-    assert [conn for _m, _o, conn, _c in captured] == [r["conn"] for r in fake.requests]
+    # The dict the facade stamped as sent (`llm.ATTEMPTED`): this fake
+    # stamps the one it was handed.
+    assert all(conn is r["conn"] for (_m, _o, conn, _c), r in zip(captured, fake.requests,
+                                                                   strict=True))
     for _m, _o, conn, _c in captured:
         assert conn[ACCOUNT]["decision_mode"] == "structured"
         assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
@@ -438,12 +441,43 @@ def test_a_schema_refusal_retry_is_one_capture(client):
     _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
             capture=captured)
     assert len(provider.requests) == 2
-    ((messages, outcome, _conn, _calls),) = captured
+    ((messages, outcome, conn, _calls),) = captured
     assert messages == provider.requests[1]["messages"]
+    # Named as re-sent: the same attempt, without the structured mode.
+    assert llm.STRUCTURED_KEY not in conn and FALLBACK_KEY not in conn
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/active")
     assert outcome == {"mode": "structured", "provider": "openrouter",
                        "model": "vendor/active",
                        "items": [{"backend": "structured",
                                   "answers": {"over": {"answer": True}}}]}
+
+
+def test_a_capture_names_the_fallback_that_answered(client):
+    """The facade's fallback answered: the capture's conn is the dict it was
+    sent (`llm.ATTEMPTED`), so the prompt log's model, kind and preset name
+    the fallback, as the outcome does -- and a preset scoped to the
+    primary's connection, which stayed with it, is not reported."""
+    _store(client)
+    resolved = _resolved()
+    warm = {"preset_id": "warm", "preset_name": "Warm", "scope": "connection",
+            "params": {"temperature": 0.9}}
+    primary = dataclasses.replace(resolved.attempts[0],
+                                  conn={**resolved.conn, "sampling": warm})
+    resolved = dataclasses.replace(resolved, attempts=(primary, *resolved.attempts[1:]))
+    assert resolved.conn[FALLBACK_KEY]["id"] == "spare"
+    provider = SequencedProvider([LLMError("network", "connection reset"),
+                                  [decision_reply({"over": True})]])
+    captured = _Captures()
+    _decide(LLMClient(openrouter=provider, timeout=0, retries=0), [_item()],
+            resolved=resolved, capture=captured)
+    assert [r["model"] for r in provider.requests] == ["vendor/active", "vendor/spare"]
+    ((messages, outcome, conn, _calls),) = captured
+    assert messages == provider.requests[1]["messages"]
+    assert (outcome["provider"], outcome["model"]) == ("spare", "vendor/spare")
+    assert (conn["id"], conn["model"]) == ("spare", "vendor/spare")
+    assert FALLBACK_KEY not in conn
+    assert conn.get("sampling") != warm
+    assert conn[ACCOUNT]["decision_mode"] == "structured"
 
 
 def test_capture_records_a_failed_call_with_its_error(client):

@@ -619,6 +619,9 @@ def _capture(cid, sid, task, messages, conn, outcome: dict | None = None):
     out of `total_tokens`: it was never sent."""
     if not store.prompt_log.capturing():
         return
+    # A prompt that carries its own breakdown (`PreparedMessages`) is filed
+    # as it is, and `outcome` is dropped: `decide` never hands one over (its
+    # messages are plain), so only the plain branch below files a decision.
     breakdown = getattr(messages, "breakdown", None)
     if breakdown is None:
         rows = [

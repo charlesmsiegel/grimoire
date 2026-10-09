@@ -87,7 +87,9 @@ Around = Callable[[Awaitable[Any], dict], Awaitable[Any]]
 #: `structured_messages`; a native item's normalised body, `llm.native_body`,
 #: as one user message), and `[]` for a call refused before anything went
 #: out; the outcome is `decisions.outcome`'s record of it; the conn is the
-#: stage's account-stamped dict, without the sampler preset a native call
+#: dict the attempt that answered was sent on (`llm.ATTEMPTED`, a fallback's
+#: or a prompt-only re-send's included), or the stage's account-stamped dict
+#: when the call failed -- a native stage's without the sampler preset it
 #: never sends. One structured chunk is one call, its prompt-only re-send
 #: included; each native item is one call.
 Capture = Callable[[list[dict], dict, dict], Awaitable[None]]
@@ -364,9 +366,14 @@ async def _structured(items: tuple[decisions.Item, ...], call: _Call) -> _Answer
                 results[offset + index] = result
             if (by := _served_by(holder)) not in served:
                 served.append(by)
-        # Settled: what went out, if anything did (`Capture`).
+        # Settled: what went out, if anything did (`Capture`), on the dict
+        # the facade sent for the attempt that answered (`llm.ATTEMPTED`: a
+        # fallback, or a re-send without the mode, names itself, with the
+        # preset it was really sent); a failed chunk names its stage's.
+        ran = holder.get(llm.ATTEMPTED) if holder is not None else None
         await _captured(call, messages if sent else [],
-                        partial(_outcome, STRUCTURED, conn, holder, answered, error), conn)
+                        partial(_outcome, STRUCTURED, conn, holder, answered, error),
+                        ran if isinstance(ran, dict) else conn)
         if error is not None:
             # Filed by the meter already; the chunk's fate waits on the chain.
             failed.append((unit, error))

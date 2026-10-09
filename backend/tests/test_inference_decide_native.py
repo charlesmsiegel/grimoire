@@ -941,12 +941,35 @@ def test_the_native_capture_renders_off_the_loop(client, monkeypatch):
     assert len(built_on) == 1 and built_on[0] != loop_thread
 
 
-def test_no_messages_are_built_without_a_capture(client, monkeypatch):
-    resolved = _native_resolution(client, fallback=False)
-    built: list[Item] = []
-    monkeypatch.setattr(llm, "native_body", lambda item, conn: built.append(item) or {})
-    got = _decide(FakeLLM([["unused"]], decisions=[_yes()]), _items(3), resolved=resolved)
-    assert len(got.items) == 3 and built == []
+@pytest.mark.parametrize("mode", [NATIVE, STRUCTURED])
+def test_no_messages_are_built_without_a_capture(client, monkeypatch, mode):
+    """Without a capture, nothing is built for one: no native request body
+    and no outcome, on either backend. With one, each is built once per
+    call -- the control that shows the spies are on the path."""
+    if mode == NATIVE:
+        resolved = _native_resolution(client, fallback=False)
+    else:
+        _structured_store(client, fallback=False)
+        resolved = _resolved()
+    built: list[str] = []
+
+    def spy(name, real):
+        def wrapper(*args, **kwargs):
+            built.append(name)
+            return real(*args, **kwargs)
+        return wrapper
+
+    monkeypatch.setattr(inference, "_native_request",
+                        spy("request", inference._native_request))
+    monkeypatch.setattr(inference, "_outcome", spy("outcome", inference._outcome))
+
+    def fake():
+        return FakeLLM([[decision_reply({"over": True})]], decisions=[_yes()])
+
+    got = _decide(fake(), [_item()], resolved=resolved)
+    assert got.items[0].backend == mode and built == []
+    _decide(fake(), [_item()], resolved=resolved, capture=_Captures())
+    assert sorted(built) == (["outcome", "request"] if mode == NATIVE else ["outcome"])
 
 
 class _Held(FakeLLM):
