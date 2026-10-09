@@ -2678,7 +2678,7 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
             out["checked"].append(aid)
             if finding["verdict"] == store.voice_drift.DRIFT:
                 out["flagged"].append(aid)
-                if not finding["note"]:
+                if not finding["note"].strip():
                     # Only a native drift reaches here with no note
                     # (`check_failure`). Shown, and `stage_edit` proposes
                     # nothing for it: a standing flag is neither replaced nor
