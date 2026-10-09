@@ -31,7 +31,7 @@ import httpx
 import pytest
 
 import grimoire.store as store
-from grimoire import catalog, decisions, embeddings, llm, routes
+from grimoire import catalog, decisions, embeddings, routes
 from grimoire.anthropic import AnthropicClient
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
@@ -39,7 +39,7 @@ from grimoire.openai_compatible import OpenAICompatibleClient
 from grimoire.routes import config as config_routes
 from grimoire.store.inference import facts, probes
 from grimoire.store.inference import resolve as inference
-from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter
+from tests.llm_fakes import FailingOpenRouter, FakeLLM, FakeOpenRouter, carrying
 
 REFUSAL = ("This test sends a request to the provider and may cost money — "
            "confirm to run it.")
@@ -583,9 +583,29 @@ def _sse(*chunks: dict) -> str:
     return "".join(f"data: {json.dumps(c)}\n\n" for c in chunks) + "data: [DONE]\n\n"
 
 
-def _wire_client(client, handler, **llm) -> list[httpx.Request]:
-    """A REAL facade, with retries and a fallback configured, whose
-    OpenAI-compatible adapter talks to a `MockTransport`."""
+class _Offering(LLMClient):
+    """A REAL facade that hands every call it is sent a fallback (`offer`, as
+    the call's own: `llm.FALLBACK_KEY`), so whatever the route sends has one
+    within reach -- and only the route's choice of call keeps it unused."""
+
+    def __init__(self, offer: dict | None, **llm) -> None:
+        super().__init__(**llm)
+        self._offer = offer
+
+    def stream(self, messages, chain, usage=None, **kwargs):
+        return super().stream(messages, carrying(chain, self._offer), usage, **kwargs)
+
+    async def complete(self, messages, chain, usage=None, **kwargs):
+        return await super().complete(messages, carrying(chain, self._offer), usage, **kwargs)
+
+    async def single(self, messages, target, usage=None):
+        return await super().single(messages, carrying(target, self._offer), usage)
+
+
+def _wire_client(client, handler, *, offer: dict | None = None, **llm) -> list[httpx.Request]:
+    """A REAL facade, with retries configured and -- given `offer` -- a
+    fallback handed every call, whose OpenAI-compatible adapter talks to a
+    `MockTransport`."""
     seen: list[httpx.Request] = []
 
     def record(request: httpx.Request) -> httpx.Response:
@@ -593,7 +613,7 @@ def _wire_client(client, handler, **llm) -> list[httpx.Request]:
         return handler(request)
 
     adapter = OpenAICompatibleClient(http=httpx.AsyncClient(transport=httpx.MockTransport(record)))
-    facade = LLMClient(openai_compatible=adapter, **llm)
+    facade = _Offering(offer, openai_compatible=adapter, **llm)
     client.app.dependency_overrides[routes.get_llm] = lambda: facade
     return seen
 
@@ -611,7 +631,7 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
         _endpoint(client, "Winifred Endpoint", "backup.example"))
     seen = _wire_client(
         client, lambda _r: httpx.Response(429, json={"error": {"message": "slow down"}}),
-        retries=3)
+        retries=3, offer=backup)
 
     run = _run(client, conn, ["generate"])
 
@@ -624,16 +644,15 @@ def test_a_rate_limit_is_not_retried_and_the_fallback_is_never_called(client, mo
     assert rows[0]["task"] == "model-test"
     assert rows[0].get("attempts", 1) == 1   # the ledger omits the default
 
-    # The control: the same facade, sent the same probe through `stream` with
-    # a fallback the call carries, DOES retry and fall back -- so the one
+    # The control: the same facade, sent the same probe through `stream` --
+    # with the same fallback offered -- DOES retry and fall back, so the one
     # request above is the test call's doing, not this setup's.
     seen.clear()
     facade = client.app.dependency_overrides[routes.get_llm]()
     probe_conn = inference.lower(store.llm_connections.read_connection_raw(conn),
                                  probes.sampling(), MODEL)
     with pytest.raises(LLMError):
-        asyncio.run(facade.complete(probes.messages("generate"),
-                                    {**probe_conn, llm.FALLBACK_KEY: backup}))
+        asyncio.run(facade.complete(probes.messages("generate"), probe_conn))
     assert [r.url.host for r in seen] == ["primary.example"] * 4 + ["backup.example"]
 
 

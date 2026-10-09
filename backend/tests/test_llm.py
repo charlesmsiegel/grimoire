@@ -223,7 +223,9 @@ async def test_a_failing_check_is_not_retried_or_fallen_back_to_another_provider
                        retries=3)
 
     with pytest.raises(LLMError) as exc:
-        await client.check(_conn("openrouter", id="or"))
+        # A fallback within reach: `check` must not take it.
+        await client.check(carrying(_conn("openrouter", id="or"),
+                                    _conn("openai_compatible", id="fb")))
 
     assert exc.value.kind == "rate_limit"
     assert len(op.probed) == 1 and oc.probed == []

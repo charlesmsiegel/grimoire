@@ -40,7 +40,7 @@ from grimoire import (
 from grimoire.decisions import Choice, Item, Option, Predicate, Score
 from grimoire.llm_errors import LLMError
 from grimoire.store import image_drafts, usage_rollup
-from grimoire.store.inference import providers, resolve
+from grimoire.store.inference import capabilities, providers, resolve
 
 from . import inference_baseline as baseline
 from . import inference_baseline_c as baseline_c
@@ -540,3 +540,33 @@ def test_what_reads_an_attempt_reads_a_target_as_its_dict(state, migrated, tmp_p
                 assert ({k: v for k, v in filed.items() if k != "at"}
                         == {k: v for k, v in other.items() if k != "at"})
                 assert registry.status(conn["id"], conn["rev"]) == filed
+
+
+#: Models whose names the preset-sensitive rules read: a Claude version before
+#: and after the prefill cut (`providers.ANTHROPIC_PREFILL_UNTIL`), one with
+#: none, and models no rule names.
+_MODELS = ("claude-haiku-4-5", "claude-opus-4-7", "claude-opus-5", "claude-mythos",
+           "gpt-4o", "glm-5.3", "vendor/any", "")
+
+
+@pytest.mark.parametrize("cap", ["vision", "prefill"])
+def test_no_provider_preset_changes_a_vision_or_prefill_answer(cap):
+    """A `wire.Target` carries no explicit provider preset, so a reader that
+    places one by its kind and URL (`post_images._target_capability`, and a
+    tail chooser asking `providers.infer` of a target) must get the answer
+    the connection's own preset would give. It does while every preset of a
+    kind agrees on the capability -- in `always`, and in what `never_for`
+    rules out for any model -- which is what this holds. A preset that
+    differs from its kind's others on `vision` or `prefill` fails here, and
+    `Target` then has to carry the preset (the 9a/9b review's M4)."""
+    for kind in adapters.KINDS:
+        of_kind = [p for p in providers.PRESETS.values() if p.kind == kind]
+        inferred = providers.infer({"kind": kind})
+        for model in _MODELS:
+            answers = {(cap in p.always, cap in providers.never_for(p, model)) for p in of_kind}
+            assert answers == {(cap in inferred.always,
+                                cap in providers.never_for(inferred, model))}, (kind, model)
+            for preset in of_kind:
+                named = capabilities.resolve_caps(preset, model, catalog_row=None, facts={})
+                placed = capabilities.resolve_caps(inferred, model, catalog_row=None, facts={})
+                assert named[cap] == placed[cap], (kind, preset.id, model)
