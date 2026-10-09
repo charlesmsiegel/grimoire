@@ -1,7 +1,12 @@
 {#- The first evidence question (`reconcile.build_items`, a choice under the
     id `evidence_scene` over the scenes the item shows, null allowed; asked
-    when the item shows a scene). No vars. The retired one-call prompt's
-    evidence sentence, reworded: a status verdict stands on its scene
-    without a rationale (§7.4, I4), and the rationale is still asked for, by
-    `explain.j2`. -#}
-For "close", "fulfilled", "broken" and "expired", name at least one evidence scene id from the lines shown; without one, the answer counts as "uncertain".
+    when the item shows a scene). No vars. It stands alone: a native
+    decisions endpoint answers each question of an item on its own, so an
+    evidence question asked only "for" some decision words was answered
+    without the decision and came back none, losing every status verdict
+    (spec 7.4). It asks what a scene shows, never what another question
+    answered; the rule that a status word ("close", "fulfilled", "broken",
+    "expired") stands only on a cited scene is `reconcile._lifecycle_word`'s,
+    applied to the answers, not asked of the model. The rationale is still
+    asked for, by `explain.j2` (I4). -#}
+Which scene shown, if any, shows a record above settled: a plot thread's question answered, or a commitment fulfilled, broken or expired? Answer that scene's id from the lines shown, or null when no scene shown does.

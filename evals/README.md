@@ -348,10 +348,13 @@ bodies, one per item, in the adapter's wire shape (`Recording.native` names
 it), which replay reads through that adapter's `decision_result` and writes
 back with `decisions.render`, as a live native run does. A native endpoint
 answers each question of an item on its own, which is why no continuity
-question depends on another's answer: G's `from` / `to` and `id` did, came
-back none natively, and lost every directed pair verdict and every native
-`existing` -- what these recordings, answering only the folded choice, would
-have shown.
+question depends on another's answer, nor refers to one: G's `from` / `to`
+and `id` did, came back none natively, and lost every directed pair verdict
+and every native `existing` -- what these recordings, answering only the
+folded choice, would have shown. The evidence questions were the last: asked
+"for" the status words, they came back none natively and every closure fell
+to `uncertain`; each now asks which shown scene, if any, shows a record
+settled, and `_decide` keeps the rule that a status word needs one.
 `scene-suggestions` decodes the reply with the app's `suggest.raw_suggestions`,
 keeps only the entries `suggest.is_card` keeps (a title and a premise, the
 cards the player is shown), and judges claims and dates with `suggest.claim`

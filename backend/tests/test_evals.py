@@ -732,9 +732,9 @@ def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatc
         "eager": ("reconcile.keep_open", "reconcile.unproven"),
         "unfounded": ("reconcile.evidence",),
         "timid": ("reconcile.cross_type", "reconcile.close", "reconcile.fulfilled"),
-        "native": ()}
+        "native": (), "native-unfounded": ("reconcile.evidence",)}
     assert {r.variant: r.native for r in case.recordings if r.native} == {
-        "native": "openrouter"}
+        "native": "openrouter", "native-unfounded": "openrouter"}
     ctx = runner.prepare(case)
     payload = ctx["payload"]
     items = ctx["items"]
@@ -748,9 +748,9 @@ def test_decide_continuity_reconcile_holds_the_decide_prompt_contract(monkeypatc
     assert "continuity-reconcile" not in case_mod.BY_ID
 
 
-def _native_recording(case_id: str) -> tuple:
+def _native_recording(case_id: str, variant: str = "native") -> tuple:
     case = case_mod.BY_ID[case_id]
-    [recording] = [r for r in case.recordings if r.native]
+    [recording] = [r for r in case.recordings if r.native and r.variant == variant]
     return case, recording, json.loads(recording.path(case_id).read_text(encoding="utf-8"))
 
 

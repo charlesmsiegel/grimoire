@@ -1148,17 +1148,21 @@ RECONCILE_REWORDED = (
     (('For "close", "fulfilled", "broken" and "expired", give a reason and name at least one '
       'evidence scene id from the lines shown; without both, the answer counts as '
       '"uncertain".'),
-     ('For "close", "fulfilled", "broken" and "expired", name at least one evidence scene id '
-      'from the lines shown; without one, the answer counts as "uncertain".'),
+     ("Which scene shown, if any, shows a record above settled: a plot thread's question "
+      "answered, or a commitment fulfilled, broken or expired? Answer that scene's id from "
+      "the lines shown, or null when no scene shown does."),
      "continuity_reconcile/evidence.j2",
-     ("a verdict stands without a rationale (spec 7.4, I4), which explain.j2 still asks "
-      "for; 'at least one' stays, as up to EVIDENCE_SCENES are asked for (I2)")),
+     ("a native decisions endpoint answers each question alone, so evidence asked only "
+      '"for" some decision words came back none and lost every status verdict; it asks '
+      "what a scene shows instead, and _lifecycle_word still reads a status word with no "
+      "cited scene as uncertain. A verdict stands without a rationale (spec 7.4, I4), "
+      "which explain.j2 still asks for")),
 )
 #: Words the decide prompt adds that the legacy prompt never said: each a
 #: pointer or a label, never a criterion. Printed, so they stay visible.
 RECONCILE_ADDED = (
-    ("Another evidence scene id from the lines shown, or null; see the first.",
-     "continuity_reconcile/evidence_more.j2"),
+    ("Each evidence question may name a different such scene; a scene named twice counts "
+     "once.", "continuity_reconcile/evidence_more.j2"),
     ("the scene listed above as {{ sid }}", "continuity_reconcile/scene_option.j2"),
 )
 for fragment, target in RECONCILE_CARRIED:

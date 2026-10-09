@@ -1,6 +1,9 @@
 {#- The second and third evidence questions (`reconcile.build_items`, choices
     under `evidence_scene_2` and `evidence_scene_3`, each over the same scenes
     as the first, null allowed; asked while the item shows that many scenes,
-    up to `reconcile.EVIDENCE_SCENES`). No vars. Added words, a pointer to
-    `evidence.j2` and no criterion (`verify_templates.py`'s RECONCILE_ADDED). -#}
-Another evidence scene id from the lines shown, or null; see the first.
+    up to `reconcile.EVIDENCE_SCENES`). No vars. `evidence.j2`'s question
+    whole, so each slot stands alone as that one does (spec 7.4), and one
+    added sentence, a pointer and no criterion (`verify_templates.py`'s
+    RECONCILE_ADDED): a reply that answers each slot alone may name one
+    scene in all of them, and `reconcile._evidence` keeps it once. -#}
+{% include "continuity_reconcile/evidence.j2" %} Each evidence question may name a different such scene; a scene named twice counts once.

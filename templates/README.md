@@ -335,7 +335,13 @@ with an earlier one dropped from the item's options and lines.
   nullable choice per scene the item shows, up to `reconcile.EVIDENCE_SCENES`
   (`evidence_scene`, then `evidence_scene_2` and `evidence_scene_3`), each
   over every scene it shows, described by `scene_option.j2` (var: `sid`; "the
-  scene listed above as <id>"). No vars otherwise.
+  scene listed above as <id>"). No vars otherwise. Each stands alone: it
+  asks which shown scene, if any, shows a record settled (a question
+  answered, a commitment fulfilled, broken or expired), null when none does,
+  and never "for" a decision word, since a native decisions endpoint answers
+  each question without the others (spec 7.4); `evidence_more.j2` is the same
+  question with one added pointer. That a status word needs a cited scene is
+  `_decide`'s rule over the answers, below, not a question's.
 - `explain.j2` is the rationale instruction (`reconcile.explain`): the
   proposal's display-only reason. No vars.
 

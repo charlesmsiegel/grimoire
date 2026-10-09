@@ -543,7 +543,7 @@ def test_the_questions_carry_the_criteria():
                    'A thread and a commitment are never "duplicate"',
                    "Age alone is never evidence that a thread is finished",
                    "A passed deadline alone is never evidence that a promise was kept or broken",
-                   "name at least one evidence scene id from the lines shown",
+                   "Which scene shown, if any, shows a record above settled",
                    "Do not invent a date"):
         assert needle in text
 
@@ -809,6 +809,20 @@ def test_an_item_asks_one_evidence_question_per_shown_scene_up_to_three():
     assert reconcile.EVIDENCE_SCENES == 3
     assert reconcile.EVIDENCE_IDS == ("evidence_scene", "evidence_scene_2",
                                       "evidence_scene_3")
+
+
+def test_no_evidence_question_depends_on_another_answer():
+    """A native decisions endpoint answers each question of an item alone
+    (spec 7.4), so an evidence question may neither name a decision word it
+    is asked "for" nor point at another question: either came back none
+    natively and cost the status verdict its evidence."""
+    words = {w for vocab in reconcile.DECISIONS.values() for w in vocab}
+    for template in ("evidence.j2", "evidence_more.j2"):
+        text = prompts.render(f"continuity_reconcile/{template}")
+        assert not any(f'"{w}"' in text for w in words), template
+        for pointer in ("the first", "the decision", "the answer", "For "):
+            assert pointer not in text, (template, pointer)
+        assert text.startswith(prompts.render("continuity_reconcile/evidence.j2"))
 
 
 def test_item_context_carries_the_date_and_only_its_own_scene_lines():

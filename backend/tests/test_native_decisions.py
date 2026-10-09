@@ -955,3 +955,41 @@ def test_a_native_existing_names_its_record_in_its_one_choice(provider):
     assert [(e.decision, e.status, e.target) for e in exam.rows] == [
         ("existing", "accepted", "find-the-ledger"), ("new", "accepted", None),
         ("existing", "accepted", "the-midnight-deadline")]
+
+
+@pytest.mark.parametrize("provider", PROVIDERS)
+def test_a_native_status_word_stands_on_the_scene_its_evidence_question_names(provider):
+    """Each evidence question stands alone (spec 7.4): it asks which shown
+    scene, if any, shows a record settled -- never "for" a decision word --
+    so a native endpoint, answering it without the decision, names the scene
+    that settles the thread, and the closure is stored with it. With every
+    evidence slot none, the same closure is ``uncertain`` (`_lifecycle_word`):
+    the safety rule holds on the answers, not in the question."""
+    payload = gate._RECONCILE_PAYLOAD
+    items = reconcile.build_items(payload)
+    cands = payload["candidates"]
+    thread = next(n for n, c in enumerate(cands) if c["vocabulary"] == "thread")
+    owed = next(n for n, c in enumerate(cands) if c["vocabulary"] == "commitment")
+    for n in (thread, owed):
+        evidence = [q for q in items[n].questions if q.id in reconcile.EVIDENCE_IDS]
+        assert evidence and all(q.instructions.startswith(
+            "Which scene shown, if any, shows a record above settled") for q in evidence)
+    settled = {thread: ("close", "closed", "0003--winifreds-house"),
+               owed: ("fulfilled", "fulfilled", "0004--saltmarch-quay")}
+
+    def proposals(cited: bool) -> dict:
+        results = tuple(read(provider)(_native_reply(provider, item, {
+            "decision": settled[n][0] if n in settled else "uncertain",
+            **({"evidence_scene": settled[n][2]} if cited and n in settled else {})}), item)
+            for n, item in enumerate(items))
+        return reconcile.proposals_of(payload, results)
+
+    got = proposals(cited=True)
+    for n, (word, status, scene) in settled.items():
+        proposal = got[cands[n]["id"]]
+        assert (proposal["decision"], proposal["status"], proposal["evidence_scenes"]) == (
+            word, status, [scene])
+    got = proposals(cited=False)
+    for n in settled:
+        assert (got[cands[n]["id"]]["decision"], got[cands[n]["id"]]["status"]) == (
+            "uncertain", "")

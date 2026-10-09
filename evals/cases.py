@@ -1783,7 +1783,14 @@ CASES: tuple[Case, ...] = (
              # which answers each question alone: every directed verdict
              # rides on the decision it is folded into, so the two pair
              # checks pass on that answer and no other (spec 7.4).
-             Recording("native", (), "json", native="openrouter"))),
+             Recording("native", (), "json", native="openrouter"),
+             # The same, but the closure's evidence answered none: each
+             # evidence question stands alone (spec 7.4), so a native
+             # endpoint is asked which scene settles the thread, never "for"
+             # the decision; answered none, the closure has no scene and is
+             # stored uncertain, which the evidence check shows.
+             Recording("native-unfounded", ("reconcile.evidence",), "json",
+                       native="openrouter"))),
     Case(id="scene-suggestions",
          task="suggestions",
          hypothesis="with two focused drivers and a batch anchor in a custom calendar, "

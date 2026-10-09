@@ -1546,8 +1546,12 @@ def build_items(payload: dict) -> tuple[decisions.Item, ...]:
     directed words folded with their direction (`_decision_options`); and one
     nullable evidence choice per scene it shows (`item_scenes`), up to
     `EVIDENCE_SCENES`, each over every scene it shows. No question depends on
-    another's answer: a native endpoint answers each one alone. Pure, but it
-    renders: callers run it in the threadpool."""
+    another's answer, nor refers to one: a native endpoint answers each one
+    alone (spec 7.4). So the evidence questions ask which shown scene, if any,
+    shows a record settled, never "for" a status word (`evidence.j2`), and
+    the rule that a status word stands only on a cited scene is applied to
+    the answers by `_decide`, not stated in a question. Pure, but it renders:
+    callers run it in the threadpool."""
     return tuple(_decision_item(payload, cand) for cand in payload["candidates"])
 
 
