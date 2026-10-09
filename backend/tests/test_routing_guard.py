@@ -25,6 +25,13 @@ The claims, each held against the AST of `routes/`:
 - a direct `store.inference.resolve.resolve(...)` is marked and capped
   (`llm_connections.get_active()`, the other way round the seam this used to
   scan for, was deleted in inference slice I);
+- every generation goes through `inference.generate` (slice I): across the
+  package, `backend/scripts/` and `evals/`, `client.stream`/`complete` are
+  spelled only in `grimoire/inference.py` (`generate` itself, and `decide`'s
+  structured backend), `client.single` only in `routes/config.py`'s model
+  test, and `client.decide_native` only in `inference.py` and that model
+  test (slice H's probe). The client is recognised by the receiver name
+  `client`, as `test_usage_guard.py` recognises it;
 - every task literal `routes/` names (resolved, overridden, metered or
   streamed) is claimed by a route, and every claimed task is named somewhere.
 
@@ -47,7 +54,7 @@ Honest about its reach, in the house style:
   is checked only for the argument's spelling, and its callers are on a human.
 - **The task inventory is the literals in `routes/`**: a `require_inference`
   first argument, a `store.usage.meter(...)` first argument, and any `task=`
-  keyword (which is how `_chat_stream` and `_ephemeral_stream` are told what
+  keyword (which is how `_chat_stream` and `_stream_contribution` are told what
   they are streaming). A task assembled at runtime is invisible to all of it --
   `streaming.py` meters the `task` it was handed, and the literal that fed it
   lives at the caller, which is where this finds it.
@@ -76,6 +83,7 @@ import pytest
 from grimoire.store import routing
 
 from . import guard_markers
+from .test_usage_guard import _generation_calls
 
 ROUTES_DIR = pathlib.Path(__file__).resolve().parents[1] / "src" / "grimoire" / "routes"
 #: The exemption marker, `# routing-ok: <reason>`. A marker with no reason fails,
@@ -217,6 +225,78 @@ def test_the_guard_reaches_the_scripts_and_the_evals():
     """The outside scan sees the two callers it was extended for."""
     names = {path.name for path, _ in _outside_sources()}
     assert {"ingest_scene.py", "runner.py"} <= names
+
+
+#: The package, scanned beside `OUTSIDE_DIRS` for direct generations.
+PACKAGE_DIR = ROUTES_DIR.parent
+
+#: Where each facade method that reaches a provider may still be called
+#: directly, as paths under `backend/src/grimoire` (spec 7.2, ruling 12).
+#: Everything else generates through `inference.generate`.
+GENERATION_DOORS: dict[str, frozenset[str]] = {
+    # `generate` itself, and `decide`'s structured backend.
+    "stream": frozenset({"inference.py"}),
+    "complete": frozenset({"inference.py"}),
+    # The model test's generate probe: one attempt, no retry, no fallback.
+    "single": frozenset({"routes/config.py"}),
+    # `decide`'s native stage, and the model test's native probe (slice H).
+    "decide_native": frozenset({"inference.py", "routes/config.py"}),
+}
+
+
+def _generation_sources():
+    """The package, then `backend/scripts/` and `evals/`, each with the name a
+    door is matched against: its path under the package, or its repo path."""
+    for path in sorted(PACKAGE_DIR.rglob("*.py")):
+        yield path.relative_to(PACKAGE_DIR).as_posix(), path.read_text(encoding="utf-8")
+    for path, text in _outside_sources():
+        yield path.relative_to(REPO).as_posix(), text
+
+
+def _direct_generations(text: str, where: str) -> list[str]:
+    """Each `client.<generator>(...)` in one file that is not at its door."""
+    return [f"{where}:{call.lineno}: client.{call.func.attr}()"
+            for call in _generation_calls(ast.parse(text))
+            if where not in GENERATION_DOORS[call.func.attr]]
+
+
+def test_every_generation_goes_through_inference_generate():
+    """A generation spelled as a facade call is one `generate` never saw: no
+    check that its resolution is for its task and operation, and nothing that
+    moves it when the facade takes targets instead of dicts."""
+    offenders = [o for where, text in _generation_sources()
+                 for o in _direct_generations(text, where)]
+    assert not offenders, (
+        "generate through `operations.generate(<task>, messages, client=client, "
+        "resolved=resolved, usage=m.usage)` instead of calling the client "
+        f"directly: {offenders}")
+
+
+def test_the_generate_check_flags_a_planted_call():
+    planted = "text = await client.complete(messages, conn, m.usage)\n"
+    assert _direct_generations(planted, "routes/scenes.py") == [
+        "routes/scenes.py:1: client.complete()"]
+    for src, where in (("client.stream(messages, conn, m.usage)\n", "evals/runner.py"),
+                       ("client.single(messages, conn, m.usage)\n", "routes/scenes.py"),
+                       ("client.decide_native(item, conn, m.usage)\n", "routes/scenes.py"),
+                       ("client.complete(messages, conn)\n", "backend/scripts/ingest_scene.py")):
+        assert _direct_generations(src, where), (src, where)
+    for src, where in (("client.complete(messages, conn, usage)\n", "inference.py"),
+                       ("client.single(messages, conn, m.usage)\n", "routes/config.py"),
+                       ("client.decide_native(item, conn, m.usage)\n", "routes/config.py"),
+                       # Not the facade: another receiver's `stream`.
+                       ("http.stream('POST', url)\n", "openrouter.py")):
+        assert _direct_generations(src, where) == [], (src, where)
+
+
+def test_the_generate_check_sees_every_door():
+    """Vacuity insurance: each door is found where it is allowed, so a door
+    that moved away -- and a scan that stopped finding anything -- fails."""
+    found: dict[str, set[str]] = {}
+    for where, text in _generation_sources():
+        for call in _generation_calls(ast.parse(text)):
+            found.setdefault(call.func.attr, set()).add(where)
+    assert found == {name: set(doors) for name, doors in GENERATION_DOORS.items()}
 
 
 #: What a direct call to the resolver is called through: `inference.resolve(`

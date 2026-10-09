@@ -269,11 +269,11 @@ def post_world_library_description_draft(
     p = store.world_images.image_path(wid, name)
     if p is None:
         raise HTTPException(status_code=404, detail="image not found")
-    conn, messages = image_draft_prompt(p, "")
+    resolved, messages = image_draft_prompt(p, "")
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "image-description",
+            client, resolved, messages, "image-description",
             lambda text: {"description": store.image_drafts.parse_output(text)})
 
     return runs.run_draft(request.app, runs.world_subject(wid),

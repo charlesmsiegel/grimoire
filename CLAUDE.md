@@ -796,9 +796,19 @@ would answer neither question.
   What the store promises is in `docs/store-guarantees.md`; the design is
   `docs/superpowers/specs/2026-10-05-content-addressed-image-store-design.md`.
 - **Adding an LLM call site?** Resolve it with
-  `require_inference(<task>, cid)` and name the task the call meters under;
-  what it returns carries the connection dict `LLMClient` takes as `.conn`
-  (read that, until the facade stops needing a connection at all).
+  `require_inference(<task>, cid)` and name the task the call meters under.
+  **A generation is `operations.generate(<task>, messages, client=…,
+  resolved=…, usage=m.usage)`** inside that task's `store.usage.meter`
+  (`stream=False` for the joined reply; the operation module bound as
+  `from .. import inference as operations`). It refuses a resolution for
+  another task or operation before any client call, so a call that generates
+  under a sibling task of the route it resolved -- a director turn on the
+  send's `chat` -- says so with `operations.for_task(resolved, <task>)`.
+  `client.stream`/`complete` are spelled only in `inference.py`, and
+  `test_routing_guard.py` fails one anywhere else. What the seam returns
+  still carries the connection dict the facade is sent as `.conn`: hand that
+  on, never read it, and read the display facts (`.kind`, `.model`,
+  `.provider_id`) off `resolved.chain.primary`.
   `store/routing.py` maps the task to a route (each one declares its
   `operation`, its `default_role` and what it `requires`), and
   `store/inference/` resolves the route to a role (Primary, Fast, Decision,

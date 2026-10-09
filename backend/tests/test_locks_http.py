@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from grimoire import main, store
 from grimoire.store import campaigns, locks, worlds
+from tests import wire_kit
 
 
 @pytest.fixture()
@@ -132,7 +133,7 @@ def test_a_busy_finalize_emits_an_error_frame_and_persists_nothing(
     def on_error(watcher):
         persisted.append(("on_error",))
 
-    resp = streaming._fence_stream("run", "0001-x", [], {}, _Client(),
+    resp = streaming._fence_stream("run", "0001-x", [], wire_kit.resolution({}), _Client(),
                                    lazy_finalize if lazy else finalize, on_error)
 
     async def drain():

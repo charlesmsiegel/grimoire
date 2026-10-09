@@ -24,6 +24,7 @@ if str(REPO) not in sys.path:
 from evals import cases as case_mod  # noqa: E402
 from evals import runner  # noqa: E402
 from evals.graders import Check  # noqa: E402
+from tests import wire_kit  # noqa: E402
 
 PAIRS = [(case, rec) for case in case_mod.CASES for rec in case.recordings]
 
@@ -90,9 +91,10 @@ def test_a_live_run_resolves_through_the_seam_not_the_active_connection(
 
     conns = runner.resolve_connections(case_mod.CASES)
 
-    assert (conns["chat"]["id"], conns["chat"]["model"]) == ("mara-local", "big")
+    assert (conns["chat"].conn["id"], conns["chat"].conn["model"]) == ("mara-local", "big")
     # Absorb's route defaults to the Fast role.
-    assert (conns["absorb"]["id"], conns["absorb"]["model"]) == ("winifred-local", "small")
+    assert (conns["absorb"].conn["id"],
+            conns["absorb"].conn["model"]) == ("winifred-local", "small")
 
     # A refusal is the seam's own reason.
     config.write_config(role_primary_provider="openrouter", role_primary_model="vendor/m")
@@ -143,7 +145,7 @@ def test_live_resolves_a_decide_case_on_its_task(monkeypatch, tmp_path):
     assert not isinstance(resolved, dict)
     assert (resolved.task, resolved.operation) == ("scene-break", "decide")
     assert (resolved.conn["id"], resolved.conn["model"]) == ("winifred-local", "small")
-    assert conns[runner.conn_key(plain)]["id"] == "mara-local"
+    assert conns[runner.conn_key(plain)].conn["id"] == "mara-local"
     assert runner.conn_key(plain) == "chat"
 
     fake = FakeLLM([[reply]])
@@ -604,7 +606,8 @@ def test_a_generate_case_is_sent_with_no_schema(monkeypatch, tmp_path):
     case = case_mod.BY_ID["scene-length"]
     assert case.schema is None and runner.operation(case) == "generate"
     fake = FakeLLM([["Seraphine Vale shrugs."]])
-    runner.live(case, {"kind": "openrouter", "id": "openrouter"}, client=fake)
+    runner.live(case, wire_kit.resolution({"kind": "openrouter", "id": "openrouter"},
+                                          case.task), client=fake)
     assert fake.schemas == [None]
 
 

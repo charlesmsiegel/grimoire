@@ -42,6 +42,7 @@ import anyio
 from fastapi.responses import StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from .. import inference as operations
 from .. import store
 from ..llm import ATTEMPTED, LLMClient
 from ..llm_errors import LLMError
@@ -177,23 +178,31 @@ def _turn_settled(cid: str) -> None:
     store.revision.bump(cid)
 
 
-def _served(meter, conn: dict) -> str:
+def _served(meter, asked: str) -> str:
     """The id of the connection that actually answered `meter`'s call: the one
     the facade stamped on the attempt that ran, which is the fallback when the
-    primary was exhausted, else the one the turn asked for. "" for a connection
-    with no id."""
+    primary was exhausted, else `asked`, the provider the turn asked for (its
+    resolution's `chain.primary.provider_id`). "" for a connection with no
+    id."""
     attempted = ((meter.usage if meter else None) or {}).get(ATTEMPTED)
-    return (attempted or conn).get("id", "")
+    return attempted.get("id", "") if attempted else asked
 
 
-def _display_stream(cid: str | None, conn: dict, meter=None) -> store.regex.stream.DisplayStream:
-    """The display-phase stream for a turn that asked for `conn`, built from the
-    connection `meter`'s call is actually running on (`_served`) -- after a
-    fallback, the one whose rules the saved message will be filed under.
-    `cid=None` is a caller with no campaign to read rules for, and gets an
-    inactive stream.
+def _asked(resolved) -> str:
+    """The provider a turn's resolution asks for first: its primary target's
+    id ("" for none) -- the display fact `_served` falls back on."""
+    chain = resolved.chain if resolved is not None else None
+    return chain.primary.provider_id if chain is not None else ""
+
+
+def _display_stream(cid: str | None, asked: str, meter=None) -> store.regex.stream.DisplayStream:
+    """The display-phase stream for a turn that asked for provider `asked`,
+    built from the connection `meter`'s call is actually running on
+    (`_served`) -- after a fallback, the one whose rules the saved message
+    will be filed under. `cid=None` is a caller with no campaign to read rules
+    for, and gets an inactive stream.
     """
-    entries = (store.regex.layers.effective(cid=cid, connection=_served(meter, conn))
+    entries = (store.regex.layers.effective(cid=cid, connection=_served(meter, asked))
                if cid else [])
     return store.regex.stream.DisplayStream(entries)
 
@@ -219,8 +228,8 @@ class _Display:
     nothing to show and nothing to build.
     """
 
-    def __init__(self, cid: str | None, conn: dict, meter) -> None:
-        self._cid, self._conn, self._meter = cid, conn, meter
+    def __init__(self, cid: str | None, asked: str, meter) -> None:
+        self._cid, self._asked, self._meter = cid, asked, meter
         self.stream: store.regex.stream.DisplayStream | None = None
 
     @property
@@ -232,7 +241,7 @@ class _Display:
         whether it is `active` before deciding to ask for any."""
         if self.stream is None:
             self.stream = await run_in_threadpool(
-                _display_stream, self._cid, self._conn, self._meter)
+                _display_stream, self._cid, self._asked, self._meter)
 
     async def frames(self, text: str, *, last: bool = False) -> list[str]:
         if text:
@@ -754,7 +763,7 @@ def _is_director_note(messages: list[dict], index: int | None) -> bool:
     return isinstance(message, dict) and store.scenes.is_director_note(message)
 
 
-def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
+def _fence_stream(cid: str, sid: str, messages: list[dict], resolved,
                   client: LLMClient, finalize, on_error=None, on_abort=None,
                   task: str = "chat", outcome: StreamOutcome | None = None,
                   post: int | None = None, after_turn=None):
@@ -765,13 +774,16 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     stream ends, `finalize(watcher)` (called with the lock/persist strategy of
     the caller — initial turn vs continuation) returns the trailing SSE frames
     (proposal / done). `on_error(watcher)` decides what to persist on an
-    upstream LLM failure. Fence watching runs on persisted turns only;
-    `_ephemeral_stream` is deliberately untouched.
+    upstream LLM failure. Fence watching runs on persisted turns only; the
+    opener's stream (`greetings._opener_frames`) is deliberately untouched.
 
     `task` is the label this turn's ledger row carries (#152) -- the meter is
     opened here rather than at each caller because this is the one place that
     sees every way a stream can end, and all three have to be recorded: a
-    completed turn, a provider failure, and a client that walked away.
+    completed turn, a provider failure, and a client that walked away. It is
+    the task `inference.generate` is asked for, so `resolved` is the caller's
+    resolution of that task (`inference.for_task` for a sibling on the scene
+    route).
 
     `post` is the transcript index of the player post this turn is answering
     (#153), stamped on the row so a reader can ask what one post cost across
@@ -799,6 +811,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     `finalize` itself here and let its frames fall on the floor.
     """
     box = outcome if outcome is not None else StreamOutcome()
+    asked = _asked(resolved)
 
     async def event_stream():
         watcher = store.fence.FenceWatcher()
@@ -816,8 +829,9 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # Display rules ride the same text, so the redaction and the fence
             # hiding above are unchanged: a `display` frame stands where the
             # `delta` would have, and counts from 0 on this path.
-            display = _Display(cid, conn, meter)
-            async for delta in client.stream(messages, conn, meter.usage):
+            display = _Display(cid, asked, meter)
+            async for delta in operations.generate(task, messages, client=client,
+                                                   resolved=resolved, usage=meter.usage):
                 if not delta:
                     if liveness.due():
                         yield _HEARTBEAT  # the facade is still waiting on the model
@@ -846,7 +860,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # timing and the route and no token counts -- which is the honest
             # answer, and why the ledger records an absent price rather than a
             # zero one.
-            watcher.connection = _served(meter, conn)
+            watcher.connection = _served(meter, asked)
             meter.done()
         except LLMError as exc:
             # Flush the redactor too, and emit what it lets go BEFORE the error
@@ -858,7 +872,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             flushed = redactor.feed(watcher.finish()) + redactor.finish()
             for frame in await display.frames(flushed, last=True):
                 yield frame
-            watcher.connection = _served(meter, conn)
+            watcher.connection = _served(meter, asked)
             meter.done("error", exc.kind, detail=exc.detail)
             note: dict = {}
             if on_error is not None:
@@ -922,7 +936,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
             # away, which is not a failure of anything and must not inflate an
             # error rate. It is still a row -- the provider generated, and on a
             # metered connection it was billed.
-            watcher.connection = _served(meter, conn)
+            watcher.connection = _served(meter, asked)
             meter.done("aborted")
             await _flush_on_abort(on_abort, watcher)
             # A Stop can flush a partial, and a flushed partial is a post: the
@@ -988,7 +1002,7 @@ def _fence_stream(cid: str, sid: str, messages: list[dict], conn: dict,
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: LLMClient,
+def _chat_stream(cid: str, sid: str, messages: list[dict], resolved, client: LLMClient,
                  undo_user_post=None, restore_removed=None, task: str = "chat",
                  *, identity: str | None, outcome: StreamOutcome | None,
                  after_turn=None):
@@ -1281,12 +1295,12 @@ def _chat_stream(cid: str, sid: str, messages: list[dict], conn: dict, client: L
                 return []
             return finalize(watcher)
 
-    return _fence_stream(cid, sid, messages, conn, client, finalize, on_error, on_abort,
+    return _fence_stream(cid, sid, messages, resolved, client, finalize, on_error, on_abort,
                          task=task, outcome=box, post=post, after_turn=after_turn)
 
 
 def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
-                         conn: dict, client: LLMClient, *,
+                         resolved, client: LLMClient, *,
                          identity: str | None, outcome: StreamOutcome | None,
                          after_turn=None):
     """Stream a proposal's continuation and commit it atomically. A supersede
@@ -1370,68 +1384,9 @@ def _continuation_stream(cid: str, sid: str, pid: str, messages: list[dict],
     # cleanly. Persisting here would be worse than losing the text — narration
     # committed outside `commit_narration` is narration a supersede can no
     # longer displace.
-    return _fence_stream(cid, sid, messages, conn, client, finalize,
+    return _fence_stream(cid, sid, messages, resolved, client, finalize,
                          task="continuation", outcome=box, post=post,
                          after_turn=after_turn)
-
-
-def ephemeral_frames(messages: list[dict], conn: dict, client: LLMClient,
-                     task: str = "opener", cid: str = "", sid: str = "",
-                     outcome: StreamOutcome | None = None):
-    """The raw SSE frames of a generation that is persisted to no scene.
-
-    The opener is the only member. Nothing about the turn is stored, but the
-    call still cost tokens and money, so it is still metered (#152) --
-    `cid`/`sid` only label the row.
-
-    A FRAME PRODUCER rather than a response, which is what `runs.start_detached`
-    takes: every frame is buffered on the run before it reaches anybody, so a
-    client that goes away mid-opener reads the rest of it on the way back
-    instead of losing the whole generation. Wrapped straight into a
-    `StreamingResponse` this was un-detachable by construction, because the
-    only copy of each frame was the one already on the wire.
-
-    The `BaseException` arm still files the row and re-raises. It is no longer
-    the disconnect path -- a subscriber leaving does not close this generator
-    now -- but it is still the CANCEL path, which is `runner.cancel` unwinding
-    the provider call, and an aborted row is the honest record of that.
-
-    `outcome` is what the RUN records, and it is not optional in practice: this
-    generator handles an upstream `LLMError` by emitting an error frame and
-    then finishing normally, so "did not raise" covers both a delivered opener
-    and a failed one. Without the box the runner infers `landed` from a clean
-    exhaustion, and a client polling the run is told an opener arrived whose
-    only terminal frame is an error -- the same defect `StreamOutcome` was
-    built for on the persisted-turn side.
-    """
-    async def frames():
-        meter = store.usage.meter(task, campaign=cid, scene=sid)
-        try:
-            async for delta in client.stream(messages, conn, meter.usage):
-                if not delta:
-                    yield _HEARTBEAT  # still waiting on the model (#95)
-                    continue
-                yield f"data: {json.dumps({'delta': delta})}\n\n"
-            meter.done()
-            if outcome is not None:
-                outcome.land()
-            yield f"data: {json.dumps({'done': True})}\n\n"
-        except LLMError as exc:
-            meter.done("error", exc.kind, detail=exc.detail)
-            if outcome is not None:
-                # The provider's own kind and detail, exactly as the persisted
-                # turns record theirs -- so a client reading a failed opener
-                # off the run acts on the same `rate_limit` or `auth` it would
-                # have read off the frame.
-                outcome.fail(exc.kind, exc.detail)
-            yield f"data: {json.dumps({'error': {'detail': exc.detail, 'kind': exc.kind}})}\n\n"
-        except BaseException:
-            # No frame can be emitted into a generator that is being closed, so
-            # filing the row is the only thing left to do.
-            meter.done("aborted")
-            raise
-
-    return frames
 
 
 # ---- roll-proposal derivation and projection ----

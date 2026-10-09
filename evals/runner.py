@@ -174,11 +174,11 @@ def conn_key(case: Case) -> str:
 
 
 def resolve_connections(cases: tuple[Case, ...], *, provider: str = "",
-                        model: str = "") -> dict[str, dict | ResolvedInference]:
+                        model: str = "") -> dict[str, ResolvedInference]:
     """`conn_key` -> where the app would send that case's call, read from the
-    real store -- one resolution per distinct key: the whole decide
-    resolution for a decide case (`run_stages` builds its chain from it), the
-    connection dict for a generate case. A decide case resolves its task with
+    real store -- one resolution per distinct key, whole: a decide case's
+    (`run_stages` builds its chain from it) and a generate case's
+    (`inference.generate` sends on it). A decide case resolves its task with
     `operation="decide"`, as `inference.decide`'s callers do, so the Decision
     role (or whatever the route chose) answers it.
 
@@ -205,7 +205,7 @@ def resolve_connections(cases: tuple[Case, ...], *, provider: str = "",
     from grimoire.routes.common import override_inference, require_inference
 
     body = SimpleNamespace(provider=provider, model=model) if provider or model else None
-    out: dict[str, dict | ResolvedInference] = {}
+    out: dict[str, ResolvedInference] = {}
     for case in cases:
         key = conn_key(case)
         if key in out:
@@ -221,7 +221,7 @@ def resolve_connections(cases: tuple[Case, ...], *, provider: str = "",
             if isinstance(detail, dict):
                 detail = detail.get("detail") or detail.get("kind") or ""
             raise RuntimeError(f"{key}: {detail} (choose a model on the Models page)") from exc
-        out[key] = resolved if case.schema is not None else resolved.conn
+        out[key] = resolved
     return out
 
 
@@ -298,14 +298,15 @@ def backend_note(decision: decisions.Decision) -> str:
     return note
 
 
-def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
+def live(case: Case, target: ResolvedInference, record: bool = False, *,
          client=None, backend: str = CHAIN) -> Result:
     """One real generation for `case`, scored against the baseline expectation
     (live output must PASS). With `record`, the reply replaces the baseline
     recording — counterexample variants are never overwritten.
 
-    A generate case (`target` a connection dict) is one `complete`. A decide
-    case (`target` its decide resolution) is answered by `inference.run_stages`
+    `target` is the case's resolution (`resolve_connections`). A generate case
+    is one joined `inference.generate`, as the app's own calls are. A decide
+    case is answered by `inference.run_stages`
     down `chain(target, backend)` -- by default the chain `inference.decide`
     sends, each stage on its own backend -- over the case's `items` and
     `explain`; the answers are written back as the structured reply
@@ -317,18 +318,17 @@ def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
 
     ctx = prepare(case)
     decide = case.schema is not None
+    if isinstance(target, dict):
+        raise TypeError(f"{case.id}: pass its resolution, not a connection")
     if decide:
-        if isinstance(target, dict):
-            raise TypeError(f"{case.id} is a decide case: pass its resolution")
         stages = chain(target, backend)
-    elif not isinstance(target, dict):
-        raise TypeError(f"{case.id} is a generate case: pass its connection")
     note = ""
 
     async def ask(c) -> str:
         nonlocal note
         if not decide:
-            return await c.complete(ctx["messages"], target)
+            return await inference.generate(case.task, ctx["messages"], client=c,
+                                            resolved=target, stream=False)
         explain = ctx.get("explain", "")
         decision = await inference.run_stages(case.task, ctx["items"], stages, client=c,
                                               explain=explain)
@@ -366,7 +366,7 @@ def live(case: Case, target: dict | ResolvedInference, record: bool = False, *,
     return result
 
 
-def live_all(cases: tuple[Case, ...], conns: dict[str, dict | ResolvedInference], isolate,
+def live_all(cases: tuple[Case, ...], conns: dict[str, ResolvedInference], isolate,
              record: bool = False, *, client=None, backend: str = CHAIN) -> list[Result]:
     """Each case live, on what its task resolved to (`resolve_connections`,
     keyed by `conn_key`); a decide case down `chain(..., backend)`."""

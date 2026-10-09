@@ -12,6 +12,8 @@ notes it once before it decides whether there is a Buffer to append to.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Callable
+
 from . import llm_usage
 
 KEY = "_reasoning_display"
@@ -94,12 +96,20 @@ def glm_effort(model: str, value: str | None) -> str:
     return effort if is_glm({"model": model}) and effort in GLM_EFFORTS else ""
 
 
-async def stream(client, messages, conn, usage):
-    """Yield separate display events; closing this wrapper closes generation."""
+async def stream(usage: dict, start: Callable[[], AsyncIterator[str]]
+                 ) -> AsyncIterator[dict]:
+    """Yield separate display events; closing this wrapper closes generation.
+
+    `start` opens the generation -- a call site's `inference.generate(...,
+    usage=usage)` -- and is called only once the display buffer is installed
+    in `usage`, the holder that generation fills, so the adapters find it
+    from the first frame. A `start` that raises (`generate` refusing its
+    resolution) takes the buffer back off."""
     buffer = Buffer()
     usage[KEY] = buffer
-    source = client.stream(messages, conn, usage)
+    source: AsyncIterator[str] | None = None
     try:
+        source = start()
         async for delta in source:
             for event in buffer.drain():
                 yield event
@@ -108,6 +118,8 @@ async def stream(client, messages, conn, usage):
             yield event
     finally:
         try:
-            await source.aclose()
+            aclose = getattr(source, "aclose", None)
+            if aclose is not None:
+                await aclose()
         finally:
             usage.pop(KEY, None)

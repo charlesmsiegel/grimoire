@@ -733,12 +733,12 @@ def post_campaign_library_description_draft(
     clock confirmation over a campaign nothing had written.
     """
     _campaign_root_or_404(cid)
-    conn, messages = image_draft_prompt(
+    resolved, messages = image_draft_prompt(
         store.campaign_images.image_path(cid, name), "", cid=cid)
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "image-description",
+            client, resolved, messages, "image-description",
             lambda text: {"description": store.image_drafts.parse_output(text)},
             cid=cid)
 
@@ -2199,7 +2199,7 @@ def post_campaign_voice_anchor_generate(
     overlay so a campaign-local character (which has no world copy) can use it
     too. Preview only — the caller persists with PUT."""
     _campaign_root_or_404(cid)
-    conn = require_inference("voice-anchor", cid).conn
+    resolved = require_inference("voice-anchor", cid)
     root = store.overlay.char_root(cid, char)
     try:
         ch = store.characters.read_character(root, char)
@@ -2213,7 +2213,7 @@ def post_campaign_voice_anchor_generate(
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "voice-anchor",
+            client, resolved, messages, "voice-anchor",
             lambda text: {"voice_anchor": store.voice_anchors.parse_output(text)},
             cid=cid)
 

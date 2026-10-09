@@ -24,14 +24,15 @@ from fastapi import (
 )
 from starlette.concurrency import run_in_threadpool
 
-from .. import decisions, llm_sampling, prompts, store
+from .. import decisions, llm_sampling, prompts, store, wire
 from .. import inference as operations
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient
 from ..llm_errors import LLMError
 from ..store.continuity import identity as continuity_identity
 from ..store.continuity import review as continuity_review
 from ..store.continuity import similarity as continuity_similarity
 from ..store.inference import resolve as inference
+from ..store.inference.resolved import ResolvedInference
 from . import character_turns, runs, streaming
 from . import continuity as continuity_routes
 from . import tracker as tracker_routes
@@ -143,7 +144,7 @@ def post_scene(cid: str, body: NewScene, request: Request):
     # The model chat would run on here, stamped on the scene. Resolved before
     # the hold: it only reads (config, connection files and campaign.md), and
     # a choice that changes in between is a stamp, not a transcript write.
-    _conn, model = _chat_target(cid)
+    _resolved, model = _chat_target(cid)
     try:
         with store.locks.campaign_lock(cid):
             if store.scenes.create_would_repad(cid):
@@ -238,7 +239,7 @@ def post_scene_import(cid: str, body: SceneImportCommit, request: Request):
              "role": _resolve_role(ref.kind, ref.role, body.pcless),
              "version": _actor_version(cid, ref.kind, ref.id, ref.version)}
             for ref in body.cast]
-    _conn, model = _chat_target(cid)    # `post_scene`'s stamp
+    _resolved, model = _chat_target(cid)    # `post_scene`'s stamp
     try:
         # The same hold, for the same reason, as `post_scene`: crossing the
         # number-width boundary repads every scene in the campaign, renaming
@@ -348,7 +349,7 @@ def post_scene_suggestions(cid: str, request: Request,
         store.campaigns.read_campaign(cid)
     except store.campaigns.CampaignNotFound:
         raise HTTPException(status_code=404, detail="campaign not found")
-    conn = require_inference("suggestions", cid).conn
+    resolved = require_inference("suggestions", cid)
     snapshot = store.suggest.build_snapshot(cid, offscreen=req.offscreen)
     controls = _controls_or_refuse(cid, snapshot, req)
     # A refresh passes rank=false: re-ranking would reshuffle the greeting cards
@@ -360,7 +361,7 @@ def post_scene_suggestions(cid: str, request: Request,
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "suggestions",
+            client, resolved, messages, "suggestions",
             lambda text: _suggestions_payload(cid, text, candidates, req.offscreen,
                                               snapshot, controls),
             cid=cid)
@@ -424,12 +425,12 @@ def post_scene_intent(cid: str, body: SceneIntent, request: Request,
         raise HTTPException(status_code=404, detail="campaign not found")
     if not body.text.strip():
         raise HTTPException(status_code=400, detail="empty scene description")
-    conn = require_inference("intent", cid).conn
+    resolved = require_inference("intent", cid)
     messages = store.suggest.build_intent_prompt(cid, body.text, offscreen=body.offscreen)
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "intent",
+            client, resolved, messages, "intent",
             lambda text: _intent_payload(cid, text, body.offscreen), cid=cid)
 
     return runs.run_draft(request.app, runs.campaign_subject(cid), "intent",
@@ -830,18 +831,19 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
     _require_scene(cid, sid)
     if character_turns.enabled() or turn.speaker_ref:
         character_turns.validate_actor(cid, sid, turn.speaker_ref)
+    resolved: UsableInference | None
     try:
-        conn = require_inference("chat", cid).conn
+        resolved = require_inference("chat", cid)
     except HTTPException as exc:
         # A Manual-mode post naming no speaker generates nothing, so a missing
-        # connection is no reason to refuse it. `{}` tells the engine none was
+        # connection is no reason to refuse it. None tells the engine none was
         # resolved; it requires one after all if its plan turns out to speak.
         if not (isinstance(exc.detail, dict) and exc.detail.get("kind") == "missing_key"
                 and character_turns.answers_nothing(
                     cid, sid, director=turn.director, content=turn.content,
                     speaker_ref=turn.speaker_ref)):
             raise
-        conn = {}
+        resolved = None
     if character_turns.enabled():
         # The speaker pick's refusal, ahead of the reservation for the reason
         # below. The kind is `_chat_run`'s: a post unless the send is
@@ -864,7 +866,7 @@ def post_chat(cid: str, sid: str, turn: ChatTurn, request: Request,
         # response. Replay it rather than doing the work twice.
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _chat_run(cid, sid, turn, request, client, conn, run)
+        return _chat_run(cid, sid, turn, request, client, resolved, run)
 
 
 def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
@@ -909,7 +911,7 @@ def _take_the_post_back(cid: str, sid: str, posted_at, content: str, run,
 
 
 def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
-              client: LLMClient, conn: dict, run):
+              client: LLMClient, resolved: UsableInference | None, run):
     """The body of a send, once the scene is reserved.
 
     Split out so `runs.reservation` can wrap every exit from it. The run is
@@ -1041,8 +1043,12 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         # (`tracker.after_take_back`), landed or not.
         tracker_routes.start(request.app, cid, sid, tracked, client, run.scene_identity)
     if character_turns.enabled() or turn.speaker_ref:
-        return _start_round(cid, sid, turn, request, client, conn, run, ephemeral=ephemeral,
+        return _start_round(cid, sid, turn, request, client, resolved, run, ephemeral=ephemeral,
                             posted_at=posted_at, content=content, post_id=post_id)
+    # Only the round engine is handed no resolution (a Manual-mode post that
+    # speaks to nobody), and it took the branch above.
+    assert resolved is not None
+    conn, primary = resolved.conn, resolved.chain.primary
     if ephemeral:
         # `content` when a note was stored (macros already resolved, so the
         # model sees exactly what the transcript holds), the template's default
@@ -1052,7 +1058,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         note = content or prompts.render("scene/director_note.j2")
         messages, breakdown = store.context.compose_director_turn(
             cid, sid, note, turn=_turn_override(turn),
-            describe=store.prompt_log.capturing(), model=effective_model(conn),
+            describe=store.prompt_log.capturing(), model=primary.model,
             images=store.post_images.images_for(conn))
         # AFTER the stream is constructed, not before. `_chat_stream` claims the
         # turn under the campaign lock synchronously, before it returns -- so a
@@ -1061,11 +1067,14 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         # never saw. The generator body has not run at this point; only the
         # claim has.
         outcome = StreamOutcome()
-        stream = _chat_stream(cid, sid, messages, conn, client, task="director",
+        # A director turn runs where the send resolved `chat` to: one route,
+        # one resolution (`for_task`), metered and generated as `director`.
+        stream = _chat_stream(cid, sid, messages, operations.for_task(resolved, "director"),
+                              client, task="director",
                               identity=run.scene_identity, outcome=outcome,
                               after_turn=_follow_up_hook(request.app, cid, sid, client))
         _record_prompt(cid, sid, "director", breakdown,
-                       model=effective_model(conn), kind=conn["kind"], messages=messages,
+                       model=primary.model, kind=primary.kind, messages=messages,
                        conn=conn)
         # DETACHED, like the ordinary send below. This branch used to return the
         # response directly, which left its reservation running forever -- the
@@ -1077,7 +1086,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(turn),
-        describe=store.prompt_log.capturing(), model=effective_model(conn),
+        describe=store.prompt_log.capturing(), model=primary.model,
         images=store.post_images.images_for(conn))
 
     # The post has to precede the stream — `build_messages` renders history out
@@ -1101,7 +1110,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     # `test_a_turn_that_never_claims_records_nothing` caught.
     outcome = StreamOutcome()
     stream = _chat_stream(
-        cid, sid, messages, conn, client,
+        cid, sid, messages, resolved, client,
         undo_user_post=lambda: _take_the_post_back(cid, sid, posted_at, content, run,
                                                    post_id),
         task="chat", identity=run.scene_identity, outcome=outcome,
@@ -1111,7 +1120,7 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
     # showing a request the model never saw (`test_a_turn_that_never_claims_
     # records_nothing`).
     _record_prompt(cid, sid, "chat", breakdown,
-                   model=effective_model(conn), kind=conn["kind"], messages=messages,
+                   model=primary.model, kind=primary.kind, messages=messages,
                    conn=conn)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
@@ -1119,7 +1128,8 @@ def _chat_run(cid: str, sid: str, turn: ChatTurn, request: Request,
 
 
 def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
-                 client: LLMClient, conn: dict, run, *, ephemeral: bool, posted_at,
+                 client: LLMClient, resolved: UsableInference | None, run, *,
+                 ephemeral: bool, posted_at,
                  content: str, post_id: str | None):
     """`_chat_run`'s hand-off to the round engine (`character_turns.start`).
 
@@ -1129,7 +1139,7 @@ def _start_round(cid: str, sid: str, turn: ChatTurn, request: Request,
     a failed turn's does. A director note stays, for `note_text`'s reasons."""
     try:
         return character_turns.start(
-            cid,sid,request,client,conn,run,post=posted_at,
+            cid,sid,request,client,resolved,run,post=posted_at,
             note=(content or prompts.render("scene/director_note.j2")) if ephemeral else "",
             turn=_turn_override(turn),automatic=not ephemeral,
             actor_ref=turn.speaker_ref,after_turn=_follow_up_hook(request.app,cid,sid,client),
@@ -1153,7 +1163,7 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
         return replay
     _turn_override(body)
     scene = _require_scene(cid, sid)
-    conn = require_inference("retry", cid).conn
+    resolved = require_inference("retry", cid)
     # Ahead of the retirement, not behind it: a refusal must not cost a decision
     # for a request that then does nothing at all. Ahead of the RESERVATION too:
     # a run reserved for a request that was never going to do anything has to be
@@ -1164,15 +1174,15 @@ def post_retry(cid: str, sid: str, request: Request, body: RetryBody | None = No
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _retry_run(cid, sid, body, request, client, conn, run)
+        return _retry_run(cid, sid, body, request, client, resolved, run)
 
 
 def _retry_run(cid: str, sid: str, body, request: Request,
-               client: LLMClient, conn: dict, run):
+               client: LLMClient, resolved: UsableInference, run):
     """The body of a retry, once the scene is reserved -- see `_chat_run` for
     why every exit from it has to be wrapped rather than audited."""
     if character_turns.enabled():
-        return character_turns.retry(cid,sid,request,client,conn,run,
+        return character_turns.retry(cid,sid,request,client,resolved,run,
                                       _follow_up_hook(request.app,cid,sid,client))
     # Same order as the send above, for the same reason — see there. Fenced like
     # it too: a scene replaced between the reservation and here must not collect
@@ -1183,16 +1193,17 @@ def _retry_run(cid: str, sid: str, body, request: Request,
         store.proposals.heal(cid, sid)
         _disown_dead_pending(cid, sid)
         store.proposals.supersede(cid, sid)  # a fresh generation retires the old decision
+    conn, primary = resolved.conn, resolved.chain.primary
     messages, breakdown = store.context.compose_turn(
         cid, sid, turn=_turn_override(body),
-        describe=store.prompt_log.capturing(), model=effective_model(conn),
+        describe=store.prompt_log.capturing(), model=primary.model,
         images=store.post_images.images_for(conn))
     outcome = StreamOutcome()
-    stream = _chat_stream(cid, sid, messages, conn, client,   # claims the turn; see above
+    stream = _chat_stream(cid, sid, messages, resolved, client,   # claims the turn; see above
                           task="retry", identity=run.scene_identity, outcome=outcome,
                           after_turn=_follow_up_hook(request.app, cid, sid, client))
     _record_prompt(cid, sid, "retry", breakdown,
-                   model=effective_model(conn), kind=conn["kind"], messages=messages,
+                   model=primary.model, kind=primary.kind, messages=messages,
                    conn=conn)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)
@@ -1274,7 +1285,7 @@ def post_regenerate(cid: str, sid: str, request: Request,
     # with no key, must refuse BEFORE the reservation below — past it the route
     # has archived and removed the outgoing reply, and a 400 raised there would
     # report a rejected request over a scene that is one reply short.
-    # `conn` is always the resolved connection and `routed` says whether it is
+    # `resolved` is always the resolution that serves and `routed` says whether it is
     # somewhere this turn would not have gone anyway — two answers, because the
     # stamps below need the second and the generation needs the first, and a
     # single sentinel could not carry both without the caller re-resolving.
@@ -1282,7 +1293,6 @@ def post_regenerate(cid: str, sid: str, request: Request,
     # generation knows what it is: a reroll of a scene reply routes exactly
     # where the reply it replaces would have (#142).
     resolved, routed = override_inference(body, "regenerate", cid)
-    conn = resolved.conn
     # RESERVED BEFORE THE FIRST MUTATOR, which matters more here than anywhere
     # else: this route archives the outgoing reply and removes it from the
     # transcript before the replacement exists, so a 409 raised afterwards
@@ -1292,20 +1302,22 @@ def post_regenerate(cid: str, sid: str, request: Request,
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _regenerate_run(cid, sid, body, request, client, conn, run, routed=routed)
+        return _regenerate_run(cid, sid, body, request, client, resolved, run, routed=routed)
 
 
 def _regenerate_run(cid: str, sid: str, body, request: Request,
-                    client: LLMClient, conn: dict, run, *, routed: bool):
+                    client: LLMClient, resolved: UsableInference, run, *, routed: bool):
     """The body of a reroll, once the scene is reserved -- see `_chat_run`."""
     guidance = (body.guidance or "").strip() if body else ""
     # What this reroll will actually be sent to, after `override_inference`
-    # has folded in whatever the body asked for. Read off `conn` rather than off
-    # the body, so it names the resolved route in every case -- an override
-    # naming only a connection reports THAT connection's model, and a Claude
-    # connection with none configured reports the one the dispatcher
-    # substitutes rather than the empty string it stores.
-    ran_on = effective_model(conn)
+    # has folded in whatever the body asked for. Read off the resolution's
+    # primary target rather than off the body, so it names the resolved route
+    # in every case -- an override naming only a connection reports THAT
+    # connection's model, and a Claude connection with none configured
+    # reports the one the dispatcher substitutes rather than the empty string
+    # it stores.
+    conn, primary = resolved.conn, resolved.chain.primary
+    ran_on = primary.model
     # `routed` is whether this turn ran somewhere it would NOT have gone
     # anyway -- not merely whether the caller typed something. A body naming
     # the active connection at its own model is not an override, and review
@@ -1455,7 +1467,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
         messages, breakdown = store.context.compose_turn(
             cid, sid, turn=_turn_override(body),
             appended=(("Regenerate guidance", "system", block),) if block else (),
-            describe=store.prompt_log.capturing(), model=effective_model(conn),
+            describe=store.prompt_log.capturing(), model=primary.model,
             images=store.post_images.images_for(conn))
     except BaseException:
         if restore is not None:
@@ -1507,7 +1519,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # `finalize`, under the same lock that writes the new reply — which is
     # tracked with the other transcript-identity work rather than bolted on.
     outcome = StreamOutcome()
-    stream = _chat_stream(cid, sid, messages, conn, client, restore_removed=restore,
+    stream = _chat_stream(cid, sid, messages, resolved, client, restore_removed=restore,
                           identity=run.scene_identity, outcome=outcome,
                           task="regenerate",
                           after_turn=_follow_up_hook(request.app, cid, sid, client))
@@ -1518,7 +1530,7 @@ def _regenerate_run(cid: str, sid: str, body, request: Request,
     # The frozen panel names this attempt; the live panel resolves the next
     # ordinary turn independently, so a one-shot override cannot leak into it.
     _record_prompt(cid, sid, "regenerate", breakdown,
-                   model=effective_model(conn), kind=conn["kind"], messages=messages,
+                   model=primary.model, kind=primary.kind, messages=messages,
                    conn=conn)
     # `on_unstarted` is `restore` again, for the one path the stream's own hooks
     # cannot cover: a Stop that arrived while this route was still in the
@@ -2118,7 +2130,7 @@ async def _resolve_identity(cid: str, sid: str, client: LLMClient,
         campaign=cid, scene=sid,
         around=lambda call, holder: budget.run(
             call, lambda: block.__setitem__("attempted", True),
-            on_timeout=_noting(client, resolved.conn, holder)))
+            on_timeout=_noting(client, resolved, holder)))
     if error := _decide_error(decision, continuity_identity.DECISION_ID):
         # A chunk failed and no chunk was read: the failure is the phase's
         # (M12), by the failing chunk's own kind -- never the unreadable reply
@@ -2233,7 +2245,7 @@ async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClien
     """The extraction, then the identity phase chained onto it.
 
     `extraction` is the already-built extraction awaitable: its
-    `client.complete(...)` is spelled in `_absorb_work`, under the absorb
+    `operations.generate(...)` is spelled in `_absorb_work`, under the absorb
     meter, so the usage guard sees it metered. Its failure stays fatal; the
     identity phase never raises for absorb."""
     text = await extraction
@@ -2241,7 +2253,8 @@ async def _extract_and_identify(extraction, cid: str, sid: str, client: LLMClien
                            store.absorb.parse_output(text), prepared, budget)
 
 
-async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
+async def _run_audit(cid: str, sid: str, client: LLMClient,
+                     resolved: UsableInference | None,
                      budget: _Budget, abandoned=None,
                      unroutable: str = "") -> tuple[list[dict], dict]:
     """(edits, mechanics) for the scene audit. Never raises for absorb; every
@@ -2258,7 +2271,7 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
     the never-raises rule above is untouched on that path."""
     mech = {"status": "skipped", "reason": None, "warnings": [], "dropped": [],
             "attempted": False, "budget_exhausted": False}
-    if conn is None:
+    if resolved is None:
         # No usable connection for this phase's route -- reported the way every
         # other audit failure is, so the absorb around it still lands.
         return [], {**mech, "status": "failed", "reason": unroutable or "no connection"}
@@ -2289,9 +2302,11 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
         # out, which is a fact only `run` holds.
         with store.usage.meter("audit", campaign=cid, scene=sid) as m:
             text = await _watched(
-                budget.run(client.complete(messages, conn, m.usage),
+                budget.run(operations.generate("audit", messages, client=client,
+                                               resolved=resolved, usage=m.usage,
+                                               stream=False),
                            lambda: mech.__setitem__("attempted", True),
-                           on_timeout=_noting(client, conn, m.usage)), abandoned)
+                           on_timeout=_noting(client, resolved, m.usage)), abandoned)
         parsed = store.audit.parse_output(text)
         edits, dropped = store.audit.materialize(cid, sid, parsed)
     except Abandoned:
@@ -2326,7 +2341,7 @@ async def _run_audit(cid: str, sid: str, client: LLMClient, conn: dict | None,
 
 
 async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient,
-                          conn: dict | None, budget: _Budget,
+                          resolved: UsableInference | None, budget: _Budget,
                           abandoned=None,
                           unroutable: str = "") -> tuple[list[dict], dict]:
     """Propose a refreshed campaign dossier for every present NPC, reporting the
@@ -2353,7 +2368,7 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
     out: dict = {"status": "skipped", "reason": None,
                  "proposed": [], "failed": [], "skipped": [],
                  "attempted": False, "budget_exhausted": False}
-    if conn is None:
+    if resolved is None:
         return [], {**out, "status": "failed", "reason": unroutable or "no connection"}
     edits: list[dict] = []
     try:
@@ -2411,9 +2426,11 @@ async def _stage_dossiers(cid: str, sid: str, transcript: str, client: LLMClient
             # `run`, which alone can decide it atomically with the deadline.
             with store.usage.meter("dossier", campaign=cid, scene=sid) as m:
                 d_text = await _watched(
-                    budget.run(client.complete(msgs, conn, m.usage),
+                    budget.run(operations.generate("dossier", msgs, client=client,
+                                                   resolved=resolved, usage=m.usage,
+                                                   stream=False),
                                lambda: out.__setitem__("attempted", True),
-                               on_timeout=_noting(client, conn, m.usage)), abandoned)
+                               on_timeout=_noting(client, resolved, m.usage)), abandoned)
             parsed_dossier = store.dossiers.parse_output(d_text)
             # stage_edit returns None for an unchanged paragraph AND for a blank
             # reply; only the first is a success. Left conflated, a model that
@@ -2650,7 +2667,7 @@ async def _stage_voice_drift(cid: str, sid: str, transcript: str, client: LLMCli
                 explain=explain, campaign=cid, scene=sid,
                 around=lambda call, holder: budget.run(
                     call, lambda: out.__setitem__("attempted", True),
-                    on_timeout=_noting(client, resolved.conn, holder)))
+                    on_timeout=_noting(client, resolved, holder)))
             finding = store.voice_drift.finding_of(decision.items[0])
             # An unreadable verdict is a FAILED call, not a quiet pass, and a
             # drift is only usable with a corrective that fits in front of
@@ -2994,7 +3011,7 @@ def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
     """
     _campaign_root_or_404(cid)
     _require_scene(cid, sid)
-    conn = require_inference("absorb", cid).conn
+    resolved = require_inference("absorb", cid)
     # Before the reservation and before a token of the budget: a scene whose id
     # predates the cap can be one the review sidecar's longer name will not fit
     # beside, and finding that out in `publish` costs the whole generation and
@@ -3014,11 +3031,12 @@ def post_absorb(cid: str, sid: str, request: Request, force: bool = False,
         runs.require_group_free(request.app, cid, sid)
         run = runs.reserve_review(request.app, cid, sid, "absorb", generation)
     with runs.reservation(request.app, run):
-        return _absorb_start(cid, sid, force, request, client, conn, run, generation)
+        return _absorb_start(cid, sid, force, request, client, resolved, run, generation)
 
 
 def _absorb_start(cid: str, sid: str, force: bool, request: Request,
-                  client: LLMClient, conn: dict, run, generation: str) -> dict:
+                  client: LLMClient, resolved: UsableInference, run,
+                  generation: str) -> dict:
     """Everything an absorb decides synchronously, then the handoff.
 
     Split out so `runs.reservation` can wrap every exit: the run is
@@ -3067,14 +3085,14 @@ def _absorb_start(cid: str, sid: str, force: bool, request: Request,
         watermark=store.pending_reviews.watermark(scene["messages"]))
 
     async def work():
-        return await _absorb_work(cid, sid, client, conn, run, generation, prepared)
+        return await _absorb_work(cid, sid, client, resolved, run, generation, prepared)
 
     runs.start_computing(request.app, run, work)
     return _accepted(run, generation)
 
 
-async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
-                       generation: str, prepared: _Prepared) -> dict:
+async def _absorb_work(cid: str, sid: str, client: LLMClient, resolved: UsableInference,
+                       run, generation: str, prepared: _Prepared) -> dict:
     """The four phases, and the durable write that is this run's whole value."""
     abandoned = _review_abandoned(run)
     budget = _Budget(store.config.absorb_budget())
@@ -3095,7 +3113,7 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # Each phase resolves its OWN connection (#142): they are five
         # different routes -- extraction, the identity check, the per-NPC
         # dossier loop, voice drift and the mechanics audit -- and sharing one
-        # `conn` would make four of those five settings do nothing whenever an
+        # resolution would make four of those five settings do nothing whenever an
         # absorb was what ran them.
         #
         # All four secondary ones resolved HERE, before the meter opens and before a single
@@ -3110,11 +3128,11 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
         # discards the extraction's result too. Voice drift and the identity
         # check keep the whole resolution, since `decide()` takes one (spec
         # 7.4).
-        dossier_conn, dossier_why = _soft_inference(
+        dossier_resolved, dossier_why = _soft_inference(
             lambda: require_inference("dossier", cid))
         voice_resolved, voice_why, _voice_kind = _soft_resolved(
             lambda: require_inference("voice-drift", cid, operation="decide"))
-        audit_conn, audit_why = _soft_inference(
+        audit_resolved, audit_why = _soft_inference(
             lambda: require_inference("audit", cid))
         ident_resolved, ident_why, _ident_kind = _soft_resolved(
             lambda: require_inference("continuity-identity", cid, operation="decide"))
@@ -3136,14 +3154,16 @@ async def _absorb_work(cid: str, sid: str, client: LLMClient, conn: dict, run,
             # `_watched` does to it here.
             results = await _watched(_gather_phases(
                 _extract_and_identify(
-                    budget.run(client.complete(prepared.messages, conn, m.usage),
-                               on_timeout=_noting(client, conn, m.usage)),
+                    budget.run(operations.generate("absorb", prepared.messages,
+                                                   client=client, resolved=resolved,
+                                                   usage=m.usage, stream=False),
+                               on_timeout=_noting(client, resolved, m.usage)),
                     cid, sid, client, prepared, budget, ident_resolved, ident_why),
-                _stage_dossiers(cid, sid, prepared.transcript, client, dossier_conn,
+                _stage_dossiers(cid, sid, prepared.transcript, client, dossier_resolved,
                                 budget, unroutable=dossier_why),
                 _stage_voice_drift(cid, sid, prepared.transcript, client, voice_resolved,
                                    budget, unroutable=voice_why),
-                _run_audit(cid, sid, client, audit_conn, budget, unroutable=audit_why),
+                _run_audit(cid, sid, client, audit_resolved, budget, unroutable=audit_why),
                 limit=store.config.absorb_concurrency()), abandoned)
         extraction, dossier_result, voice_result, audit_result = results
         if isinstance(extraction, BaseException):
@@ -3455,7 +3475,7 @@ def post_audit(cid: str, sid: str, request: Request,
     nothing else can reconstruct.
     """
     _require_scene(cid, sid)
-    conn = require_inference("audit", cid).conn
+    resolved = require_inference("audit", cid)
     if store.modules.resolve(cid) is None:
         raise HTTPException(status_code=400, detail="no module resolved")
 
@@ -3465,7 +3485,7 @@ def post_audit(cid: str, sid: str, request: Request,
             # whatever absorb ran out of time earlier.
             try:
                 edits, mechanics = await _run_audit(
-                    cid, sid, client, conn, _Budget(store.config.absorb_budget()),
+                    cid, sid, client, resolved, _Budget(store.config.absorb_budget()),
                     abandoned=_review_abandoned(run))
             except Abandoned:
                 return {"state": "cancelled", "error": _cancelled_error()}
@@ -3875,7 +3895,7 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
         # digest, what gets folded, what `covered` records -- then works from the
         # same bounded transcript, rather than each having to remember the bound.
         scene = {**scene, "messages": scene["messages"][:upto]}
-    conn = require_inference("rolling-summary", cid).conn
+    resolved = require_inference("rolling-summary", cid)
     every = store.config.rolling_summary_every()
     facts = store.chronicle.scene_facts(cid, sid)
     view = _rolling_view(cid, sid, scene, facts)
@@ -3894,12 +3914,13 @@ async def _rolling_once(cid: str, sid: str, force: bool, upto: int | None,
             if not force:
                 return {**_rolling_body(view, every), "refreshed": False}
             return None
-        return await _rolling_refresh(cid, sid, scene, view, every, conn, client,
+        return await _rolling_refresh(cid, sid, scene, view, every, resolved, client,
                                       facts)
 
 
 async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: int,
-                           conn: dict, client: LLMClient, facts: dict) -> dict:
+                           resolved: UsableInference, client: LLMClient,
+                           facts: dict) -> dict:
     """The paid half of `post_rolling_summary`, split out so the in-flight claim
     brackets exactly the span that reaches the provider."""
     messages = scene["messages"]
@@ -3917,7 +3938,8 @@ async def _rolling_refresh(cid: str, sid: str, scene: dict, view: dict, every: i
         facts)
     try:
         with store.usage.meter("rolling-summary", campaign=cid, scene=sid) as m:
-            text = await client.complete(prompt, conn, m.usage)
+            text = await operations.generate("rolling-summary", prompt, client=client,
+                                             resolved=resolved, usage=m.usage, stream=False)
     except LLMError as exc:
         raise _llm_http_error(exc) from exc
     summary = store.rolling_summary.parse_output(text)
@@ -4356,7 +4378,8 @@ async def _break_title(cid: str, sid: str, transcript: str, facts: dict | None,
         return ""
     try:
         with store.usage.meter("scene-break-title", campaign=cid, scene=sid) as m:
-            text = await client.complete(prompt, resolved.conn, m.usage)
+            text = await operations.generate("scene-break-title", prompt, client=client,
+                                             resolved=resolved, usage=m.usage, stream=False)
     except LLMError:
         return ""
     return store.scene_break.parse_title(text)
@@ -4578,7 +4601,7 @@ def post_dossiers(cid: str, sid: str, request: Request,
     proposal from the first pass and put nothing in its place.
     """
     scene = _require_scene(cid, sid)
-    conn = require_inference("dossier", cid).conn
+    resolved = require_inference("dossier", cid)
     if not store.scenes.in_context(scene["messages"]):
         # A dossier is a paragraph the model rewrites FROM the transcript, so an
         # empty one can only produce invention. The audit needs no equivalent
@@ -4596,7 +4619,7 @@ def post_dossiers(cid: str, sid: str, request: Request,
             # whatever absorb ran out of time earlier (post_audit's reason).
             try:
                 edits, dossiers = await _stage_dossiers(
-                    cid, sid, transcript, client, conn,
+                    cid, sid, transcript, client, resolved,
                     _Budget(store.config.absorb_budget()),
                     abandoned=_review_abandoned(run))
             except Abandoned:
@@ -5339,17 +5362,30 @@ def put_scene_response(cid: str, sid: str, body: ResponseSettings):
     return {"ok": True}
 
 
-def _chat_target(cid: str) -> tuple[dict | None, str]:
-    """What chat would run on in campaign `cid`: the routed connection (None
-    when nothing resolves) and its effective model ("" then).
+def _chat_target(cid: str) -> tuple[ResolvedInference, str]:
+    """What chat would run on in campaign `cid`: the resolution (its `conn`
+    and `chain` None when nothing resolves) and the model its primary target
+    sends ("" then).
 
     A display read -- the context view's, and the `model` a new scene is
     stamped with (`post_scene`, `post_scene_import`) -- so it never refuses: a
     keyless or incapable primary is still where chat would go, and the turn
     itself is what reports it."""
     # routing-ok: what chat WOULD run on, shown and stamped on a new scene; never refuses
-    conn = inference.resolve("chat", cid).conn
-    return conn, (effective_model(conn) if conn is not None else "")
+    resolved = inference.resolve("chat", cid)
+    return resolved, _target_model(resolved.chain)
+
+
+def _target_model(chain: wire.Chain | None) -> str:
+    """The model a resolution's primary target sends, "" when nothing
+    resolved -- a display fact (`wire.Target.model`, the effective model)."""
+    return chain.primary.model if chain is not None else ""
+
+
+def _target_kind(chain: wire.Chain | None) -> str:
+    """The adapter a resolution's primary target is sent through, "" when
+    nothing resolved -- a display fact (`wire.Target.kind`)."""
+    return chain.primary.kind if chain is not None else ""
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/context")
@@ -5365,19 +5401,19 @@ def get_scene_context(cid: str, sid: str):
     this model's own (`tokens.counting`) -- for most backends it is not, and the
     inspector marks the counts as estimates."""
     _require_scene(cid, sid)
-    conn, model = _chat_target(cid)
+    resolved, model = _chat_target(cid)
     # What the next turn would send, pictures included (#377): the Images row is
     # present exactly when they would reach this scene's routed connection. And
     # what the next ordinary turn's sampler preset sends on this connection,
     # and what its backend cannot take -- the inspector says so rather than the
     # facade dropping it in silence (sampler presets spec). A frozen snapshot
     # carries the same block for the attempt it captured.
-    breakdown = store.context.context_breakdown(cid, sid, model=model,
-                                                images=store.post_images.images_for(conn))
+    breakdown = store.context.context_breakdown(
+        cid, sid, model=model, images=store.post_images.images_for(resolved.conn))
     return {"model": model, **breakdown,
-            "token_count": store.tokens.counting(model, conn["kind"] if conn else "",
+            "token_count": store.tokens.counting(model, _target_kind(resolved.chain),
                                                  breakdown.get("counted_with", "")),
-            "sampling": llm_sampling.report(conn)}
+            "sampling": llm_sampling.report(resolved.conn)}
 
 
 @router.get("/campaigns/{cid}/scenes/{sid}/prompts")
@@ -5461,12 +5497,12 @@ def get_scene_prompt_diff(cid: str, sid: str, eid: str, against: str = LIVE_SIDE
         # assemble/pack pass `GET .../context` does, so the side this diff calls
         # "live" is the one the Context panel is showing.
         # routing-ok: the live side of a prompt diff is a display; it must never refuse
-        conn = inference.resolve("chat", cid).conn
-        model = effective_model(conn) if conn is not None else ""
+        chat = inference.resolve("chat", cid)
+        model = _target_model(chat.chain)
         live = store.context.context_breakdown(cid, sid, model=model,
-                                               images=store.post_images.images_for(conn))
+                                               images=store.post_images.images_for(chat.conn))
         head = {"id": LIVE_SIDE, "task": LIVE_SIDE, "ts": "", "model": model, **live,
-                "token_count": store.tokens.counting(model, conn["kind"] if conn else "",
+                "token_count": store.tokens.counting(model, _target_kind(chat.chain),
                                                      live.get("counted_with", ""))}
     else:
         other = store.prompt_log.read_entry(cid, against, scene=sid)
@@ -5954,18 +5990,18 @@ def post_replay_turn(cid: str, sid: str, request: Request,
     if replay is not None:
         return replay
     _require_scene(cid, sid)
-    conn = require_inference("replay", cid).conn
+    resolved = require_inference("replay", cid)
     _replay_session(cid, sid)
     run, fresh = runs.reserve_turn(request.app, cid, sid, "replay",
                                    x_grimoire_attempt)
     if not fresh:
         return runs.tail_response(run, 0, lead=runs.lead_frame(run))
     with runs.reservation(request.app, run):
-        return _replay_turn_run(cid, sid, request, client, conn, run)
+        return _replay_turn_run(cid, sid, request, client, resolved, run)
 
 
 def _replay_turn_run(cid: str, sid: str, request: Request,
-                     client: LLMClient, conn: dict, run):
+                     client: LLMClient, resolved: UsableInference, run):
     """The body of a replay turn, once the scene is reserved -- see `_chat_run`."""
     try:
         store.replay.stage(cid)
@@ -5978,11 +6014,12 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
                             detail={"detail": "this replay has no model turn left to run",
                                     "kind": "replay_done"})
     if character_turns.enabled():
-        return character_turns.start(cid,sid,request,client,conn,run,
+        return character_turns.start(cid,sid,request,client,resolved,run,
             actor_ref=character_turns.replay_actor(cid,sid),automatic=False,
             note=prompts.render("scene/director_note.j2"))
+    conn, primary = resolved.conn, resolved.chain.primary
     messages, breakdown = store.context.compose_turn(
-        cid, sid, describe=store.prompt_log.capturing(), model=effective_model(conn),
+        cid, sid, describe=store.prompt_log.capturing(), model=primary.model,
         images=store.post_images.images_for(conn))
     # No `undo_user_post` hook, unlike `post_chat`. The staged posts are not
     # this request's to take back: `stage` recorded them as staged, a retry
@@ -5996,10 +6033,10 @@ def _replay_turn_run(cid: str, sid: str, request: Request,
     # `ReplayPanel` asks once when the walk ends, which is the boundary that
     # means anything here.
     outcome = StreamOutcome()
-    stream = _chat_stream(cid, sid, messages, conn, client, task="replay",
+    stream = _chat_stream(cid, sid, messages, resolved, client, task="replay",
                           identity=run.scene_identity, outcome=outcome)
     _record_prompt(cid, sid, "replay", breakdown,
-                   model=effective_model(conn), kind=conn["kind"], messages=messages,
+                   model=primary.model, kind=primary.kind, messages=messages,
                    conn=conn)
     runs.start_detached(request.app, run, lambda: stream.body_iterator,
                         outcome=outcome.result)

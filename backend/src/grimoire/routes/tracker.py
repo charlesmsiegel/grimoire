@@ -22,8 +22,9 @@ import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request
 from starlette.concurrency import run_in_threadpool
 
+from .. import inference as operations
 from .. import store
-from ..llm import LLMClient, effective_model
+from ..llm import LLMClient
 from ..llm_errors import LLMError
 from . import runs
 from .common import (
@@ -389,7 +390,7 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
         # a failed record saying why rather than an exception out of the run.
         # In a worker: resolving a connection reads the campaign and the
         # connection files, and this runs on the lifespan loop.
-        conn = await run_in_threadpool(lambda: require_inference("tracker-update", cid).conn)
+        resolved = await run_in_threadpool(lambda: require_inference("tracker-update", cid))
     except HTTPException as exc:
         await run_in_threadpool(_fail, cid, identity, sid, key, _detail(exc), gen)
         return {"state": "failed", "error": run_error(exc)}
@@ -407,7 +408,8 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
     try:
         with store.usage.meter("tracker-update", campaign=cid, scene=prep["sid"],
                                post=prep["post"], response_id=prep["rid"]) as m:
-            text = await client.complete(messages, conn, m.usage)
+            text = await operations.generate("tracker-update", messages, client=client,
+                                             resolved=resolved, usage=m.usage, stream=False)
         reply = store.tracker.merge.parse_reply(text)
     except LLMError as exc:
         await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)
@@ -425,7 +427,7 @@ async def _update_locked(cid: str, sid: str, key: str, gen: int | None, client: 
     try:
         written = await run_in_threadpool(
             _commit, cid, identity, prep["sid"], key, snapshot, changed,
-            store.tracker.fields.digest(fields), effective_model(conn), flag_later,
+            store.tracker.fields.digest(fields), resolved.chain.primary.model, flag_later,
             prep["seen_seq"], gen, prep["stale_base"], restored, prep["base"])
     except Exception as exc:  # noqa: BLE001 -- as `_prepare`: never leave it `pending`
         await run_in_threadpool(_fail, cid, identity, prep["sid"], key, _text(exc), gen)

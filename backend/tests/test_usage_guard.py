@@ -35,6 +35,14 @@ Honest about its reach, the house standard:
   meter and never enters it is a bug this cannot see.
 - **A marker clears a call that genuinely should not be counted**, with a reason,
   and the count of markers is capped: an exemption is a hole in the total.
+- **`inference.generate` forwards its caller's holder** (slice I). Its
+  facade calls (`stream` and `complete`) pass its own `usage` parameter, not a meter of their own:
+  the meter belongs at the call site, around the generation, where a route
+  opens it. So those two calls are `FORWARDERS`, and the rule moves to the
+  door instead -- every `generate` operation call in the package (the
+  operation guard's recogniser, through a binding of `grimoire.inference`)
+  passes `usage=<meter>.usage`. Outside the package (`evals/`, the ingest
+  script) nothing is metered today, and neither is checked.
 """
 
 from __future__ import annotations
@@ -46,7 +54,7 @@ import grimoire.inference as inference_mod
 import grimoire.routes as routes_pkg
 
 from . import guard_markers
-from .test_operation_guard import CLIENT_MODULE, _walk, client_calls
+from .test_operation_guard import CLIENT_MODULE, _walk, client_calls, generate_calls
 
 ROUTES = pathlib.Path(routes_pkg.__file__).parent
 #: Files outside `routes/` that hold an `LLMClient` and are scanned beside it.
@@ -63,6 +71,12 @@ _CLIENT = "client"
 _HOLDER = "usage"
 
 MARKER = "usage-ok:"
+
+#: Functions whose facade calls forward the CALLER's holder rather than open a
+#: meter: `{file under the package: function names}`. Such a call is metered
+#: where the function is called, which `test_every_generate_call_passes_a_
+#: meters_holder` checks.
+FORWARDERS: dict[str, tuple[str, ...]] = {"inference.py": ("generate",)}
 
 
 def _generation_calls(tree: ast.AST):
@@ -98,12 +112,32 @@ def _where(path: pathlib.Path) -> pathlib.Path:
     return path.relative_to(ROUTES.parent)
 
 
+def _forwarded(tree: ast.Module, path: pathlib.Path) -> set[int]:
+    """The ids of the facade calls in `path` that a `FORWARDERS` function
+    makes with its own `usage` parameter as the holder."""
+    names = FORWARDERS.get(_where(path).as_posix(), ())
+    out: set[int] = set()
+    for fn in tree.body:
+        if not (isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)) and fn.name in names):
+            continue
+        params = {a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)}
+        if _HOLDER not in params:
+            continue
+        for node in _generation_calls(fn):
+            given = [*node.args[2:3], *(k.value for k in node.keywords if k.arg == _HOLDER)]
+            if any(isinstance(a, ast.Name) and a.id == _HOLDER for a in given):
+                out.add(id(node))
+    return out
+
+
 def _offenders():
     for path in _sources():
         src = path.read_text(encoding="utf-8")
-        calls = list(_generation_calls(ast.parse(src)))
+        tree = ast.parse(src)
+        calls = list(_generation_calls(tree))
+        forwarded = _forwarded(tree, path)
         for node in calls:
-            if _is_metered(node):
+            if _is_metered(node) or id(node) in forwarded:
                 continue
             others = [n for n in calls if n is not node]
             if guard_markers.marker_reason(MARKER, src, node, others) is None:
@@ -190,10 +224,17 @@ def test_the_guard_ignores_calls_that_are_not_generations():
 
 def test_the_guard_sees_the_call_sites_it_is_meant_to_cover():
     """Vacuous-pass insurance: if the receiver convention ever changes, this
-    finds nothing and every other assertion here passes trivially."""
-    found = sum(len(list(_generation_calls(ast.parse(p.read_text(encoding="utf-8")))))
-                for p in ROUTES.rglob("*.py"))
-    assert found >= 10, f"only {found} generation call sites found; did routes/ move?"
+    finds nothing and every other assertion here passes trivially. Since
+    slice I a route generates through `inference.generate`, so what is
+    counted is both: the facade calls left in `routes/` (the model test's)
+    and the `generate` calls the holder check reads."""
+    direct = sum(len(list(_generation_calls(ast.parse(p.read_text(encoding="utf-8")))))
+                 for p in ROUTES.rglob("*.py"))
+    through = sum(len(generate_calls(tree, modname, is_pkg))
+                  for modname, tree, is_pkg in _walk() if modname.startswith("grimoire.routes"))
+    assert direct >= 2, f"only {direct} direct calls found; did the model test move?"
+    assert direct + through >= 10, (
+        f"only {direct + through} generation call sites found; did routes/ move?")
 
 
 # ---- the embeddings client (slice D, spec 14.1: embed is metered) ----
@@ -238,8 +279,63 @@ def test_the_embeddings_check_flags_and_passes_planted_cases():
 
 
 def test_the_extra_sources_are_scanned():
-    """Vacuity insurance for `EXTRA_SOURCES`: `decide`'s facade call is seen,
-    and it hands over its meter's holder."""
+    """Vacuity insurance for `EXTRA_SOURCES`: `decide`'s facade calls are
+    seen, and each hands over its meter's holder -- all but `generate`'s,
+    which forward their caller's (`FORWARDERS`)."""
     (path,) = EXTRA_SOURCES
-    calls = list(_generation_calls(ast.parse(path.read_text(encoding="utf-8"))))
-    assert calls and all(_is_metered(c) for c in calls), path
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    calls = list(_generation_calls(tree))
+    forwarded = _forwarded(tree, path)
+    assert {c.func.attr for c in calls if id(c) in forwarded} == {"stream", "complete"}, (
+        "generate's stream and complete were not both found")
+    own = [c for c in calls if id(c) not in forwarded]
+    assert own and all(_is_metered(c) for c in own), path
+
+
+def test_a_forwarder_forwards_only_its_own_holder():
+    """`FORWARDERS` clears a call that passes the function's `usage`
+    parameter, and nothing else: a call inside it with no holder, or with a
+    name that is not its parameter, is still an offender."""
+    path = EXTRA_SOURCES[0]
+    src = ("def generate(task, messages, *, client, resolved, usage=None):\n"
+           "    client.stream(messages, conn, usage)\n"
+           "    client.complete(messages, conn, usage=usage)\n"
+           "    client.complete(messages, conn)\n"
+           "    client.stream(messages, conn, holder)\n"
+           "def other(usage):\n"
+           "    client.stream(messages, conn, usage)\n")
+    tree = ast.parse(src)
+    forwarded = _forwarded(tree, path)
+    lines = sorted(n.lineno for n in _generation_calls(tree) if id(n) in forwarded)
+    assert lines == [2, 3]
+
+
+def _unmetered_generates(tree: ast.AST, modname: str, is_pkg: bool = False) -> list[str]:
+    """`generate` operation calls that hand it no meter's holder: `usage=`
+    must be an attribute named `usage` (`m.usage`, `meter.usage`)."""
+    return [f"{modname}:{call.lineno}: generate()"
+            for call in generate_calls(tree, modname, is_pkg)
+            if not any(k.arg == _HOLDER and isinstance(k.value, ast.Attribute)
+                       and k.value.attr == _HOLDER for k in call.keywords)]
+
+
+def test_every_generate_call_passes_a_meters_holder():
+    offenders = [o for modname, tree, is_pkg in _walk()
+                 for o in _unmetered_generates(tree, modname, is_pkg)]
+    assert not offenders, (
+        "generation(s) that file no ledger row -- open `with store.usage.meter(<task>, "
+        "...) as m:` around the call and pass `usage=m.usage`:\n  " + "\n  ".join(offenders))
+
+
+def test_the_generate_holder_check_flags_planted_calls():
+    where = "grimoire.routes.scenes"
+    ops = "from .. import inference as operations\n"
+    for src in (ops + "operations.generate('chat', m, client=c, resolved=r)\n",
+                ops + "operations.generate('chat', m, client=c, resolved=r, usage=None)\n",
+                ops + "operations.generate('chat', m, client=c, resolved=r, usage={})\n",
+                ops + "operations.generate('chat', m, client=c, resolved=r, usage=holder)\n"):
+        assert _unmetered_generates(ast.parse(src), where), src
+    for src in (ops + "operations.generate('chat', m, client=c, resolved=r, usage=m.usage)\n",
+                ops + ("operations.generate('tagline', m, client=c, resolved=r,\n"
+                       "                    usage=meter.usage, stream=False)\n")):
+        assert _unmetered_generates(ast.parse(src), where) == [], src

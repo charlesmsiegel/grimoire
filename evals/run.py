@@ -87,7 +87,7 @@ def run_live(args: argparse.Namespace, selected: tuple) -> list[runner.Result] |
     for case in selected:
         key = runner.conn_key(case)
         target = conns[key]
-        if key in modes or isinstance(target, dict):
+        if key in modes or runner.operation(case) != "decide":
             continue
         try:
             stages = runner.chain(target, backend)
@@ -98,13 +98,13 @@ def run_live(args: argparse.Namespace, selected: tuple) -> list[runner.Result] |
     # ascii_safe: the model id is user-configured free text and may not
     # encode in the console's code page (see runner.report).
     for key, target in conns.items():
-        conn = target if isinstance(target, dict) else target.conn
-        if conn is None:   # the seam refuses a resolution of nothing; never sent
+        chain = target.chain
+        if chain is None:   # the seam refuses a resolution of nothing; never sent
             print(runner.ascii_safe(f"live: {key} resolved to no connection"),
                   file=sys.stderr)
             return 1
         print(runner.ascii_safe(
-            f"live: {key} -> {conn['kind']} / {conn.get('model') or '(default)'}"
+            f"live: {key} -> {chain.primary.kind} / {chain.primary.model or '(default)'}"
             f"{modes.get(key, '')}"))
     if args.record:
         print("  [recording baselines]")

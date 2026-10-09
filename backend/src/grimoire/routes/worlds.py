@@ -31,6 +31,7 @@ from ..llm import LLMClient
 from . import runs
 from .common import (
     PC_HISTORY_MISSES,
+    UsableInference,
     _content_fields,
     _dump,
     _serve_image,
@@ -725,12 +726,12 @@ def post_world_pc_image_description_draft(
         subject = store.pcs.read_pc(root, pid)["meta"]["name"]
     except store.pcs.PCNotFound:
         subject = ""
-    conn, messages = image_draft_prompt(
+    resolved, messages = image_draft_prompt(
         store.assets.image_path(root, pid, vid, name, base=store.pcs.ASSET_BASE), subject)
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "image-description",
+            client, resolved, messages, "image-description",
             lambda text: {"description": store.image_drafts.parse_output(text)})
 
     return runs.run_draft(request.app, runs.world_subject(wid),
@@ -782,7 +783,8 @@ def post_lorebook_import(wid: str, body: LorebookCommit):
 # proposal from it, and — after the user has edited that proposal — write it.
 # Only the third writes anything, which is what makes the review gate real
 # rather than a confirmation dialog over work already done.
-async def _scenario_proposal(card: dict, client: LLMClient, conn: dict, root) -> dict:
+async def _scenario_proposal(card: dict, client: LLMClient,
+                             resolved: UsableInference, root) -> dict:
     """Extract a proposal from `card`, as a detached run's outcome.
 
     One bounded completion, exactly like the tagline and voice-anchor previews.
@@ -804,7 +806,7 @@ async def _scenario_proposal(card: dict, client: LLMClient, conn: dict, root) ->
     # when the proposal is built rather than as it stood minutes earlier, which
     # detachment now makes a real difference.
     return await draft_completion(
-        client, conn, store.scenario.build_prompt(card), "scenario",
+        client, resolved, store.scenario.build_prompt(card), "scenario",
         lambda text: store.scenario.proposal(
             card, store.scenario.parse_output(text),
             [c["name"] for c in store.characters.list_characters(root)]))
@@ -835,7 +837,7 @@ async def post_scenario_parse(wid: str, request: Request,
     # after the user has fixed a card (or waited on a slow host) tells them the
     # wrong thing first. Before the RESERVATION too, so a keyless install does
     # not leave a failed run behind for every press.
-    conn = require_inference("scenario").conn
+    resolved = require_inference("scenario")
     run, fresh = await _reserve_scenario(request, wid, x_grimoire_attempt)
     if not fresh:
         return {"run": runs.run_payload(run)}
@@ -846,7 +848,7 @@ async def post_scenario_parse(wid: str, request: Request,
         except store.cards.CardParseError as exc:
             raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
         return await run_in_threadpool(_detach_scenario, request, run, card,
-                                       client, conn, root)
+                                       client, resolved, root)
 
 
 @router.post("/worlds/{wid}/scenario/parse-url", status_code=202)
@@ -862,7 +864,7 @@ async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody, request: Requ
     fetches nothing is a 404 the reader retypes, and hiding it behind a run
     would make "not a valid URL" arrive as a failed generation."""
     root = _world_root_or_404(wid)
-    conn = require_inference("scenario").conn
+    resolved = require_inference("scenario")
     run, fresh = await _reserve_scenario(request, wid, x_grimoire_attempt)
     if not fresh:
         return {"run": runs.run_payload(run)}
@@ -882,7 +884,7 @@ async def post_scenario_parse_url(wid: str, body: ScenarioUrlBody, request: Requ
         except store.cards.CardParseError as exc:
             raise HTTPException(status_code=400, detail=f"could not parse card: {exc}")
         return await run_in_threadpool(_detach_scenario, request, run, card,
-                                       client, conn, root)
+                                       client, resolved, root)
 
 
 async def _reserve_scenario(request: Request, wid: str, attempt_id: str | None):
@@ -901,7 +903,7 @@ async def _reserve_scenario(request: Request, wid: str, attempt_id: str | None):
 
 
 def _detach_scenario(request: Request, run, card: dict, client: LLMClient,
-                     conn: dict, root) -> dict:
+                     resolved: UsableInference, root) -> dict:
     """Hand the proposal to the runner. Both parse routes end here.
 
     One function because the two differ only in where the card came from, and
@@ -911,7 +913,7 @@ def _detach_scenario(request: Request, run, card: dict, client: LLMClient,
     through the same portal, which refuses to be called from the loop.
     """
     async def work():
-        return await _scenario_proposal(card, client, conn, root)
+        return await _scenario_proposal(card, client, resolved, root)
 
     runs.start_computing(request.app, run, work)
     return {"run": runs.run_payload(run)}

@@ -28,8 +28,10 @@ def gateway(thought=THOUGHT, requests=None):
 async def test_reasoning_events_precede_visible_text_without_entering_complete():
     from grimoire import llm_reasoning
     client = gateway()
+    holder: dict = {}
     try:
-        events = [e async for e in llm_reasoning.stream(client, [], CONN, {})]
+        events = [e async for e in llm_reasoning.stream(
+            holder, lambda: client.stream([], CONN, holder))]
         assert ''.join(e.get("thinking_delta", "") for e in events) == THOUGHT
         assert next(i for i,e in enumerate(events) if e.get("thinking_delta")) < next(i for i,e in enumerate(events) if e.get("delta"))
         assert THOUGHT not in await client.complete([], CONN)
@@ -105,7 +107,8 @@ async def test_reasoning_is_delivered_while_provider_is_still_thinking():
             yield b'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\n'
     client = LLMClient(openai_compatible=OpenAICompatibleClient(http=httpx.AsyncClient(
         transport=httpx.MockTransport(lambda request: httpx.Response(200, stream=Frames())))))
-    events = llm_reasoning.stream(client, [], CONN, {})
+    holder: dict = {}
+    events = llm_reasoning.stream(holder, lambda: client.stream([], CONN, holder))
     try:
         async def first_thought():
             async for event in events:
@@ -137,8 +140,10 @@ async def test_retry_resets_failed_attempt_reasoning(monkeypatch):
     client = LLMClient(openai_compatible=OpenAICompatibleClient(http=httpx.AsyncClient(
         transport=httpx.MockTransport(handler))), retries=1)
     thought = ""
+    holder: dict = {}
     try:
-        events = [e async for e in llm_reasoning.stream(client, [], CONN, {})]
+        events = [e async for e in llm_reasoning.stream(
+            holder, lambda: client.stream([], CONN, holder))]
         for event in events:
             if event.get("thinking_reset"):
                 thought = ""

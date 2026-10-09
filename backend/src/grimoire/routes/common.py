@@ -26,7 +26,8 @@ from fastapi import HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from .. import decisions, llm, llm_sampling, model_guidance, store
+from .. import decisions, llm, llm_sampling, model_guidance, store, wire
+from .. import inference as operations
 from ..health import ProviderHealth
 from ..llm import LLMClient, effective_model
 from ..llm_errors import LLMError
@@ -216,8 +217,9 @@ def run_error(exc: HTTPException) -> dict:
     return {**out, "retry_after": window} if window else out
 
 
-async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
-                           task: str, shape, cid: str = "", sid: str = "") -> dict:
+async def draft_completion(client: LLMClient, resolved: UsableInference,
+                           messages: list[dict], task: str, shape, cid: str = "",
+                           sid: str = "") -> dict:
     """One metered non-stream generation, as the outcome a detached run reports.
 
     THE helper the twelve computing `draft` routes share, and the reason they
@@ -237,11 +239,17 @@ async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
     a parse that raises inside would file the model's successful call as a
     provider error in the usage ledger -- which is the one place that has to be
     able to say what the provider actually did.
+
+    `resolved` is the route's resolution of `task` (`require_inference`, at
+    the call site that names the task), which `inference.generate` refuses
+    for any other task.
     """
     try:
         with store.usage.meter(task, campaign=cid, scene=sid) as m:
-            text = await _bounded_call(client.complete(messages, conn, m.usage),
-                                       on_timeout=_noting(client, conn, m.usage))
+            text = await _bounded_call(
+                operations.generate(task, messages, client=client, resolved=resolved,
+                                    usage=m.usage, stream=False),
+                on_timeout=_noting(client, resolved, m.usage))
     except LLMError as exc:
         return {"state": "failed", "error": run_error(_llm_http_error(exc))}
     try:
@@ -253,8 +261,9 @@ async def draft_completion(client: LLMClient, conn: dict, messages: list[dict],
         return {"state": "failed", "error": run_error(exc)}
 
 
-def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[dict]]:
-    """The connection and the messages for one image-description draft.
+def image_draft_prompt(path, subject: str,
+                       cid: str = "") -> tuple[UsableInference, list[dict]]:
+    """The resolution and the messages for one image-description draft.
 
     Everything `_draft_description` used to do BEFORE the provider call, split
     out so the route can do it synchronously -- while the request is still
@@ -273,11 +282,11 @@ def image_draft_prompt(path, subject: str, cid: str = "") -> tuple[dict, list[di
     # `image_drafts.UNSUPPORTED` exactly as this function's own kind check
     # used to; a model its catalog or the user says is blind, as `incapable`.
     # The one check, so no surface can drift from another.
-    conn = require_inference("image-description", cid).conn
+    resolved = require_inference("image-description", cid)
     if path is None:
         raise HTTPException(status_code=404, detail="image not found")
     try:
-        return conn, store.image_drafts.build_prompt(path, subject)
+        return resolved, store.image_drafts.build_prompt(path, subject)
     except store.image_drafts.ImageTooLargeError as exc:
         # Refused before the bytes are read, so this is an error rather than the
         # killed process an Android install would otherwise get. See MAX_BYTES.
@@ -604,20 +613,21 @@ async def _bounded_call(coro, ceiling: float | None = None, on_timeout=None):
         raise LLMError("timeout", str(exc) or "the call timed out") from exc
 
 
-def _noting(client: LLMClient, conn: dict, usage: dict | None = None):
+def _noting(client: LLMClient, resolved: ResolvedInference, usage: dict | None = None):
     """`on_timeout` for a bounded generation: file the overrun against the
     connection that was actually running when the ceiling fired (#146).
 
     A function rather than a lambda at each call site, because the thing worth
     reading at those sites is the generation, not the bookkeeping.
 
-    `conn` is the route's connection and `usage` is the holder the facade
+    `resolved` is the route's resolution and `usage` is the holder the facade
     stamps per attempt, which is the more accurate of the two: a generation
     that failed over is being served by the *fallback* by the time it overruns,
     and blaming the primary would both overwrite its real failure with a
     timeout it did not cause and leave the connection that did cause one
-    looking healthy. The route's own connection is the fallback for a caller
-    that threads no holder.
+    looking healthy. The resolution's primary attempt
+    (`inference.note_outcome`) is the fallback for a caller that threads no
+    holder, or whose holder no attempt has stamped yet.
     """
     def note(exc: LLMError) -> None:
         # Guarded for the same reason `llm._observe` is, and it took a broken
@@ -627,7 +637,11 @@ def _noting(client: LLMClient, conn: dict, usage: dict | None = None):
         # `note_outcome` turned "the budget stopped this phase" into an
         # AttributeError, and the phase stopped reporting why it died.
         try:
-            client.note_outcome((usage or {}).get(llm.ATTEMPTED) or conn, exc)
+            attempted = (usage or {}).get(llm.ATTEMPTED)
+            if attempted:
+                client.note_outcome(attempted, exc)
+            else:
+                operations.note_outcome(client, resolved, exc)
         except Exception as exc2:  # noqa: BLE001 - see above
             log.warning("could not record a ceiling timeout: %s", exc2)
 
@@ -1134,6 +1148,15 @@ class UsableInference(ResolvedInference):
         assert self.attempts, "a usable resolution always resolved an attempt"
         return self.attempts[0].conn
 
+    @property
+    def chain(self) -> wire.Chain:
+        """What the facade is sent, typed (`ResolvedInference.chain`): never
+        None here. Its `primary` is where a call site reads the display facts
+        of the attempt it asks for first -- `.kind`, `.model`, `.provider_id`."""
+        chain = super().chain
+        assert chain is not None, "a usable resolution always resolved an attempt"
+        return chain
+
 
 def _narrowed(resolved: ResolvedInference) -> UsableInference:
     """`resolved` as a `UsableInference`; the caller has refused a None `conn`."""
@@ -1504,12 +1527,12 @@ def _soft_resolved(resolve: Callable[[], UsableInference]
     `kind` is its fixed vocabulary (`missing_key`, `incapable`, ...; "" for a
     refusal that carries none), which is what a log line may say.
 
-    `_soft_inference` is this, keeping the connection dict. The resolution
-    itself is for a caller that hands it on whole -- the scene-break title,
-    which runs only after a verdict has been stored, and whose failure must
-    leave that verdict standing with no title rather than lose it. Takes a
-    THUNK for `_soft_inference`'s reason: the task stays a literal at the call
-    site, where `test_routing_guard.py` reads it.
+    `_soft_inference` is this without the kind. A caller that wants the kind
+    too reads it here -- the scene-break title, which runs only after a
+    verdict has been stored, and whose failure must leave that verdict
+    standing with no title rather than lose it. Takes a THUNK for
+    `_soft_inference`'s reason: the task stays a literal at the call site,
+    where `test_routing_guard.py` reads it.
     """
     try:
         return resolve(), "", ""
@@ -1520,8 +1543,9 @@ def _soft_resolved(resolve: Callable[[], UsableInference]
         return None, str(detail), ""
 
 
-def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None, str]:
-    """A SECONDARY absorb phase's connection, or why it has none (#142).
+def _soft_inference(resolve: Callable[[], UsableInference]
+                    ) -> tuple[UsableInference | None, str]:
+    """A SECONDARY absorb phase's resolution, or why it has none (#142).
 
     `(None, reason)` rather than a raised 409, because the three phases below
     each promise never to fail an absorb: a dossier refresh routed at a
@@ -1536,7 +1560,7 @@ def _soft_inference(resolve: Callable[[], UsableInference]) -> tuple[dict | None
     one -- which is how a routing map goes stale without anything failing.
     """
     resolved, why, _kind = _soft_resolved(resolve)
-    return (None, why) if resolved is None else (resolved.conn, "")
+    return (None, why) if resolved is None else (resolved, "")
 
 
 def _decide_error(decision: decisions.Decision, qid: str) -> LLMError | None:

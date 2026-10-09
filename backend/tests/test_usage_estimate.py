@@ -490,7 +490,8 @@ def test_reasoning_is_counted_once_with_a_display_buffer(home):
     async def go():
         try:
             with usage.meter("chat") as m:
-                events = [e async for e in llm_reasoning.stream(client, PROMPT, CONN, m.usage)]
+                events = [e async for e in llm_reasoning.stream(
+                    m.usage, lambda: client.stream(PROMPT, CONN, m.usage))]
         finally:
             await client.aclose()
         return events

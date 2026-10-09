@@ -19,6 +19,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from starlette.concurrency import run_in_threadpool
 
+from .. import inference as operations
 from .. import store
 from ..llm import LLMClient
 from ..llm_errors import LLMError
@@ -304,7 +305,7 @@ def post_character_tagline_generate(
     nobody has agreed to yet.
     """
     root = _world_root_or_404(wid)
-    conn = require_inference("tagline").conn
+    resolved = require_inference("tagline")
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
@@ -314,7 +315,7 @@ def post_character_tagline_generate(
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "tagline",
+            client, resolved, messages, "tagline",
             lambda text: {"tagline": store.taglines.parse_output(text)})
 
     return runs.run_draft(request.app, runs.world_subject(wid), "tagline",
@@ -449,7 +450,7 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
     new root, and deriving there fills them.
     """
     root = _world_root_or_404(wid)
-    conn = require_inference("tagline").conn
+    resolved = require_inference("tagline")
     # Off the event loop: `list_characters` stats every version and every image
     # of every character, which is ~200ms on a large world (see
     # `list_undescribed_images`). Eagerly, before the response is returned, so
@@ -485,7 +486,9 @@ async def post_world_taglines_generate(wid: str, client: LLMClient = Depends(get
                 messages = store.taglines.build_prompt(_card_data(card))
                 try:
                     with store.usage.meter("tagline") as m:
-                        text = await _bounded_call(client.complete(messages, conn, m.usage))
+                        text = await _bounded_call(operations.generate(
+                            "tagline", messages, client=client, resolved=resolved,
+                            usage=m.usage, stream=False))
                 except LLMError as exc:
                     stopped = True
                     yield _sse({**frame, "error": {"detail": exc.detail, "kind": exc.kind}})
@@ -557,7 +560,7 @@ def post_character_voice_anchor_generate(
     so an anchor is never written without review (#59).
     """
     root = _world_root_or_404(wid)
-    conn = require_inference("voice-anchor").conn
+    resolved = require_inference("voice-anchor")
     try:
         ch = store.characters.read_character(root, cid)
     except store.characters.CharacterNotFound:
@@ -567,7 +570,7 @@ def post_character_voice_anchor_generate(
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "voice-anchor",
+            client, resolved, messages, "voice-anchor",
             lambda text: {"voice_anchor": store.voice_anchors.parse_output(text)})
 
     return runs.run_draft(request.app, runs.world_subject(wid), "voice-anchor",
@@ -1235,12 +1238,12 @@ def post_world_image_description_draft(
         subject = store.characters.read_character(root, cid)["meta"]["name"]
     except store.characters.CharacterNotFound:
         subject = ""
-    conn, messages = image_draft_prompt(
+    resolved, messages = image_draft_prompt(
         store.assets.image_path(root, cid, vid, name), subject)
 
     async def work():
         return await draft_completion(
-            client, conn, messages, "image-description",
+            client, resolved, messages, "image-description",
             lambda text: {"description": store.image_drafts.parse_output(text)})
 
     return runs.run_draft(request.app, runs.world_subject(wid),

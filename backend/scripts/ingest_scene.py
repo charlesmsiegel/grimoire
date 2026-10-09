@@ -16,8 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fastapi import HTTPException
 
-from grimoire.llm import LLMClient, effective_model
-from grimoire.routes.common import require_inference
+from grimoire import inference as operations
+from grimoire.llm import LLMClient
+from grimoire.routes.common import UsableInference, require_inference
 from grimoire.store import (
     absorb,
     appearances,
@@ -41,13 +42,14 @@ from grimoire.store.paths import slugify
 ABSORB_TASK = "absorb"
 
 
-def absorb_connection(cid: str) -> tuple[dict | None, str]:
-    """`(conn, "")`: the connection dict the app's absorb would send for `cid`
-    -- resolved and refused by the seam itself (`require_inference`), so the
-    script cannot drift from the app on a missing key or a model that cannot
-    do the job. `(None, why)` when the seam refuses, with its reason."""
+def absorb_connection(cid: str) -> tuple[UsableInference | None, str]:
+    """`(resolved, "")`: where the app's absorb would run for `cid` -- resolved
+    and refused by the seam itself (`require_inference`), so the script cannot
+    drift from the app on a missing key or a model that cannot do the job.
+    `(None, why)` when the seam refuses, with its reason. The resolution is
+    what `inference.generate` sends the extraction on (`run_absorb`)."""
     try:
-        return require_inference(ABSORB_TASK, cid).conn, ""
+        return require_inference(ABSORB_TASK, cid), ""
     except HTTPException as exc:
         detail = exc.detail
         if isinstance(detail, dict):
@@ -58,8 +60,8 @@ def absorb_connection(cid: str) -> tuple[dict | None, str]:
 def chat_model(cid: str) -> str:
     """The model chat would run on in `cid` -- what a new scene is stamped with
     (`routes.scenes._chat_target`'s read). A display read: never refuses."""
-    conn = inference.resolve("chat", cid).conn
-    return effective_model(conn) if conn is not None else ""
+    chain = inference.resolve("chat", cid).chain
+    return chain.primary.model if chain is not None else ""
 
 
 def ensure_campaign(name: str, world_id: str) -> str:
@@ -138,7 +140,8 @@ def build_scene(cid: str, scene: dict) -> str:
     return sid
 
 
-async def run_absorb(cid: str, sid: str, client: LLMClient, conn: dict) -> dict:
+async def run_absorb(cid: str, sid: str, client: LLMClient,
+                     resolved: UsableInference) -> dict:
     scene = scenes.read_scene(cid, sid)
     facts = chronicle.scene_facts(cid, sid)
     transcript = chronicle.transcript_text(scene["messages"])
@@ -158,7 +161,10 @@ async def run_absorb(cid: str, sid: str, client: LLMClient, conn: dict) -> dict:
         # facts on the highest-volume path there is (#114).
         commitment_snapshot=absorb.commitment_snapshot(cid),
         fact_snapshot=absorb.fact_snapshot(cid, sid))
-    text = await client.complete(messages, conn)
+    # No meter, as before: this script has never filed a ledger row, and
+    # starting to is a change to what an ingest records, not to how it calls.
+    text = await operations.generate(ABSORB_TASK, messages, client=client,
+                                     resolved=resolved, stream=False)
     parsed = absorb.parse_output(text)
     edits = absorb.materialize(cid, sid, parsed)
     return {"parsed": parsed, "edits": edits}
@@ -481,7 +487,8 @@ def _unapplied(edits: list[dict], failures: list[dict]) -> list[dict]:
     return pending
 
 
-async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict) -> dict:
+async def ingest_one_scene(cid: str, scene: dict, client: LLMClient,
+                           resolved: UsableInference) -> dict:
     manifest = load_manifest(cid)
     key = scene["key"]
     entry = manifest.get(key)
@@ -597,7 +604,7 @@ async def ingest_one_scene(cid: str, scene: dict, client: LLMClient, conn: dict)
             edits = stored_edits if isinstance(stored_edits, list) \
                 else absorb.materialize(cid, sid, parsed)
         else:
-            result = await run_absorb(cid, sid, client, conn)
+            result = await run_absorb(cid, sid, client, resolved)
             parsed, edits = result["parsed"], result["edits"]
             # The timeline's PRE-IMAGE rides with the extraction, recorded in
             # the same write and for the same reason: a resume has to be able to
@@ -728,13 +735,13 @@ def main() -> int:
         return 0 if ok else 1
 
     scene = json.loads(args.input.read_text(encoding="utf-8"))
-    conn, why = absorb_connection(args.campaign)
-    if conn is None:
+    resolved, why = absorb_connection(args.campaign)
+    if resolved is None:
         print(f"error: {why} (absorb runs on what grimoire's Models page chooses for it)",
               file=sys.stderr)
         return 1
     client = LLMClient()
-    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, conn))
+    result = asyncio.run(ingest_one_scene(args.campaign, scene, client, resolved))
     print(json.dumps(result, indent=2))
     if result["status"] == "incomplete":
         # Nonzero, because the caller is a batch driver working through a log in

@@ -13,20 +13,23 @@ import grimoire.store as store
 from grimoire import routes
 from grimoire.main import create_app
 from tests import draft_runs as drafts
-from tests import inference_fixtures, review_runs
+from tests import inference_fixtures, review_runs, wire_kit
 from tests.llm_fakes import FailingOpenRouter, FakeOpenRouter, FakeOpenRouterComplete
 
 
-def _unfenced_stream(*args, **kw):
+def _unfenced_stream(cid, sid, messages, conn, *args, **kw):
     """`_chat_stream` with the publish fence and the outcome box switched off.
 
     Both are keyword-only and required on the real function so a route being
     migrated to detached runs cannot forget them; this test predates the fence
     and means the old behaviour. `test_routes._unfenced_stream` carries the
     full reasoning -- not imported from there because importing that module
-    runs the largest suite in the tree at collection time.
+    runs the largest suite in the tree at collection time. The connection is
+    handed on as a resolution of the turn's task, as there.
     """
-    return routes.streaming._chat_stream(*args, identity=None, outcome=None, **kw)
+    return routes.streaming._chat_stream(cid, sid, messages,
+                                         wire_kit.resolution(conn, kw.get("task", "chat")),
+                                         *args, identity=None, outcome=None, **kw)
 
 
 USAGE = {"prompt_tokens": 900, "completion_tokens": 40, "cost_usd": 0.0042,

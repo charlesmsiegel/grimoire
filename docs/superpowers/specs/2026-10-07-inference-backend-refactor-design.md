@@ -2231,6 +2231,21 @@ campaign's Fast override no longer outranks a global pin.
   same `CONTRIBUTING.md` row). The decide half resolves import bindings
   (D's alias resolution, generalised to a target module) and never matches a
   method by its name alone, because `decide` is a common method name.
+- The generate rule (slice I, ruling 8): **a generation is
+  `operations.generate(<task>, …)`**. `test_routing_guard.py` fails a
+  `client.stream`/`complete` anywhere but `inference.py` (`generate` itself
+  and `decide`'s structured backend), a `client.single` anywhere but the
+  model test, and a `client.decide_native` anywhere but `inference.py` and
+  the model test (ruling 12), across the package, `backend/scripts/` and
+  `evals/`. `test_operation_guard.py` adds the generate half beside the
+  decide half, by the same import bindings: every `generate` names a task on
+  a `generate` route (or a registered non-route task) and passes
+  `resolved=`, and is never handed around as a value. The task is a literal,
+  or a name that traces only to literals -- a turn's meter is opened where
+  the turn is streamed, so the literal is at that helper's callers -- and H's
+  `decide`/`run_stages` are never swept in. `test_usage_guard.py` holds that
+  every `generate` call passes `usage=` a meter's holder; `generate`'s own
+  facade calls forward that holder.
 - `test_usage_guard.py`: decide and embed are metered.
 - `test_import_guard.py`, `test_lock_domain_guard.py`: classify the new
   modules.

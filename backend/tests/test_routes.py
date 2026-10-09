@@ -25,7 +25,7 @@ from grimoire.routes import character_turns
 from grimoire.store import atomic
 from grimoire.store import inference_keys as keys
 from tests import draft_runs as drafts
-from tests import review_runs
+from tests import review_runs, wire_kit
 from tests.inference_fixtures import (
     SAME_PROVIDER,
     SPARE,
@@ -62,7 +62,7 @@ def client(client, monkeypatch):
     return client
 
 
-def _unfenced_stream(*args, **kw):
+def _unfenced_stream(cid, sid, messages, conn, *args, **kw):
     """`_chat_stream` with the publish fence and the outcome box switched off.
 
     Both are keyword-only and REQUIRED on the real function, deliberately: a
@@ -78,14 +78,22 @@ def _unfenced_stream(*args, **kw):
     Said once, here, and named, so a reader can tell it is a choice rather than
     an omission. Looked up on the module at call time so monkeypatching
     `routes.streaming._chat_stream` still works.
+
+    The connection a test names is handed on as a resolution of the turn's
+    task (`wire_kit.resolution`): every generation goes through
+    `inference.generate`, which takes one, and the fake still sees the dict.
     """
-    return routes.streaming._chat_stream(*args, identity=None, outcome=None, **kw)
+    return routes.streaming._chat_stream(cid, sid, messages,
+                                         wire_kit.resolution(conn, kw.get("task", "chat")),
+                                         *args, identity=None, outcome=None, **kw)
 
 
-def _unfenced_continuation(*args, **kw):
+def _unfenced_continuation(cid, sid, pid, messages, conn, *args, **kw):
     """ with the fence and the outcome box off, for the
     same reason as  above."""
-    return routes.streaming._continuation_stream(*args, identity=None, outcome=None, **kw)
+    return routes.streaming._continuation_stream(
+        cid, sid, pid, messages, wire_kit.resolution(conn, "continuation"), *args,
+        identity=None, outcome=None, **kw)
 
 
 def _world(client, name="W"):

@@ -1,4 +1,14 @@
-"""The inference operations a call site asks for by name: `decide` (spec 7.4).
+"""The inference operations a call site asks for by name: `generate` (spec 7.2)
+and `decide` (spec 7.4).
+
+A generation is free text, streamed or joined. `generate` is the only door
+to it: it takes the resolution a call site already made (`require_inference`
+or `override_inference`), refuses one made for another task or operation, or
+one that resolved nothing, before any client call, and hands the facade
+`resolved.conn` -- the facade itself is unchanged. `test_routing_guard.py`
+holds that `client.stream`/`complete` are spelled only in this module; the
+caller's meter, and the holder it hands in as `usage=`, stay at the call
+site, where `test_usage_guard.py` reads them.
 
 A decision is a closed question answered from a set the caller fixed in
 advance (`grimoire.decisions` holds that contract). `decide` is the operation:
@@ -12,7 +22,7 @@ schema=)`) over a prompt that carries the schema, read back by
 (`LLMClient.decide_native`), one request per item. An item moves to the next
 stage only when its stage FAILED to answer it (`run_stages`).
 
-Four rules this module keeps:
+Four rules `decide` keeps:
 
 - **One meter per call, opened here** (ruling 9): per structured chunk, and
   per native item. A caller's time budget runs inside it through `around`, so
@@ -52,10 +62,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
-from typing import Any, NamedTuple
+from typing import Any, Literal, NamedTuple, overload
 
 from . import decisions, llm, llm_errors, llm_usage, prompts, store
 from .llm import LLMClient
@@ -713,3 +723,96 @@ async def decide(task: str, items: Sequence[decisions.Item], *, client: LLMClien
     return await run_stages(task, items, chain, client=client,
                             explain=explain, campaign=campaign, scene=scene, post=post,
                             round_id=round_id, capture=capture, around=around)
+
+
+# ---- generate (spec 7.2) ----
+
+def _generating(task: str, resolved: ResolvedInference) -> dict:
+    """The connection dict `resolved` sends for `task`'s generation, or the
+    `ValueError` `generate` raises for a resolution it cannot send."""
+    if resolved.task != task:
+        raise ValueError(f"a resolution of {resolved.task!r} cannot generate {task!r}")
+    if resolved.operation != "generate":
+        raise ValueError(f"a {resolved.operation!r} resolution cannot generate")
+    conn = resolved.conn
+    if conn is None:
+        raise ValueError(f"{task!r} resolved to no connection")
+    return conn
+
+
+@overload
+def generate(task: str, messages: list[dict], *, client: LLMClient,
+             resolved: ResolvedInference, usage: dict | None = None,
+             schema: dict | None = None,
+             stream: Literal[True] = True) -> AsyncIterator[str]: ...
+
+
+@overload
+def generate(task: str, messages: list[dict], *, client: LLMClient,
+             resolved: ResolvedInference, usage: dict | None = None,
+             schema: dict | None = None,
+             stream: Literal[False]) -> Awaitable[str]: ...
+
+
+def generate(task: str, messages: list[dict], *, client: LLMClient,
+             resolved: ResolvedInference, usage: dict | None = None,
+             schema: dict | None = None,
+             stream: bool = True) -> AsyncIterator[str] | Awaitable[str]:
+    """Generate free text for `task` (spec 7.2): with `stream=True` an async
+    iterator of the reply's deltas, with `stream=False` an awaitable of the
+    joined reply.
+
+    `resolved` is the call site's own resolution of `task` for the
+    `generate` operation (`require_inference`, `override_inference`, or
+    `for_task` for a sibling task on the same route). A resolution of another
+    task or operation, or one that resolved nothing, is a `ValueError`, raised
+    here -- before any client call, so no request goes out and no holder is
+    stamped.
+
+    `usage` is the caller's meter's holder (`store.usage.Meter.usage`), which
+    the facade fills; the meter stays at the call site, around this call, as
+    `test_usage_guard.py` requires. `schema` is passed through (ruling 8): the
+    facade sends structured mode only on an attempt flagged for it, which a
+    generate resolution never is.
+
+    The facade is sent `resolved.conn` exactly as a call site sent it before
+    this door existed: positionally, with `schema=` only when one is given --
+    so every request, ledger row and capture is what it was."""
+    conn = _generating(task, resolved)
+    if stream:
+        return (client.stream(messages, conn, usage) if schema is None
+                else client.stream(messages, conn, usage, schema=schema))
+    return (client.complete(messages, conn, usage) if schema is None
+            else client.complete(messages, conn, usage, schema=schema))
+
+
+def note_outcome(client: LLMClient, resolved: ResolvedInference,
+                 error: LLMError | None) -> None:
+    """File an outcome the facade did not itself observe (#146) -- a bounded
+    call's ceiling, which cancels the call from outside -- against the attempt
+    `resolved` sends first (`LLMClient.note_outcome`, which takes the fallback
+    off). A resolution of nothing has no attempt to file it against."""
+    conn = resolved.conn
+    if conn is not None:
+        client.note_outcome(conn, error)
+
+
+def for_task(resolved: ResolvedInference, task: str) -> ResolvedInference:
+    """`resolved` as the resolution of `task`, a task on the SAME route.
+
+    The resolver answers per route, never per task (`routing.route`): two
+    tasks of one route resolve to the same attempts, read from the same
+    settings. So a call site that resolved once and generates under a sibling
+    task's label -- a director turn on the send's resolution of `chat`, a
+    group round's contributions (`chat` or `continuation`) on whatever turn
+    opened the round -- says so here rather than handing `generate` a
+    resolution of another task, which it refuses. A task on another route, or
+    one no route claims, is a `ValueError`: that resolution would not be
+    where `task` runs."""
+    if resolved.task == task:
+        return resolved
+    route = store.routing.route(task)
+    if route is None or not resolved.route or route.key != resolved.route:
+        raise ValueError(f"{task!r} is not on the route {resolved.task!r} resolved "
+                         f"({resolved.route or 'none'!r})")
+    return replace(resolved, task=task)
