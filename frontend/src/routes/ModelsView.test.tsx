@@ -65,13 +65,13 @@ const resolved = (over: Record<string, unknown> = {}) => ({
 });
 const card = (over: Record<string, unknown> = {}) => ({
   stored: sel(), fallback: sel(), resolves: resolved(), inherits: resolved(), problem: null,
-  fallback_missing: [], fallback_problem: null, ...over,
+  fallback_missing: [], fallback_problem: null, decision_mode: "", ...over,
 });
 const route = (over: Record<string, unknown>) => ({
   hint: "", tasks: [], operation: "generate", default_role: "fast", requires: [],
   campaign_scoped: true, use: "", pin: sel(), preset: "", resolves: resolved(),
   inherits: resolved(), problem: null, fallback_missing: [], fallback_problem: null,
-  role: "fast", uses: "fast", ...over,
+  decision_mode: "", role: "fast", uses: "fast", ...over,
 });
 
 const ROUTES = [
@@ -467,12 +467,83 @@ test("a route that sends no images asks nothing about vision", async () => {
     "saltmarch", "vision", "vendor/m");
 });
 
+/** The settings view with the Decision card resolved `mode`, and `over` on it. */
+function decisionAs(mode: string, over: Record<string, unknown> = {}) {
+  return settings({ roles: { ...settings().roles,
+                             decision: card({ decision_mode: mode, ...over }) } });
+}
+
+// I9: how a decision is answered is the resolution's `decision_mode`, never a
+// rule the page works out from the model's capabilities.
+test("a native Decision card says the provider's decisions endpoint answers", async () => {
+  // The capabilities would say "no native API" -- the resolution outranks them.
+  CAPS["vendor/m"].decide_native = "no";
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("native"));
+  await openCards();
+  expect(await roleCard("Decision").findByText(
+    "Answered by the provider's decisions endpoint.")).toBeInTheDocument();
+  expect(roleCard("Decision").queryByText(/structured generation/)).not.toBeInTheDocument();
+});
+
+test("a structured Decision card on a model that could decide natively claims no missing API",
+     async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("structured"));
+  await openCards();
+  expect(await roleCard("Decision").findByText("Answered by structured generation."))
+    .toBeInTheDocument();
+  expect(roleCard("Decision").queryByText(/No native decision API/)).not.toBeInTheDocument();
+});
+
 test("warns when the Decision model has no native decision API", async () => {
   CAPS["vendor/m"].decide_native = "no";
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("structured"));
   await openCards();
   expect(await roleCard("Decision").findByText(
     "No native decision API; structured generation will be used.")).toBeInTheDocument();
   expect(roleCard("Primary").queryByText(/native decision/)).not.toBeInTheDocument();
+});
+
+test("a refused Decision card shows only the refusal's own sentence", async () => {
+  const incapable = "Saltmarch Router ▸ vendor/m cannot generate text or make native decisions.";
+  CAPS["vendor/m"] = { generate: "no", vision: "no", embed: "no", decide_native: "no" };
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("", { problem: incapable }));
+  await openCards();
+  const decision = roleCard("Decision");
+  expect(await decision.findByText(incapable)).toBeInTheDocument();
+  expect(decision.queryByRole("note")).not.toBeInTheDocument();
+  expect(decision.queryByText(/can't generate text/)).not.toBeInTheDocument();
+  expect(decision.queryByText(/Answered by|No native decision API/)).not.toBeInTheDocument();
+});
+
+test("a Decision card on a native-only model says its sampling is not sent", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("native"));
+  const na = { state: "n/a", wire: "", why: "a native decision takes no sampling",
+               source: "adapter" };
+  (api.previewControls as any).mockImplementation((body: { operation?: string }) =>
+    Promise.resolve(body.operation === "decide"
+      ? { requested: {}, effective: {}, controls: { temperature: na, reasoning_effort: na } }
+      : { requested: {}, effective: {}, controls: {} }));
+  await openCards();
+  expect(await roleCard("Decision").findByText(
+    "Not sent: a native decision takes no sampling.")).toBeInTheDocument();
+  expect(api.previewControls).toHaveBeenCalledWith(expect.objectContaining({
+    provider: "saltmarch", model: "vendor/m", operation: "decide" }));
+  // Primary generates: it asks no decision question, and lists its controls as ever.
+  expect(roleCard("Primary").queryByText(/native decision/)).not.toBeInTheDocument();
+});
+
+test("a decide route says how its decision is answered", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+    ...ROUTES,
+    route({ key: "speaker", label: "Who speaks next", operation: "decide",
+            default_role: "decision", role: "decision", uses: "decision",
+            decision_mode: "native" }),
+  ] }));
+  open("/models/route/speaker");
+  expect(await main().findByText("Answered by the provider's decisions endpoint."))
+    .toBeInTheDocument();
+  expect(api.previewControls).toHaveBeenCalledWith(expect.objectContaining({
+    operation: "decide" }));
 });
 
 test("warns when the Embedding model can't create embeddings", async () => {

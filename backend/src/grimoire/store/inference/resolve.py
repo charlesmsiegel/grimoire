@@ -706,7 +706,7 @@ def _chain(attempts: list[Attempt], operation: str, needs: tuple[frozenset[str],
     if operation == "decide":
         # Before the attach, which reads them. The same dict objects, so the
         # attach below writes into the dicts the attempts carry.
-        attempts = [dataclasses.replace(a, decision_mode=decision_mode(a)) for a in attempts]
+        attempts = [_decide_attempt(a) for a in attempts]
     if len(attempts) > 1 and not fallback_missing and _rides(attempts, operation):
         # The facade sends what the primary's dict carries (spec 5.3: a
         # fallback known incapable is dropped from the chain, never sent). The
@@ -714,6 +714,19 @@ def _chain(attempts: list[Attempt], operation: str, needs: tuple[frozenset[str],
         # handed back is touched.
         attempts[0].conn[FALLBACK_KEY] = attempts[1].conn
     return _Tail(tuple(attempts), missing, fallback_missing)
+
+
+def _decide_attempt(attempt: Attempt) -> Attempt:
+    """`attempt` on a decide resolution: its `decision_mode`, and -- when that
+    is "native" -- its controls all `n/a` (spec 8), since its provider's
+    decisions endpoint takes no sampling. Under ruling 1 a native attempt is
+    always one that cannot generate, so there is no sampling to keep."""
+    mode = decision_mode(attempt)
+    if mode != "native":
+        return dataclasses.replace(attempt, decision_mode=mode)
+    return dataclasses.replace(
+        attempt, decision_mode=mode,
+        controls=llm_sampling.not_applicable(attempt.conn, llm_sampling.WHY_NATIVE))
 
 
 def _rides(attempts: list[Attempt], operation: str) -> bool:

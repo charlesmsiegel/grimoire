@@ -1553,11 +1553,14 @@ def delete_sampler_preset(pid: str):
 class InferenceControlsBody(BaseModel):
     """A sampler preset previewed on a provider's model. Defined beside its one
     route, not in `models.py`, so this block stays in one place. `preset_id` ""
-    is no preset (provider defaults); `model` "" is the provider's own."""
+    is no preset (provider defaults); `model` "" is the provider's own.
+    `operation` "decide" previews it as a decision, which a model answered
+    natively takes no sampling for; anything else previews generation."""
 
     preset_id: str = ""
     provider: str
     model: str = ""
+    operation: str = ""
 
 
 @router.get("/llm-connections/{conn_id}/capabilities")
@@ -1691,14 +1694,15 @@ def put_connection_facts(conn_id: str, body: FactsUpdate):
 def post_inference_controls(body: InferenceControlsBody):
     """What sampler preset `preset_id` sends on `provider` serving `model`:
     `{requested, effective, controls}` (`controls.preview`), the same answer an
-    attempt resolved for that provider, model and preset carries."""
+    attempt resolved for that provider, model and preset carries -- for
+    `operation`, so a decision on a model answered natively is all `n/a`."""
     try:
         conn = store.llm_connections.read_connection_raw(body.provider)
     except store.llm_connections.ConnectionNotFound:
         raise HTTPException(status_code=404, detail="connection not found") from None
     if body.preset_id and store.sampler_presets.read_preset(body.preset_id) is None:
         raise HTTPException(status_code=404, detail="sampler preset not found")
-    return controls.preview(body.preset_id, conn, body.model)
+    return controls.preview(body.preset_id, conn, body.model, body.operation)
 
 
 # ---- the entity kinds an import may route a row to (#138) ----

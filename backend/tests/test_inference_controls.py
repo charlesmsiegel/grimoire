@@ -17,7 +17,7 @@ from grimoire import llm_sampling as ls
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.store import llm_connections, sampler_presets
-from grimoire.store.inference import capabilities, controls, providers
+from grimoire.store.inference import capabilities, controls, providers, resolve
 from tests.llm_fakes import RefusingProvider
 
 ALL = {"temperature": 0.9, "top_p": 0.95, "top_k": 40, "min_p": 0.05,
@@ -960,3 +960,51 @@ def test_preview_never_raises_on_an_unreadable_connection(home):
     got = controls.preview("", {"kind": "anthropic", "id": "../nope", "model": "claude-test-1"},
                            "claude-test-1")
     assert got["effective"] == {"max_tokens": 16000}
+
+
+# ---- a native decision takes no sampling (slice H, Task 9; spec 8) ----
+def test_not_applicable_has_effectives_shape_with_every_control_na():
+    conn = _claude_api({"temperature": 0.9, "top_k": 2, "reasoning_effort": "high"}, CURRENT)
+    got = ls.not_applicable(conn, ls.WHY_NATIVE)
+    assert set(got) == {"requested", "effective", "controls"}
+    # What was stored is still reported as requested; nothing goes on the wire,
+    # not even the Anthropic API's otherwise-required max_tokens.
+    assert got["requested"] == ls.effective(conn)["requested"]
+    assert got["effective"] == {}
+    assert list(got["controls"]) == list(ls.CONTROLS)
+    assert all(c == {"state": ls.NOT_APPLICABLE, "wire": "", "why": ls.WHY_NATIVE,
+                     "source": "adapter"} for c in got["controls"].values())
+    assert ls.WHY_NATIVE == "a native decision takes no sampling"
+
+
+def test_controls_preview_for_decide_on_a_decide_only_model(home):
+    conn = _openrouter(rows=[{"id": "vendor/decider", "outputs": ["decisions"]}])
+    pid = sampler_presets.create_preset("Warm", {"temperature": 0.8, "top_k": 30})
+    got = controls.preview(pid, conn, "vendor/decider", operation="decide")
+    assert got["requested"] == {"temperature": 0.8, "top_k": 30}
+    assert got["effective"] == {}
+    assert {c["state"] for c in got["controls"].values()} == {ls.NOT_APPLICABLE}
+    assert {c["why"] for c in got["controls"].values()} == {ls.WHY_NATIVE}
+
+
+def test_a_decide_preview_on_a_model_that_generates_keeps_its_controls(home):
+    """Ruling 1: a model that can generate is structured, whatever its
+    `decide_native` says, so its decide preview is its generate preview."""
+    conn = _openrouter(rows=[{"id": "vendor/both", "outputs": ["text", "decisions"],
+                              "params": ["temperature"]}])
+    pid = sampler_presets.create_preset("Warm", {"temperature": 0.8, "top_k": 30})
+    got = controls.preview(pid, conn, "vendor/both", operation="decide")
+    assert got == controls.preview(pid, conn, "vendor/both")
+    assert got["effective"] == {"temperature": 0.8}
+
+
+def test_a_generate_preview_is_unchanged_by_the_operation(home):
+    """The decide-only model previewed for anything but a decision is what
+    the preview always said: `effective` over the lowered preset."""
+    conn = _openrouter(rows=[{"id": "vendor/decider", "outputs": ["decisions"]}])
+    pid = sampler_presets.create_preset("Warm", {"temperature": 0.8})
+    today = ls.effective(resolve.lower(conn, resolve.preset_sampling(pid), "vendor/decider"))
+    for operation in ("", "generate"):
+        assert controls.preview(pid, conn, "vendor/decider", operation=operation) == today
+    assert controls.preview(pid, conn, "vendor/decider") == today
+    assert today["controls"]["temperature"]["state"] != ls.NOT_APPLICABLE

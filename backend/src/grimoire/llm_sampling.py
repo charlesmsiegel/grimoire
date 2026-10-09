@@ -114,6 +114,7 @@ WHY_STANDARD = ("not part of the OpenAI API — turn on extended samplers if thi
                 "endpoint takes it")
 WHY_STOP = f"the OpenAI API takes at most {OPENAI_STOP_MAX} stop strings"
 WHY_CLAUDE = "the Claude Agent SDK takes no sampling options"
+WHY_NATIVE = "a native decision takes no sampling"
 WHY_INVALID = "the stored value is not valid"
 WHY_UNVERIFIED = ("OpenRouter's catalog for this model is not cached, so whether it "
                   "takes this is not known")
@@ -588,6 +589,19 @@ def effective(conn: dict) -> dict:
         controls[name] = {"state": decided.state, "wire": decided.wire, "why": decided.why,
                           "source": decided.source}
     return {"requested": requested, "effective": sent, "controls": controls}
+
+
+def not_applicable(conn: dict, why: str) -> dict:
+    """`effective`'s answer for an operation that takes no sampling at all (a
+    native decision): what `conn`'s preset stores is still `requested`, as
+    `effective` reports it, nothing is sent, and every control in `CONTROLS`
+    is `n/a` for `why`."""
+    conn = conn if isinstance(conn, dict) else {}
+    stored = _stored(conn)
+    return {"requested": {name: stored[name] for name in CONTROLS if name in stored},
+            "effective": {},
+            "controls": {name: {"state": NOT_APPLICABLE, "wire": "", "why": why,
+                                "source": "adapter"} for name in CONTROLS}}
 
 
 def reasoning_wire(eff: dict) -> dict:

@@ -331,7 +331,8 @@ function SelectionFields({ label, needs, sel, onChange, settings, blocked, prese
           A preset with no provider is not used. Choose a provider, or clear it.
         </p>
       )}
-      <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />
+      <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model}
+                       operation={needs.includes("decide") ? "decide" : undefined} />
     </fieldset>
   );
 }

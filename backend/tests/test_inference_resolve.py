@@ -32,6 +32,7 @@ from grimoire.store.inference.cascade import Selection
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as baseline
+from . import inference_fixtures
 from .test_inference_equivalence import NEW_TASKS
 
 TASKS = [*sorted(routing.TASK_ROUTE), ""]
@@ -995,3 +996,41 @@ def test_an_anthropic_connection_needs_a_key_to_send():
             "base_url": "", "api_key": "", "model": "claude-test-1"}
     assert inf.problem(conn) == "Anthropic API key not set"
     assert inf.problem({**conn, "api_key": "test-key-anthropic"}) is None
+
+
+# ---- a native attempt's controls are n/a (slice H, Task 9; spec 8) ----
+def _decision_on(tmp_path, rows: list[dict]):
+    """A format-2 store whose Decision role is `vendor/decider` on the seeded
+    OpenRouter provider, served under the `Warm` preset, with `spare` as its
+    fallback, the catalog rows `rows` cached; the scene-break route's decide
+    resolution."""
+    with baseline.client_at(tmp_path) as client:
+        inference_fixtures.decide_only(client, fallback=True)
+        rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
+        store.llm_connections.set_cached_models("openrouter", rows, rev)
+        pid = store.sampler_presets.create_preset("Warm", {"temperature": 0.8})
+        inference_fixtures.put_settings(client, {"roles": {"decision": {"selection": {
+            "provider": "openrouter", "model": "vendor/decider", "preset": pid}}}})
+        return inf.resolve("scene-break", operation="decide")
+
+
+def test_a_native_attempt_reports_na_controls(tmp_path):
+    resolved = _decision_on(tmp_path, [{"id": "vendor/decider", "outputs": ["decisions"]}])
+    native, fallback = resolved.attempts
+    assert (native.decision_mode, fallback.decision_mode) == ("native", "structured")
+    assert native.controls == llm_sampling.not_applicable(native.conn, llm_sampling.WHY_NATIVE)
+    assert native.controls["requested"] == {"temperature": 0.8}
+    assert native.controls["effective"] == {}
+    # The structured fallback keeps what it sends.
+    assert fallback.controls == llm_sampling.effective(fallback.conn)
+
+
+def test_a_dual_capable_attempt_keeps_its_controls(tmp_path):
+    """Ruling 1: a model that can generate is structured, so its controls are
+    slice F's -- what `effective` says of the dict it is sent."""
+    resolved = _decision_on(tmp_path, [{"id": "vendor/decider",
+                                        "outputs": ["text", "decisions"]}])
+    primary = resolved.attempts[0]
+    assert primary.decision_mode == "structured"
+    assert primary.controls == llm_sampling.effective(primary.conn)
+    assert primary.controls["effective"] == {"temperature": 0.8}

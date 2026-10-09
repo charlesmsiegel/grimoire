@@ -291,7 +291,14 @@ export type RoleCard = {
   /** Why the stored fallback cannot send at all (no key, no base URL), so it
    *  is left out of the chain as silently; null when it can, or there is none. */
   fallback_problem: string | null;
+  /** On the Decision card, the backend its model is answered by: `native`
+   *  (the provider's decisions endpoint), `structured` (generation against a
+   *  schema), or `""` when it can do neither and is refused. `""` on every
+   *  other role. The server's resolution, never re-derived here. */
+  decision_mode: DecisionMode;
 };
+/** Which backend answers a decision (`RoleCard.decision_mode`). */
+export type DecisionMode = "native" | "structured" | "";
 /** The Embedding role (global scope only). `on` is whether anything embeds;
  *  `problem` is null when it does, else the server's short reason it does not
  *  ("No provider chosen", "<provider> has no key set", ...). */
@@ -325,6 +332,8 @@ export type RouteRow = {
   fallback_missing: CapabilityName[];
   /** As on `RoleCard`: why the route's fallback cannot send at all. */
   fallback_problem: string | null;
+  /** As on `RoleCard`, for a decide route; `""` on a generate one. */
+  decision_mode: DecisionMode;
   role: GenerativeRole | null;
   /** The role the route walks (its own `use`, else its default), whichever
    *  role ends up supplying it -- a route can use Decision while Decision
