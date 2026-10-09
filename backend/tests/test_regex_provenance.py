@@ -8,16 +8,30 @@ metadata, and absent on anything written before it existed.
 import contextlib
 import json
 
+import pytest
+
 from grimoire import llm, routes, store
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.store.scenes import serialize
+from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeLLM, FlakyProvider
+
+pytestmark = pytest.mark.upgraded_birth
+
+
+def _primary(client, model="primary"):
+    """The seeded `openrouter` provider keyed, and the Primary role on it at
+    `model` (format 2: a provider names no model of its own)."""
+    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    assert got.status_code == 200, got.text
+    put_settings(client, {"roles": {"primary": {"selection": {
+        "provider": "openrouter", "model": model}}}})
 
 
 def seed(client):
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    _primary(client)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
@@ -95,9 +109,10 @@ def with_fallback(client, monkeypatch):
     retries the primary is exhausted at once and the fallback serves."""
     monkeypatch.setattr(llm, "RETRY_BASE", 0.0)
     backup = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Backup", "model": "backup",
-        "api_key": "sk-backup"}).json()["id"]
-    client.put("/api/config", json={"llm_retries": "0", "fallback_connection_id": backup})
+        "kind": "openrouter", "name": "Backup", "api_key": "sk-backup"}).json()["id"]
+    assert client.put("/api/config", json={"llm_retries": "0"}).status_code == 200
+    put_settings(client, {"roles": {"primary": {"fallback": {
+        "provider": backup, "model": "backup"}}}})
     provider = FlakyProvider(LLMError("rate_limit", "upstream is busy"), chunks=("Mara answers.",))
     client.app.dependency_overrides[routes.get_llm] = lambda: LLMClient(
         openrouter=provider, claude=provider, openai_compatible=provider,
@@ -143,7 +158,7 @@ def test_legacy_stream_fallback_records_serving_connection(client, monkeypatch):
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    _primary(client)
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})
     assert response.status_code == 200, response.text
 
@@ -255,7 +270,7 @@ def test_live_display_follows_the_serving_connection_legacy(client, monkeypatch)
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
     sid = store.scenes.create_scene(cid, "Mara")
-    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "model": "primary"})
+    _primary(client)
     connection_rules(client, "openrouter", {**ANSWERS, "replacement": "WRONG"})
     connection_rules(client, backup, ANSWERS)
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json={"content": "Hello"})

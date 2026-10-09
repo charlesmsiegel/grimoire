@@ -16,6 +16,8 @@ from grimoire.store import config, embed_space, llm_connections
 from grimoire.store import inference_keys as keys
 from grimoire.store.inference import facts, providers, translate
 
+pytestmark = pytest.mark.upgraded_birth
+
 
 @pytest.fixture(autouse=True)
 def _home(tmp_path, monkeypatch):
@@ -30,7 +32,8 @@ def _local() -> str:
 
 def test_the_embedding_role_is_what_resolves(monkeypatch):
     conn = _local()
-    config.write_config(embeddings_connection_id="elsewhere", embeddings_model="legacy")
+    config.write_config(**{keys.role_key("embedding", "provider"): "elsewhere",
+                           keys.role_key("embedding", "model"): "stored"})
     # `resolve.embedding` reads the role through `embedding_view` (slice D);
     # `embedding_role` is only the stored-pair wrapper over it.
     monkeypatch.setattr(translate, "embedding_view", lambda cfg: {

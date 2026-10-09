@@ -10,10 +10,13 @@ from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.routes import runs as runs_mod
 from grimoire.store import response_protocol
+from tests.inference_fixtures import put_settings
 from tests.llm_fakes import FakeLLM, ScriptedProvider
 from tests.test_character_turns import seed
 from tests.test_response_controls_routes import _answer
 from tests.test_runs_routes import _events
+
+pytestmark = pytest.mark.upgraded_birth
 
 # --- pure helpers -----------------------------------------------------------
 
@@ -119,8 +122,10 @@ def _start(result):
 
 
 def _prefill_on(client):
-    assert client.put("/api/llm-connections/openrouter",
-                      json={"prefill": True}).status_code == 200
+    """Prefill on for the model Primary runs (a fact of the model at format 2)."""
+    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
+    assert client.put("/api/llm-connections/openrouter/facts",
+                      json={"model": model, "prefill": True}).status_code == 200
 
 
 def test_prefill_extend_appends_the_partial_reply_and_saves_a_joined_variant(client):
@@ -151,16 +156,18 @@ def test_instruction_extend_on_a_non_prefill_connection(client, kind):
     cid, sid = seed(client)
     _prefill_on(client)   # the standing route; the override below is not prefill
     if kind == "claude":
-        conn_id = "claude"
+        conn_id, model = "claude", store.config.DEFAULT_CLAUDE_MODEL
     else:
-        conn_id = client.post("/api/llm-connections", json={
+        conn_id, model = client.post("/api/llm-connections", json={
             "kind": "openai_compatible", "name": "Saltmarch Local",
-            "base_url": "http://localhost:9/v1", "model": "local-model",
-            "post_process": "strict"}).json()["id"]
+            "base_url": "http://localhost:9/v1"}).json()["id"], "local-model"
+        assert client.put(f"/api/llm-connections/{conn_id}/facts", json={
+            "model": model, "post_process": "strict"}).status_code == 200
     base = f"/api/campaigns/{cid}/scenes/{sid}"
     rid = _answer(client, base)
+    # A provider names no model of its own at format 2: the override names both.
     result, fake = _extend(client, base, rid, "Then the door opened.",
-                           {"connection_id": conn_id})
+                           {"connection_id": conn_id, "model": model})
     assert result.status_code == 200 and "error" not in result.text, result.text
     assert fake.conn["id"] == conn_id
     assert fake.messages[-1]["role"] == "user"
@@ -203,8 +210,9 @@ def test_a_prefill_primary_failing_over_to_an_instruction_fallback_strips_its_fe
     rid = _answer(client, base)
     backup = client.post("/api/llm-connections", json={
         "kind": "openai_compatible", "name": "Saltmarch Backup",
-        "base_url": "https://example.test/v1", "model": "vendor/unknown"}).json()["id"]
-    client.put("/api/config", json={"fallback_connection_id": backup})
+        "base_url": "https://example.test/v1"}).json()["id"]
+    put_settings(client, {"roles": {"primary": {"fallback": {
+        "provider": backup, "model": "vendor/unknown"}}}})
     primary = ScriptedProvider(chunks=(), error=LLMError("auth", "refused"))
     fallback = ScriptedProvider(chunks=(
         "```perception\nShe notes", " the door.\n```\n", "Then she left." + _HANDOFF))

@@ -19,6 +19,7 @@ from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from tests import draft_runs as drafts
+from tests.inference_fixtures import legacy_store, put_settings
 from tests.llm_fakes import (
     FakeCatalog,
     FlakyProvider,
@@ -26,11 +27,23 @@ from tests.llm_fakes import (
     StallingGateway,
 )
 
+pytestmark = pytest.mark.upgraded_birth
+
 
 @pytest.fixture
 def client(monkeypatch, tmp_path):
     monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
     importlib.reload(store)
+    with TestClient(create_app()) as c:
+        yield c
+
+
+@pytest.fixture
+def legacy_client(monkeypatch, tmp_path):
+    """`client` on a format-1 store: one the settings switch has not reached."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    legacy_store(tmp_path)
     with TestClient(create_app()) as c:
         yield c
 
@@ -356,7 +369,7 @@ def test_config_reports_no_health_when_there_is_no_active_connection(client):
     # migration, and the migration seeds an active connection when it finds
     # none. Clearing before that has run is undone by it.
     assert client.get("/api/config").json()["health"] is not None
-    client.put("/api/config", json={"active_connection_id": ""})
+    put_settings(client, {"roles": {"primary": {"selection": {}}}})
 
     assert client.get("/api/config").json()["health"] is None
 
@@ -405,10 +418,14 @@ def test_editing_a_connection_clears_the_verdict_its_old_settings_earned(client)
     assert client.get("/api/config").json()["health"]["state"] == "unknown"
 
 
-def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
+def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(legacy_client):
     """`prefill` is rev-neutral so the catalog survives a toggle, but a model
     that refuses a trailing assistant message turns the dot red over the
-    switch -- and unticking it must be the fix the reader sees take."""
+    switch -- and unticking it must be the fix the reader sees take.
+
+    The connection's own `prefill`, so a format-1 store: at format 2 it is a
+    fact of the model (the twin below)."""
+    client = legacy_client
     client.app.dependency_overrides[routes.get_llm] = \
         lambda: FakeCatalog(health_error=LLMError("bad_response", "assistant prefill"))
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x", "prefill": True})
@@ -419,6 +436,30 @@ def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(client)
 
     body = client.put("/api/llm-connections/openrouter", json={"prefill": False}).json()
 
+    assert body["health"]["state"] == "unknown"
+    assert body["rev"] == rev
+
+
+@pytest.mark.xfail(strict=True, reason=(
+    "format 2: a prefill fact written through PUT /llm-connections/{id}/facts "
+    "does not clear the verdict a refused prefill earned; only put_connection "
+    "forgets one (task 3c report)"))
+def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
+    """The format-2 twin of the test above: `prefill` is the model's fact."""
+    client.app.dependency_overrides[routes.get_llm] = \
+        lambda: FakeCatalog(health_error=LLMError("bad_response", "assistant prefill"))
+    model = store.read_config()[store.inference_keys.role_key("primary", "model")]
+    facts = "/api/llm-connections/openrouter/facts"
+    client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
+    assert client.put(facts, json={"model": model, "prefill": True}).status_code == 200
+    client.post("/api/llm-connections/openrouter/health")
+    rev = client.get("/api/llm-connections/openrouter").json()["rev"]
+
+    assert client.get("/api/llm-connections/openrouter").json()["health"]["state"] == "error"
+
+    assert client.put(facts, json={"model": model, "prefill": False}).status_code == 200
+
+    body = client.get("/api/llm-connections/openrouter").json()
     assert body["health"]["state"] == "unknown"
     assert body["rev"] == rev
 

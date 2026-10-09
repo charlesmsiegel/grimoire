@@ -20,6 +20,7 @@ from grimoire.store import (
     config,
     entities,
     groupstate,
+    inference_keys,
     llm_connections,
     logs,
     scenes,
@@ -29,6 +30,22 @@ from grimoire.store import (
 )
 from grimoire.store import context as ctx
 from grimoire.store.context import semantic, world_state
+from grimoire.store.inference import providers
+from grimoire.store.inference import settings as inference_settings
+from tests.inference_fixtures import legacy_store
+
+pytestmark = pytest.mark.upgraded_birth
+
+#: The Embedding role's two keys in `config.md` (format 2).
+EMBED_PROVIDER = inference_keys.role_key("embedding", "provider")
+
+
+def embed_with(provider_id, model="embed-1"):
+    """Point the Embedding role at `provider_id` serving `model` (confirmed:
+    nothing here sends what re-embedding would)."""
+    inference_settings.write("global", "", {"roles": {"embedding": {
+        "selection": {"provider": provider_id, "model": model}}}}, confirm_embedding=True)
+
 
 # --- a fake provider -------------------------------------------------------
 #
@@ -77,8 +94,8 @@ def configure(depth="2", threshold="0.4", model="embed-1", kind="openai_compatib
     if connection:
         cid = llm_connections.create_connection(kind, "Vectors", base_url=base_url,
                                                 api_key="sk-x", model="", post_process="none")
-    config.write_config(semantic_recall_depth=depth, semantic_recall_threshold=threshold,
-                        embeddings_model=model, embeddings_connection_id=cid)
+    config.write_config(semantic_recall_depth=depth, semantic_recall_threshold=threshold)
+    embed_with(cid, model)
     return cid
 
 
@@ -179,8 +196,7 @@ def test_recall_is_off_by_default(store, provider):
     {"depth": "many"},                   # hand-edited config.md
     {"model": ""},                       # no embedding model chosen
     {"connection": False},               # no connection chosen
-    {"kind": "openrouter"},              # a kind with no /embeddings route
-    {"kind": "claude"},
+    {"kind": "claude"},                  # a kind with no /embeddings route
     {"base_url": ""},                    # a custom endpoint with nowhere to point
 ])
 def test_an_incomplete_configuration_leaves_the_layer_off(store, provider, override):
@@ -188,6 +204,26 @@ def test_an_incomplete_configuration_leaves_the_layer_off(store, provider, overr
     assert semantic.settings() is None
     assert semantic.recall([entry("Miss", keys=["x"])], "some text") == []
     assert provider.calls == []
+
+
+def test_a_legacy_store_never_embeds_through_openrouter(store, provider):
+    """At format 1 an OpenRouter connection named for embeddings has always
+    meant "off" (`resolve.embed_endpoint`): turning it on would start sending
+    text to a provider nobody chose it for."""
+    legacy_store()
+    cid = llm_connections.create_connection("openrouter", "Vectors", api_key="sk-x")
+    config.write_config(semantic_recall_depth="2", embeddings_model="embed-1",
+                        embeddings_connection_id=cid)
+    assert semantic.settings() is None
+    assert semantic.recall([entry("Miss", keys=["x"])], "some text") == []
+    assert provider.calls == []
+
+
+def test_the_embedding_role_embeds_through_openrouter(store, provider):
+    """At format 2 the Embedding role is a choice the user made in the new
+    layout, so OpenRouter's own `/embeddings` serves it (the preset's URL)."""
+    configure(kind="openrouter")
+    assert semantic.settings()["base_url"] == providers.PRESETS["openrouter"].base_url
 
 
 def test_a_deleted_connection_leaves_the_layer_off(store, provider):
@@ -205,18 +241,19 @@ def test_deleting_the_connection_clears_the_reference_to_it(store):
     # inherit the reference.
     cid = configure()
     llm_connections.delete_connection(cid)
-    assert config.read_config()["embeddings_connection_id"] == ""
+    assert config.read_config()[EMBED_PROVIDER] == ""
 
 
 def test_deleting_the_connection_clears_a_fallback_reference_too(store):
-    """`fallback_connection_id` names a connection just like the two beside it
+    """A role's fallback names a connection just like the selections beside it
     (#144), and a dangling one is worse than the others: the slug is reusable,
     so a later connection created under the same name silently inherits the
     role of "where generation goes when the primary fails"."""
     cid = llm_connections.create_connection("openrouter", "Backup", api_key="k")
-    config.write_config(fallback_connection_id=cid)
+    inference_settings.write("global", "", {"roles": {"primary": {
+        "fallback": {"provider": cid, "model": "vendor/backup"}}}})
     llm_connections.delete_connection(cid)
-    assert config.read_config()["fallback_connection_id"] == ""
+    assert config.read_config()[inference_keys.fallback_key("primary", "provider")] == ""
 
 
 def test_deleting_another_connection_leaves_the_reference_alone(store):
@@ -224,7 +261,7 @@ def test_deleting_another_connection_leaves_the_reference_alone(store):
     other = llm_connections.create_connection("openai_compatible", "Unrelated",
                                               base_url="https://other/v1")
     llm_connections.delete_connection(other)
-    assert config.read_config()["embeddings_connection_id"] == cid
+    assert config.read_config()[EMBED_PROVIDER] == cid
 
 
 def test_the_cache_namespace_moves_when_the_credential_does(store):
@@ -245,9 +282,9 @@ def test_two_connections_to_one_endpoint_do_not_share_a_namespace(store):
     second = llm_connections.create_connection(
         "openai_compatible", "Same gateway",          # identical URL and model
         base_url="https://vectors.example/v1", api_key="sk-other")
-    config.write_config(embeddings_connection_id=first)
+    embed_with(first)
     one = semantic.settings()["space"]
-    config.write_config(embeddings_connection_id=second)
+    embed_with(second)
     assert semantic.settings()["space"] != one
 
 

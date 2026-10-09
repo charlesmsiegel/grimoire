@@ -23,7 +23,6 @@ from grimoire.store import (
     campaigns,
     clock,
     commitments,
-    config,
     embed_space,
     errors,
     events,
@@ -46,9 +45,12 @@ from grimoire.store.continuity import (
     review,
     similarity,
 )
+from grimoire.store.inference import settings as inference_settings
 from tests.llm_fakes import FakeEmbeddings
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
 from tests.test_continuity_pressure import _BROKEN_PROVIDER_SRC
+
+pytestmark = pytest.mark.upgraded_birth
 
 LEDGER = f"thread:{LEDGER_THREAD[0]}"
 RECOVER = "thread:recover-the-harbour-ledger"
@@ -694,7 +696,8 @@ def _configure():
     conn = llm_connections.create_connection("openai_compatible", "Vectors",
                                              base_url="https://vectors.example/v1",
                                              api_key="sk-x", model="", post_process="none")
-    config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn)
+    inference_settings.write("global", "", {"roles": {"embedding": {
+        "selection": {"provider": conn, "model": "embed-1"}}}}, confirm_embedding=True)
 
 
 def _vector_space():

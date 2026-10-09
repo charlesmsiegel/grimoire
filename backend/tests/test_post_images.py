@@ -7,6 +7,9 @@ import pytest
 
 from grimoire import catalog, store
 from grimoire.store import config, llm_connections, post_images
+from tests.inference_fixtures import put_settings
+
+pytestmark = pytest.mark.upgraded_birth
 
 
 @pytest.fixture
@@ -113,16 +116,19 @@ def test_send_images_round_trips_and_is_validated(client):
 
 def test_reach_describes_the_chat_connection(client):
     cid = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Seraphine", "api_key": "k", "model": "m"}).json()["id"]
-    client.put("/api/config", json={"active_connection_id": cid, "send_images": "on"})
+        "kind": "openrouter", "name": "Seraphine", "api_key": "k"}).json()["id"]
+    put_settings(client, {"roles": {"primary": {"selection": {"provider": cid, "model": "m"}}}})
+    assert client.put("/api/config", json={"send_images": "on"}).status_code == 200
     assert client.get("/api/config").json()["send_images_reach"] == "unknown"
-    client.put(f"/api/llm-connections/{cid}", json={"vision": "on"})
+    r = client.put(f"/api/llm-connections/{cid}/facts", json={"model": "m", "vision": "on"})
+    assert r.status_code == 200, r.text
     assert client.get("/api/config").json()["send_images_reach"] == "yes"
 
 
 def test_reach_with_no_connection_reads_none(client):
     client.get("/api/config")  # the first read migrates in a default connection
-    client.put("/api/config", json={"send_images": "on", "active_connection_id": ""})
+    put_settings(client, {"roles": {"primary": {"selection": {}}}})
+    assert client.put("/api/config", json={"send_images": "on"}).status_code == 200
     assert client.get("/api/config").json()["send_images_reach"] == "none"
 
 
@@ -136,14 +142,19 @@ def test_editing_only_the_vision_override_keeps_the_catalog(home):
 
 
 def test_connection_vision_is_constrained_and_round_trips(client):
+    """Vision is a fact of the model at format 2 (`PUT .../facts`), not of the
+    provider."""
     bad = client.post("/api/llm-connections", json={
         "kind": "openrouter", "name": "Mara", "api_key": "k", "vision": "sometimes"})
     assert bad.status_code == 422
     cid = client.post("/api/llm-connections", json={
-        "kind": "openrouter", "name": "Mara", "api_key": "k", "vision": "on"}).json()["id"]
-    assert client.get(f"/api/llm-connections/{cid}").json()["vision"] == "on"
-    client.put(f"/api/llm-connections/{cid}", json={"vision": ""})
-    assert client.get(f"/api/llm-connections/{cid}").json()["vision"] == ""
+        "kind": "openrouter", "name": "Mara", "api_key": "k"}).json()["id"]
+    facts = f"/api/llm-connections/{cid}/facts"
+    assert client.put(facts, json={"model": "m", "vision": "sometimes"}).status_code == 400
+    assert client.put(facts, json={"model": "m", "vision": "on"}).status_code == 200
+    assert client.get(facts, params={"model": "m"}).json()["vision"] == "on"
+    assert client.put(facts, json={"model": "m", "vision": ""}).status_code == 200
+    assert client.get(facts, params={"model": "m"}).json()["vision"] == ""
 
 
 # ---- resolving and encoding (Task 4) ----

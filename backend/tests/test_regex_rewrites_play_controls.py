@@ -5,10 +5,14 @@ views like every other reader of transcript text."""
 
 from __future__ import annotations
 
+import pytest
+
 from grimoire import routes, store
 from tests.llm_fakes import FakeLLM
 from tests.test_regex_rewrites import ELLIPSIS, messages, put_rules, records, seed, send
 from tests.test_runs_routes import _events
+
+pytestmark = pytest.mark.upgraded_birth
 
 _HANDOFF = '\n```handoff\n{"next":null}\n```'
 
@@ -22,8 +26,9 @@ def _extend(client, cid, sid, rid, reply):
 
 
 def _prefill_on(client):
-    assert client.put("/api/llm-connections/openrouter",
-                      json={"prefill": True}).status_code == 200
+    """Prefill on for the model `seed` puts on Primary (a fact of the model)."""
+    assert client.put("/api/llm-connections/openrouter/facts",
+                      json={"model": "primary", "prefill": True}).status_code == 200
 
 
 def test_a_branch_carries_the_records_of_the_posts_it_keeps(client):

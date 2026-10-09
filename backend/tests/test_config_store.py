@@ -1,6 +1,7 @@
 import importlib
 
 import grimoire.store as store
+from tests.inference_fixtures import legacy_store
 
 
 def reload_with_home(monkeypatch, tmp_path):
@@ -143,7 +144,6 @@ def test_retry_defaults(monkeypatch, tmp_path):
     s = reload_with_home(monkeypatch, tmp_path)
     cfg = s.read_config()
     assert cfg["llm_retries"] == "2"
-    assert cfg["fallback_connection_id"] == ""   # no fallback until one is picked
     assert s.config.llm_retries() == 2
 
 
@@ -177,7 +177,11 @@ def test_the_retry_count_is_clamped(monkeypatch, tmp_path):
 
 
 def test_the_fallback_connection_round_trips(monkeypatch, tmp_path):
+    """The legacy layout's one fallback key (format 1; a role carries its own
+    fallback at format 2)."""
     s = reload_with_home(monkeypatch, tmp_path)
+    legacy_store(tmp_path)
+    assert s.read_config()["fallback_connection_id"] == ""   # no fallback until one is picked
     s.write_config(fallback_connection_id="backup")
     assert s.read_config()["fallback_connection_id"] == "backup"
 

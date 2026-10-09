@@ -20,12 +20,15 @@ from fastapi.testclient import TestClient
 import grimoire.store as store
 from grimoire import decisions, embeddings, inference, prompts
 from grimoire.main import create_app
-from grimoire.store import absorb, config, embed_space, llm_connections, vectors
+from grimoire.store import absorb, embed_space, llm_connections, vectors
 from grimoire.store.absorb import materializer
 from grimoire.store.campaigns import paths as campaigns_paths
 from grimoire.store.continuity import identity, review, similarity
+from grimoire.store.inference import settings as inference_settings
 from tests.llm_fakes import FakeEmbeddings, decision_reply
 from tests.review_runs import LEDGER_THREAD, RECOVER_THE_LEDGER, SALTMARCH_TITHE
+
+pytestmark = pytest.mark.upgraded_birth
 
 NO_FACTS = {"cast": [], "location": "", "date": ""}
 
@@ -95,7 +98,8 @@ def _configure():
     conn = llm_connections.create_connection("openai_compatible", "Vectors",
                                              base_url="https://vectors.example/v1",
                                              api_key="sk-x", model="", post_process="none")
-    config.write_config(embeddings_model="embed-1", embeddings_connection_id=conn)
+    inference_settings.write("global", "", {"roles": {"embedding": {
+        "selection": {"provider": conn, "model": "embed-1"}}}}, confirm_embedding=True)
 
 
 def _soon():
