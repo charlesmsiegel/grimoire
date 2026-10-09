@@ -233,9 +233,12 @@ version:
 The legacy fields `model`, `post_process`, `reasoning_effort`,
 `sampler_preset`, `vision`, `prefill` are **left in place, frozen** for older
 builds (§11) and ignored by this version once the store is at format 2 — with
-one exception until slice I: a GLM connection's `reasoning_effort` still
-applies where the effective preset sets none (§11.2 step 4). At format 2 they
-are refused on write (§11.3).
+one exception through slice H: a GLM connection's `reasoning_effort` still
+applied where the effective preset set none (§11.2 step 4). At format 2 they
+are refused on write (§11.3). Slice I's retirement (§11.4) turns that effort
+into derived presets, copies each connection's non-empty fields into the
+retirement record and then strips them, keeping `rev`; from then on the
+planner reads them only from that record.
 
 `rev` rules are unchanged in spirit: edits to `name`, `preset`, `billing`,
 `sampler_support` keep it; edits that could change the deployment behind the
@@ -294,7 +297,8 @@ catalog sidecar.
 **Facts are what a call sends.** At format 2 the lowering (§5.4) overlays the
 selected model's facts on the connection dict it builds: `vision`, `prefill`
 and `post_process` come from `facts.json[<model>]` (a missing entry reads as
-`""`, `false`, `none`), never from the legacy connection fields. Otherwise the
+`""`, `false`, `none`), never from the legacy connection fields (from slice I
+the resolver lays them on the attempt's `wire.Target` instead, §5.4). Otherwise the
 facts panel would write settings nothing sends, and a provider created at
 format 2, which has no legacy fields at all, could never prefill. The legacy
 `sampler_preset` is ignored at format 2 for the same reason: the preset
@@ -307,7 +311,7 @@ Today's sampler preset, plus one parameter:
 | Param | Values |
 |---|---|
 | the nine existing params | unchanged (`llm_sampling.PARAMS`) |
-| `reasoning_effort` | `off` \| `low` \| `medium` \| `high` (provider-neutral) |
+| `reasoning_effort` | `off` \| `low` \| `medium` \| `high` (provider-neutral), and from slice I `max`, which only GLM takes (§8) |
 
 A preset is reusable across models. A value a given model cannot take stays
 stored and is reported as unsupported for that model (§8), never deleted. The
@@ -530,6 +534,8 @@ ResolvedInference(
     decision_mode=None,    # decide only: "native" | "structured"; a property over
                            # the attempt that is sent (Attempt.decision_mode)
                            # (there is no `skipped`: slice H deletes the skip)
+    chain=None,            # slice I: wire.Chain | None, the sent attempt's target
+                           # and its fallback's; replaces the lowered `.conn`
 )
 
 Attempt(
@@ -540,17 +546,37 @@ Attempt(
     retries,                # primary: llm_retries; every fallback stage: 0,
                             # structured included (slice H, ruling 12)
     decision_mode="",       # decide only: the capability answer (see below)
+    target,                 # slice I: wire.Target, this attempt as an adapter sends it
 )
 ```
 
-Until slice I, each `Attempt` is lowered to today's connection-dict shape so
-`LLMClient` runs unchanged (approach 1, §13). The lowering is a single
-function with its own tests; nothing else builds a connection dict.
+Through slice H, each `Attempt` was lowered to the connection-dict shape of
+the baseline so `LLMClient` ran unchanged (approach 1, §13). The lowering was
+a single function with its own tests; nothing else built a connection dict.
+
+**Slice I replaces the lowered dict with typed targets** (slice I, ruling 9).
+`grimoire/wire.py` is a gateway leaf that imports only the standard library.
+It holds `Target`, one attempt as an adapter sends it (provider, kind, the
+model sent, endpoint and key, the key kept out of its `repr`, `Sampling`, the
+model facts that shape the wire, `structured`, `degrade` and `account`), and
+`Chain`, a primary target and its optional fallback. The resolver builds
+both: `Attempt.target`, and `ResolvedInference.chain`, which replaces `.conn`.
+The fallback rides on `Chain.fallback`, not under `FALLBACK_KEY`; structured
+mode is `Target.structured`, not `STRUCTURED_KEY`; the account block is
+`Target.account` (`wire.Account`), not `ACCOUNT_KEY`. All three keys are
+deleted with the lowering. `llm.ATTEMPTED` stays a holder key and holds the
+`Target` that answered. **Inside H's stages** (`inference.stages` and
+`run_stages`, §5.5, §7.4) the `Chain` is what replaces the connection dict: a
+`Stage` carries `chain: wire.Chain`, and a stage's chain carries a fallback
+exactly where its dict carried `FALLBACK_KEY`. H's strip of the fallback
+becomes `Chain.alone()`, and H's attach rule for a structured fallback is
+unchanged.
 
 `Attempt.decision_mode` is the resolver's *capability* answer: which backend
 will serve that attempt first. How a call *was* served is not read back from
 it; the backend stamps the mode per call on a copy of the **account block**
-(a small record the resolver lays on each lowered connection dict, carrying
+(a small record the resolver lays on each lowered connection dict, and from
+slice I on each `Target` as `Target.account`, carrying
 `operation`, `role` and the like, which the facade copies into the usage
 holder so the ledger row learns what the resolver knew; §9.3), so no block of
 the resolution is mutated. `ResolvedInference.decision_mode` reads the same
@@ -623,9 +649,9 @@ unset, half-set or known not to embed resolves with no `space_id`.
     never moves an item, a native `refused` and a `None` from a well-formed body
     included.
   - The fallback gets **one stage**, native or structured by the same rule
-    applied to its own capabilities. It rides the facade (`FALLBACK_KEY`) only
-    when it is structured and the primary generates; otherwise it is its own
-    stage.
+    applied to its own capabilities. It rides the facade (`FALLBACK_KEY`; from
+    slice I, the stage's `Chain.fallback`, §5.4) only when it is structured and
+    the primary generates; otherwise it is its own stage.
   - A `PresetRefusalError` stops the chain, as it stops the facade, including a
     native fallback stage that would take no sampling: the user should fix the
     preset.
@@ -891,9 +917,14 @@ automatically, and the server refuses that check without `confirm: true`
 
 - `store/inference/` — pure and store-side: `providers.py` (preset table,
   provider records), `facts.py`, `roles.py` (role/route keys and the pure
-  cascade), `capabilities.py`, `controls.py` (§8), `translate.py` (legacy →
-  new, §11), `migrate.py`. It must respect `test_import_guard.py` (module-scope
-  imports, submodule bindings across packages, acyclic).
+  cascade), `capabilities.py`, `controls.py` (§8), `migrate.py`, and from
+  slice I `legacy_plan.py` (the one reader of the legacy layout: the legacy →
+  new mapping, the model-facts overlay, the derived presets and the notes,
+  §11), `retire.py` (retirement, §11.4) and `retired.py` (the retirement
+  record and its `Note`, a leaf the planner imports). `legacy_plan.py`
+  replaces `translate.py`, which slice I deletes. It must respect
+  `test_import_guard.py` (module-scope imports, submodule bindings across
+  packages, acyclic).
 - `store/inference/embed.py` — the `embed` / `embed_sync` operation (§7.3).
   Every caller is a store module, and the store never imports `llm.py` (#239),
   so the operation cannot sit beside `LLMClient`.
@@ -901,6 +932,15 @@ automatically, and the server refuses that check without `confirm: true`
   `decide` API below, built on `inference.resolve` and the existing
   `LLMClient`. `decide` stays here. The two modules are disjoint, and neither
   merges into the other.
+- `wire.py` (top level, slice I; a gateway leaf that imports only the standard
+  library) — `Target`, `Account`, `Sampling` and `Chain`, the typed attempt
+  that replaces the lowered connection dict (§5.4).
+- `adapters.py` (top level, slice I; a gateway module, never imported by the
+  store) — the per-kind adapter registry, one class per provider `kind`, each
+  with `generate`, `models`, `check` and native `decide`, and the flags
+  `carries_images`, `lists_models`, `embeds` and `decides_natively` (§13).
+  `LLMClient` dispatches through it and keeps its retries, fallback, idle
+  bound, image lowering, prefill tails and usage stamping.
 - `decisions.py` (top level, a gateway leaf that imports nothing from the
   package) — `decide`'s request and result types, validation, the JSON Schema
   of a batch and the parser (§7.4). Slice H's native adapters are gateway
@@ -912,14 +952,27 @@ automatically, and the server refuses that check without `confirm: true`
 ### 7.2 `generate`
 
 ```python
-await inference.generate(task, messages, cid="", *, stream=True, usage=..., schema=None, override=None)
+inference.generate(task, messages, *, client, resolved, usage=None, schema=None, stream=True)
 # slice F has: LLMClient.complete(messages, conn, usage=None, *, schema=None)
 #               LLMClient.stream(messages, conn, usage=None, *, schema=None)
 ```
 
-`inference.generate` arrives with slice I's adapter registry. Until then the
-facade's own `complete` and `stream` take `schema=` (shown above) and are
-what `decide` calls. Behaviour is today's `LLMClient.stream/complete` behind `require_inference`.
+`inference.generate` arrived with slice I's adapter registry (slice I,
+ruling 8). Like `decide` (§7.4), it takes the call site's resolution and the
+client rather than resolving for itself: the `cid` and `override` this section
+first gave it are the inputs of that resolution, `require_inference(task, cid,
+operation="generate")` or `override_inference`. It refuses a resolution for
+another task or another operation, or one where nothing resolved, before any
+client call. With `stream=True` it returns an async iterator of text; with
+`stream=False`, an awaitable of the joined text. It is the only door to
+generation: a call site writes `operations.generate(<task literal>, …)`, and
+`client.stream`/`complete` appear only in `inference.py`. Two facade methods
+stay (slice I, ruling 12): `client.single`, for the model test's generate
+probe only, and `client.decide_native`, for H's native stage in `inference.py`
+and its model-test probe. Through
+slice H the facade's own `complete` and `stream` took `schema=` (shown above)
+and were what `decide` called; from slice I they take a `wire.Chain` in place
+of the dict. Behaviour is today's `LLMClient.stream/complete` behind `require_inference`.
 New: `schema=` asks for JSON matching a JSON Schema. When the attempt's
 `structured_output` is `yes`, the adapter sends the provider's structured mode
 (`response_format: {type: json_schema}` on OpenRouter/OpenAI-compatible;
@@ -933,9 +986,10 @@ backend uses it.
   variant for a fallback that lacks the mode.
 - **Decided per attempt.** The resolver flags an attempt on a decide
   resolution whose `structured_output` is `yes` (`STRUCTURED_KEY` on its
-  lowered dict); the facade reads the flag from the dict it already receives,
-  so a fallback is covered without the facade importing the store. A generate
-  resolution never carries the key, so its dicts are unchanged.
+  lowered dict; from slice I, `Target.structured`); the facade reads the flag
+  from what it already receives, so a fallback is covered without the facade
+  importing the store. A generate resolution never carries the flag, so its
+  attempts are unchanged.
 - **Schema features** are restricted to the intersection of OpenAI strict
   mode's and Anthropic's documented subsets: `type`, `enum`, `anyOf`,
   `required`, `additionalProperties: false`, with no numeric bounds (a score is
@@ -961,8 +1015,8 @@ backend uses it.
   roster-dependent schema pays the compile latency once per roster
   composition. To be tuned against real prompts later, never against a
   measured library.
-- `decide` is the only caller of `schema=` before slice I adds
-  `inference.generate`.
+- `decide` was the only caller of `schema=` before slice I added
+  `inference.generate`, which passes `schema=` through on a generate call too.
 
 ### 7.3 `embed`
 
@@ -1341,16 +1395,20 @@ parameters and describes them. For each control:
 | `unknown` | cannot be proven | sent, per today's rule (marked unverified; standard-only on strict endpoints unless `sampler_support` is on) | distinguishable from unsupported |
 | `n/a` | the operation takes no sampling (embed, native decide) — produced from slices D/H, when operations reach the controls API: the controls API takes `operation`, and a native attempt reports every control `n/a` | not sent | the panel says so |
 
-`reasoning_effort` translations:
+`reasoning_effort` translations. From slice I `llm_sampling.REASONING` is
+`off`, `low`, `medium`, `high` and `max` (ratified 2026-10-09). `max` is a GLM
+level: it is sent only to a GLM model on `openai_compatible`, and every other
+row answers it `unsupported`, nothing sent, source `adapter` (`WHY_MAX`). A
+build from C to H reads a `max` preset as invalid and sends no effort (§11.3).
 
 | Adapter | Wire |
 |---|---|
-| `openrouter` | `reasoning: {effort}`: `translated` when the cached catalog lists `reasoning`, `unsupported` when a cached catalog omits it, `unknown` (sent) when no catalog is cached |
-| OpenAI preset | `reasoning_effort`, decided by the model id (source `name`; lowercased, after any `vendor/` prefix): a reasoning family (`o` and a digit — `o1`, `o3-mini`, `o4-mini` — `gpt-5*`, `gpt-oss*`) is `supported` and sent, with `off` `unknown` (nothing sent) as before; a non-reasoning family (`gpt-4*`, `gpt-3*`, `chatgpt-*`, and the `gpt-5*-chat*` chat snapshots, checked first) is `unsupported` (nothing sent, reported dropped — it would answer a 400 that reads as a preset refusal and skips the fallback), where `off` is honoured by sending nothing (`supported`); any other id is `unknown` and sent, unverified |
-| `anthropic` | `low`/`medium`/`high` → `thinking: {type: "adaptive"}` + `output_config: {effort: <same>}` where the catalog says adaptive thinking is supported (current models reject `budget_tokens`); where the catalog lists `enabled` thinking instead, `budget_tokens` 1024 / 4096 / 16000, each held to at most half the effective `max_tokens` and at least 1024 (thinking is `unsupported` when that leaves no room); when the catalog states neither, nothing is sent and the control is `unknown`; `off` depends on the catalog's thinking types: on a model with adaptive thinking (whose unset default is to think, whatever else it lists) it is `translated` → `thinking: {type: "disabled"}` where the catalog says `disabled` is supported, `unsupported` (nothing sent) where it says `disabled` is not — that model's thinking cannot be turned off — and `unknown` (nothing sent) where it does not say; Claude Sonnet 5.5 is the one exception, which refuses `disabled` and takes `thinking: {type: "between_tools"}` as its off (no thinking before the reply; the API refuses it on every other model, so it is chosen by id), sent whatever the catalog's `disabled` says or omits (`translated`, source `adapter`: a row cached before `disabled` was read would otherwise leave it thinking); on a budget-only model, or one that takes no thinking at all, omitting `thinking` is off, so nothing is sent and it is `supported`; with no thinking types known it is `unknown`. `disabled` and `between_tools` are not thinking: they do not hold back sampling parameters. Sampling parameters are decided by the model id's Claude version, not by the thinking the catalog lists (Claude Opus 5 lists `enabled` thinking and still refuses them): they are sent only to an id naming a version below 4.7 (`claude-opus-4-6`, `claude-3-7-sonnet-20250219`) while no thinking is being sent, and `top_p` is not sent beside `temperature`; otherwise they are `unsupported` (source `adapter` for 4.7 and later, `unknown` for an id that names no version, such as `claude-mythos-preview`); `max_tokens` defaults to 16000 capped at the catalog's limit; `stop` is `translated` → `stop_sequences` |
-| GLM on `openai_compatible` | today's `llm_reasoning.glm_effort`; `off` is `unsupported` (nothing sent, reported dropped): GLM takes low, high or max |
-| `claude` (Agent SDK) | unsupported |
-| other `openai_compatible` | `unsupported` (not sent) on a strict endpoint, like the other extensions; `unknown` (sent) where `sampler_support` allows non-standard parameters |
+| `openrouter` | `reasoning: {effort}`: `translated` when the cached catalog lists `reasoning`, `unsupported` when a cached catalog omits it, `unknown` (sent) when no catalog is cached; `max` is `unsupported` (nothing sent), with or without a catalog |
+| OpenAI preset | `reasoning_effort`, decided by the model id (source `name`; lowercased, after any `vendor/` prefix): a reasoning family (`o` and a digit — `o1`, `o3-mini`, `o4-mini` — `gpt-5*`, `gpt-oss*`) is `supported` and sent, with `off` `unknown` (nothing sent) as before; a non-reasoning family (`gpt-4*`, `gpt-3*`, `chatgpt-*`, and the `gpt-5*-chat*` chat snapshots, checked first) is `unsupported` (nothing sent, reported dropped — it would answer a 400 that reads as a preset refusal and skips the fallback), where `off` is honoured by sending nothing (`supported`); any other id is `unknown` and sent, unverified; `max` is `unsupported` (nothing sent) in all three cases |
+| `anthropic` | `low`/`medium`/`high` → `thinking: {type: "adaptive"}` + `output_config: {effort: <same>}` where the catalog says adaptive thinking is supported (current models reject `budget_tokens`); where the catalog lists `enabled` thinking instead, `budget_tokens` 1024 / 4096 / 16000, each held to at most half the effective `max_tokens` and at least 1024 (thinking is `unsupported` when that leaves no room); when the catalog states neither, nothing is sent and the control is `unknown`; `off` depends on the catalog's thinking types: on a model with adaptive thinking (whose unset default is to think, whatever else it lists) it is `translated` → `thinking: {type: "disabled"}` where the catalog says `disabled` is supported, `unsupported` (nothing sent) where it says `disabled` is not — that model's thinking cannot be turned off — and `unknown` (nothing sent) where it does not say; Claude Sonnet 5.5 is the one exception, which refuses `disabled` and takes `thinking: {type: "between_tools"}` as its off (no thinking before the reply; the API refuses it on every other model, so it is chosen by id), sent whatever the catalog's `disabled` says or omits (`translated`, source `adapter`: a row cached before `disabled` was read would otherwise leave it thinking); on a budget-only model, or one that takes no thinking at all, omitting `thinking` is off, so nothing is sent and it is `supported`; with no thinking types known it is `unknown`. `disabled` and `between_tools` are not thinking: they do not hold back sampling parameters. Sampling parameters are decided by the model id's Claude version, not by the thinking the catalog lists (Claude Opus 5 lists `enabled` thinking and still refuses them): they are sent only to an id naming a version below 4.7 (`claude-opus-4-6`, `claude-3-7-sonnet-20250219`) while no thinking is being sent, and `top_p` is not sent beside `temperature`; otherwise they are `unsupported` (source `adapter` for 4.7 and later, `unknown` for an id that names no version, such as `claude-mythos-preview`); `max_tokens` defaults to 16000 capped at the catalog's limit; `stop` is `translated` → `stop_sequences`; a `max` effort is `unsupported` (nothing sent) |
+| GLM on `openai_compatible` | `llm_reasoning.glm_effort`; `off` is `unsupported` (nothing sent, reported dropped): GLM takes low, high or max, and from slice I it takes them from the preset only (the connection's legacy effort is no longer read, §11.4) |
+| `claude` (Agent SDK) | unsupported (`max` included) |
+| other `openai_compatible` | `unsupported` (not sent) on a strict endpoint, like the other extensions; `unknown` (sent) where `sampler_support` allows non-standard parameters; `max` is `unsupported` (nothing sent) on either |
 
 `max_tokens` is `translated` → `max_completion_tokens` on the OpenAI preset
 (and wherever else an endpoint requires it). This is a deliberate exception to
@@ -1358,7 +1416,8 @@ rule 3: an existing connection at `api.openai.com` with a `max_tokens` preset
 sends the new spelling from slice B, because the endpoint refuses the old one
 on current models. The per-kind decisions live in
 one gateway function (`llm_sampling.effective`, which the facade calls per
-attempt from the connection dict, so the fallback is covered too); the store
+attempt from the connection dict, from slice I from the attempt's
+`wire.Target`, so the fallback is covered too); the store
 wraps it to add each control's capability `source` for the screens. The API returns `{requested, effective, controls: {name: {state,
 source, wire}}}` for any (preset, selection) pair; the Presets editor's
 "Preview on…" and every role card render it. The frontend keeps no capability
@@ -1481,7 +1540,11 @@ onward. `usage.Meter.done` remains the one place LLM failures are logged
 
 `operation` and `decision_mode` reach a row through the account block (§5.4):
 the decide backend stamps the mode per call, on a copy of the block, so a
-resolution is never mutated and a fallback attempt carries its own.
+resolution is never mutated and a fallback attempt carries its own. From
+slice I the block is `Target.account` and the attempted dict is the attempted
+`Target` (`llm.ATTEMPTED`), so `preset` below reads its `sampling.preset_id`.
+The row keeps its fields and their values, `decision_mode: "native"`
+included, so `usage_rollup.VERSION` stays 6.
 
 - A native row is priced only from what the provider reports (slice H).
   `cost_usd` is filed when the provider reports a cost (OpenRouter's
@@ -1689,12 +1752,16 @@ new-layout editors cannot save until the migration completes (409
 
 ### 11.1 Translation, then persistence
 
-`store/inference/translate.py` is a pure function from the legacy layout to
-the new one. While `inference_format` is absent, the resolver reads the store
-**through it**, so the app is correct before, during and without migration.
+The translation is a pure function from the legacy layout to the new one. It
+was `store/inference/translate.py`; slice I moves its mapping verbatim into
+`store/inference/legacy_plan.py`, the planner, and deletes `translate.py`
+(§11.4). While `inference_format` is absent, the resolver reads the store
+**through the planner (`legacy_plan.py`), in memory**, so the app is correct
+before, during and without migration.
 Migration persists that same translation **verbatim** — padded ids, dangling
-references and `PRESET_CLEAR` stay exactly as `translate.global_view` /
-`campaign_view` give them — **plus the enrichments in §11.2** that a read-time
+references and `PRESET_CLEAR` stay exactly as the planner's mapping
+(`translate.global_view` / `campaign_view` before slice I) gives them — **plus
+the enrichments in §11.2** that a read-time
 translation deliberately does not make (provider presets and billing, model
 facts, an unset Claude model written as `opus`): those change what a later
 edit starts from, not what resolves today. Every derived value is
@@ -1707,7 +1774,8 @@ and opened by an older one resolves every campaign from the same frozen
 legacy state.
 
 **Campaign keys need the campaign marker.** At format 2 a campaign without
-its own marker still resolves through the translation: it was skipped as busy
+its own marker still resolves through the planner (`legacy_plan.py`), in
+memory: it was skipped as busy
 (§11.2 step 8), forked from one that was, or created by an older build on a
 synced device. So the marker is never written over legacy overrides that were
 never translated:
@@ -1733,7 +1801,8 @@ so two starts never interleave, and `main.start()` holds
 in a store module (CLAUDE.md), so a backup, fork or image-store run cannot
 walk the tree while it is rewritten. A data-dir switch mid-run writes no
 marker: the run belongs to the root it started on. While the migration is
-`pending` or `failed`, play resolves through the translation and every
+`pending` or `failed`, play resolves through the planner (`legacy_plan.py`),
+in memory, and every
 new-layout settings write answers 409 `not_migrated` with the status — a write
 into a format-1 store would be ignored. Tests turn the automatic start off
 (`GRIMOIRE_INFERENCE_AUTOMIGRATE=0`) and call `ensure()` themselves.
@@ -1760,18 +1829,57 @@ migration write. Then:
    (§4.2).
 4. **Presets — none derived; the legacy GLM effort keeps applying.** A
    connection's legacy `reasoning_effort` is not turned into a preset in this
-   slice. It keeps applying, at both formats, whenever the effective preset
-   sets no `reasoning_effort` — slice B's rule — until slice I. Deriving
+   slice. It kept applying, at both formats, whenever the effective preset
+   sets no `reasoning_effort` — slice B's rule — through slice H. Deriving
    presets here would change every observed preset (id, name, params) and buy
    no change on the wire; and `glm_effort` matches by model name regardless of
    kind, so a derived preset on an OpenRouter GLM connection would start
    sending reasoning that connection never sent. Slice I derives them when it
-   stops reading the legacy field (§14): for `openai_compatible` GLM
+   stops reading the legacy field (§11.4, §14): for `openai_compatible` GLM
    connections only, and only for values a preset can represent — its own
    sampler preset's params plus that effort, named "<preset name> ·
    reasoning <effort>" (or "Reasoning <effort>" when it had no preset), with a
    deterministic id (`slugify` of that name); identical derivations collapse
    to one.
+
+   **The exact rule** (slice I, ruling 4). It amends one phrase above, as the
+   user ratified on 2026-10-09: a derivation starts from the preset the *slot*
+   selects, not from the connection's "own sampler preset" (its legacy
+   `sampler_preset`). That is the only reading that keeps the wire for a role
+   whose preset was repointed after C.
+   - **Which slots.** Every selection slot (each generative role, its
+     fallback, and each route pin), at global scope and in every campaign,
+     where the provider's `kind` is `openai_compatible`, its legacy
+     `reasoning_effort` `E` is representable (in both
+     `llm_reasoning.GLM_EFFORTS` and `llm_sampling.REASONING`, so `low`,
+     `high` or `max`, §8), the slot's model is GLM (`llm_reasoning.is_glm`),
+     and the slot's preset, read, sets no `reasoning_effort`.
+   - **What it points at.** A derived preset whose params are the slot's
+     preset's params plus `{"reasoning_effort": E}`, named "<preset name> ·
+     reasoning <E>", or "Reasoning <E>" when the slot names no readable
+     preset. The slot is repointed to it, so its wire does not change. The
+     derived preset is a frozen copy: editing the base preset (say "Warm") no
+     longer reaches that slot.
+   - **The id.** `slugify(name)`. If a preset with that id already holds
+     different params or a different name, the id is
+     `f"{slugify(name)}-{sha256(canonical params)[:8]}"`. Identical
+     derivations collapse to one file, and two devices write the same bytes.
+   - **A route-level preset is left alone, and noted** (slice I, ruling 5;
+     ratified). A `preset_<route>` (global or campaign, `PRESET_CLEAR`
+     included) that sets no reasoning effort, on a route whose selection at
+     that scope is an `openai_compatible` GLM provider with a legacy effort, is
+     not derived: a route preset is shared by the route's primary and its
+     fallback (§5.2), so a derived one would start sending reasoning to a
+     fallback that never sent it. That route stops sending the effort, and it
+     gets one note per (scope, route, provider) in the retirement record
+     (§11.4), shown on `/models` until dismissed and worded "was not carried
+     over". It is never reported only in `skipped`.
+   - **What is not stored gets no note** (ratified). A call outside a stored
+     selection stops adding a GLM connection's legacy effort, with no note,
+     because nothing stored changed: a reroll's override preset that sets no
+     reasoning effort, the model test call on such a connection, the provider
+     editor's controls readout, and the Presets editor's "Preview on…" a GLM
+     provider.
 5. **Roles** — Primary = the active connection (its model, or `opus` for an
    unset Claude model) with its own sampler preset. Fast and Decision unset
    (inherit). Embedding = `embeddings_connection_id` + `embeddings_model`
@@ -1806,8 +1914,17 @@ bytes.
 ### 11.3 Older and newer builds
 
 - **Older builds** keep running on the state as of migration: legacy keys and
-  fields are left in place, frozen. Changes made in the new UI do not reach
-  them.
+  fields are left in place, frozen, until retirement deletes them (§11.4).
+  Changes made in the new UI do not reach them.
+- **Older builds after retirement** (slice I; ratified 2026-10-09). A build
+  from before C sees no model settings: its connections have no `model`, so it
+  sends requests with an empty model. A build from C to H keeps playing and
+  loses only the `max` effort (§8), which it reads as an invalid preset value
+  and sends no effort for; it can write `active_connection_id` back, because
+  its `llm_connections.ensure_migrated` seeds it wherever
+  `llm_connections/.migrated` is absent, so at most once per library. This
+  build ignores a legacy key or field in a retired scope (the retirement
+  marker keeps the planner off it) and deletes it again on its next start.
 - **Legacy keys are refused at format 2.** A write of a legacy inference key
   (`active_connection_id`, `fallback_connection_id`, `route_*`,
   `embeddings_connection_id`, `embeddings_model`) or a legacy connection field
@@ -1835,6 +1952,164 @@ preset first), delete the legacy config keys (`active_connection_id`,
 translation layer. A store still at format 1 at that point is migrated first,
 backup included.
 
+The user ratified slice I's reading of this section on 2026-10-09. What
+follows is how it holds.
+
+**What "delete the translation layer" means** (slice I, CR1). The second
+runtime read path is deleted: `translate.py`, every format-1 branch of
+`resolve`, `settings` and `in_use`, and the legacy GLM read in
+`llm_sampling`. The mapping itself lives on in one guarded planner,
+`store/inference/legacy_plan.py` (§7.1), which the migration and retirement
+persist and play uses in memory. That is what keeps §11.2, §12, §5.6, §15 and
+§17.8 true. A literal deletion would refuse play at format 1. `routing.legacy_key`
+and `routing.CONFIG_KEYS` stay as spelling data that the planner, the write
+refusals and retirement read, and a guard fails any other reader of the legacy
+layout.
+
+**Play is never refused, and reads the legacy layout only through the
+planner, in memory** (ruling 1).
+- `resolve` makes one call, `legacy_plan.overlay(cfg, meta)`. It returns the
+  format-2 view of the global and campaign settings, the virtual derived
+  presets (§11.2 step 4), the model-facts overlay and the notes, and the
+  resolver reads that view as format 2. Below format 2 it plans the whole
+  mapping. At format 2 it plans an unmarked campaign's mapping, and the
+  derived-preset repoint of every scope without the retirement marker. A
+  retired scope costs nothing.
+- Nothing is written on the play path. The banner, `GET /config`'s `ready`
+  and §12's rows are unchanged, and there is no retry loop: the next start
+  retries, as §11.2 says.
+- The planner's lookup has three modes. Play's is fail-soft (`soft`). The
+  migration keeps C's (`migrate`), changed in one way: a connection the
+  retirement record holds an entry for answers from that record, read
+  strictly. Retirement and every write it makes use `retire`, which raises on
+  an unreadable, empty, unfenced or `kind`-less connection file and on an
+  unparseable retirement record.
+- The migration persists `Plan.mapped`, the old translation verbatim, and
+  never a repoint, so no persisted preset key names a file that does not
+  exist. Retirement persists `mapped | repoint` after writing the derived
+  presets. Play applies both in memory, and a test holds the in-memory answer
+  equal to what the migration and retirement write (§15).
+- Legacy keys and fields stay writable at format 1, where they are the
+  planner's input, and refused at format 2 (§11.3).
+  `llm_connections.ensure_migrated` seeds them only below format 2, and a
+  connection write never writes an empty legacy field.
+
+**When it runs, and in what order** (ruling 6). Retirement is the last stage
+of `migrate.ensure`: after the marker, in the same run, on every store at
+format 2. It is idempotent, deterministic and resumable.
+0. **Archive.** It is decided once per pass, over every remaining unit of
+   work: the global scope, every readable campaign, stray keys and the strip.
+   When any unit deletes or replaces a stored value, the archive is taken
+   before the pass's first write of any kind, marker-only writes included.
+   - It is reused on resume while the migration's note names it and the
+     file exists. A reused archive can predate items a later run retires. That is
+     acceptable, because every retirement deletion keeps its value in a new
+     key or in the record. The one exception is a legacy key an older build
+     wrote after retirement, whose value this build never read.
+   - It is skipped when this same run *created* a `pre-inference-` archive (a
+     reused one predates every edit since), and when the whole pass only adds
+     markers.
+   - If it fails, nothing below runs, and play is unaffected.
+   - Each unit re-checks the decision inside its own hold. A unit that now
+     needs an archive the pass did not take is left for the next run.
+1. **Global.** One `config.md` write, in one hold of `config.format_hold()`
+   (the reentrant, cross-process `config_lock`, which answers 409 after 30 s):
+   the derived presets first, then the repoint, the deletion of every legacy
+   config key and global `route_*`, and the retirement marker.
+2. **Campaigns.** Each under `campaign_lock_nowait(cid)`, with its marker
+   re-read inside the hold. An unmarked campaign is migrated in the same write
+   first. A newer one is skipped, and it holds the strip for as long as it
+   stays newer, which is fail-safe. A busy one is left for the next run. Its
+   derived presets are written under `config_lock`, taken inside the campaign
+   hold, which is the only order the locks allow. Then one write carries the
+   repoint, the deletion, the markers and `revision.bump(cid)`.
+3. **Stray keys.** A retired scope that holds a legacy key again, written by
+   an older build (§11.3), gets a deletion-only write: nothing derived, and
+   nothing read from the key.
+4. **Strip.** Only when `config.md` and every campaign are readable, marked
+   and retired, and every connection reads. Per connection, under
+   `llm_connections.LOCK` (which is `config_lock`) across the precondition
+   re-check, the read, the record and the write: each `vision`, `prefill` or
+   `post_process` its model's facts do not state becomes a `fact_not_carried`
+   note; its non-empty legacy fields go to the retirement record; a
+   `keep_rev` write strips them. A connection edit that meets the strip waits
+   for it, and is never overwritten.
+
+**Fail closed.** Every reader in steps 1–4 is strict, the lookup and the
+record included. A file that exists and cannot be read, is empty, has
+frontmatter that does not parse, or lacks its marker or `kind` raises
+`frontmatter.RecordUnreadableError` (C's `migrate.RecordUnreadableError`,
+moved), the read's own `OSError`/`UnicodeDecodeError`, or
+`ConnectionUnreadableError`. That item is not retired and never rewritten,
+and nothing that names it is retired. Each item checks `run.halted()` first,
+as the migration's steps do. A §11.1 write refused because the record cannot
+be read answers 409 `retirement_unreadable`, never a 500.
+
+**The status.** Retirement never moves `migrate.status().state`. What is left
+is reported in `Status.retirement` (`left`, `failed`), read fail-soft and
+never raising, and it is not rendered. So a fresh install reads `done`, and
+the Models page's quiet line is unchanged.
+
+**The archive is a second never-pruned one** (ratified). It is
+`pre-retirement-grimoire-<stamp>.zip` (`backups.RETIRE_PREFIX`), a
+full-library archive like C's `pre-inference-grimoire-<stamp>.zip`
+(`backups.SAFETY_PREFIX`), and it is listed in Backups beside it. Retention
+never deletes it: `backups.sweep` counts and prunes only the ordinary
+`grimoire-` series. It is in `list_backups()`, so `backups.due()` counts it as
+a restore point. A fresh install never takes one, because it is born retired.
+
+**The retirement marker** (ruling 15; ratified as new storage).
+`inference_keys.RETIRED_KEY = "inference_retired"`, value `"1"`, in
+`config.md` and in each `campaign.md`.
+- It is written by the retirement write of each scope, and stamped at birth:
+  on a new `config.md` by `config.birth_fields()`, and on a new campaign when
+  `config.md` is retired, through a create-only keyword on
+  `lifecycle.publish_birth` that only `create_campaign` passes. A settings
+  write is not a retirement: `_inference_marker()` stamps the format marker
+  only. In an unretired store a new campaign joins the next pass, so its GLM
+  pins still get their derived presets.
+- A fork goes through `publish_birth` without that keyword. A source marked
+  current or newer is copied as it stands, its retirement marker included. An
+  unmarked source is translated (through the planner, with the record
+  fallback) and stamped with the format marker only, so the fork joins the
+  next pass. If that translation raises `OSError`, the fork is born unmarked.
+- It gates the in-memory derivation, so a legacy field an older build writes
+  after retirement changes nothing here. It is how retirement knows a scope
+  is verified retired. It is in `config._CONFIG_KEYS` (default `""`), and
+  C–H writers keep it, since they keep unknown frontmatter keys.
+
+**The retirement record** (ruling 16; ratified as new storage).
+`<home>/inference-retired.json`, owned by `store/inference/retired.py`,
+written through `store.atomic` under its own lock (innermost, after
+`llm_connections.LOCK`) and resolved through `store.paths`. It sits at the
+store root, not under `<home>/.cache/`, so it is in every backup and every
+synced copy.
+- `fields`: `{conn_id: {legacy field: value}}`, written before the strip.
+  The legacy fields hold no key or URL, so the record never holds a
+  credential (§9.4). Only the planner's lookup reads it, as the fallback for
+  a connection whose file exists and holds no non-empty legacy field, so a
+  campaign that arrives unmarked after the strip still resolves. It never
+  answers for an absent file, so a deleted provider does not come back. A
+  later strip keeps the first recorded values, the ones C translated.
+- `notes`: the route-preset notes of §11.2 step 4 and the `fact_not_carried`
+  notes, each `{id, scope, subject, provider_id, effort, kind, text,
+  dismissed}`. `id` is a digest of everything but `text`, so a wording change
+  in a later build does not bring back a dismissed note, and merging never
+  un-dismisses one.
+- Every writer, and the `retire` lookup, reads it strictly. Display readers
+  fail soft.
+
+**The "not carried over" notice** (ratified). `/models` shows the
+undismissed notes under its heading, each sentence ending "— this was not
+carried over", with Dismiss
+(`POST /api/inference/retired-notes/{note_id}/dismiss`, which spends nothing,
+touches no campaign, and refuses only a newer-format store and an id nobody
+knows). The planner computes the notes, so the
+notice appears from this build's first start, before retirement has
+persisted them. Dismissing a note the record does not yet hold records it
+first, already dismissed. Because the record is in the library, every device
+shows the notice until the user dismisses it.
+
 ### 11.5 What does not migrate
 
 Campaign content needs no migration. The frozen campaign fixture's `home/` is
@@ -1859,7 +2134,7 @@ never migrated in place; tests migrate a copy.
 | A provider edit that moves the Embedding role's vector space (a `rev` restamp on the provider it embeds through, after which it embeds, judged as the provider will read once saved: a catalog row or probe verdict the restamp leaves stale says nothing) without `confirm_embedding: true` | 400 `confirm_embedding`; nothing written (rule 1, §7.3) |
 | A model-facts write that turns the Embedding role on (the user's `embed: yes` over a known `no` for the model it embeds with) without `confirm_embedding: true` | 400 `confirm_embedding`; nothing written (rule 1, §7.3). A passed test call and a catalog refresh are not the user's settings writes to the role and can lift a `no` unasked; a failed test cannot (§6.2) |
 | Claude-subscription health check without `confirm: true` | 400; nothing sent (rule 1) |
-| Migration backup failed | no write; Settings banner ("Upgrade pending: the safety backup failed (reason)"); translation serves; the next start retries |
+| Migration backup failed | no write; Settings banner ("Upgrade pending: the safety backup failed (reason)"); the in-memory plan serves; the next start retries |
 | Decide question unanswerable | `answer: None` + `reason`; never a guessed default |
 | Embedding provider fails | caller degrades as today; no fallback; one metered error row per `embed_sync` call that sent a request, its detail the kind and HTTP status only |
 | Test call fails | a refusal of the probe itself is recorded in `verified` with the provider's error text and resolves as `unknown`, so the row stays "unverified" with that error shown and the call is never refused for it; transient failures (rate limit, outage, credits or a spend limit, auth, transport) are reported and not recorded |
@@ -1881,15 +2156,34 @@ cannot generate is served natively, so a row has a refusal or nothing.
 
 ## 13. Implementation approach
 
-**Resolver first, adapters reorganised last.** `ResolvedInference` is lowered
-to today's connection dict so `LLMClient` — retries, fallback, health, image
-lowering, prefill tails, post-processing — and its tests run unchanged while
-the substrate moves underneath. The per-operation adapter registry
-(`generate` / `decide` / `embed` / `models` per adapter) and the deletion of
-the lowering come in slice I, when nothing depends on the dict shape.
-Rejected alternatives: rewriting adapters first (largest risk before anything
-is visible), and growing the connection dict forever (fails rule 2 and does
-not fit `decide`/`embed`).
+**Resolver first, adapters reorganised last.** `ResolvedInference` was lowered
+to the baseline's connection dict so `LLMClient` — retries, fallback, health,
+image lowering, prefill tails, post-processing — and its tests ran unchanged
+while the substrate moved underneath. The per-operation adapter registry
+(planned as `generate` / `decide` / `embed` / `models` per adapter) and the
+deletion of the lowering came in slice I, when nothing depended on the dict
+shape. Rejected alternatives: rewriting adapters first (largest risk before
+anything is visible), and growing the connection dict forever (fails rule 2
+and does not fit `decide`/`embed`).
+
+**The registry, as slice I built it** (slice I, ruling 10).
+`grimoire/adapters.py` has one class per provider `kind` (`openrouter`,
+`openai_compatible`, `anthropic`, `claude`). Each has `generate`, `models`,
+`check` and native `decide` (slice H's, raising where the kind has no
+decisions endpoint), and the flags `carries_images`, `lists_models`, `embeds`
+and `decides_natively`. Adapters take a `wire.Target` (§5.4), never a
+connection dict, and never import the store. `LLMClient` dispatches through
+the registry and keeps its retries, fallback, idle bound, image lowering,
+prefill tails and usage stamping. `inference.generate` and `inference.decide`
+(H's `stages`/`run_stages`) hand the facade a `wire.Chain`.
+
+**There is no per-adapter `embed`** (ratified 2026-10-09). Embedding stays
+D's caller-owned door (§7.3): each store caller hands in its own
+`EmbeddingsClient`, because the store must not import the gateway (#239), and a
+per-adapter `embed` the store called would make it. Two pairs are held equal
+by tests instead: the registry's `embeds` flag and the store's endpoint rule
+(`resolve.embed_endpoint`), and the store's adapter facts (`providers.py`)
+and the registry's flags.
 
 ---
 
@@ -1909,8 +2203,8 @@ against this spec) and lands green under `make check`. Order is chosen so that
 | **E — Pricing** | Ledger fields, rates in model facts, subscription tagging, local token estimation + flag (D's embed rows included: E stamps their account fields and estimates an unreported prompt, §9.1), the Housekeeping chore | Yes |
 | **F — `decide()`** (settled) | The contract (`decisions.py`), `generate(schema=)`, the structured backend, the decide skip of §5.3, scene-break / voice-drift / speaker converted behind the eval gate; those routes' `default_role` flips to `decision` | Decision role in use |
 | **G — Continuity decisions** (settled) | continuity-identity and continuity-reconcile converted behind the eval gate; `continuity.default_role` flips to `decision`. Both conversions switch in one change, because they share the `continuity` route and the safety rule flips a route only where its call sites decide; neither is refused at request time (both resolutions stay soft) | the Decision role serves the duplicate check and the continuity sweep; a partial sweep says so |
-| **H — Native decisions** (settled; lands after G; its native chain serves G's continuity items) | OpenRouter and OpenAI decision adapters; the chain of §5.5 (the selection's one backend, native only for a model that cannot generate, then the role fallback in one attempt; the native backend stamps `"native"`, replaces F's skip and widens `OPERATION_CAPABILITY["decide"]`); §9.4's capture of mode, normalised answers and distributions; voice drift's native "verdict without a note" branch; `--live` evals with `--decide-backend`; the Decision role card and its routes read one refusal (the skip and `skip_text` are deleted, §5.3); and strict mode's schema limits beyond the 1,000-value enum budget, enforced for every backend (§7.4). OpenRouter's `provider.require_parameters` stays out (the schema is always in the prompt, so routing to a provider that ignores `response_format` is harmless) and is left to I | Opt-in |
-| **I — Retirement** | §11.4, including the derived reasoning presets of §11.2 step 4 (`openai_compatible` GLM connections only, representable values only) as the legacy GLM `reasoning_effort` stops being read; the adapter registry, with `inference.generate`; deletion of the connection-dict lowering, with `FALLBACK_KEY` and `STRUCTURED_KEY` | No |
+| **H — Native decisions** (settled; lands after G; its native chain serves G's continuity items) | OpenRouter and OpenAI decision adapters; the chain of §5.5 (the selection's one backend, native only for a model that cannot generate, then the role fallback in one attempt; the native backend stamps `"native"`, replaces F's skip and widens `OPERATION_CAPABILITY["decide"]`); §9.4's capture of mode, normalised answers and distributions; voice drift's native "verdict without a note" branch; `--live` evals with `--decide-backend`; the Decision role card and its routes read one refusal (the skip and `skip_text` are deleted, §5.3); and strict mode's schema limits beyond the 1,000-value enum budget, enforced for every backend (§7.4). OpenRouter's `provider.require_parameters` stays out (the schema is always in the prompt, so routing to a provider that ignores `response_format` is harmless) and is left to I, which declines it as a wire change I does not make: it is open for a later slice | Opt-in |
+| **I — Retirement** (settled) | §11.4, including the derived reasoning presets of §11.2 step 4 (`openai_compatible` GLM connections only, representable values only) as the legacy GLM `reasoning_effort` stops being read; the adapter registry, with `inference.generate` (§7.2, §13); deletion of the connection-dict lowering for `wire.Target`/`Chain` (§5.4), with `FALLBACK_KEY`, `STRUCTURED_KEY` and `ACCOUNT_KEY` | Small, each item ratified by the user on 2026-10-09: `max` as a preset reasoning effort, sent to GLM only (§8); derived "… · reasoning <effort>" presets in the Presets list, which GLM selections now point at, so an edit to the base preset no longer reaches them (§11.2 step 4); a route preset that sets no effort, over a GLM connection with one, stops sending it on that route, and says so (§11.2 step 4); calls outside a stored selection (a reroll's override preset, the model test, the controls readouts) stop adding a GLM connection's legacy effort (§11.2 step 4); what older builds see after retirement (§11.3); a second never-pruned archive, `pre-retirement-grimoire-<stamp>.zip` (§11.4); the durable "not carried over" notice on `/models` (§11.4). The rest of what the user ratified is invisible: no per-adapter `embed` (§13), `generate`'s signature (§7.2), the planner as the reading of "delete the translation layer", and the retirement marker and record (§11.4) |
 
 **Safety rule across slices**: a route's `default_role` stays `fast` until
 its tasks call `decide()` (F/G). Pointing the Decision role at a decide-only
@@ -1968,7 +2262,14 @@ format 2, never migrated); `rev` preserved; **behaviour equivalence for every
 task**, before and after — against both frozen fixtures, the second of which
 (`inference_baseline_c.json`) records the GLM, post-image, prefill and
 legacy-embedding states the first never built; idempotence (running twice
-changes nothing); newer-format refusal.
+changes nothing); newer-format refusal. From slice I: **planned equals
+persisted, before and after** (what play resolves in memory through the
+planner equals what the migration and retirement write, on both frozen
+fixtures and on a copy of the frozen campaign); **named differences exact**
+(each asserts the recorded value before changing it, touches one key, and
+applies to an asserted set of states); the derived presets keep the wire; an
+unreadable `config.md`, campaign, connection or record is never rewritten;
+a failed retirement archive writes nothing.
 
 **Capabilities**: each source and its precedence; adapter `no` beats every
 other source; `rev` change invalidates `verified`; OpenRouter
