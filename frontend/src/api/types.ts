@@ -118,8 +118,9 @@ export type LLMConnectionDraft = {
   confirm_embedding?: boolean;
 };
 
-/** A preset's provider-neutral reasoning effort (`llm_sampling.REASONING`). */
-export type ReasoningEffort = "off" | "low" | "medium" | "high";
+/** A preset's provider-neutral reasoning effort (`llm_sampling.REASONING`).
+ *  `max` is GLM's own level: sent to a GLM model only, unsupported elsewhere. */
+export type ReasoningEffort = "off" | "low" | "medium" | "high" | "max";
 /** The nine sampler parameters and the reasoning effort, as a preset stores
  *  them. Every one optional: an absent parameter is the backend's own
  *  default, never a zero. */

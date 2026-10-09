@@ -19,6 +19,9 @@ current `config.md` through, and `campaign_view` passes a campaign through only
 when the caller says the GLOBAL layout is current (and the campaign is marked
 too). A campaign's own marker never switches it alone.
 
+The mapping itself lives in `legacy_plan` (slice I), the one reader of the
+legacy layout; these views decide only whether to read it.
+
 Both views take `only`, the route keys to translate (None for every route), so
 a resolver answering one task looks up only that route's pins. Roles and the
 fallback are always translated: every task can reach them.
@@ -28,70 +31,26 @@ Emitted key names come from `store.inference_keys` only.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection
+from collections.abc import Collection
 
 from .. import inference_keys as keys
-from .. import routing
+from . import legacy_plan
 
 #: A raw connection by id, or None. The resolver's lookup never raises; the
 #: migration's raises on a file it cannot read (`migrate._lookup`), and this
 #: module lets that through untouched.
-Lookup = Callable[[str], dict | None]
+Lookup = legacy_plan.Lookup
 
 
 def is_current(meta: dict) -> bool:
     return keys.is_current(meta)
 
 
-def _selection(conn_id: str, conn: Lookup) -> dict[str, str]:
-    """`{provider, model, preset}` for a connection id (model and preset are
-    empty when the connection is unknown or sets none)."""
-    raw = conn(conn_id) or {}
-    return {
-        "provider": conn_id,
-        "model": str(raw.get("model") or ""),
-        "preset": str(raw.get("sampler_preset") or "").strip(),
-    }
-
-
-def _pins_and_presets(meta: dict, conn: Lookup, scoped_only: bool,
-                      only: Collection[str] | None) -> dict:
-    out: dict = {}
-    for route in routing.ROUTES:
-        if scoped_only and not route.campaign_scoped:
-            continue
-        if only is not None and route.key not in only:
-            continue
-        legacy = routing.legacy_key(route)
-        chosen = str(meta.get(routing.config_key(legacy), "") or "").strip()
-        if chosen:
-            out[keys.use_key(route.key)] = keys.PIN
-            sel = _selection(chosen, conn)
-            for part in keys.PARTS:
-                out[keys.pin_key(route.key, part)] = sel[part]
-        preset = str(meta.get(routing.preset_key(legacy), "") or "").strip()
-        if preset:
-            out[keys.preset_key(route.key)] = preset
-    return out
-
-
 def embedding_view(cfg: dict) -> dict[str, str]:
     """The Embedding role's slot in the current layout's keys, both values
-    stripped: `{role_embedding_provider, role_embedding_model}`. A current
-    config reads them from those keys, a legacy one from `embeddings_*`. No
-    lookup: the embedding model is read from config alone.
-
-    What `resolve.embedding` hands the cascade. Unlike `global_view`, it always
-    strips (the `embeddings_*` trim rule, kept at both formats) and always
-    carries both keys."""
-    if is_current(cfg):
-        provider = cfg.get(keys.role_key("embedding", "provider"), "")
-        model = cfg.get(keys.role_key("embedding", "model"), "")
-    else:
-        provider = cfg.get("embeddings_connection_id", "")
-        model = cfg.get("embeddings_model", "")
-    return {keys.role_key("embedding", "provider"): str(provider or "").strip(),
-            keys.role_key("embedding", "model"): str(model or "").strip()}
+    stripped (`legacy_plan.embedding_view`): what `resolve.embedding` hands the
+    cascade."""
+    return legacy_plan.embedding_view(cfg)
 
 
 def embedding_role(cfg: dict) -> tuple[str, str]:
@@ -107,23 +66,7 @@ def global_view(cfg: dict, conn: Lookup, *, only: Collection[str] | None = None)
     pins and presets to translate; None for all)."""
     if is_current(cfg):
         return cfg
-    out: dict = {}
-    active = str(cfg.get("active_connection_id", "") or "")
-    if active:
-        for part, value in _selection(active, conn).items():
-            out[keys.role_key("primary", part)] = value
-    fallback = str(cfg.get("fallback_connection_id", "") or "")
-    if fallback:
-        sel = _selection(fallback, conn)
-        for role in keys.GENERATIVE_ROLES:
-            for part, value in sel.items():
-                out[keys.fallback_key(role, part)] = value
-    provider, model = embedding_role(cfg)
-    if provider:
-        out[keys.role_key("embedding", "provider")] = provider
-        out[keys.role_key("embedding", "model")] = model
-    out.update(_pins_and_presets(cfg, conn, scoped_only=False, only=only))
-    return out
+    return legacy_plan.global_mapping(cfg, conn, only=only)
 
 
 def campaign_view(meta: dict, conn: Lookup, *, current: bool,
@@ -138,4 +81,4 @@ def campaign_view(meta: dict, conn: Lookup, *, current: bool,
     and an older one reopened resolves every campaign from the legacy keys."""
     if current and is_current(meta):
         return meta
-    return _pins_and_presets(meta, conn, scoped_only=True, only=only)
+    return legacy_plan.campaign_mapping(meta, conn, only=only)

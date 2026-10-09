@@ -246,6 +246,8 @@ _CONFIG_KEYS = ("character_response_mode", "theme", "context_scan_depth", "syste
 #: names, so only what is new is appended -- a key listed twice would be
 #: harmless here and a lie in every reader that counts them.
 _CONFIG_KEYS += tuple(k for k in inference_keys.GLOBAL_KEYS if k not in _CONFIG_KEYS)
+#: The retirement marker (slice I), read and written beside the layout.
+_CONFIG_KEYS += (inference_keys.RETIRED_KEY,)
 
 
 def _config_path():
@@ -328,7 +330,9 @@ def read_config() -> dict[str, str]:
                 **dict.fromkeys(_LENGTH_KEYS, ""),
                 # The new inference layout, "" = unset. The marker's "" is
                 # format 1: a config.md that predates it is a legacy store.
-                **dict.fromkeys(inference_keys.GLOBAL_KEYS, "")}
+                **dict.fromkeys(inference_keys.GLOBAL_KEYS, ""),
+                # "" is not retired: a legacy key may still be read here.
+                inference_keys.RETIRED_KEY: ""}
     if not path.exists():
         # Materializing the defaults is a write, and two first-ever readers
         # racing here would each publish a whole file.

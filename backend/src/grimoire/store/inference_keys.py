@@ -34,6 +34,12 @@ EMBEDDING_PARTS: tuple[str, ...] = ("provider", "model")
 FORMAT_KEY = "inference_format"
 CURRENT_FORMAT = "2"
 
+#: The retirement marker (slice I, ruling 15): "1" on a `config.md` or a
+#: `campaign.md` whose legacy keys retirement has removed, after which the
+#: legacy layout is never read there again. Not part of `GLOBAL_KEYS`: the
+#: migration does not own it, and nothing writes it before retirement does.
+RETIRED_KEY = "inference_retired"
+
 #: Set to "0" to keep the automatic layout switch off: the background
 #: migration does not start. It gates that thread and nothing else -- a fresh
 #: store is born at the current format either way (`born_current`). The suite

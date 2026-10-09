@@ -189,3 +189,63 @@ def test_anthropic_takes_temperature_or_top_p_not_both():
     # top_p alone is still sent.
     alone = {**conn, "sampling": {**conn["sampling"], "params": {"top_p": 0.9}}}
     assert ls.effective(alone)["effective"]["top_p"] == 0.9
+
+
+# ---- `max`: GLM's own level (slice I, ratification item 1) ----
+_GLM_URL = "https://api.z.ai/api/paas/v4"
+_ADAPTIVE = {"adaptive_thinking": True, "enabled_thinking": False,
+             "effort": ["low", "medium", "high", "xhigh", "max"], "max_tokens": 64000}
+
+#: Every adapter row of spec 8 that is not GLM, as the connection `effective` reads.
+_NOT_GLM = {
+    "openrouter-catalog": {"kind": "openrouter", "model_params": ["reasoning"]},
+    "openrouter-no-catalog": {"kind": "openrouter"},
+    "openai-reasoning": {"kind": "openai_compatible", "base_url": "https://api.openai.com/v1",
+                         "model": "o3"},
+    "openai-not-reasoning": {"kind": "openai_compatible",
+                             "base_url": "https://api.openai.com/v1", "model": "gpt-4o"},
+    "openai-unknown-family": {"kind": "openai_compatible",
+                              "base_url": "https://api.openai.com/v1", "model": "mystery-model"},
+    "anthropic-adaptive": {"kind": "anthropic", "model": "claude-opus-4-7",
+                           "model_features": _ADAPTIVE},
+    "anthropic-budgeted": {"kind": "anthropic", "model": "claude-sonnet-4-5-20250929",
+                           "model_features": {"enabled_thinking": True,
+                                              "adaptive_thinking": False}},
+    "claude": {"kind": "claude"},
+    "openai-compatible-strict": {"kind": "openai_compatible",
+                                 "base_url": "http://localhost:1234/v1", "model": "local-model"},
+    "openai-compatible-extended": {"kind": "openai_compatible",
+                                   "base_url": "http://localhost:1234/v1", "model": "local-model",
+                                   "sampler_support": "extended"},
+}
+
+
+def test_max_is_a_preset_effort():
+    assert "max" in ls.REASONING
+    assert ls.validate({"reasoning_effort": "max"}) == {"reasoning_effort": "max"}
+
+
+@pytest.mark.parametrize("row", ["glm", *_NOT_GLM])
+def test_max_is_a_glm_only_effort(row):
+    """GLM on `openai_compatible` is sent `max`; every other adapter answers
+    it unsupported, by the adapter, and sends no reasoning field at all."""
+    fields = ({"kind": "openai_compatible", "base_url": _GLM_URL, "model": "glm-5.3"}
+              if row == "glm" else _NOT_GLM[row])
+    conn = {"model": "m", **fields, "sampling": {"preset_id": "p", "preset_name": "P",
+                                                 "scope": "connection",
+                                                 "params": {"reasoning_effort": "max"}}}
+    eff = ls.effective(conn)
+    control = eff["controls"]["reasoning_effort"]
+    if row == "glm":
+        assert control["state"] == ls.SUPPORTED
+        assert ls.reasoning_wire(eff) == {"reasoning_effort": "max"}
+        assert ls.sent_names(conn) == ["reasoning_effort"]
+        return
+    assert (control["state"], control["why"], control["source"]) == (
+        ls.UNSUPPORTED, ls.WHY_MAX, "adapter")
+    assert ls.reasoning_wire(eff) == {}
+    assert ls.report(conn)["dropped"] == [{"param": "reasoning_effort", "reason": ls.WHY_MAX}]
+
+
+def test_the_glm_levels_are_named_without_the_connection():
+    assert ls.WHY_GLM == "this GLM model takes low, high or max"

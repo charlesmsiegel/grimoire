@@ -9,12 +9,14 @@ from . import (
     embed,
     facts,
     in_use,
+    legacy_plan,
     probes,
     providers,
     resolve,
     resolved,
+    retired,
     translate,
 )
 
-__all__ = ["capabilities", "cascade", "controls", "embed", "facts", "in_use", "probes",
-           "providers", "resolve", "resolved", "translate"]
+__all__ = ["capabilities", "cascade", "controls", "embed", "facts", "in_use", "legacy_plan",
+           "probes", "providers", "resolve", "resolved", "retired", "translate"]

@@ -23,14 +23,15 @@ write), then
 4. *(derived reasoning presets: slice I, ruling 3)*;
 5. **roles**, 6. **routes**, 7. **split routes**, 9. **marker** -- ONE
    `config.md` write, the last, derived from a read taken inside the
-   `config_lock` hold that writes it: `translate.global_view` of the legacy
-   settings, persisted **verbatim** (padded ids, dangling references and
+   `config_lock` hold that writes it: the planner's mapping of the legacy
+   settings (`legacy_plan.global_plan(...).mapped`, never its repoints),
+   persisted **verbatim** (padded ids, dangling references and
    `PRESET_CLEAR` exactly as it gives them; the split routes are already in
    it, read from their parents) with two enrichments -- an unset Claude model
    is written as `opus` wherever it is a selection's model, and the Embedding
    role is set only when the legacy configuration actually embeds
-   (`embed_space.resolve`'s answer over the run's strict lookup, `_embeds`;
-   ruling 5) -- plus `inference_format: "2"`.
+   (`embed_space.resolve`'s answer over the run's strict lookup,
+   `legacy_plan.legacy_embeds`; ruling 5) -- plus `inference_format: "2"`.
 
    Read late because the app serves at format 1 all through the backup, and a
    legacy edit made meanwhile must not be reverted by a snapshot from before
@@ -95,12 +96,11 @@ derived data, outside every backup.
 
 from __future__ import annotations
 
-import functools
 import json
 import logging
 import os
 import threading
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
@@ -109,34 +109,26 @@ from .. import (
     atomic,
     backups,
     config,
-    embed_space,
     llm_connections,
     locks,
     paths,
     revision,
-    routing,
+    sampler_presets,
 )
 from .. import inference_keys as keys
 from ..campaigns import paths as campaign_paths
 from ..campaigns import read as campaign_read
 from ..frontmatter import dump_frontmatter, parse_frontmatter
-from . import facts, providers, resolve, translate
+from . import facts, legacy_plan, providers
 
 log = logging.getLogger(__name__)
 
 #: Every state `status` answers.
 STATES: tuple[str, ...] = ("done", "pending", "running", "failed", "newer")
 
-#: The legacy routes' preset keys: spelled the same in both layouts
-#: (`inference_keys.GLOBAL_KEYS`), so the migration leaves them as they are.
-_SHARED_PRESET_KEYS = frozenset(routing.PRESET_CONFIG_KEYS)
-
-#: The global keys the migration writes, every one on every switch: the
-#: format-2 layout without the marker (written beside them) and without the
-#: preset keys both layouts share.
-OWNED_GLOBAL_KEYS: tuple[str, ...] = tuple(
-    k for k in keys.GLOBAL_KEYS
-    if k != keys.FORMAT_KEY and k not in _SHARED_PRESET_KEYS)
+#: The global keys the migration writes, every one on every switch
+#: (`legacy_plan.OWNED_GLOBAL_KEYS`, where the mapping lives).
+OWNED_GLOBAL_KEYS: tuple[str, ...] = legacy_plan.OWNED_GLOBAL_KEYS
 
 #: The reason a run that found its root moved under it reports.
 MOVED = "the storage location changed during the upgrade; it resumes on the next start there"
@@ -316,8 +308,9 @@ _UNREADABLE = (llm_connections.ConnectionNotFound, locks.StoreBusy, OSError,
                UnicodeDecodeError)
 
 
-def _lookup() -> translate.Lookup:
-    """A raw connection by id, memoised for one run.
+def _lookup() -> legacy_plan.Lookup:
+    """A raw connection by id, memoised for one run: the planner's `migrate`
+    mode (`legacy_plan.lookup`).
 
     None only when no connection by that id exists -- a dangling reference,
     persisted as one. A file that is there but cannot be read RAISES
@@ -326,108 +319,30 @@ def _lookup() -> translate.Lookup:
     otherwise become a selection with an empty model and no preset, for good.
     The global switch fails on it and the next start retries; a campaign is
     skipped and finished next time."""
-    seen: dict[str, dict | None] = {}
-
-    def lookup(conn_id: str) -> dict | None:
-        if conn_id not in seen:
-            seen[conn_id] = llm_connections.read_connection_strict(conn_id)
-        return seen[conn_id]
-
-    return lookup
+    return legacy_plan.lookup(mode="migrate")
 
 
-def connection_reader() -> translate.Lookup:
+def connection_reader() -> legacy_plan.Lookup:
     """The strict, memoised connection lookup the migration translates with
     (`_lookup`), for `campaign_fields` called from outside it: a campaign born
     as a copy into a store already switched (`campaigns.lifecycle
     .publish_birth`)."""
-    return _lookup()
+    return legacy_plan.lookup(mode="migrate")
 
 
-def _selection_keys() -> Iterator[Callable[[str], str]]:
-    """The key builder of every selection a scope can hold: each generative
-    role and its fallback, and each route's pin."""
-    for role in keys.GENERATIVE_ROLES:
-        yield functools.partial(keys.role_key, role)
-        yield functools.partial(keys.fallback_key, role)
-    for route in routing.ROUTES:
-        yield functools.partial(keys.pin_key, route.key)
-
-
-def _enriched(fields: dict[str, str], lookup: translate.Lookup) -> dict[str, str]:
-    """`fields` with an unset Claude model written as `opus` wherever it is a
-    selection's model -- what the Claude adapter runs an unset model as, so
-    nothing that resolves changes; what a later edit starts from does."""
-    out = dict(fields)
-    for key in _selection_keys():
-        provider = out.get(key("provider"), "")
-        if not provider or out.get(key("model")):
-            continue
-        raw = lookup(provider)
-        if raw is not None and raw.get("kind") == "claude":
-            out[key("model")] = config.DEFAULT_CLAUDE_MODEL
-    return out
-
-
-def _persistable(view: dict) -> dict[str, str]:
-    """A translated campaign view as the keys to write: the shared preset keys
-    left alone, and an empty value dropped -- an absent key and "" read the
-    same, a campaign's frontmatter is a file people read by hand, and a
-    campaign is migrated and marked in one write, so nothing a partial run
-    wrote is left for a later one to clear."""
-    return {k: str(v) for k, v in view.items()
-            if k not in _SHARED_PRESET_KEYS and str(v) != ""}
-
-
-def _embeds(cfg: dict, lookup: translate.Lookup) -> bool:
-    """Whether the legacy Embedding choice embeds (ruling 5): what
-    `embed_space.resolve` answers, but read through the run's strict `lookup`
-    like every other selection. A provider file that cannot be read raises, so
-    the switch fails and the next start retries, rather than reading as "never
-    embedded" and clearing the choice for good. A record that reads but is
-    malformed is off, as `embed_space.resolve` has always said.
-
-    The facts file is held to the same rule. The resolution reads it
-    fail-soft, so a file a sync client holds reads as nothing stated -- and a
-    user's `embed: yes` over a catalog's `no` would vanish into a known `no`.
-    So a known `no` is judged again with the facts read strictly
-    (`facts.of(strict=True)`), and one that cannot be read fails the run."""
-    try:
-        got = resolve.embedding(cfg, lookup=lookup)
-        if got.missing and got.attempts:
-            first = got.attempts[0]
-            raw = lookup(first.provider_id)
-            if raw is None:
-                return False
-            known = facts.of(first.provider_id, facts.model_of(first.conn), first.rev,
-                             strict=True)
-            again = resolve.embed_attempt(first.provider_id, first.model, raw,
-                                          current=got.current, model_facts=known)
-            return again.space_id is not None
-    except (KeyError, TypeError, ValueError) as exc:
-        if isinstance(exc, UnicodeDecodeError):   # unreadable, not malformed
-            raise
-        return False
-    return embed_space.endpoint_of(got) is not None
-
-
-def global_fields(cfg: dict, lookup: translate.Lookup) -> dict[str, str]:
+def global_fields(cfg: dict, lookup: legacy_plan.Lookup) -> dict[str, str]:
     """The format-2 keys a legacy `config.md` migrates to (steps 5-7): every
-    one of `OWNED_GLOBAL_KEYS`, "" where it is unset."""
-    view = translate.global_view(cfg, lookup)
-    fields = dict.fromkeys(OWNED_GLOBAL_KEYS, "")
-    fields.update((k, str(view[k])) for k in OWNED_GLOBAL_KEYS if k in view)
-    if not _embeds(cfg, lookup):
-        # A legacy choice that never embedded stays off (ruling 5).
-        for part in keys.EMBEDDING_PARTS:
-            fields[keys.role_key("embedding", part)] = ""
-    return _enriched(fields, lookup)
+    one of `OWNED_GLOBAL_KEYS`, "" where it is unset -- the planner's
+    `mapped`, and never its derived-preset repoints (N2): a persisted preset
+    key always names a preset file that exists."""
+    return legacy_plan.global_plan(cfg, lookup, sampler_presets.read_preset).mapped
 
 
-def campaign_fields(meta: dict, lookup: translate.Lookup) -> dict[str, str]:
-    """The format-2 keys a legacy `campaign.md` migrates to (steps 6-7)."""
-    return _enriched(_persistable(translate.campaign_view(meta, lookup, current=False)),
-                     lookup)
+def campaign_fields(meta: dict, lookup: legacy_plan.Lookup) -> dict[str, str]:
+    """The format-2 keys a legacy `campaign.md` migrates to (steps 6-7): the
+    planner's `mapped`, never its repoints (N2)."""
+    return legacy_plan.campaign_plan(meta, global_current=False, lookup=lookup,
+                                     presets=sampler_presets.read_preset).mapped
 
 
 # ---- one campaign ----
@@ -678,21 +593,6 @@ def _providers(run: _Run) -> str:
     return ""
 
 
-def _stated(conn: dict) -> dict[str, object]:
-    """A connection's legacy model fields that differ from the defaults, as
-    `{field: value}` -- what `facts.adopt_legacy` states of its model."""
-    out: dict[str, object] = {}
-    vision = str(conn.get("vision") or "")
-    if vision:
-        out["vision"] = vision
-    if conn.get("prefill") is True:
-        out["prefill"] = True
-    post_process = str(conn.get("post_process") or "")
-    if post_process not in ("", "none"):
-        out["post_process"] = post_process
-    return out
-
-
 def _facts(run: _Run) -> str:
     """Step 3: each connection's stated model behaviour, as its model's facts
     (`facts.adopt_legacy`, which first takes back whatever an earlier,
@@ -710,7 +610,7 @@ def _facts(run: _Run) -> str:
         model = facts.model_of(conn)
         label = f"facts {conn['id']} {model or '(no model)'}"
         try:
-            refused = facts.adopt_legacy(conn["id"], model, _stated(conn))
+            refused = facts.adopt_legacy(conn["id"], model, legacy_plan.stated(conn))
         except facts.FactsUnreadableError:
             raise
         except (ValueError, *_UNREADABLE) as exc:

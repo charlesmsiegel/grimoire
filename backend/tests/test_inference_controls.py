@@ -159,7 +159,7 @@ def test_validate_takes_each_reasoning_effort(value):
     assert ls.validate({"reasoning_effort": value}) == {"reasoning_effort": value}
 
 
-@pytest.mark.parametrize("value", ["max", "", "Low", True, 3, None, ["low"]])
+@pytest.mark.parametrize("value", ["xhigh", "", "Low", True, 3, None, ["low"]])
 def test_validate_refuses_any_other_reasoning_effort(value):
     with pytest.raises(ValueError, match="reasoning_effort"):
         ls.validate({"reasoning_effort": value})
@@ -887,7 +887,7 @@ def test_a_preset_keeps_its_reasoning_effort(home):
     assert sampler_presets.read_preset(pid)["params"] == {"temperature": 0.8,
                                                           "reasoning_effort": "high"}
     with pytest.raises(ValueError, match="reasoning_effort"):
-        sampler_presets.create_preset("Bad", {"reasoning_effort": "max"})
+        sampler_presets.create_preset("Bad", {"reasoning_effort": "xhigh"})
 
 
 def test_a_sillytavern_reasoning_field_is_ignored():

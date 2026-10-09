@@ -61,7 +61,10 @@ NAMES: tuple[str, ...] = tuple(p.name for p in PARAMS)
 
 #: A preset's provider-neutral reasoning effort (spec 4.3). Not in `PARAMS`, so
 #: `split` stays about samplers; the editor's `table` lists it after them.
-REASONING: tuple[str, ...] = ("off", "low", "medium", "high")
+#: `max` is GLM's own level (slice I, ratification item 1): sent to a GLM model
+#: on `openai_compatible` only, and unsupported on every other adapter
+#: (`WHY_MAX`), so a legacy GLM connection at `max` keeps its wire as a preset.
+REASONING: tuple[str, ...] = ("off", "low", "medium", "high", "max")
 REASONING_PARAM = Param("reasoning_effort", "Reasoning effort", "choice", 0, 0, REASONING)
 
 #: Every control a preset may set, in the order every answer lists them.
@@ -151,7 +154,10 @@ _OPENAI_REASONING = re.compile(r"o\d|gpt-5|gpt-oss")
 #: `gpt-5-chat-latest` and its kin are the non-reasoning chat snapshots of a
 #: reasoning family: checked before `_OPENAI_REASONING` would claim them.
 _OPENAI_NOT_REASONING = re.compile(r"gpt-4|gpt-3|chatgpt-|gpt-5[^/]*-chat")
-WHY_GLM = "this GLM model takes low or high (or max, set on the connection)"
+WHY_GLM = "this GLM model takes low, high or max"
+#: Why `max` is sent nowhere but GLM: no other adapter is documented here as
+#: taking it, so nothing else claims it.
+WHY_MAX = "max is a GLM level"
 
 
 def _check_stop(p: Param, value: object) -> list[str]:
@@ -512,7 +518,10 @@ def _thinking(c: _Conn, value: str | None, max_tokens: int) -> _Control:
 
 def _reasoning(c: _Conn, conn: dict, value: str | None, max_tokens: int) -> _Control:
     """`reasoning_effort` per adapter (spec 8). `value` None: the preset sets
-    none, and the answer describes what setting one would do."""
+    none, and the answer describes what setting one would do. `max` is GLM's
+    level alone: every other adapter answers it unsupported, sending nothing."""
+    if value == "max" and not (c.kind == "openai_compatible" and llm_reasoning.is_glm(conn)):
+        return _Control(UNSUPPORTED, None, WHY_MAX, "adapter")
     if c.kind == "claude":
         return _Control(UNSUPPORTED, None, WHY_CLAUDE, "adapter")
     if c.kind == "anthropic":

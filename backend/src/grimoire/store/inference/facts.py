@@ -154,8 +154,8 @@ def of(provider_id: str, model: str, rev: str, *, strict: bool = False) -> dict:
     -- raises instead of reading as a model nothing was said of; an absent
     file still reads as empty. The facts panel's GET flags either
     (`unreadable`), since a save would be refused, and the migration's
-    Embedding check (`migrate._embeds`) fails the run on it rather than
-    deciding anything for good from a file it could not read.
+    Embedding check (`legacy_plan.legacy_embeds`) fails the run on it rather
+    than deciding anything for good from a file it could not read.
     """
     if strict and safe_id(provider_id):
         return _view(_load_for_write(provider_id).get(model, {}), rev)
