@@ -336,3 +336,224 @@ test("with nothing lost, there is no notice", async () => {
   await openSummary();
   expect(screen.queryByRole("region", { name: "Not carried over" })).toBeNull();
 });
+
+// ---- ported from the card page: what the summary still owns ----
+const decisionAs = (mode: string, over: Record<string, unknown> = {}) =>
+  settings({ roles: { ...settings().roles, decision: card({ decision_mode: mode, ...over }) } });
+
+test("warns when the Primary model can't generate text", async () => {
+  CAPS["vendor/m"].generate = "no";
+  await openSummary();
+  expect(await row("Primary").findByText(
+    "This model can't generate text, so it can't be Primary.")).toBeInTheDocument();
+});
+
+test("warns when the Embedding model can't create embeddings", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    embedding: { stored: { provider: "saltmarch", model: "vendor/m" }, resolves: null,
+                 on: false, problem: null, rate: null },
+  } }));
+  await openSummary();
+  expect(await row("Embedding").findByText("This model can't create embeddings."))
+    .toBeInTheDocument();
+});
+
+test("no capability note when every model fits", async () => {
+  await openSummary();
+  await waitFor(() => expect(api.readConnectionCapabilities).toHaveBeenCalled());
+  expect(main().queryByRole("note")).toBeNull();
+});
+
+test("a capability warning is asked again once a model test lands", async () => {
+  CAPS["vendor/m"].generate = "no";
+  await openSummary();
+  expect(await row("Primary").findByText(/can't generate text/)).toBeInTheDocument();
+  CAPS["vendor/m"].generate = "yes";
+  const { configChanged } = await import("../appEvents");
+  act(() => { configChanged(); });
+  await waitFor(() => expect(row("Primary").queryByText(/can't generate text/)).toBeNull());
+});
+
+test("a native Decision says the provider's decisions endpoint answers", async () => {
+  CAPS["vendor/m"].decide_native = "no";
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("native"));
+  await openSummary();
+  expect(await row("Decision").findByText("Answered by the provider's decisions endpoint."))
+    .toBeInTheDocument();
+  expect(row("Decision").queryByText(/structured generation/)).toBeNull();
+});
+
+test.each(["yes", "unknown"])("structured Decision with native API %s claims no missing API",
+  async (known) => {
+    (api.getInferenceSettings as any).mockResolvedValue(
+      decisionAs("structured", { decides_natively: known }));
+    await openSummary();
+    expect(await row("Decision").findByText("Answered by structured generation."))
+      .toBeInTheDocument();
+    expect(row("Decision").queryByText(/No native decision API/)).toBeNull();
+  });
+
+test("a Decision model known to have no native API says so, even when the picker hides it",
+  async () => {
+    CAPS["vendor/m"] = { generate: "no", vision: "no", embed: "no", decide_native: "no" };
+    (api.getInferenceSettings as any).mockResolvedValue(
+      decisionAs("structured", { decides_natively: "no" }));
+    await openSummary();
+    expect(await row("Decision").findByText(
+      "No native decision API; structured generation will be used.")).toBeInTheDocument();
+    expect(row("Primary").queryByText(/native decision/)).toBeNull();
+  });
+
+test("a refused Decision shows only the refusal's own sentence", async () => {
+  const incapable = "Saltmarch Router ▸ vendor/m cannot generate text or make native decisions.";
+  CAPS["vendor/m"] = { generate: "no", vision: "no", embed: "no", decide_native: "no" };
+  (api.getInferenceSettings as any).mockResolvedValue(decisionAs("", { problem: incapable }));
+  await openSummary();
+  expect(await row("Decision").findByText(incapable)).toBeInTheDocument();
+  expect(row("Decision").queryByRole("note")).toBeNull();
+  expect(row("Decision").queryByText(/Answered by|No native decision API/)).toBeNull();
+});
+
+test("a fallback known not to fit its role says it is never sent", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    primary: card({ stored: sel("saltmarch", "vendor/m"), fallback: sel("saltmarch", "vendor/eye"),
+                    inherits: null, fallback_missing: ["generate"] }),
+  } }));
+  await openSummary();
+  expect(row("Primary").getByText(
+    "The fallback, Saltmarch Router ▸ vendor/eye, is known not to fit Primary "
+    + "(it cannot generate text), so it is never sent.")).toBeInTheDocument();
+});
+
+test("a fallback that cannot send says why", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    primary: card({ stored: sel("saltmarch", "vendor/m"), inherits: null,
+                    fallback: sel("realm", "realm/small"),
+                    fallback_problem: "Endpoint base URL not set" }),
+  } }));
+  await openSummary();
+  expect(row("Primary").getByText(
+    "The fallback, Realm Local ▸ realm/small, cannot be sent (Endpoint base URL not set), "
+    + "so it is never tried.")).toBeInTheDocument();
+});
+
+test("a fallback that fits says nothing", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+    ...settings().roles,
+    primary: card({ stored: sel("saltmarch", "vendor/m"), fallback: sel("saltmarch", "vendor/eye"),
+                    inherits: null }),
+  } }));
+  await openSummary();
+  expect(row("Primary").getByText(/vendor\/eye/)).toBeInTheDocument();
+  expect(row("Primary").queryByText(/is never (sent|tried)/)).toBeNull();
+});
+
+test("a native Decision's What this sends asks as a decision and says no sampling is sent",
+  async () => {
+    (api.getInferenceSettings as any).mockResolvedValue(decisionAs("native"));
+    const na = { state: "n/a", wire: "", why: "a native decision takes no sampling",
+                 source: "adapter" };
+    (api.previewControls as any).mockImplementation((body: { operation?: string }) =>
+      Promise.resolve(body.operation === "decide"
+        ? { requested: {}, effective: {}, controls: { temperature: na, reasoning_effort: na } }
+        : { requested: {}, effective: {}, controls: {} }));
+    await openSummary();
+    (row("Decision").getByText("What this sends").closest("details") as HTMLDetailsElement).open = true;
+    expect(await row("Decision").findByText("Not sent: a native decision takes no sampling."))
+      .toBeInTheDocument();
+    expect(api.previewControls).toHaveBeenCalledWith(expect.objectContaining({
+      provider: "saltmarch", model: "vendor/m", operation: "decide" }));
+    expect(row("Primary").queryByText(/native decision/)).toBeNull();
+  });
+
+test("the Decision task list names inherited roles and leaves out pinned tasks", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+    ...ROUTES.slice(0, 3),
+    route({ key: "speaker", label: "Who speaks next", operation: "decide",
+            default_role: "decision", role: "fast", uses: "decision" }),
+    route({ key: "scene_break", label: "Scene-break checks", operation: "decide",
+            default_role: "decision", role: "primary", uses: "decision" }),
+    route({ key: "voice_drift", label: "Voice drift checks", operation: "decide",
+            default_role: "decision", role: null, uses: null, use: "model",
+            resolves: resolved({ via: "route" }) }),
+  ] }));
+  await openSummary();
+  const list = row("Decision").getByRole("list", { name: "Tasks answered by Decision" });
+  const tasks = within(list);
+  expect(tasks.getByRole("link", { name: "Who speaks next" })).toBeInTheDocument();
+  expect(tasks.getByText(/inherits Fast/)).toBeInTheDocument();
+  expect(tasks.getByRole("link", { name: "Scene-break checks" })).toBeInTheDocument();
+  expect(tasks.getByText(/inherits Primary/)).toBeInTheDocument();
+  expect(tasks.queryByRole("link", { name: "Voice drift checks" })).toBeNull();
+});
+
+test("the Decision row says when no task uses it", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: ROUTES.slice(0, 3) }));
+  await openSummary();
+  expect(row("Decision").getByText("No task uses Decision yet.")).toBeInTheDocument();
+});
+
+test("an Embedding that is on shows provider and model, no preset, and an input-only rate",
+  async () => {
+    (api.getInferenceSettings as any).mockResolvedValue(settings({ roles: {
+      ...settings().roles,
+      embedding: { stored: { provider: "saltmarch", model: "vendor/embed" }, on: true,
+                   resolves: resolved({ model: "vendor/embed" }), problem: null,
+                   rate: { source: "table", entry: { prompt_usd_per_1k: 0.002, completion_usd_per_1k: 0.002 } } },
+    } }));
+    await openSummary();
+    const emb = row("Embedding");
+    expect(emb.getByRole("link", { name: "Saltmarch Router" })).toBeInTheDocument();
+    expect(emb.getByText(/vendor\/embed/)).toBeInTheDocument();
+    expect(emb.queryByText(/no preset/)).toBeNull();
+    expect(emb.getByText(/would be priced at .*\(your rates\)/)).toBeInTheDocument();
+    expect(emb.queryByText(/ out/)).toBeNull();
+  });
+
+test("a newer store says so and disables Edit models", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ newer: true }));
+  await openSummary();
+  expect(await screen.findByText(/upgraded by a newer Grimoire/)).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Edit models" })).toBeDisabled();
+});
+
+test("a pending migration at format 2 still lets the settings be edited", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({
+    migration: { state: "pending", reason: "",
+                 skipped: ["campaign saltmarch-run: busy; finished on the next start"] } }));
+  await openSummary();
+  expect(main().getByRole("button", { name: "Edit models" })).toBeEnabled();
+});
+
+test("a store not yet at format 2 says the upgrade is pending and cannot be edited", async () => {
+  (api.getInferenceSettings as any).mockResolvedValue(settings({
+    format: "1", migration: { state: "pending", reason: "", skipped: [] } }));
+  await openSummary();
+  expect(await screen.findByText(/Upgrade pending/)).toBeInTheDocument();
+  expect(main().getByRole("button", { name: "Edit models" })).toBeDisabled();
+});
+
+test("the page unlocks once the upgrade lands, without leaving it", async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
+  try {
+    (api.getInferenceSettings as any).mockResolvedValue(settings({
+      format: "1", migration: { state: "running", reason: "", skipped: [] } }));
+    await openSummary();
+    expect(await screen.findByText(/Upgrade pending/)).toBeInTheDocument();
+    expect(main().getByRole("button", { name: "Edit models" })).toBeDisabled();
+
+    (api.getInferenceSettings as any).mockResolvedValue(settings());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+
+    expect(await main().findByRole("button", { name: "Edit models" })).toBeEnabled();
+    expect(screen.queryByText(/Upgrade pending/)).toBeNull();
+    const reads = (api.getInferenceSettings as any).mock.calls.length;
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect((api.getInferenceSettings as any).mock.calls.length).toBe(reads);
+  } finally {
+    vi.useRealTimers();
+  }
+});
