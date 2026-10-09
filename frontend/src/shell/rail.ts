@@ -176,9 +176,11 @@ export const APP_ROWS: RailRow[] = [
   {
     id: "config", label: "Settings", icon: "⚙",
     to: () => "/config",
-    // `/models` (roles and routes) is reached from Settings (spec 10: the
-    // rail gains no row for it), so the reader is still in Settings there.
-    match: (p) => isUnder(p, "/config") || isUnder(p, "/models"),
+    // Settings → Inference's three pages (Providers, Models, Presets) are
+    // pages of their own reached from Settings, so the reader is still in
+    // Settings there (the rail gains no row for them).
+    match: (p) => isUnder(p, "/config") || isUnder(p, "/models")
+      || isUnder(p, "/providers") || isUnder(p, "/presets"),
   },
 ];
 
@@ -337,6 +339,7 @@ export const TITLES: [(p: string) => boolean, string][] = [
   [(p) => isUnder(p, "/climates"), "Climates"],
   [(p) => isUnder(p, "/providers"), "Providers"],
   [(p) => isUnder(p, "/models"), "Models"],
+  [(p) => isUnder(p, "/presets"), "Presets"],
   [(p) => isUnder(p, "/search"), "Search"],
   [(p) => isUnder(p, "/stats"), "Stats"],
   [(p) => isUnder(p, "/config"), "Settings"],

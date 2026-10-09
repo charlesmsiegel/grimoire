@@ -46,15 +46,8 @@ export const LIBRARY_SECTIONS: LibrarySection[] = [
     blurb: "Weather models that regions and locations draw their seasons from.",
     count: () => api.listClimates().then((r) => r.climates.length),
   },
-  // Providers (once Connections) used to sit outside the library, beside it in
-  // the nav rail. Nothing justified that: a provider is a thing a campaign is
-  // built from in exactly the sense the other five are. It is a library
-  // section, and its page owns the screen as the ledger's does.
-  {
-    to: "/providers", label: "Providers", unit: "provider",
-    blurb: "Where models are served from, and what each model can do.",
-    count: () => api.listConnections().then((r) => r.length),
-  },
+  // Providers left the library for Settings → Inference (2026-10-09), with
+  // Models and Presets.
   // There is no Images section, and the design has one (#437). `ImagesView` is
   // mounted world-scoped and there is no `/images` route, so an entry here
   // would point nowhere -- and the rail's Library badge is this list's length,

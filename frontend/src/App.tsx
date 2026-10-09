@@ -45,6 +45,8 @@ import CalendarsView from "./routes/CalendarsView";
 import ClimatesView from "./routes/ClimatesView";
 import ProvidersView from "./routes/ProvidersView";
 import ModelsView from "./routes/ModelsView";
+import PresetsView from "./routes/PresetsView";
+import { RoutePageRedirect } from "./routes/ModelsRedirect";
 import ConfigView from "./routes/ConfigView";
 import StatsView from "./routes/StatsView";
 
@@ -370,15 +372,23 @@ const AppRoutes = memo(function AppRoutes(
       <Route path="/calendars" element={<CalendarsView />} />
       <Route path="/climates" element={<ClimatesView />} />
       <Route path="/providers" element={<ProvidersView />} />
+      {/* Before `:id`, so `new` is never read as a provider. */}
+      <Route path="/providers/new" element={<ProvidersView />} />
       <Route path="/providers/:id" element={<ProvidersView />} />
       {/* A splat: a model id carries its own slashes (`vendor/model`). */}
       <Route path="/providers/:id/models/*" element={<ProvidersView />} />
       <Route path="/connections" element={<Navigate to="/providers" replace />} />
-      {/* Roles and routes (reached from Settings). A provider's Used by
-          chips land on the last two. */}
+      {/* Settings → Inference: the roles' summary, and the one form that
+          edits every role and task. The old per-role and per-route pages
+          are addresses older links carry. */}
       <Route path="/models" element={<ModelsView />} />
-      <Route path="/models/role/:role" element={<ModelsView />} />
-      <Route path="/models/route/:key" element={<ModelsView />} />
+      <Route path="/models/edit" element={<ModelsView edit />} />
+      <Route path="/models/role/:role" element={<Navigate to="/models" replace />} />
+      <Route path="/models/route/:key" element={<RoutePageRedirect />} />
+      <Route path="/presets" element={<PresetsView />} />
+      <Route path="/presets/new" element={<PresetsView />} />
+      <Route path="/presets/import" element={<PresetsView />} />
+      <Route path="/presets/:id" element={<PresetsView />} />
       <Route path="/config" element={<ConfigView />} />
       {/* A room, not a tab inside Configuration (#154 asked for a "tab").
           Config is a page of settings; this is a page of readings, and the

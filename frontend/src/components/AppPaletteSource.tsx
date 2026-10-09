@@ -73,11 +73,14 @@ export default function AppPaletteSource() {
     // no way in but the URL bar.
     out.push({ id: "section:/stats", group: "ELSEWHERE", label: "Instrumentation",
                meta: "latency, errors, the debug log", to: "/stats" });
-    // Which model each role runs on. Its providers are a library section, but
-    // this page is neither that nor a rail row: Settings links to it, and
-    // this is the way in that does not need Settings open first.
+    // Settings → Inference's three pages: neither library sections nor rail
+    // rows, so this is the way in that does not need Settings open first.
+    out.push({ id: "section:/providers", group: "ELSEWHERE", label: "Providers",
+               meta: "Settings → Inference", to: "/providers" });
     out.push({ id: "section:/models", group: "ELSEWHERE", label: "Models",
-               meta: "roles and routes", to: "/models" });
+               meta: "Settings → Inference", to: "/models" });
+    out.push({ id: "section:/presets", group: "ELSEWHERE", label: "Presets",
+               meta: "Settings → Inference", to: "/presets" });
     // Typeable as well as clickable, for the same reason every route is: the
     // header button is the only other way in, and it is one of the things this
     // hides. Offered in both directions so the palette never describes a state

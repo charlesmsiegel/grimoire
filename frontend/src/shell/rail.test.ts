@@ -55,15 +55,22 @@ test("Library survives its own redirect", () => {
   // existed.
   expect(activeIn(APP_ROWS, "/library")).toEqual(["library"]);
   expect(activeIn(APP_ROWS, "/worlds")).toEqual(["library"]);
-  expect(activeIn(APP_ROWS, "/providers")).toEqual(["library"]);
+  expect(activeIn(APP_ROWS, "/providers")).toEqual(["config"]);
   // ...without lighting on a route that merely shares a prefix.
   expect(activeIn(APP_ROWS, "/modules-of-my-own")).toEqual([]);
 });
 
-test("/models is Settings' page, under its own title", () => {
+test("Inference's three pages are Settings', each under its own title", () => {
   expect(activeIn(APP_ROWS, "/models")).toEqual(["config"]);
   expect(activeIn(APP_ROWS, "/models/route/summary")).toEqual(["config"]);
   expect(titleFor("/models/role/fast")).toBe("Models");
+  expect(activeIn(APP_ROWS, "/providers/saltmarch")).toEqual(["config"]);
+  expect(activeIn(APP_ROWS, "/presets")).toEqual(["config"]);
+  expect(activeIn(APP_ROWS, "/presets/balanced")).toEqual(["config"]);
+  expect(activeIn(APP_ROWS, "/models/edit")).toEqual(["config"]);
+  expect(titleFor("/presets/balanced")).toBe("Presets");
+  expect(titleFor("/providers/new")).toBe("Providers");
+  expect(activeIn(APP_ROWS, "/presets-of-my-own")).toEqual([]);
   // ...without lighting on a route that merely shares a prefix.
   expect(activeIn(APP_ROWS, "/models-of-my-own")).toEqual([]);
 });

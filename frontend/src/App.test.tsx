@@ -70,9 +70,15 @@ vi.mock("./routes/ProvidersView", () => ({
 }));
 
 vi.mock("./routes/ModelsView", () => ({
-  default: function ModelsViewStub() {
-    const { role, key } = useParams();
-    return <div data-testid="models-view">{role ?? ""}|{key ?? ""}</div>;
+  default: function ModelsViewStub({ edit }: { edit?: boolean }) {
+    return <div data-testid="models-view">{edit ? "edit" : "summary"}</div>;
+  },
+}));
+
+vi.mock("./routes/PresetsView", () => ({
+  default: function PresetsViewStub() {
+    const { id } = useParams();
+    return <div data-testid="presets-view">{id ?? ""}</div>;
   },
 }));
 
@@ -233,9 +239,13 @@ test("the palette offers campaigns, worlds and library sections, and goes there"
   expect(await screen.findByRole("option", { name: /saltmarch/i })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /realm/i })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: /climates/i })).toBeInTheDocument();
-  // Models is no rail row and no library section: without this, the links in
-  // Settings were its only way in.
-  expect(screen.getByRole("option", { name: /roles and routes/i })).toHaveTextContent(/Models/);
+  // Providers, Models and Presets are no rail row and no library section:
+  // without this, the links in Settings were their only way in.
+  for (const label of ["Providers", "Models", "Presets"]) {
+    const opt = screen.getAllByRole("option", { name: /Settings → Inference/ })
+      .find((o) => o.textContent?.includes(label));
+    expect(opt).toBeDefined();
+  }
 
   fireEvent.click(screen.getByRole("option", { name: /climates/i }));
   expect(await screen.findByRole("heading", { name: /climates/i })).toBeInTheDocument();
@@ -256,10 +266,11 @@ test("↑↓ moves and ⏎ opens, without the mouse", async () => {
 test("the library's card hub is gone — /library lands in a section", async () => {
   render(<MemoryRouter initialEntries={["/library"]}><App /></MemoryRouter>);
   expect(await screen.findByRole("heading", { name: /worlds/i })).toBeInTheDocument();
-  // the six sections are the column now, with their counts
+  // the library's sections are the column now, with their counts
   expect(column().getByRole("link", { name: /worlds/i })).toHaveAttribute("href", "/worlds");
   expect(column().getByRole("link", { name: /climates/i })).toHaveAttribute("href", "/climates");
-  expect(column().getByRole("link", { name: /providers/i })).toHaveAttribute("href", "/providers");
+  // Providers left the library for Settings, Inference.
+  expect(column().queryByRole("link", { name: /providers/i })).toBeNull();
 });
 
 test("/connections redirects to /providers", async () => {
@@ -274,12 +285,28 @@ test("a provider's model route keeps the slashes in the model id", async () => {
 });
 
 test.each([
-  ["/models", "|"],
-  ["/models/role/primary", "primary|"],
-  ["/models/route/scene_break", "|scene_break"],
-])("%s opens the models page (where Used by chips land)", async (at, shown) => {
+  ["/models", "summary"],
+  ["/models/edit", "edit"],
+  ["/models/role/primary", "summary"],
+])("%s opens the models page", async (at, shown) => {
   render(<MemoryRouter initialEntries={[at]}><App /></MemoryRouter>);
   expect((await screen.findByTestId("models-view")).textContent).toBe(shown);
+});
+
+test("an old route page redirects to its task's row on the edit form", async () => {
+  render(<MemoryRouter initialEntries={["/models/route/scene_break"]}><App /></MemoryRouter>);
+  expect((await screen.findByTestId("models-view")).textContent).toBe("edit");
+});
+
+test.each([["/presets", ""], ["/presets/new", ""], ["/presets/import", ""], ["/presets/balanced", "balanced"]])(
+  "%s opens the presets page", async (at, id) => {
+    render(<MemoryRouter initialEntries={[at]}><App /></MemoryRouter>);
+    expect((await screen.findByTestId("presets-view")).textContent).toBe(id);
+  });
+
+test("/providers/new is not read as a provider id", async () => {
+  render(<MemoryRouter initialEntries={["/providers/new"]}><App /></MemoryRouter>);
+  expect(await screen.findByTestId("providers-view")).toHaveTextContent("|");
 });
 
 test("the library column persists across a section change, keeping the lit row", async () => {
