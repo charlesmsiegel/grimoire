@@ -269,16 +269,20 @@ def retired_expectation(recorded: dict, state: str) -> dict:
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
 def test_resolution_matches_the_baseline(state, tmp_path):
     """The store as each state builds it -- format 1, unmigrated -- played
-    in memory through the planner, answers what the JSON recorded: minus
-    `routing` (`RETIRED`), with the migration's named differences (the store
-    is resolved as format 2) and `retired_expectation`'s."""
+    in memory through the planner, answers exactly what the JSON recorded,
+    minus `routing` (`RETIRED`) alone: a format-1 store still plays as
+    format 1 where it always answered differently (a reroll naming a
+    provider runs that provider's own model and preset; the `missing_key`
+    sentence), so neither `migrated_expectation` nor the provider-only cells
+    are excused here (user ruling 2026-10-09). `retired_expectation`'s rules
+    name only the GLM states of the other baseline, so it is the identity
+    on this one, and is not applied."""
     with baseline.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
         observed = without_new_tasks(baseline.observe(client, ctx))
         assert not store.inference_keys.is_current(store.read_config())
-        assert (without_allowed_differences(observed)
-                == without_allowed_differences(
-                    retired_expectation(migrated_expectation(BASELINE[state]), state)))
+        assert retired_expectation(BASELINE[state], state) == BASELINE[state]
+        assert without_retired(observed) == without_retired(BASELINE[state])
 
 
 #: Rule 3, the retired-and-stripped store only: the states whose recorded

@@ -235,20 +235,48 @@ def test_a_provider_that_cannot_send_is_the_same_409(at):
     assert "nokey" in exc.detail["detail"]
 
 
-def test_provider_only_keeps_the_standing_model_on_format_1_too(at):
-    """Since slice I a format-1 store plays as format 2, in memory, so a
-    provider named alone means what it means there (spec 5.6): that provider
-    at the STANDING model -- never at a model of its own."""
+def test_provider_only_keeps_the_legacy_meaning_on_format_1(at):
+    """A format-1 store still rerolls as format 1 (spec 5.6; user ruling
+    2026-10-09): a provider named alone runs that connection's OWN model,
+    whatever the standing route runs -- read through the planner's overlay
+    (`Overlay.selection`), never from a legacy field in the resolver."""
     ctx = at()
     assert not store.inference_keys.is_current(store.read_config())
-    standing, _ = _run({}, ctx["cid"])
     resolved, routed = _run({"provider": "spare"}, ctx["cid"])
+    # That connection's own model, whatever the active one runs.
     assert resolved.chain.primary.provider_id == "spare"
-    assert resolved.chain.primary.model == standing.chain.primary.model != "vendor/spare"
+    assert resolved.chain.primary.model == "vendor/spare"
     assert routed is True
     # ... and `connection_id` says the same thing it always did.
     legacy, _ = _run({"connection_id": "spare"}, ctx["cid"])
     assert base._resolved(legacy.chain.primary) == base._resolved(resolved.chain.primary)
+
+
+def test_provider_only_needs_no_standing_selection_on_format_1(at):
+    """With no active connection, a format-1 reroll naming a provider still
+    runs it at its own model -- never the format-2 400 asking for a model,
+    since a format-1 connection has a model of its own (spec 5.6)."""
+    ctx = at()
+    store.write_config(active_connection_id="")
+    assert not store.inference_keys.is_current(store.read_config())
+    assert inf.resolve("regenerate", ctx["cid"]).standing is None
+    resolved, routed = _run({"provider": "spare"}, ctx["cid"])
+    assert (resolved.chain.primary.provider_id, resolved.chain.primary.model) == (
+        "spare", "vendor/spare")
+    assert routed is True
+
+
+def test_provider_and_model_take_the_named_connections_preset_on_format_1(at):
+    """A provider and a model on another connection run under that
+    connection's OWN preset at format 1, as they always did -- the standing
+    route's preset rides along only at format 2 (spec 5.6)."""
+    ctx = at()
+    store.llm_connections.update_connection("spare", sampler_preset="hot")
+    store.llm_connections.update_connection("openrouter", sampler_preset="warm")
+    assert not store.inference_keys.is_current(store.read_config())
+    resolved, _ = _run({"provider": "spare", "model": "vendor/active"}, ctx["cid"])
+    assert resolved.chain.primary.sampling.preset_id == "hot"
+    assert resolved.chain.primary.sampling.scope == "connection"
 
 
 def test_a_preset_is_honoured_on_format_1_too(at):

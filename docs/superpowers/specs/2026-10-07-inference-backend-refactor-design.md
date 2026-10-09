@@ -703,6 +703,17 @@ legacy layout lowers a named preset exactly as the new one does. The
 provider-only meaning moves only with the format, since a format-1
 connection still has a model of its own.
 
+From slice I a format-1 store is read through the planner's in-memory
+overlay (§11.4), and this still holds there (user ruling 2026-10-09): a
+provider-only override runs the planner's selection of that connection — its
+own model and preset — and needs no standing selection; a provider and a model
+take that connection's own preset, not the standing route's; and a
+`missing_key` refusal keeps its format-1 sentence (the bare reason, or "(name,
+routed for <legacy route>)" for a pin). The resolver reads all three off the
+overlay (`Overlay.legacy`, `Overlay.selection`), never a legacy field. Only
+once `config.md` is at format 2 does a provider-only override keep the
+standing model and preset.
+
 ### 5.7 The seam
 
 `_require_connection(task, cid)` becomes `require_inference(task, cid, *,
@@ -1965,7 +1976,13 @@ runtime read path is deleted: `translate.py`, every format-1 branch of
 `llm_sampling`. The mapping itself lives on in one guarded planner,
 `store/inference/legacy_plan.py` (§7.1), which the migration and retirement
 persist and play uses in memory. That is what keeps §11.2, §12, §5.6, §15 and
-§17.8 true. A literal deletion would refuse play at format 1. `routing.legacy_key`
+§17.8 true. A literal deletion would refuse play at format 1. Two format-1
+answers stay in `resolve`, by the user's ruling of 2026-10-09, because a
+format-1 store always gave them: the provider-only reroll and the
+`missing_key` sentence (§5.6). Neither reads a legacy field; both are read off
+the planner's overlay (`Overlay.legacy`, `Overlay.selection`), so
+`test_resolution_matches_the_baseline` holds a format-1 store to the frozen
+JSON exactly. `routing.legacy_key`
 and `routing.CONFIG_KEYS` stay as spelling data that the planner, the write
 refusals and retirement read, and a guard fails any other reader of the legacy
 layout.

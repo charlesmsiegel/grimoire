@@ -257,10 +257,9 @@ def _providers() -> list[dict]:
     """Every provider, with whether it can send at all -- `resolve.problem`,
     the seam's credential rule, asked of a masked record (`key_set` stands in
     for the key it deliberately does not carry) -- and `own_model`, the model
-    its record names (`facts.model_of`; "" when it names none). A reroll
-    naming the provider alone runs it at the STANDING model whatever the
-    store's format (`resolve._overridden`, spec 5.6), so nothing resolves
-    from this: it is what the record says."""
+    its record names (`facts.model_of`): what a reroll naming the provider
+    alone runs on a store still at format 1, where a provider has a model of
+    its own (`resolve._overridden`, spec 5.6); "" when it names none."""
     return [{"id": c["id"], "name": str(c.get("name") or c["id"]),
              "kind": str(c.get("kind") or ""),
              "preset": str(c.get("preset") or "") or providers.infer(c).id,

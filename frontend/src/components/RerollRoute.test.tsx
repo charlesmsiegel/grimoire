@@ -240,29 +240,28 @@ test("a provider alone, where the route names no model to keep, says to choose o
   expect(await screen.findByText(/names no model to keep/)).toBeInTheDocument();
 });
 
-test("at format 1 a provider alone keeps the standing model, as the server runs it", async () => {
-  // A store whose upgrade is pending or failed is read by the server as the
-  // new layout too (inference slice I), so a provider-only reroll keeps the
-  // scene route's standing model there as well -- whatever model the
-  // provider's legacy record names. The caption says so, and never offers
-  // the provider's own model.
+test("at format 1 a provider alone says it runs that provider's own model", async () => {
+  // A store whose upgrade is pending or failed resolves a provider-only reroll
+  // through the legacy keys: the provider's OWN model, not the scene route's
+  // standing one -- possibly another, pricier one. The caption says which.
   (api.getCampaignInference as any).mockResolvedValue(view({
     format: "1", migration: { state: "pending", reason: "", skipped: [] },
     providers: PROVIDERS.map((p) => (p.id === "realm" ? { ...p, own_model: "qwen3-max" }
                                                      : { ...p, own_model: "" })) }));
   render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
 
-  expect(await screen.findByText("Keeps vendor/campaign")).toBeInTheDocument();
-  expect(screen.queryByText(/own model/)).toBeNull();
+  expect(await screen.findByText("Runs this provider's own model, qwen3-max"))
+    .toBeInTheDocument();
+  expect(screen.queryByText(/^Keeps /)).toBeNull();
 });
 
-test("at format 1 a provider alone, where the route names no model to keep, says to choose one", async () => {
+test("at format 1 a provider naming no model of its own says to choose one", async () => {
   (api.getCampaignInference as any).mockResolvedValue(view({
-    format: "1", providers: PROVIDERS, routes: [{ ...SCENE_ROUTE, resolves: null }] }));
+    format: "1", providers: PROVIDERS }));
   render(<Harness start={{ provider: "realm", model: "", preset: "" }} />);
 
-  expect(await screen.findByText(/names no model to keep/)).toBeInTheDocument();
-  expect(screen.queryByText(/own model/)).toBeNull();
+  expect(await screen.findByText("This provider names no model of its own: choose one."))
+    .toBeInTheDocument();
 });
 
 test("the popover fits a phone: capped to the viewport, and anchored inside it", () => {

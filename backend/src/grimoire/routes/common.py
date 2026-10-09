@@ -1460,9 +1460,10 @@ def override_inference(body, task: str = "", cid: str = "", *,
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
-    elif not model and not _has_standing_model(resolved, primary):
+    elif not resolved.legacy and not model and not _has_standing_model(resolved, primary):
         # A provider alone keeps the standing model, and there is none to keep.
-        # The body's fault, so before the connection's own refusals.
+        # The body's fault, so before the connection's own refusals. (A
+        # format-1 store's provider alone runs its own model, spec 5.6.)
         raise HTTPException(
             status_code=400,
             detail="Name a model for this provider — there is no standing model to keep.")

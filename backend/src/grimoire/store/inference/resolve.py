@@ -52,7 +52,12 @@ reached -- a format-1 store, an unmarked campaign, a scope not yet retired --
 is read through the planner, in memory: `_overlay` is the one call into
 `legacy_plan`, and what it returns (the settings as format 2 sees them, the
 derived reasoning presets, the legacy model facts) is resolved as though it
-were stored. Nothing on that path writes. The model's facts drive its
+were stored. Nothing on that path writes. Two answers stay format 1's on a
+format-1 store (spec 5.6; user ruling 2026-10-09), each read off the overlay
+rather than a legacy field: a reroll naming a provider alone runs that
+provider's own model and preset (`Overlay.selection`, `_overridden`), and the
+`missing_key` sentence keeps its format-1 wording (`ResolvedInference.legacy`,
+`unusable`). The model's facts drive its
 behaviour: a target's `prefill`, `post_process` and post-image reach are its
 model's facts (`_stated`), never the connection's legacy fields.
 
@@ -360,16 +365,6 @@ def _stated(model_facts: dict) -> tuple[str, bool, str]:
              and post_process in facts.POST_PROCESS_VALUES and post_process else "none"))
 
 
-def _current_layout() -> bool:
-    """Whether the store's global layout is the current one (format 2). Never
-    raises: a `config.md` that cannot be read leaves the connection's own
-    fields, which a migration keeps in place."""
-    try:
-        return keys.is_current(config.read_config())
-    except (locks.StoreBusy, OSError, UnicodeDecodeError):
-        return False
-
-
 def preset_sampling(preset_id: str, scope: str = "connection") -> dict:
     """The `sampling` block for the sampler preset `preset_id` at `scope` -- the
     shape `_sampling` gives an attempt; no preset ("") is provider defaults.
@@ -389,14 +384,20 @@ def _model_facts(provider_id: str, model: str, rev: str) -> dict:
 
 def facts_for(raw: dict, model: str) -> dict:
     """The facts a target outside any route (`target_for`) is built with:
-    at format 2, `model`'s on `raw` (`facts.of`, never raising, under the
-    model the record runs -- `facts.model_of`); below format 2 the record's
-    own legacy `vision`, `prefill` and `post_process`, which is what the
-    record sends until the migration moves them onto its model. What the
-    model test's probes and the screens' previews send and show."""
-    if not _current_layout():
-        return {k: raw[k] for k in _UNSTATED if k in raw}
-    return _model_facts(_text(raw, "id"), _sent_model(raw, model), _rev(raw))
+    `model`'s on `raw`, under the model the record runs (`facts.model_of`),
+    read exactly as a resolved attempt reads them (`_read_facts`) -- so what
+    the model test's probes and the screens' previews send and show is what
+    play sends. Below format 2 that is through the planner's overlay
+    (`Overlay.facts`): the connection's legacy `vision`, `prefill` and
+    `post_process` laid over its OWN model's facts, as the migration's step 3
+    will leave them, and nothing of them on another model. Never raises: a
+    `config.md` that cannot be read plans nothing, and unreadable facts say
+    nothing."""
+    try:
+        stated = _overlay(config.read_config(), {}).facts
+    except (locks.StoreBusy, OSError, UnicodeDecodeError):
+        stated = {}
+    return _read_facts(_text(raw, "id"), _sent_model(raw, model), _rev(raw), stated)
 
 
 def _rev(conn: dict) -> str:
@@ -606,16 +607,25 @@ def own_target(raw: dict) -> wire.Target:
 
 # ---- the resolver ----
 def _overridden(standing: Selection | None, override: Selection | None,
-                lookup: llm_connections.Lookup) -> Selection | None:
+                lookup: llm_connections.Lookup, *,
+                own: Callable[[str], Selection] | None = None) -> Selection | None:
     """The selection one call runs on, given a per-call override (#77).
 
     A model alone drives the STANDING provider at that model, so with no
     standing selection there is nothing to drive. Both is the named provider at
-    the named model. A provider alone (spec 5.6) is that provider at the
-    STANDING model and preset: a provider has no model of its own, so what is
-    kept is the part of the selection the override did not name. With no
-    standing selection there is nothing to keep, and the model is left empty
-    for the seam to ask the caller for.
+    the named model. A provider alone is the one part that depends on the
+    layout (spec 5.6):
+
+    - format 2: that provider at the STANDING model and preset. A provider
+      has no model of its own, so what is kept is the part of the selection
+      the override did not name. With no standing selection there is nothing
+      to keep, and the model is left empty for the seam to ask the caller for.
+    - format 1 (`own`, the planner's `Overlay.selection`): that provider at
+      its OWN model and preset, needing no standing selection -- rerolling
+      onto a working endpoint is how a broken standing route is fixed. A
+      format-1 connection still has a model of its own, and a provider and a
+      model together take the named connection's own preset too, as a
+      format-1 store always has.
 
     The override's preset is never merged into the selection: it outranks the
     route's preset, which no selection's own can, so `resolve` applies it on
@@ -625,7 +635,9 @@ def _overridden(standing: Selection | None, override: Selection | None,
     if override.provider:
         if lookup(override.provider) is None:
             return None
-        if standing is not None and standing.provider == override.provider:
+        if own is not None:
+            base = own(override.provider)
+        elif standing is not None and standing.provider == override.provider:
             base = standing
         elif standing is not None:
             base = Selection(override.provider, standing.model, standing.preset)
@@ -768,7 +780,8 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
 
     attempts: list[Attempt] = []
     fallback_problem: str | None = None
-    selection = _overridden(choice.selection, override, lookup)
+    selection = _overridden(choice.selection, override, lookup,
+                            own=seen.selection if seen.legacy else None)
     raw = lookup(selection.provider) if selection is not None else None
     standing_preset: str | None = None
     if selection is not None and raw is not None:
@@ -818,7 +831,7 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         attempts=tail.attempts, standing=choice.selection,
         standing_preset=standing_preset, missing=tail.missing,
         fallback_missing=tail.fallback_missing, fallback_problem=fallback_problem,
-        rides=tail.rides)
+        rides=tail.rides, legacy_route=seen.legacy_route(route) if seen.legacy else None)
 
 
 class _Tail(NamedTuple):
@@ -1186,14 +1199,23 @@ def unusable(resolved: ResolvedInference) -> Refusal | None:
     # provider rejected is a runtime failure, worth routing around silently,
     # while no key at all is a setup mistake. Quietly serving it from the
     # fallback would leave someone playing for weeks on the wrong connection.
-    #
+    name = primary.label
+    if resolved.legacy:
+        # A format-1 store keeps the sentences it always answered (user
+        # ruling 2026-10-09): the bare reason, and a ROUTED connection named
+        # by the legacy route it was stored under -- reported, not walked
+        # past, because the user pointed this task at it.
+        if resolved.via == "route":
+            return 409, {"detail": f"{why} ({name}, routed for "
+                                   f"{routing.label_for(resolved.legacy_route or '').lower()})",
+                         "kind": "missing_key"}
+        return 409, {"detail": why, "kind": "missing_key"}
     # Spec 12: the provider, and the route or role that chose it. Nearly
     # everything comes through a role, and two providers of one kind would
     # otherwise read the same sentence. A pin is named by its own route (a
     # split route's pin is its own, not its legacy parent's): a ROUTED
     # connection that cannot send is reported, not walked past -- the user
     # pointed this task at it.
-    name = primary.label
     where = (f"routed for {routing.label_for(resolved.route).lower()}"
              if resolved.via == "route"
              else f"the {resolved.role.capitalize()} role" if resolved.role else "")

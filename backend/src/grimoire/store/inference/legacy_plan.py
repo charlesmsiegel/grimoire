@@ -873,6 +873,37 @@ class Overlay(NamedTuple):
     #: format 2, even one the mapping turns off. What a guard that asks
     #: whether an edit moves the role's space compares (`embed_space.moved_by`).
     embedding: tuple[str, str]
+    #: Whether `config.md` is below format 2 and was mapped here (not
+    #: settled): a format-1 store. It still plays as format 2 everywhere but
+    #: two places, where a format-1 store has always answered differently
+    #: and still does (spec 5.6; user ruling 2026-10-09): a reroll naming a
+    #: provider runs that provider's OWN model and preset (`selection`), and
+    #: a `missing_key` refusal keeps its format-1 sentence
+    #: (`resolve.unusable`, naming a pin by its `legacy_route`).
+    legacy: bool = False
+    #: The soft lookup this overlay planned through (None when nothing was
+    #: planned): what `selection` reads, so a format-1 reroll reads the
+    #: connection exactly as the mapping did, with no second plan.
+    lookup: Lookup | None = None
+
+    def selection(self, conn_id: str) -> cascade.Selection:
+        """Connection `conn_id` as the planner maps it when a legacy key names
+        it: its own model and preset (empty for an unknown id or one that sets
+        none) -- what a format-1 reroll naming the provider runs on (spec
+        5.6). Read through this overlay's lookup, so the record fallback for a
+        stripped connection applies as it does to the mapping."""
+        sel = _selection(conn_id, self.lookup or _no_connection)
+        return cascade.Selection(sel["provider"], sel["model"], sel["preset"])
+
+    def legacy_route(self, route: routing.Route | None) -> str:
+        """The legacy route `route`'s settings were stored under at format 1
+        (its own key, or the parent a split route came out of); "" for none:
+        what a format-1 refusal names a pin by."""
+        return routing.legacy_key(route) if route is not None else ""
+
+
+def _no_connection(_conn_id: str) -> dict | None:
+    return None
 
 
 class OverlayError(ValueError):
@@ -948,13 +979,14 @@ def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -
     keep(gplan)
     glob = _as_current(cfg, gplan)
     stored = _persisted(cfg, gplan)
+    legacy = not _settled(cfg) and not keys.is_current(cfg)
     if not meta:
         return Overlay(glob, {}, virtual, gplan.facts, gplan.notes, stored, {},
-                       embedding_role(cfg))
+                       embedding_role(cfg), legacy, conn)
     cplan = campaign_plan(meta, glob=glob,
                           global_current=keys.is_current(cfg) or keys.is_newer(cfg),
                           lookup=conn, presets=presets, cid=cid)
     keep(cplan)
     return Overlay(glob, _as_current(meta, cplan), virtual, gplan.facts,
                    gplan.notes + cplan.notes, stored, _persisted(meta, cplan),
-                   embedding_role(cfg))
+                   embedding_role(cfg), legacy, conn)

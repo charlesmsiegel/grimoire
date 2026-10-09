@@ -100,9 +100,9 @@ def _refusal(resolved: ResolvedInference) -> dict | None:
 
     Spelled out here rather than read off the seam, so the comparison below
     proves the resolver carries everything that refusal needs (the primary's
-    target, `via`, `route`, `role`) independently of the code that builds it.
-    Every store resolves as format 2 since slice I, so this is that wording
-    (spec 12)."""
+    target, `via`, `route`, `role`, `legacy_route`) independently of the code
+    that builds it. A format-1 store keeps the sentences it always answered
+    (`legacy_route` set); format 2 has spec 12's wording."""
     primary = _primary(resolved)
     if primary is None:
         return {"detail": "No LLM connection selected", "kind": "missing_key"}
@@ -110,6 +110,11 @@ def _refusal(resolved: ResolvedInference) -> dict | None:
     if problem is None:
         return None
     name = primary.provider_name or primary.provider_id
+    if resolved.legacy_route is not None:
+        if resolved.via == "route":
+            label = routing.label_for(resolved.legacy_route).lower()
+            return {"detail": f"{problem} ({name}, routed for {label})", "kind": "missing_key"}
+        return {"detail": problem, "kind": "missing_key"}
     if resolved.via == "route":
         label = routing.label_for(resolved.route).lower()
         return {"detail": f"{problem} ({name}, routed for {label})", "kind": "missing_key"}
@@ -329,9 +334,16 @@ def test_a_route_pin_targets_that_connection(at_state):
 
 
 def test_a_split_route_reports_its_own_route(at_state):
+    """A split route is its own route; on a format-1 store the resolution
+    also names the legacy route it was stored under, which that store's
+    refusal sentence names a pin by. Format 2 names none."""
     at_state("fresh")
-    assert inf.resolve("scene-break").route == "scene_break"
-    assert inf.resolve("").route == ""
+    assert not keys.is_current(store.read_config())
+    resolved = inf.resolve("scene-break")
+    assert (resolved.route, resolved.legacy_route) == ("scene_break", "summary")
+    assert (inf.resolve("").route, inf.resolve("").legacy_route) == ("", "")
+    store.write_config(**{keys.FORMAT_KEY: "2"})
+    assert inf.resolve("scene-break").legacy_route is None
 
 
 def test_a_keyless_fallback_is_no_fallback(at_state):
@@ -434,24 +446,35 @@ def test_a_connection_is_read_once_per_resolve(at_state, monkeypatch):
     assert calls and len(calls) == len(set(calls))
 
 
-def test_a_provider_only_override_keeps_the_standing_model(at_state):
-    """Spec 5.6, on a legacy store too since slice I: a provider named alone
-    runs at the STANDING selection's model and preset (the active
-    connection's, mapped into the Primary role in memory), never at a model
-    of its own."""
+def test_a_provider_only_override_keeps_that_providers_model(at_state):
+    """Spec 5.6 on a format-1 store (user ruling 2026-10-09): a provider named
+    alone runs at that connection's OWN model and preset -- the planner's
+    selection of it (`Overlay.selection`) -- as a format-1 store always has."""
     at_state("routed")
+    assert not keys.is_current(store.read_config())
     resolved = inf.resolve("regenerate",
                            override=Selection("local", "", ""))
     assert _primary(resolved).provider_id == "local"
-    assert _primary(resolved).model == "vendor/active"
+    assert _primary(resolved).model == "local-model"
     # The route's preset follows the route (global `preset_scene: cold`); a
-    # route with none falls to the standing selection's own (`warm`).
+    # route with none falls to the named connection's own (`warm`).
     assert _primary(resolved).sampling.preset_id == "cold"
     assert _primary(resolved).sampling.scope == "global"
     tagline = inf.resolve("tagline", override=Selection("local", "", ""))
-    assert _primary(tagline).model == "vendor/active"
+    assert _primary(tagline).model == "local-model"
     assert _primary(tagline).sampling.preset_id == "warm"
     assert _primary(tagline).sampling.scope == "connection"
+
+
+def test_a_provider_only_override_keeps_the_standing_model_at_format_2(at_state):
+    """Spec 5.6 once the store is at format 2: a provider named alone runs at
+    the STANDING selection's model and preset, never at a model of its own."""
+    at_state("routed")
+    assert migrate.ensure().state == "done"
+    resolved = inf.resolve("regenerate", override=Selection("local", "", ""))
+    standing = inf.resolve("regenerate")
+    assert _primary(resolved).provider_id == "local"
+    assert _primary(resolved).model == _primary(standing).model != "local-model"
 
 
 def test_a_model_only_override_keeps_the_standing_provider(at_state):
@@ -471,13 +494,14 @@ def test_a_model_only_override_keeps_the_standing_provider(at_state):
     assert _primary(glob).model_params == ("temperature",)
 
 
-def test_a_provider_override_with_no_standing_selection_names_no_model(at_state):
-    """With nothing standing, a provider named alone has no model to keep
-    (spec 5.6): it resolves with none, which the seam asks the caller for."""
+def test_a_provider_override_needs_no_standing_selection(at_state):
+    """At format 1 a provider named alone runs its own model, so it needs no
+    standing selection -- rerolling onto a working endpoint is how a broken
+    standing route is fixed (spec 5.6)."""
     at_state("no_active")
     assert inf.resolve("regenerate").chain is None
     named = inf.resolve("regenerate", override=Selection("spare", "", ""))
-    assert _primary(named).provider_id == "spare" and named.attempts[0].model == ""
+    assert _primary(named).provider_id == "spare" and named.attempts[0].model == "vendor/spare"
     # A model alone overrides the standing selection, and there is none.
     model_only = inf.resolve("regenerate",
                              override=Selection("", "vendor/bigger", ""))
@@ -511,19 +535,23 @@ def test_own_target_drops_a_stale_model_params(at_state):
     assert got.model_params is None
 
 
+def _three(got: dict) -> tuple:
+    return (got.get("vision") or "", got.get("prefill") is True,
+            got.get("post_process") or "none")
+
+
 def test_facts_for_reads_the_model_at_format_2_and_the_record_below_it(at_state):
     """`facts_for` is what a target outside any route sends its model's
-    behaviour from: below format 2 the record's own legacy fields (what it
-    sent before the migration), at format 2 its model's facts -- never the
-    record's frozen fields there."""
+    behaviour from: below format 2 the record's own legacy fields laid over
+    ITS model (through the planner's overlay, as play reads them), at format
+    2 its model's facts -- never the record's frozen fields there."""
     at_state("fresh")
     assert not keys.is_current(store.read_config())
     store.llm_connections.update_connection("openrouter", prefill=True,
                                             post_process="strict", vision="off")
     raw = store.llm_connections.read_connection_raw("openrouter")
     model = raw["model"]
-    assert inf.facts_for(raw, model) == {"vision": "off", "prefill": True,
-                                         "post_process": "strict"}
+    assert _three(inf.facts_for(raw, model)) == ("off", True, "strict")
     legacy = inf.own_target(raw)
     assert (legacy.prefill, legacy.post_process, legacy.reads_images) == (True, "strict", "no")
 
@@ -536,6 +564,23 @@ def test_facts_for_reads_the_model_at_format_2_and_the_record_below_it(at_state)
     current = inf.own_target(raw)
     assert (current.prefill, current.post_process, current.reads_images) == (
         False, "none", "yes")
+
+
+def test_facts_for_agrees_with_play_on_another_model_at_format_1(at_state):
+    """Spec review F4: below format 2 a connection's legacy `prefill` is its
+    OWN model's fact. "Preview on..." another model of that provider says
+    what play sends there -- no prefill -- rather than the record's flag."""
+    at_state("fresh")
+    assert not keys.is_current(store.read_config())
+    store.llm_connections.update_connection("openrouter", prefill=True)
+    raw = store.llm_connections.read_connection_raw("openrouter")
+    other = "vendor/other"
+    assert other != raw["model"]
+    assert inf.facts_for(raw, raw["model"])["prefill"] is True
+    assert inf.facts_for(raw, other).get("prefill") is not True
+    played = inf.resolve("regenerate", override=Selection("openrouter", other, ""))
+    assert played.chain.primary.model == other
+    assert played.chain.primary.prefill is (inf.facts_for(raw, other).get("prefill") is True)
 
 
 def test_the_operation_is_carried(at_state):
@@ -610,14 +655,15 @@ def test_a_model_only_override_on_a_keyless_standing_route_is_a_409(at_state, mo
     is refused with the seam's own wording -- never served."""
     at_state("fresh")
     real = store.llm_connections.read_connection_raw
-    name = real("openrouter")["name"]
     monkeypatch.setattr(store.llm_connections, "read_connection_raw",
                         lambda cid: {**real(cid), "api_key": ""})
     with pytest.raises(HTTPException) as exc:
         routes.common.override_inference(SimpleNamespace(**body), "regenerate", "")
     assert exc.value.status_code == 409
-    assert exc.value.detail == {"detail": f"OpenRouter key not set ({name}, the Primary role)",
-                                "kind": "missing_key"}
+    # A format-1 store's sentence, as it always answered (user ruling
+    # 2026-10-09); spec 12's wording is format 2's.
+    assert not keys.is_current(store.read_config())
+    assert exc.value.detail == {"detail": "OpenRouter key not set", "kind": "missing_key"}
 
 
 # ---- the campaign is read store-side, and never fails a resolution ----

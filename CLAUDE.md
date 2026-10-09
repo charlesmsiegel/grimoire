@@ -831,10 +831,13 @@ would answer neither question.
   not reached is read through the planner, in memory (`resolve._overlay`, the
   one call of `legacy_plan.overlay`): the legacy keys seen as that same
   layout, a legacy GLM effort as a derived reasoning preset, and nothing
-  written, so a call site never asks which one it is on. The derived presets
-  stay in memory on a migrated store too, until retirement (inference slice
-  I, Task 6) writes them and marks each scope retired; a retired scope will
-  read nothing of the planner. The fallback rides on
+  written, so a call site never asks which one it is on. Two answers stay
+  format 1's on a format-1 store, both read off the overlay rather than a
+  legacy field: a reroll naming a provider alone runs that provider's own
+  model and preset, and the `missing_key` sentence keeps its old wording
+  (`ResolvedInference.legacy`). The derived presets stay in memory until
+  retirement (`store/inference/retire.py`) writes them and marks each scope
+  retired; a retired scope reads nothing of the planner. The fallback rides on
   the resolved chain: `chain.fallback` is the fallback attempt's target
   (wearing the route's preset when the route has one), and the facade sends
   that one. A fallback *known* unable to do what the route needs is reported

@@ -135,6 +135,12 @@ class ResolvedInference:
     #: structured (`resolve._rides`) -- elsewhere `inference.stages` sends the
     #: fallback as a stage of its own. False with no fallback.
     rides: bool = False
+    #: Set only on a resolution of a format-1 store (`config.md` below format
+    #: 2, read through the planner, `legacy_plan.Overlay.legacy`): the legacy
+    #: route the task's route was stored under ("" for none), which the
+    #: format-1 `missing_key` sentence names a pin by (`resolve.unusable`).
+    #: None at format 2, and on an attempt built by hand.
+    legacy_route: str | None = None
 
     @property
     def chain(self) -> wire.Chain | None:
@@ -146,6 +152,13 @@ class ResolvedInference:
             return None
         rides = self.rides and len(self.attempts) > 1
         return wire.Chain(self.attempts[0].target, self.attempts[1].target if rides else None)
+
+    @property
+    def legacy(self) -> bool:
+        """Whether this is a format-1 store's resolution (`legacy_route` set):
+        the two places such a store still answers as it always has -- a
+        reroll naming a provider alone, and the `missing_key` sentence."""
+        return self.legacy_route is not None
 
     @property
     def decision_mode(self) -> str | None:

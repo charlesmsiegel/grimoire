@@ -32,11 +32,14 @@ function describe(view: InferenceSettings | null): string {
     .filter(Boolean).join(" · ");
 }
 
-/** What a reroll naming a provider and no model runs, in words: the scene
- *  route's standing model, on any store -- the server reads a library it has
- *  not upgraded yet as the new layout too, where a provider has no model of
- *  its own (spec 5.6). */
-function providerAloneWords(standingModel: string): string {
+/** What a reroll naming `provider` and no model runs, in words. */
+function providerAloneWords(view: InferenceSettings, provider: string,
+                            standingModel: string): string {
+  if (view.format !== "2") {
+    const own = view.providers.find((p) => p.id === provider)?.own_model ?? "";
+    return own ? `Runs this provider's own model, ${own}`
+      : "This provider names no model of its own: choose one.";
+  }
   return standingModel ? `Keeps ${standingModel}`
     : "The scene route names no model to keep: choose one.";
 }
@@ -59,8 +62,8 @@ export default function RerollRoutePicker({ cid, value, onChange, onPending }: {
   onChange: (route: RerollRoute) => void;
   /** Whether a model id is typed and not yet taken ("Use this id"). The
    *  holder's Reroll sends `value`, which does not name it -- so it waits
-   *  until it does, rather than silently running the standing model in its
-   *  place. False again once this goes. */
+   *  until it does, rather than silently running the standing or the
+   *  provider's own model in its place. False again once this goes. */
   onPending?: (pending: boolean) => void;
 }) {
   const [view, setView] = useState<InferenceSettings | null>(null);
@@ -127,7 +130,7 @@ export default function RerollRoutePicker({ cid, value, onChange, onPending }: {
               pricier, one. */}
           {value.provider && !value.model && (
             <p className="field-hint">
-              {providerAloneWords(standingModel)}
+              {providerAloneWords(view, value.provider, standingModel)}
             </p>
           )}
           {/* Offered in either settings layout: `override_inference` applies

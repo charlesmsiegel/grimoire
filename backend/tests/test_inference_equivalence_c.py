@@ -41,16 +41,18 @@ def test_every_state_has_a_recorded_baseline():
 def test_resolution_matches_the_baseline(state, tmp_path):
     """Before any migration, played in memory through the planner, every state
     answers what the JSON recorded -- minus `routing`
-    (`test_inference_equivalence.RETIRED`), with the migration's named
-    differences and `test_inference_equivalence.retired_expectation`'s."""
+    (`test_inference_equivalence.RETIRED`), with
+    `test_inference_equivalence.retired_expectation`'s named differences (the
+    derived GLM presets, ratification items 1-3) and nothing else: no
+    `migrated_expectation`, and every provider-only reroll cell held, since a
+    format-1 store still rerolls as format 1 (user ruling 2026-10-09)."""
     with baseline.base.client_at(tmp_path) as client:
         ctx = baseline.STATES[state](client)
         observed = equivalence.without_new_tasks(baseline.observe(client, ctx), CELLS)
         assert not store.inference_keys.is_current(store.read_config())
-        assert (equivalence.without_allowed_differences(observed)
-                == equivalence.without_allowed_differences(
-                    equivalence.retired_expectation(
-                        equivalence.migrated_expectation(BASELINE[state]), state)))
+        assert (equivalence.without_retired(observed)
+                == equivalence.without_retired(
+                    equivalence.retired_expectation(BASELINE[state], state)))
 
 
 @pytest.mark.parametrize("state", sorted(baseline.STATES))
