@@ -270,11 +270,15 @@ def current_view(cfg: Mapping[str, str], meta: Mapping[str, str] | None = None, 
     return _overlay(cfg, meta or {}, cid)
 
 
-def retirement_notes(cid: str = "") -> tuple[retired.Note, ...]:
+def retirement_notes(cid: str = "", *,
+                     cfg: Mapping[str, str] | None = None) -> tuple[retired.Note, ...]:
     """What the planner could not carry over (ruling 5), for the global scope
     and, with `cid`, that campaign. Never raises on a campaign that cannot be
-    read (`campaign_meta`)."""
-    return _overlay(config.read_config(), campaign_meta(cid), cid).notes
+    read (`campaign_meta`). `cfg` is `config.md` as the caller has already
+    read it (read here when not given): a caller asking for every campaign
+    reads it once."""
+    return _overlay(config.read_config() if cfg is None else cfg,
+                    campaign_meta(cid), cid).notes
 
 
 def _embedding_view(cfg: Mapping[str, str]) -> dict[str, str]:

@@ -1237,7 +1237,11 @@ backup and every synced copy. It holds two things:
   so a campaign that arrives unmarked after the strip (a restore, an older
   build) still migrates to the model it named. It never answers for a
   connection whose file is gone, and the first values recorded for a
-  connection are the ones kept.
+  connection are the ones kept. Deleting a connection forgets its entry, in
+  the same hold, before the file goes, so a provider created later under the
+  same slug never inherits it; the record is read before the delete writes
+  anything, and a record that cannot be read refuses the delete with 409
+  `retirement_unreadable` — no reference cleared, no file removed.
 - **`notes`**: what could not be carried over — a route-level preset that
   sets no reasoning effort over a GLM effort, a GLM effort in a scope already
   marked retired before it was migrated, a model behaviour the connection

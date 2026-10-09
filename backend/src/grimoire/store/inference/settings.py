@@ -365,10 +365,19 @@ def _planner_notes(names: Mapping[str, str]) -> list[retired.Note]:
     plan's and each campaign's (`resolve.retirement_notes`, which gives a
     campaign's own beside the global ones), ids collapsing. What `/models`
     shows before retirement has recorded them (spec 11.4), and what a
-    dismissal looks a planner-only note up in."""
+    dismissal looks a planner-only note up in.
+
+    A permanent fan-out, by design: every GET of `/models` plans each
+    campaign -- on a retired store too, where a retired campaign costs one
+    read of its `campaign.md` (the overlay plans nothing) -- because a late
+    unmarked campaign can arrive at any time, and its loss must show. The
+    cost is accepted (the 6b re-review measured it at about 0.15 s per GET
+    for 200 campaigns on a retired store). `config.md` is read
+    once per call."""
+    cfg = config.read_config()
     out: dict[str, retired.Note] = {}
     for cid in ["", *names]:
-        for note in resolve.retirement_notes(cid):
+        for note in resolve.retirement_notes(cid, cfg=cfg):
             out.setdefault(note.id, note)
     return list(out.values())
 
