@@ -549,7 +549,7 @@ would answer neither question.
   Python and Node floors up front, and `test_install_scripts.py` holds those
   floors to `requires-python` and `engines.node`. A store this build creates
   is **born at the current model-settings format**: the first write of a
-  missing `config.md` stamps the format marker (`inference_keys.born_current`),
+  missing `config.md` stamps the format marker (`config.birth_fields()`),
   so a fresh install is never migrated and no safety archive is taken of an
   empty library. `GRIMOIRE_INFERENCE_AUTOMIGRATE=0`, which `tests/conftest.py`
   sets, turns off the background migration only -- the birth stamp is always
