@@ -1,0 +1,3290 @@
+{
+ "base:claude_active|override:openrouter_connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:claude_active|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:claude_active|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:claude_active|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:claude_active|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:claude_active|override:openrouter_connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:embed_with_dangling|override:openrouter_connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:embed_with_dangling|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:embed_with_dangling|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:embed_with_dangling|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:embed_with_dangling|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:embed_with_dangling|override:openrouter_connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:openrouter_connection/fallback": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 2,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ],
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ],
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:no_active|override:openrouter_connection/structured_fallback": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 2,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ],
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ],
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:openrouter_connection/fallback": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 2,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ],
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ],
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:routed|override:openrouter_connection/structured_fallback": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 2,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "preset": "warm",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ],
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ],
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "sampling": {
+       "temperature": 0.9
+      }
+     }
+    ]
+   ]
+  }
+ },
+ "base:whitespace|override:connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:whitespace|override:connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "base:whitespace|override:connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:whitespace|override:connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:whitespace|override:connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "base:whitespace|override:connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:embed_openrouter_legacy|override:connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:embed_openrouter_legacy|override:connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "c:embed_openrouter_legacy|override:connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:embed_openrouter_legacy|override:connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:embed_openrouter_legacy|override:connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "spare",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:embed_openrouter_legacy|override:connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/spare is down"
+  ],
+  "holder": {
+   "attempted": [
+    "spare",
+    "vendor/spare"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "spare",
+   "images": 0,
+   "model": "vendor/spare",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "spare",
+   "requested_model": "vendor/spare"
+  },
+  "observed": [
+   [
+    "spare",
+    "vendor/spare",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/spare",
+      "sk-spare"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_bigger/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/bigger is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_bigger/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_bigger/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_bigger/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_bigger/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_bigger/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/bigger is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_max_under_route_preset|override:openrouter_connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_bigger/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/bigger is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_bigger/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_bigger/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_bigger/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_bigger/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_bigger/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/bigger is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/bigger"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/bigger",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/bigger"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/bigger",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/bigger",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:glm_reasoning|override:openrouter_connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:openrouter_glm_with_effort|override:openrouter_connection/fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:openrouter_glm_with_effort|override:openrouter_connection/native": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "decide",
+     [
+      "<item>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {
+      "bound": 7.0
+     }
+    ]
+   ]
+  }
+ },
+ "c:openrouter_glm_with_effort|override:openrouter_connection/ok": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:openrouter_glm_with_effort|override:openrouter_connection/single": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:openrouter_glm_with_effort|override:openrouter_connection/structured": {
+  "error": null,
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "completion_tokens": 2,
+   "connection": "OpenRouter",
+   "cost_usd": 0.001,
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "prompt_tokens": 5,
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    null
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ },
+ "c:openrouter_glm_with_effort|override:openrouter_connection/structured_fallback": {
+  "error": [
+   "LLMError",
+   "bad_response",
+   "vendor/active is down"
+  ],
+  "holder": {
+   "attempted": [
+    "openrouter",
+    "vendor/active"
+   ],
+   "attempts": 1,
+   "billing": "metered",
+   "connection": "OpenRouter",
+   "images": 0,
+   "model": "vendor/active",
+   "operation": "generate",
+   "provider": "openrouter",
+   "provider_id": "openrouter",
+   "requested_model": "vendor/active"
+  },
+  "observed": [
+   [
+    "openrouter",
+    "vendor/active",
+    "bad_response"
+   ]
+  ],
+  "wire": {
+   "openrouter": [
+    [
+     "stream",
+     [
+      "<messages>",
+      "vendor/active",
+      "sk-test-active"
+     ],
+     {}
+    ]
+   ]
+  }
+ }
+}

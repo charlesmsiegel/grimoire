@@ -285,36 +285,25 @@ def _recorded_as(stage: str) -> str:
     return "memory" if stage == "memory" else "migrated"
 
 
-#: The reroll overrides that name a provider (`connection_id`), alone or
-#: with a model. The golden's `memory` pass recorded them as a format-1 store
-#: answered them in slice I before the user's ruling of 2026-10-09 (spec
-#: review F1): with format-2 meaning, the standing model and preset. That
-#: ruling restored format 1's own -- the named connection's model and preset,
-#: as `main` sends them -- so in that pass these cells are excused from the
-#: golden, BY NAME, and held instead to the frozen baseline JSON the golden
-#: does not replace: each `ok` attempt must be sent to the provider and model
-#: that JSON recorded (`_format_1_reroll_sent`), and
-#: `test_inference_equivalence*.test_resolution_matches_the_baseline` holds
-#: the whole cell to it. The golden itself is not regenerated, and every other
-#: cell, pass and edge is held to it unchanged.
-FORMAT_1_REROLLS = frozenset(f"override:{name}"
-                             for name, body in baseline.OVERRIDE_BODIES.items()
-                             if body.get("connection_id"))
+#: The format-1 reroll cells the golden's `memory` pass recorded wrongly, and
+#: what `main` (4e822aa) sends for them, every leg in full
+#: (`fixtures/record_format1_rerolls.py`, which says how it was recorded).
+#: The golden was recorded inside slice I after a format-1 reroll naming a
+#: provider had taken format-2 meaning; the user's ruling of 2026-10-09 (spec
+#: review F1) restored main's. The golden is never regenerated, so in that
+#: pass exactly these `(state, cell)` pairs -- each one the golden records
+#: differently from main -- are held to main's records instead, and every
+#: other cell, pass and edge to the golden unchanged.
+FORMAT_1_REROLLS = Path(__file__).resolve().parent / "fixtures" / "adapter_wire_format1_rerolls.json"
 
 
-def _format_1_reroll_sent(state: str, seen: dict[str, list[dict]]) -> None:
-    """Each excused cell's `ok` attempt went where the frozen baseline JSON
-    recorded that reroll going."""
-    family, name = STATES[state]
-    recorded = json.loads(family.FIXTURE.read_text(encoding="utf-8"))[name]["overrides"]
-    for where, records in seen.items():
-        cell, _, case = where.partition("/")
-        if cell not in FORMAT_1_REROLLS or case != "ok":
-            continue
-        want = recorded[cell.removeprefix("override:")]
-        for record in records:
-            assert [record["observed"][0][:2]] == [[want["conn"], want["model"]]], (
-                state, where, record["observed"], want)
+def _format_1_rerolls() -> dict[str, dict[str, dict]]:
+    """`{state: {where/case: record}}` from `FORMAT_1_REROLLS`."""
+    out: dict[str, dict[str, dict]] = {}
+    for key, record in json.loads(FORMAT_1_REROLLS.read_text(encoding="utf-8")).items():
+        state, _, at = key.partition("|")
+        out.setdefault(state, {})[at] = record
+    return out
 
 
 @pytest.mark.parametrize("state", sorted(STATES))
@@ -324,12 +313,32 @@ def test_every_baseline_attempt_sends_the_frozen_wire(state, stage, tmp_path):
     index = golden["states"][f"{state}|{_recorded_as(stage)}"]
     seen = _observe_state(state, stage, tmp_path)
     if stage == "memory":
-        excused = {w for w in set(index) | set(seen)
-                   if w.partition("/")[0] in FORMAT_1_REROLLS}
-        _format_1_reroll_sent(state, seen)
-        index = {w: k for w, k in index.items() if w not in excused}
-        seen = {w: r for w, r in seen.items() if w not in excused}
+        main = _format_1_rerolls().get(state, {})
+        for where, records in seen.items():
+            if where in main:
+                for record in records:
+                    assert record == main[where], where
+        assert set(main) <= set(seen), sorted(set(main) - set(seen))
+        cells = {at.rpartition("/")[0] for at in main}
+        index = {w: k for w, k in index.items() if w.rpartition("/")[0] not in cells}
+        seen = {w: r for w, r in seen.items() if w.rpartition("/")[0] not in cells}
     _check(index, golden["records"], seen)
+
+
+def test_the_format_1_reroll_exception_is_only_what_the_golden_got_wrong():
+    """`FORMAT_1_REROLLS` names a cell only where the golden's `memory` pass
+    records it differently from main, and only a reroll naming a provider
+    (`connection_id`): each cell differs in some leg, or the golden lacks it."""
+    golden = _golden()
+    named = {f"override:{name}" for name, body in baseline.OVERRIDE_BODIES.items()
+             if body.get("connection_id")}
+    for state, main in _format_1_rerolls().items():
+        index = golden["states"][f"{state}|memory"]
+        for cell in {at.rpartition("/")[0] for at in main}:
+            assert cell in named, (state, cell)
+            legs = {at: rec for at, rec in main.items() if at.rpartition("/")[0] == cell}
+            assert any(at not in index or golden["records"][index[at]] != rec
+                       for at, rec in legs.items()), (state, cell)
 
 
 def test_every_edge_attempt_sends_the_frozen_wire():
