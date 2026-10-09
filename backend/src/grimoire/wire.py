@@ -24,8 +24,8 @@ from dataclasses import dataclass, field
 
 @dataclass(frozen=True)
 class Sampling:
-    """The sampler preset an attempt is sent with: the dict's `sampling` block
-    (`resolve._sampling`'s shape). No preset is provider defaults."""
+    """The sampler preset an attempt is sent with (`resolve._sampling` builds
+    it). No preset is provider defaults."""
 
     preset_id: str = ""
     preset_name: str = ""
