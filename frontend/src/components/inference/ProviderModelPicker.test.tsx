@@ -226,6 +226,23 @@ test.each([
     "saltmarch", { model: "b", capabilities: ["generate"] });
 });
 
+test("a Decision row whose generate no is a name-rule guess never offers decide_native",
+     async () => {
+  // Brutal review H (2-P4): the resolver serves such a model structured
+  // whatever the native probe finds (a name-rule `no` is a guess), so a
+  // confirmed, cost-unknown native request would buy nothing.
+  (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
+    generate: { value: "no", source: "name" },
+    decide_native: { value: "unknown", source: "unknown" } }));
+  render(<Harness needs={["decide"]} />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Test B" }));
+
+  await screen.findByRole("dialog", { name: "Test a model" });
+  expect(api.previewModelTest).toHaveBeenCalledWith(
+    "saltmarch", { model: "b", capabilities: ["generate"] });
+});
+
 test("a Decision row whose decide_native is no never offers it", async () => {
   (api.readConnectionCapabilities as any).mockResolvedValue(decideAnswer({
     generate: { value: "no", source: "catalog" },

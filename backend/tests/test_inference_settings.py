@@ -604,7 +604,10 @@ def test_the_settings_view_carries_decision_mode(client):
 def test_the_settings_view_says_whether_the_model_decides_natively(client):
     """I9: `decides_natively` is the resolved primary's own `decide_native`
     -- the capabilities the resolver decided on -- so the page words a
-    structured decision without a second read that could disagree."""
+    structured decision without a second read that could disagree. It says
+    `yes`, `no` or `unknown`, and `no` only when it is known (brutal review
+    H, 2-Y1): "No native decision API" is never said of a model nobody has
+    checked."""
     deciding = {r.key for r in routing.ROUTES if r.operation == "decide"}
     fx.format2(client)
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
@@ -614,21 +617,47 @@ def test_the_settings_view_says_whether_the_model_decides_natively(client):
         "openrouter", [{"id": "vendor/active", "outputs": ["text", "decisions"]}], rev)
     got = _global(client)
     card = got["roles"]["decision"]
-    assert (card["decision_mode"], card["decides_natively"]) == ("structured", True)
+    assert (card["decision_mode"], card["decides_natively"]) == ("structured", "yes")
     assert {(_row(got, k)["decision_mode"], _row(got, k)["decides_natively"])
-            for k in deciding} == {("structured", True)}
+            for k in deciding} == {("structured", "yes")}
 
-    # The same model with no native API: cleared on the card and every row.
+    # The same model with no word on a native API: an OpenRouter row without
+    # `decisions` says nothing (`capabilities._listed`), so it is unknown on
+    # the card and every row -- never a missing API.
     store.llm_connections.set_cached_models(
         "openrouter", [{"id": "vendor/active", "outputs": ["text"]}], rev)
     got = _global(client)
-    assert got["roles"]["decision"]["decides_natively"] is False
-    assert {_row(got, k)["decides_natively"] for k in deciding} == {False}
+    assert got["roles"]["decision"]["decides_natively"] == "unknown"
+    assert {_row(got, k)["decides_natively"] for k in deciding} == {"unknown"}
+
+    # The user says it cannot: a known `no`.
+    got = client.put("/api/llm-connections/openrouter/facts",
+                     json={"model": "vendor/active", "overrides": {"decide_native": "no"}})
+    assert got.status_code == 200, got.text
+    got = _global(client)
+    assert (got["roles"]["decision"]["decision_mode"],
+            got["roles"]["decision"]["decides_natively"]) == ("structured", "no")
 
     # A model the user says cannot decide natively (and that cannot generate).
     fx.neither(client)
     got = _global(client)
-    assert got["roles"]["decision"]["decides_natively"] is False
+    assert got["roles"]["decision"]["decides_natively"] == "no"
+
+
+def test_an_unmarked_openai_model_is_structured_with_its_native_api_unknown(client):
+    """The OpenAI preset says every model generates and its `/models` rows
+    say nothing of outputs, so a decisions-only model there is structured
+    until the user marks it -- and its card says that its native API is
+    unknown, not missing. Marked `generate: no`, it is answered natively."""
+    conn_id = fx.openai_decides_only(client)
+    card = _global(client)["roles"]["decision"]
+    assert (card["decision_mode"], card["decides_natively"]) == ("structured", "unknown")
+    got = client.put(f"/api/llm-connections/{conn_id}/facts",
+                     json={"model": fx.OPENAI_DECIDER, "overrides": {"generate": "no"}})
+    assert got.status_code == 200, got.text
+    card = _global(client)["roles"]["decision"]
+    assert (card["decision_mode"], card["decides_natively"]) == ("native", "unknown")
+    assert card["problem"] is None
 
 
 def _deleted_after_validation(monkeypatch, delete) -> None:

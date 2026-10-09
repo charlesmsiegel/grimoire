@@ -22,11 +22,13 @@ from grimoire.main import create_app
 from grimoire.routes import scenes as scenes_routes
 
 from .inference_fixtures import (
+    OPENAI_DECIDER,
     SAME_PROVIDER,
     SPARE,
     decide_only,
     format2,
     neither,
+    openai_decides_only,
     put_settings,
 )
 from .llm_fakes import FakeLLM, decision_reply
@@ -771,6 +773,37 @@ def test_a_decide_only_decision_model_without_a_fallback_answers_natively(client
     assert r.status_code == 200, r.text
     assert r.json()["verdict"] == "yes"
     assert len(llm.native_requests) == 1 and llm.schemas == [None]
+
+
+def test_an_openai_model_the_user_marks_decisions_only_answers_natively(client):
+    """Brutal review H (2-Y1): the OpenAI preset says every model generates,
+    so a decisions-only model there resolves structured until the user says
+    otherwise. Their capability override `generate: no` outranks the preset,
+    the model is native-only (spec 5.3), and the route's decision is answered
+    through `decide_native` on that provider -- the OpenAI adapter reached
+    without naming any model in code."""
+    conn_id = openai_decides_only(client)
+    decided = store.inference.resolve.resolve("scene-break", operation="decide")
+    assert decided.attempts[0].capabilities["generate"][:2] == ("yes", "preset")
+    assert decided.attempts[0].decision_mode == "structured"
+    got = client.put(f"/api/llm-connections/{conn_id}/facts",
+                     json={"model": OPENAI_DECIDER, "overrides": {"generate": "no"}})
+    assert got.status_code == 200, got.text
+    decided = store.inference.resolve.resolve("scene-break", operation="decide")
+    first = decided.attempts[0]
+    assert first.capabilities["generate"][:2] == ("no", "user")
+    assert first.decision_mode == "native" and first.provider_preset == "openai"
+    llm = _use(client, FakeLLM([[TITLE]], decisions=[NATIVE_YES]))
+    cid, sid = _scene(client, posts=40)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "yes"
+    [(_item, conn, _retries)] = llm.native_requests
+    assert (conn["id"], conn["kind"], conn["model"]) == (
+        conn_id, "openai_compatible", OPENAI_DECIDER)
+    assert llm.schemas == [None]       # the one completion is the title's
+    (row,) = _rows("scene-break")
+    assert (row["operation"], row["decision_mode"]) == ("decide", "native")
 
 
 def test_a_decision_model_that_can_do_neither_is_refused(client):

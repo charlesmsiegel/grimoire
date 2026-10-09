@@ -82,3 +82,27 @@ def neither(client) -> None:
     put_settings(client, {"roles": {"decision": {
         "selection": {"provider": NEITHER[0], "model": NEITHER[1]},
         "fallback": {"provider": ""}}}})
+
+
+#: A decisions-only model on the OpenAI preset (invented id).
+OPENAI_DECIDER = "gpt-test-decider"
+
+
+def openai_decides_only(client) -> str:
+    """The Decision role on an OpenAI-preset provider's decisions-only model,
+    returning the provider's id. The preset's `always` says every model on it
+    generates, and an OpenAI `/models` row states no outputs, so nothing but
+    the user can say this model cannot: until they mark it -- the capability
+    override `generate: no` (`PUT /llm-connections/{id}/facts`), which
+    outranks the preset (`capabilities.resolve_caps`) -- it resolves
+    structured, as spec 5.3 says. The callers mark it themselves."""
+    format2(client)
+    got = client.post("/api/llm-connections", json={
+        "kind": "openai_compatible", "name": "Realm OpenAI",
+        "base_url": "https://api.openai.com/v1", "api_key": "sk-test-openai"})
+    assert got.status_code == 200, got.text
+    conn_id = got.json()["id"]
+    put_settings(client, {"roles": {"decision": {
+        "selection": {"provider": conn_id, "model": OPENAI_DECIDER},
+        "fallback": {"provider": ""}}}})
+    return conn_id

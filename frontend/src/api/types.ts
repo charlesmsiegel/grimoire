@@ -296,14 +296,17 @@ export type RoleCard = {
    *  schema), or `""` when it can do neither and is refused. `""` on every
    *  other role. The server's resolution, never re-derived here. */
   decision_mode: DecisionMode;
-  /** Whether the resolved model's `decide_native` is `yes` -- the
-   *  capabilities the resolver decided on -- so a `structured` decision is
-   *  worded without a read of its own: one that could also decide natively,
-   *  or one with no native API. */
-  decides_natively: boolean;
+  /** The resolved model's `decide_native` -- the capabilities the resolver
+   *  decided on -- so a `structured` decision is worded without a read of
+   *  its own. `no` only when it is KNOWN (a name-rule guess is `unknown`):
+   *  the one value under which "no native decision API" may be said. */
+  decides_natively: DecidesNatively;
 };
 /** Which backend answers a decision (`RoleCard.decision_mode`). */
 export type DecisionMode = "native" | "structured" | "";
+/** What is known of a resolved model's native decisions
+ *  (`RoleCard.decides_natively`). */
+export type DecidesNatively = "yes" | "no" | "unknown";
 /** The Embedding role (global scope only). `on` is whether anything embeds;
  *  `problem` is null when it does, else the server's short reason it does not
  *  ("No provider chosen", "<provider> has no key set", ...). */
@@ -340,7 +343,7 @@ export type RouteRow = {
   /** As on `RoleCard`, for a decide route; `""` on a generate one. */
   decision_mode: DecisionMode;
   /** As on `RoleCard`. */
-  decides_natively: boolean;
+  decides_natively: DecidesNatively;
   role: GenerativeRole | null;
   /** The role the route walks (its own `use`, else its default), whichever
    *  role ends up supplying it -- a route can use Decision while Decision

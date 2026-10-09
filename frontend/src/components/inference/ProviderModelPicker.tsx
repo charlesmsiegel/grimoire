@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import {
-  api, type CapabilityModel, type CapabilityNeed, type ModelCapabilities,
-  type TestableCapability,
+  api, type CapabilityModel, type CapabilityNeed, type CapabilityValue,
+  type ModelCapabilities, type TestableCapability,
 } from "../../api/client";
 import { errorText } from "../../api/errors";
 import { TestCallDialog, useModelTests } from "./TestCallDialog";
@@ -53,19 +53,27 @@ export function combine(answers: ModelCapabilities[]): {
   return { reason, placements };
 }
 
+/** Whether `cap` is a `no` that is knowledge rather than a guess: the
+ *  resolver's own rule (`resolve._known_no`), under which the name rule's
+ *  `no` is a guess that hides a model but never decides how it is served. */
+function knownNo(cap: CapabilityValue | undefined): boolean {
+  return cap?.value === "no" && cap.source !== "name";
+}
+
 /** The probes a Test… sends for `needs` on `row`: each need it does not
  *  already answer yes to. A need names its own probe, except `decide`: a
  *  decision is answered by structured generation wherever a model generates
  *  (spec 7.4), so it tests `generate`. It tests `decide_native` as well only
- *  for a row that is KNOWN unable to generate and not known unable to decide
- *  natively: a model that generates stays structured whatever that probe
- *  finds, so the probe would spend and change nothing. The server refuses
- *  anything it has no probe for, with a reason the dialog shows. */
+ *  for a row the resolver would serve natively -- KNOWN unable to generate
+ *  and not known unable to decide natively (`knownNo`, so a name-rule guess
+ *  counts for neither): a model that generates stays structured whatever
+ *  that probe finds, so the probe would spend and change nothing. The server
+ *  refuses anything it has no probe for, with a reason the dialog shows. */
 function probesFor(needs: CapabilityNeed[], row: CapabilityModel | null): TestableCapability[] {
   const all = [...new Set(needs.map((n) => (n === "decide" ? "generate" : n)))] as
     TestableCapability[];
-  if (needs.includes("decide") && row?.capabilities.generate?.value === "no"
-      && row.capabilities.decide_native?.value !== "no") {
+  if (needs.includes("decide") && knownNo(row?.capabilities.generate)
+      && !knownNo(row?.capabilities.decide_native)) {
     all.push("decide_native");
   }
   const open = all.filter((c) => row?.capabilities[c]?.value !== "yes");

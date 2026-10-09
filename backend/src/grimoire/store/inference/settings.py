@@ -140,15 +140,20 @@ def _problem(resolved: ResolvedInference) -> str | None:
     return str(body["detail"]) if isinstance(body, dict) else body
 
 
-def _decides_natively(resolved: ResolvedInference) -> bool:
-    """Whether the resolved primary's `decide_native` is `yes` -- the
-    capabilities the resolver itself decided on, so the Models page can word
-    a structured decision ("could also decide natively" or "no native API")
-    without a second read that could disagree with the mode (I9)."""
+def _decides_natively(resolved: ResolvedInference) -> str:
+    """What the resolved primary's `decide_native` is -- `yes`, `no` or
+    `unknown`, read off the capabilities the resolver itself decided on -- so
+    the Models page can word a structured decision without a second read that
+    could disagree with the mode (I9). `no` only when it is KNOWN
+    (`resolve.decides_natively`: a name-rule guess is no knowledge), so "No
+    native decision API" is never said of a model nobody has checked."""
     if not resolved.attempts:
-        return False
-    cap = resolved.attempts[0].capabilities.get("decide_native")
-    return cap is not None and cap.value == capabilities.YES
+        return capabilities.UNKNOWN
+    first = resolved.attempts[0]
+    cap = first.capabilities.get("decide_native")
+    if cap is not None and cap.value == capabilities.YES:
+        return capabilities.YES
+    return capabilities.UNKNOWN if resolve.decides_natively(first) else capabilities.NO
 
 
 def _role_card(role: str, own: dict, scope: str, cid: str) -> dict:

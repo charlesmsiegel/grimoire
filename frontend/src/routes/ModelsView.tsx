@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
-  api, type CapabilityNeed, type DecisionMode, type EmbeddingCard, type GenerativeRole,
-  type InferenceRole, type InferenceSelection, type InferenceSettings, type InferenceWrite,
-  type ModelCapabilities, type RoleCard, type RouteRow, type RouteUse,
+  api, type CapabilityNeed, type DecidesNatively, type DecisionMode, type EmbeddingCard,
+  type GenerativeRole, type InferenceRole, type InferenceSelection, type InferenceSettings,
+  type InferenceWrite, type ModelCapabilities, type RoleCard, type RouteRow, type RouteUse,
 } from "../api/client";
 import { errorText } from "../api/errors";
 import { onConfigChanged } from "../appEvents";
@@ -44,8 +44,9 @@ export const WARNINGS = {
 
 /** How a decision is answered, by the resolution's `decision_mode` (spec 10,
  *  I9) -- what it says, not a warning: `native` is the provider's decisions
- *  endpoint, and `structured` on a model that could also decide natively is
- *  no missing API. Structured on one with none is `WARNINGS.decide`. */
+ *  endpoint, and `structured` on a model whose native API is there or
+ *  unknown is no missing API. Structured on one KNOWN to have none
+ *  (`decides_natively: "no"`) is `WARNINGS.decide`. */
 export const DECIDE_WORDS = {
   native: "Answered by the provider's decisions endpoint.",
   structured: "Answered by structured generation.",
@@ -109,13 +110,18 @@ function Problem({ text }: { text: string | null }) {
 /** How a card's or row's model answers a decision: the server's
  *  `decision_mode` and `decides_natively` (I9), and nothing read here. A
  *  refused one (`""`) says nothing: its `problem` is the refusal's own
- *  sentence. A structured one always says which kind it is. */
-function DecideNote({ mode, decidesNatively }: { mode: DecisionMode; decidesNatively: boolean }) {
+ *  sentence. A structured one always says which kind it is, and warns of
+ *  no native API only when that is known (`"no"`): an `unknown` one -- a
+ *  catalog that says nothing, or a preset whose models nobody has marked --
+ *  is simply answered by structured generation. */
+function DecideNote({ mode, decidesNatively }: {
+  mode: DecisionMode; decidesNatively: DecidesNatively;
+}) {
   if (mode === "native") return <p className="field-hint">{DECIDE_WORDS.native}</p>;
   if (mode !== "structured") return null;
-  return decidesNatively
-    ? <p className="field-hint">{DECIDE_WORDS.structured}</p>
-    : <Warning text={WARNINGS.decide} />;
+  return decidesNatively === "no"
+    ? <Warning text={WARNINGS.decide} />
+    : <p className="field-hint">{DECIDE_WORDS.structured}</p>;
 }
 
 /** The routes that use Decision (the view's `uses`), and for each one that

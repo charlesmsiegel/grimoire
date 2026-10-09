@@ -65,14 +65,14 @@ const resolved = (over: Record<string, unknown> = {}) => ({
 });
 const card = (over: Record<string, unknown> = {}) => ({
   stored: sel(), fallback: sel(), resolves: resolved(), inherits: resolved(), problem: null,
-  fallback_missing: [], fallback_problem: null, decision_mode: "", decides_natively: false,
+  fallback_missing: [], fallback_problem: null, decision_mode: "", decides_natively: "unknown",
   ...over,
 });
 const route = (over: Record<string, unknown>) => ({
   hint: "", tasks: [], operation: "generate", default_role: "fast", requires: [],
   campaign_scoped: true, use: "", pin: sel(), preset: "", resolves: resolved(),
   inherits: resolved(), problem: null, fallback_missing: [], fallback_problem: null,
-  decision_mode: "", decides_natively: false, role: "fast", uses: "fast", ...over,
+  decision_mode: "", decides_natively: "unknown", role: "fast", uses: "fast", ...over,
 });
 
 const ROUTES = [
@@ -490,7 +490,21 @@ test("a structured Decision card on a model that could decide natively claims no
      async () => {
   CAPS["vendor/m"].decide_native = "yes";
   (api.getInferenceSettings as any).mockResolvedValue(
-    decisionAs("structured", { decides_natively: true }));
+    decisionAs("structured", { decides_natively: "yes" }));
+  await openCards();
+  expect(await roleCard("Decision").findByText("Answered by structured generation."))
+    .toBeInTheDocument();
+  expect(roleCard("Decision").queryByText(/No native decision API/)).not.toBeInTheDocument();
+});
+
+test("a structured Decision card whose native API is unknown claims no missing API",
+     async () => {
+  // Brutal review H (2-Y1): a preset whose models nobody has checked for a
+  // native API -- OpenAI's, say -- is unknown, not missing. Only a known `no`
+  // may say "No native decision API".
+  CAPS["vendor/m"].decide_native = "unknown";
+  (api.getInferenceSettings as any).mockResolvedValue(
+    decisionAs("structured", { decides_natively: "unknown" }));
   await openCards();
   expect(await roleCard("Decision").findByText("Answered by structured generation."))
     .toBeInTheDocument();
@@ -500,7 +514,7 @@ test("a structured Decision card on a model that could decide natively claims no
 test("warns when the Decision model has no native decision API", async () => {
   CAPS["vendor/m"].decide_native = "no";
   (api.getInferenceSettings as any).mockResolvedValue(
-    decisionAs("structured", { decides_natively: false }));
+    decisionAs("structured", { decides_natively: "no" }));
   await openCards();
   expect(await roleCard("Decision").findByText(
     "No native decision API; structured generation will be used.")).toBeInTheDocument();
@@ -513,7 +527,7 @@ test("a structured card the picker hides on a guess still says how it is answere
   // the server's, so nothing the picker hides can silence them.
   CAPS["vendor/m"] = { generate: "no", vision: "no", embed: "no", decide_native: "no" };
   (api.getInferenceSettings as any).mockResolvedValue(
-    decisionAs("structured", { decides_natively: false }));
+    decisionAs("structured", { decides_natively: "no" }));
   await openCards();
   expect(await roleCard("Decision").findByText(
     "No native decision API; structured generation will be used.")).toBeInTheDocument();
