@@ -2,7 +2,7 @@
 
 **Status:** Draft — spec gate (`/codex:adversarial-review`) pending.
 **Date:** 2026-10-09
-**Roadmap:** 05 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 → 04 → 05 → 06, and 05 + 07 + 01h → 08).
+**Roadmap:** 05 in `ROADMAP-CHECKLIST.md`. Lane: cache (03 -> 04 -> 05 -> 06, and 05 + 07 + 01h -> 08).
 **Baseline:** `main` at `35c1fb7`.
 **Reconciles:** the bundle draft `05-direct-edit-cache-sync.md` (2026-10-06,
 written against `7f80c42`), against current code and against the reconciled 03
@@ -141,7 +141,7 @@ of it has landed. What exists today:
 
 | Draft | Current code and the reconciled 03 | Consequence here |
 |---|---|---|
-| A live source→hash mapping that sync updates (draft steps 4–6). | There is none. 03 section 2a.2: "The filesystem is that mapping." Every read computes its key from current bytes. | Sync updates nothing that a read relies on for correctness. Step 6 ("remove the old hash from live mappings") holds already. |
+| A live source->hash mapping that sync updates (draft steps 4-6). | There is none. 03 section 2a.2: "The filesystem is that mapping." Every read computes its key from current bytes. | Sync updates nothing that a read relies on for correctness. Step 6 ("remove the old hash from live mappings") holds already. |
 | "After sync completes, no live query may return content derived from the superseded source version" as sync's core invariant. | True at every read by 03-C2, with sync or without it. The one exception is 04's stale-while-revalidate first paint, which serves a payload before validating it. | Sync's correctness-relevant step is retiring 04's first-paint payloads (04-C2), and nothing else. |
 | `store.atomic` (or the writers) update the source mapping right after a write. | 03 section 5 rule 4: a write never records its own `sources` row. 03-C5: artifacts may be stored at once. | Sync stores artifacts and leaves `sources` to 03's rules. It never asks for a row inside the window. |
 | "On read, if the stat signature differs, refresh the source hash" (draft section 7) as a backstop to add. | That is 03's read path. | Not part of 05. |
@@ -1028,7 +1028,7 @@ embedded.**
   added later is collected too. It is named in CONTRIBUTING.md's guard table
   (`test_contributing_names_every_guard_test` requires it), and has no marker.
 - **Import graph.** `writeset` imports nothing from `grimoire`, so
-  `atomic → writeset` adds no cycle. `cache_sync` imports 03's module,
+  `atomic -> writeset` adds no cycle. `cache_sync` imports 03's module,
   `embed_space`, `vectors`, `inference.embed`, `revision` and `paths`; it binds
   submodules inside `store/`, never names off a package
   (`test_import_guard.py`). The routes import `cache_sync`; the store never

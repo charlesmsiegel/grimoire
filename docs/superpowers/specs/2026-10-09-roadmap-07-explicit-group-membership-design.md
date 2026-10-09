@@ -507,7 +507,7 @@ is enough to get every behaviour that pattern requires:
   `members` value nobody touched saves as it always did.
 
 The picker lists every actor in scope. That is today's behaviour for
-`habitat` and `known_by`, and a large cast makes it a long list. Section 15,
+`habitat` and `known_by`, and a large cast makes it a long list. Section 19,
 Q9, asks whether a filter box is needed; the recommendation is to ship with
 the existing picker and add a filter only if it is missed.
 
