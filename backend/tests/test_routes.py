@@ -4811,10 +4811,9 @@ def test_a_reroll_may_name_a_model_without_naming_a_connection(client):
 
 def test_a_reroll_may_name_a_whole_connection(client):
     """The case a bare model id cannot express — a different provider, with its
-    own base URL and credentials. Even on a format-1 store, where the named
-    connection still holds a model of its own: since slice I that store plays
-    as format 2, in memory, so a provider alone keeps the STANDING model (spec
-    5.6) rather than running its own."""
+    own base URL and credentials. On a format-1 store the named connection
+    still holds a model of its own, and a provider alone runs it (spec 5.6;
+    user ruling 2026-10-09), as that store always has."""
     fake, cid, sid = _rerollable(client, legacy=True)
     other = _local_endpoint(client, model="llama3")
 
@@ -4824,7 +4823,7 @@ def test_a_reroll_may_name_a_whole_connection(client):
     assert fake.target.kind == "openai_compatible"
     assert fake.target.base_url == "http://localhost:11434/v1"
     assert fake.target.api_key == "sk-local"        # the named connection's own
-    assert fake.target.model == "campaign/model"    # at the standing model
+    assert fake.target.model == "llama3"            # and its own model
 
 
 def test_a_reroll_may_name_a_connection_and_a_model_together(client):

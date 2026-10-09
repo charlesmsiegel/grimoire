@@ -58,6 +58,7 @@ import pytest
 from grimoire import adapters, decisions, llm, wire
 from grimoire.llm_errors import LLMError
 
+from . import inference_baseline as baseline
 from .test_adapter_registry import HAND_BUILT, ITEM, NATIVE, PASSES, STATES, _resolved, hand
 
 GOLDEN = Path(__file__).resolve().parent / "fixtures" / "adapter_wire_golden.json"
@@ -284,12 +285,51 @@ def _recorded_as(stage: str) -> str:
     return "memory" if stage == "memory" else "migrated"
 
 
+#: The reroll overrides that name a provider (`connection_id`), alone or
+#: with a model. The golden's `memory` pass recorded them as a format-1 store
+#: answered them in slice I before the user's ruling of 2026-10-09 (spec
+#: review F1): with format-2 meaning, the standing model and preset. That
+#: ruling restored format 1's own -- the named connection's model and preset,
+#: as `main` sends them -- so in that pass these cells are excused from the
+#: golden, BY NAME, and held instead to the frozen baseline JSON the golden
+#: does not replace: each `ok` attempt must be sent to the provider and model
+#: that JSON recorded (`_format_1_reroll_sent`), and
+#: `test_inference_equivalence*.test_resolution_matches_the_baseline` holds
+#: the whole cell to it. The golden itself is not regenerated, and every other
+#: cell, pass and edge is held to it unchanged.
+FORMAT_1_REROLLS = frozenset(f"override:{name}"
+                             for name, body in baseline.OVERRIDE_BODIES.items()
+                             if body.get("connection_id"))
+
+
+def _format_1_reroll_sent(state: str, seen: dict[str, list[dict]]) -> None:
+    """Each excused cell's `ok` attempt went where the frozen baseline JSON
+    recorded that reroll going."""
+    family, name = STATES[state]
+    recorded = json.loads(family.FIXTURE.read_text(encoding="utf-8"))[name]["overrides"]
+    for where, records in seen.items():
+        cell, _, case = where.partition("/")
+        if cell not in FORMAT_1_REROLLS or case != "ok":
+            continue
+        want = recorded[cell.removeprefix("override:")]
+        for record in records:
+            assert [record["observed"][0][:2]] == [[want["conn"], want["model"]]], (
+                state, where, record["observed"], want)
+
+
 @pytest.mark.parametrize("state", sorted(STATES))
 @pytest.mark.parametrize("stage", PASSES)
 def test_every_baseline_attempt_sends_the_frozen_wire(state, stage, tmp_path):
     golden = _golden()
-    _check(golden["states"][f"{state}|{_recorded_as(stage)}"],
-           golden["records"], _observe_state(state, stage, tmp_path))
+    index = golden["states"][f"{state}|{_recorded_as(stage)}"]
+    seen = _observe_state(state, stage, tmp_path)
+    if stage == "memory":
+        excused = {w for w in set(index) | set(seen)
+                   if w.partition("/")[0] in FORMAT_1_REROLLS}
+        _format_1_reroll_sent(state, seen)
+        index = {w: k for w, k in index.items() if w not in excused}
+        seen = {w: r for w, r in seen.items() if w not in excused}
+    _check(index, golden["records"], seen)
 
 
 def test_every_edge_attempt_sends_the_frozen_wire():

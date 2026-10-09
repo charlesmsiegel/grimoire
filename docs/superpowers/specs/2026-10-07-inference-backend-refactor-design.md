@@ -1942,8 +1942,8 @@ bytes.
   unmarked after the strip (a restore, an old folder copied in), and of a
   fork of one: it knows no retirement record, so it plays and migrates that
   campaign from the stripped connection file, with an empty pinned model and
-  no preset, for good (*corrected 2026-10-09 after the code review; awaiting
-  the user's ratification* — nothing a C–H build reads can stop it). It can
+  no preset, for good (*corrected 2026-10-09 after the code review, and ratified
+  by the user that day* — nothing a C–H build reads can stop it). It can
   write `active_connection_id` back, because
   its `llm_connections.ensure_migrated` seeds it wherever
   `llm_connections/.migrated` is absent, so at most once per library. This
