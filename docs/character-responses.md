@@ -253,7 +253,7 @@ combined response engine still use their existing display paths.
 
 For a Custom (OpenAI-compatible) provider serving `glm-5.3` or
 `glm-5.3-flash`, the reasoning effort is a sampler preset's **Reasoning effort**
-(Settings → Presets), attached to the role or route that runs the model on the
+(Settings → Inference → Presets, `/presets`), attached to the role or route that runs the model on the
 **Models** page. GLM takes Low and High from a preset; Off and Medium are not
 levels it has, and the preset's controls readout says so rather than sending
 them. A preset that sets no effort sends none, unless the provider kept one
