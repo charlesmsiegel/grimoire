@@ -10,7 +10,8 @@ layout, planned once per scope as a `Plan`:
 - `mapped`: the legacy keys in the new vocabulary -- roles, fallbacks, pins
   and route presets -- as the migration persists them (`migrate`, steps 5-7
   and 8), byte for byte what it has always written (N2). The mapping itself
-  is `global_mapping` / `campaign_mapping`, moved here from `translate`.
+  is `global_mapping` / `campaign_mapping` (once `translate`'s, which slice I
+  deleted).
 - `facts`: each connection's legacy `vision`, `prefill` and `post_process`
   (where they differ from the defaults) as its model's facts -- the values
   the migration's step 3 copies (`stated`), in memory.
@@ -46,8 +47,14 @@ existence check exactly as it always was). A route naming a connection that
 does not exist is still mapped, to a pin on that id: walking past a dangling
 choice is the cascade's job, not this module's.
 
-A leaf of `store/inference/`: it imports neither `resolve` nor `translate`
-nor `migrate`, which all read the legacy layout through it.
+Play reads the legacy layout through `overlay` alone, in memory: the global
+and campaign settings as format 2 sees them (`mapped`, then `repoint`), the
+derived presets as virtual presets, the facts overlay and the notes. Nothing
+on that path writes; the migration persists `mapped`, and retirement the
+rest. `resolve` makes the one call (`resolve._overlay`).
+
+A leaf of `store/inference/`: it imports neither `resolve` nor `migrate`,
+which both read the legacy layout through it.
 """
 
 from __future__ import annotations
@@ -65,7 +72,9 @@ from . import capabilities, cascade, facts, providers, retired
 
 #: A raw connection by id (legacy fields included), or None. What
 #: `lookup(mode=...)` builds; a plain function will do in a test.
-Lookup = Callable[[str], dict | None]
+#: `llm_connections.Lookup`, re-bound so the planner's callers can annotate
+#: with either name.
+Lookup = llm_connections.Lookup
 #: A sampler preset by id (`sampler_presets.read_preset`'s shape), or None.
 PresetRead = Callable[[str], dict | None]
 
@@ -188,7 +197,7 @@ def _strict(conn: Lookup) -> bool:
     return getattr(conn, "strict", False) is True
 
 
-# ---- the mapping (moved from `translate`) ----
+# ---- the mapping ----
 def _selection(conn_id: str, conn: Lookup) -> dict[str, str]:
     """`{provider, model, preset}` for a connection id (model and preset are
     empty when the connection is unknown or sets none)."""
@@ -695,7 +704,7 @@ def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_cu
     which its notes are judged against.
 
     - `global_current` false: `mapped` is the mapping, whatever the campaign's
-      own marker says (as `translate.campaign_view` reads it below format 2);
+      own marker says (the layout is decided globally below format 2);
       the derivation too, unless the campaign is retired or a newer build's.
     - Global current, campaign unmarked: `mapped` and the derivation.
     - Marked, not retired: the derivation only.
@@ -712,3 +721,88 @@ def campaign_plan(meta: Mapping[str, str], *, glob: Mapping[str, str], global_cu
     return _planned({**meta, **mapped}, glob=glob, mapped=mapped, model_facts={},
                     scope=scope, campaign=True, conn=lookup, presets=presets,
                     derive_too=not own_out)
+
+
+# ---- the in-memory overlay (play's read) ----
+class Overlay(NamedTuple):
+    """The stored settings as format 2 sees them, for one global scope and
+    (optionally) one campaign: what `resolve` resolves, in memory."""
+
+    #: `config.md`'s settings as format 2 sees them: `mapped`, then `repoint`.
+    cfg: dict[str, str]
+    #: The campaign's, likewise ({} with no campaign).
+    meta: dict[str, str]
+    #: The derived presets, by id, in `sampler_presets.read_preset`'s shape:
+    #: virtual until retirement writes them.
+    presets: Mapping[str, dict]
+    #: provider -> model -> the facts its legacy fields state (below format 2).
+    facts: Mapping[str, Mapping[str, dict]]
+    #: What no preset can carry, global first, then the campaign's.
+    notes: tuple[retired.Note, ...]
+
+
+def _virtual(made: Derived) -> dict:
+    """A derived preset in `sampler_presets.read_preset`'s shape."""
+    return {"id": made.id, "name": made.name, "params": dict(made.params),
+            "notes": "", "source": ""}
+
+
+def _as_current(meta: Mapping[str, str], plan: Plan) -> dict[str, str]:
+    """`planned(meta, plan)`, marked current when the plan mapped it: the
+    scope as the migration will write it, which a reader asking
+    `inference_keys.is_current` of it sees as such."""
+    out = planned(meta, plan)
+    if plan.mapped and not keys.is_current(meta):
+        out[keys.FORMAT_KEY] = keys.CURRENT_FORMAT
+    return out
+
+
+def overlay(cfg: Mapping[str, str], meta: Mapping[str, str], *, cid: str = "") -> Overlay:
+    """`cfg` and `meta` (a campaign's frontmatter, {} for none; `cid` names
+    its notes' scope) as format 2 sees them, planned in memory.
+
+    Identity, with nothing read, when `config.md` is retired and the
+    campaign is absent or retired too. Otherwise each scope is `planned`
+    (`mapped | repoint`, N2) through one fail-soft lookup (`lookup("soft")`:
+    an unreadable connection is no connection, as the translation always
+    read it) and `sampler_presets.read_preset`, memoised for the call.
+
+    The campaign is planned against the global settings as planned here,
+    and reads the global derived presets before the store's: a campaign
+    derivation whose slug a global one already holds with another body takes
+    the suffix (`derive`), so neither scope's derived preset ever shadows or
+    aliases the other's under one id. A store a newer build switched is read
+    as format 2, best effort: its `config.md` plans nothing, and its
+    campaigns are planned as they would be under a current one."""
+    if _retired(cfg) and (not meta or _retired(meta)):
+        return Overlay(dict(cfg), dict(meta), {}, {}, ())
+    conn = lookup(mode="soft")
+    virtual: dict[str, dict] = {}
+    seen: dict[str, dict | None] = {}
+
+    def presets(pid: str) -> dict | None:
+        if pid in virtual:
+            return virtual[pid]
+        if pid not in seen:
+            seen[pid] = sampler_presets.read_preset(pid)
+        return seen[pid]
+
+    def keep(plan: Plan) -> None:
+        for made in plan.presets:
+            got = _virtual(made)
+            held = virtual.setdefault(made.id, got)
+            # `derive` reads `presets`, which answers with `virtual` first, so
+            # an id it hands back is free or holds this very preset.
+            assert (held["name"], held["params"]) == (got["name"], got["params"]), made.id
+
+    gplan = global_plan(cfg, conn, presets)
+    keep(gplan)
+    glob = _as_current(cfg, gplan)
+    if not meta:
+        return Overlay(glob, {}, virtual, gplan.facts, gplan.notes)
+    cplan = campaign_plan(meta, glob=glob,
+                          global_current=keys.is_current(cfg) or keys.is_newer(cfg),
+                          lookup=conn, presets=presets, cid=cid)
+    keep(cplan)
+    return Overlay(glob, _as_current(meta, cplan), virtual, gplan.facts,
+                   gplan.notes + cplan.notes)

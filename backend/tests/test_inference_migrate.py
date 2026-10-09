@@ -490,14 +490,16 @@ def test_a_legacy_openrouter_embedding_stays_off(home):
 def test_a_legacy_zai_embedding_is_off_and_the_migration_clears_it(home):
     """z.ai serves no embeddings (the preset's hard `no`, inferred from the
     URL), so a legacy choice of it is off at format 1 -- no request that could
-    only fail -- and the migration writes no Embedding role for it (ruling 4):
-    the choice is cleared, and the role stays off after the switch."""
+    only fail: the planner maps it to no Embedding role at all, in memory --
+    and the migration writes no Embedding role for it (ruling 4): the choice
+    is cleared, and the role stays off after the switch."""
     _legacy()
     llm_connections.create_connection("openai_compatible", "Winifred Zai",
                                       base_url="https://api.z.ai/api/paas/v4",
                                       api_key="sk-fake")
     config.write_config(embeddings_connection_id="winifred-zai", embeddings_model="embed-x")
-    assert store_pkg.inference.resolve.embedding().missing == ("embed",)
+    assert store_pkg.inference.resolve.embedding().attempts == ()
+    assert store_pkg.inference.resolve.embedding_role(config.read_config()) == ("", "")
     assert store_pkg.embed_space.resolve() is None
     assert migrate.ensure().state == "done"
     cfg = _raw_config(home)

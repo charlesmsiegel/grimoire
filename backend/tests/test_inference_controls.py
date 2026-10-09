@@ -743,20 +743,26 @@ GLM = {"base_url": "https://api.z.ai/api/paas/v4", "model": "glm-5.3"}
 
 @pytest.mark.parametrize("legacy", ["", "low", "high", "max", "medium", "bogus"])
 @pytest.mark.parametrize("model", ["glm-5.3", "vendor/GLM-5.3-flash", "another-model"])
-def test_the_legacy_glm_setting_applies_exactly_as_before(legacy, model):
+def test_the_legacy_glm_setting_is_never_read(legacy, model):
+    """Slice I: a connection's legacy GLM effort sends nothing on its own
+    (a legacy store's rides on a derived reasoning preset, `legacy_plan`), and
+    the preset's effort is what `glm_effort` speaks for."""
     from grimoire import llm_reasoning
     conn = _conn("openai_compatible", {}, base_url=GLM["base_url"], model=model,
                  reasoning_effort=legacy)
-    expected = llm_reasoning.glm_effort(conn)
-    got = ls.effective(conn)["effective"].get("reasoning_effort", "")
-    assert got == expected
-    # The legacy setting is the connection's, not the preset's: it is not a
-    # sent preset parameter, so a refusal of it is not a preset refusal.
+    assert "reasoning_effort" not in ls.effective(conn)["effective"]
     assert ls.sent_names(conn) == []
     assert ls.report(conn)["applied"] == {}
+    # The same value as the preset's is sent exactly where GLM takes it.
+    preset = _conn("openai_compatible", {"reasoning_effort": legacy} if legacy else {},
+                   base_url=GLM["base_url"], model=model)
+    got = ls.effective(preset)["effective"].get("reasoning_effort", "")
+    assert got == llm_reasoning.glm_effort(model, legacy)
+    assert got == (legacy if llm_reasoning.is_glm({"model": model})
+                   and legacy in llm_reasoning.GLM_EFFORTS else "")
 
 
-def test_a_preset_effort_wins_over_the_legacy_glm_setting():
+def test_a_preset_effort_is_sent_whatever_the_legacy_glm_setting():
     conn = _conn("openai_compatible", {"reasoning_effort": "low"}, **GLM,
                  reasoning_effort="max")
     assert ls.effective(conn)["effective"] == {"reasoning_effort": "low"}

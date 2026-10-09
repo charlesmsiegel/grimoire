@@ -59,6 +59,14 @@ SAMPLER_FIELDS = frozenset({"sampler_preset", "sampler_support"})
 #: user pays for in test calls.
 REV_NEUTRAL_FIELDS = SAMPLER_FIELDS | {"vision", "prefill", "name", "preset", "billing"}
 
+#: A raw-connection reader: a connection id to its raw record (legacy fields
+#: included), or None for no such connection. The type of what
+#: `read_connection_raw` / `read_connection_strict` are wrapped into for one
+#: resolution or one plan (`resolve.connection_lookup`, `legacy_plan.lookup`);
+#: whether a file that cannot be read raises or reads as None is the
+#: wrapper's to say.
+Lookup = Callable[[str], dict | None]
+
 
 #: The one serialization boundary over a connection's record and the files
 #: beside it. Every write that stamps a rev (`_write_raw`: create, update,
@@ -282,6 +290,19 @@ def read_connection_raw(id: str) -> dict:
     return conn
 
 
+def own_preset(raw: dict) -> str:
+    """The sampler preset connection record `raw` names as its own
+    (`sampler_preset`, one of `MODEL_FIELDS`), stripped; "" for none.
+
+    What the record carries, for the connection editor's readout
+    (`resolve.own_sampling`) -- never a selection: since slice I the resolver
+    takes a selection's preset from the format-2 settings alone, which the
+    planner (`inference.legacy_plan`) maps a legacy connection's preset into.
+    Read here, beside the fields it belongs to, so nothing outside the
+    planner reads a legacy field of a connection by name."""
+    return str(raw.get("sampler_preset", "") or "").strip()
+
+
 def read_connection_strict(conn_id: str) -> dict | None:
     """The raw connection, or None when none by that id exists (an unsafe id,
     no file, an unknown kind). A file that exists but cannot be read or
@@ -502,14 +523,6 @@ def _dangling(cfg: dict, conn_id: str) -> dict[str, str]:
     return out
 
 
-def get_active() -> dict | None:
-    ensure_migrated()
-    id = config.read_config().get("active_connection_id", "")
-    if not id:
-        return None
-    return _read(id)
-
-
 def cached_models(id: str) -> dict:
     """The sole read path for the model-list cache — gates on `rev` here,
     not at write time, so there's no check-then-act gap for a concurrent
@@ -638,8 +651,8 @@ def _migrate() -> None:
         # pre-migration/legacy file), or present-but-"" (because
         # config.read_config()'s own defaults bootstrap already wrote this
         # file with active_connection_id: "" before migration ever ran,
-        # e.g. via GET /api/config's read_config()-before-get_active() call
-        # order) — equally means "not yet decided", so seed it from the
+        # e.g. via a read_config() that ran before the first connection
+        # read) — equally means "not yet decided", so seed it from the
         # legacy `provider` field either way. A presence check would treat
         # that bootstrap-written "" as an intentional decision and skip
         # seeding, leaving a brand-new install with no active connection.

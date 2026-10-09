@@ -573,7 +573,9 @@ would answer neither question.
   ordinary series, but `backups.sweep` counts and deletes only the ordinary
   series, so it stays until a person removes it. Until the switch lands the
   new Models settings answer 409 `not_migrated` (play carries on through the
-  legacy translation); a store a newer build switched refuses every
+  planner, in memory -- `store/inference/legacy_plan.py`, the one reader of the
+  legacy layout, which `test_legacy_reader_guard.py` holds to being the only
+  one); a store a newer build switched refuses every
   model-settings write with 409 `newer_format`. Backup, marker, resume, busy
   campaigns and older builds are all in `docs/store-guarantees.md`.
 - **Run the gate with `make check`** — the same targets `.github/workflows/ci.yml`
@@ -800,14 +802,15 @@ would answer neither question.
   `store/routing.py` maps the task to a route (each one declares its
   `operation`, its `default_role` and what it `requires`), and
   `store/inference/` resolves the route to a role (Primary, Fast, Decision,
-  Embedding) or a pinned model. Which settings it reads is decided once per
-  resolution by `config.md`'s format marker. A store at format 2 reads the
+  Embedding) or a pinned model. Every store is resolved as format 2: the
   roles and their fallbacks, each route's choice, pin and preset, a campaign's
   own overrides of both, and the facts of the chosen model -- `vision`,
   `prefill` and `post_process`, which the lowering lays over the connection
-  dict in place of the connection's legacy fields. A store the migration has
-  not reached is read through `translate`, the legacy keys seen as that same
-  layout, so a call site never asks which one it is on. The fallback rides on
+  dict in place of the connection's legacy fields. A layout the migration or
+  retirement has not reached is read through the planner, in memory
+  (`resolve._overlay`, the one call of `legacy_plan.overlay`): the legacy keys
+  seen as that same layout, a legacy GLM effort as a derived reasoning preset,
+  and nothing written, so a call site never asks which one it is on. The fallback rides on
   the resolved conn: the primary's dict carries the fallback attempt, lowered
   (wearing the route's preset when the route has one), under `FALLBACK_KEY`,
   and the facade sends that one. A fallback *known* unable to do what the route needs is reported

@@ -407,21 +407,20 @@ def _openrouter_reasoning(c: _Conn, value: str | None) -> _Control:
 
 
 def _openai_reasoning(c: _Conn, conn: dict, value: str | None) -> _Control:
-    """`openai_compatible`: GLM by `llm_reasoning`'s rule (the connection's legacy
-    setting when the preset sets none), the OpenAI API by the model's family
+    """`openai_compatible`: GLM by `llm_reasoning`'s rule (the preset's value
+    only: with none, nothing is sent -- a legacy connection's effort rides on a
+    derived reasoning preset, slice I), the OpenAI API by the model's family
     (`_openai_api_reasoning`), and any other
     endpoint by the strict-endpoint rule the samplers follow (spec 8): it is not
     an OpenAI chat parameter, so it is held back unless extended samplers are
     on, and then sent unverified."""
     if llm_reasoning.is_glm(conn):
         if value is None:
-            legacy = llm_reasoning.glm_effort(conn)
-            return _Control(SUPPORTED, "reasoning_effort", "", "name",
-                            {"reasoning_effort": legacy} if legacy else {})
+            return _Control(SUPPORTED, "reasoning_effort", "", "name", {})
         if value == "off":
             # GLM takes low, high or max; off is a level it has not got.
             return _Control(UNSUPPORTED, None, WHY_GLM, "name")
-        effort = llm_reasoning.glm_effort({**conn, "reasoning_effort": value})
+        effort = llm_reasoning.glm_effort(str(conn.get("model", "") or ""), value)
         if not effort:
             return _Control(UNSUPPORTED, None, WHY_GLM, "name")
         return _Control(SUPPORTED, "reasoning_effort", "", "name", {"reasoning_effort": effort})

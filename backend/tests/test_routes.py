@@ -4801,8 +4801,10 @@ def test_a_reroll_may_name_a_model_without_naming_a_connection(client):
 
 def test_a_reroll_may_name_a_whole_connection(client):
     """The case a bare model id cannot express — a different provider, with its
-    own base URL and credentials. At format 1, where a connection has a model of
-    its own to run (at format 2 a provider alone keeps the standing model)."""
+    own base URL and credentials. Even on a format-1 store, where the named
+    connection still holds a model of its own: since slice I that store plays
+    as format 2, in memory, so a provider alone keeps the STANDING model (spec
+    5.6) rather than running its own."""
     fake, cid, sid = _rerollable(client, legacy=True)
     other = _local_endpoint(client, model="llama3")
 
@@ -4812,7 +4814,7 @@ def test_a_reroll_may_name_a_whole_connection(client):
     assert fake.conn["kind"] == "openai_compatible"
     assert fake.conn["base_url"] == "http://localhost:11434/v1"
     assert fake.conn["api_key"] == "sk-local"        # the named connection's own
-    assert fake.conn["model"] == "llama3"            # and its own model
+    assert fake.conn["model"] == "campaign/model"    # at the standing model
 
 
 def test_a_reroll_may_name_a_connection_and_a_model_together(client):
@@ -5032,12 +5034,15 @@ def test_a_turn_with_no_override_records_the_resolved_model(client, task, send):
 def test_a_reroll_onto_claude_stamps_the_model_the_dispatcher_substitutes(client):
     """`effective_model`, not `conn["model"]`: a Claude connection with none
     configured still generates, so stamping the stored "" would file a variant
-    under a model the reader cannot look a context size up for. At format 1:
-    a format-2 override naming a provider alone keeps the standing model."""
-    _fake, cid, sid = _rerollable(client, legacy=True)
+    under a model the reader cannot look a context size up for. A provider
+    named alone keeps the standing model (spec 5.6), so the standing selection
+    is the Claude one with no model -- written straight into the settings, as
+    a hand edit would leave it (the Models page always names one)."""
+    _fake, cid, sid = _rerollable(client)
     anthropic = client.post("/api/llm-connections",
-                            json={"kind": "claude", "name": "Claude",
-                                  "model": ""}).json()["id"]
+                            json={"kind": "claude", "name": "Claude"}).json()["id"]
+    store.write_config(**{keys.role_key("primary", "provider"): anthropic,
+                          keys.role_key("primary", "model"): ""})
 
     client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                 json={"connection_id": anthropic})
@@ -5095,12 +5100,15 @@ def test_a_route_with_no_model_is_not_filed_under_the_campaigns(client):
     configured generates fine on the provider's own default, and filing that
     reroll under the campaign's model is the exact mislabel #77 exists to
     prevent — `SceneInspector` sizes the frozen prompt against what is
-    recorded here. At format 1, where a provider alone runs its own model (at
-    format 2 it keeps the standing one)."""
-    fake, cid, sid = _rerollable(client, legacy=True)
+    recorded here. A provider named alone keeps the standing model (spec
+    5.6), so the standing selection is that endpoint with no model -- written
+    straight into the settings, as a hand edit would leave it."""
+    fake, cid, sid = _rerollable(client)
     modelless = client.post("/api/llm-connections",
                             json={"kind": "openai_compatible", "name": "Bare",
                                   "base_url": "http://localhost:11434/v1"}).json()["id"]
+    store.write_config(**{keys.role_key("primary", "provider"): modelless,
+                          keys.role_key("primary", "model"): ""})
 
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/regenerate",
                        json={"connection_id": modelless}).status_code == 200

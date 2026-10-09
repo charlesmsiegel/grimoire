@@ -1643,16 +1643,13 @@ def test_on_a_store_a_newer_build_wrote_no_rates_link_is_offered(client, monkeyp
     write its rates, so the copy says a newer version wrote it -- never "after
     the upgrade".
 
-    This build reads a store it is not current for through the legacy
-    translation, so the selection it sees there is the one in the frozen
-    legacy keys. Built that way on purpose -- a legacy library holding a
-    provider at its own model, then a newer build's marker -- rather than by
-    writing legacy fields into a store already born at format 2."""
-    inference_fixtures.legacy_store()
+    This build reads a store a newer build switched as format 2, best effort
+    (slice I), so the selection it sees there is the Primary role's: a
+    format-2 library's role on a provider, then a newer build's marker."""
     pid = store.llm_connections.create_connection(
-        "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1",
-        model="vendor/model-a")
-    store.write_config(active_connection_id=pid)
+        "openai_compatible", "Saltmarch", base_url="http://localhost:1/v1")
+    store.write_config(**{inference_keys.role_key("primary", "provider"): pid,
+                          inference_keys.role_key("primary", "model"): "vendor/model-a"})
     store.write_config(**{inference_keys.FORMAT_KEY: str(int(inference_keys.CURRENT_FORMAT) + 1)})
     assert inference_keys.is_newer(store.read_config())
     # The model in use, read off that store (`in_use` is what the chore asks).

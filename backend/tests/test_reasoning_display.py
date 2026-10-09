@@ -39,13 +39,19 @@ async def test_reasoning_events_precede_visible_text_without_entering_complete()
 
 @pytest.mark.parametrize("effort", ["", "low", "high", "max"])
 async def test_glm_effort_is_opt_in_and_sent_to_provider(effort):
+    """The preset's effort, and only the preset's (slice I): a connection's
+    legacy `reasoning_effort` sends nothing -- a legacy store's rides on a
+    derived reasoning preset instead (`legacy_plan`)."""
     requests = []
     client = gateway(requests=requests)
+    params = {"reasoning_effort": effort} if effort else {}
     try:
-        await client.complete([], {**CONN, "reasoning_effort": effort})
+        await client.complete([], {**CONN, "sampling": {"params": params}})
+        await client.complete([], {**CONN, "reasoning_effort": effort or "high"})
     finally:
         await client.aclose()
     assert requests[0].get("reasoning_effort") == (effort or None)
+    assert "reasoning_effort" not in requests[1]
 
 
 def test_reasoning_is_saved_per_variant_and_never_in_transcript_content(client):
@@ -148,7 +154,8 @@ async def test_glm_effort_is_not_sent_after_switching_to_another_model():
     requests = []
     client = gateway(requests=requests)
     try:
-        await client.complete([], {**CONN, "model":"another-model", "reasoning_effort":"max"})
+        await client.complete([], {**CONN, "model": "another-model",
+                                   "sampling": {"params": {"reasoning_effort": "max"}}})
         assert "reasoning_effort" not in requests[0]
     finally:
         await client.aclose()

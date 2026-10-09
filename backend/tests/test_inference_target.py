@@ -180,7 +180,7 @@ def test_a_hand_built_attempt_has_no_chain_to_send():
     target, as it carries empty `controls`; nothing resolved, nothing sent."""
     a = Attempt("p", "m", "", {})
     assert a.target == resolved.UNBUILT
-    empty = ResolvedInference(task="", operation="generate", route="", legacy_route="",
+    empty = ResolvedInference(task="", operation="generate", route="",
                               role="", via="", scope="none", attempts=())
     assert empty.chain is None
 
@@ -192,7 +192,7 @@ def test_a_chain_carries_the_fallback_only_where_the_dict_does():
     unattached = Attempt("p", "m", "", {"id": "p"}, target=wire_kit.target(provider_id="p"))
 
     def chain(*attempts: Attempt) -> wire.Chain | None:
-        return ResolvedInference(task="", operation="generate", route="", legacy_route="",
+        return ResolvedInference(task="", operation="generate", route="",
                                  role="", via="", scope="none", attempts=attempts).chain
 
     assert chain(attached, fb) == wire.Chain(attached.target, fb.target)

@@ -2,7 +2,7 @@
 
 Everything that reads or writes a role, a route choice or the format marker
 builds the key here, so a spelling cannot drift between the resolver, the
-translation, `config.md`'s key list and (later) the migration.
+planner (`inference.legacy_plan`), `config.md`'s key list and the migration.
 
 A store-level leaf rather than a module of `store/inference/`: `config.py`
 needs the key list, and `store/inference/__init__.py` imports `resolve`, which

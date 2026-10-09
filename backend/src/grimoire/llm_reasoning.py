@@ -84,9 +84,14 @@ def is_glm(conn):
     return str(conn.get("model", "")).lower().split("/")[-1] in GLM_MODELS
 
 
-def glm_effort(conn):
-    effort = conn.get("reasoning_effort", "")
-    return effort if is_glm(conn) and effort in GLM_EFFORTS else ""
+def glm_effort(model: str, value: str | None) -> str:
+    """The `reasoning_effort` a GLM `model` is sent for a preset's `value`:
+    the value itself when the model is GLM and the value is a level GLM takes
+    (`GLM_EFFORTS`), else "" -- nothing sent. The preset's value only: a
+    connection's legacy effort is never read here (slice I), it rides on a
+    derived reasoning preset instead."""
+    effort = value or ""
+    return effort if is_glm({"model": model}) and effort in GLM_EFFORTS else ""
 
 
 async def stream(client, messages, conn, usage):

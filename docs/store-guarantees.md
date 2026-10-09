@@ -1013,8 +1013,9 @@ an interrupted run or a hand edit is overwritten by what the legacy settings
 say now rather than surviving because nothing named it.
 
 Until that write lands the resolver reads the legacy settings through the
-translation (`store/inference/translate.py`), which answers as the new layout
-would, so play is the same on either side of the switch.
+planner, in memory (`store/inference/legacy_plan.py`, the one reader of the
+legacy layout), which answers as the new layout would and writes nothing, so
+play is the same on either side of the switch.
 
 ### Idempotent and resumable
 
@@ -1029,7 +1030,7 @@ default between two runs, or a model the connection moved off, does not keep
 the old copy. Every write is atomic (see
 [Atomic writes](#atomic-writes)), so a run killed anywhere leaves each file
 whole — the store still on the old layout before the marker, and after it
-some campaigns still unmarked and read through the translation — and the
+some campaigns still unmarked and read through the planner, in memory — and the
 next start goes on from there.
 
 The archive, the final `config.md` write, a connection file that exists
@@ -1054,7 +1055,7 @@ with nothing more marked.
 Each unmarked campaign is moved in one atomic write of its `campaign.md` (its
 route choices and its own marker together) under `campaign_lock_nowait`, one
 campaign at a time. A campaign whose lock is held is **skipped as busy**, not
-waited for: it keeps resolving through the translation and is finished by the
+waited for: it keeps resolving through the planner, in memory, and is finished by the
 next `ensure`, or by the first new-layout write to it —
 `store/inference/settings.py` moves an unmarked campaign inside the same lock
 hold as that write, so the marker it stamps never lands over overrides nobody

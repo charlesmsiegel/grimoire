@@ -27,7 +27,7 @@ from grimoire.store import (
     worlds,
 )
 from grimoire.store.frontmatter import parse_frontmatter
-from grimoire.store.inference import capabilities, facts, providers, translate
+from grimoire.store.inference import capabilities, facts, providers
 from tests import inference_fixtures
 
 
@@ -81,7 +81,7 @@ def test_a_fresh_store_is_born_at_format_2(home, monkeypatch):
     assert cfg[inference_keys.FORMAT_KEY] == "2"
     raw, _ = parse_frontmatter((home / "config.md").read_text(encoding="utf-8"))
     assert raw[inference_keys.FORMAT_KEY] == "2"
-    assert translate.is_current(config.read_config())
+    assert inference_keys.is_current(config.read_config())
 
 
 def test_a_fresh_store_first_written_by_write_config_is_born_at_format_2(home, monkeypatch):
@@ -98,7 +98,7 @@ def test_an_existing_config_without_the_marker_stays_legacy(home, monkeypatch):
     config.write_config(theme="system")
     raw, _ = parse_frontmatter((home / "config.md").read_text(encoding="utf-8"))
     assert inference_keys.FORMAT_KEY not in raw
-    assert not translate.is_current(config.read_config())
+    assert not inference_keys.is_current(config.read_config())
 
 
 def test_the_background_switch_does_not_unbirth_a_fresh_store(home, monkeypatch):
@@ -164,9 +164,9 @@ def test_read_config_round_trips_every_inference_key(home):
 
 def test_is_current_sees_the_marker_through_read_config(home):
     inference_fixtures.legacy_store()
-    assert not translate.is_current(config.read_config())
+    assert not inference_keys.is_current(config.read_config())
     _make_current()
-    assert translate.is_current(config.read_config())
+    assert inference_keys.is_current(config.read_config())
 
 
 def test_is_newer():
@@ -330,7 +330,7 @@ def test_set_campaign_inference_marks_the_campaign_on_a_current_store(home):
     campaigns.set_campaign_inference(cid, {"use_opener": "fast"})
     meta = _campaign_meta(cid)
     assert meta[inference_keys.FORMAT_KEY] == inference_keys.CURRENT_FORMAT
-    assert translate.is_current(meta)
+    assert inference_keys.is_current(meta)
 
 
 def test_set_campaign_inference_that_changes_nothing_writes_nothing(home):

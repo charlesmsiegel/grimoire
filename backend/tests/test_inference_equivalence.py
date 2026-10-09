@@ -6,15 +6,26 @@ before the inference resolver refactor (`python -m tests.inference_baseline
 refactor is behaviour-neutral, so a failure here means the new resolver answers
 differently from the code it replaced, and the fix is in the code. What each
 state contains and what is observed is in `tests/inference_baseline.py`.
+
+Since slice I a legacy store is read only through the planner, in memory
+(`legacy_plan.overlay`), and resolved as format 2. So the store as built --
+format 1 -- is held to the JSON through the migration's named differences
+and `retired_expectation`'s, and `test_planned_equals_persisted` holds what
+it plays in memory equal to what it plays once migrated.
 """
 
 from __future__ import annotations
 
+import copy
 import json
+from typing import NamedTuple
 
 import pytest
 
 import grimoire.store as store
+from grimoire import llm_sampling
+from grimoire.store import routing
+from grimoire.store.inference import resolve as inference
 
 from . import inference_baseline as baseline
 
@@ -64,14 +75,6 @@ def test_every_state_has_a_recorded_baseline():
     assert sorted(BASELINE) == sorted(baseline.STATES)
 
 
-@pytest.mark.parametrize("state", sorted(baseline.STATES))
-def test_resolution_matches_the_baseline(state, tmp_path):
-    """Before any migration, every state answers what the JSON recorded --
-    minus `routing`, whose endpoints slice C's Task 8 retired (`RETIRED`)."""
-    with baseline.client_at(tmp_path) as client:
-        ctx = baseline.STATES[state](client)
-        observed = without_new_tasks(baseline.observe(client, ctx))
-        assert without_retired(observed) == without_retired(BASELINE[state])
 
 
 #: The only differences a migrated store may show against the frozen baseline
@@ -135,5 +138,189 @@ def test_each_baseline_state_resolves_identically_after_migration(state, tmp_pat
         assert got.state == "done", got
         assert store.inference_keys.is_current(store.read_config())
         observed = without_new_tasks(baseline.observe(client, ctx))
+        # Migrated, not retired: the derivation is still the planner's, in
+        # memory, so `retired_expectation`'s differences apply here too.
         assert (without_allowed_differences(observed)
-                == without_allowed_differences(migrated_expectation(BASELINE[state])))
+                == without_allowed_differences(
+                    retired_expectation(migrated_expectation(BASELINE[state]), state)))
+
+
+# ---- slice I: the legacy layout, read in memory through the planner ----
+class Derived(NamedTuple):
+    """A derived reasoning preset, as the planner names it (ruling 4)."""
+
+    id: str
+    name: str
+    params: dict
+
+
+#: Rule 1's presets: per state, the base preset each derived preset replaces
+#: on the GLM provider's slots, exact. Only slice C's two GLM states derive.
+DERIVED: dict[str, dict[str, Derived]] = {
+    "glm_reasoning": {"warm": Derived("warm-reasoning-low", "warm · reasoning low",
+                                      {"temperature": 0.9, "reasoning_effort": "low"})},
+    "glm_max_under_route_preset": {
+        "warm": Derived("warm-reasoning-max", "warm · reasoning max",
+                        {"temperature": 0.9, "reasoning_effort": "max"})},
+}
+#: The provider those slots are on (`inference_baseline_c._glm`).
+GLM = "glm"
+#: Rule 2: the legacy effort each state's builder set on the GLM connection
+#: whose route preset sets none (`_glm(client, "max")`).
+LEGACY_EFFORT: dict[str, str] = {"glm_max_under_route_preset": "max"}
+#: Where the baseline records a ROUTE-level preset (`sampling.scope`).
+ROUTE_SCOPES = ("global", "campaign")
+
+
+def _derive_sampling(sampling: dict, derived: dict[str, Derived]) -> bool:
+    """Rule 1 on one recorded `sampling` block, in place: its base preset
+    replaced by the derived one. True when it applied."""
+    made = derived.get(sampling.get("preset_id", ""))
+    if made is None:
+        return False
+    sampling.update(preset_id=made.id, preset_name=made.name, params=dict(made.params))
+    return True
+
+
+def _derive_report(report: dict, derived: dict[str, Derived]) -> bool:
+    """Rule 1 on a recorded `llm_sampling.report` (the context breakdown): the
+    derived preset's id and name, and the effort it now names among what is
+    applied (`report` lists a requested level as applied; the wire is
+    `effective`'s, held equal by the `c.lowered` cells)."""
+    made = derived.get(report.get("preset_id", ""))
+    if made is None:
+        return False
+    report.update(preset_id=made.id, preset_name=made.name,
+                  applied={**report["applied"],
+                           "reasoning_effort": made.params["reasoning_effort"]})
+    return True
+
+
+def _rule_1(out: dict, state: str) -> bool:
+    """Rule 1 over every recorded cell of `out`, in place: whether it applied."""
+    derived = DERIVED.get(state, {})
+    cells = [cell for by_scope in out["tasks"].values() for cell in by_scope.values()]
+    cells += list(out["overrides"].values())
+    applied = [_derive_sampling(cell["sampling"], derived)
+               for cell in cells if cell.get("conn") == GLM]
+    context = out["display"]["context_sampling"]["sampling"]
+    if context is not None:
+        applied.append(_derive_report(context, derived))
+    return any(applied)
+
+
+def _rule_2(out: dict, recorded: dict, state: str) -> bool:
+    """Rule 2 over `out`'s lowered cells, in place: whether it applied."""
+    applied = False
+    for task, cells in out.get("c", {}).get("lowered", {}).items():
+        for scope, lowered in cells.items():
+            sampling = recorded["tasks"][task][scope].get("sampling")
+            if (lowered is None or sampling is None or sampling["scope"] not in ROUTE_SCOPES
+                    or "reasoning_effort" in sampling["params"]
+                    or "reasoning_effort" not in lowered["effective"]):
+                continue
+            assert lowered["effective"]["reasoning_effort"] == LEGACY_EFFORT[state], (
+                state, task, scope)
+            del lowered["effective"]["reasoning_effort"]
+            applied = True
+    return applied
+
+
+def _retired(recorded: dict, state: str) -> tuple[dict, set[str]]:
+    """`(expectation, rules applied)`: `retired_expectation`, and which of its
+    rules touched this state ("derived", "route_preset")."""
+    out = copy.deepcopy(recorded)
+    touched = {rule for rule, applied in (("derived", _rule_1(out, state)),
+                                          ("route_preset", _rule_2(out, recorded, state)))
+               if applied}
+    return out, touched
+
+
+def retired_expectation(recorded: dict, state: str) -> dict:
+    """`recorded` as a legacy store answers it once play reads the legacy
+    layout through the planner (slice I) -- the only named differences, each
+    exact (`test_the_named_differences_touch_exactly_their_states`):
+
+    1. **Derived slots.** A GLM slot whose legacy effort the planner carries
+       over runs on its derived preset (`DERIVED`): `sampling.preset_id`,
+       `preset_name` and `params` become the derived preset's (its params are
+       the base's plus that effort), and the context breakdown names the
+       effort as applied. The wire (`c.lowered`'s `effective`) is unchanged.
+    2. **Route preset over a GLM effort.** A cell whose recorded preset is
+       route-level (`ROUTE_SCOPES`), sets no reasoning effort, and whose wire
+       carried the connection's legacy effort anyway: that effort is asserted
+       (`LEGACY_EFFORT`) and dropped from the wire, and nothing else. It is
+       noted durably instead (ratification item 3).
+
+    Rule 3 of the plan (a GLM `max` the planner cannot carry) is for a
+    declined ratification item 1; item 1 was ratified, so `max` is derived
+    under rule 1 and rule 3 has nothing to name. Everything else must be
+    equal."""
+    return _retired(recorded, state)[0]
+
+
+@pytest.mark.parametrize("state", sorted(baseline.STATES))
+def test_resolution_matches_the_baseline(state, tmp_path):
+    """The store as each state builds it -- format 1, unmigrated -- played
+    in memory through the planner, answers what the JSON recorded: minus
+    `routing` (`RETIRED`), with the migration's named differences (the store
+    is resolved as format 2) and `retired_expectation`'s."""
+    with baseline.client_at(tmp_path) as client:
+        ctx = baseline.STATES[state](client)
+        observed = without_new_tasks(baseline.observe(client, ctx))
+        assert not store.inference_keys.is_current(store.read_config())
+        assert (without_allowed_differences(observed)
+                == without_allowed_differences(
+                    retired_expectation(migrated_expectation(BASELINE[state]), state)))
+
+
+def test_the_named_differences_touch_exactly_their_states():
+    """Each of `retired_expectation`'s rules applies to the states it names
+    and to no other, across both frozen baselines."""
+    from . import test_inference_equivalence_c as equivalence_c
+
+    touched: dict[str, set[str]] = {"derived": set(), "route_preset": set()}
+    for frozen in (BASELINE, equivalence_c.BASELINE):
+        for state, recorded in frozen.items():
+            for rule in _retired(migrated_expectation(recorded), state)[1]:
+                touched[rule].add(state)
+    assert touched == {"derived": set(DERIVED), "route_preset": set(LEGACY_EFFORT)}
+
+
+def planned_cells(cid: str) -> dict:
+    """What every task resolves to at both scopes, as the seam sees it: the
+    primary's provider, model, preset and sampling, what it sends
+    (`effective`), its fallback (and whether the facade sends it), and the
+    seam's refusal. The comparison `test_planned_equals_persisted` makes."""
+    def cell(task: str, scope_cid: str) -> dict:
+        resolved = inference.resolve(task, scope_cid)
+        out: dict = {"refusal": inference.refusal(resolved)}
+        if not resolved.attempts:
+            return out
+        first = resolved.attempts[0]
+        out.update(provider=first.provider_id, model=first.model, preset=first.preset_id,
+                   sampling=first.conn["sampling"],
+                   effective=llm_sampling.effective(first.conn)["effective"])
+        if len(resolved.attempts) > 1:
+            fb = resolved.attempts[1]
+            out["fallback"] = {"provider": fb.provider_id, "model": fb.model,
+                               "preset": fb.preset_id, "sampling": fb.conn["sampling"],
+                               "sent": resolved.chain is not None
+                               and resolved.chain.fallback is not None}
+        return out
+
+    return {task: {"global": cell(task, ""), "campaign": cell(task, cid)}
+            for task in [*sorted(routing.TASK_ROUTE), ""]}
+
+
+@pytest.mark.parametrize("state", sorted(baseline.STATES))
+def test_planned_equals_persisted(state, tmp_path):
+    """What a legacy store plays in memory, through the planner, is what it
+    plays once the migration has persisted the plan (`mapped`; the
+    derivation is still in memory on both sides until retirement)."""
+    with baseline.client_at(tmp_path) as client:
+        ctx = baseline.STATES[state](client)
+        planned = planned_cells(ctx["cid"])
+        assert baseline.migrate_state(state).state == "done"
+        assert store.inference_keys.is_current(store.read_config())
+        assert planned_cells(ctx["cid"]) == planned

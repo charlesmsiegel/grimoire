@@ -20,7 +20,7 @@ It is the REGISTRY only. Which connection a task runs on is
 require_inference`; the legacy cascade that used to live here (`resolve`,
 `bundle`) and the `/routing` endpoints that rendered it were retired in
 inference slice C. The legacy keys it names (`CONFIG_KEYS`,
-`PRESET_CONFIG_KEYS`) are still read -- by `store.inference.translate`, for a
+`PRESET_CONFIG_KEYS`) are still read -- by `store.inference.legacy_plan`, for a
 store the migration has not reached -- and still swept on a delete.
 """
 

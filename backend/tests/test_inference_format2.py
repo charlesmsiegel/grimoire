@@ -8,27 +8,42 @@ dict the facade reads, and every consumer (`llm.prefill_capable`, the strict
 post-processing, `post_images.capability`) answers per model without changing.
 
 Facts are written here with `facts.set_stated`, which is what the Models
-screen's writer will call; the screen itself is a later task. Invented
-connection ids and the codebase's placeholder names only.
+screen's writer will call; the screen itself is a later task.
+
+Since slice I every store plays as format 2: a store the migration has not
+reached -- format 1, an unmarked campaign, a scope not yet retired -- is read
+through the planner, in memory (`legacy_plan.overlay`), including a legacy
+connection's model fields as its model's facts and its GLM effort as a derived
+reasoning preset. Nothing on that path writes. The second half of this file
+holds that.
+
+Invented connection ids and the codebase's placeholder names only.
 """
 
 from __future__ import annotations
 
+import importlib
+import threading
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import llm, llm_sampling, routes
+from grimoire.main import create_app
 from grimoire.store import post_images
-from grimoire.store.inference import facts, migrate
+from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
+from grimoire.store.inference import facts, legacy_plan, migrate
 from grimoire.store.inference import resolve as inference
 from grimoire.store.inference.capabilities import Cap
 from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as base
 from . import inference_baseline_c as base_c
+from .llm_fakes import FakeLLM
 
 MODEL = "vendor/active"
 
@@ -97,13 +112,16 @@ def test_format_2_unstated_facts_map_to_the_defaults(client):
     assert (conn["prefill"], conn["post_process"], conn["vision"]) == (False, "none", "")
 
 
-def test_format_1_ignores_the_facts(client):
+def test_format_1_reads_the_facts_as_format_2_does(client):
+    """A legacy store resolves as format 2 in memory (slice I): its model's
+    facts drive the wire, as they will once it is migrated -- the connection
+    states nothing here, so the migration copies nothing over them."""
     base._fresh(client)
     facts.set_stated("openrouter", MODEL, prefill=True, post_process="strict",
                      vision="off")
     assert not store.inference_keys.is_current(store.read_config())
     conn = _primary()
-    assert (conn["prefill"], conn["post_process"], conn["vision"]) == (False, "none", "")
+    assert (conn["prefill"], conn["post_process"], conn["vision"]) == (True, "strict", "off")
 
 
 def test_format_2_post_images_read_the_model_facts(client):
@@ -157,14 +175,16 @@ def test_vision_on_is_a_user_yes(client):
     assert post_images.capability(usable.conn) == "yes"
 
 
-def test_the_images_on_bridge_is_format_1_only(client):
-    """A legacy "Images: on" waives a catalog's vision `no` at format 1. At
-    format 2 the connection's flag is frozen legacy and says nothing: the
-    model's facts do, and a cleared `vision` there is refused like any `no`."""
+def test_a_legacy_images_on_is_a_user_yes_until_the_facts_say_otherwise(client):
+    """A legacy "Images: on" is read into the model's facts in memory at
+    format 1 (the planner's facts overlay), where it is the user's `yes` over
+    a catalog's vision `no`. Once migrated the connection's flag is frozen
+    legacy and says nothing: the model's facts do, and a cleared `vision`
+    there is refused like any `no`."""
     base._fresh(client)
     store.llm_connections.update_connection("openrouter", vision="on")
     _catalog(vision=False)
-    routes.common.require_inference("image-description")  # format 1: the bridge
+    routes.common.require_inference("image-description")  # format 1: the facts, in memory
 
     _migrate()
     routes.common.require_inference("image-description")  # migrated: a user yes
@@ -176,42 +196,38 @@ def test_the_images_on_bridge_is_format_1_only(client):
     assert refused.value.detail["kind"] == "incapable"
 
 
-def _by_hand(*, current: bool, vision_flag: str, source: str) -> ResolvedInference:
+def _by_hand(*, vision_flag: str, source: str) -> ResolvedInference:
     conn = {"id": "openrouter", "kind": "openrouter", "name": "OpenRouter",
             "api_key": "sk-test", "model": MODEL, "vision": vision_flag}
     attempt = Attempt("openrouter", MODEL, "", conn, provider_preset="openrouter",
                       capabilities={"vision": Cap("no", source)})
     return ResolvedInference(
         task="image-description", operation="generate", route="image",
-        legacy_route="image", role="fast", via="role", scope="global",
-        attempts=(attempt,), current=current, missing=("vision",))
+        role="fast", via="role", scope="global",
+        attempts=(attempt,), missing=("vision",))
 
 
 def test_refusal_is_one_pure_decision():
-    # Format 1: "Images: on" outranks a catalog `no`; nothing to refuse.
-    assert inference.refusal(_by_hand(current=False, vision_flag="on",
-                                      source="catalog")) is None
-    # Format 2: the bridge is gone.
-    status, detail = inference.refusal(_by_hand(current=True, vision_flag="on",
-                                                source="catalog"))
+    # A connection's "Images: on" bridges nothing: only the model's facts can
+    # outrank the catalog, and they did it before the resolution was built.
+    status, detail = inference.refusal(_by_hand(vision_flag="on", source="catalog"))
     assert status == 409 and detail["kind"] == "incapable"
-    # The wire protocol's `no` keeps its old body at either format.
-    for current in (False, True):
-        assert inference.refusal(_by_hand(current=current, vision_flag="on",
-                                          source="adapter")) == (
-            409, store.image_drafts.UNSUPPORTED)
+    # The wire protocol's `no` keeps its old body.
+    assert inference.refusal(_by_hand(vision_flag="on", source="adapter")) == (
+        409, store.image_drafts.UNSUPPORTED)
     # No connection at all is the missing-key refusal.
     empty = ResolvedInference(task="chat", operation="generate", route="scene",
-                              legacy_route="scene", role="", via="", scope="none",
-                              attempts=())
+                              role="", via="", scope="none", attempts=())
     assert inference.refusal(empty) == (
         409, {"detail": "No LLM connection selected", "kind": "missing_key"})
 
 
-def test_glm_legacy_effort_still_applies_under_a_route_preset(client):
-    """Ruling 3: until derived reasoning presets (slice I), the legacy GLM
-    effort keeps riding when the effective preset sets none -- a route preset
-    included, at format 2 as at format 1."""
+def test_a_route_preset_over_a_glm_effort_sends_none_and_is_noted(client):
+    """Ratification item 3: a route preset that sets no reasoning effort is
+    shared with the route's fallback, so it is not derived -- the GLM
+    connection's legacy effort stops riding there, at format 1 (in memory) and
+    once migrated alike, and the planner notes it rather than dropping it
+    silently. The Primary's own slot still carries it, on its derived preset."""
     ctx = base_c.STATES["glm_max_under_route_preset"](client)
     for migrated in (False, True):
         if migrated:
@@ -219,8 +235,15 @@ def test_glm_legacy_effort_still_applies_under_a_route_preset(client):
         for cid in ("", ctx["cid"]):
             conn = _primary("rolling-summary", cid)
             assert conn["sampling"]["preset_id"] == "cold", migrated
-            assert llm_sampling.effective(conn)["effective"]["reasoning_effort"] == "max", \
+            assert "reasoning_effort" not in llm_sampling.effective(conn)["effective"], \
                 migrated
+            chat = _primary("chat", cid)
+            assert chat["sampling"]["preset_id"] == "warm-reasoning-max", migrated
+            assert llm_sampling.effective(chat)["effective"]["reasoning_effort"] == "max"
+            noted = {(n.subject, n.provider_id, n.effort, n.kind)
+                     for n in inference.retirement_notes(cid)}
+            assert noted == {("summary", "glm", "max", "route_preset"),
+                             ("scene_break", "glm", "max", "route_preset")}, migrated
 
 
 def test_an_unreadable_facts_sidecar_lowers_to_the_defaults(client):
@@ -249,3 +272,230 @@ def test_the_facts_model_key_is_the_effective_model():
     for conn in ({"kind": "claude", "model": ""}, {"kind": "claude", "model": "sonnet"},
                  {"kind": "openrouter", "model": MODEL}, {"kind": "openrouter", "model": ""}):
         assert facts.model_of(conn) == llm.effective_model(conn)
+
+
+# ---- slice I: a layout the migration has not reached plays in memory ----
+REPLY = 'The tide turns.\n```handoff\n{"next":null}\n```'
+
+
+@pytest.fixture
+def born(monkeypatch, tmp_path):
+    """A client on a store born at format 2 (the suite's upgraded default
+    library) -- `conftest.client`, which this file's `client` shadows."""
+    monkeypatch.setenv("GRIMOIRE_HOME", str(tmp_path))
+    importlib.reload(store)
+    app = create_app()
+    app.dependency_overrides[routes.get_llm] = lambda: FakeLLM([[REPLY]])
+    with TestClient(app) as c:
+        yield c
+
+
+def _settings_digest(home: Path) -> dict[str, object]:
+    """What a settings write would change: `config.md`, every file under
+    `llm_connections/` (the records, their facts and catalogs) and
+    `sampler_presets/`, and each campaign's settings -- its frontmatter but
+    `updated`, which play stamps on a campaign whatever its settings."""
+    out: dict[str, object] = {"config.md": (home / "config.md").read_bytes()}
+    for folder in ("llm_connections", "sampler_presets"):
+        for path in sorted((home / folder).rglob("*")) if (home / folder).exists() else ():
+            if path.is_file():
+                out[path.relative_to(home).as_posix()] = path.read_bytes()
+    for path in sorted((home / "campaigns").glob("*/campaign.md")):
+        meta, _ = parse_frontmatter(path.read_text(encoding="utf-8"))
+        out[path.relative_to(home).as_posix()] = {k: v for k, v in meta.items()
+                                                  if k != "updated"}
+    return out
+
+
+def _cast_scene(client) -> tuple[str, str]:
+    """Realm, Saltmarch and a scene with Mara in it, through the store and the
+    API as `test_format2_play` builds one."""
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    sid = store.scenes.create_scene(cid, "Mara")
+    actor = client.post(f"/api/campaigns/{cid}/characters", json={"name": "Mara"})
+    assert actor.status_code == 200, actor.text
+    cast = client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
+                       json={"id": actor.json()["character"]})
+    assert cast.status_code == 200, cast.text
+    return cid, sid
+
+
+def _legacy_active(client) -> None:
+    """The seeded OpenRouter connection, keyed and at a model, as the active
+    connection of a format-1 store."""
+    got = client.put("/api/llm-connections/openrouter",
+                     json={"api_key": "sk-test-active", "model": MODEL})
+    assert got.status_code == 200, got.text
+    store.write_config(active_connection_id="openrouter")
+
+
+def _sent(fake: FakeLLM) -> dict:
+    turns = [r for r in fake.requests
+             if "You maintain the scene state tracker" not in r["messages"][0]["content"]]
+    assert turns, fake.requests
+    return turns[-1]["conn"]
+
+
+def test_a_format_1_store_plays_in_memory_and_writes_nothing(client, tmp_path):
+    home = store.home()
+    _legacy_active(client)
+    cid, sid = _cast_scene(client)
+    assert not store.inference_keys.is_current(store.read_config())
+    before = _settings_digest(home)
+
+    turn = FakeLLM([[REPLY]])
+    client.app.dependency_overrides[routes.get_llm] = lambda: turn
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
+                    json={"content": "Hi", "speaker_ref": "characters:mara"})
+
+    assert r.status_code == 200, r.text
+    assert "error" not in r.text, r.text
+    assert (_sent(turn)["id"], _sent(turn)["model"]) == ("openrouter", MODEL)
+    assert _settings_digest(home) == before
+    assert not store.inference_keys.is_current(store.read_config())
+
+
+def _unmark(cid: str, **fields: str) -> None:
+    """Campaign `cid`'s frontmatter without the format marker, plus `fields`:
+    a campaign the migration skipped, or one an older build created."""
+    path = store.campaigns.campaign_root(cid) / "campaign.md"
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    meta.pop(store.inference_keys.FORMAT_KEY, None)
+    path.write_text(dump_frontmatter({**meta, **fields}, body),  # atomic-ok: test fixture
+                    encoding="utf-8")
+    assert not store.inference_keys.is_current(store.campaigns.read_campaign(cid)["meta"])
+
+
+def _spare(client) -> None:
+    """A keyed `spare` provider, and the seeded `openrouter` keyed too."""
+    got = client.put("/api/llm-connections/openrouter", json={"api_key": "sk-test-active"})
+    assert got.status_code == 200, got.text
+    got = client.post("/api/llm-connections", json={"kind": "openrouter", "name": "spare",
+                                                     "api_key": "sk-test-spare"})
+    assert got.status_code == 200 and got.json()["id"] == "spare", got.text
+
+
+def test_an_unmarked_campaign_resolves_its_overrides_in_memory(born):
+    assert store.inference_keys.is_current(store.read_config())
+    _spare(born)
+    cid, _sid = _cast_scene(born)
+    _unmark(cid, route_scene="spare")
+    path = store.campaigns.campaign_root(cid) / "campaign.md"
+    before = path.read_bytes()
+
+    assert routes.common.require_inference("chat", cid).conn["id"] == "spare"
+    assert routes.common.require_inference("chat").conn["id"] == "openrouter"
+    # Still unmarked: nothing was written.
+    assert not store.inference_keys.is_current(store.campaigns.read_campaign(cid)["meta"])
+    assert path.read_bytes() == before
+
+
+def test_a_busy_unmarked_campaign_still_resolves_and_nothing_is_written(born):
+    """I3, inverted: another writer holds the campaign's lock, and the turn
+    still resolves its legacy override -- the planner reads, and takes no
+    lock, so nothing waits and nothing is written."""
+    _spare(born)
+    cid, _sid = _cast_scene(born)
+    _unmark(cid, route_scene="spare")
+    path = store.campaigns.campaign_root(cid) / "campaign.md"
+    before = path.read_bytes()
+    held, release = threading.Event(), threading.Event()
+
+    def holder() -> None:
+        with store.locks.campaign_lock(cid):
+            held.set()
+            release.wait(10)
+
+    thread = threading.Thread(target=holder)
+    thread.start()
+    try:
+        assert held.wait(10)
+        assert routes.common.require_inference("chat", cid).conn["id"] == "spare"
+    finally:
+        release.set()
+        thread.join(10)
+    assert path.read_bytes() == before
+
+
+def test_a_newer_store_still_plays_and_refuses_settings_writes(born):
+    """I1: a store a newer build switched resolves best effort, as format 2,
+    and its model-settings writes stay refused as `newer_format`."""
+    got = born.put("/api/llm-connections/openrouter", json={"api_key": "sk-test-active"})
+    assert got.status_code == 200, got.text
+    path = store.home() / "config.md"
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    path.write_text(dump_frontmatter({**meta, store.inference_keys.FORMAT_KEY: "3"}, body),
+                    encoding="utf-8")  # atomic-ok: test fixture
+    assert store.inference_keys.is_newer(store.read_config())
+
+    served = routes.common.require_inference("chat")
+    assert (served.conn["id"], served.conn["model"]) == ("openrouter", store.config.DEFAULT_MODEL)
+    refused = born.put("/api/inference/settings", json={"roles": {"primary": {
+        "selection": {"provider": "openrouter", "model": "vendor/bigger"}}}})
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["kind"] == "newer_format"
+
+
+def test_a_format_1_glm_store_still_sends_its_effort(client):
+    """The legacy GLM effort rides on a derived preset, virtual until
+    retirement writes it: the wire is what the legacy connection sent."""
+    ctx = base_c.STATES["glm_reasoning"](client)
+    for cid in ("", ctx["cid"]):
+        conn = _primary("chat", cid)
+        assert conn["sampling"]["preset_id"] == "warm-reasoning-low"
+        assert conn["sampling"]["params"] == {"temperature": 0.9, "reasoning_effort": "low"}
+        assert llm_sampling.effective(conn)["effective"] == {
+            "temperature": 0.9, "reasoning_effort": "low"}
+    assert not (store.home() / "sampler_presets" / "warm-reasoning-low.json").exists()
+
+
+def _retire_by_hand(cid: str) -> None:
+    """The retirement marker on `config.md` and campaign `cid`, as Task 6's
+    retirement will write it -- here without its writes, so the connection
+    still carries its legacy effort and no derived preset exists."""
+    store.write_config(**{store.inference_keys.RETIRED_KEY: "1"})
+    path = store.campaigns.campaign_root(cid) / "campaign.md"
+    meta, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    path.write_text(dump_frontmatter({**meta, store.inference_keys.RETIRED_KEY: "1"}, body),
+                    encoding="utf-8")  # atomic-ok: test fixture
+
+
+def test_a_retired_scope_never_reads_the_legacy_effort(client):
+    ctx = base_c.STATES["glm_reasoning"](client)
+    _migrate()
+    _retire_by_hand(ctx["cid"])
+    raw = store.llm_connections.read_connection_raw("glm")
+    assert raw["reasoning_effort"] == "low"
+    for cid in ("", ctx["cid"]):
+        conn = _primary("chat", cid)
+        assert conn["sampling"]["preset_id"] == "warm"
+        assert "reasoning_effort" not in llm_sampling.effective(conn)["effective"]
+    assert inference.retirement_notes(ctx["cid"]) == ()
+
+
+def test_glm_with_no_preset_effort_reports_supported_and_sends_nothing():
+    for effort in ("", "high"):
+        eff = llm_sampling.effective({"id": "glm", "kind": "openai_compatible",
+                                      "model": "glm-5.3", "base_url": base_c.GLM_URL,
+                                      "reasoning_effort": effort, "sampling": {"params": {}}})
+        assert eff["controls"]["reasoning_effort"]["state"] == "supported"
+        assert "reasoning_effort" not in eff["effective"]
+
+
+def test_overlay_is_free_on_a_retired_store(monkeypatch):
+    """A retired `config.md`, with no campaign or a retired one: the overlay is
+    the settings as given, and nothing is read -- no connection, no preset."""
+    def forbid(*_args, **_kwargs):
+        raise AssertionError("a retired store reads nothing")
+
+    monkeypatch.setattr(legacy_plan, "lookup", forbid)
+    monkeypatch.setattr(store.sampler_presets, "read_preset", forbid)
+    monkeypatch.setattr(store.llm_connections, "list_connections", forbid)
+    retired = store.inference_keys.RETIRED_KEY
+    cfg = {store.inference_keys.FORMAT_KEY: "2", retired: "1", "active_connection_id": "glm"}
+    meta = {store.inference_keys.FORMAT_KEY: "2", retired: "1", "route_scene": "glm"}
+    for campaign in ({}, meta):
+        seen = legacy_plan.overlay(cfg, campaign, cid="saltmarch")
+        assert (seen.cfg, seen.meta) == (cfg, campaign)
+        assert (dict(seen.presets), dict(seen.facts), seen.notes) == ({}, {}, ())

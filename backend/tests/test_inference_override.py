@@ -218,11 +218,16 @@ def test_a_provider_that_cannot_send_is_the_same_409(at):
     assert "nokey" in exc.detail["detail"]
 
 
-def test_provider_only_keeps_the_legacy_meaning_on_format_1(at):
+def test_provider_only_keeps_the_standing_model_on_format_1_too(at):
+    """Since slice I a format-1 store plays as format 2, in memory, so a
+    provider named alone means what it means there (spec 5.6): that provider
+    at the STANDING model -- never at a model of its own."""
     ctx = at()
+    assert not store.inference_keys.is_current(store.read_config())
+    standing, _ = _run({}, ctx["cid"])
     resolved, routed = _run({"provider": "spare"}, ctx["cid"])
-    # That connection's own model, whatever the active one runs.
-    assert effective_model(resolved.conn) == "vendor/spare"
+    assert resolved.conn["id"] == "spare"
+    assert effective_model(resolved.conn) == effective_model(standing.conn) != "vendor/spare"
     assert routed is True
     # ... and `connection_id` says the same thing it always did.
     legacy, _ = _run({"connection_id": "spare"}, ctx["cid"])

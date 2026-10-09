@@ -45,14 +45,15 @@ write), then
 
 8. **campaigns** -- `campaign(cid)` for each unmarked one, under its own
    `campaign_lock_nowait(cid)`, one at a time; a busy one is skipped and the
-   next `ensure` finishes it (it resolves through the translation meanwhile).
+   next `ensure` finishes it (it resolves through the planner, in memory,
+   meanwhile).
    AFTER the marker, not before it: a campaign's routes are translated from
    the connections they name, and before the marker a connection's legacy
    `model` can still be edited -- by this server or another -- so a campaign
    migrated then kept the model the edit replaced, for good. Once the store
    is at format 2 those fields are frozen (refused on write), so what a
    campaign is translated from cannot move under its step, and an unmarked
-   campaign reads the same translation until it is reached.
+   campaign reads the same mapping, in memory, until it is reached.
 
 Every derived value is deterministic, so two devices migrating one synced
 store write the same bytes. The legacy keys and fields are left in place,

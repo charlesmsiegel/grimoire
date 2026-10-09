@@ -47,8 +47,8 @@ Four settings in config.md, all off by default:
 
 The Embedding role (set on the Models page; stored as
 ``role_embedding_provider`` and ``role_embedding_model``, read through the
-legacy translation on a store the format-2 migration has not reached, and
-turned into an endpoint in one place, `embed_space.endpoint`)
+planner, in memory (`legacy_plan`), on a store the format-2 migration has not
+reached, and turned into an endpoint in one place, `embed_space.endpoint`)
     The provider is an `llm_connections` entry; its ``base_url`` and
     ``api_key`` are the endpoint. Reusing a provider rather than adding
     ``embeddings_url``/``embeddings_key`` to config.md is deliberate: config.md
@@ -56,8 +56,9 @@ turned into an endpoint in one place, `embed_space.endpoint`)
     connection store already handles masking, editing, and dropping the key
     when the endpoint is repointed. An ``openai_compatible`` provider brings
     its own URL; an OpenRouter one embeds through OpenRouter's
-    ``/embeddings`` at format 2 only (a legacy choice of one has always meant
-    "off", and stays off through the migration); the Claude kinds serve no
+    ``/embeddings`` when chosen in the format-2 layout (a legacy choice of one
+    has always meant "off": the planner maps it to no choice, and so does the
+    migration); the Claude kinds serve no
     ``/embeddings`` route and embed nothing. The model is the embedding
     model id, e.g. ``text-embedding-3-small``.
 ``semantic_recall_depth``

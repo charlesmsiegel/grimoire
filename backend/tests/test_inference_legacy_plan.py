@@ -207,6 +207,18 @@ def _wire(conn: dict, params: dict) -> dict:
     return llm_sampling.effective({**conn, "sampling": {"params": params}})["effective"]
 
 
+def _legacy_wire(conn: dict, params: dict) -> dict:
+    """What `conn` sent with a preset of `params` before slice I: the preset's
+    share, plus the connection's legacy GLM effort where the preset set none
+    (the old `glm_effort(conn)`, restated)."""
+    out = _wire(conn, params)
+    effort = str(conn.get("reasoning_effort") or "")
+    if ("reasoning_effort" not in params and effort in llm_reasoning.GLM_EFFORTS
+            and llm_reasoning.is_glm(conn) and conn.get("kind") == "openai_compatible"):
+        out["reasoning_effort"] = effort
+    return out
+
+
 def _forbid(_conn_id: str):
     raise AssertionError("a retired scope reads nothing")
 
@@ -323,17 +335,19 @@ def test_derived_presets_keep_the_wire_in_memory(home):
     assert camp.repoint == {keys.pin_key("scene", "preset"): "reasoning-high"}
     assert _derived(camp)["reasoning-high"].params == {"reasoning_effort": "high"}
 
-    # The wire: the legacy connection with its own preset, against the same
-    # connection with its effort gone and the derived preset attached.
+    # The wire: what the legacy connection sent with its own preset -- that
+    # preset's share plus the connection's effort, which `glm_effort` added
+    # until slice I (it reads only the preset now, `_legacy_wire`) -- against
+    # the derived preset's, whether or not the connection still holds it.
     for conn_id, base_params, derived_id in (("glm", {"temperature": 0.9}, "warm-reasoning-high"),
                                              ("glm2", {}, "reasoning-low")):
         raw = llm_connections.read_connection_raw(conn_id)
-        legacy = _wire(raw, base_params)
+        legacy = _legacy_wire(raw, base_params)
         assert legacy["reasoning_effort"] == raw["reasoning_effort"]
+        assert _wire(raw, derived[derived_id].params) == legacy
         assert _wire({**raw, "reasoning_effort": ""}, derived[derived_id].params) == legacy
     raw = llm_connections.read_connection_raw("glm")
-    assert (_wire({**raw, "reasoning_effort": ""}, _derived(camp)["reasoning-high"].params)
-            == _wire(raw, {}))
+    assert _wire(raw, _derived(camp)["reasoning-high"].params) == _legacy_wire(raw, {})
 
 
 def test_identical_derivations_collapse(home):
@@ -802,3 +816,267 @@ def test_the_retired_marker_is_a_config_key(home):
     assert legacy_plan.RETIRED_KEY == inference_keys.RETIRED_KEY
     assert config.read_config()[inference_keys.RETIRED_KEY] == ""
     assert inference_keys.RETIRED_KEY not in routing.CONFIG_KEYS
+
+
+# ---- the mapping, case by case (moved from `test_inference_translate.py`) ----
+#: Raw connections by id, for the pure mapping cases.
+CONNS = {
+    "or": {"model": "vendor/a", "sampler_preset": "warm"},
+    "claude": {"model": "", "sampler_preset": ""},
+    "spare": {"model": "spare-model", "sampler_preset": "calm"},
+    "local": {"model": "local-model", "sampler_preset": "cold"},
+}
+
+
+def _conns(conn_id: str):
+    return CONNS.get(conn_id)
+
+
+def test_the_active_connection_becomes_primary():
+    view = legacy_plan.global_mapping({"active_connection_id": "or"}, _conns)
+    assert view[keys.role_key("primary", "provider")] == "or"
+    assert view[keys.role_key("primary", "model")] == "vendor/a"
+    assert view[keys.role_key("primary", "preset")] == "warm"
+    assert not view.get(keys.role_key("fast", "provider"))
+    assert not view.get(keys.role_key("decision", "provider"))
+
+
+def test_the_active_id_is_used_raw():
+    view = legacy_plan.global_mapping({"active_connection_id": "  or  "}, _conns)
+    assert view[keys.role_key("primary", "provider")] == "  or  "
+
+
+def test_an_empty_claude_model_stays_empty_in_the_mapping():
+    """The mapping keeps it empty; only what the migration persists names the
+    model an unset Claude connection runs (`enriched`)."""
+    view = legacy_plan.global_mapping({"active_connection_id": "claude"}, _conns)
+    assert view[keys.role_key("primary", "provider")] == "claude"
+    assert view[keys.role_key("primary", "model")] == ""
+
+
+def test_the_global_fallback_backs_every_generative_role():
+    view = legacy_plan.global_mapping(
+        {"active_connection_id": "or", "fallback_connection_id": "spare"}, _conns)
+    for role in keys.GENERATIVE_ROLES:
+        assert view[keys.fallback_key(role, "provider")] == "spare"
+        assert view[keys.fallback_key(role, "model")] == "spare-model"
+        assert view[keys.fallback_key(role, "preset")] == "calm"
+    assert not any(k.startswith("role_embedding_fallback_") for k in view)
+
+
+def test_embeddings_become_the_embedding_role():
+    view = legacy_plan.global_mapping(
+        {"embeddings_connection_id": "  local ", "embeddings_model": " m "}, _conns)
+    assert view[keys.role_key("embedding", "provider")] == "local"
+    assert view[keys.role_key("embedding", "model")] == "m"
+
+
+def test_embedding_role_needs_no_lookup():
+    cfg = {"embeddings_connection_id": "  local ", "embeddings_model": " m "}
+    assert legacy_plan.embedding_role(cfg) == ("local", "m")
+
+
+def test_embedding_role_reads_the_view_keys_when_current():
+    cfg = {keys.FORMAT_KEY: "2", keys.role_key("embedding", "provider"): "x",
+           keys.role_key("embedding", "model"): "y",
+           "embeddings_connection_id": "ignored"}
+    assert legacy_plan.embedding_role(cfg) == ("x", "y")
+    assert legacy_plan.embedding_role({}) == ("", "")
+
+
+def test_a_route_connection_becomes_a_pin():
+    view = legacy_plan.global_mapping({"route_dossier": "  local  "}, _conns)
+    assert view[keys.use_key("dossier")] == keys.PIN == "model"
+    assert view[keys.pin_key("dossier", "provider")] == "local"
+    assert view[keys.pin_key("dossier", "model")] == "local-model"
+    assert view[keys.pin_key("dossier", "preset")] == "cold"
+
+
+def test_split_routes_copy_their_parents():
+    view = legacy_plan.global_mapping(
+        {"route_summary": "claude", "preset_summary": CLEAR}, _conns)
+    for route in ("summary", "scene_break"):
+        assert view[keys.use_key(route)] == "model"
+        assert view[keys.pin_key(route, "provider")] == "claude"
+        assert view[keys.preset_key(route)] == CLEAR
+
+
+def test_a_dangling_route_id_is_kept_for_the_cascade_to_walk_past():
+    view = legacy_plan.global_mapping({"route_voice": "gone"}, lambda cid: None)
+    assert view[keys.use_key("voice")] == "model"
+    assert view[keys.pin_key("voice", "provider")] == "gone"
+    assert view[keys.pin_key("voice", "model")] == ""
+
+
+def test_a_blank_route_says_nothing():
+    view = legacy_plan.global_mapping({"route_voice": "   ", "preset_voice": " "}, _conns)
+    assert keys.use_key("voice") not in view
+    assert keys.preset_key("voice") not in view
+
+
+def test_a_campaign_mapping_carries_routes_only():
+    view = legacy_plan.campaign_mapping({"route_scene": "local", "route_tagline": "x"}, _conns)
+    assert view[keys.use_key("scene")] == "model"
+    assert view[keys.pin_key("speaker", "provider")] == "local"
+    assert not any(k.endswith("tagline") or "_tagline_" in k for k in view)
+    assert not any(k.startswith("role_") for k in view)
+
+
+def test_a_connections_own_preset_is_stripped():
+    conns = {"p": {"model": "m", "sampler_preset": "  warm  "}}
+    cfg = {"active_connection_id": "p", "fallback_connection_id": "p",
+           "route_dossier": "p"}
+    view = legacy_plan.global_mapping(cfg, conns.get)
+    assert view[keys.role_key("primary", "preset")] == "warm"
+    assert view[keys.fallback_key("fast", "preset")] == "warm"
+    assert view[keys.pin_key("dossier", "preset")] == "warm"
+
+
+def test_a_padded_preset_value_is_stripped_at_both_scopes():
+    g = legacy_plan.global_mapping({"preset_scene": "  warm "}, _conns)
+    assert g[keys.preset_key("scene")] == "warm"
+    assert g[keys.preset_key("speaker")] == "warm"
+    c = legacy_plan.campaign_mapping({"preset_scene": "  warm "}, _conns)
+    assert c[keys.preset_key("scene")] == "warm"
+    assert c[keys.preset_key("speaker")] == "warm"
+
+
+def test_the_clear_sentinel_passes_through_a_campaign_mapping():
+    c = legacy_plan.campaign_mapping({"preset_summary": CLEAR}, _conns)
+    assert c[keys.preset_key("summary")] == CLEAR
+    assert c[keys.preset_key("scene_break")] == CLEAR
+
+
+def test_a_dangling_fallback_id_is_kept_raw():
+    view = legacy_plan.global_mapping({"fallback_connection_id": "gone"}, lambda cid: None)
+    for role in keys.GENERATIVE_ROLES:
+        assert view[keys.fallback_key(role, "provider")] == "gone"
+        assert view[keys.fallback_key(role, "model")] == ""
+
+
+def test_a_whitespace_only_fallback_id_is_kept_raw():
+    view = legacy_plan.global_mapping({"fallback_connection_id": "  "}, _conns)
+    for role in keys.GENERATIVE_ROLES:
+        assert view[keys.fallback_key(role, "provider")] == "  "
+
+
+def test_a_campaign_marker_alone_never_switches_the_layout():
+    """Spec 11.1: under a legacy `config.md` a marked campaign's legacy keys
+    are still mapped -- its own marker does not stop the planner."""
+    meta = {keys.FORMAT_KEY: "2", "route_scene": "local"}
+    plan = _campaign(meta, global_current=False, lookup=_conns,
+                     presets=lambda _pid: None)
+    assert plan.mapped[keys.pin_key("scene", "provider")] == "local"
+    # Under a current one, a marked campaign is read as it stands.
+    assert _campaign(meta, lookup=_conns, presets=lambda _pid: None).mapped == {}
+
+
+# ---- the overlay: play's read, in memory ----
+def _write_campaign(cid: str, meta: dict) -> None:
+    from grimoire.store.frontmatter import dump_frontmatter
+
+    path = store.campaigns.campaign_root(cid) / "campaign.md"
+    _, body = parse_frontmatter(path.read_text(encoding="utf-8"))
+    path.write_text(dump_frontmatter(meta, body), encoding="utf-8")  # atomic-ok: test fixture
+
+
+def test_overlay_reads_a_legacy_store_as_format_2(home):
+    """`mapped`, then `repoint`, over each scope, marked current in memory;
+    nothing written."""
+    sampler_presets.create_preset("Warm", {"temperature": 0.9})
+    _glm("glm", "high", preset="warm")
+    config.write_config(active_connection_id="glm", route_dossier="glm")
+    before = (home / "config.md").read_bytes()
+    cfg = config.read_config()
+
+    seen = legacy_plan.overlay(cfg, {})
+
+    assert keys.is_current(seen.cfg)
+    assert seen.cfg[keys.role_key("primary", "provider")] == "glm"
+    assert seen.cfg[keys.role_key("primary", "preset")] == "warm-reasoning-high"
+    assert seen.cfg[keys.pin_key("dossier", "preset")] == "warm-reasoning-high"
+    assert dict(seen.presets) == {"warm-reasoning-high": {
+        "id": "warm-reasoning-high", "name": "Warm · reasoning high",
+        "params": {"temperature": 0.9, "reasoning_effort": "high"}, "notes": "", "source": ""}}
+    assert seen.meta == {} and seen.notes == ()
+    assert (home / "config.md").read_bytes() == before
+    assert not (home / "sampler_presets" / "warm-reasoning-high.json").exists()
+
+
+def test_overlay_reads_an_unreadable_connection_as_absent(home):
+    """Play's lookup is fail-soft, as the translation's was: a connection file
+    a sync client holds is no connection, never a raise."""
+    (home / "llm_connections").mkdir(exist_ok=True)
+    llm_connections.list_connections()
+    (home / "llm_connections" / "held.md").write_bytes(b"")
+    config.write_config(active_connection_id="held")
+    seen = legacy_plan.overlay(config.read_config(), {})
+    assert seen.cfg[keys.role_key("primary", "provider")] == "held"
+    assert seen.cfg[keys.role_key("primary", "model")] == ""
+
+
+def test_overlay_passes_a_current_scope_through(home):
+    """At format 2 nothing is mapped -- a legacy key left in the file means
+    nothing -- and with no GLM slot nothing is repointed either."""
+    cfg = {keys.FORMAT_KEY: "2", "route_scene": "local", "active_connection_id": "or",
+           keys.role_key("primary", "provider"): "openrouter"}
+    seen = legacy_plan.overlay(cfg, {keys.FORMAT_KEY: "2", "route_scene": "local"})
+    assert seen.cfg == cfg
+    assert seen.meta == {keys.FORMAT_KEY: "2", "route_scene": "local"}
+
+
+def test_overlay_plans_a_campaign_against_the_overlaid_global(home):
+    """An unmarked campaign at format 2 is mapped in memory; its notes are
+    its own scope's."""
+    sampler_presets.create_preset("Cold", {"temperature": 0.2})
+    _glm("glm", "low")
+    cfg = {keys.FORMAT_KEY: "2", keys.role_key("primary", "provider"): "glm",
+           keys.role_key("primary", "model"): "glm-5.3"}
+    seen = legacy_plan.overlay(cfg, {"route_tracker": "glm", "preset_tracker": "cold"},
+                               cid="saltmarch")
+    assert seen.cfg[keys.role_key("primary", "preset")] == "reasoning-low"
+    assert seen.meta[keys.pin_key("tracker", "provider")] == "glm"
+    assert keys.is_current(seen.meta)
+    assert [(n.scope, n.subject, n.provider_id) for n in seen.notes] == [
+        ("campaign:saltmarch", "tracker", "glm")]
+
+
+def test_a_campaign_derivation_never_aliases_a_global_one(home):
+    """Two different presets with one name, each on a GLM slot at the same
+    effort -- the global Primary's and a campaign pin's -- derive one name.
+    The global derived preset is planned first and answers the campaign's
+    `derive` before the store does, so the campaign's takes the suffix: no
+    id names two bodies, and each slot keeps its own params on the wire."""
+    sampler_presets.create_preset("Warm", {"temperature": 0.9})
+    other = sampler_presets.create_preset("Warm", {"temperature": 0.5})
+    assert other != "warm"
+    assert sampler_presets.read_preset(other)["name"] == "Warm"
+    _glm("glm", "high", preset="warm")
+    _glm("glm2", "high", preset=other)
+    config.write_config(active_connection_id="glm")
+
+    seen = legacy_plan.overlay(config.read_config(), {"route_scene": "glm2"},
+                               cid="saltmarch")
+
+    glob_id = seen.cfg[keys.role_key("primary", "preset")]
+    camp_id = seen.meta[keys.pin_key("scene", "preset")]
+    assert glob_id == "warm-reasoning-high"
+    assert camp_id.startswith("warm-reasoning-high-") and camp_id != glob_id
+    assert seen.presets[glob_id]["params"] == {"temperature": 0.9, "reasoning_effort": "high"}
+    assert seen.presets[camp_id]["params"] == {"temperature": 0.5, "reasoning_effort": "high"}
+    assert seen.presets[glob_id]["name"] == seen.presets[camp_id]["name"]
+
+    # And the resolver hands each slot its own.
+    from grimoire.store.inference import resolve
+
+    wid = store.worlds.create_world("Realm")
+    cid = store.campaigns.create_campaign("Saltmarch", wid)
+    meta = store.campaigns.read_campaign(cid)["meta"]
+    _write_campaign(cid, {**{k: v for k, v in meta.items() if k != keys.FORMAT_KEY},
+                          "route_scene": "glm2"})
+    glob = resolve.resolve("chat").conn
+    camp = resolve.resolve("chat", cid).conn
+    assert (glob["sampling"]["preset_id"], glob["sampling"]["params"]["temperature"]) == (
+        glob_id, 0.9)
+    assert camp["id"] == "glm2" and camp["sampling"]["params"]["temperature"] == 0.5
+    assert llm_sampling.effective(camp)["effective"]["reasoning_effort"] == "high"

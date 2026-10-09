@@ -277,7 +277,6 @@ def test_deleting_the_active_connection_leaves_nothing_active(monkeypatch, tmp_p
     s.write_config(active_connection_id=cid)
     s.llm_connections.delete_connection(cid)
     assert s.read_config()["active_connection_id"] == ""
-    assert s.llm_connections.get_active() is None
 
 
 def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(monkeypatch, tmp_path):
@@ -295,7 +294,6 @@ def test_recreating_a_deleted_active_connection_does_not_silently_reactivate_it(
         "claude", "Reused Name", model="opus")  # even a different kind
     assert new_id == cid  # same freed slug
     assert s.read_config()["active_connection_id"] == ""
-    assert s.llm_connections.get_active() is None
 
 
 def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tmp_path):
@@ -331,26 +329,6 @@ def test_delete_clears_active_id_even_if_file_removal_then_fails(monkeypatch, tm
     import pytest
     with pytest.raises(s.llm_connections.ConnectionNotFound):
         s.llm_connections.read_connection_raw(cid)
-
-
-# ---- get_active ----
-
-def test_get_active_resolves_the_configured_connection(monkeypatch, tmp_path):
-    s = legacy_home(monkeypatch, tmp_path)
-    s.write_config(active_connection_id="claude")
-    active = s.llm_connections.get_active()
-    assert active is not None and active["kind"] == "claude"
-
-
-def test_get_active_none_when_unset(monkeypatch, tmp_path):
-    # Models an explicit clear that happens AFTER migration has already
-    # completed (e.g. via delete_connection on the active connection) --
-    # not the pre-migration bootstrap case, which ensure_migrated's own
-    # seeding step is responsible for (see test_zero_config_seeds_...).
-    s = legacy_home(monkeypatch, tmp_path)
-    s.llm_connections.list_connections()  # let migration complete first (writes the .migrated marker)
-    s.write_config(active_connection_id="")  # simulate an explicit clear, e.g. via delete_connection
-    assert s.llm_connections.get_active() is None
 
 
 # ---- prefill opt-in (play controls IV) ----

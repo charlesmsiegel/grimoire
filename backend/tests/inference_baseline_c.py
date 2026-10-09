@@ -62,7 +62,8 @@ def _glm(client: TestClient, effort: str) -> str:
                             api_key="sk-test-glm", model="glm-5.3",
                             reasoning_effort=effort, sampler_preset="warm")
     # The point of the state: the legacy effort is one `glm_effort` speaks for.
-    assert llm_reasoning.glm_effort(store.llm_connections.read_connection_raw(conn)) == effort
+    raw = store.llm_connections.read_connection_raw(conn)
+    assert llm_reasoning.glm_effort(raw["model"], raw["reasoning_effort"]) == effort
     base._config(active_connection_id=conn)
     return conn
 

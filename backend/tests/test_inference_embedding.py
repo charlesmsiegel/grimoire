@@ -1,6 +1,7 @@
 """The Embedding role has one reader: `resolve.embedding` (slice D, Task 1).
 
-It reads the role through the cascade (`translate.embedding_view`, then
+It reads the role through the cascade (the planner's overlay of `config.md`,
+its role keys stripped by `_embedding_view`, then
 `cascade.role_selection("embedding", campaign={})`), builds one attempt with
 no fallback, says what that attempt is known not to do (`missing`), and names
 the vector space it embeds in (`space_id`) only when it embeds. `embed_space`
@@ -16,7 +17,7 @@ import pytest
 
 from grimoire.store import config, embed_space, llm_connections, routing
 from grimoire.store import inference_keys as keys
-from grimoire.store.inference import cascade, facts, translate
+from grimoire.store.inference import cascade, facts
 from grimoire.store.inference import resolve as inference_resolve
 
 
@@ -52,14 +53,14 @@ def test_the_cascade_is_the_reader(monkeypatch):
         return real(role, campaign=campaign, glob=glob, exists=exists)
 
     views: list[dict] = []
-    real_view = translate.embedding_view
+    real_view = inference_resolve._embedding_view
 
     def view_spy(cfg):
         views.append(cfg)
         return real_view(cfg)
 
     monkeypatch.setattr(cascade, "role_selection", spy)
-    monkeypatch.setattr(translate, "embedding_view", view_spy)
+    monkeypatch.setattr(inference_resolve, "_embedding_view", view_spy)
     assert embed_space.resolve() is not None
     assert calls == [("embedding", {})]
     assert len(views) == 1
@@ -273,9 +274,15 @@ def test_embed_tasks_are_registered_apart():
 
 
 def test_embedding_view_strips_at_both_formats():
+    """The `embeddings_*` trim rule, kept: the format-2 role keys are read
+    stripped, and so is a legacy choice, which the planner maps in memory
+    (and maps to nothing when it never embedded)."""
     role = keys.role_key("embedding", "provider"), keys.role_key("embedding", "model")
-    assert translate.embedding_view({"embeddings_connection_id": " a ",
-                                     "embeddings_model": " b "}) == {role[0]: "a", role[1]: "b"}
-    assert translate.embedding_view({keys.FORMAT_KEY: "2", role[0]: " a ",
-                                     role[1]: " b "}) == {role[0]: "a", role[1]: "b"}
-    assert translate.embedding_role({keys.FORMAT_KEY: "2", role[0]: " a "}) == ("a", "")
+    assert inference_resolve._embedding_view({keys.FORMAT_KEY: "2", role[0]: " a ",
+                                              role[1]: " b "}) == {role[0]: "a", role[1]: "b"}
+    assert inference_resolve.embedding_role({keys.FORMAT_KEY: "2", role[0]: " a "}) == ("a", "")
+    conn = _local()
+    assert inference_resolve.embedding_role({"embeddings_connection_id": f" {conn} ",
+                                             "embeddings_model": " b "}) == (conn, "b")
+    assert inference_resolve.embedding_role({"embeddings_connection_id": " gone ",
+                                             "embeddings_model": " b "}) == ("", "")

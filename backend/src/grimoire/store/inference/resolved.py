@@ -58,9 +58,9 @@ class Attempt:
     #: a fallback, the primary's when the primary's came from a route scope.
     preset_id: str
     #: The attempt lowered to today's connection dict (`sampling` and, where
-    #: the catalog says, `model_params` and `model_features` attached; at
-    #: format 2, the model's `vision`, `prefill` and `post_process` facts in
-    #: place of the connection's legacy fields -- `resolve.with_facts`).
+    #: the catalog says, `model_params` and `model_features` attached; the
+    #: model's `vision`, `prefill` and `post_process` facts in place of the
+    #: connection's legacy fields -- `resolve.with_facts`).
     conn: dict
     #: The connection's adapter (`kind`).
     provider_kind: str = ""
@@ -105,9 +105,6 @@ class ResolvedInference:
     operation: str
     #: The route's key, or "" for a task no route claims.
     route: str
-    #: The key the route's legacy settings live under (`routing.legacy_key`),
-    #: which is what a refusal names; "" for no route.
-    legacy_route: str
     #: The role whose slot supplied the selection ("" for a pin, or nothing).
     role: str
     #: "route" (a pin), "role", or "" when nothing was selected.
@@ -125,13 +122,8 @@ class ResolvedInference:
     #: same reads the attempts were built from (None when it chose nothing).
     #: What an override is compared against to say whether it moved the call.
     standing: Selection | None = None
-    #: Whether the layout this was resolved from is the current one (roles and
-    #: route choices) rather than the legacy keys read as it. The per-call
-    #: override means different things in the two (spec 5.6), so the seam that
-    #: refuses on it asks this rather than re-reading `config.md`.
-    current: bool = False
     #: The sampler preset the STANDING selection would have run with, when the
-    #: call carried an override preset (either layout); None otherwise (it
+    #: call carried an override preset; None otherwise (it
     #: is only ever compared against that preset).
     standing_preset: str | None = None
     #: The capabilities the route needs -- its operation's own and its

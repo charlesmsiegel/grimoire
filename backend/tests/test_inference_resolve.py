@@ -1,7 +1,7 @@
 """The resolver: a task (and a campaign's settings) in, the attempts it runs out.
 
-`store.inference.resolve` assembles the pure pieces (`translate`, `cascade`)
-around the store reads, and must answer exactly what the route layer answered
+`store.inference.resolve` assembles the pure pieces (`cascade`, and the
+planner's in-memory overlay of a legacy layout) around the store reads, and must answer exactly what the route layer answered
 before the refactor. The functions it replaced are gone from `routes.common`
 now, so these tests hold the resolver itself -- not the seam built on it -- to
 the frozen baseline (`fixtures/inference_baseline.json`), over every store state
@@ -24,7 +24,7 @@ from grimoire.llm import effective_model
 from grimoire.store import inference_keys as keys
 from grimoire.store import routing
 from grimoire.store.frontmatter import dump_frontmatter, parse_frontmatter
-from grimoire.store.inference import capabilities, translate
+from grimoire.store.inference import capabilities
 from grimoire.store.inference import facts as inference_facts
 from grimoire.store.inference import resolve as inf
 from grimoire.store.inference.capabilities import Cap
@@ -33,7 +33,11 @@ from grimoire.store.inference.resolved import Attempt, ResolvedInference
 
 from . import inference_baseline as baseline
 from . import inference_fixtures
-from .test_inference_equivalence import NEW_TASKS
+from .test_inference_equivalence import (
+    NEW_TASKS,
+    PROVIDER_ONLY_OVERRIDES,
+    migrated_expectation,
+)
 
 TASKS = [*sorted(routing.TASK_ROUTE), ""]
 
@@ -86,18 +90,22 @@ def _refusal(resolved: ResolvedInference) -> dict | None:
 
     Spelled out here rather than read off the seam, so the comparison below
     proves the resolver carries everything that refusal needs (`conn`, `via`,
-    `legacy_route`) independently of the code that builds it."""
+    `route`, `role`) independently of the code that builds it. Every store
+    resolves as format 2 since slice I, so this is that wording (spec 12)."""
     conn = resolved.conn
     if conn is None:
         return {"detail": "No LLM connection selected", "kind": "missing_key"}
     problem = inf.problem(conn)
     if problem is None:
         return None
+    name = conn.get("name") or conn["id"]
     if resolved.via == "route":
-        label = routing.label_for(resolved.legacy_route).lower()
-        return {"detail": f"{problem} ({conn.get('name') or conn['id']}, routed for {label})",
+        label = routing.label_for(resolved.route).lower()
+        return {"detail": f"{problem} ({name}, routed for {label})", "kind": "missing_key"}
+    if resolved.role:
+        return {"detail": f"{problem} ({name}, the {resolved.role.capitalize()} role)",
                 "kind": "missing_key"}
-    return {"detail": problem, "kind": "missing_key"}
+    return {"detail": f"{problem} ({name})", "kind": "missing_key"}
 
 
 # ---- the equivalence sweep: every state, task and scope against the baseline ----
@@ -242,11 +250,18 @@ def _selection(body: dict) -> Selection:
 def test_every_override_resolves_as_the_baseline_recorded(state, at_state):
     """The resolver's half of an override, against what the seam answered
     (recorded at the campaign scope). A 400 or a 409 is the seam's to raise;
-    the resolver's part is to have nothing, or something that cannot send."""
+    the resolver's part is to have nothing, or something that cannot send.
+
+    Every store resolves as format 2 since slice I, so the cells are the
+    migration's (`migrated_expectation`), and a connection named alone means
+    what it means at format 2 -- `test_inference_override.py` holds those."""
     ctx = at_state(state)
+    expected = migrated_expectation(BASELINE[state])["overrides"]
     for name, body in OVERRIDES.items():
+        if name in PROVIDER_ONLY_OVERRIDES:
+            continue
         where = (state, name)
-        recorded = BASELINE[state]["overrides"][name]
+        recorded = expected[name]
         resolved = inf.resolve("regenerate", ctx["cid"],
                                override=_selection(body))
         if recorded.get("status") == 400:
@@ -293,18 +308,16 @@ def test_a_route_pin_lowers_to_that_connections_dict(at_state):
     assert conn["sampling"] == {"preset_id": "warm", "preset_name": "warm",
                                 "scope": "connection", "params": {"temperature": 0.9}}
     assert "model_params" not in conn          # not an OpenRouter connection
-    assert (resolved.route, resolved.legacy_route) == ("dossier", "dossier")
+    assert resolved.route == "dossier"
     assert (resolved.via, resolved.scope, resolved.role) == ("route", "global", "")
     first = resolved.attempts[0]
     assert (first.provider_id, first.model, first.preset_id, first.conn) == (
         "local", "local-model", "warm", conn)
 
 
-def test_a_split_route_reports_its_legacy_route(at_state):
+def test_a_split_route_reports_its_own_route(at_state):
     at_state("fresh")
-    resolved = inf.resolve("scene-break")
-    assert (resolved.route, resolved.legacy_route) == ("scene_break", "summary")
-    assert inf.resolve("").legacy_route == ""
+    assert inf.resolve("scene-break").route == "scene_break"
     assert inf.resolve("").route == ""
 
 
@@ -375,7 +388,25 @@ def test_an_unreadable_connection_file_reads_as_missing(at_state, monkeypatch):
         assert resolved.conn["id"] == "claude", exc
 
 
+def _uncounted_planner(monkeypatch) -> None:
+    """The planner's own reads (`legacy_plan.lookup("soft")`) through the real
+    reader, so a test counting `read_connection_raw` counts the resolver's."""
+    from grimoire.store.inference import legacy_plan
+
+    real = store.llm_connections.read_connection_raw
+
+    def soft(conn_id: str):
+        try:
+            return real(conn_id)
+        except store.llm_connections.ConnectionNotFound:
+            return None
+
+    monkeypatch.setattr(legacy_plan, "_soft_read", soft)
+
+
 def test_a_connection_is_read_once_per_resolve(at_state, monkeypatch):
+    """By the resolver, once (`connection_lookup`). The planner reads a legacy
+    layout through a lookup of its own (`_overlay`), once more at most."""
     at_state("routed")
     calls: list[str] = []
     real = store.llm_connections.read_connection_raw
@@ -384,21 +415,27 @@ def test_a_connection_is_read_once_per_resolve(at_state, monkeypatch):
         calls.append(conn_id)
         return real(conn_id)
 
+    _uncounted_planner(monkeypatch)
     monkeypatch.setattr(store.llm_connections, "read_connection_raw", counting)
     inf.resolve("dossier")
     assert calls and len(calls) == len(set(calls))
 
 
-def test_a_provider_only_override_keeps_that_providers_model(at_state):
+def test_a_provider_only_override_keeps_the_standing_model(at_state):
+    """Spec 5.6, on a legacy store too since slice I: a provider named alone
+    runs at the STANDING selection's model and preset (the active
+    connection's, mapped into the Primary role in memory), never at a model
+    of its own."""
     at_state("routed")
     resolved = inf.resolve("regenerate",
                            override=Selection("local", "", ""))
-    assert resolved.conn["id"] == "local" and resolved.conn["model"] == "local-model"
+    assert resolved.conn["id"] == "local" and resolved.conn["model"] == "vendor/active"
     # The route's preset follows the route (global `preset_scene: cold`); a
-    # route with none falls to the named connection's own (`warm`).
+    # route with none falls to the standing selection's own (`warm`).
     assert resolved.conn["sampling"]["preset_id"] == "cold"
     assert resolved.conn["sampling"]["scope"] == "global"
     tagline = inf.resolve("tagline", override=Selection("local", "", ""))
+    assert tagline.conn["model"] == "vendor/active"
     assert tagline.conn["sampling"]["preset_id"] == "warm"
     assert tagline.conn["sampling"]["scope"] == "connection"
 
@@ -419,11 +456,13 @@ def test_a_model_only_override_keeps_the_standing_provider(at_state):
     assert effective_model(glob.conn) == "vendor/bigger"
 
 
-def test_a_provider_override_needs_no_standing_selection(at_state):
+def test_a_provider_override_with_no_standing_selection_names_no_model(at_state):
+    """With nothing standing, a provider named alone has no model to keep
+    (spec 5.6): it resolves with none, which the seam asks the caller for."""
     at_state("no_active")
     assert inf.resolve("regenerate").conn is None
     named = inf.resolve("regenerate", override=Selection("spare", "", ""))
-    assert named.conn["id"] == "spare" and named.conn["model"] == "vendor/spare"
+    assert named.conn["id"] == "spare" and named.conn["model"] == ""
     # A model alone overrides the standing selection, and there is none.
     model_only = inf.resolve("regenerate",
                              override=Selection("", "vendor/bigger", ""))
@@ -507,10 +546,12 @@ def _key_cleared_after_first_read(monkeypatch, conn_id: str) -> list[str]:
 def test_an_override_is_refused_on_the_copy_that_serves(at_state, monkeypatch, body):
     """Review probe: an override that read the standing connection twice
     checked one copy and served the other, so a key cleared between the two
-    reads went out keyless with no 409. One read per call, and what serves is
-    what was checked."""
+    reads went out keyless with no 409. One read per call by the resolver,
+    and what serves is what was checked. (The planner's own read of a legacy
+    layout is not the resolver's, and decides no key: `_uncounted_planner`.)"""
     ctx = at_state("fresh")
     for scope_cid in ("", ctx["cid"]):
+        _uncounted_planner(monkeypatch)
         reads = _key_cleared_after_first_read(monkeypatch, "openrouter")
         resolved, routed = routes.common.override_inference(
             SimpleNamespace(**body), "regenerate", scope_cid)
@@ -527,12 +568,14 @@ def test_a_model_only_override_on_a_keyless_standing_route_is_a_409(at_state, mo
     is refused with the seam's own wording -- never served."""
     at_state("fresh")
     real = store.llm_connections.read_connection_raw
+    name = real("openrouter")["name"]
     monkeypatch.setattr(store.llm_connections, "read_connection_raw",
                         lambda cid: {**real(cid), "api_key": ""})
     with pytest.raises(HTTPException) as exc:
         routes.common.override_inference(SimpleNamespace(**body), "regenerate", "")
     assert exc.value.status_code == 409
-    assert exc.value.detail == {"detail": "OpenRouter key not set", "kind": "missing_key"}
+    assert exc.value.detail == {"detail": f"OpenRouter key not set ({name}, the Primary role)",
+                                "kind": "missing_key"}
 
 
 # ---- the campaign is read store-side, and never fails a resolution ----
@@ -578,27 +621,30 @@ def _write_campaign_meta(cid: str, fields: dict) -> None:
 @pytest.mark.parametrize(("fields", "expected"), [
     # A campaign marker beside LEGACY keys: the legacy keys still route it.
     ({keys.FORMAT_KEY: 2, "route_scene": "local"}, "local"),
-    # A campaign marker beside NEW-style keys, in a legacy store: those keys
-    # mean nothing yet, exactly as they meant nothing to the code before.
+    # A campaign marker beside NEW-style keys, in a legacy store: since slice
+    # I every scope is read as format 2 sees it (`legacy_plan.overlay`), and
+    # the migration leaves a marked campaign as it stands -- so those keys
+    # route it, in memory as they will once migrated.
     ({keys.FORMAT_KEY: 2, keys.use_key("scene"): keys.PIN,
       keys.pin_key("scene", "provider"): "local",
-      keys.pin_key("scene", "model"): "local-model"}, "openrouter"),
+      keys.pin_key("scene", "model"): "local-model"}, "local"),
 ])
 def test_a_campaign_marker_alone_never_switches_the_layout(at_state, fields, expected):
     ctx = at_state("whitespace")
     cid = ctx["cid"]
     _write_campaign_meta(cid, fields)
-    assert not translate.is_current(store.config.read_config())
+    assert not keys.is_current(store.config.read_config())
     resolved = inf.resolve("chat", cid)
     assert resolved.conn["id"] == expected
 
 
 # ---- a resolution reads only what its task can reach ----
 @pytest.mark.parametrize(("task", "scoped", "expected"), [
-    # Active (Primary), the fallback, and the global dossier pin.
-    ("dossier", False, {"openrouter", "spare", "local"}),
-    # The campaign's scene pin.
-    ("chat", True, {"openrouter", "spare", "local"}),
+    # The global dossier pin, and the fallback: the pin answers before the
+    # Primary role is walked.
+    ("dossier", False, {"spare", "local"}),
+    # The campaign's scene pin, and the fallback.
+    ("chat", True, {"spare", "local"}),
     # A global-only route nothing pins, and a task no route claims.
     ("tagline", False, {"openrouter", "spare"}),
     ("", True, {"openrouter", "spare"}),
@@ -607,7 +653,9 @@ def test_a_resolution_reads_only_the_connections_its_task_can_touch(
         at_state, monkeypatch, task, scoped, expected):
     """`routed` pins summary to `claude`, voice to a dangling id, tracker to
     `local` (and `spare` in the campaign) and absorb, in the campaign, to a
-    deleted connection: a resolution of one task looks none of those up."""
+    deleted connection: the resolver, resolving one task, looks none of those
+    up. (The planner maps the whole legacy layout through its own lookup,
+    `_uncounted_planner`.)"""
     ctx = at_state("routed")
     calls: list[str] = []
     real = store.llm_connections.read_connection_raw
@@ -616,6 +664,7 @@ def test_a_resolution_reads_only_the_connections_its_task_can_touch(
         calls.append(conn_id)
         return real(conn_id)
 
+    _uncounted_planner(monkeypatch)
     monkeypatch.setattr(store.llm_connections, "read_connection_raw", counting)
     inf.resolve(task, ctx["cid"] if scoped else "")
     assert set(calls) == expected
@@ -832,9 +881,10 @@ def test_an_override_onto_a_keyless_connection_is_refused_for_the_key_first(at_s
         "openrouter", "Mara", model="vendor/embedder")
     _catalog(keyless, [{"id": "vendor/embedder", "outputs": ["embeddings"]}])
     assert inf.resolve("regenerate", ctx["cid"],
-                       override=Selection(keyless, "", "")).missing == ("generate",)
+                       override=Selection(keyless, "vendor/embedder", "")).missing == ("generate",)
     exc = _refused(lambda: routes.common.override_inference(
-        SimpleNamespace(connection_id=keyless), "regenerate", ctx["cid"]))
+        SimpleNamespace(connection_id=keyless, model="vendor/embedder"), "regenerate",
+        ctx["cid"]))
     assert exc.detail == {"detail": "Mara: OpenRouter key not set", "kind": "missing_key"}
 
 
@@ -896,14 +946,17 @@ def test_the_capability_refusal_is_the_seams_only_change(state, at_state):
             }) == recorded, where
 
 
-# ---- the "Images: on" bridge (until slice C moves it into model facts) ----
+# ---- "Images: on" on a legacy connection: the user's word, through the facts ----
 def test_images_on_outranks_a_catalogs_vision_no_at_the_seam(at_state):
+    """A legacy connection's "Images: on" is read into its model's facts in
+    memory (`Overlay.facts`), where it is the user's `yes` and outranks the
+    catalog's `no` -- the resolver's answer, so nothing is missing."""
     at_state("fresh")
     store.llm_connections.update_connection("openrouter", vision="on")
     _catalog("openrouter", [{"id": "vendor/active", "vision": False}])
     image = inf.resolve("image-description")
-    # Still reported: the bridge is the seam's, not the resolver's.
-    assert image.missing == ("vision",)
+    assert image.attempts[0].capabilities["vision"] == Cap("yes", "user")
+    assert image.missing == ()
     assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
 
 
@@ -952,7 +1005,6 @@ def test_a_failed_test_never_refuses_and_the_users_word_outranks_it(at_state):
     """Spec 12: a failed test leaves the model unverified, so it cannot make
     the seam refuse -- and the user's own override beats it."""
     at_state("fresh")
-    store.llm_connections.update_connection("openrouter", vision="on")
     rev = store.llm_connections.read_connection_raw("openrouter")["rev"]
     inference_facts.record_verified("openrouter", "vendor/active", rev, {
         "vision": {"ok": False, "error": "image input is not supported"}})
@@ -968,6 +1020,11 @@ def test_a_failed_test_never_refuses_and_the_users_word_outranks_it(at_state):
     assert capabilities.caps_for(conn)["vision"] == Cap("yes", "user")
     assert routes.common.require_inference("image-description").conn["id"] == "openrouter"
     assert store.post_images.capability(conn) == "yes"
+    # And so does a legacy connection's "Images: on" (the planner's facts).
+    inference_facts.state("openrouter", "vendor/active", overrides={"vision": ""})
+    store.llm_connections.update_connection("openrouter", vision="on")
+    image = inf.resolve("image-description")
+    assert image.attempts[0].capabilities["vision"] == Cap("yes", "user")
 
 
 def test_the_name_rule_hides_a_model_but_never_refuses_it(at_state):

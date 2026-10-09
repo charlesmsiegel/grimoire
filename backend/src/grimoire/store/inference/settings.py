@@ -1,9 +1,12 @@
 """Roles and routes, read for the Models screen and written from it (spec 10).
 
 `view` is what a role card and a route row render, at the global scope or one
-campaign's. Each carries what the scope STORES (read through the legacy
-translation, so a store the migration has not reached shows what plays),
-what it `resolves` to and what it `inherits`:
+campaign's. Each carries what the scope STORES (read as the resolver reads it,
+`resolve.current_view`, so a store the migration or retirement has not reached
+shows the format-2 layout it will be written as -- which is what plays), what
+it `resolves` to and what it `inherits`. The view also carries the planner's
+`retirement_notes` (`resolve.retirement_notes`): what could not be carried
+over. Nothing renders them yet.
 
 - `resolves` is one `resolve.resolve` per row -- the route's first task, or
   the role itself (`role=`) -- so it is what `require_inference` serves, and
@@ -49,7 +52,7 @@ from __future__ import annotations
 
 import functools
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from .. import (
     alternates,
@@ -63,7 +66,7 @@ from .. import (
 from .. import inference_keys as keys
 from ..campaigns import lifecycle as campaign_lifecycle
 from ..frontmatter import breaks_line
-from . import capabilities, cascade, facts, in_use, migrate, providers, resolve, translate
+from . import capabilities, cascade, facts, in_use, migrate, providers, resolve
 from .resolved import ResolvedInference
 
 SCOPES: tuple[str, ...] = ("global", "campaign")
@@ -213,8 +216,8 @@ def _route_row(route: routing.Route, own: dict, scope: str, cid: str,
             "uses": uses or None}
 
 
-def _embedding_card(cfg: dict, lookup: translate.Lookup) -> dict:
-    provider, model = translate.embedding_role(cfg)
+def _embedding_card(cfg: dict, lookup: llm_connections.Lookup) -> dict:
+    provider, model = resolve.embedding_role(cfg)
     # One resolution per card: whether it is on, and why not, are read from
     # the same answer (spec 12, one decision).
     got = embed_space.resolution(cfg)
@@ -252,9 +255,10 @@ def _providers() -> list[dict]:
     """Every provider, with whether it can send at all -- `resolve.problem`,
     the seam's credential rule, asked of a masked record (`key_set` stands in
     for the key it deliberately does not carry) -- and `own_model`, the model
-    its record names (`facts.model_of`): what a reroll naming the provider
-    alone runs on a store still at format 1, where a provider has a model of
-    its own (`resolve._overridden`); "" when it names none."""
+    its record names (`facts.model_of`; "" when it names none). A reroll
+    naming the provider alone runs it at the STANDING model whatever the
+    store's format (`resolve._overridden`, spec 5.6), so nothing resolves
+    from this: it is what the record says."""
     return [{"id": c["id"], "name": str(c.get("name") or c["id"]),
              "kind": str(c.get("kind") or ""),
              "preset": str(c.get("preset") or "") or providers.infer(c).id,
@@ -272,14 +276,13 @@ def view(scope: str, cid: str = "") -> dict:
         raise ValueError(f"no such scope: {scope!r}")
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
-    current = keys.is_current(cfg)
-    glob = translate.global_view(cfg, lookup)
     if scope == "campaign":
-        own = translate.campaign_view(in_use.campaign_meta(cid, strict=False), lookup,
-                                      current=current)
+        seen = resolve.current_view(cfg, in_use.campaign_meta(cid, strict=False), cid=cid)
+        glob, own = seen.cfg, seen.meta
     else:
         cid = ""
-        own = glob
+        seen = resolve.current_view(cfg)
+        glob = own = seen.cfg
 
     def uses(route: routing.Route) -> str:
         return cascade.walked_role(route, campaign=own if scope == "campaign" else {},
@@ -299,14 +302,20 @@ def view(scope: str, cid: str = "") -> dict:
         "presets": [{"id": p["id"], "name": p["name"]}
                     for p in sampler_presets.list_presets()],
         "preset_clear": sampler_presets.PRESET_CLEAR,
+        # What could not be carried over (ruling 5): the global scope's, and
+        # the campaign's own on a campaign view. Not rendered yet.
+        "retirement_notes": [note._asdict() for note in resolve.retirement_notes(cid)],
     }
 
 
-def _named(selection: cascade.Selection, lookup: translate.Lookup) -> dict:
+def _named(selection: cascade.Selection, lookup: llm_connections.Lookup,
+           virtual: Mapping[str, dict]) -> dict:
     """A role's selection as the header names it: the provider's name, the
-    model and the preset's name ("" when it names none, or one that is gone)."""
+    model and the preset's name ("" when it names none, or one that is gone;
+    a derived preset not yet written is `virtual`'s)."""
     raw = lookup(selection.provider) or {}
-    preset = sampler_presets.read_preset(selection.preset) if selection.preset else None
+    preset = (virtual.get(selection.preset) or sampler_presets.read_preset(selection.preset)
+              if selection.preset else None)
     return {"provider_name": str(raw.get("name") or selection.provider),
             # The model it actually runs: a Claude provider with none set
             # runs its default, which is what `active_connection` names too.
@@ -319,15 +328,16 @@ def summary() -> dict:
     each generative role's global selection, named (None when nothing selects
     one), and whether embedding is on.
 
-    One `translate.global_view` and `cascade.role_selection` per role -- the
+    One `resolve.current_view` and `cascade.role_selection` per role -- the
     cascade, not the resolver: no `resolve.resolve`, so this refuses nothing
     and is no resolver call site (the header's own target is the one display
-    resolve the config route makes). A legacy store reads through the
-    translation, so it names what plays there too."""
+    resolve the config route makes). A legacy store is read as the planner
+    reads it, so it names what plays there too."""
     llm_connections.ensure_migrated()
     cfg = config.read_config()
     lookup = resolve.connection_lookup()
-    glob = translate.global_view(cfg, lookup)
+    seen = resolve.current_view(cfg)
+    glob = seen.cfg
 
     def exists(provider_id: str) -> bool:
         return lookup(provider_id) is not None
@@ -335,7 +345,7 @@ def summary() -> dict:
     roles: dict[str, dict | None] = {}
     for role in keys.GENERATIVE_ROLES:
         selection = cascade.role_selection(role, campaign={}, glob=glob, exists=exists)[0]
-        roles[role] = None if selection is None else _named(selection, lookup)
+        roles[role] = None if selection is None else _named(selection, lookup, seen.presets)
     return {"roles": roles, "embedding_on": embed_space.resolve(cfg) is not None}
 
 
@@ -346,8 +356,8 @@ def used_by(provider_id: str) -> list[dict]:
     role, a role's fallback, a route's chosen pin, or the Embedding role.
 
     `in_use.selections`, filtered to this provider: read as `view` reads them,
-    through the legacy translation, so a store the migration has not reached
-    reports what plays. Global first, then each campaign by id; a campaign
+    through the planner, so a store the migration has not reached reports
+    what plays. Global first, then each campaign by id; a campaign
     that cannot be read names nothing. Walks every campaign (each one's parse
     memoized on its file), so it belongs on a provider's detail, never on the
     list, which would ask it once per provider."""

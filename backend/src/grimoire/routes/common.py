@@ -34,7 +34,6 @@ from ..openai_compatible import OpenAICompatibleClient
 from ..store.inference import cascade as inference_cascade
 from ..store.inference import migrate as inference_migrate
 from ..store.inference import resolve as inference
-from ..store.inference import translate as inference_translate
 from ..store.inference.resolved import ResolvedInference
 
 log = logging.getLogger(__name__)
@@ -1209,7 +1208,7 @@ def refuse_unmigrated() -> None:
     The status is `migrate.status()`: `pending`, `running`, or `failed` with
     the reason (a safety backup that could not be taken)."""
     refuse_newer()
-    if inference_translate.is_current(store.read_config()):
+    if store.inference_keys.is_current(store.read_config()):
         return
     raise _not_migrated()
 
@@ -1245,7 +1244,7 @@ def rates_block() -> str | None:
         return RATES_UNREADABLE
     if store.inference_keys.is_newer(meta):
         return RATES_NEWER_FORMAT
-    return None if inference_translate.is_current(meta) else RATES_AFTER_UPGRADE
+    return None if store.inference_keys.is_current(meta) else RATES_AFTER_UPGRADE
 
 
 def rates_editable() -> bool:
@@ -1428,7 +1427,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
     if not conn_id:
         # The seam's refusals, on the copy that serves. A model alone drives
         # the STANDING provider, so this is the standing route's own refusal:
-        # `problem` does not depend on the model, and `via`/`legacy_route`
+        # `problem` does not depend on the model, and `via`/`route`
         # describe the standing choice -- a routed connection that cannot
         # send says so here too.
         _refuse_unusable(resolved)
@@ -1441,7 +1440,7 @@ def override_inference(body, task: str = "", cid: str = "", *,
             status_code=400,
             detail="That connection no longer exists — pick another, "
                    "or reroll on the campaign's.")
-    elif resolved.current and not model and not _has_standing_model(resolved, conn):
+    elif not model and not _has_standing_model(resolved, conn):
         # A provider alone keeps the standing model, and there is none to keep.
         # The body's fault, so before the connection's own refusals.
         raise HTTPException(
