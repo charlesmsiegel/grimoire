@@ -18,6 +18,7 @@ import pytest
 from fastapi import HTTPException
 
 import grimoire.store as store
+from grimoire import inference as inference_ops
 from grimoire import routes
 from grimoire.store import embed_space, locks, revision, routing
 from grimoire.store import inference_keys as keys
@@ -552,6 +553,26 @@ def test_the_decision_card_resolves_as_a_decision(client):
     # Every other role still reads as a generation.
     assert got["roles"]["primary"]["fallback_problem"] is None
     assert got["roles"]["primary"]["problem"] is None
+
+
+def test_a_decide_only_models_fallback_on_itself_is_dropped_and_said(client):
+    """#144 behind a native primary: a fallback on the primary's own
+    connection AND model is not a stage apart but a second send of the very
+    call that failed -- two identical native stages, the second re-sending
+    every failure into the endpoint (and the refusal) the first just met. It
+    is dropped as C drops a same-provider fallback, and the Decision card and
+    its rows say why rather than showing a retry as a working fallback."""
+    fx.decide_only(client, fallback=True, on=("openrouter", "vendor/decider"))
+    decided = inference.resolve("", role="decision", operation="decide")
+    assert [(a.provider_id, a.model) for a in decided.attempts] == [
+        ("openrouter", "vendor/decider")]
+    assert decided.fallback_problem == inference.SAME_PROVIDER
+    assert [s.mode for s in inference_ops.stages(decided)] == ["native"]
+    got = _global(client)
+    card, row = got["roles"]["decision"], _row(got, "scene_break")
+    assert card["fallback_problem"] == row["fallback_problem"] == inference.SAME_PROVIDER
+    assert card["problem"] is None and row["problem"] is None
+    assert card["decision_mode"] == "native"
 
 
 def test_the_settings_view_carries_decision_mode(client):

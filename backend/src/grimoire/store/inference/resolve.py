@@ -89,8 +89,9 @@ FALLBACK_KEY = "_fallback"
 #: (`fallback_problem`): a second try on the connection that just failed is not
 #: a fallback (`llm._same_route`). A name of its own, so the one resolution
 #: that keeps such a fallback -- a decide primary that cannot generate, whose
-#: fallback is a stage apart (`_apart`) -- lifts this reason where it lifts the
-#: drop, and leaves the credential ones (`problem`) alone.
+#: fallback on another model is a stage apart (`_apart`) -- lifts this reason
+#: where it lifts the drop, and leaves the credential ones (`problem`) alone.
+#: The same model there is still a second try, and still dropped with it.
 SAME_PROVIDER = "it is on the primary's own provider"
 
 #: Where an attempt's connection dict says it may be asked for structured
@@ -555,7 +556,8 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
     never replaces the primary's real error) and when it names the primary's
     own connection (`llm._same_route`: a second try on the connection that just
     failed is not a fallback; kept behind a decide primary that cannot
-    generate, where it is a stage of its own, `_apart`) -- either says why in
+    generate when it names another model, where it is a stage of its own,
+    `_apart`) -- either says why in
     `fallback_problem`
     (`problem`'s reason, or `SAME_PROVIDER`), which nothing refuses on; and
     when the route has a
@@ -654,11 +656,15 @@ def resolve(task: str, cid: str = "", *, operation: str = "generate",
         fb_raw = lookup(fallback.provider) if fallback is not None else None
         # A fallback on the primary's own provider is a retry (#144), which
         # the retry budget already covers -- except behind a decide primary
-        # that cannot generate (`_apart`): that fallback is a stage of its
-        # own, a different backend on a different model, never a second try
-        # of the call that failed. The reason is lifted exactly where the
-        # drop is (`SAME_PROVIDER`).
-        fallback_problem = (problem(fb_raw) if fb_raw is not None and _apart(first, operation)
+        # that cannot generate (`_apart`) when it names ANOTHER model: that
+        # fallback is a stage of its own, never a second try of the call that
+        # failed. The same model on the same connection is that second try
+        # whatever the stage is called, so it is dropped as C drops it. The
+        # reason is lifted exactly where the drop is (`SAME_PROVIDER`).
+        fallback_problem = (problem(fb_raw)
+                            if fb_raw is not None and fallback is not None
+                            and _apart(first, operation)
+                            and not _same_model(conn, fb_raw, fallback.model)
                             else _fallback_problem(conn, fb_raw))
         if fallback is not None and fb_raw is not None and fallback_problem is None:
             # A copy, so the two attempts never share a mutable block.
@@ -780,12 +786,14 @@ def decision_mode(attempt: Attempt) -> str:
 
 
 def _apart(primary: Attempt, operation: str) -> bool:
-    """Whether a fallback on `primary`'s own provider is kept (`resolve`): on
-    a decide resolution whose primary cannot generate. That fallback is never
-    a retry of the primary's call -- it is a stage of its own, on another
-    backend and model (`inference.stages`) -- so the same-provider drop
-    (#144) does not apply. Kept like any other fallback: one that cannot
-    serve either backend is reported in `fallback_missing`."""
+    """Whether a fallback on `primary`'s own provider may be kept (`resolve`):
+    on a decide resolution whose primary cannot generate, and only when it
+    names another model (`_same_model`, checked by the caller). That
+    fallback is never a retry of the primary's call -- it is a stage of its
+    own, on another model (`inference.stages`) -- so the same-provider drop
+    (#144) does not apply. The same model on the same connection IS that
+    retry, and is dropped with `SAME_PROVIDER`. Kept like any other fallback:
+    one that cannot serve either backend is reported in `fallback_missing`."""
     return operation == "decide" and not generates(primary)
 
 
@@ -992,6 +1000,15 @@ def _account(attempts: list[Attempt], operation: str, choice: cascade.Choice,
         stamp["role"] = choice.role
     for attempt in attempts:
         attempt.conn[ACCOUNT_KEY] = {**attempt.conn.get(ACCOUNT_KEY, {}), **stamp}
+
+
+def _same_model(primary: dict, fallback: dict, model: str) -> bool:
+    """Whether a fallback on record `fallback`, at `model`, is the primary's
+    own connection AND model (`facts.model_of`, so an unset Claude model is
+    the default it runs): a second send of the very call that failed, which
+    no stage boundary turns into a fallback (#144)."""
+    return (_same_provider(primary, fallback)
+            and facts.model_of({**fallback, "model": model}) == facts.model_of(primary))
 
 
 def _same_provider(primary: dict, fallback: dict) -> bool:

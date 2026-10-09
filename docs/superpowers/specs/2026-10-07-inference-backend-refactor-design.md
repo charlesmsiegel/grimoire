@@ -586,8 +586,11 @@ unset, half-set or known not to embed resolves with no `space_id`.
   generate (slice H, ruling 6): its next step is a different model on another
   backend, not a retry, so a same-provider fallback is kept (one OpenRouter
   account with a native-only Decision model and one of its generating models
-  behind it). A same-provider fallback behind a primary that generates is
-  dropped as before. `fallback_problem` reads off the same condition:
+  behind it). The exception covers another model only: a fallback on the
+  primary's own provider AND model is a second send of the call that failed,
+  whatever stage it would sit in, so it is dropped and reported with
+  `SAME_PROVIDER` like any other same-provider fallback. A same-provider
+  fallback behind a primary that generates is dropped as before. `fallback_problem` reads off the same condition:
   `SAME_PROVIDER` is lifted exactly where the drop is, so a row that keeps the
   fallback names no problem with it, and one that drops it says `SAME_PROVIDER`,
   or the credential problem it shares with the primary (no key on that
