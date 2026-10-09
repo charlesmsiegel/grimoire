@@ -1102,7 +1102,7 @@ def embedding(cfg: dict | None = None, *,
         return ResolvedInference(task="", operation="embed", route="",
                                  role="", via="", scope="none", attempts=())
     got = embed_attempt(selection.provider, selection.model, raw, stated=seen.facts)
-    # The account block a chat resolution's attempts get from `_account`: the
+    # The account a chat resolution's attempts get from `_account`: the
     # operation, and the role whose slot supplied the selection -- always the
     # Embedding role's, since nothing overrides it per call (spec 9.3).
     attempt = _stamp(got.attempt, account={"operation": "embed", "role": "embedding"})

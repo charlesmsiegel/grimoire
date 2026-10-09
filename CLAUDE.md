@@ -244,8 +244,8 @@ around that single sentence.
 row carries `provider_id` (the provider's store id; `provider` stays the
 adapter kind), `requested_model` (only when the answer named a dated snapshot),
 `operation`, `role`, `preset` and `billing`. Nobody passes them at a call site:
-`llm._stamp` copies them off the resolved conn of the attempt that served, a
-fallback included, and `usage.Meter.done` files what the holder carries.
+`llm._stamp` copies them off the target (`wire.Target`) of the attempt that
+served, a fallback included, and `usage.Meter.done` files what the holder carries.
 `billing` (`metered` or `subscription`) is a label, and only `cost_basis` moves
 a figure between columns — **a billed price beats the subscription tag**, stays
 `cost_usd` and counts against a budget. A row with no reported price is priced
@@ -882,10 +882,10 @@ would answer neither question.
   `summary` route, drafted only once a YES verdict is written, so a read
   between the two writes sees a YES with no title and the inspector shows the
   proposal untitled until its next refresh. Whether an attempt is also sent
-  its provider's structured mode is decided per attempt (`STRUCTURED_KEY`,
-  present on decide resolutions only); the schema is in the prompt either
-  way, and the mode is filed per call on a copied account block, never by
-  mutating the resolution's. An attempt whose provider refuses the structured
+  its provider's structured mode is decided per attempt
+  (`wire.Target.structured`, set on a decide resolution's targets only); the
+  schema is in the prompt either way, and the mode is filed per call on a new
+  target's account (`with_account`), never by mutating the resolution's. An attempt whose provider refuses the structured
   field is sent once more without the mode once every route has failed -- a
   refusing primary after its fallback failed too, a refusing fallback after
   the primary failed -- once per attempt, as its own metered call
@@ -925,8 +925,8 @@ would answer neither question.
   `SAME_PROVIDER` even behind a native primary: that is a second send of
   the call that failed, whatever stage it sits in (#144).
   `decide_native` is metered per item (`store.usage.meter`, opened in
-  `inference._native` with `decision_mode` stamped on a copy of the stage's
-  account block), at most `NATIVE_CONCURRENCY` in flight inside one
+  `inference._native` with `decision_mode` stamped on a new copy of the
+  stage target's account), at most `NATIVE_CONCURRENCY` in flight inside one
   `asyncio.TaskGroup`, so an unexpected exception or a cancel leaves no
   request the group owns running (an `around` that detaches its call, as
   `_bounded_call` does, abandons it to unwind on its own). It sends no

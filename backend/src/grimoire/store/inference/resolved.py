@@ -71,7 +71,7 @@ class Attempt:
     #: generate and not known unable to decide natively, "structured" when it
     #: can generate (whatever its `decide_native`), "" when it can do neither.
     #: "" on a generate resolution. The capability answer only -- the backend
-    #: stamps the mode a call actually used on a copy of its account block.
+    #: stamps the mode a call actually used on a new target's account.
     decision_mode: str = ""
     #: The attempt as an adapter sends it (`resolve._target`): the provider's
     #: record at this model and preset, its model's stated behaviour laid on,

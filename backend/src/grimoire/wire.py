@@ -1,5 +1,5 @@
 """One attempt as an adapter sends it (`Target`), and a primary with its
-optional fallback (`Chain`): the typed form of the lowered connection dict.
+optional fallback (`Chain`): what the store resolves a task to, typed.
 
 A gateway leaf, and **standard library only** (#239): the store builds these
 (`store.inference.resolve`) and the gateway will send them, so neither side

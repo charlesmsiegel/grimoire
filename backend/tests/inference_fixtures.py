@@ -137,8 +137,8 @@ def endpoint(client, name: str, *, base_url: str = "https://example.test/v1",
 
 def primary_falling_back(client, selection: tuple[str, str], fallback: tuple[str, str]) -> None:
     """The Primary role on `selection` (provider, model), falling back to
-    `fallback` (provider, model): the fallback a call carries, as the resolver
-    attaches it (`llm.FALLBACK_KEY`)."""
+    `fallback` (provider, model): the fallback a call carries, riding the
+    resolution's chain (`wire.Chain.fallback`)."""
     put_settings(client, {"roles": {"primary": {
         "selection": {"provider": selection[0], "model": selection[1]},
         "fallback": {"provider": fallback[0], "model": fallback[1]}}}})

@@ -567,7 +567,7 @@ def _stamp(usage: dict | None, route: _Route | wire.Target, attempts: int) -> No
 
     What served the attempt is filed from THIS attempt's target
     (`llm_usage.account`): its provider id, the sampler preset it was sent,
-    and its account block. So a fallback, a degrade sibling or a retry each
+    and its account. So a fallback, a degrade sibling or a retry each
     describes itself, and a row that fell back names the fallback.
     """
     if usage is None:

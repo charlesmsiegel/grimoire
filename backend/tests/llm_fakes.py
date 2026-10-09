@@ -13,7 +13,7 @@ these fakes implement exactly the surface `llm.LLMClient` exposes to routes:
 
 Each takes what the facade takes: a `wire.Chain` (or a lone `wire.Target`)
 for `stream` and `complete`, one `wire.Target` for the rest -- and, like the
-facade, refuses a lowered connection dict with a `TypeError`. Each request
+facade, refuses a connection dict with a `TypeError`. Each request
 records `request["chain"]` and `request["target"]` (its primary).
 
 `decide_native` is a native decisions endpoint's one attempt (slice H, spec
