@@ -545,8 +545,8 @@ Attempt(
     preset_id, controls,    # effective controls (§8)
     retries,                # primary: llm_retries; every fallback stage: 0,
                             # structured included (slice H, ruling 12)
-    decision_mode="",       # decide only: the capability answer (see below)
     target,                 # slice I: wire.Target, this attempt as an adapter sends it
+    decision_mode="",       # decide only: the capability answer (see below)
 )
 ```
 
@@ -957,7 +957,7 @@ inference.generate(task, messages, *, client, resolved, usage=None, schema=None,
 #               LLMClient.stream(messages, conn, usage=None, *, schema=None)
 ```
 
-`inference.generate` arrived with slice I's adapter registry (slice I,
+`inference.generate` comes with slice I's adapter registry (slice I,
 ruling 8). Like `decide` (§7.4), it takes the call site's resolution and the
 client rather than resolving for itself: the `cid` and `override` this section
 first gave it are the inputs of that resolution, `require_inference(task, cid,
@@ -1015,8 +1015,8 @@ backend uses it.
   roster-dependent schema pays the compile latency once per roster
   composition. To be tuned against real prompts later, never against a
   measured library.
-- `decide` was the only caller of `schema=` before slice I added
-  `inference.generate`, which passes `schema=` through on a generate call too.
+- `decide` was the only caller of `schema=` through slice H. Slice I's
+  `inference.generate` passes `schema=` through on a generate call too.
 
 ### 7.3 `embed`
 
@@ -1374,7 +1374,8 @@ today's parse on them, offline. Native backends are measured with
   since a native API carries none by contract; otherwise the native-versus-
   structured comparison would be biased against native. `--decide-backend
   native` is refused before anything is sent for a primary with no native
-  endpoint (a kind outside `NATIVE_DECISION_KINDS`), on a preset whose `never`
+  endpoint (a kind outside `NATIVE_DECISION_KINDS`; from slice I, a kind whose
+  adapter's `decides_natively` flag is false, §13), on a preset whose `never`
   holds `decide_native`, or with a known `no` for `decide_native`
   (`resolve.decides_natively`).
 
@@ -1561,7 +1562,8 @@ included, so `usage_rollup.VERSION` stays 6.
   read as zero. An unpriced native row is counted in `unpriced_native_calls`
   and never in `unmetered_calls`; the two counts are disjoint.
   A native row's `preset` is absent: a native call sends no sampling (§8),
-  and `decide_native` drops the dict's `sampling` before it stamps.
+  and `decide_native` drops the dict's `sampling` before it stamps (from
+  slice I, `target.without_sampling()`).
 - `provider` stays the adapter kind, as every existing row already writes it
   and an append-only ledger cannot change a field's meaning under rows older
   builds still read. The provider goes in `provider_id`, and `connection`
@@ -1827,7 +1829,7 @@ migration write. Then:
 3. **Model facts** — each connection's `vision`, `prefill`, `post_process` →
    `facts.json[<its model>]`, which is what the format-2 lowering reads
    (§4.2).
-4. **Presets — none derived; the legacy GLM effort keeps applying.** A
+4. **Presets — none derived by the migration; slice I derives them.** A
    connection's legacy `reasoning_effort` is not turned into a preset in this
    slice. It kept applying, at both formats, whenever the effective preset
    sets no `reasoning_effort` — slice B's rule — through slice H. Deriving
@@ -2161,12 +2163,12 @@ to the baseline's connection dict so `LLMClient` — retries, fallback, health,
 image lowering, prefill tails, post-processing — and its tests ran unchanged
 while the substrate moved underneath. The per-operation adapter registry
 (planned as `generate` / `decide` / `embed` / `models` per adapter) and the
-deletion of the lowering came in slice I, when nothing depended on the dict
+deletion of the lowering come in slice I, when nothing depends on the dict
 shape. Rejected alternatives: rewriting adapters first (largest risk before
 anything is visible), and growing the connection dict forever (fails rule 2
 and does not fit `decide`/`embed`).
 
-**The registry, as slice I built it** (slice I, ruling 10).
+**The registry** (slice I, ruling 10).
 `grimoire/adapters.py` has one class per provider `kind` (`openrouter`,
 `openai_compatible`, `anthropic`, `claude`). Each has `generate`, `models`,
 `check` and native `decide` (slice H's, raising where the kind has no
