@@ -42,7 +42,7 @@ def resolution(conn: dict, task: str = "chat", *,
     model = llm.effective_model(conn) if conn.get("kind") else str(conn.get("model", "") or "")
     return UsableInference(
         task=task, operation=operation, route=route.key if route else "",
-        legacy_route="", role="", via="", scope="none",
+        role="", via="", scope="none",
         attempts=(Attempt(provider, str(conn.get("model", "") or ""), "", conn,
                           target=wire.Target(provider_id=provider,
                                              kind=str(conn.get("kind", "") or ""),
