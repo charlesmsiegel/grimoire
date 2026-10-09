@@ -925,12 +925,22 @@ Two commits. **CI checkpoint after 6b.**
     - **retired, holding a `route_*` key again:** the deletion only (N5).
 
     It writes its plan's derived presets first, with `put_derived` under `config_lock` (N19). Then comes one atomic `campaign.md` write, holding `mapped | repoint`, `FORMAT_KEY` and `RETIRED_KEY`, with the `route_*` keys deleted and `updated` left alone. Then `revision.bump(cid)`. A `ConnectionUnreadableError` from `lookup(mode="retire")` stops it before any write (N1).
+  - **Only a non-empty legacy value is work** (N3, I2; 2026-10-09). On `main` a `config.md` is born holding every `LEGACY_GLOBAL_KEYS` member as `""`.
+    - `config.read_config` materialises its defaults on the first read, and those defaults include `active_connection_id`, `fallback_connection_id`, `embeddings_connection_id`, `embeddings_model` and every `route_*` (`routing.CONFIG_KEYS`), all `""`.
+    - `born_current()` (`automigrate()`, true in a product build) puts `inference_format: "2"` beside them.
+    - Every store a C–H build created, and every store this build creates until 6b takes the legacy defaults out of `read_config`, therefore holds those 16 empty keys.
+    - So a key whose value is empty or whitespace is the same as an absent key, everywhere retirement counts work:
+      - `left()` never names it;
+      - `pass_plan` plans no deletion for it;
+      - `needs_archive` never counts it;
+      - no write is made for it alone.
+    - A write the pass makes anyway, the marker for example, drops it with the rest of the scope's legacy keys. The same holds for a `route_*` key in a `campaign.md`, and for `MODEL_FIELDS` (I2, 6b).
   - `left() -> tuple[str, ...]`, **fail-soft, never raises**, one human-readable item each:
-    - `config.md` unretired or unreadable, or retired but holding a `LEGACY_GLOBAL_KEYS` member or a global `route_*` key (N5);
-    - a campaign unretired, unmarked or unreadable, or retired but holding a `route_*` key (N5). A newer campaign reads "written by a newer build; the strip waits for it" (N18);
+    - `config.md` unretired or unreadable, or retired but holding a **non-empty** `LEGACY_GLOBAL_KEYS` member or a non-empty global `route_*` key (N5);
+    - a campaign unretired, unmarked or unreadable, or retired but holding a **non-empty** `route_*` key (N5). A newer campaign reads "written by a newer build; the strip waits for it" (N18);
     - a connection unreadable, or holding a non-empty `MODEL_FIELDS` value (6b).
   - `pass_plan(lookup) -> PassPlan`: the whole pass, built before any write. It covers the global plan, each readable campaign's plan, the stray legacy keys in retired scopes, and the strip candidates (R2-3).
-  - `needs_archive(pass_plan: PassPlan) -> bool`: true when any unit of the pass deletes or replaces a stored value (a legacy key, a field, a repointed preset key). It is false only when the whole pass adds nothing but markers (N3, R2-3).
+  - `needs_archive(pass_plan: PassPlan) -> bool`: true when any unit of the pass deletes or replaces a stored **non-empty** value (a legacy key, a field, a repointed preset key). It is false only when the whole pass adds nothing but markers, plus the deletion of keys whose values are empty (N3, R2-3).
 - `migrate`:
   - `_retire(run)` runs after the marker, and on every `ensure` of a current store:
     0. `pass_plan(...)`, computed once;
@@ -956,6 +966,14 @@ Two commits. **CI checkpoint after 6b.**
                                                                               # no .cache note -> one RETIRE_PREFIX archive, taken before that campaign's write
   def test_a_resumed_pass_with_only_the_strip_left_takes_an_archive(home)    # R2-3: every scope retired, fields still on connections
   def test_a_marker_only_pass_takes_no_archive(home)                    # R2-3: a C-era campaign with no legacy key -> RETIRED_KEY only, no archive
+  def test_a_fresh_install_with_empty_legacy_keys_takes_no_archive(home)   # N3: config.md written as a C-H build births it on main
+                                                                        # (inference_format "2", no RETIRED_KEY, all 16 LEGACY_GLOBAL_KEYS
+                                                                        # present as "") and one campaign born the same way -> retire.left()
+                                                                        # names only the missing markers, needs_archive(pass_plan) is False,
+                                                                        # ensure() takes no RETIRE_PREFIX archive and writes RETIRED_KEY
+                                                                        # only; a second ensure() writes nothing; with the marker already
+                                                                        # present and the empty keys still there, left() is empty and
+                                                                        # ensure() writes nothing at all
   def test_a_unit_that_grew_work_after_planning_is_left_for_the_next_run(home, monkeypatch)   # R3-1: the pass plans marker-only; a patched hook
                                                                               # writes a route_scene into the campaign before its unit -> that unit writes
                                                                               # nothing; the next ensure() takes the archive and retires it
@@ -1046,7 +1064,7 @@ Two commits. **CI checkpoint after 6b.**
 - Modify:
   - `store/inference/retired.py` (created in Task 4 with `Note`): the record.
   - `store/inference/retire.py`: `strip`; `left` widened; the facts check (N9).
-  - `store/inference/legacy_plan.py`: `lookup` falls back to the record's `fields` for a connection whose file exists and holds no non-empty `MODEL_FIELDS` value. The `retire` mode, and the `migrate` mode once `config.md` is retired, read the record strictly (N6, N20, R2-2).
+  - `store/inference/legacy_plan.py`: `lookup` falls back to the record's `fields` for a connection whose file exists and holds no non-empty `MODEL_FIELDS` value. The `retire` mode, and the `migrate` mode whenever the record holds an entry for that connection, read the record strictly (N6, N20, R2-2). Per R3-2, the entry proves a strip happened; `config.md`'s retirement marker is not consulted. *(2026-10-09: this read "the `migrate` mode once `config.md` is retired", which R3-2 replaced.)*
   - `store/inference/migrate.py`: step 8 (`_campaign_step` → `migrate.campaign`) and the §11.1 write path build their lookup with `mode="migrate"`, which now reaches the record for any connection the record holds (R3-2).
     - Step 8 treats `RecordUnreadableError` as "leave this campaign". It already does: C's step 8 catches `OSError`, and the error is one.
     - The §11.1 write path's route answers **409** with detail `{"kind": "retirement_unreadable", "detail": "The record of retired model settings could not be read; try again once it has synced."}`, following D's `facts_unreadable` precedent. It is never a 500 (R3-3).
