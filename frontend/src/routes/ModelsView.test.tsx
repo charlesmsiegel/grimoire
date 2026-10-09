@@ -65,7 +65,7 @@ const resolved = (over: Record<string, unknown> = {}) => ({
 });
 const card = (over: Record<string, unknown> = {}) => ({
   stored: sel(), fallback: sel(), resolves: resolved(), inherits: resolved(), problem: null,
-  fallback_missing: [], fallback_problem: null, decide_skip: null, ...over,
+  fallback_missing: [], fallback_problem: null, ...over,
 });
 const route = (over: Record<string, unknown>) => ({
   hint: "", tasks: [], operation: "generate", default_role: "fast", requires: [],
@@ -555,26 +555,6 @@ test("the Decision card lists a route that uses it while Decision inherits", asy
   expect(routes.getByText(/inherits Primary/)).toBeInTheDocument();
   expect(routes.queryByRole("link", { name: "Voice drift checks" })).not.toBeInTheDocument();
   expect(card.queryByText("No route uses Decision yet.")).not.toBeInTheDocument();
-});
-
-test("the Decision card says its decide routes skip a decide-only model", async () => {
-  // Brutal-2 #1: the server reads Decision as `decide` too, and a skip lands
-  // on a same-provider fallback -- so the card says the fallback answers, not
-  // that it "is never tried".
-  const skip = "This decision runs on the Decision role (vendor/decider on Saltmarch Router), "
-    + "which cannot generate; until native decisions arrive it is answered by the fallback "
-    + "(vendor/m on Saltmarch Router).";
-  (api.getInferenceSettings as any).mockResolvedValue(settings({
-    roles: { ...settings().roles,
-             decision: card({ stored: sel("saltmarch", "vendor/decider"),
-                              fallback: sel("saltmarch", "vendor/m"), inherits: null,
-                              decide_skip: skip }) },
-    routes: [...ROUTES,
-             route({ key: "speaker", label: "Who speaks next", operation: "decide",
-                     default_role: "decision", role: "decision", uses: "decision" })] }));
-  open("/models/role/decision");
-  expect(await main().findByText(skip)).toBeInTheDocument();
-  expect(main().queryByText(/never tried/)).not.toBeInTheDocument();
 });
 
 test("the Decision card says when no route uses it", async () => {

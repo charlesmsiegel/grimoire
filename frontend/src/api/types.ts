@@ -291,11 +291,6 @@ export type RoleCard = {
   /** Why the stored fallback cannot send at all (no key, no base URL), so it
    *  is left out of the chain as silently; null when it can, or there is none. */
   fallback_problem: string | null;
-  /** On Decision only: that the decide routes skip its decide-only model for
-   *  the fallback (spec 5.5) -- the sentence their rows show. The card reads
-   *  the role as a generation, so without this its fallback line would say
-   *  "never tried" about the fallback answering those routes. Null otherwise. */
-  decide_skip: string | null;
 };
 /** The Embedding role (global scope only). `on` is whether anything embeds;
  *  `problem` is null when it does, else the server's short reason it does not

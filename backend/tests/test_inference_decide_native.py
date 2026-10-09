@@ -1,9 +1,10 @@
 """`inference.decide`'s chain of stages (slice H, Task 4; spec 5.5, 7.4).
 
-No resolution produces `"native"` until Task 5, so these tests build one:
-a real decide resolution on an isolated format-2 store, with
-`dataclasses.replace` laying `decision_mode="native"` onto the attempt that
-Task 5's resolver will serve natively. Every answer comes from `llm_fakes`
+A native-only Decision model is resolved `"native"` by the resolver (Task 5),
+so these tests stand on a real decide resolution on an isolated format-2
+store; where a shape no resolver builds is the subject (a native fallback,
+an attempt both native and generating), `dataclasses.replace` lays the mode
+onto a real resolution's attempt. Every answer comes from `llm_fakes`
 (a `FakeLLM` scripted with `decisions=`), or from a real `LLMClient` over a
 provider double where the facade's own retry and refusal rules are the
 subject. Nothing reaches a provider.
@@ -62,21 +63,15 @@ def _resolved():
     return inf.resolve("scene-break", operation="decide")
 
 
-def _as_native(resolved, *, fallback_mode: str = STRUCTURED):
-    """`resolved` with its primary served natively, as Task 5's resolver will
-    serve a model that cannot generate: mode `native`, nothing missing, no
-    skip -- and the fallback, when there is one, served by `fallback_mode`."""
-    attempts = [dataclasses.replace(resolved.attempts[0], decision_mode=NATIVE)]
-    if len(resolved.attempts) > 1:
-        attempts.append(dataclasses.replace(resolved.attempts[1], decision_mode=fallback_mode))
-    return dataclasses.replace(resolved, attempts=tuple(attempts), skipped=(), missing=())
-
-
-def _native_resolution(client, *, fallback: bool, fallback_mode: str = STRUCTURED):
-    """A native-only Decision model (`inference_fixtures.decide_only`), with
-    the generating `spare` fallback when `fallback`."""
+def _native_resolution(client, *, fallback: bool):
+    """A native-only Decision model (`inference_fixtures.decide_only`),
+    resolved: its primary served natively, and -- when `fallback` -- the
+    generating `spare` fallback behind it as a structured stage of its own."""
     fx.decide_only(client, fallback=fallback)
-    return _as_native(_resolved(), fallback_mode=fallback_mode)
+    resolved = _resolved()
+    assert [a.decision_mode for a in resolved.attempts] == (
+        [NATIVE, STRUCTURED] if fallback else [NATIVE])
+    return resolved
 
 
 def _structured_store(client, *, fallback: bool = True) -> None:
@@ -216,16 +211,13 @@ def _real(wire: _Wire, *, retries: int = 2) -> LLMClient:
 
 
 # ---- stages ----
-@pytest.mark.parametrize("shape", ["fallback_attached", "no_fallback", "skipped"])
+@pytest.mark.parametrize("shape", ["fallback_attached", "no_fallback"])
 def test_stages_for_every_f_resolution_are_fs(client, shape):
-    """Every resolution F builds is one structured stage on the dict F sends,
-    `FALLBACK_KEY` and all -- the same object, so nothing about F's call moves."""
-    if shape == "skipped":
-        fx.decide_only(client, fallback=True)
-    else:
-        _structured_store(client, fallback=shape == "fallback_attached")
+    """Every structured resolution F builds is one structured stage on the
+    dict F sends, `FALLBACK_KEY` and all -- the same object, so nothing about
+    F's call moves."""
+    _structured_store(client, fallback=shape == "fallback_attached")
     resolved = _resolved()
-    assert bool(resolved.skipped) == (shape == "skipped")
     chain = inference.stages(resolved)
     assert chain == (Stage(STRUCTURED, resolved.conn, None),)
     assert chain[0].conn is resolved.conn
@@ -535,7 +527,7 @@ def test_a_lone_structured_fallback_stage_gets_the_schema_refusal_retry(client):
     no `FALLBACK_KEY`, so its schema refusal is re-sent without the mode."""
     fx.decide_only(client, fallback=True)
     _flag("spare", "vendor/spare")
-    resolved = _as_native(_resolved())
+    resolved = _resolved()
     assert resolved.attempts[1].conn[llm.STRUCTURED_KEY] is True
     wire = _Wire(streams=[_refused_schema(), decision_reply({"over": True})],
                  decides=[LLMError("network", "connection reset")])

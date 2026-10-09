@@ -27,6 +27,7 @@ from grimoire.store.inference import resolve as inference
 
 from . import inference_baseline as base
 from . import inference_baseline_c as base_c
+from . import inference_fixtures as fx
 
 WAIT = 10
 CLEAR = store.sampler_presets.PRESET_CLEAR
@@ -520,6 +521,63 @@ def test_a_fallback_on_the_primarys_own_provider_says_why_on_its_rows(client):
     assert _row(got, "scene")["fallback_problem"] == inference.SAME_PROVIDER
     assert inference.resolve("chat").fallback is None
     assert _row(_campaign(client, cid), "scene")["fallback_problem"] == inference.SAME_PROVIDER
+
+
+# ---- the Decision card reads its role as a decision (slice H) ----
+def _resolution_of(resolved) -> dict:
+    first = resolved.attempts[0]
+    return {"provider": first.provider_id, "model": first.model, "preset": first.preset_id,
+            "via": resolved.via, "scope": resolved.scope}
+
+
+def test_the_decision_card_resolves_as_a_decision(client):
+    """Spec 12, one decision: the Decision card resolves its role as the
+    decide routes it serves do, so a decide-only model with a same-provider
+    fallback reads on the card exactly as on those rows -- no problem
+    (ruling 2), and the fallback a stage of its own rather than a retry. Read
+    as a generation it would be refused ("cannot generate text") and its
+    fallback dropped as one on the primary's own provider."""
+    fx.decide_only(client, fallback=True, on=fx.SAME_PROVIDER)
+    got = _global(client)
+    card, row = got["roles"]["decision"], _row(got, "scene_break")
+    decided = inference.resolve("", role="decision", operation="decide")
+    assert _cut(card["resolves"]) == _resolution_of(decided)
+    assert card["problem"] is None and row["problem"] is None
+    assert card["fallback_problem"] is None and row["fallback_problem"] is None
+    assert card["fallback_missing"] == row["fallback_missing"] == []
+    # The generate reading the card used to make says otherwise.
+    generated = inference.resolve("", role="decision")
+    assert generated.fallback_problem == inference.SAME_PROVIDER
+    assert inference.refusal(generated)[1]["kind"] == "incapable"
+    # Every other role still reads as a generation.
+    assert got["roles"]["primary"]["fallback_problem"] is None
+    assert got["roles"]["primary"]["problem"] is None
+
+
+def test_the_settings_view_carries_decision_mode(client):
+    """I9: the Decision card and each decide route row say which backend
+    answers -- `native`, `structured`, or `""` on a model that can do neither
+    (refused) -- read off the resolution, so the Models page keeps no
+    capability rule of its own. Every other card and row says `""`."""
+    deciding = {r.key for r in routing.ROUTES if r.operation == "decide"}
+    fx.format2(client)
+    got = _global(client)
+    assert got["roles"]["decision"]["decision_mode"] == "structured"
+    assert {_row(got, k)["decision_mode"] for k in deciding} == {"structured"}
+    assert {r["decision_mode"] for r in got["routes"] if r["key"] not in deciding} == {""}
+    assert {got["roles"][r]["decision_mode"] for r in ("primary", "fast")} == {""}
+
+    fx.decide_only(client, fallback=False)
+    got = _global(client)
+    assert got["roles"]["decision"]["decision_mode"] == "native"
+    assert {_row(got, k)["decision_mode"] for k in deciding} == {"native"}
+
+    fx.neither(client)
+    got = _global(client)
+    card = got["roles"]["decision"]
+    assert card["decision_mode"] == ""
+    assert "cannot generate text or make native decisions" in card["problem"]
+    assert {_row(got, k)["decision_mode"] for k in deciding} == {""}
 
 
 def _deleted_after_validation(monkeypatch, delete) -> None:

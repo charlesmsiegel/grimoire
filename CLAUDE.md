@@ -781,8 +781,8 @@ would answer neither question.
   and the facade sends that one. A fallback *known* unable to do what the route needs is reported
   (`fallback_missing`) and never attached, so the facade never sends it -- nor
   one that names the primary's own connection (a retry, which the retry budget
-  covers; the decide skip below is the exception), nor one that cannot carry
-  the call's images. A reroll's connection override goes through `override_inference`, and
+  covers -- except behind a Decision model that cannot generate, where it is a
+  decide stage of its own), nor one that cannot carry the call's images. A reroll's connection override goes through `override_inference`, and
   absorb's secondary phases hand `_soft_inference` a thunk (voice drift and the
   duplicate check hand one to `_soft_resolved`, which keeps the whole
   resolution `decide` takes), so a phase that cannot resolve reports itself
@@ -828,12 +828,14 @@ would answer neither question.
   the primary failed -- once per attempt, as its own metered call
   (`llm.SchemaRefusalError` carries the refusing attempts). The refusal is
   never a health failure, nor the kind a both-failed error reports
-  (`llm.routes_failed`). Until slice H, a decide-only Decision model is
-  skipped for a role fallback that can generate -- on its own provider too,
-  since the skipped primary is never sent -- and the route row's `problem`
-  says so (`resolve.skip_text`); with no such fallback the 409 `incapable`
-  stands, and for the speaker pick `post_chat` raises it before it writes
-  anything (`refuse_an_unanswerable_pick`). The four decide routes (`speaker`,
+  (`llm.routes_failed`). A Decision model that cannot generate but may
+  decide natively is served by its provider's decisions endpoint
+  (`decision_mode == "native"`), then by the role fallback; a model that can
+  generate stays on structured generation whatever its `decide_native` says,
+  until native wins on evals (`inference.stages`). A model that can do
+  neither is refused with 409 `incapable`, and for the speaker pick
+  `post_chat` raises it before it writes anything
+  (`refuse_an_unanswerable_pick`). The four decide routes (`speaker`,
   `scene_break`, `voice_drift` and `continuity`) use the Decision role, which
   inherits Fast, so on them a campaign's own Fast override no longer outranks
   a global pin (spec 5.1) -- the duplicate check and the sweep included, which

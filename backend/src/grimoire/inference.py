@@ -127,14 +127,7 @@ def stages(resolved: ResolvedInference) -> tuple[Stage, ...]:
     No structured stage follows a native one on the same selection: a native
     attempt is one that cannot generate (ruling 1, C1), so that stage could
     never answer. Trying native first on a model that also generates is a
-    later user decision (spec 16), which would add it back here.
-
-    While slice F's decide skip exists, a skipped resolution is F's one stage
-    on the fallback it skipped to (`resolved.conn`)."""
-    if resolved.skipped:
-        if resolved.conn is None:
-            raise ValueError("a skipped resolution names no connection to send")
-        return (Stage(STRUCTURED, resolved.conn, None),)
+    later user decision (spec 16), which would add it back here."""
     if not resolved.attempts:
         return ()
     primary = resolved.attempts[0]

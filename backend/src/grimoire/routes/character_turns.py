@@ -399,7 +399,7 @@ def _may_pick(cid, sid, kind):
 
 def refuse_an_unanswerable_pick(cid, sid, *, kind, actor_ref):
     """The speaker pick's 409 (spec 5.3's `incapable`: the Decision role on a
-    model that cannot answer it, with no generating fallback), raised while
+    model that can neither generate nor decide natively), raised while
     the request is here to be told and BEFORE `post_chat` reserves or writes
     anything -- a refusal after its first mutator would tell the player
     nothing happened when the post, a retired roll proposal and a started

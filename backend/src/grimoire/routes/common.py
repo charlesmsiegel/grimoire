@@ -1131,12 +1131,9 @@ class UsableInference(ResolvedInference):
 
     @property
     def conn(self) -> dict:
-        """The connection dict the facade is sent (`ResolvedInference._sent`):
-        the primary attempt's, or the fallback's when a decide resolution
-        `skipped` the primary."""
-        sent = self._sent
-        assert sent is not None, "a usable resolution always resolved an attempt"
-        return sent.conn
+        """The connection dict the facade is sent: the primary attempt's."""
+        assert self.attempts, "a usable resolution always resolved an attempt"
+        return self.attempts[0].conn
 
 
 def _narrowed(resolved: ResolvedInference) -> UsableInference:

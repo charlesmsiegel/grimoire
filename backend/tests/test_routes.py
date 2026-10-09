@@ -18,13 +18,21 @@ from PIL import Image
 
 import grimoire.store as store
 from grimoire import llm, routes
+from grimoire.decisions import Answer, ItemResult
 from grimoire.llm import LLMClient
 from grimoire.llm_errors import LLMError
 from grimoire.routes import character_turns
 from grimoire.store import atomic
 from tests import draft_runs as drafts
 from tests import review_runs
-from tests.inference_fixtures import SAME_PROVIDER, SPARE, decide_only, format2, put_settings
+from tests.inference_fixtures import (
+    SAME_PROVIDER,
+    SPARE,
+    decide_only,
+    format2,
+    neither,
+    put_settings,
+)
 from tests.llm_fakes import (  # the shared gateway fakes (#204)
     CapturingOpenRouter,
     CassetteProvider,
@@ -7526,31 +7534,72 @@ def test_an_unreadable_decision_is_a_failed_check_not_a_clear(client):
         assert store.voice_drift.read(store.campaigns.campaign_root(cid), "aese") == "She hedged."
 
 
+#: A native endpoint's verdict: no rationale, which a native backend never has.
+_NATIVE_IN_VOICE = ItemResult({"verdict": Answer("in_voice")})
+
+
+def _native_judge(*, decisions):
+    """`_absorb_script`'s fake, its voice answer scripted on the native
+    endpoint (`decisions`) as well as on the structured one."""
+    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+    fake.decisions = list(decisions)
+    return fake
+
+
 @pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
-def test_voice_drift_on_a_decide_only_model_answers_on_the_fallback(client, on):
-    """Review Focus 1: until native decisions arrive, a Decision model that
-    cannot generate is skipped for a role fallback that can -- on another
-    provider or its own (spec I-1). The judge is asked of the fallback, and
-    nothing is sent to the decide-only model."""
+def test_voice_drift_on_a_decide_only_model_answers_natively(client, on):
+    """Slice H: a Decision model that cannot generate is answered by its
+    provider's native decisions endpoint -- the verdict comes from there, and
+    no voice check is completed on any model."""
     cid, sid = _voice_scene(client)
     decide_only(client, fallback=True, on=on)
-    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+    fake = _native_judge(decisions=[_NATIVE_IN_VOICE])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     body = review_runs.absorb(client, cid, sid).json()
     assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
+    [(_item, conn, _retries)] = fake.native_requests
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert _voice_requests(fake) == []
+    (row,) = _voice_rows()
+    assert (row["operation"], row["decision_mode"]) == ("decide", "native")
+
+
+@pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
+def test_voice_drift_on_a_decide_only_model_answers_on_the_fallback(client, on):
+    """Review Focus 1: when the native endpoint fails, the role fallback that
+    generates answers the judge -- on another provider or its own (spec I-1,
+    a stage of its own rather than a retry)."""
+    cid, sid = _voice_scene(client)
+    decide_only(client, fallback=True, on=on)
+    fake = _native_judge(decisions=[LLMError("bad_response", "no decisions endpoint",
+                                             status=404)])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
+    assert len(fake.native_requests) == 1
     (sent,) = _voice_requests(fake)
     assert (sent["conn"]["id"], sent["conn"]["model"]) == on
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
 
 
-def test_voice_drift_on_a_decide_only_model_without_a_fallback_fails_the_phase_not_the_absorb(
-        client):
-    """With no generating fallback the seam refuses (spec 5.3's 409), and the
-    absorb phase reports that refusal as its own failure: the review still
-    lands, and nothing is sent for the voice check."""
+def test_voice_drift_on_a_decide_only_model_without_a_fallback_answers_natively(client):
     cid, sid = _voice_scene(client)
     decide_only(client, fallback=False)
-    fake = _absorb_script(_EXTRACTION, _DOSSIER, _verdict("in_voice"))
+    fake = _native_judge(decisions=[_NATIVE_IN_VOICE])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    body = review_runs.absorb(client, cid, sid).json()
+    assert body["voice"]["status"] == "ok" and body["voice"]["checked"] == ["aese"]
+    assert len(fake.native_requests) == 1 and _voice_requests(fake) == []
+
+
+def test_voice_drift_on_a_model_that_can_do_neither_fails_the_phase_not_the_absorb(client):
+    """A model that can neither generate nor decide natively is refused by the
+    seam (spec 5.3's 409), and the absorb phase reports that refusal as its
+    own failure: the review still lands, and nothing is sent for the voice
+    check."""
+    cid, sid = _voice_scene(client)
+    neither(client)
+    fake = _native_judge(decisions=[_NATIVE_IN_VOICE])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     r = review_runs.absorb(client, cid, sid)
     assert r.status_code == 200, r.text
@@ -7559,8 +7608,10 @@ def test_voice_drift_on_a_decide_only_model_without_a_fallback_fails_the_phase_n
     voice = body["voice"]
     assert voice["status"] == "failed" and voice["attempted"] is False
     assert voice["reason"].startswith("The Voice drift checks route runs on the Decision "
-                                      "role (vendor/decider on OpenRouter)"), voice["reason"]
-    assert _voice_requests(fake) == [] and _voice_rows() == []
+                                      "role (vendor/neither on OpenRouter), which cannot "
+                                      "generate text or make native decisions"), voice["reason"]
+    assert _voice_requests(fake) == [] and fake.native_requests == []
+    assert _voice_rows() == []
 
 
 def test_a_voice_drift_overrun_on_the_fallback_is_filed_and_noted_against_it(client):

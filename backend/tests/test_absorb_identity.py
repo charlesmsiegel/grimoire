@@ -25,7 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import grimoire.store as store
-from grimoire import decisions, embeddings, llm_errors, routes
+from grimoire import decisions, embeddings, inference, llm_errors, routes
 from grimoire.llm import LLMClient
 from grimoire.main import create_app
 from grimoire.store import config, llm_connections
@@ -1108,35 +1108,165 @@ def test_a_reply_in_todays_format_answers_no_row(client, scene):
     assert body["one_line"] == "o"
 
 
+#: A native endpoint's answer for the one examined row: new business, with
+#: no rationale (a native backend never has one).
+NATIVE_NEW = decisions.ItemResult({"decision": decisions.Answer("new")})
+
+#: What a native endpoint answers for a model it has no decisions for.
+NO_ENDPOINT = llm_errors.LLMError("bad_response", "no decisions endpoint", status=404)
+
+
+def _native(fake, *answers):
+    """`fake` with its native endpoint scripted by `answers`."""
+    fake.decisions = list(answers)
+    return fake
+
+
 @pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
                          ids=["spare", "same-provider"])
-def test_identity_on_a_decide_only_model_answers_on_the_fallback(client, scene, on):
-    """Until native decisions arrive, a Decision model that cannot generate is
-    skipped for a role fallback that can, on another provider or its own: the
-    check is asked of the fallback, and nothing is sent to `vendor/decider`."""
+def test_identity_on_a_decide_only_model_answers_natively(client, scene, on):
+    """Slice H: a Decision model that cannot generate is answered by its
+    provider's native decisions endpoint. The check is asked there, the role
+    fallback is not asked, and no identity prompt is completed on any model."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     inference_fixtures.decide_only(client, fallback=True, on=on)
-    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                decision_reply(_row("new")))
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
 
     body = _absorb(client, cid, sid)
 
     assert body["identity"]["status"] == "ok"
+    assert _checks(body) == [("new", "accepted")]
+    [(_item, conn, _retries)] = fake.native_requests
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    assert identity_requests(fake) == []
+    assert [(r["operation"], r["decision_mode"]) for r in _identity_rows(cid)] == [
+        ("decide", "native")]
+
+
+@pytest.mark.parametrize("on", [inference_fixtures.SPARE, inference_fixtures.SAME_PROVIDER],
+                         ids=["spare", "same-provider"])
+def test_identity_on_a_decide_only_model_answers_on_the_fallback(client, scene, on):
+    """When the native endpoint fails, the role fallback that generates
+    answers the check, on another provider or the decide-only model's own (a
+    stage of its own rather than a retry)."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True, on=on)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NO_ENDPOINT)
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["status"] == "ok"
+    assert len(fake.native_requests) == 1
     [sent] = identity_requests(fake)
     assert (sent["conn"]["id"], sent["conn"]["model"]) == on
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
 
 
-def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(client, scene):
-    """With no generating fallback the seam refuses (`incapable`), and the
-    phase reports that refusal as its own failure: the review still lands, the
-    rows stage with their hints, and nothing is sent for the check."""
+def test_a_native_identity_answer_maps_with_an_empty_reason(client, scene):
+    """G's review I4: a native `existing` on an offered id is accepted on its
+    own, with `reason: ""` -- the rationale is display text, and a native
+    backend has none to give."""
     cid, s0, sid = scene
     _seed_ledger(cid, s0)
     inference_fixtures.decide_only(client, fallback=False)
-    fake = _llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
-                decision_reply(_row("new")))
+    _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                 decision_reply(_row("new"))),
+            decisions.ItemResult({"decision": decisions.Answer("existing"),
+                                  "id": decisions.Answer("find-the-ledger")}))
+
+    body = _absorb(client, cid, sid)
+
+    [edit] = _plot_edits(body)
+    assert edit["target"] == {"kind": "plot", "id": "find-the-ledger"}
+    ic = edit["identity_check"]
+    assert (ic["decision"], ic["status"], ic["reason"]) == ("existing", "accepted", "")
+    assert body["identity"]["status"] == "ok"
+
+
+@pytest.mark.parametrize("fallback", ["refused", "failed"])
+def test_a_budget_refused_native_stage_is_the_budget_through_its_fallback(
+        client, scene, monkeypatch, fallback):
+    """Task 4's parked review item, end to end: the absorb clock refuses the
+    native stage unsent (`BudgetRefused`), and the fallback stage then fails
+    too -- refused by the same spent clock, or (the clock read afresh) sent
+    and failing for a reason of its own. Either way the composed error is not
+    the clock's sentence, and `_budget_overrun` still reads the clock in its
+    `words`: the phase reports the budget, never a provider failure."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=True)
+    client.put("/api/config", json={"absorb_budget": "60"})
+    clock = [0.0]
+    monkeypatch.setattr(routes.scenes, "_clock", lambda: clock[0])
+    real_explain = identity.explain
+
+    def spend_then_explain():
+        clock[0] = 1e6                       # the clock runs out just before decide
+        return real_explain()
+
+    monkeypatch.setattr(identity, "explain", spend_then_explain)
+    if fallback == "failed":
+        real_messages = inference.structured_messages
+
+        def rewind(*args, **kwargs):
+            clock[0] = 0.0                   # the fallback stage finds time left
+            return real_messages(*args, **kwargs)
+
+        monkeypatch.setattr(inference, "structured_messages", rewind)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        error={"kind": "network", "message": "connection reset"}),
+                   NATIVE_NEW)
+    asked: list[str] = []
+    real_native = fake.decide_native
+
+    def native(item, conn, *args, **kwargs):
+        asked.append(conn["model"])          # the call is built; the clock decides if it goes
+        return real_native(item, conn, *args, **kwargs)
+
+    fake.decide_native = native
+
+    body = _absorb(client, cid, sid)
+
+    assert asked == ["vendor/decider"] and fake.native_requests == []
+    assert len(identity_requests(fake)) == (1 if fallback == "failed" else 0)
+    block = body["identity"]
+    assert (block["status"], block["budget_exhausted"], block["attempted"]) == (
+        "failed", True, fallback == "failed")
+    assert block["reason"] == (routes.scenes._IDENTITY_CUT_SHORT if fallback == "failed"
+                               else routes.scenes._IDENTITY_REFUSED)
+    assert _checks(body) == [("unchecked", "hint_only")]
+    # The clock refused it unsent, so no row; the fallback's is its own failure.
+    assert [(r["decision_mode"], r["status"]) for r in _identity_rows(cid)] == (
+        [("structured", "error")] if fallback == "failed" else [])
+
+
+def test_identity_on_a_decide_only_model_without_a_fallback_answers_natively(client, scene):
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.decide_only(client, fallback=False)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
+
+    body = _absorb(client, cid, sid)
+
+    assert body["identity"]["status"] == "ok"
+    assert len(fake.native_requests) == 1 and identity_requests(fake) == []
+
+
+def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(client, scene):
+    """On a model that can neither generate nor decide natively the seam
+    refuses (`incapable`), and the phase reports that refusal as its own
+    failure: the review still lands, the rows stage with their hints, and
+    nothing is sent for the check."""
+    cid, s0, sid = scene
+    _seed_ledger(cid, s0)
+    inference_fixtures.neither(client)
+    fake = _native(_llm(client, EXTRACTION_PROPOSING_RECOVER_THE_HARBOUR_LEDGER,
+                        decision_reply(_row("new"))), NATIVE_NEW)
 
     r = review_runs.absorb(client, cid, sid)
 
@@ -1146,9 +1276,11 @@ def test_identity_without_a_generating_fallback_fails_the_phase_not_the_absorb(c
     block = body["identity"]
     assert (block["status"], block["attempted"]) == ("failed", False)
     assert block["reason"].startswith("The Continuity checks route runs on the Decision "
-                                      "role (vendor/decider on OpenRouter)"), block["reason"]
+                                      "role (vendor/neither on OpenRouter), which cannot "
+                                      "generate text or make native decisions"), block["reason"]
     assert identity_requests(fake) == [] and _identity_rows(cid) == []
-    assert all(q["conn"].get("model") != "vendor/decider" for q in fake.requests)
+    assert fake.native_requests == []
+    assert all(q["conn"].get("model") != "vendor/neither" for q in fake.requests)
     [edit] = _plot_edits(body)
     assert edit["identity_check"]["status"] == "hint_only"
 

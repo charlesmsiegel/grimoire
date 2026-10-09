@@ -152,7 +152,6 @@ function GenerativeSummary({ role, card, routes, fallbackName }:
         <p>{sel ? describe(sel) : "Not set."}</p>
       )}
       <Problem text={card.problem} />
-      <Problem text={card.decide_skip} />
       <Warning text={warning} />
       <Problem text={dropped} />
       {sel && <ControlsReadout presetId={sel.preset} provider={sel.provider} model={sel.model} />}

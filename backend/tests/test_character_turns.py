@@ -3,7 +3,16 @@
 import pytest
 
 from grimoire import routes, store
-from tests.inference_fixtures import SAME_PROVIDER, SPARE, decide_only, format2, put_settings
+from grimoire.decisions import Answer, ItemResult
+from grimoire.llm_errors import LLMError
+from tests.inference_fixtures import (
+    SAME_PROVIDER,
+    SPARE,
+    decide_only,
+    format2,
+    neither,
+    put_settings,
+)
 from tests.llm_fakes import FakeLLM, decision_reply
 
 
@@ -627,22 +636,60 @@ def test_the_selector_capture_is_the_decide_prompt(client):
     assert "Available NPCs:" not in system["content"] + user["content"]
 
 
+#: A native endpoint's pick: Mara, with no rationale.
+NATIVE_MARA = ItemResult({"next": Answer("characters:mara")})
+
+#: What a native endpoint answers for a model it has no decisions for.
+NO_ENDPOINT = LLMError("bad_response", "no decisions endpoint for this model", status=404)
+
+#: Mara's turn once she is picked.
+MARA_ANSWERS = 'Mara answers.\n```handoff\n{"next":null}\n```'
+
+
 @pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
-def test_the_speaker_on_a_decide_only_model_answers_on_the_fallback(client, on):
-    """Review Focus 1: a Decision model that cannot generate is skipped for a
-    role fallback that can. The pick is asked of the fallback, nothing is
-    sent to the decide-only model, and the actor still writes on Primary --
-    the fallback on the decide-only model's own provider too (spec I-1)."""
+def test_the_speaker_on_a_decide_only_model_answers_natively(client, on):
+    """Slice H: a Decision model that cannot generate is answered by its
+    provider's native decisions endpoint. The pick comes from there, the role
+    fallback is not asked, and the one completion is the actor's, on Primary."""
     cid, sid = seed(client)
     decide_only(client, fallback=True, on=on)
-    fake = FakeLLM([[decision_reply({"next": "characters:mara"})],
-                    ['Mara answers.\n```handoff\n{"next":null}\n```']])
+    fake = FakeLLM([[MARA_ANSWERS]], decisions=[NATIVE_MARA])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
+    [(_item, conn, _retries)] = fake.native_requests
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    (actor,) = fake.requests
+    assert (actor["conn"]["id"], actor["conn"]["model"]) == ("openrouter", "vendor/active")
+    assert _speakers(cid, sid) == ["Mara"]
+
+
+@pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
+def test_the_speaker_on_a_decide_only_model_answers_on_the_fallback(client, on):
+    """Review Focus 1: when the native endpoint fails, the role fallback that
+    generates answers the pick -- on another provider or the decide-only
+    model's own (spec I-1, a stage of its own rather than a retry) -- and the
+    actor still writes on Primary."""
+    cid, sid = seed(client)
+    decide_only(client, fallback=True, on=on)
+    fake = FakeLLM([[decision_reply({"next": "characters:mara"})], [MARA_ANSWERS]],
+                   decisions=[NO_ENDPOINT])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    assert len(fake.native_requests) == 1
     pick, actor = fake.requests
     assert (pick["conn"]["id"], pick["conn"]["model"]) == on
     assert all(r["conn"].get("model") != "vendor/decider" for r in fake.requests)
     assert actor["conn"]["id"] == "openrouter"
+    assert _speakers(cid, sid) == ["Mara"]
+
+
+def test_the_speaker_on_a_decide_only_model_without_a_fallback_answers_natively(client):
+    cid, sid = seed(client)
+    decide_only(client, fallback=False)
+    fake = FakeLLM([[MARA_ANSWERS]], decisions=[NATIVE_MARA])
+    client.app.dependency_overrides[routes.get_llm] = lambda: fake
+    _chat(client, cid, sid)
+    assert len(fake.native_requests) == 1 and len(fake.requests) == 1
     assert _speakers(cid, sid) == ["Mara"]
 
 
@@ -658,20 +705,21 @@ def _tracker_runs(client, cid, sid):
     {"content": "Somebody steer this.", "director": True},
     {"content": ""},
 ], ids=["post", "note", "continue"])
-def test_the_speaker_on_a_decide_only_model_without_a_fallback_is_refused(client, body):
-    """With no generating fallback the seam refuses the pick (spec 5.3's 409
-    `incapable`, naming the Decision role), as it refuses scene-break and
-    voice drift: nothing is sent, neither the pick nor an actor turn.
+def test_the_speaker_on_a_model_that_can_do_neither_is_refused(client, body):
+    """On a model that can neither generate nor decide natively the seam
+    refuses the pick (spec 5.3's 409 `incapable`, naming the Decision role),
+    as it refuses scene-break and voice drift: nothing is sent, neither the
+    pick nor an actor turn.
 
     And the refusal comes BEFORE anything is written (`post_chat`'s
     reserved-before-the-first-mutator rule): a 409 tells the player nothing
     happened, so the post, the director note, the pending roll proposal and
     the tracker are all as they were -- and sending again adds no copy."""
     cid, sid = seed(client)
-    decide_only(client, fallback=False)
+    neither(client)
     store.proposals.new(cid, sid, {"check": "brawl"})
     before = store.scenes.read_scene(cid, sid)["messages"]
-    fake = FakeLLM([["must not be sent"]])
+    fake = FakeLLM([["must not be sent"]], decisions=[NATIVE_MARA])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     for _ in range(2):
         response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat", json=body)
@@ -679,8 +727,9 @@ def test_the_speaker_on_a_decide_only_model_without_a_fallback_is_refused(client
         got = response.json()
         assert got["kind"] == "incapable"
         assert got["detail"].startswith("The Next speaker route runs on the Decision role "
-                                        "(vendor/decider on OpenRouter)"), got["detail"]
-    assert fake.calls == 0
+                                        "(vendor/neither on OpenRouter), which cannot "
+                                        "generate text or make native decisions"), got["detail"]
+    assert fake.calls == 0 and fake.native_requests == []
     assert store.scenes.read_scene(cid, sid)["messages"] == before
     assert store.proposals.get(cid, sid)["status"] == "pending"
     assert _tracker_runs(client, cid, sid) == []
@@ -688,7 +737,7 @@ def test_the_speaker_on_a_decide_only_model_without_a_fallback_is_refused(client
 
 def test_a_scene_with_one_speaker_is_not_refused_over_the_pick(client):
     """The refusal is for a pick: with one NPC present nobody is picked, so a
-    decide-only Decision model with no fallback refuses nothing."""
+    Decision model that can do neither refuses nothing."""
     client.put("/api/llm-connections/openrouter", json={"api_key": "sk-or-x"})
     wid = store.worlds.create_world("Realm")
     cid = store.campaigns.create_campaign("Saltmarch", wid)
@@ -697,7 +746,7 @@ def test_a_scene_with_one_speaker_is_not_refused_over_the_pick(client):
                         json={"name": "Mara"}).json()["character"]
     assert client.post(f"/api/campaigns/{cid}/scenes/{sid}/cast",
                        json={"id": actor}).status_code == 200
-    decide_only(client, fallback=False)
+    neither(client)
     fake = FakeLLM([['Mara answers.\n```handoff\n{"next":null}\n```']])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     _chat(client, cid, sid)
@@ -712,17 +761,17 @@ def test_a_pick_refused_inside_the_run_takes_the_post_back(client, monkeypatch):
     from grimoire.routes import character_turns
 
     cid, sid = seed(client)
-    decide_only(client, fallback=False)
+    neither(client)
     monkeypatch.setattr(character_turns, "refuse_an_unanswerable_pick",
                         lambda *a, **k: None)
     before = store.scenes.read_scene(cid, sid)["messages"]
-    fake = FakeLLM([["must not be sent"]])
+    fake = FakeLLM([["must not be sent"]], decisions=[NATIVE_MARA])
     client.app.dependency_overrides[routes.get_llm] = lambda: fake
     response = client.post(f"/api/campaigns/{cid}/scenes/{sid}/chat",
                            json={"content": "Hello there"})
     assert response.status_code == 409, response.text
     assert response.json()["kind"] == "incapable"
-    assert fake.calls == 0
+    assert fake.calls == 0 and fake.native_requests == []
     assert store.scenes.read_scene(cid, sid)["messages"] == before
 
 

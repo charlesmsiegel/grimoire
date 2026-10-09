@@ -16,11 +16,19 @@ from fastapi.testclient import TestClient
 
 import grimoire.store as store
 from grimoire import routes
+from grimoire.decisions import Answer, ItemResult
 from grimoire.llm_errors import LLMError
 from grimoire.main import create_app
 from grimoire.routes import scenes as scenes_routes
 
-from .inference_fixtures import SAME_PROVIDER, SPARE, decide_only, format2, put_settings
+from .inference_fixtures import (
+    SAME_PROVIDER,
+    SPARE,
+    decide_only,
+    format2,
+    neither,
+    put_settings,
+)
 from .llm_fakes import FakeLLM, decision_reply
 
 YES = decision_reply({"over": True}, rationales=["The ledger changed hands."])
@@ -709,18 +717,44 @@ def test_a_title_that_resolves_logs_nothing(client, caplog):
 
 
 # ---- the Decision role (slice F: the scene_break route decides) ----
+#: A native endpoint's YES: no rationale, which a native backend never has.
+NATIVE_YES = ItemResult({"over": Answer(True)})
+
+#: What a native endpoint answers for a model it has no decisions for.
+NO_ENDPOINT = LLMError("bad_response", "no decisions endpoint for this model", status=404)
+
+
 @pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
-def test_a_decide_only_decision_model_falls_to_the_role_fallback(client, on):
-    """Review Focus 1: until native decisions arrive, a Decision model that
-    cannot generate is skipped for a role fallback that can -- on another
-    provider or its own (spec I-1). The verdict is asked of the fallback, and
-    nothing is sent to the decide-only model."""
+def test_a_decide_only_decision_model_answers_natively(client, on):
+    """Slice H: a Decision model that cannot generate is answered by its
+    provider's native decisions endpoint. The verdict comes from there, the
+    role fallback is not asked, and the one completion is the title's."""
     decide_only(client, fallback=True, on=on)
-    llm = _use(client, _judge(YES))
+    llm = _use(client, FakeLLM([[TITLE]], decisions=[NATIVE_YES]))
     cid, sid = _scene(client, posts=40)
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
     assert r.status_code == 200, r.text
     assert r.json()["verdict"] == "yes"
+    [(_item, conn, _retries)] = llm.native_requests
+    assert (conn["id"], conn["model"]) == ("openrouter", "vendor/decider")
+    [title_call] = llm.requests
+    assert llm.schemas == [None]
+    assert (title_call["conn"]["id"], title_call["conn"]["model"]) == \
+        ("openrouter", "vendor/active")
+
+
+@pytest.mark.parametrize("on", [SPARE, SAME_PROVIDER], ids=["spare", "same-provider"])
+def test_a_decide_only_decision_model_falls_to_the_role_fallback(client, on):
+    """Review Focus 1: when the native endpoint fails, the role fallback that
+    generates answers in its place -- on another provider or its own (spec
+    I-1, a stage of its own rather than a retry)."""
+    decide_only(client, fallback=True, on=on)
+    llm = _use(client, FakeLLM([[YES], [TITLE]], decisions=[NO_ENDPOINT]))
+    cid, sid = _scene(client, posts=40)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "yes"
+    assert [c["model"] for _i, c, _r in llm.native_requests] == ["vendor/decider"]
     decide_call, title_call = llm.requests
     assert (decide_call["conn"]["id"], decide_call["conn"]["model"]) == on
     assert all(req["conn"].get("model") != "vendor/decider" for req in llm.requests)
@@ -729,17 +763,30 @@ def test_a_decide_only_decision_model_falls_to_the_role_fallback(client, on):
         ("openrouter", "vendor/active")
 
 
-def test_a_decide_only_decision_model_without_a_fallback_is_refused(client):
+def test_a_decide_only_decision_model_without_a_fallback_answers_natively(client):
     decide_only(client, fallback=False)
-    llm = _use(client, _judge(YES))
+    llm = _use(client, FakeLLM([[TITLE]], decisions=[NATIVE_YES]))
+    cid, sid = _scene(client, posts=40)
+    r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
+    assert r.status_code == 200, r.text
+    assert r.json()["verdict"] == "yes"
+    assert len(llm.native_requests) == 1 and llm.schemas == [None]
+
+
+def test_a_decision_model_that_can_do_neither_is_refused(client):
+    """I8: a model that can neither generate nor decide natively is the one
+    the seam refuses, before anything is sent."""
+    neither(client)
+    llm = _use(client, FakeLLM([[YES]], decisions=[NATIVE_YES]))
     cid, sid = _scene(client, posts=40)
     r = client.post(f"/api/campaigns/{cid}/scenes/{sid}/scene-break")
     assert r.status_code == 409, r.text
     body = r.json()
     assert body["kind"] == "incapable"
     assert body["detail"].startswith("The Scene-break checks route runs on the Decision "
-                                     "role (vendor/decider on OpenRouter)")
-    assert llm.calls == 0
+                                     "role (vendor/neither on OpenRouter), which cannot "
+                                     "generate text or make native decisions")
+    assert llm.calls == 0 and llm.native_requests == []
 
 
 def test_the_decision_role_now_serves_scene_break(client):
