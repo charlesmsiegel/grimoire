@@ -736,3 +736,146 @@ test("a newer build's store holds the whole form", async () => {
   expect(form().getByRole("combobox", { name: "Primary provider" })).toBeDisabled();
   expect(form().getByRole("button", { name: "Save" })).toBeDisabled();
 });
+
+// ---- Advanced: per-task overrides ----
+const advanced = () => main().getByText(/^Advanced: per-task overrides/).closest("details")!;
+const task = (name: string) => within(within(advanced()).getByRole("group", { name }));
+
+test("Advanced is folded until asked for", async () => {
+  await openForm();
+  expect(advanced()).not.toHaveAttribute("open");
+});
+
+test("an address opens it: the section, or one task, however its key is spelt", async () => {
+  open("/models/edit#advanced");
+  await main().findByRole("form", { name: "Edit models" });
+  expect(advanced()).toHaveAttribute("open");
+  cleanup();
+  open("/models/edit#task-scene%20break");
+  await main().findByRole("form", { name: "Edit models" });
+  expect(advanced()).toHaveAttribute("open");
+  expect(task("Scene break").getByRole("combobox", { name: "Scene break use" })).toBeInTheDocument();
+});
+
+test("a malformed task address opens the page with the section folded", async () => {
+  open("/models/edit#task-%ZZ");
+  await main().findByRole("form", { name: "Edit models" });
+  expect(advanced()).not.toHaveAttribute("open");
+});
+
+test("choosing a role for a task marks it as overriding and sends only use", async () => {
+  await openForm("#advanced");
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" }),
+                   { target: { value: "primary" } });
+  expect(task("Rolling summary").getByText("overrides")).toBeInTheDocument();
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ routes: { summary: { use: "primary" } } });
+});
+
+test("switching a pinned task to a role keeps the pin to come back to", async () => {
+  const pinned = { ...ROUTES[1], use: "model", pin: sel("realm", "vendor/m", "tight") };
+  (api.getInferenceSettings as any).mockResolvedValue(settings({
+    routes: [ROUTES[0], pinned, ROUTES[2], ROUTES[3]] }));
+  await openForm("#advanced");
+  const use = task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" });
+  fireEvent.change(use, { target: { value: "fast" } });
+  fireEvent.change(use, { target: { value: "model" } });
+  expect(task("Rolling summary").getByRole("combobox", { name: "Rolling summary pinned provider" }))
+    .toHaveValue("realm");
+  expect(task("Rolling summary").getByRole("combobox", { name: "Rolling summary pin preset" }))
+    .toHaveValue("tight");
+  fireEvent.change(use, { target: { value: "fast" } });
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ routes: { summary: { use: "fast" } } });
+});
+
+test("a pin preset and a preset override are two values, and stop-inheriting round-trips", async () => {
+  const pinned = { ...ROUTES[1], use: "model", pin: sel("saltmarch", "vendor/m", "balanced"),
+                   preset: PRESET_CLEAR };
+  (api.getInferenceSettings as any).mockResolvedValue(settings({
+    routes: [ROUTES[0], pinned, ROUTES[2], ROUTES[3]] }));
+  await openForm("#advanced");
+  expect(task("Rolling summary").getByRole("combobox", { name: "Rolling summary pin preset" }))
+    .toHaveValue("balanced");
+  const override = task("Rolling summary").getByRole("combobox", { name: "Rolling summary preset override" });
+  expect(override).toHaveValue(PRESET_CLEAR);
+  fireEvent.change(override, { target: { value: "tight" } });
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ routes: { summary: { preset: "tight" } } });
+});
+
+test("stop inheriting is sent as the sentinel, never as an empty preset", async () => {
+  await openForm("#advanced");
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary preset override" }),
+                   { target: { value: PRESET_CLEAR } });
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ routes: { summary: { preset: PRESET_CLEAR } } });
+});
+
+test("a pin with no model holds Save", async () => {
+  await openForm("#advanced");
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" }),
+                   { target: { value: "model" } });
+  expect(form().getByRole("button", { name: "Save" })).toBeDisabled();
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary pinned provider" }),
+                   { target: { value: "realm" } });
+  expect(form().getByRole("button", { name: "Save" })).toBeDisabled();
+});
+
+test("each task keeps what its detail page said: vision, a dropped fallback, the decide note", async () => {
+  CAPS["vendor/eye"].vision = "unknown";
+  (api.getInferenceSettings as any).mockResolvedValue(settings({ routes: [
+    ROUTES[0],
+    { ...ROUTES[1], fallback_problem: "Realm Local has no key set" },
+    { ...ROUTES[2], resolves: resolved({ model: "vendor/eye" }), inherits: resolved({ model: "vendor/eye" }) },
+    { ...ROUTES[3], decision_mode: "structured", decides_natively: "no" },
+  ] }));
+  open("/models/edit#advanced");
+  await main().findByRole("form", { name: "Edit models" });
+  expect(await task("Image descriptions").findByText(
+    "This route sends images; the chosen model is unverified for vision.")).toBeInTheDocument();
+  expect(task("Rolling summary").getByText(/cannot be sent \(Realm Local has no key set\)/))
+    .toBeInTheDocument();
+  expect(task("Scene break").getByText("No native decision API; structured generation will be used."))
+    .toBeInTheDocument();
+  expect(task("Image descriptions").getByText(/Also needs: vision/)).toBeInTheDocument();
+});
+
+test("a pinned model is warned of when it is unverified for the task's images", async () => {
+  const pinned = { ...ROUTES[2], use: "model", pin: sel("saltmarch", "vendor/eye", "") };
+  (api.getInferenceSettings as any).mockResolvedValue(settings({
+    routes: [ROUTES[0], ROUTES[1], pinned, ROUTES[3]] }));
+  open("/models/edit#advanced");
+  await main().findByRole("form", { name: "Edit models" });
+  expect(await task("Image descriptions").findByText(
+    "This route sends images; the chosen model is unverified for vision.")).toBeInTheDocument();
+});
+
+test("the section counts what this form would override", async () => {
+  await openForm("#advanced");
+  expect(main().getByText("Advanced: per-task overrides (0 active)")).toBeInTheDocument();
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" }),
+                   { target: { value: "primary" } });
+  expect(main().getByText("Advanced: per-task overrides (1 active)")).toBeInTheDocument();
+});
+
+test("a settings refresh while the form is open does not make an untouched role look moved", async () => {
+  await openForm("#advanced");
+  expect(api.getInferenceSettings).toHaveBeenCalledTimes(1);
+  // Another tab (or the migration poll) changed what Primary stores.
+  const refreshed = settings();
+  refreshed.roles.primary = { ...refreshed.roles.primary, stored: sel("realm", "vendor/other", "tight") };
+  (api.getInferenceSettings as any).mockResolvedValue(refreshed);
+  const { configChanged } = await import("../appEvents");
+  act(() => { configChanged(); });
+  await waitFor(() => expect(api.getInferenceSettings).toHaveBeenCalledTimes(2));
+  fireEvent.change(task("Rolling summary").getByRole("combobox", { name: "Rolling summary use" }),
+                   { target: { value: "fast" } });
+  fireEvent.click(form().getByRole("button", { name: "Save" }));
+  await waitFor(() => expect(api.putInferenceSettings).toHaveBeenCalledTimes(1));
+  expect(putBody()[0]).toEqual({ routes: { summary: { use: "fast" } } });
+});

@@ -14,6 +14,7 @@ import { ModelSelect } from "./ModelSelect";
 import { Problem, useWarning, Warning } from "./notes";
 import { SAME_AS } from "./RoleRow";
 import { EMPTY_SEL, GENERATIVE, sameSel } from "./selections";
+import { routeBody, routesIncomplete, startRouteDrafts, TaskOverrides, type RouteDraft } from "./TaskOverrides";
 
 export type RoleDraft = { sel: InferenceSelection; fallback: InferenceSelection; fallbackOpen: boolean };
 export type Drafts = Record<GenerativeRole, RoleDraft>;
@@ -96,7 +97,13 @@ export function ModelsEditForm({ settings, health, blocked, onSaved, onCancel }:
   { settings: InferenceSettings; health: ReadonlyMap<string, ProviderHealth>; blocked: boolean;
     onSaved: (next: InferenceSettings) => void; onCancel: () => void }) {
   const [drafts, setDrafts] = useState<Drafts>(() => startDrafts(settings));
-  const storedEmbedding = settings.roles.embedding?.stored ?? { provider: "", model: "" };
+  // Every "did this move" comparison is against what the form opened with, not
+  // the live prop: a refresh while the form is open (a token-rate save, the
+  // migration poll) must not make an untouched part look moved.
+  const [baseline] = useState(settings);
+  const [routes, setRoutes] = useState<Record<string, RouteDraft>>(
+    () => startRouteDrafts(settings.routes));
+  const storedEmbedding = baseline.roles.embedding?.stored ?? { provider: "", model: "" };
   const [embedding, setEmbedding] = useState(storedEmbedding);
   const [error, setError] = useState<unknown>(null);
   const [saving, setSaving] = useState(false);
@@ -113,17 +120,20 @@ export function ModelsEditForm({ settings, health, blocked, onSaved, onCancel }:
                                       ROLE_LABEL.embedding);
 
   function body(): InferenceWrite {
-    const roles = roleBody(drafts, settings) ?? {};
+    const roles = roleBody(drafts, baseline) ?? {};
     const out: InferenceWrite = {};
     const withEmbedding = embeddingMoved
       ? { ...roles, embedding: { selection: { provider: embedding.provider, model: embedding.model } } }
       : roles;
     if (Object.keys(withEmbedding).length) out.roles = withEmbedding;
+    const routeWrites = routeBody(routes, baseline.routes);
+    if (Object.keys(routeWrites).length) out.routes = routeWrites;
     return out;
   }
 
   const incomplete = GENERATIVE.some((r) => wantsModel(drafts[r].sel)
-      || (drafts[r].fallbackOpen && wantsModel(drafts[r].fallback)));
+      || (drafts[r].fallbackOpen && wantsModel(drafts[r].fallback)))
+    || routesIncomplete(routes);
 
   async function send(confirm: boolean) {
     setSaving(true);
@@ -215,6 +225,8 @@ export function ModelsEditForm({ settings, health, blocked, onSaved, onCancel }:
           {!settings.roles.embedding.on && <Problem text={settings.roles.embedding.problem ?? null} />}
         </fieldset>
       )}
+      <TaskOverrides settings={settings} health={health} blocked={blocked} drafts={routes}
+                     onChange={(key, d) => { setRoutes((r) => ({ ...r, [key]: d })); setAsking(null); }} />
       {asking !== null && (
         <div className="banner" role="group" aria-label="Confirm the re-embedding">
           {asking}{" "}
