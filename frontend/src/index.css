@@ -5271,3 +5271,35 @@ a.chore-item-label:hover { color: var(--accent); text-decoration: underline; }
                                     display: flex; flex-direction: column; gap: 8px; }
 .campaign-models .field { display: flex; flex-direction: column; gap: 4px; }
 .campaign-models .field select { max-width: 100%; }
+
+/* ---- Settings → Inference: Models ---- */
+.models-roles { display: grid; gap: 12px; margin-block: 12px 16px; }
+.role-row { display: grid; grid-template-columns: 110px 1fr; gap: 12px;
+            padding: 10px 0; border-bottom: 1px solid var(--rule); }
+.role-row-name { font-weight: 600; }
+.role-row-body > p { margin: 0 0 4px; }
+.role-row-fallback { color: var(--muted); }
+.models-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.models-edit { display: block; }
+.models-edit-role { border: 1px solid var(--rule); border-radius: 6px; padding: 10px 12px;
+                    margin-block: 10px; }
+.models-edit-fallback { margin-top: 8px; border-style: dashed; }
+.model-select { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.model-select select { min-width: 14rem; max-width: 100%; }
+.model-typed { display: inline-flex; gap: 6px; }
+.task-overrides > summary { cursor: pointer; font-weight: 600; margin-block: 12px; }
+.task-row { border-top: 1px solid var(--rule); padding: 10px 0; }
+.token-rates { margin-block: 8px; }
+.rates-table { border-collapse: collapse; margin-block: 8px; }
+.rates-table th, .rates-table td { text-align: left; padding: 4px 12px 4px 0; }
+.what-it-sends { margin-block: 8px; padding: 8px 12px; border: 1px solid var(--rule);
+                 border-radius: 6px; color: var(--muted); }
+.decision-tasks { margin-block: 8px; color: var(--muted); }
+/* A Link wearing a button's class: an `<a>` is inline and underlined where a
+   `<button>` is neither, and the Add provider / Presets actions are links. */
+a.column-primary { text-align: center; text-decoration: none; }
+a.subtle, a.button { display: inline-block; text-decoration: none; }
+@media (max-width: 640px) {
+  .role-row { grid-template-columns: 1fr; gap: 4px; }
+  .model-select select { min-width: 0; width: 100%; }
+}
