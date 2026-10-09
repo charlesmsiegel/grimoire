@@ -441,9 +441,9 @@ def test_turning_prefill_off_clears_the_verdict_a_refused_prefill_earned(legacy_
 
 
 @pytest.mark.xfail(strict=True, reason=(
-    "format 2: a prefill fact written through PUT /llm-connections/{id}/facts "
-    "does not clear the verdict a refused prefill earned; only put_connection "
-    "forgets one (task 3c report)"))
+    "at format 2, turning a model's prefill fact off through put_connection_facts "
+    "does not forget the verdict a refused prefill earned, whereas turning a "
+    "provider's prefill off through put_connection does"))
 def test_turning_a_models_prefill_off_clears_the_verdict_a_refused_prefill_earned(client):
     """The format-2 twin of the test above: `prefill` is the model's fact."""
     client.app.dependency_overrides[routes.get_llm] = \

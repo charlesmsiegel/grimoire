@@ -1,6 +1,7 @@
 import importlib
 
 import grimoire.store as store
+from grimoire.store import inference_keys as keys
 from tests.inference_fixtures import legacy_store
 
 
@@ -145,6 +146,10 @@ def test_retry_defaults(monkeypatch, tmp_path):
     cfg = s.read_config()
     assert cfg["llm_retries"] == "2"
     assert s.config.llm_retries() == 2
+    # No fallback until one is picked: at format 2 each role carries its own.
+    assert keys.is_current(cfg)
+    for role in keys.GENERATIVE_ROLES:
+        assert cfg.get(keys.fallback_key(role, "provider"), "") == "", role
 
 
 def test_zero_retries_is_the_pre_144_behaviour(monkeypatch, tmp_path):

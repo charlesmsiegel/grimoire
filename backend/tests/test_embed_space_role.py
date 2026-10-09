@@ -44,6 +44,20 @@ def test_the_embedding_role_is_what_resolves(monkeypatch):
     assert out["model"] == "m2"
 
 
+def test_a_format_two_store_ignores_the_legacy_embedding_keys():
+    """At format 2 the role keys are the only answer: `embeddings_*` naming a
+    working endpoint embeds nothing while the role is empty, and does not
+    move the model once the role names one."""
+    conn = _local()
+    config.write_config(embeddings_connection_id=conn, embeddings_model="legacy")
+    assert embed_space.resolve() is None
+    config.write_config(**{keys.role_key("embedding", "provider"): conn,
+                           keys.role_key("embedding", "model"): "m"})
+    out = embed_space.resolve()
+    assert out is not None
+    assert out["model"] == "m"
+
+
 def test_a_format_two_config_resolves_from_role_keys():
     conn = _local()
     out = embed_space.resolve({"inference_format": "2",
